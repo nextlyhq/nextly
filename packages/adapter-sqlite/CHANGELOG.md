@@ -1,5 +1,30 @@
 # @nextlyhq/adapter-sqlite
 
+## 0.0.2-alpha.65
+
+### Patch Changes
+
+- [#1655](https://github.com/nextlyhq/nextly/pull/1655) [`1a1a13b`](https://github.com/nextlyhq/nextly/commit/1a1a13b957b1d94dfba80ddc01061de752999a40) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Rendering a page that embeds components now refuses a document-limits object
+  whose `maxNodes` or `maxDepth` is not a number, instead of quietly rendering
+  without that bound. A cap that arrives as `undefined` or `NaN` — a partial
+  limits object, or one computed from an environment variable that is not set —
+  did not fall back to the default: every comparison against it was false, so the
+  walk had no stopping point and the guard that refuses to compose a document it
+  could not survey whole never fired.
+
+  Sites that pass a complete `limits` object, or none at all, are unaffected.
+
+- [#1654](https://github.com/nextlyhq/nextly/pull/1654) [`df2843b`](https://github.com/nextlyhq/nextly/commit/df2843b5bbbd0e80b2e3936b9da81462500f41ae) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A plugin can pass a hook context. `ctx.services.collections` operations take an optional `context`, which reaches this operation's hooks as `ctx.context`. It is how a caller tells a hook something about the CALL that the row cannot say.
+
+  Core has accepted this on every collection operation for a while and seeds the shared hook context from it. The plugin facade rebuilt its trailing argument as `{ user, overrideAccess }` and dropped everything else, and `CollectionService` forwarded only those two, so nothing above could reach it.
+
+  It is data, not permission: nothing passed here bypasses access, validation or any hook. A hook decides for itself what to do with what it is told.
+
+  The form-builder plugin uses it for the case that prompted it. A submission write reads its parent form only to check the payload against that form's fields, and the form's `afterRead` hook was counting that form's submissions on the way past. That count is presentation work nobody on the write path reads, and it grows with the form's history, so every submission paid for a count of every submission before it. The write now says it wants the schema alone, and the hook skips the count.
+
+- Updated dependencies [[`1a1a13b`](https://github.com/nextlyhq/nextly/commit/1a1a13b957b1d94dfba80ddc01061de752999a40), [`df2843b`](https://github.com/nextlyhq/nextly/commit/df2843b5bbbd0e80b2e3936b9da81462500f41ae)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.65
+
 ## 0.0.2-alpha.64
 
 ### Patch Changes

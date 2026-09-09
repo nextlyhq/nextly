@@ -12,10 +12,14 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 
+import { classUsageIndex } from "./class-usage-reconcile";
+import { usageTarget } from "./class-usage-write";
 import {
   rebuildClassUsageIndex,
+  rebuildPageBuilderUsageIndexes,
   type ClassUsageDocumentStore,
 } from "./class-usage-index-rebuild";
+import { componentUsageIndex } from "./component-usage";
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 
 const documentUsing = (...classes: string[]) => ({
@@ -102,6 +106,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 2,
       repaired: 2,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
     expect(index.calls).toEqual([
@@ -170,6 +175,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 1,
       repaired: 0,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
     expect(index.calls).toEqual([]);
@@ -208,6 +214,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 1,
       repaired: 1,
       undetermined: 1,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
   });
@@ -238,6 +245,7 @@ describe("rebuilding the class-usage index", () => {
       scanned: 1,
       repaired: 1,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 0,
     });
     expect(index.calls).toEqual(["create:published:page-1:hero"]);
@@ -436,6 +444,7 @@ describe("rows whose document no longer exists", () => {
       scanned: 1,
       repaired: 0,
       undetermined: 0,
+      unrepaired: 0,
       orphansRemoved: 1,
     });
     expect(calls).toEqual(["delete:r9"]);
@@ -638,5 +647,302 @@ describe("the coordinates an existence check is asked in", () => {
     });
 
     expect(asked).toEqual(["gone-page:fr:draft"]);
+  });
+});
+
+describe("repairing every index a site maintains", () => {
+  /** A store that keeps whole rows, so each index's own columns are visible. */
+  function recordingStore() {
+    const written: Record<string, unknown>[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+      create: async args => {
+        written.push(args.data);
+        return {};
+      },
+      delete: async () => ({}),
+    };
+    return { store, written };
+  }
+
+  /** A store that cannot answer at all, as an unavailable index table reads. */
+  function unavailableStore(message: string): ClassUsageIndexStore {
+    return {
+      find: async () => {
+        throw new Error(message);
+      },
+      create: async () => ({}),
+      delete: async () => ({}),
+    };
+  }
+
+  /**
+   * A page carrying a reference for BOTH indexes.
+   *
+   * A class alone would leave the component index with nothing to derive, so a
+   * test asserting the sibling was repaired would fail on a fixture that never
+   * gave it anything to write rather than on the behaviour it names.
+   */
+  const onePage = (id: string, klass: string) => ({
+    id,
+    content: {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "core/text", version: 1, props: {}, classes: [klass] },
+        {
+          id: `${id}-i`,
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    },
+  });
+
+  /** An index store holding fixed rows and recording its deletes. */
+  function storeHolding(rows: Record<string, unknown>[]) {
+    const deleted: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async args => {
+        const key = args.where.entityKey?.equals;
+        // The sweep asks WITHOUT an entityKey; maintenance asks with one.
+        return {
+          items:
+            key === undefined ? rows : rows.filter(r => r.entityKey === key),
+          meta: { hasNext: false },
+        };
+      },
+      create: async () => ({}),
+      delete: async args => {
+        deleted.push(args.id);
+        return {};
+      },
+    };
+    return { store, deleted };
+  }
+
+  it("keeps the DEPRECATED entry point raising rather than reporting", async () => {
+    // Code written against the published signature puts the call in a `try`
+    // and cannot inspect a field that did not exist when it was written. The
+    // walk behind it now reports failures instead of raising them, so the
+    // wrapper restores the contract its callers compiled against: reporting
+    // here would turn a failed repair into a silent success for every one.
+    const docs = documentStore([onePage("page-1", "hero")]);
+
+    await expect(
+      rebuildClassUsageIndex({
+        limits: DEFAULT_LIMITS,
+        documents: docs.store,
+        index: unavailableStore("class index unavailable"),
+        collection: "pages",
+        field: "content",
+        locale: "",
+        variant: "published",
+      })
+    ).rejects.toThrow("class index unavailable");
+  });
+
+  it("sweeps the COMPONENT index's orphan rows, not only the class index's", async () => {
+    // The sweep decodes rows through an index descriptor, and one index's
+    // reader answers null for another's rows. Swept through the class reader,
+    // every component row is skipped for having no `classId` — so the sweep
+    // examines nothing, removes nothing, and reports a clean pass. The rows of
+    // a document deleted outside the hook then count for ever.
+    const docs = documentStore([onePage("page-1", "hero")]);
+    const classes = storeHolding([
+      {
+        id: "c-orphan",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "deleted-page",
+        field: "content",
+        locale: "",
+        variant: "published",
+        classId: "ghost",
+      },
+    ]);
+    const components = storeHolding([
+      {
+        id: "k-orphan",
+        scope: "collection",
+        entity: "pages",
+        entityKey: "deleted-page",
+        field: "content",
+        locale: "",
+        variant: "published",
+        kind: "reference",
+        componentId: "ghost-component",
+      },
+    ]);
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: classes.store,
+      componentIndex: components.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    // BOTH asserted: the class half is the control. Without it a sweep that
+    // removed nothing at all would fail this test for the wrong reason, and
+    // one that removed everything would pass it for the wrong reason.
+    expect({
+      classOrphan: classes.deleted.includes("c-orphan"),
+      componentOrphan: components.deleted.includes("k-orphan"),
+      orphansRemoved: report.orphansRemoved,
+    }).toEqual({
+      classOrphan: true,
+      componentOrphan: true,
+      orphansRemoved: 2,
+    });
+  });
+
+  it("repairs the OTHER indexes when one of them cannot be reached", async () => {
+    // The rebuild is the remedy for a stale index, so abandoning the walk at
+    // the first store that cannot answer means the repair path fails in
+    // exactly the circumstances it exists for — and it abandoned every
+    // remaining DOCUMENT too, not merely the failing index.
+    const docs = documentStore([onePage("page-1", "hero")]);
+    const healthy = recordingStore();
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: unavailableStore("class index unavailable"),
+      componentIndex: healthy.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect({
+      // The sibling was repaired anyway, which is the property.
+      sibling: healthy.written.length > 0,
+      // And the report SAYS it was not a whole repair, rather than reading as
+      // a clean rebuild that happened to write less.
+      unrepaired: report.unrepaired,
+      cause: (report.failure as Error).message,
+      scanned: report.scanned,
+    }).toEqual({
+      sibling: true,
+      unrepaired: 1,
+      cause: "class index unavailable",
+      scanned: 1,
+    });
+  });
+
+  it("walks the documents AFTER one that could not be repaired", async () => {
+    // The costly half of aborting: every later document keeps rows that
+    // disagree with it, and the later ones are the ones nobody knows to check.
+    const docs = documentStore([
+      onePage("page-1", "hero"),
+      onePage("page-2", "banner"),
+    ]);
+    const healthy = recordingStore();
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: unavailableStore("class index unavailable"),
+      componentIndex: healthy.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect({ scanned: report.scanned, unrepaired: report.unrepaired }).toEqual({
+      scanned: 2,
+      unrepaired: 2,
+    });
+  });
+
+  it("reports a rebuild that repaired everything as carrying NO failure", async () => {
+    // The control. Without it, a report that always carried a failure would
+    // satisfy both assertions above.
+    const docs = documentStore([onePage("page-1", "hero")]);
+    const classes = recordingStore();
+    const components = recordingStore();
+
+    const report = await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: classes.store,
+      componentIndex: components.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect({
+      failure: report.failure,
+      unrepaired: report.unrepaired,
+    }).toEqual({ failure: undefined, unrepaired: 0 });
+  });
+
+  it("fills BOTH indexes from one walk, through the entry point a host can reach", async () => {
+    // The upgrade case, and the reason this entry point exists. An installation
+    // that already held pages gets an empty component index and it fills only
+    // for pages saved AFTER the upgrade, so every stored reference stays
+    // invisible until somebody resaves the page. An empty index answers
+    // "references nothing" — the answer a delete check acts on.
+    //
+    // Exercised through `rebuildPageBuilderUsageIndexes` rather than by handing
+    // a targets list to the walk, because the targets list names
+    // package-internal descriptors: a test that builds one proves the WALK
+    // repairs what it is given, and says nothing about whether a host can name
+    // both indexes in the first place.
+    const docs = documentStore([
+      {
+        id: "page-1",
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: "a",
+              type: "core/text",
+              version: 1,
+              props: {},
+              classes: ["hero"],
+            },
+            {
+              id: "i1",
+              type: "nextly/component-instance",
+              version: 1,
+              props: { componentId: "header" },
+            },
+          ],
+        },
+      },
+    ]);
+    const classes = recordingStore();
+    const components = recordingStore();
+
+    await rebuildPageBuilderUsageIndexes({
+      limits: DEFAULT_LIMITS,
+      documents: docs.store,
+      classIndex: classes.store,
+      componentIndex: components.store,
+      collection: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    // Both asserted together, and each against the rows only ITS descriptor
+    // produces: either alone passes on a rebuild that repaired one index and
+    // silently skipped the other, which is the defect itself, and comparing
+    // row counts would pass on the two stores wired to the same descriptor.
+    expect({
+      classes: classes.written.map(r => r.classId),
+      components: components.written.map(r => r.componentId),
+    }).toEqual({ classes: ["hero"], components: ["header"] });
   });
 });

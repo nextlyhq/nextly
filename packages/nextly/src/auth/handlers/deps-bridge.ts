@@ -19,7 +19,7 @@ import { env } from "../../lib/env";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import { createPluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
-import { parseTrustedProxyIpsEnv } from "../../utils/get-trusted-client-ip";
+import { readProxyTrustSettings } from "../../utils/proxy-trust";
 import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
 import { AuthHookRegistry } from "../pipeline/hooks";
@@ -63,8 +63,7 @@ export function buildAuthRouterDeps(
     revealRegistrationConflict: readRevealRegistrationConflict(getService),
     devAutoLogin: readDevAutoLogin(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
-    trustProxy: readTrustProxy(getService),
-    trustedProxyIps: parseTrustedProxyIpsEnv(process.env.TRUSTED_PROXY_IPS),
+    ...readProxyTrustSettings(() => getService("config")),
     authRateLimit: readAuthRateLimit(getService),
     auditLog: buildAuditLogWriter(getService),
 
@@ -540,30 +539,6 @@ function readDevAutoLogin(
             password: typed.password,
           };
         }
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Read `security.trustProxy` from the NextlyConfig registered in the DI
- * container. Returns `false` (the safe default) when the container is
- * not yet initialised or the flag is unset.
- */
-function readTrustProxy(getService: (name: string) => unknown): boolean {
-  try {
-    const config = getService("config");
-    if (config && typeof config === "object" && "security" in config) {
-      const security = (config as { security?: unknown }).security;
-      if (
-        security &&
-        typeof security === "object" &&
-        "trustProxy" in security
-      ) {
-        return (security as { trustProxy?: unknown }).trustProxy === true;
       }
     }
     return false;

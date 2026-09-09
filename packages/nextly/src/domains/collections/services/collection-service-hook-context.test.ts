@@ -1,6 +1,6 @@
 /**
- * The collection facade forwards `RequestContext.context` to the entry service
- * on every ENTRY operation.
+ * The collection facade forwards `RequestContext.context` and
+ * `RequestContext.request` to the entry service on every ENTRY operation.
  *
  * `context` is advertised on the shared `RequestContext`, which every method on
  * this service takes, so a method that quietly drops it is worse than one that
@@ -8,6 +8,11 @@
  * ignore it with nothing to say why. The first version of this threading
  * reached five methods and left the batch, count and transactional paths
  * behind, which is exactly that trap.
+ *
+ * `request` is the HTTP request that produced the operation, and it travels the
+ * same road for the same reason: a hook that applies a request-scoped rule has
+ * to be able to tell a visitor from a server-side import, and a method that
+ * drops it silently answers that question wrongly rather than not at all.
  *
  * Sibling of the `overrideAccess` threading test, and for the same reason: the
  * live create path cannot exercise this, so the threading is asserted directly.
@@ -36,7 +41,11 @@ const ok = { success: true, data: { id: "1" }, statusCode: 200 };
 const okList = { success: true, data: [], statusCode: 200 };
 const okCount = { success: true, data: { totalDocs: 0 }, statusCode: 200 };
 const hookContext = { formBuilder: { schemaOnlyRead: true } };
-const ctx = { overrideAccess: true, context: hookContext };
+const request = new Request("https://example.test/api/vault", {
+  method: "POST",
+  headers: { "x-forwarded-for": "203.0.113.7" },
+});
+const ctx = { overrideAccess: true, context: hookContext, request };
 const tx = {} as never;
 
 /**
@@ -75,19 +84,18 @@ const OPERATIONS: Array<
   ],
 ];
 
+/** The canned entry-service result each delegate has to return to get past its caller. */
+function resultFor(delegate: string): unknown {
+  if (delegate === "countEntries") return okCount;
+  if (delegate === "listEntries") return okList;
+  return ok;
+}
+
 describe("CollectionService threads RequestContext.context", () => {
   it.each(OPERATIONS)(
     "%s forwards the hook context to %s",
     async (_name, delegate, call) => {
-      const spy = vi
-        .fn()
-        .mockResolvedValue(
-          delegate === "countEntries"
-            ? okCount
-            : delegate === "listEntries"
-              ? okList
-              : ok
-        );
+      const spy = vi.fn().mockResolvedValue(resultFor(delegate));
       const service = make({ [delegate]: spy });
       await call(service).catch(() => undefined);
       expect(spy).toHaveBeenCalled();
@@ -114,6 +122,35 @@ describe("CollectionService threads RequestContext.context", () => {
       .findEntryById("vault", "1", { overrideAccess: true })
       .then(() => {
         expect(spy.mock.calls[0]![0]).toMatchObject({ context: undefined });
+      });
+  });
+});
+
+describe("CollectionService threads RequestContext.request", () => {
+  it.each(OPERATIONS)(
+    "%s forwards the request to %s",
+    async (_name, delegate, call) => {
+      const spy = vi.fn().mockResolvedValue(resultFor(delegate));
+      const service = make({ [delegate]: spy });
+      await call(service).catch(() => undefined);
+      expect(spy).toHaveBeenCalled();
+      const passed = spy.mock.calls[0]!.find(
+        (arg): arg is { request?: unknown } =>
+          typeof arg === "object" && arg !== null && "request" in arg
+      );
+      expect(passed?.request).toBe(request);
+    }
+  );
+
+  it("passes nothing when the caller passed nothing", () => {
+    // A facade that reached for an ambient request would satisfy every case
+    // above while telling a hook that a server-side import came from a visitor,
+    // which is the one answer that must never be invented.
+    const spy = vi.fn().mockResolvedValue(ok);
+    return make({ getEntry: spy })
+      .findEntryById("vault", "1", { overrideAccess: true })
+      .then(() => {
+        expect(spy.mock.calls[0]![0]).toMatchObject({ request: undefined });
       });
   });
 });

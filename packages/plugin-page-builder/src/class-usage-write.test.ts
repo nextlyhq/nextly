@@ -14,8 +14,11 @@ import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
-import type { ClassUsageSubject } from "./class-usage-reconcile";
-import { reconcileWrittenDocument } from "./class-usage-write";
+import {
+  classUsageIndex,
+  type ClassUsageSubject,
+} from "./class-usage-reconcile";
+import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
 
 /** A document whose single node applies the given classes. */
 const documentUsing = (...classes: string[]) => ({
@@ -309,6 +312,122 @@ describe("a subject that fails", () => {
     expect(report.failures[0]?.subject.locale).toBe("en");
     // The two locales after the failure were still written.
     expect(calls).toEqual(["create:hero", "create:hero"]);
+  });
+
+  it("maintains the sibling indexes after one of them fails", async () => {
+    // The content save has already committed, so a failure isolated to one
+    // derived store has no reason to leave the others stale as well. The
+    // persistent case is what makes this matter: every save fails at the same
+    // target first, so a sibling index never records anything at all — and an
+    // empty index answers "references nothing" for every document, which is
+    // the answer a delete check acts on.
+    const failing: ClassUsageIndexStore = {
+      find: async () => {
+        throw new Error("class index unavailable");
+      },
+      create: async () => ({}),
+      delete: async () => ({}),
+    };
+    const healthy = recordingStore();
+
+    const report = await reconcileWrittenDocument({
+      store: failing,
+      read: async () => documentUsing("hero"),
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: false,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+      // The order the hook registers them in: the class target is always
+      // first, so a loop that stops at the first throw never reaches this one.
+      targets: [
+        usageTarget(classUsageIndex, failing),
+        usageTarget(classUsageIndex, healthy.store),
+      ],
+    });
+
+    expect({
+      failures: report.failures.length,
+      cause: (report.failures[0]?.failure as Error).message,
+      // The second target ran anyway, which is the whole property.
+      sibling: healthy.calls,
+    }).toEqual({
+      failures: 1,
+      cause: "class index unavailable",
+      sibling: ["create:hero"],
+    });
+  });
+
+  it("still reports a target that rejected without a reason", async () => {
+    // `Promise.reject()` and `throw undefined` both carry no value. Callers
+    // identify a failed subject by `failure !== undefined`, so passing that
+    // value straight through would report the subject as reconciled while its
+    // index stayed stale — the failure erased by the field that exists to
+    // carry it.
+    const silent: ClassUsageIndexStore = {
+      find: async () => {
+        throw undefined;
+      },
+      create: async () => ({}),
+      delete: async () => ({}),
+    };
+
+    const report = await reconcileWrittenDocument({
+      store: silent,
+      read: async () => documentUsing("hero"),
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: false,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect({
+      counted: report.failures.length,
+      reported: report.failures[0]?.failure !== undefined,
+    }).toEqual({ counted: 1, reported: true });
+  });
+
+  it("reports EVERY target that failed, not only the first", async () => {
+    // Separate indexes fail for separate reasons — a missing table is not a
+    // lost connection — and reducing them to the first hides the one nobody
+    // has diagnosed yet.
+    const failing = (message: string): ClassUsageIndexStore => ({
+      find: async () => {
+        throw new Error(message);
+      },
+      create: async () => ({}),
+      delete: async () => ({}),
+    });
+
+    const report = await reconcileWrittenDocument({
+      store: failing("first"),
+      read: async () => documentUsing("hero"),
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: false,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+      targets: [
+        usageTarget(classUsageIndex, failing("first")),
+        usageTarget(classUsageIndex, failing("second")),
+      ],
+    });
+
+    const failure = report.failures[0]?.failure as AggregateError;
+    expect(failure.errors.map((e: Error) => e.message)).toEqual([
+      "first",
+      "second",
+    ]);
   });
 
   it("reports a reconciliation failure the same way as a read failure", async () => {

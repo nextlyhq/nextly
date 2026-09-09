@@ -41,6 +41,7 @@ import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
+import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
@@ -397,6 +398,8 @@ export interface TransitionAuthorization {
 interface DeleteEntryWriteParams {
   /** Arbitrary data passed to this operation's hooks via context. */
   context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
   collectionName: string;
   user?: UserContext;
   /**
@@ -423,6 +426,8 @@ interface DeleteEntryWriteOptions {
 interface UpdateEntryWriteParams {
   /** Arbitrary data passed to this operation's hooks via context. */
   context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
   collectionName: string;
   user?: UserContext;
   overrideAccess?: boolean;
@@ -466,6 +471,8 @@ interface UpdateEntryWriteOptions {
 interface CreateEntryWriteParams {
   /** Arbitrary data passed to this operation's hooks via context. */
   context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
   collectionName: string;
   user?: UserContext;
   overrideAccess?: boolean;
@@ -2740,6 +2747,8 @@ export class CollectionMutationService extends BaseService {
       // to what this user may read (this is not a trusted-server read).
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       // The caller's authenticated scope. For a scoped API-key REST create the
       // publish transition gate (a create-as-published) judges the key's OWN
       // grants — the route only authorized `create` against the key's scope.
@@ -2811,6 +2820,9 @@ export class CollectionMutationService extends BaseService {
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
@@ -2835,6 +2847,7 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          req: requestFacts,
         });
 
       // Use modified data if returned by beforeOperation. A hook returning its
@@ -2851,6 +2864,7 @@ export class CollectionMutationService extends BaseService {
         data: currentData,
         user: params.user,
         context: sharedContext,
+        req: requestFacts,
       });
 
       const modifiedData = await this.hookService.hookRegistry.execute(
@@ -2868,14 +2882,15 @@ export class CollectionMutationService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "beforeCreate",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "create",
-            dataAfterCodeHooks,
-            this.queryDatabaseFn,
-            params.user,
-            sharedContext
-          )
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "create",
+            data: dataAfterCodeHooks,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          })
         );
       const finalData = (storedBeforeResult.data ??
         dataAfterCodeHooks) as Record<string, unknown>;
@@ -2958,6 +2973,7 @@ export class CollectionMutationService extends BaseService {
         queryDatabase: this.queryDatabaseFn,
         user: params.user,
         sharedContext,
+        req: requestFacts,
       });
 
       // Field-level beforeChange hooks transform the final stored value
@@ -3511,6 +3527,7 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext, // Pass shared context from beforeCreate
+        req: requestFacts,
       });
 
       await this.hookService.hookRegistry.execute("afterCreate", afterContext);
@@ -3519,14 +3536,15 @@ export class CollectionMutationService extends BaseService {
       await this.hookService.storedHookExecutor.execute(
         "afterCreate",
         storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "create",
-          entry,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext
-        )
+        this.hookService.buildPrebuiltHookContext({
+          collection: params.collectionName,
+          operation: "create",
+          data: entry,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          req: requestFacts,
+        })
       );
 
       // Post-commit reaction event (D8/D51).
@@ -5322,6 +5340,8 @@ export class CollectionMutationService extends BaseService {
       // to what this user may read (this is not a trusted-server read).
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /**
        * Set when this write restores an earlier version, recording which one on
        * the version it captures. Lineage cannot be inferred afterwards: a
@@ -5583,6 +5603,9 @@ export class CollectionMutationService extends BaseService {
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments (id, data) or throw to abort
@@ -5595,6 +5618,7 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          req: requestFacts,
         });
 
       // Use modified data if returned by beforeOperation
@@ -5609,6 +5633,7 @@ export class CollectionMutationService extends BaseService {
         originalData: existingEntry,
         user: params.user,
         context: sharedContext,
+        req: requestFacts,
       });
 
       const modifiedData = await this.hookService.hookRegistry.execute(
@@ -5626,14 +5651,15 @@ export class CollectionMutationService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "beforeUpdate",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "update",
-            dataAfterCodeHooks,
-            this.queryDatabaseFn,
-            params.user,
-            sharedContext
-          )
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "update",
+            data: dataAfterCodeHooks,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
+            sharedContext,
+            req: requestFacts,
+          })
         );
       let finalData = (storedBeforeResult.data ?? dataAfterCodeHooks) as Record<
         string,
@@ -5706,6 +5732,7 @@ export class CollectionMutationService extends BaseService {
         queryDatabase: this.queryDatabaseFn,
         user: params.user,
         sharedContext,
+        req: requestFacts,
       });
 
       // Field-level beforeChange hooks transform the final stored value
@@ -7551,6 +7578,7 @@ export class CollectionMutationService extends BaseService {
         originalData: priorWorkingDraftDocument ?? existingEntry,
         user: params.user,
         context: sharedContext, // Pass shared context from beforeUpdate
+        req: requestFacts,
       });
 
       await this.hookService.hookRegistry.execute("afterUpdate", afterContext);
@@ -7559,14 +7587,15 @@ export class CollectionMutationService extends BaseService {
       await this.hookService.storedHookExecutor.execute(
         "afterUpdate",
         storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "update",
-          responseSource,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext
-        )
+        this.hookService.buildPrebuiltHookContext({
+          collection: params.collectionName,
+          operation: "update",
+          data: responseSource,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          req: requestFacts,
+        })
       );
 
       // Post-commit reaction event (D8/D51). Skipped for a pure draft edit: the
@@ -7813,6 +7842,8 @@ export class CollectionMutationService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /**
      * The caller's authenticated scope. A scoped API key is judged on its OWN
      * delete grant here, so the session super-admin bypass does not apply to a
@@ -7887,6 +7918,9 @@ export class CollectionMutationService extends BaseService {
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments (id) or throw to abort
@@ -7898,6 +7932,7 @@ export class CollectionMutationService extends BaseService {
           ? { id: params.user.id, email: params.user.email }
           : undefined,
         context: sharedContext,
+        req: requestFacts,
       });
 
       // Note: For delete, we don't use modified id since we already fetched the entry
@@ -7911,6 +7946,7 @@ export class CollectionMutationService extends BaseService {
         data: entry,
         user: params.user,
         context: sharedContext,
+        req: requestFacts,
       });
 
       await this.hookService.hookRegistry.execute(
@@ -7922,14 +7958,15 @@ export class CollectionMutationService extends BaseService {
       await this.hookService.storedHookExecutor.execute(
         "beforeDelete",
         storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "delete",
-          entry,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext
-        )
+        this.hookService.buildPrebuiltHookContext({
+          collection: params.collectionName,
+          operation: "delete",
+          data: entry,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          req: requestFacts,
+        })
       );
 
       // The collection schema, viewed two ways: the component cascade takes
@@ -8131,6 +8168,7 @@ export class CollectionMutationService extends BaseService {
         data: deleted,
         user: params.user,
         context: sharedContext, // Pass shared context from beforeDelete
+        req: requestFacts,
       });
 
       await this.hookService.hookRegistry.execute("afterDelete", afterContext);
@@ -8139,14 +8177,15 @@ export class CollectionMutationService extends BaseService {
       await this.hookService.storedHookExecutor.execute(
         "afterDelete",
         storedHooks,
-        this.hookService.buildPrebuiltHookContext(
-          params.collectionName,
-          "delete",
-          deleted,
-          this.queryDatabaseFn,
-          params.user,
-          sharedContext
-        )
+        this.hookService.buildPrebuiltHookContext({
+          collection: params.collectionName,
+          operation: "delete",
+          data: deleted,
+          queryDatabase: this.queryDatabaseFn,
+          user: params.user,
+          sharedContext,
+          req: requestFacts,
+        })
       );
 
       // Post-commit reaction event (D8/D51).
@@ -8287,6 +8326,9 @@ export class CollectionMutationService extends BaseService {
       // one made inside a transaction, which is the least obvious place for
       // a flag such as recursion suppression to stop working.
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
@@ -8301,6 +8343,7 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            req: requestFacts,
             // Bind a beforeOperation hook that reads via context.executor to the
             // caller's transaction connection so it does not re-enter the pool.
             executor: tx.getDrizzle(),
@@ -8324,6 +8367,7 @@ export class CollectionMutationService extends BaseService {
           // loads field metadata) to the caller's transaction connection so they
           // do not re-enter the pool from inside the transaction.
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
 
         const modifiedData = await this.hookService.hookRegistry.execute(
@@ -8337,17 +8381,18 @@ export class CollectionMutationService extends BaseService {
           await this.hookService.storedHookExecutor.execute(
             "beforeCreate",
             storedHooks,
-            this.hookService.buildPrebuiltHookContext(
-              params.collectionName,
-              "create",
-              currentData,
-              this.queryDatabaseFn,
-              params.user,
+            this.hookService.buildPrebuiltHookContext({
+              collection: params.collectionName,
+              operation: "create",
+              data: currentData,
+              queryDatabase: this.queryDatabaseFn,
+              user: params.user,
               sharedContext,
+              req: requestFacts,
               // Bind a stored hook's uniqueness read to the caller's transaction
               // connection so it does not re-enter the pool from inside the tx.
-              tx.getDrizzle()
-            )
+              executor: tx.getDrizzle(),
+            })
           );
         currentData = (storedBeforeResult.data ?? currentData) as Record<
           string,
@@ -8438,6 +8483,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           sharedContext,
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
         await runFieldHooks({
           kind: "collection",
@@ -8605,6 +8651,7 @@ export class CollectionMutationService extends BaseService {
           // Bind an after-hook that reads via context.executor to the caller's
           // transaction connection so it does not re-enter the pool from the tx.
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
 
         await this.hookService.hookRegistry.execute(
@@ -8616,17 +8663,18 @@ export class CollectionMutationService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "afterCreate",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "create",
-            entry,
-            this.queryDatabaseFn,
-            params.user,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "create",
+            data: entry,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
             sharedContext,
+            req: requestFacts,
             // Bind a stored hook's uniqueness read to the caller's transaction
             // connection so it does not re-enter the pool from inside the tx.
-            tx.getDrizzle()
-          )
+            executor: tx.getDrizzle(),
+          })
         );
       }
 
@@ -8859,6 +8907,9 @@ export class CollectionMutationService extends BaseService {
       // one made inside a transaction, which is the least obvious place for
       // a flag such as recursion suppression to stop working.
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
@@ -8873,6 +8924,7 @@ export class CollectionMutationService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: sharedContext,
+            req: requestFacts,
             // Bind a beforeOperation hook that reads via context.executor to the
             // caller's transaction connection so it does not re-enter the pool.
             executor: tx.getDrizzle(),
@@ -8896,6 +8948,7 @@ export class CollectionMutationService extends BaseService {
           // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
           // caller's transaction connection so they do not re-enter the pool.
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
 
         const modifiedData = await this.hookService.hookRegistry.execute(
@@ -8909,17 +8962,18 @@ export class CollectionMutationService extends BaseService {
           await this.hookService.storedHookExecutor.execute(
             "beforeUpdate",
             storedHooks,
-            this.hookService.buildPrebuiltHookContext(
-              params.collectionName,
-              "update",
-              currentData,
-              this.queryDatabaseFn,
-              params.user,
+            this.hookService.buildPrebuiltHookContext({
+              collection: params.collectionName,
+              operation: "update",
+              data: currentData,
+              queryDatabase: this.queryDatabaseFn,
+              user: params.user,
               sharedContext,
+              req: requestFacts,
               // Bind a stored hook's uniqueness read to the caller's transaction
               // connection so it does not re-enter the pool from inside the tx.
-              tx.getDrizzle()
-            )
+              executor: tx.getDrizzle(),
+            })
           );
         currentData = (storedBeforeResult.data ?? currentData) as Record<
           string,
@@ -8990,6 +9044,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           sharedContext,
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
         await runFieldHooks({
           kind: "collection",
@@ -9358,6 +9413,7 @@ export class CollectionMutationService extends BaseService {
           // Bind an after-hook that reads via context.executor to the caller's
           // transaction connection so it does not re-enter the pool from the tx.
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
 
         await this.hookService.hookRegistry.execute(
@@ -9369,17 +9425,18 @@ export class CollectionMutationService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "afterUpdate",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "update",
-            updated,
-            this.queryDatabaseFn,
-            params.user,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "update",
+            data: updated,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
             sharedContext,
+            req: requestFacts,
             // Bind a stored hook's uniqueness read to the caller's transaction
             // connection so it does not re-enter the pool from inside the tx.
-            tx.getDrizzle()
-          )
+            executor: tx.getDrizzle(),
+          })
         );
       }
 
@@ -9618,6 +9675,9 @@ export class CollectionMutationService extends BaseService {
       // one made inside a transaction, which is the least obvious place for
       // a flag such as recursion suppression to stop working.
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // Execute hooks (unless skipped)
       if (options.runHooks) {
@@ -9631,6 +9691,7 @@ export class CollectionMutationService extends BaseService {
             ? { id: params.user.id, email: params.user.email }
             : undefined,
           context: sharedContext,
+          req: requestFacts,
           // Bind a beforeOperation hook that reads via context.executor to the
           // caller's transaction connection so it does not re-enter the pool.
           executor: tx.getDrizzle(),
@@ -9649,6 +9710,7 @@ export class CollectionMutationService extends BaseService {
           // Bind a code beforeDelete hook that reads via context.executor to the
           // caller's transaction connection so it does not re-enter the pool.
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
 
         await this.hookService.hookRegistry.execute(
@@ -9660,17 +9722,18 @@ export class CollectionMutationService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "beforeDelete",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "delete",
-            entry,
-            this.queryDatabaseFn,
-            params.user,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "delete",
+            data: entry,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
             sharedContext,
+            req: requestFacts,
             // Bind a stored hook's uniqueness read to the caller's transaction
             // connection so it does not re-enter the pool from inside the tx.
-            tx.getDrizzle()
-          )
+            executor: tx.getDrizzle(),
+          })
         );
       }
 
@@ -9820,6 +9883,7 @@ export class CollectionMutationService extends BaseService {
           // Bind an after-hook that reads via context.executor to the caller's
           // transaction connection so it does not re-enter the pool from the tx.
           executor: tx.getDrizzle(),
+          req: requestFacts,
         });
 
         await this.hookService.hookRegistry.execute(
@@ -9831,17 +9895,18 @@ export class CollectionMutationService extends BaseService {
         await this.hookService.storedHookExecutor.execute(
           "afterDelete",
           storedHooks,
-          this.hookService.buildPrebuiltHookContext(
-            params.collectionName,
-            "delete",
-            entry,
-            this.queryDatabaseFn,
-            params.user,
+          this.hookService.buildPrebuiltHookContext({
+            collection: params.collectionName,
+            operation: "delete",
+            data: entry,
+            queryDatabase: this.queryDatabaseFn,
+            user: params.user,
             sharedContext,
+            req: requestFacts,
             // Bind a stored hook's uniqueness read to the caller's transaction
             // connection so it does not re-enter the pool from inside the tx.
-            tx.getDrizzle()
-          )
+            executor: tx.getDrizzle(),
+          })
         );
       }
 

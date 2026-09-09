@@ -522,6 +522,20 @@ export interface DirectAPIConfig {
   context?: Record<string, unknown>;
 
   /**
+   * The HTTP request this operation is serving, when it is serving one.
+   *
+   * A route handler calling the Direct API passes the request it was given, and
+   * the core resolves it into what hooks read as `ctx.req.http`: the headers,
+   * and a client address judged against this deployment's proxy-trust settings.
+   * Leave it out for background work, and a hook scoped to a visitor stands
+   * down instead of judging a script as one.
+   *
+   * The request rather than an address, because a caller does not get to name
+   * its own client.
+   */
+  request?: Request;
+
+  /**
    * Include hidden fields in the response.
    *
    * Hidden fields (defined with `hidden: true` in field config)

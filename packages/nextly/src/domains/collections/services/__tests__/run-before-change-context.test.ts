@@ -41,6 +41,8 @@ describe("the context runBeforeChange builds", () => {
       data: { title: "t" },
       storedHooks: [],
       queryDatabase: () => Promise.resolve(false),
+      // No request produced these writes, and the seam has to be told so.
+      req: {},
       executor,
     });
 
@@ -58,6 +60,8 @@ describe("the context runBeforeChange builds", () => {
       data: { title: "after" },
       storedHooks: [],
       queryDatabase: () => Promise.resolve(false),
+      // No request produced these writes, and the seam has to be told so.
+      req: {},
       originalData,
     });
 
@@ -80,6 +84,8 @@ describe("the context runBeforeChange builds", () => {
       data,
       storedHooks: [],
       queryDatabase: () => Promise.resolve(false),
+      // No request produced these writes, and the seam has to be told so.
+      req: {},
     });
 
     expect(data).toEqual({ kept: "yes" });

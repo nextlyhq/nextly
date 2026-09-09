@@ -265,12 +265,19 @@ export type {
  * Plugin HTTP routes (P4, D25/D26/D27) — `contributes.routes` author surface.
  * @public Exercised by redirects (lookup) and seo (sitemap).
  */
+// `AuthenticatedScope` is here because `ctx.authenticatedScope` is on the
+// context below: a route helper typed against it otherwise widens to `unknown`,
+// and a grant that widens to `unknown` stops being checkable. Kept OUT of the
+// braces because `plugin-surface.test.ts` parses the export list textually and
+// reads a comment inside it as an export name.
 export type {
   PluginRoute,
+  PluginRouteCaller,
   PluginRouteContext,
   PluginRouteHandler,
   Middleware,
   RouteMethod,
+  AuthenticatedScope,
 } from "nextly";
 
 /**

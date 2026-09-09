@@ -26,6 +26,31 @@
  * hook runs BEFORE the caller commits, where a throw would mean something else
  * entirely, and maintenance does not run there.
  *
+ * ## What running post-commit does NOT give, stated rather than implied
+ *
+ * Serialisation with the write. The mutation service releases its transaction
+ * before these hooks run, so two concurrent saves of one document can each read
+ * the index before either has written it, and the loser's diff describes a
+ * document that is no longer the live one — removing rows the winning document
+ * still justifies. `class-usage-reconcile` records the same window from the
+ * reconciler's side and says there that soundness is the write path's to
+ * establish; this is the write path, and it does not establish it.
+ *
+ * Every index maintained here shares the window, because they share the read.
+ * The direction it fails in is the costly one: rows go missing, so a document
+ * that still references something reads as referencing nothing.
+ *
+ * An in-process lock keyed by document is not the fix and is worse than none. A
+ * second application instance is not serialised by it, so it would close the
+ * window on one machine and leave it open on the deployments most likely to see
+ * concurrent saves — a mitigation that fails in the direction of looking
+ * effective. Closing it needs a boundary the writes share, which is the
+ * mutation service's to offer.
+ *
+ * The consequence for callers is the same as the one this whole module is
+ * built around: the index is EVENTUALLY consistent, a rebuild is what repairs
+ * it, and a decision that destroys data must not read it as exact.
+ *
  * @module class-usage-hook
  */
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
@@ -33,12 +58,14 @@ import type { HookContext } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import { forgetDeletedDocument } from "./class-usage-maintenance";
+import { classUsageIndex } from "./class-usage-reconcile";
 import {
   classUsageDocumentReader,
   classUsageIndexStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
-import { reconcileWrittenDocument } from "./class-usage-write";
+import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
+import { componentUsageIndex } from "./component-usage";
 import { requestContextFor, writeTargetOf } from "./write-target";
 
 /**
@@ -112,8 +139,17 @@ export interface DraftSplitResolver {
  */
 export function registerClassUsageMaintenance(args: {
   ctx: ClassUsagePluginContext;
-  /** The collection whose rows this maintains. */
+  /** The collection the CLASS index's rows live in. */
   indexCollection: string;
+  /**
+   * The collection the COMPONENT index's rows live in.
+   *
+   * A second index, not a second hook. One registration reads the written
+   * collection's configuration, resolves its draft split and reads each locale
+   * and variant of the document ONCE, and every index derives from that read —
+   * where a second wildcard registration would repeat all of it on every save.
+   */
+  componentIndexCollection: string;
   /** Resolves whether a collection keeps a working draft beside its published row. */
   draftSplit: DraftSplitResolver;
   /** The site's configured locales, read per call. */
@@ -188,18 +224,47 @@ async function forget(
   context: UnknownRecord
 ): Promise<void> {
   const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    excluded: [args.indexCollection],
+    // BOTH, because the hook is on the wildcard: a write to either index would
+    // otherwise re-enter this handler and maintain an index against its own
+    // bookkeeping rows.
+    excluded: [args.indexCollection, args.componentIndexCollection],
   });
   if (target === null) return;
 
-  try {
-    await forgetDeletedDocument({
-      store: classUsageIndexStore(target.nextly, args.indexCollection),
-      scope: "collection",
-      entity: target.slug,
-      entityKey: target.documentId,
-    });
-  } catch (failure) {
+  // Every index, because a document's rows survive it in each of them and
+  // nothing later reconciles rows naming a document that no longer exists.
+  //
+  // EACH ONE ATTEMPTED, whatever the ones before it did. The document is
+  // already gone, so a store that cannot be reached now will not be revisited
+  // by any later save — only a rebuild reaches those rows. Letting the first
+  // failure end the loop would strand the healthy indexes' rows too, for a
+  // document that no longer exists, and they would count towards their
+  // references until somebody ran a rebuild nobody knew was needed.
+  const failures: unknown[] = [];
+  for (const indexCollection of [
+    args.indexCollection,
+    args.componentIndexCollection,
+  ]) {
+    try {
+      await forgetDeletedDocument({
+        store: classUsageIndexStore(target.nextly, indexCollection),
+        scope: "collection",
+        entity: target.slug,
+        entityKey: target.documentId,
+      });
+    } catch (thrown) {
+      failures.push(thrown);
+    }
+  }
+
+  if (failures.length > 0) {
+    const failure =
+      failures.length === 1
+        ? failures[0]
+        : new AggregateError(
+            failures,
+            "more than one usage index could not forget a deleted document"
+          );
     // Raised for the same reason maintenance raises: `after*` is a side-effect
     // phase whose throw the registry converts into a warning the caller
     // receives, and the delete itself is already committed. Swallowing would
@@ -233,7 +298,10 @@ async function planMaintenance(
   context: UnknownRecord
 ): Promise<Parameters<typeof reconcileWrittenDocument>[0] | null> {
   const target = writeTargetOf<ClassUsageDirectApi>(context, {
-    excluded: [args.indexCollection],
+    // BOTH, because the hook is on the wildcard: a write to either index would
+    // otherwise re-enter this handler and maintain an index against its own
+    // bookkeeping rows.
+    excluded: [args.indexCollection, args.componentIndexCollection],
   });
   if (target === null) return null;
 
@@ -248,6 +316,16 @@ async function planMaintenance(
 
   return {
     store: classUsageIndexStore(target.nextly, args.indexCollection),
+    targets: [
+      usageTarget(
+        classUsageIndex,
+        classUsageIndexStore(target.nextly, args.indexCollection)
+      ),
+      usageTarget(
+        componentUsageIndex,
+        classUsageIndexStore(target.nextly, args.componentIndexCollection)
+      ),
+    ],
     read: classUsageDocumentReader(target.nextly),
     collection: {
       slug: target.slug,

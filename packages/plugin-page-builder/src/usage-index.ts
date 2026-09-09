@@ -64,7 +64,7 @@ export type UsageVariant = "published" | "draft";
  * enforces that key today — a collection's declared indexes do not reach the
  * schema pipeline — so the reconciler is what keeps rows unique instead.
  */
-export interface UsageSubject {
+export type UsageSubject = {
   scope: UsageScope;
   /** The collection's or single's slug. */
   entity: string;
@@ -118,7 +118,7 @@ export interface UsageSubject {
    * draft applies breaks that draft the moment somebody publishes it.
    */
   variant: UsageVariant;
-}
+};
 
 /** What a document references, and whether the whole of it could be read. */
 export interface UsageDerivation {
@@ -144,16 +144,35 @@ export interface UsageDerivation {
  */
 export interface UsageIndex<TRow extends UsageSubject> {
   /**
-   * The stored column the reference id lives in.
+   * A stored row's OWN columns, read from unvalidated data, or `null` when any
+   * of them cannot be read as what it must be.
    *
-   * A string because the row PARSER validates columns by name against data
-   * that arrives unvalidated. Everywhere a row is built or read as a value,
-   * the typed members below are used instead.
+   * The shared parser reads the six subject columns and the row id, which every
+   * index has; this reads what only this index has. Returning `null` SKIPS the
+   * row rather than counting or deleting it: persisted data arrives
+   * unvalidated, one unreadable row must not stop a subject being reconciled,
+   * and nothing here knows enough about it to remove it.
+   *
+   * This replaced a `referenceColumn: string` written a slice earlier, which
+   * named the column and was never read by anything — the parser needs more
+   * than a name, because an index may carry a closed set beside its reference
+   * and a bare column list cannot validate one.
    */
-  readonly referenceColumn: string;
+  readOwn(item: Record<string, unknown>): Omit<TRow, keyof UsageSubject> | null;
 
-  /** The reference a row records. */
-  referenceOf(row: TRow): string;
+  /**
+   * The key a row is reconciled by: two rows sharing one are the same record.
+   *
+   * NOT simply "the reference id", though for an index whose rows carry
+   * nothing else it is exactly that. Reconciliation matches derived rows
+   * against stored ones through this and removes what no derived row claims,
+   * so anything that distinguishes two rows an index must keep apart has to be
+   * IN it. An index whose rows carry a second column that changes their meaning
+   * — a marker flag, say — includes it, or a stored row contradicting itself
+   * suppresses the real one and no reconciliation can repair it, because the
+   * two look like the same record.
+   */
+  reconcileKeyOf(row: TRow): string;
 
   /** A row recording that `subject` references `referenceId`. */
   rowFor(subject: UsageSubject, referenceId: string): TRow;
