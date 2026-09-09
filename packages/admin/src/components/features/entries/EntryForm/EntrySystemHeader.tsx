@@ -878,6 +878,9 @@ export function EntrySystemHeader({
           // state, not just form dirtiness: state a field holds outside the
           // form (the page builder's pending document) is lost the same way.
           liveDirty={hasUnsavedWork}
+          // A claim arriving while the confirmation is open: the trigger
+          // removes itself, and the open dialog must refuse as well.
+          restoreRefused={documentLocked || isSubmitting}
           // The live document's status, which is what a restore changes — the
           // selected version's own status describes the past.
           liveStatus={effectiveStatus}

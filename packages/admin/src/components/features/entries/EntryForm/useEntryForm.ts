@@ -601,6 +601,11 @@ export function useEntryForm({
     if (mode !== "edit" || !entry?.id) {
       return;
     }
+    // Discard is a write like any other: the same latch the submit gate holds
+    // keeps a save started in the same turn from running concurrently, whose
+    // completion order would otherwise decide the working-draft state.
+    if (isSubmitting || submissionLatch.current) return;
+    submissionLatch.current = true;
     try {
       const result = await discardMutation.mutateAsync();
       form.reset(getDefaultValues(fields, result.item));
@@ -611,8 +616,10 @@ export function useEntryForm({
       // this, stays open on failure and keeps its retry context rather than
       // closing as it does on success.
       throw error;
+    } finally {
+      submissionLatch.current = false;
     }
-  }, [mode, entry?.id, discardMutation, form, fields, onError]);
+  }, [isSubmitting, mode, entry?.id, discardMutation, form, fields, onError]);
 
   // Cancel handler
   const handleCancel = useCallback(() => {

@@ -108,6 +108,13 @@ export interface VersionHistorySheetProps {
    * confirmation has to say so before the author commits to it.
    */
   liveDirty?: boolean;
+  /**
+   * A transient reason the confirm action must refuse: a colleague's claim
+   * arriving while the confirmation is open. The banner trigger removes
+   * itself on the same signal, but an already-open dialog outlives it, so
+   * the refusal has to be carried into the confirmation as well.
+   */
+  restoreRefused?: boolean;
 }
 
 function ListSkeleton() {
@@ -134,6 +141,7 @@ export function VersionHistorySheet({
   liveStatus = null,
   entityLocalized,
   liveDirty = false,
+  restoreRefused = false,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   // The version pair being compared (older -> newer), or null when not
@@ -731,8 +739,14 @@ export function VersionHistorySheet({
           versionNo={selected}
           isPublished={liveStatus === "published"}
           unsavedChanges={liveDirty}
+          confirmDisabled={restoreRefused}
           isRestoring={restore.isPending}
-          onConfirm={() => restore.mutate(selected)}
+          // Re-checked at confirm time: the banner trigger can vanish while
+          // the dialog is open (a claim arriving mid-dialog), and an open
+          // dialog must not restore past a refusal that arrived after it.
+          onConfirm={() => {
+            if (canRestore && !restoreRefused) restore.mutate(selected);
+          }}
         />
       ) : null}
 

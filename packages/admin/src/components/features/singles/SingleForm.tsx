@@ -897,7 +897,10 @@ export function SingleForm({
                               historyFields={schema.fields}
                               historyEnabled={historyEnabledFrom(schema)}
                               hasStatus={hasStatus}
-                              isSubmitting={isSubmitting}
+                              // The whole busy state: the header's spinner,
+                              // disabled reasons and discard dialog all
+                              // reflect a discard in flight as well as a save.
+                              isSubmitting={busy}
                               isDirty={isDirty}
                               hasUnsavedWork={hasUnsavedWork}
                               entry={entryLike}
@@ -959,9 +962,17 @@ export function SingleForm({
                               }}
                               onDiscardWorkingDraft={async () => {
                                 // Through the same gate: this reaches the row
-                                // directly and never passed `handleSubmit`.
+                                // directly and never passed `handleSubmit`. The
+                                // latch is held for its duration so a save
+                                // started in the same turn cannot run against
+                                // it.
                                 if (writesHeld || busy) return;
-                                await discardMutation.mutateAsync();
+                                submissionLatch.current = true;
+                                try {
+                                  await discardMutation.mutateAsync();
+                                } finally {
+                                  submissionLatch.current = false;
+                                }
                               }}
                               onCancel={handleCancel}
                               onViewApi={onViewApi}
