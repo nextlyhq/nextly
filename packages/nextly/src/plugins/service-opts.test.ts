@@ -74,7 +74,16 @@ describe("resolveServiceOpts — the caller's own scope", () => {
       as: "user",
       user: { id: "u1", email: "u@e.com", name: "U" },
     });
-    expect(Object.keys(resolved).sort()).toEqual(["overrideAccess", "user"]);
+    // On the KEY rather than the value: `toEqual` ignores an
+    // explicitly-undefined property, so comparing against `undefined` would be
+    // satisfied by a hop that always wrote `authenticatedScope: undefined` and
+    // by one that wrote nothing, which are different behaviours downstream.
+    //
+    // Asserting this one key rather than the whole key set, because the set is
+    // shared: `context` arrived here from another change and broke an
+    // exact-set assertion that was never about it.
+    expect(Object.keys(resolved)).not.toContain("authenticatedScope");
+    expect(resolved.overrideAccess).toBe(false);
   });
 
   it("drops a scope under system elevation, which bypasses the check it feeds", () => {
