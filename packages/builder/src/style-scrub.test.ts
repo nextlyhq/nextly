@@ -7,6 +7,7 @@ import {
   PREVIEW_VIEWPORT_CONTAINER,
   STYLE_STATES,
   type BlockDocument,
+  type NodeStyles,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
@@ -440,6 +441,105 @@ describe("the selector at each state the catalog supports", () => {
       expect(fragments.get(state)).not.toBe("");
       expect(fragments.get(state)).toContain(":where(");
     }
+  });
+});
+
+describe("a preview that must not outrank another state", () => {
+  /*
+   * The compiler emits one rule per state at EQUAL specificity, in
+   * `STYLE_STATES` order, each constrained by a zero-specificity `:where()`.
+   * Later beats earlier on document ORDER — and a preview mounted after the
+   * whole sheet is later than all of them, so a base-state drag repainted the
+   * block's hover value for as long as the pointer was over it.
+   */
+  const HOVER_MARGIN: NodeStyles = {
+    hover: { base: { margin: { blockEnd: "24px" } } },
+  };
+
+  function previewSelector(styles: NodeStyles | undefined): string {
+    const preview = scrubPreviewCss(
+      { ...TARGET, ...(styles === undefined ? {} : { styles }) },
+      "32px"
+    );
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error("expected a preview");
+    return preview.css.split("{")[0].trim();
+  }
+
+  it("steps aside where a later state declares the same address", () => {
+    expect(previewSelector(HOVER_MARGIN)).toContain(
+      ":not(:where(:hover, .nx-pb-state-hover))"
+    );
+  });
+
+  /*
+   * The control, and it is the half that matters. Excluding unconditionally
+   * would satisfy the assertion above while blanking the preview on every
+   * ordinary node — the drag would simply stop showing anything under the
+   * pointer, which reads as the handle being broken.
+   */
+  it("does not step aside when no later state declares it", () => {
+    expect(previewSelector(undefined)).not.toContain(":not(");
+    expect(previewSelector({})).not.toContain(":not(");
+    expect(
+      previewSelector({ hover: { base: { color: "red" } } })
+    ).not.toContain(":not(");
+  });
+
+  /*
+   * Per ADDRESS, not per property. A hover that sets a DIFFERENT side of the
+   * same box compiles to a different longhand and cannot outrank this one, so
+   * excluding on the property would blank the preview wherever an author had
+   * styled any other side.
+   */
+  it("ignores a later state that declares another side of the same box", () => {
+    expect(
+      previewSelector({ hover: { base: { margin: { blockStart: "8px" } } } })
+    ).not.toContain(":not(");
+  });
+
+  /*
+   * Earlier states lose to this rule already — the compiler put them first —
+   * so excluding them would blank the preview on elements it legitimately owns.
+   *
+   * Asked of FOCUS with HOVER declared, deliberately. Hover is emitted before
+   * focus and carries a real selector fragment, so an implementation excluding
+   * earlier states shows it. Asking base to be un-excluded cannot detect that:
+   * base's fragment is empty, so the exclusion would collapse to nothing and
+   * the assertion would pass either way.
+   */
+  it("ignores a state emitted before this one", () => {
+    const focusTarget = {
+      ...TARGET,
+      address: { ...TARGET.address, state: "focus" as StyleState },
+      styles: {
+        hover: { base: { margin: { blockEnd: "8px" } } },
+        active: { base: { margin: { blockEnd: "8px" } } },
+      } satisfies NodeStyles,
+    };
+    const preview = scrubPreviewCss(focusTarget, "32px");
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error("expected a preview");
+    const selector = preview.css.split("{")[0].trim();
+    // `active` comes after `focus`, so it is excluded.
+    expect(selector).toContain(":not(:where(:active, .nx-pb-state-active))");
+    // `hover` comes before it, and is not.
+    expect(selector).not.toContain(":not(:where(:hover");
+  });
+
+  /*
+   * The specificity contract, which is what makes the exclusion safe at all.
+   * `:not()` takes the specificity of its most specific argument and `:where()`
+   * is always zero, so the rule still ranks exactly where the compiler put the
+   * one it previews over. A stronger selector would win the hover case and lose
+   * the contract — the preview would land where the committed value cannot.
+   */
+  it("adds no specificity, so the rule still ranks where the compiler put it", () => {
+    const plain = previewSelector(undefined);
+    const excluded = previewSelector(HOVER_MARGIN);
+    const weight = (selector: string): string =>
+      selector.replaceAll(/:not\(:where\([^)]*\)\)/g, "");
+    expect(weight(excluded)).toBe(plain);
   });
 });
 

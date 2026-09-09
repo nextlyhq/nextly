@@ -53,6 +53,7 @@ import {
   type BlockDocument,
   type BreakpointSet,
   type Declaration,
+  type NodeStyles,
   type StyleState,
   type StyleValue,
   type ValidationIssue,
@@ -65,7 +66,12 @@ import type {
   StyleWrite,
   StyleWriteRequest,
 } from "./style-values";
-import { styleValueAtPath, styleWriteOp, styleWriteOps } from "./style-values";
+import {
+  readStyleValue,
+  styleValueAtPath,
+  styleWriteOp,
+  styleWriteOps,
+} from "./style-values";
 
 /** The node a scrub is previewing against. */
 export interface ScrubTarget {
@@ -131,6 +137,31 @@ export interface ScrubTarget {
   readonly tokenPrefix?: string;
   /** The site policy, forwarded to the compile so a refused URL never previews. */
   readonly policy?: StylePolicy;
+  /**
+   * The node's own styles, so the preview can decline to outrank a state it
+   * does not belong to.
+   *
+   * The compiler emits one rule per state at EQUAL specificity, in
+   * `STYLE_STATES` order — measured: base, then hover, then focus, then active,
+   * each constrained by a zero-specificity `:where()`. Later therefore beats
+   * earlier on document ORDER alone, and a preview mounted after the whole
+   * sheet is later than all of them. So a base-state preview silently outranks
+   * an existing hover declaration: the block shows the scrubbed base value
+   * while the pointer is over it, and reverts to hover on release.
+   *
+   * Given the styles, the rule excludes exactly the states that are emitted
+   * AFTER this one and declare THIS address. The exclusion is written with
+   * `:not(:where(...))`, whose specificity is that of its most specific
+   * argument — and `:where()` is always zero — so the rule still ranks exactly
+   * where the compiler put the one it is previewing over. Raising specificity
+   * instead would win the hover case and lose the contract: the preview would
+   * land somewhere the committed value cannot.
+   *
+   * Omitted, the preview outranks every later state, which is the behaviour
+   * this field exists to correct. Supply it whenever a node may carry
+   * interaction states — which is any node an editor can style.
+   */
+  readonly styles?: NodeStyles;
 }
 
 /**
@@ -400,13 +431,42 @@ export type ScrubPreview =
  * merged rule. Repeating the grouping here would be a second copy of a function
  * the engine already has, kept in step by nothing.
  */
+/**
+ * The states that would beat this preview, as selector exclusions.
+ *
+ * Only the states emitted AFTER this one — earlier states lose to it already —
+ * and only those declaring the SAME address. Granularity matters both ways: a
+ * hover that sets `margin.blockStart` compiles to `margin-block-start` alone and
+ * does not touch a `blockEnd` preview, so excluding on the property would blank
+ * the preview wherever the author had styled any other side of the same box.
+ *
+ * Empty when the caller supplied no styles, which leaves the previous behaviour
+ * rather than guessing at one.
+ */
+function laterStateExclusions(target: ScrubTarget): string {
+  if (target.styles === undefined) return "";
+  const { address } = target;
+  const from = STYLE_STATES.indexOf(address.state);
+  /* c8 ignore next -- the address's state comes from the same union */
+  if (from < 0) return "";
+  return STYLE_STATES.slice(from + 1)
+    .filter(
+      later =>
+        readStyleValue(target.styles, { ...address, state: later }) !==
+        undefined
+    )
+    .map(later => `:not(${stateFragment(later)})`)
+    .join("");
+}
+
 function ruleText(
   target: ScrubTarget,
   declarations: readonly Declaration[],
   atRule: string
 ): string {
   const root = rootSelector(target.scope);
-  const state = stateFragment(target.address.state);
+  const state =
+    stateFragment(target.address.state) + laterStateExclusions(target);
   return declarations
     .map(declaration => {
       const descendant =

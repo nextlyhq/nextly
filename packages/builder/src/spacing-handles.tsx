@@ -472,8 +472,16 @@ export function SpacingHandles({
               : { tokenPrefix: context.tokenPrefix }),
             ...(context.policy === undefined ? {} : { policy: context.policy }),
             ...(context.scope === undefined ? {} : { scope: context.scope }),
+            /*
+             * What else this node declares, so a preview for one state does not
+             * outrank another. See `ScrubTarget.styles`: every state compiles at
+             * equal specificity and later wins on order, so a base-state drag
+             * would otherwise repaint the block's hover value for as long as the
+             * pointer was over it.
+             */
+            ...(node?.styles === undefined ? {} : { styles: node.styles }),
           },
-    [context, nodeClass, nodeId]
+    [context, node?.styles, nodeClass, nodeId]
   );
 
   /**
