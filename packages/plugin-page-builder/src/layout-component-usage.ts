@@ -138,27 +138,53 @@ function referencesIn(
   componentId: string,
   variant: "published" | "draft"
 ): LayoutComponentReference[] {
-  if (!isRecord(item)) return [];
-  const layoutId = typeof item.id === "string" ? item.id : "";
-  // A Layout whose id cannot be read cannot be NAMED in a refusal, and a
-  // refusal an author cannot act on is worse than the delete it prevents.
-  if (layoutId === "") return [];
+  const named = layoutIdentityOf(item);
+  if (named === null) return [];
 
-  const areas = item.areas;
+  const areas = (item as Record<string, unknown>).areas;
   if (!Array.isArray(areas)) return [];
 
   const found: LayoutComponentReference[] = [];
   for (const row of areas) {
-    if (!isRecord(row)) continue;
-    if (componentIdOf(row.component) !== componentId) continue;
-    found.push({
-      layoutId,
-      title: typeof item.title === "string" ? item.title : "",
-      area: typeof row.area === "string" ? row.area : "",
-      variant,
-    });
+    const area = areaNaming(row, componentId);
+    if (area === null) continue;
+    found.push({ ...named, area, variant });
   }
   return found;
+}
+
+/**
+ * How a Layout is named in a refusal, or null when it cannot be.
+ *
+ * A Layout whose id cannot be read cannot be NAMED, and a refusal an author
+ * cannot act on is worse than the delete it prevents — so it contributes
+ * nothing rather than an anonymous entry.
+ */
+function layoutIdentityOf(
+  item: unknown
+): { layoutId: string; title: string } | null {
+  if (!isRecord(item)) return null;
+  const layoutId = typeof item.id === "string" ? item.id : "";
+  if (layoutId === "") return null;
+  return {
+    layoutId,
+    title: typeof item.title === "string" ? item.title : "",
+  };
+}
+
+/**
+ * The area this repeater row places `componentId` in, or null when it does not
+ * name that component at all.
+ *
+ * One question rather than two: whether the row matches, and where. Answering
+ * them separately at the call site is what put the walk above the complexity
+ * gate, and the gate was reading a real thing — the loop had to hold row
+ * validation, matching and construction at once.
+ */
+function areaNaming(row: unknown, componentId: string): string | null {
+  if (!isRecord(row)) return null;
+  if (componentIdOf(row.component) !== componentId) return null;
+  return typeof row.area === "string" ? row.area : "";
 }
 
 /**
