@@ -37,12 +37,15 @@ several — a heading, a paragraph and a button — and it is disabled with a re
 whenever the planner would refuse the selection, asked of the planner rather
 than restated, so the button and the save can never disagree.
 
-The form asks for a name and for how much of a page the pattern covers, with
-every option and its meaning visible rather than behind a picker: choosing
-"Page" files a pattern that starts a page instead of being inserted into one,
-which is worth reading before choosing rather than after. Category suggestions
-come from what the library already uses, so one site does not grow "Hero",
-"hero" and "Heroes" as three groupings nobody chose. Nobody is asked for a slug.
+The form asks for a name and for how much of a page the pattern covers — an
+element, a group of blocks, or a whole section — with every option and its
+meaning visible rather than behind a picker, because the choice is required and
+has no default. It offers the granularities the insert panel can offer back,
+which is why a whole-page pattern is not among them yet: that one is a way to
+START a page, and the surface that would offer it does not exist. Category
+suggestions come from what the library already uses, so one site does not grow
+"Hero", "hero" and "Heroes" as three groupings nobody chose. Nobody is asked for
+a slug.
 
 A refused save keeps the form open with the draft intact. A name collision is
 the expected failure and the remedy is to change a field that has to still be on

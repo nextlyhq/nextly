@@ -20,17 +20,22 @@ import { useShortcuts } from "@nextlyhq/ui";
 /**
  * Block the editor's shortcuts for as long as `active`.
  *
- * Registered one scope DEEPER than a host's, and above its depth rather than
- * merely deep: layers at equal depth are ordered by registration, so whether
- * the modal wins would otherwise depend on whether the host mounted its
- * shortcuts first. `priority: 1` settles it however deeply a host scoped its
- * own.
+ * Registered at the CALLER's own depth. `useShortcuts` reads the depth from the
+ * surrounding context and only a `ShortcutScope` increments it, so nothing here
+ * nests the hold — and nesting is not what would make it work anyway. The host
+ * chooses how deeply its own shortcuts are scoped, so any depth this picked
+ * could be tied or beaten by a scope the host nests one level further.
+ *
+ * `priority: 1` is what carries it: the manager sorts priority ABOVE depth, so
+ * the hold outranks an ordinary layer however deeply that layer sits. Priority
+ * is the one axis the host does not control.
  *
  * The manager already exempts text insertion and Tab, so a form's fields and
  * its focus trap keep working underneath this.
  *
- * `name` identifies the holder in the manager's own diagnostics, so two modals
- * open at once are told apart by something other than their depth.
+ * `name` identifies the holder in the manager's own diagnostics, which is worth
+ * having now that more than one layer raises its priority: two holds at equal
+ * priority fall back to depth, and a name is what tells them apart in a trace.
  */
 export function useModalKeyboardHold(name: string, active: boolean): void {
   useShortcuts([], { name, enabled: active, priority: 1, blocking: true });

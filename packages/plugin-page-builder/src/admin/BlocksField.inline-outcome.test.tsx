@@ -23,6 +23,7 @@ import * as React from "react";
 import { useForm, useWatch, type Control } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
 import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
@@ -37,6 +38,16 @@ let saved: unknown;
 
 /** How many times the inline passage has been asked to commit. */
 let commits = 0;
+
+/**
+ * The document the save form was handed, so the WORDS can be followed.
+ *
+ * Counting commits proves the flow was entered and nothing about what it
+ * carried: an editor that committed and then snapshotted the stale document
+ * would satisfy a call count while saving a pattern without the text the author
+ * had just typed, which is the entire defect.
+ */
+let savedFrom: unknown;
 
 /** The save-as-pattern verb the editor published, so a test can run it. */
 let offeredSaveVerb: (() => void) | undefined;
@@ -238,6 +249,27 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 // Imported after the mocks, which is what makes them take effect.
+/*
+ * The save form, replaced by a recorder.
+ *
+ * What is under test here is which DOCUMENT the editor hands over, and the real
+ * form would only let that be observed through a full submit. The form itself is
+ * exercised against the real components in `BlocksField.savePattern.test`; this
+ * file is about the editor's response to an inline outcome.
+ */
+vi.mock("./SavePatternPrompt", () => ({
+  SavePatternPrompt: ({
+    document,
+  }: {
+    document: BlockDocument | null;
+    selectedIds: readonly string[];
+    onClose: () => void;
+  }): React.JSX.Element | null => {
+    savedFrom = document;
+    return document === null ? null : <div role="dialog">save form</div>;
+  },
+}));
+
 const { BlocksField } = await import("./BlocksField");
 
 /** Watches what the field writes back, which is what a save actually persists. */
@@ -278,6 +310,7 @@ beforeEach(() => {
   errors.length = 0;
   saved = undefined;
   commits = 0;
+  savedFrom = undefined;
   offeredSaveVerb = undefined;
 });
 
@@ -436,11 +469,25 @@ describe("the save shortcut with an inline edit that could not be written", () =
 });
 
 describe("saving a pattern while a passage is still open", () => {
-  it("commits the passage FIRST, so the words on screen are the words stored", () => {
-    // A rich-text editor holds the author's text itself while they type — the
-    // canvas keeps the caret still — so the document the editor holds during an
-    // open passage is the one from before it. A form snapshotting that stores a
-    // pattern missing what is on screen, silently.
+  it("saves the COMMITTED document, not the one the editor was holding", () => {
+    /*
+     * A rich-text editor holds the author's text itself while they type — the
+     * canvas keeps the caret still — so the document the editor holds during an
+     * open passage is the one from before it. A form snapshotting that stores a
+     * pattern missing what is on screen, silently.
+     *
+     * Followed by IDENTITY rather than by counting the commit. An editor that
+     * committed and then snapshotted the stale document would satisfy a call
+     * count perfectly while doing exactly the thing this exists to prevent.
+     */
+    const written = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "typed", type: "core/text", version: 1, props: { text: "new" } },
+      ],
+    } as unknown as BlockDocument;
+    outcome = { status: "written", document: written };
     openEditor();
 
     React.act(() => {
@@ -448,6 +495,7 @@ describe("saving a pattern while a passage is still open", () => {
     });
 
     expect(commits).toBe(1);
+    expect(savedFrom).toBe(written);
   });
 
   it("declines to open the form when the commit was REFUSED", () => {
@@ -463,6 +511,9 @@ describe("saving a pattern while a passage is still open", () => {
     });
 
     expect(screen.queryByRole("dialog")).toBeNull();
+    // And nothing was handed over, so there is no document waiting to be saved
+    // from behind a form that did not open.
+    expect(savedFrom).toBeNull();
   });
 
   it("opens it when the commit went through", () => {
@@ -474,8 +525,6 @@ describe("saving a pattern while a passage is still open", () => {
       offeredSaveVerb?.();
     });
 
-    expect(
-      screen.getByRole("heading", { name: /save as pattern/i })
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });
