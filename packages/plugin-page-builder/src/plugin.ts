@@ -41,6 +41,7 @@ import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { patternLibraryRoute } from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -449,6 +450,21 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // collection, because it is a property of the plugin being INSTALLED: the
       // index table exists whether or not anything maintains it, and a host
       // that installs the plugin is asking for both.
+      // Refuse deleting a component a Layout still names. Registered beside
+      // the index maintenance because both answer "is this still in use", and
+      // separately because they answer it about different things: the index is
+      // a count over many pages, this is a refusal over few Layouts, and the
+      // refusal has to be exact at the moment it refuses.
+      registerLayoutComponentGuard({
+        ctx,
+        // RESOLVED slugs. A host may rename either, and a guard holding the
+        // declared name would register on a collection nothing deletes from
+        // and scan one that does not exist — refusing nothing, silently.
+        componentsCollection:
+          ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
+        layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+      });
+
       registerClassUsageMaintenance({
         ctx,
         // The RESOLVED slug, not the declared one. An integrator may
