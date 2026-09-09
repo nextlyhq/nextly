@@ -54,6 +54,7 @@ import {
 import {
   countNodes,
   DEFAULT_LIMITS,
+  ForestTooLargeError,
   treeDepth,
   type DocumentLimits,
 } from "./limits";
@@ -434,6 +435,31 @@ function assertUsableLimits(limits: DocumentLimits): void {
 }
 
 /** Refuses a tree the engine's recursive helpers cannot walk. */
+/**
+ * Measure a forest, reporting a refusal to measure as an `OpError`.
+ *
+ * `countNodes` and `treeDepth` refuse a forest whose entries outrun
+ * {@link MAX_WALKABLE_ENTRIES} rather than answering from a partial walk, and
+ * that refusal has to arrive here wearing this module's error type. Six
+ * `...Refusal` helpers in this file are written as
+ * `catch (error) { if (error instanceof OpError) return error.message; throw error; }`
+ * — so an error of any other type is rethrown, and a helper whose whole purpose
+ * is to hand back a reason instead throws at its caller.
+ *
+ * The message is carried verbatim: it already names the cause a reader has to
+ * act on, and restating it here would be a second spelling of one explanation.
+ */
+function measured(measure: () => number, verb: string): number {
+  try {
+    return measure();
+  } catch (error) {
+    if (error instanceof ForestTooLargeError) {
+      throw new OpError(`${verb}: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
 function assertWalkable(depth: number, subject: string): void {
   if (depth > MAX_WALKABLE_DEPTH) {
     throw new OpError(
@@ -1930,15 +1956,21 @@ function assertFitsCaps(
   // against a freshly measured original made the original's cost proportional
   // to the number of offending nodes, so lowering `maxDepth` under a broad
   // document turned a linear edit into a quadratic one.
-  const depth = treeDepth(result.nodes);
-  if (depth > limits.maxDepth && depth > treeDepth(before.nodes)) {
+  const depth = measured(() => treeDepth(result.nodes), verb);
+  if (
+    depth > limits.maxDepth &&
+    depth > measured(() => treeDepth(before.nodes), verb)
+  ) {
     throw new OpError(
       `${verb}: this would leave the document nested ${String(depth)} ` +
         `levels deep, past the ${String(limits.maxDepth)} it may hold.`
     );
   }
-  const total = countNodes(result.nodes);
-  if (total > limits.maxNodes && total > countNodes(before.nodes)) {
+  const total = measured(() => countNodes(result.nodes), verb);
+  if (
+    total > limits.maxNodes &&
+    total > measured(() => countNodes(before.nodes), verb)
+  ) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
         `past the ${String(limits.maxNodes)} a document may hold. The edit would ` +
@@ -3061,7 +3093,10 @@ export function applyOp(
   // saying so is better than letting a native RangeError escape from whichever
   // helper reaches it first. This is deliberately NOT `limits.maxDepth`: that
   // is a product rule a site may relax, and this is a machine one nothing can.
-  assertWalkable(treeDepth(nodes), "this document");
+  assertWalkable(
+    measured(() => treeDepth(nodes), "this document"),
+    "this document"
+  );
 
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from
@@ -3149,7 +3184,10 @@ export function applyOp(
       // `limits.maxDepth` can otherwise hand in a subtree deeper than the
       // engine's helpers can walk, and the overflow lands after the document
       // has been checked rather than before.
-      assertWalkable(treeDepth([op.node]), "insert");
+      assertWalkable(
+        measured(() => treeDepth([op.node]), "insert"),
+        "insert"
+      );
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(

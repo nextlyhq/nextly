@@ -20,6 +20,7 @@
 
 import {
   countNodes,
+  ForestTooLargeError,
   locateNode,
   type BlockDocument,
   type BlockNode,
@@ -111,6 +112,23 @@ function siblingsOf(
 }
 
 /**
+ * How many descendants a subtree has, or zero when it cannot be counted.
+ *
+ * The engine refuses to count a forest whose entries outrun its machine bound
+ * rather than answering from a partial walk. That refusal belongs to the engine
+ * and is right there; here it must not become an exception, because this
+ * function's answer decides whether the editor OFFERS a deletion at all.
+ */
+function countableDescendants(node: BlockNode): number {
+  try {
+    return countNodes([node]) - 1;
+  } catch (error) {
+    if (error instanceof ForestTooLargeError) return 0;
+    throw error;
+  }
+}
+
+/**
  * Describe deleting the selected block, or `null` when there is nothing to
  * delete.
  *
@@ -140,7 +158,19 @@ export function blockDeletion(
   // The subtree's own size, less the node itself. `countNodes` walks slots, so
   // this is every descendant at any depth rather than the immediate children —
   // which is what actually disappears.
-  const descendantCount = countNodes([node]) - 1;
+  //
+  // A subtree too large to count must not stop the DELETION being offered.
+  // `blockDeletion` is called to decide whether the toolbar's Delete button is
+  // enabled, so letting the refusal escape would throw out of toolbar
+  // construction and take the editor down at the moment a node is selected —
+  // and the count is descriptive, while being able to remove the node is not.
+  //
+  // Zero is the fallback, and it is deliberately the same value a node with no
+  // descendants gets. Normally folding "unknown" into a real value is how a
+  // third state disappears, but the only reader is the announcement, which says
+  // "<name> deleted" at zero and adds "with N blocks inside" above it — so zero
+  // states nothing about the contents rather than claiming there were none.
+  const descendantCount = countableDescendants(node);
 
   const dropSlotIfEmpty =
     here.parent !== undefined && here.slot !== undefined
