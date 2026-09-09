@@ -17,7 +17,7 @@ import {
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
 import {
-  apiKeyScope,
+  apiKeyScopeFrom,
   type GrantedPermission,
   ruleFacingPermissions,
 } from "../authenticated-scope";
@@ -643,7 +643,7 @@ async function evaluateCodeAccess(
   // `resource:action` — which `listEffectivePermissions` produces for the
   // session branch below. Handing a rule the stored form denied every key on
   // exactly the predicate the documentation shows.
-  const scope = apiKeyScope(authResult.grants ?? [], authResult.roles);
+  const scope = apiKeyScopeFrom(authResult);
   const ctx: AccessControlContext = {
     user: { id: authResult.userId },
     roles: [...(scope.roles ?? [])],

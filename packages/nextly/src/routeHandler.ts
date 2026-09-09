@@ -98,7 +98,7 @@ import {
   putWidgetLayout,
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
-import { apiKeyScope } from "./auth/authenticated-scope";
+import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import { runWithCallerScope } from "./auth/caller-scope";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { readableEntities } from "./auth/entity-read-access";
@@ -1363,7 +1363,7 @@ async function handleServiceRequest(
   // field added to the scope later reaches them without a second edit here.
   const result = await runWithCallerScope(
     authorizedUser?.authMethod === "api-key"
-      ? apiKeyScope(authorizedUser.grants ?? [], authorizedUser.roles)
+      ? apiKeyScopeFrom(authorizedUser)
       : undefined,
     () => dispatcher.dispatch(dispatchRequest)
   );

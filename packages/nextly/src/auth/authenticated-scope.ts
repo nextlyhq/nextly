@@ -115,6 +115,32 @@ export function apiKeyScope(
 }
 
 /**
+ * The scope for an authenticated caller, from whatever that caller carries.
+ *
+ * The one place the choice between the two constructions is made, so no call
+ * site has to remember which it holds. A caller resolved through
+ * `requireAuthentication` carries the rows; one whose grants were already
+ * reduced to slugs — a mocked context, a path that stamped them somewhere and
+ * read them back — carries only those, and gets a scope that says so rather
+ * than an empty one.
+ */
+export function apiKeyScopeFrom(caller: {
+  grants?: readonly GrantedPermission[];
+  permissions: readonly string[];
+  roles: readonly string[];
+}): AuthenticatedScope {
+  if (caller.grants) return apiKeyScope(caller.grants, caller.roles);
+  // No rows, so `grants` is left ABSENT rather than empty: absent means "this
+  // scope never had them", which `ruleFacingPermissions` answers honestly, and
+  // an empty array would mean "this key holds nothing" and deny everything.
+  return freezeScope({
+    actorType: "apiKey",
+    permissions: [...caller.permissions],
+    roles: [...caller.roles],
+  });
+}
+
+/**
  * A copy of `scope` holding only the grants `keep` accepts.
  *
  * How a route restricts itself further before a sensitive call. Both spellings
