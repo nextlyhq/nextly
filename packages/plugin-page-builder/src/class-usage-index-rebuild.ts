@@ -181,6 +181,52 @@ interface PageTally {
 }
 
 /**
+ * Bring ONE document's rows into agreement, across every index.
+ *
+ * Its own function rather than a loop inside the page walk. The walk COUNTS and
+ * this REPAIRS, and folding both into one body put that function over the
+ * complexity gate — which is the gate reporting, correctly, that a reader now
+ * had to hold two jobs at once to follow it.
+ *
+ * A rebuild that repaired only some indexes is the shape this whole slice
+ * exists to avoid: an unrepaired index answers "references nothing" for every
+ * document the walk visited, and that is the answer a delete check acts on.
+ */
+async function repairOneDocument(
+  args: {
+    targets: readonly UsageTarget[];
+    collection: string;
+    field: string;
+    locale: string;
+    variant: ClassUsageVariant;
+    limits: DocumentLimits;
+  },
+  item: { id: string } & Record<string, unknown>
+): Promise<{ changed: boolean; unread: boolean }> {
+  const subject = {
+    scope: "collection" as const,
+    entity: args.collection,
+    entityKey: item.id,
+    field: args.field,
+    locale: args.locale,
+    variant: args.variant,
+  };
+
+  let changed = false;
+  let unread = false;
+  for (const target of args.targets) {
+    const report = await target.maintain({
+      subject,
+      document: item[args.field],
+      limits: args.limits,
+    });
+    if (report.undetermined) unread = true;
+    if (report.inserted > 0 || report.removed > 0) changed = true;
+  }
+  return { changed, unread };
+}
+
+/**
  * Bring one query's worth of documents into agreement with their rows.
  *
  * An item this cannot read an id out of is SKIPPED rather than counted.
@@ -209,40 +255,13 @@ async function rebuildOnePage(
     scanned += 1;
     visited.add(item.id);
 
-    const subject = {
-      scope: "collection" as const,
-      entity: args.collection,
-      entityKey: item.id,
-      field: args.field,
-      locale: args.locale,
-      variant: args.variant,
-    };
+    const outcome = await repairOneDocument(args, item);
 
-    // Every index, from ONE document. A rebuild that repaired only some of them
-    // is the shape this whole slice exists to avoid: the unrepaired index reads
-    // as "references nothing", which is the answer a delete check acts on.
-    let changed = false;
-    let unread = false;
-    for (const target of args.targets) {
-      const report = await target.maintain({
-        subject,
-        document: item[args.field],
-        limits: args.limits,
-      });
-      if (report.undetermined) unread = true;
-      if (report.inserted > 0 || report.removed > 0) changed = true;
-    }
-    const report = {
-      undetermined: unread,
-      inserted: changed ? 1 : 0,
-      removed: 0,
-    };
-
-    if (report.undetermined) undetermined += 1;
+    if (outcome.unread) undetermined += 1;
     // Repaired means the rows CHANGED, which is a different question from
     // whether the document was read. A document already in agreement issues no
     // writes and is scanned without being repaired.
-    if (report.inserted > 0 || report.removed > 0) repaired += 1;
+    if (outcome.changed) repaired += 1;
   }
 
   return { scanned, repaired, undetermined };
