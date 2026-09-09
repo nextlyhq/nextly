@@ -38,20 +38,25 @@ const SRC = join(__dirname, "..", "..");
 const SEAM_DEFINITION = join(SRC, "auth", "authenticated-scope.ts");
 
 /**
- * What this guard does NOT reach, stated rather than left to be discovered.
+ * The dispatcher's param decode, which rebuilds a scope from strings.
  *
- * The pattern matches the literal `actorType: "apiKey"`, which is the shape all
- * eight instances took. A scope built from a VARIABLE actor type does not match
- * it — `dispatcher/helpers/authenticated-actor.ts` returns
- * `{ actorType: type, permissions }`, and no pattern that catches that could
- * tell it from any other object being assembled.
+ * A REAL exemption now, unlike the one this file first carried: the widened
+ * pattern DOES match it, so excluding it is a decision the guard acts on rather
+ * than a note beside a pattern that could never have reached it.
  *
- * That file is a deliberate exception in any case: route params carry strings,
- * so it has no rows for `apiKeyScopeFrom` to take, and nothing reads its answer
- * while a scope is pinned for the request. But it is UNREACHED here rather than
- * excluded here, and an exclusion list naming it would say the guard considered
- * it when the guard cannot see it.
+ * Exempt because it has nothing better to build from. Route params carry
+ * strings, so there are no permission rows for `apiKeyScopeFrom` to take, and
+ * its `actorType` is a variable that may be `user` or `system` — neither of
+ * which `apiKeyScopeFrom` produces. Nothing reads its answer while a scope is
+ * pinned for the request, which is every request that arrives through the
+ * route handler.
  */
+const LOSSY_DECODE = join(
+  SRC,
+  "dispatcher",
+  "helpers",
+  "authenticated-actor.ts"
+);
 
 /** Every product source file — tests excluded, they may model any shape. */
 function productSources(): { path: string; text: string }[] {
@@ -66,7 +71,7 @@ function productSources(): { path: string; text: string }[] {
       }
       if (!name.endsWith(".ts") && !name.endsWith(".tsx")) continue;
       if (name.endsWith(".test.ts") || name.endsWith(".test-d.ts")) continue;
-      if (full === SEAM_DEFINITION) continue;
+      if (full === SEAM_DEFINITION || full === LOSSY_DECODE) continue;
       out.push({ path: full, text: readFileSync(full, "utf8") });
     }
   };
@@ -74,8 +79,22 @@ function productSources(): { path: string; text: string }[] {
   return out;
 }
 
-/** A literal declaring itself an API-key scope. */
-const HAND_BUILT = /actorType:\s*"apiKey"/g;
+/**
+ * An object being built as a scope — matched by its SHAPE, not by its value.
+ *
+ * `actorType: "apiKey"` was the first version of this, and it missed the ninth
+ * instance: `api/singles-detail.ts` wrote
+ * `actorType: auth.authMethod === "api-key" ? "apiKey" : "user"`, a conditional
+ * no value-matching pattern can see. The guard reported clean while a live
+ * defect sat one file away, which is a guard certifying what it cannot examine.
+ *
+ * `actorType` PAIRED with `permissions` is what a scope is, whatever expression
+ * produces either. That distinguishes it from the other things in this codebase
+ * that carry an `actorType` and are not scopes — the webhook outbox column and
+ * its Drizzle schemas — without naming them in an exemption list that would go
+ * stale the moment a third such thing appears.
+ */
+const HAND_BUILT = /actorType:[^}]*?\bpermissions\s*[:,}]/gs;
 
 describe("the API-key scope seam", () => {
   it("is exercised — the scan reaches the files that once held a literal", () => {
@@ -121,13 +140,36 @@ describe("the API-key scope seam", () => {
     // absence is satisfied by a pattern that can never match. This shows the
     // pattern DOES match the shape it rejects, so a green above means the
     // shape is gone rather than that the search was broken.
-    const reintroduced = [
+    const asLiteral = [
       '  return auth.authMethod === "api-key"',
       '    ? { actorType: "apiKey", permissions: auth.permissions }',
       "    : undefined;",
     ].join("\n");
+    expect(asLiteral.match(HAND_BUILT)).toHaveLength(1);
+    HAND_BUILT.lastIndex = 0;
 
-    expect(reintroduced.match(HAND_BUILT)).toHaveLength(1);
+    // And the CONDITIONAL form, which the first version of this pattern could
+    // not see. It is the shape the ninth instance actually took, so a control
+    // that only exercised the literal would have certified a guard blind to the
+    // very case that motivated widening it.
+    const asConditional = [
+      "      authenticatedScope: {",
+      '        actorType: auth.authMethod === "api-key" ? "apiKey" : "user",',
+      "        permissions: auth.permissions,",
+      "      },",
+    ].join("\n");
+    expect(asConditional.match(HAND_BUILT)).toHaveLength(1);
+    HAND_BUILT.lastIndex = 0;
+
+    // The negative half: an `actorType` that is NOT a scope must stay unmatched,
+    // or the guard reports the webhook outbox column as an authorization defect.
+    const outboxColumn = [
+      "  await recordEvent({",
+      "    actorType: envelope.actor?.type ?? null,",
+      "    actorId: envelope.actor?.id ?? null,",
+      "  });",
+    ].join("\n");
+    expect(outboxColumn.match(HAND_BUILT)).toBeNull();
     HAND_BUILT.lastIndex = 0;
   });
 });

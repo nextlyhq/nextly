@@ -67,7 +67,9 @@ the scope's arrays are frozen, so editing them is refused:
 ```ts
 import { narrowScope } from "@nextlyhq/plugin-sdk";
 
-const readOnly = narrowScope(ctx.authenticatedScope!, g => g.action === "read");
+// `undefined` in, `undefined` out — a signed-in person carries no scope, and
+// resolves by their own RBAC exactly as they would have anyway.
+const readOnly = narrowScope(ctx.authenticatedScope, g => g.action === "read");
 
 await ctx.services.collections.updateEntry("posts", id, data, {
   as: "user",

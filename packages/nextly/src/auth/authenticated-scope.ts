@@ -152,6 +152,8 @@ export function apiKeyScopeFrom(caller: {
 /**
  * A copy of `scope` holding only the grants `keep` accepts.
  *
+ * `undefined` in, `undefined` out: a session caller has no scope to narrow.
+ *
  * How a route restricts itself further before a sensitive call. Both spellings
  * are re-derived from the surviving rows, so a grant dropped here is dropped at
  * every gate — the collection check, the field rules, and anything added later.
@@ -159,9 +161,15 @@ export function apiKeyScopeFrom(caller: {
  * is frozen.
  */
 export function narrowScope(
-  scope: AuthenticatedScope,
+  scope: AuthenticatedScope | undefined,
   keep: (grant: GrantedPermission) => boolean
-): AuthenticatedScope {
+): AuthenticatedScope | undefined {
+  // A SESSION caller carries no scope, and reaches the same routes an API key
+  // does. Requiring each call site to guard that is how a `!` gets written —
+  // and a `!` here is a crash for every signed-in person using the route.
+  // There is nothing to narrow and nothing is the honest answer: the caller
+  // then passes no scope, and resolves by their own RBAC exactly as before.
+  if (!scope) return undefined;
   if (!scope.grants) {
     // No rows to filter, so the slugs are all there is. Narrow those, and leave
     // the rule spelling to `ruleFacingPermissions`, which will read them too.

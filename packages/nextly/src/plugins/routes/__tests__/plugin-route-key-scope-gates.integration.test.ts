@@ -32,6 +32,10 @@ import { defineCollection, text } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { isSuperAdmin } from "../../../services/lib/permissions";
 import { narrowScope } from "../../../auth/authenticated-scope";
+import type {
+  ApiKeyTokenType,
+  ExpiresIn,
+} from "../../../domains/auth/services/api-key-service";
 import { definePlugin } from "../../plugin-context";
 import { createTestNextly, type TestNextly } from "../../test-nextly";
 
@@ -130,6 +134,88 @@ const gatePlugin = definePlugin({
               )
             );
             return Response.json({ wrote: true, id: created.id });
+          } catch (error) {
+            return Response.json(
+              { wrote: false, reason: String(error) },
+              { status: 403 }
+            );
+          }
+        },
+      },
+      {
+        method: "POST",
+        path: "/tx-plain",
+        // The same transactional write with NOTHING surrendered, so the
+        // narrowed twin below is refused for the narrowing and not for a grant
+        // the key never had.
+        handler: async (_req, ctx) => {
+          try {
+            const collections = ctx.services.collections as unknown as {
+              withTransaction: <T>(
+                fn: (tx: unknown) => Promise<T>
+              ) => Promise<T>;
+              createEntryInTransaction: (
+                tx: unknown,
+                slug: string,
+                data: Record<string, unknown>,
+                context: Record<string, unknown>
+              ) => Promise<{ id: string }>;
+            };
+            await collections.withTransaction(async tx =>
+              collections.createEntryInTransaction(
+                tx,
+                "notes",
+                { title: "written with the grant intact" },
+                { user: ctx.user ?? undefined }
+              )
+            );
+            return Response.json({ wrote: true });
+          } catch (error) {
+            return Response.json(
+              { wrote: false, reason: String(error) },
+              { status: 403 }
+            );
+          }
+        },
+      },
+      {
+        method: "POST",
+        path: "/tx-narrowed",
+        /**
+         * A route that surrenders a grant and then reaches for the TRANSACTION
+         * entry point.
+         *
+         * These sit outside the plugin facade's `CONTEXT_INDEX`, so the proxy
+         * binds them straight through and the wrapper that re-pins an explicit
+         * scope never runs. The narrowing then reached the argument and no
+         * gate, and the write was judged on the scope the request arrived with.
+         */
+        handler: async (_req, ctx) => {
+          const narrowed = narrowScope(
+            ctx.authenticatedScope,
+            grant => grant.slug !== "create-notes"
+          );
+          try {
+            const collections = ctx.services.collections as unknown as {
+              withTransaction: <T>(
+                fn: (tx: unknown) => Promise<T>
+              ) => Promise<T>;
+              createEntryInTransaction: (
+                tx: unknown,
+                slug: string,
+                data: Record<string, unknown>,
+                context: Record<string, unknown>
+              ) => Promise<{ id: string }>;
+            };
+            await collections.withTransaction(async tx =>
+              collections.createEntryInTransaction(
+                tx,
+                "notes",
+                { title: "written after giving up the grant" },
+                { user: ctx.user ?? undefined, authenticatedScope: narrowed }
+              )
+            );
+            return Response.json({ wrote: true });
           } catch (error) {
             return Response.json(
               { wrote: false, reason: String(error) },
@@ -264,6 +350,8 @@ function post(
     | "read-one"
     | "read-spelled"
     | "narrow-then-read"
+    | "tx-plain"
+    | "tx-narrowed"
     | "can-read-notes"
     | "mutate-scope",
   headers: Record<string, string>
@@ -349,7 +437,9 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
   });
 
   const permissions = await nextly.permissions.find({ limit: 300 });
-  const granted = ["read-posts", "read-notes"].map(slug => {
+  // `create-notes` included deliberately: a narrowing test whose key never held
+  // the write grant is refused whether or not the narrowing worked.
+  const granted = ["read-posts", "read-notes", "create-notes"].map(slug => {
     const found = permissions.items.find(p => p.slug === slug);
     expect(
       found,
@@ -367,9 +457,15 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
       userId: string,
       input: {
         name: string;
-        tokenType: string;
+        tokenType: ApiKeyTokenType;
         roleId?: string;
-        expiresIn: string;
+        // The REAL union, not `string`. A widened cast here let this suite ask
+        // for `expiresIn: "never"` — not a member — and pass anyway, because
+        // `resolveExpiresAt` maps an unknown value to no expiry. Every test in
+        // the file then rested on that fallback rather than on the contract,
+        // and would have failed for a reason unrelated to scope the day the
+        // fallback became a throw.
+        expiresIn: ExpiresIn;
       }
     ) => Promise<{ key: string; meta: { id: string } }>;
     resolveApiKeyPermissions: (
@@ -384,7 +480,7 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
     name: "viewer key for a contractor",
     tokenType: "role-based",
     roleId: viewer.item.id,
-    expiresIn: "never",
+    expiresIn: "unlimited",
   });
 
   const scope = await apiKeys.resolveApiKeyPermissions(
@@ -395,8 +491,9 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
   );
   expect(
     [...scope].sort(),
-    "the key must hold both reads and NO write"
-  ).toEqual(["read-notes", "read-posts"]);
+    "the key must hold exactly these, or a narrowing test below is refused for " +
+      "a reason other than the grant it surrendered"
+  ).toEqual(["create-notes", "read-notes", "read-posts"]);
 
   ownerId = owner.item.id;
   keyId = meta.id;
@@ -598,7 +695,7 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
       first.map(g => g.slug).sort(),
       "the resolver must return the key's grants, or the assertions below are " +
         "about an empty array"
-    ).toEqual(["read-notes", "read-posts"]);
+    ).toEqual(["create-notes", "read-notes", "read-posts"]);
 
     expect(() =>
       (first as { slug: string }[]).push({ slug: "delete-posts" })
@@ -613,7 +710,7 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     expect(
       second.map(g => g.slug).sort(),
       "a second resolve returned grants a caller had added to the first"
-    ).toEqual(["read-notes", "read-posts"]);
+    ).toEqual(["create-notes", "read-notes", "read-posts"]);
   });
 
   it("answers `caller.can()` the way the write would answer", async () => {
@@ -639,6 +736,38 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
         "spelling derives from never reach it and every documented permission " +
         "predicate answers false."
     ).toBe(true);
+  });
+
+  it("allows the transaction write the key's grant DOES cover", async () => {
+    // The control. Without it, the refusal below is equally consistent with a
+    // key that never held `create-notes` — which is exactly what an earlier
+    // version of these two tests was, and it passed while proving nothing.
+    const key = await viewerKeyOwnedBySuperAdmin();
+
+    const res = await post("tx-plain", { authorization: `Bearer ${key}` });
+    const body = (await res.json()) as { wrote: boolean; reason?: string };
+    expect(
+      body.wrote,
+      `the key holds \`create-notes\`, so this must write. ${body.reason ?? ""}`
+    ).toBe(true);
+  });
+
+  it("carries a narrowing into a TRANSACTION write", async () => {
+    // The key holds `read-notes`; the route gives it up and then writes through
+    // the transaction entry point. The `notes` collection's own rule asks for
+    // `notes:read`, so surrendering that grant must refuse the write.
+    const key = await viewerKeyOwnedBySuperAdmin();
+
+    const res = await post("tx-narrowed", { authorization: `Bearer ${key}` });
+    const body = (await res.json()) as { wrote: boolean; reason?: string };
+
+    expect(
+      body.wrote,
+      "the route surrendered the grant and the transactional write went " +
+        "through anyway. The transaction methods bypass the facade wrapper " +
+        "that re-pins an explicit scope, so the narrowing reached the argument " +
+        `and never a gate. ${body.reason ?? ""}`
+    ).toBe(false);
   });
 
   it("does not let a handler edit the grants it was handed", async () => {
@@ -680,11 +809,11 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
       expect(
         [...body.after].sort(),
         "the scope must be unchanged after the refused edits"
-      ).toEqual(["read-notes", "read-posts"]);
+      ).toEqual(["create-notes", "read-notes", "read-posts"]);
       return [...body.before].sort();
     };
 
-    const HELD = ["read-notes", "read-posts"];
+    const HELD = ["create-notes", "read-notes", "read-posts"];
 
     expect(
       await grantsSeenBy(),
