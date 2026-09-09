@@ -32,9 +32,12 @@ They walk ENTRIES, not objects, and deliberately so: one node object placed in t
 
 `documentBytes` was the sharp edge. `JSON.stringify` expands each shared node into a copy per path that reaches it, so it allocated 132 MB for 21 objects and raised `RangeError: Invalid string length` at 23 — from a document a few kilobytes in memory, in the one function that decides whether a document may be stored.
 
-All three now throw `ForestTooLargeError` past `MAX_VALUE_PARTS` (4,194,304) — the ceiling the op layer's preflight **already** refused values at, now shared rather than duplicated.
+All three now throw `ForestTooLargeError`, against the ceiling that fits what each one actually spends:
 
-That reuse is the point. A second, lower number would let a dry run accept a document the apply then refuses, and would sit below `maxNodes` on a site that legitimately raised it — so a supported configuration would find one reader agreeing with it and another not. `MAX_VALUE_PARTS` is exported from the package root and from `@nextlyhq/blocks-engine/format` alongside the error.
+- `countNodes` and `treeDepth` refuse past `MAX_VALUE_PARTS` (4,194,304) — the ceiling the op layer's preflight **already** refused values at, now shared rather than duplicated.
+- `documentBytes` refuses past `MAX_SERIALIZED_VALUES`, which is derived from the byte cap it protects: every serialized value contributes at least one byte, so a document that has emitted more values than the cap has bytes cannot come in under it.
+
+Sharing the first number is the point: a second, lower ceiling for the structural readers would let a dry run accept a document the apply then refuses, and would sit below `maxNodes` on a site that legitimately raised it. The serializer keeps its own because it bounds a different resource — a structural walk reads, while serialization BUILDS as it goes, so one numeral buys different amounts of work in each. Both are exported from the package root, and `@nextlyhq/blocks-engine/format` exports the error with `MAX_SERIALIZED_VALUES`, the only one bounding anything that entry exposes.
 
 The messages name the routes to the ceiling without claiming which one a caller hit, because no reader compares object identity and so none can tell. Inside `applyOp` the refusal arrives as an `OpError` like every other, so the `...Refusal` helpers still return a reason rather than throwing at their caller. Composition and the builder's deletion metadata degrade rather than propagate it: an unmeasurable subtree refunds nothing and reports no descendant count, so a page still renders and a block can still be deleted.
 

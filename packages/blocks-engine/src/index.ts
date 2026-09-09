@@ -110,6 +110,7 @@ export {
   // value with more parts than this, so a second number here would let a dry run
   // accept what the apply then refuses.
   MAX_VALUE_PARTS,
+  MAX_SERIALIZED_VALUES,
   ForestTooLargeError,
 } from "./limits";
 export type { DocumentLimits } from "./limits";

@@ -60,13 +60,49 @@ function chain(objects: number): BlockNode[] {
 const page = (nodes: BlockNode[]): BlockDocument =>
   ({ formatVersion: 1, kind: "page", nodes }) as BlockDocument;
 
+/** Entries a `sharedChain(wrappers)` walks: one leaf plus `wrappers` doublings. */
+function chainEntries(wrappers: number): number {
+  return 2 ** (wrappers + 1) - 1;
+}
+
+/** The smallest chain whose entries exceed `ceiling`. */
+function smallestChainOver(ceiling: number): number {
+  let wrappers = 1;
+  while (chainEntries(wrappers) <= ceiling) wrappers += 1;
+  return wrappers;
+}
+
 describe("a forest whose entries outrun its objects", () => {
-  // 23 objects walk 8,388,607 entries, which is past the shared ceiling of
-  // 4,194,304. 18 objects walk 524,287, which is not — so the pair separates
-  // "refuses what it must" from "refuses everything", and neither test is
-  // evidence without the other.
-  const OVER = 23;
-  const UNDER = 18;
+  /*
+   * DERIVED from the ceiling, not chosen against it. `sharedChain(w)` builds one
+   * leaf plus `w` wrappers, so its entries are `2 ** (w + 1) - 1` — a number
+   * that was stated by hand and was wrong by a factor of two, which left the
+   * fixture four times over the ceiling instead of just over it. A fixture with
+   * that much slack keeps passing while the ceiling moves underneath it, which
+   * is the drift these tests exist to expose.
+   *
+   * OVER is the SMALLEST chain that exceeds the ceiling and UNDER is the largest
+   * that does not, so the pair brackets it: move the ceiling either way and one
+   * of them fails.
+   */
+  const OVER = smallestChainOver(MAX_VALUE_PARTS);
+  const UNDER = OVER - 1;
+
+  it("brackets the ceiling, so neither fixture can drift away from it", () => {
+    /*
+     * The property that makes every test below mean something. A fixture sized
+     * by hand sits at whatever multiple of the ceiling it happened to be written
+     * at, and keeps passing when the ceiling moves — the earlier one was four
+     * times over, from an entry count stated wrongly by a factor of two.
+     *
+     * Asserted rather than assumed, because the derivation is arithmetic that
+     * can be got wrong exactly as the hand-written number was.
+     */
+    expect(chainEntries(UNDER)).toBeLessThanOrEqual(MAX_VALUE_PARTS);
+    expect(chainEntries(OVER)).toBeGreaterThan(MAX_VALUE_PARTS);
+    // And OVER is the SMALLEST such chain: one step down is under the ceiling.
+    expect(OVER).toBe(UNDER + 1);
+  });
 
   it("refuses to COUNT one, rather than answering from a partial walk", () => {
     expect(() => countNodes(sharedChain(OVER))).toThrow(ForestTooLargeError);
@@ -184,7 +220,7 @@ describe("a forest whose entries outrun its objects", () => {
   it("still answers for a shared forest UNDER the bound", () => {
     // The control for all four above. A bound set low enough to refuse
     // everything passes each of them, and this is what separates the two.
-    expect(countNodes(sharedChain(UNDER))).toBe(2 ** (UNDER + 1) - 1);
+    expect(countNodes(sharedChain(UNDER))).toBe(chainEntries(UNDER));
     expect(treeDepth(sharedChain(UNDER))).toBe(UNDER + 1);
   });
 

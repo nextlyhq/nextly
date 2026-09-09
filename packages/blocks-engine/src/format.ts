@@ -60,7 +60,11 @@ export {
   // the threshold it hit, without reaching past this entry to the root — which
   // is the coupling this parser-free entry exists to prevent.
   ForestTooLargeError,
-  MAX_VALUE_PARTS,
+  // `MAX_SERIALIZED_VALUES` and not `MAX_VALUE_PARTS`: `countNodes` and
+  // `treeDepth` are not published here, so the structural ceiling bounds nothing
+  // a caller of this entry can reach, and naming it would advertise a threshold
+  // they cannot hit.
+  MAX_SERIALIZED_VALUES,
 } from "./limits";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
