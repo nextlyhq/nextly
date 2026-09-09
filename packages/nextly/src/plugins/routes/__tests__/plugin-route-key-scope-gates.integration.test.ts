@@ -221,9 +221,19 @@ const gatePlugin = definePlugin({
           } catch {
             refused = true;
           }
+          // And the other way to desync it: REPLACING the array rather than
+          // emptying it. Freezing the array stops the splice; only freezing the
+          // scope OBJECT stops this, and the two are separate guards.
+          let refusedReplace = false;
+          try {
+            (scope as unknown as { permissions: string[] }).permissions = [];
+          } catch {
+            refusedReplace = true;
+          }
           return Response.json({
             before,
             refused,
+            refusedReplace,
             after: [...(scope?.permissions ?? [])],
           });
         },
@@ -278,6 +288,7 @@ function restGet(
 let handle: TestNextly | undefined;
 let ownerId = "";
 let keyId = "";
+let viewerRoleId = "";
 
 beforeEach(async () => {
   handle = await createTestNextly({
@@ -372,6 +383,7 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
 
   ownerId = owner.item.id;
   keyId = meta.id;
+  viewerRoleId = viewer.item.id;
   return key;
 }
 
@@ -543,6 +555,50 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     ).toHaveProperty("gatedByPermission");
   });
 
+  it("hands out grants nothing can write to, cache included", async () => {
+    // Reached directly rather than through a request, deliberately. Every
+    // consumer today copies the array into a fresh scope, so no request can
+    // corrupt the cache — and the guard is here for the consumer written next,
+    // which is exactly the one no test can drive yet. The resolver's contract
+    // is what is asserted: what it returns is shared, so it is not writable.
+    await viewerKeyOwnedBySuperAdmin();
+    const apiKeys = handle!.getService("apiKeyService") as unknown as {
+      resolveApiKeyGrants: (
+        tokenType: string,
+        roleId: string | null,
+        userId: string,
+        keyId: string
+      ) => Promise<readonly { slug: string }[]>;
+    };
+
+    const first = await apiKeys.resolveApiKeyGrants(
+      "role-based",
+      viewerRoleId,
+      ownerId,
+      keyId
+    );
+    expect(
+      first.map(g => g.slug).sort(),
+      "the resolver must return the key's grants, or the assertions below are " +
+        "about an empty array"
+    ).toEqual(["read-notes", "read-posts"]);
+
+    expect(() =>
+      (first as { slug: string }[]).push({ slug: "delete-posts" })
+    ).toThrow();
+
+    const second = await apiKeys.resolveApiKeyGrants(
+      "role-based",
+      viewerRoleId,
+      ownerId,
+      keyId
+    );
+    expect(
+      second.map(g => g.slug).sort(),
+      "a second resolve returned grants a caller had added to the first"
+    ).toEqual(["read-notes", "read-posts"]);
+  });
+
   it("does not let a handler edit the grants it was handed", async () => {
     // Three requests, because the grants are handed out from two branches and
     // BOTH must hand out a copy: the first request resolves them fresh, and
@@ -562,6 +618,7 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
         before: string[];
         after: string[];
         refused: boolean;
+        refusedReplace: boolean;
       };
       // The handler tried to clear its own scope and must have been refused.
       // Without this the assertions below pass on a build where the handler
@@ -574,8 +631,13 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
           "spelling derived from `grants`."
       ).toBe(true);
       expect(
+        body.refusedReplace,
+        "replacing `permissions` wholesale must throw too. Freezing the array " +
+          "does not stop that; freezing the scope object is what does."
+      ).toBe(true);
+      expect(
         [...body.after].sort(),
-        "the scope must be unchanged after the refused edit"
+        "the scope must be unchanged after the refused edits"
       ).toEqual(["read-notes", "read-posts"]);
       return [...body.before].sort();
     };
