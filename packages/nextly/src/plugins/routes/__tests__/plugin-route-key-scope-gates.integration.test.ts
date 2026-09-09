@@ -192,6 +192,7 @@ function post(
 
 let handle: TestNextly | undefined;
 let ownerId = "";
+let keyId = "";
 
 beforeEach(async () => {
   handle = await createTestNextly({
@@ -285,7 +286,26 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
   ).toEqual(["read-notes", "read-posts"]);
 
   ownerId = owner.item.id;
+  keyId = meta.id;
   return key;
+}
+
+/**
+ * Put the key's grants back to unresolved.
+ *
+ * The assertion above resolves them, which populates the same five-minute cache
+ * the request path reads — so without this every request in a test takes the
+ * cache-HIT branch and the fresh-resolve branch never executes. Both branches
+ * hand the scope to a route handler and both must hand it a copy; a mutation
+ * removing the copy from the fresh one survived a test that only ever hit the
+ * cache.
+ */
+function forgetResolvedGrants(): void {
+  (
+    handle!.getService("apiKeyService") as unknown as {
+      invalidatePermissionsCache: (id: string) => void;
+    }
+  ).invalidatePermissionsCache(keyId);
 }
 
 /** Seed a row as the trusted server, so the read tests have something to read. */
@@ -370,33 +390,49 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
   });
 
   it("does not let a handler's narrowing outlive its own request", async () => {
+    // Three requests, because the grants are handed out from two branches and
+    // BOTH must hand out a copy: the first request resolves them fresh, and
+    // every request after it reads the five-minute cache. Two requests exercise
+    // only one branch — whichever one the previous line left the cache in — and
+    // a mutation removing the copy from the other survives.
     const key = await viewerKeyOwnedBySuperAdmin();
+    // Undo the resolution the helper's own assertion performed, so the first
+    // request below is a genuine cache MISS.
+    forgetResolvedGrants();
 
-    const first = await post("mutate-scope", {
-      authorization: `Bearer ${key}`,
-    });
-    const firstBody = (await first.json()) as {
-      before: string[];
-      after: string[];
+    const grantsSeenBy = async (): Promise<string[]> => {
+      const res = await post("mutate-scope", {
+        authorization: `Bearer ${key}`,
+      });
+      const body = (await res.json()) as { before: string[]; after: string[] };
+      // Each handler clears its own scope in place. What the NEXT request sees
+      // is the question; `before` is read from the scope it was handed.
+      expect(
+        body.after,
+        "the handler must actually have cleared its own scope, or nothing was " +
+          "mutated and the requests after it prove nothing"
+      ).toEqual([]);
+      return [...body.before].sort();
     };
-    expect(
-      [...firstBody.before].sort(),
-      "the handler must see the key's grants, or it had nothing to mutate " +
-        "and the second request below proves nothing"
-    ).toEqual(["read-notes", "read-posts"]);
 
-    // The same key, a second request. Its grants must be what the key holds,
-    // not what the previous handler left behind in the shared cache.
-    const second = await post("mutate-scope", {
-      authorization: `Bearer ${key}`,
-    });
-    const secondBody = (await second.json()) as { before: string[] };
+    const HELD = ["read-notes", "read-posts"];
 
     expect(
-      [...secondBody.before].sort(),
-      "the first handler's in-place narrowing changed the key's effective " +
-        "grants for a later request. `resolveApiKeyPermissions` returns its " +
-        "cached array by reference and the route context published it as-is."
-    ).toEqual(["read-notes", "read-posts"]);
+      await grantsSeenBy(),
+      "the first handler must see the key's grants — resolved fresh, since " +
+        "the cache was just invalidated — or it had nothing to mutate"
+    ).toEqual(HELD);
+
+    expect(
+      await grantsSeenBy(),
+      "the FRESH resolve handed out the array it also stored in the cache, so " +
+        "the first handler's narrowing became the key's real grants."
+    ).toEqual(HELD);
+
+    expect(
+      await grantsSeenBy(),
+      "a CACHE HIT handed out the cached array itself, so the second " +
+        "handler's narrowing became the key's real grants."
+    ).toEqual(HELD);
   });
 });
