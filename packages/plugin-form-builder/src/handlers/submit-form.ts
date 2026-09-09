@@ -19,11 +19,6 @@ import type {
 } from "../types";
 import { normalizeFormSettings } from "../utils/form-settings";
 import {
-  generateZodSchema,
-  transformFormData,
-  getValidationErrors,
-} from "../utils/generate-schema";
-import {
   applyRedirectPattern,
   documentReachability,
   parseRedirectReference,
@@ -644,18 +639,23 @@ export async function validateSubmission(
     return { valid: false, errors: { _form: "Form not found" } };
   }
 
-  // Transform and validate
-  const transformedData = transformFormData(data, form.fields);
-  const schema = generateZodSchema(form.fields);
-  const result = schema.safeParse(transformedData);
+  // The same rule storage applies, asked rather than restated. Restating it
+  // meant this answered on the transformed but unsanitized value while the
+  // write seam answers on the sanitized one, so a preflight check could call a
+  // submission valid that storage then refused.
+  const prepared = prepareSubmission({
+    data,
+    fields: form.fields,
+    validate: true,
+  });
 
-  if (result.success) {
+  if (!prepared.validationErrors) {
     return { valid: true };
   }
 
   return {
     valid: false,
-    errors: getValidationErrors(result),
+    errors: prepared.validationErrors,
   };
 }
 

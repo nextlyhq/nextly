@@ -18,6 +18,7 @@ import {
   prepareSubmission,
   takeSubmissionMarks,
 } from "../handlers/prepare-submission";
+import { validateSubmission } from "../handlers/submit-form";
 import { formBuilder, prepareSubmissionForWrite } from "../plugin";
 import type { AnyFormField } from "../types";
 
@@ -301,6 +302,59 @@ describe("the write-seam hook on submissions", () => {
     expect(out?.data).toEqual({ name: "Ada", email: "ada@example.com" });
   });
 
+  it("checks the stored payload when a submission moves to another form", async () => {
+    // A patch that only changes the relationship carries no payload, so a rule
+    // keyed on `data` alone let a caller move a submission onto any form and
+    // leave behind a payload that form rejects.
+    const otherForm = nextlyWith({
+      id: "form2",
+      fields: [
+        { id: "9", name: "note", type: "text", label: "Note", required: true },
+      ],
+    });
+    await expect(
+      prepareSubmissionForWrite(
+        {
+          data: { form: "form2" },
+          operation: "update",
+          originalData: {
+            id: "sub1",
+            form: "form1",
+            data: { name: "Ada", email: "ada@example.com" },
+          },
+        },
+        formsSlug,
+        otherForm
+      )
+    ).rejects.toThrow();
+  });
+
+  it("re-projects a moved submission onto the form it lands on", async () => {
+    // The other half: the payload is brought to the new form's shape rather
+    // than merely judged against it, so a key that form does not declare is
+    // dropped instead of staying in a row that now belongs elsewhere.
+    const otherForm = nextlyWith({
+      id: "form2",
+      fields: [
+        { id: "9", name: "name", type: "text", label: "Name", required: true },
+      ],
+    });
+    const out = await prepareSubmissionForWrite(
+      {
+        data: { form: "form2" },
+        operation: "update",
+        originalData: {
+          id: "sub1",
+          form: "form1",
+          data: { name: "<b>Ada</b>", email: "ada@example.com" },
+        },
+      },
+      formsSlug,
+      otherForm
+    );
+    expect(out?.data).toEqual({ name: "Ada" });
+  });
+
   it("refuses an update whose replacement payload the schema rejects", async () => {
     await expect(
       prepareSubmissionForWrite(
@@ -487,6 +541,56 @@ describe("the write-seam hook on submissions", () => {
     };
     const out = await prepareSubmissionForWrite(ctx, formsSlug, withForm);
     expect(out).toBe(ctx.data);
+  });
+});
+
+describe("the preflight check and the write seam", () => {
+  const storedForm = {
+    id: "form1",
+    slug: "contact",
+    fields,
+    status: "published",
+  };
+  const context = {
+    pluginContext: {
+      services: {
+        collections: {
+          listEntries: vi.fn().mockResolvedValue({ data: [storedForm] }),
+        },
+      },
+    },
+    pluginConfig: { formOverrides: { slug: "forms" } },
+  } as never;
+
+  it("agree about a value that is only markup", async () => {
+    // `validateSubmission` restated transform-then-validate, so it judged the
+    // unsanitized value while the write seam judges the sanitized one. A client
+    // was told `<b></b>` satisfied a required field and the write then refused
+    // it.
+    const preflight = await validateSubmission(
+      "contact",
+      { name: "<b></b>", email: "ada@example.com" },
+      context
+    );
+    const atTheSeam = prepareSubmission({
+      data: { name: "<b></b>", email: "ada@example.com" },
+      fields,
+      validate: true,
+    });
+    expect(preflight.valid).toBe(false);
+    expect(Object.keys(preflight.errors ?? {})).toEqual(
+      Object.keys(atTheSeam.validationErrors ?? {})
+    );
+  });
+
+  it("agree about a value that is valid once the markup is gone", async () => {
+    // The control: the two agreeing must not be two refusals of everything.
+    const preflight = await validateSubmission(
+      "contact",
+      { name: "<b>Ada</b>", email: "ada@example.com" },
+      context
+    );
+    expect(preflight.valid).toBe(true);
   });
 });
 

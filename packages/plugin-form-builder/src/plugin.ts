@@ -900,6 +900,37 @@ function submittedPayload(raw: unknown): Record<string, unknown> {
   });
 }
 
+/**
+ * Whether an update has to be brought back to the form's shape.
+ *
+ * Two kinds of update do, and one does not.
+ *
+ * A patch that replaces `data` is replacing what the visitor sent, so it is
+ * checked exactly as the create was. Exempting every update meant a caller who
+ * may edit a submission could put undeclared keys, values the form's schema
+ * rejects and markup into the row a moment after the create had refused to
+ * accept them.
+ *
+ * A patch that touches `form` moves the row under a different schema, and the
+ * payload it already holds is what has to satisfy that one. Such a patch
+ * carries no `data` of its own, so a rule keyed on `data` alone let a caller
+ * move a submission onto any form and leave behind a payload the form it now
+ * belongs to rejects.
+ *
+ * An update that does neither leaves nothing to check: an admin changing a
+ * status sends only that, and preparing an absent payload would store an empty
+ * submission over a real one. A move is left alone for the same reason when the
+ * stored row did not reach this hook, since there is then no payload to judge.
+ */
+function updateNeedsChecking(
+  submission: Record<string, unknown>,
+  stored: Record<string, unknown> | undefined
+): boolean {
+  if (submission.data !== undefined) return true;
+  if (submission.form === undefined) return false;
+  return stored?.data !== undefined;
+}
+
 export async function prepareSubmissionForWrite(
   context: unknown,
   formsSlug: string,
@@ -912,28 +943,21 @@ export async function prepareSubmissionForWrite(
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
-  // An update carrying no payload is left alone. `beforeChange` runs for
-  // updates too, where `data` is a partial: an admin changing a submission's
-  // status sends no payload at all, and preparing that would store an empty
-  // submission over a real one.
-  //
-  // An update that does carry one is replacing what the visitor sent, so it is
-  // checked exactly as the create was. Exempting every update meant a caller
-  // who may edit a submission could put undeclared keys, values the form's
-  // schema rejects, and markup into the row a moment after the create had
-  // refused to accept them.
-  if (ctx.operation !== "create" && submission.data === undefined) {
-    return ctx.data;
-  }
+  const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
   // which form this payload has to match.
   const formId =
-    parentFormId(submission) ??
-    (ctx.originalData ? parentFormId(ctx.originalData) : null);
+    parentFormId(submission) ?? (stored ? parentFormId(stored) : null);
   if (!formId) return ctx.data;
 
-  const incoming = submittedPayload(submission.data);
+  if (ctx.operation !== "create" && !updateNeedsChecking(submission, stored)) {
+    return ctx.data;
+  }
+
+  const incoming = submittedPayload(
+    submission.data !== undefined ? submission.data : stored?.data
+  );
 
   // Taken once, and not before here: an early return above would spend a mark
   // on a write that never used it, and the next write in the same call would
