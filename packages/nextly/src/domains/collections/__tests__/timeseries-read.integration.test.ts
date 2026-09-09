@@ -788,5 +788,36 @@ describe.each(getConfiguredTestDialects())(
 
       expect(res.data?.points.at(-1)?.count).toBe(1);
     });
+
+    it("counts a row inside a window whose two ends are BOTH unstorable", async () => {
+      // The second control, and the one the case above cannot supply. Two
+      // unrepresentable ends describe two opposite windows: one lying past the
+      // storable range, and one SURROUNDING it. 366 yearly intervals anchored
+      // in 2040 run from 1675 to 2041, so both ends are dropped on MySQL while
+      // every row a `TIMESTAMP` can hold falls inside -- and deciding from the
+      // rendered bounds rather than from the raw window answers zeros for 1970
+      // through 2038 without reading a row.
+      //
+      // Reachable from an ordinary request: 366 is the documented maximum, and
+      // the anchor is a caller's own reporting parameter.
+      const h = await boot(dialect, [{ occurredAt: daysAgo(0) }]);
+
+      const res = await h.timeseriesEntries({
+        collectionName: EVENTS,
+        now: new Date("2040-06-01T00:00:00.000Z"),
+        dateField: "occurredAt",
+        interval: "year",
+        intervals: 366,
+      });
+
+      expect(res.success).toBe(true);
+      // Summed rather than positional: the row's bucket is this year, whose
+      // offset from the window's end moves with the calendar.
+      const counted = (res.data?.points ?? []).reduce(
+        (total, point) => total + point.count,
+        0
+      );
+      expect(counted).toBe(1);
+    });
   }
 );

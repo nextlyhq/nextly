@@ -101,6 +101,34 @@ export function timeseriesBoundOperand(
   return sql`from_unixtime(${epochSeconds})`;
 }
 
+/**
+ * Whether a window can contain any instant the dialect is able to store.
+ *
+ * The rendered bounds cannot answer this, and reading them as though they could
+ * is what makes a spanning window look empty. Each end is dropped
+ * INDIVIDUALLY when it falls outside the storable range, so "both ends were
+ * dropped" describes two opposite windows: one lying entirely to one side of
+ * the range, and one SURROUNDING it. A 366-interval yearly window anchored in
+ * 2040 runs from 1675 to 2041 and drops both ends while containing every
+ * instant a MySQL `TIMESTAMP` can hold, so treating it as unaskable would
+ * answer zeros for 1970 through 2038 without reading a row.
+ *
+ * The endpoints are therefore judged as a RANGE, before either is rendered.
+ * `to` is the exclusive end of the last bucket, so a window ending exactly at
+ * the first storable instant holds nothing.
+ */
+export function timeseriesWindowIsStorable(
+  from: Date,
+  to: Date,
+  dialect: SupportedDialect
+): boolean {
+  if (dialect !== "mysql") return true;
+  return (
+    from.getTime() <= MYSQL_TIMESTAMP_MAX_EPOCH * 1000 &&
+    to.getTime() > MYSQL_TIMESTAMP_MIN_EPOCH * 1000
+  );
+}
+
 export function timeseriesBucketExpression(
   column: unknown,
   interval: TimeseriesInterval,

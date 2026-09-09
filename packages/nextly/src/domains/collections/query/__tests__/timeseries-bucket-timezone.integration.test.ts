@@ -21,8 +21,8 @@ import {
   TIMESERIES_INTERVALS,
   type TimeseriesInterval,
 } from "../timeseries-interval";
-import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
-import { getColumnDescriptor } from "../../../schema/services/field-column-descriptor";
+import { buildDesiredTableFromFields } from "../../../schema/pipeline/diff/build-from-fields";
+import { emitDdl } from "../../../schema/pipeline/ddl-emitter";
 import {
   timeseriesBoundOperand,
   timeseriesBucketExpression,
@@ -30,6 +30,8 @@ import {
 
 const URL = process.env.TEST_MYSQL_URL;
 const TABLE = "tz_bucket_probe";
+/** The date field the bucket expression is exercised over. */
+const DATE_COLUMN = "c";
 
 /**
  * One stored instant per interval, each chosen so that a +05:30 shift crosses
@@ -87,29 +89,41 @@ describeOrSkip("a MySQL timeseries bucket, across server time zones", () => {
     const { createConnection } = await import("mysql2/promise");
     connection = (await createConnection(URL as string)) as unknown as Conn;
     await connection.query(`DROP TABLE IF EXISTS ${TABLE}`);
-    // The column type is DERIVED from the canonical field-to-column mapping,
-    // not written here. Hard-coding `TIMESTAMP` would let this probe go on
-    // certifying an expression after the mapping changed underneath it --
-    // exercising a shape real collection columns no longer have.
-    const descriptor = getColumnDescriptor(
-      { name: "c", type: "date" } as FieldDefinition,
+    // Created by the SAME code that creates a real collection table: fields in,
+    // a `TableSpec` out, DDL emitted for MySQL. Assembling the statement here
+    // would leave the probe certifying the bucket expression over a shape no
+    // collection has, the moment either the field-to-column mapping or the
+    // emitter changed -- and it would still read as coverage, because the
+    // expression works perfectly well over a column nobody stores data in.
+    const spec = buildDesiredTableFromFields(
+      TABLE,
+      [
+        { name: "label", type: "text" },
+        { name: DATE_COLUMN, type: "date" },
+      ],
       "mysql",
-      "collection"
+      { builtBy: "collection" }
     );
     // The expression under test is only meaningful over a timestamp column, so
     // a mapping that stopped producing one must fail here rather than quietly
     // change what is being certified.
-    expect(descriptor?.kind).toBe("timestamp");
-    const columnType = descriptor?.dialectType;
-    expect(columnType).toBeTruthy();
-    await connection.query(
-      `CREATE TABLE ${TABLE} (label VARCHAR(16), c ${String(columnType)})`
+    expect(spec.columns.find(c => c.name === DATE_COLUMN)?.type).toBe(
+      "timestamp"
     );
-    // Written at UTC so every stored instant is unambiguous.
+    for (const statement of emitDdl(
+      [{ type: "add_table", table: spec }],
+      "mysql"
+    )) {
+      await connection.query(statement);
+    }
+    // Written at UTC so every stored instant is unambiguous. The system columns
+    // the production table carries are filled explicitly rather than left to
+    // their defaults, so a row is entirely described by this statement.
     await connection.query(`SET time_zone = '+00:00'`);
     for (const [interval, probe] of Object.entries(PROBES)) {
       await connection.query(
-        `INSERT INTO ${TABLE} VALUES ('${interval}', '${probe.stored}')`
+        `INSERT INTO ${TABLE} (id, title, slug, label, ${DATE_COLUMN})
+         VALUES ('${interval}', '${interval}', '${interval}', '${interval}', '${probe.stored}')`
       );
     }
   });
