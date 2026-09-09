@@ -43,6 +43,13 @@
  * already in use being deleted by someone who did not know — and the race is
  * left visible here rather than papered over by a check that looks total.
  *
+ * A host's own `afterRead` hook on the Layouts collection, for the same reason.
+ * The scan reads through the collection's read pipeline, which substitutes
+ * whatever a registered hook returns, so a hook that drops or reshapes `areas`
+ * hides a reference from this scan and the delete is permitted. Closing it
+ * needs a read that bypasses those hooks, and the Direct API — a plugin's only
+ * read surface — offers no option to.
+ *
  * @module layout-component-guard
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
@@ -52,6 +59,7 @@ import {
   layoutReferencesOf,
   type LayoutComponentReference,
   type LayoutPage,
+  type LayoutRecord,
 } from "./layout-component-usage";
 
 /** How many Layouts one page of the scan asks for. */
@@ -60,18 +68,18 @@ const SCAN_PAGE_SIZE = 100;
 /**
  * The Direct API surface this needs.
  *
- * REUSED rather than restated. A structural subset of a published API is a
- * restatement, and a restatement can be wrong while everything built on it
- * compiles and every test passes — the fake matches the restatement, so the
- * tests agree with the mistake. This guard was written with its own, declaring
- * `find` as `{ docs, hasNextPage }`; the scan then saw an empty page for every
- * Layout and ALLOWED the delete it exists to refuse, with a green suite.
+ * An ALIAS of the declaration this package already pins, never a second
+ * structural description of the same API. A structural restatement is checked
+ * against nothing: it compiles whatever it claims, and a test fake written to
+ * satisfy it agrees with the claim rather than with the API — so a wrong one
+ * survives review and a green suite while the reads it describes answer
+ * something else entirely, in the direction that ALLOWS a delete.
  *
- * `ClassUsageDirectApi` already declares both reads correctly and is pinned
- * against the real `Nextly` by `class-usage-runtime.test-d.ts`, control
- * included. A second declaration beside it would be a second thing to keep
- * true. The name is the class index's because that is where it was first
- * needed; what it describes is the Direct API this package reads through.
+ * `class-usage-runtime.test-d.ts` pins this declaration against the real
+ * `Nextly`, control included, which is the property a second declaration
+ * beside it would not have. The name is the class index's because that is
+ * where it was first needed; what it describes is the Direct API this whole
+ * package reads through.
  */
 export type LayoutGuardDirectApi = ClassUsageDirectApi;
 
@@ -141,15 +149,23 @@ async function refuseWhileALayoutNamesIt(
 
   const usage = await layoutReferencesOf({
     componentId,
-    read: async ({ variant, page }) => {
+    read: async ({ page }) => {
       const answered = await nextly.find({
         collection: args.layoutsCollection,
         limit: SCAN_PAGE_SIZE,
         page,
-        // Both stored forms, asked separately. A draft Layout naming the
-        // component is on no page yet and breaks the moment somebody
-        // publishes it.
-        status: variant,
+        // EVERY Layout in ONE enumeration, whatever lifecycle state it is in.
+        // Asking for the states separately misses the one that matters most: a
+        // published Layout holding unpublished changes keeps its main row
+        // published, so a draft-scoped read excludes exactly the Layout whose
+        // pending edit has to be inspected.
+        status: "all",
+        // A DETERMINISTIC page order. Absent a sort the query service issues no
+        // `ORDER BY` at all, and paging by limit and offset over an unordered
+        // result may answer overlapping or disjoint pages — so a Layout naming
+        // the component can fall in the gap between two pages and never be
+        // seen, while the scan still reports that it finished.
+        sort: "id",
         // The relationship is only ever compared as an ID here. Left to the
         // default the read expands it per repeater row, fetching every named
         // component's whole document — hundreds of extra reads before a
@@ -157,12 +173,12 @@ async function refuseWhileALayoutNamesIt(
         depth: 0,
         overrideAccess: true,
       });
-      const items = answered.items ?? [];
       return {
-        items:
-          variant === "draft"
-            ? await withPendingEdits(nextly, args.layoutsCollection, items)
-            : items,
+        items: await withPendingEdits(
+          nextly,
+          args.layoutsCollection,
+          answered.items ?? []
+        ),
         hasNext: answered.meta?.hasNext === true,
       } satisfies LayoutPage;
     },
@@ -182,11 +198,12 @@ async function refuseWhileALayoutNamesIt(
 
   if (usage.references.length === 0) return;
 
+  const named = layoutsNamed(usage.references);
   throw refusal(
-    `This component cannot be deleted because ${describeLayouts(usage.references)}. ` +
+    `This component cannot be deleted because ${describeLayouts(named)}. ` +
       `A Layout appears on every page assigned to it, so removing a component ` +
       `it uses would leave a gap on all of them. Remove it from ${
-        usage.references.length === 1 ? "that Layout" : "those Layouts"
+        named.length === 1 ? "that Layout" : "those Layouts"
       } first.`
   );
 }
@@ -213,22 +230,35 @@ function isInsideACallerTransaction(context: unknown): boolean {
   );
 }
 
-/** How the Layouts read in the refusal, so an author knows where to go. */
-function describeLayouts(
+/**
+ * The Layouts an author has to go and edit, named once each.
+ *
+ * By LAYOUT, not by reference: one Layout naming the component in two areas —
+ * or in both its stored form and its pending edit — is one place to go, and
+ * listing it twice reads as two problems.
+ *
+ * The single source for BOTH halves of the refusal, the names and their plural
+ * agreement. Counting references for one and Layouts for the other lets the
+ * sentence contradict itself, naming one Layout and then asking the author to
+ * edit several.
+ */
+function layoutsNamed(
   references: readonly LayoutComponentReference[]
-): string {
-  // By LAYOUT, not by reference: one Layout naming the component in two areas
-  // is one place to go and edit, and listing it twice reads as two problems.
+): string[] {
   const byLayout = new Map<string, LayoutComponentReference>();
   for (const reference of references) {
     if (!byLayout.has(reference.layoutId)) {
       byLayout.set(reference.layoutId, reference);
     }
   }
-  const named = [...byLayout.values()].map(reference => {
+  return [...byLayout.values()].map(reference => {
     const title = reference.title === "" ? reference.layoutId : reference.title;
     return reference.variant === "draft" ? `${title} (draft)` : title;
   });
+}
+
+/** How those Layouts read in the refusal, so an author knows where to go. */
+function describeLayouts(named: readonly string[]): string {
   return named.length === 1
     ? `the Layout "${named[0]}" uses it`
     : `${String(named.length)} Layouts use it: ${named.map(n => `"${n}"`).join(", ")}`;
@@ -255,33 +285,44 @@ function directApiOf(context: unknown): LayoutGuardDirectApi | null {
 }
 
 /**
- * The same Layouts, each replaced by its PENDING edit where one exists.
+ * The same Layouts, each paired with its PENDING edit where it has one.
  *
  * A published Layout edited since keeps its main row published and its changes
- * in a sidecar, and a list read never surfaces that — only a by-id read asking
- * for the draft does. So a component named only by an unsaved-to-live edit is
- * invisible to the list pass, and deleting it breaks the Layout the moment the
- * edit is published.
+ * in a sidecar, and no list read surfaces that — only a by-id read asking for
+ * the draft does. So a component named only by an unpublished edit is invisible
+ * to the enumeration, and deleting it breaks the Layout the moment the edit is
+ * published.
+ *
+ * Attempted for EVERY Layout, because the row's own lifecycle state does not
+ * say whether it has one: a pending edit is a separate document, and the state
+ * that most needs asking — published, with unpublished changes — is the state
+ * that looks least like a draft from the outside.
+ *
+ * The pair is kept rather than the edit substituted. A component the pending
+ * edit no longer names may still be named by the form the site stores today,
+ * and replacing one with the other would lose whichever it replaced.
  *
  * `_isWorkingDraft` is what identifies an overlay, and it is checked rather
  * than assumed: the by-id read falls back to the LIVE row when there is no
- * sidecar, and taking that as a pending edit would report the published
- * references twice.
+ * sidecar, and taking that as a pending edit would report the stored
+ * references a second time.
  *
- * One read per Layout, which is why this runs only on the draft pass and why
- * the scan is bounded: the population it multiplies is the one already assumed
- * small.
+ * SEQUENTIAL, one read at a time. Issuing a page of these at once would put a
+ * burst of reads on the pool immediately before a delete; the population is
+ * assumed small and the scan is bounded, so the walk costs little and the
+ * burst is the only part that could hurt.
  */
 async function withPendingEdits(
   nextly: LayoutGuardDirectApi,
   collection: string,
   items: readonly unknown[]
-): Promise<unknown[]> {
-  const resolved: unknown[] = [];
+): Promise<LayoutRecord[]> {
+  const records: LayoutRecord[] = [];
   for (const item of items) {
+    const variant = variantOf(item);
     const id = idOf(item);
     if (id === null) {
-      resolved.push(item);
+      records.push({ stored: item, variant, pending: null });
       continue;
     }
     const pending = await nextly.findByID({
@@ -291,9 +332,28 @@ async function withPendingEdits(
       depth: 0,
       overrideAccess: true,
     });
-    resolved.push(isPendingEdit(pending) ? pending : item);
+    records.push({
+      stored: item,
+      variant,
+      pending: isPendingEdit(pending) ? pending : null,
+    });
   }
-  return resolved;
+  return records;
+}
+
+/**
+ * Which lifecycle state a stored Layout is in.
+ *
+ * Only the WORDING of the refusal turns on this — every form is scanned either
+ * way — so an unreadable value reads as published. Labelling a live Layout
+ * "(draft)" would tell the author the reference serves nobody when it serves
+ * every page the Layout is assigned to.
+ */
+function variantOf(item: unknown): "published" | "draft" {
+  if (typeof item !== "object" || item === null) return "published";
+  return (item as { status?: unknown }).status === "draft"
+    ? "draft"
+    : "published";
 }
 
 /**

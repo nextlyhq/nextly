@@ -24,20 +24,35 @@ function context() {
  * A Direct API answering fixed pages, and recording what it was asked.
  *
  * TYPED as the surface the guard consumes, so the fake cannot drift from it.
- * An untyped fake is how this file previously agreed with a mistake: the guard
- * declared the service's inner `{ docs, hasNextPage }`, the fake returned the
- * same, and the scan reported that nothing referenced the component — allowing
- * the very delete the guard exists to refuse, with every test green.
+ * An untyped fake proves only that the guard agrees with the fake: both can
+ * state a shape the real API does not have, and the suite then certifies the
+ * agreement rather than the behaviour — going green over a scan that finds
+ * nothing and allows every delete the guard exists to refuse.
  */
 function api(pages: {
-  published?: unknown[];
-  draft?: unknown[];
+  /**
+   * Every Layout the enumeration answers, each carrying its OWN `status`.
+   *
+   * ONE list, not a list per lifecycle state, because one list is what the
+   * store holds: `status` is a column on the row, not a separate table. A fake
+   * keyed on the requested state can withhold a published Layout from a
+   * published read — something no database does — and a scan that never
+   * inspects a published Layout at all then looks as though it had.
+   */
+  layouts?: unknown[];
   /** Working-draft overlays, by Layout id, as `findByID({ draft: true })` answers. */
   pending?: Record<string, unknown>;
 }) {
   const asked: {
     collection: string;
     status?: string;
+    sort?: string;
+    depth?: number;
+    override?: boolean;
+  }[] = [];
+  const overlaid: {
+    id: string;
+    draft?: boolean;
     depth?: number;
     override?: boolean;
   }[] = [];
@@ -46,18 +61,25 @@ function api(pages: {
       asked.push({
         collection: a.collection,
         status: a.status,
+        sort: a.sort,
         depth: a.depth,
         override: a.overrideAccess,
       });
-      const items =
-        (a.status === "draft" ? pages.draft : pages.published) ?? [];
-      return { items, meta: { hasNext: false } };
+      return { items: pages.layouts ?? [], meta: { hasNext: false } };
     },
-    findByID: async a => (pages.pending ?? {})[a.id] ?? null,
+    findByID: async a => {
+      overlaid.push({
+        id: a.id,
+        draft: a.draft,
+        depth: a.depth,
+        override: a.overrideAccess,
+      });
+      return (pages.pending ?? {})[a.id] ?? null;
+    },
     create: async () => ({}),
     delete: async () => ({}),
   };
-  return { asked, nextly };
+  return { asked, overlaid, nextly };
 }
 
 const deleting = (id: string, nextly: unknown) => ({
@@ -65,9 +87,15 @@ const deleting = (id: string, nextly: unknown) => ({
   req: { nextly },
 });
 
-const layout = (id: string, title: string, componentId: string) => ({
+const layout = (
+  id: string,
+  title: string,
+  componentId: string,
+  status: "published" | "draft" = "published"
+) => ({
   id,
   title,
+  status,
   areas: [{ area: "header", component: componentId }],
 });
 
@@ -93,7 +121,7 @@ describe("deleting a component a Layout still uses", () => {
   it("refuses, naming the Layout the author has to go and edit", async () => {
     const c = context();
     register(c.ctx);
-    const { nextly } = api({ published: [layout("l1", "Marketing", "cmp")] });
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
 
     await expect(c.run(deleting("cmp", nextly))).rejects.toThrow(
       /the Layout "Marketing" uses it/
@@ -105,7 +133,7 @@ describe("deleting a component a Layout still uses", () => {
     // every refusal case here.
     const c = context();
     register(c.ctx);
-    const { nextly } = api({ published: [layout("l1", "Marketing", "other")] });
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "other")] });
 
     await expect(c.run(deleting("cmp", nextly))).resolves.toBeUndefined();
   });
@@ -113,15 +141,31 @@ describe("deleting a component a Layout still uses", () => {
   it("counts a DRAFT Layout, and says which it is", async () => {
     const c = context();
     register(c.ctx);
-    const { nextly, asked } = api({
-      draft: [layout("l2", "Next season", "cmp")],
+    const { nextly } = api({
+      layouts: [layout("l2", "Next season", "cmp", "draft")],
     });
 
     await expect(c.run(deleting("cmp", nextly))).rejects.toThrow(
       /"Next season \(draft\)"/
     );
-    // Both stored forms asked for, as separate reads.
-    expect(asked.map(a => a.status)).toEqual(["published", "draft"]);
+  });
+
+  it("enumerates every lifecycle state in ONE read, and in a stable order", async () => {
+    // `status: "all"` because a published Layout holding unpublished changes
+    // keeps its main row published — a draft-scoped read excludes exactly the
+    // Layout whose pending edit has to be inspected.
+    //
+    // `sort` because without one the query service issues no `ORDER BY`, and
+    // paging by limit and offset over an unordered result may answer
+    // overlapping or disjoint pages: a Layout can fall in the gap and never be
+    // seen while the scan still reports that it finished.
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({ layouts: [] });
+
+    await c.run(deleting("cmp", nextly));
+
+    expect(asked.map(a => `${a.status}/${a.sort}`)).toEqual(["all/id"]);
   });
 
   it("reads as the system, or a Layout the user cannot see is invisible", async () => {
@@ -130,21 +174,29 @@ describe("deleting a component a Layout still uses", () => {
     // Layout would break.
     const c = context();
     register(c.ctx);
-    const { nextly, asked } = api({});
+    const { nextly, asked, overlaid } = api({
+      layouts: [layout("l1", "Marketing", "other")],
+    });
 
     await c.run(deleting("cmp", nextly));
 
-    expect(asked.every(a => a.override)).toBe(true);
+    // BOTH reads, not only the enumeration: the overlay read is what surfaces
+    // a pending edit, so one running as the user hides the same Layout.
+    expect({
+      enumerations: asked.map(a => a.override),
+      overlays: overlaid.map(o => o.override),
+    }).toEqual({ enumerations: [true], overlays: [true] });
   });
 
   it("names one Layout once, however many of its areas use the component", async () => {
     const c = context();
     register(c.ctx);
     const { nextly } = api({
-      published: [
+      layouts: [
         {
           id: "l1",
           title: "Marketing",
+          status: "published",
           areas: [
             { area: "header", component: "cmp" },
             { area: "footer", component: "cmp" },
@@ -154,20 +206,53 @@ describe("deleting a component a Layout still uses", () => {
     });
 
     // One place to go and edit. Listing it twice reads as two problems.
-    await expect(c.run(deleting("cmp", nextly))).rejects.toThrow(
-      /the Layout "Marketing" uses it/
+    //
+    // BOTH halves of the sentence, because they are what can disagree: naming
+    // the Layouts from the deduplicated set while counting the raw references
+    // for the plural produces `the Layout "Marketing" uses it ... Remove it
+    // from those Layouts first`.
+    const refused = await c.run(deleting("cmp", nextly)).then(
+      () => null,
+      (error: unknown) => (error as Error).message
+    );
+
+    expect(refused).toMatch(
+      /the Layout "Marketing" uses it.*Remove it from that Layout first/s
     );
   });
 
-  it("sees a component named only by a Layout's PENDING edit", async () => {
-    // A published Layout edited since keeps its main row published and its
-    // changes in a sidecar. A list read never surfaces that, so a component
-    // named only by the unsaved-to-live edit would be invisible — and deleting
-    // it breaks the Layout the moment somebody publishes.
+  it("agrees with itself when two Layouts use it", async () => {
+    // The other side of the plural, so the assertion above cannot be satisfied
+    // by a message that says "that Layout" whatever it found.
     const c = context();
     register(c.ctx);
     const { nextly } = api({
-      draft: [layout("l1", "Marketing", "old-cmp")],
+      layouts: [
+        layout("l1", "Marketing", "cmp"),
+        layout("l2", "Careers", "cmp"),
+      ],
+    });
+
+    const refused = await c.run(deleting("cmp", nextly)).then(
+      () => null,
+      (error: unknown) => (error as Error).message
+    );
+
+    expect(refused).toMatch(
+      /2 Layouts use it: "Marketing", "Careers".*Remove it from those Layouts first/s
+    );
+  });
+
+  it("sees a component named only by a PUBLISHED Layout's pending edit", async () => {
+    // The state the whole overlay pass exists for, and the one a per-state
+    // scan cannot reach: the Layout is PUBLISHED, so a draft-scoped read
+    // excludes it, and its main row still names the old component. Only the
+    // sidecar names the one being deleted — and deleting it breaks the Layout
+    // the moment somebody publishes those changes.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      layouts: [layout("l1", "Marketing", "old-cmp", "published")],
       // `_isWorkingDraft` is what marks an OVERLAY. Without it the by-id read
       // answered the live row, which the next test covers.
       pending: {
@@ -180,14 +265,33 @@ describe("deleting a component a Layout still uses", () => {
     );
   });
 
-  it("ignores a by-id read that answered the LIVE row, not an overlay", async () => {
-    // The read falls back to the live row when there is no sidecar. Taking
-    // that as a pending edit would report the published references twice — and
-    // here it would invent a reference the draft pass does not have.
+  it("still sees a component the pending edit REMOVED but the live row keeps", async () => {
+    // The pair is kept rather than the edit substituted. This Layout serves
+    // the component on every page today; that an unpublished edit drops it
+    // does not make deleting it safe, and replacing the row with the overlay
+    // would lose exactly that reference.
     const c = context();
     register(c.ctx);
     const { nextly } = api({
-      draft: [layout("l1", "Marketing", "other")],
+      layouts: [layout("l1", "Marketing", "cmp", "published")],
+      pending: {
+        l1: { ...layout("l1", "Marketing", "other"), _isWorkingDraft: true },
+      },
+    });
+
+    await expect(c.run(deleting("cmp", nextly))).rejects.toThrow(
+      /the Layout "Marketing" uses it/
+    );
+  });
+
+  it("ignores a by-id read that answered the LIVE row, not an overlay", async () => {
+    // The read falls back to the live row when there is no sidecar. Taking
+    // that as a pending edit would report the stored references twice — and
+    // here it would invent a reference the enumeration does not have.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      layouts: [layout("l1", "Marketing", "other")],
       // No `_isWorkingDraft` marker: this is the live row coming back.
       pending: { l1: layout("l1", "Marketing", "cmp") },
     });
@@ -203,7 +307,7 @@ describe("deleting a component a Layout still uses", () => {
     // many at once.
     const c = context();
     register(c.ctx);
-    const { nextly, asked } = api({ published: [layout("l1", "M", "cmp")] });
+    const { nextly, asked } = api({ layouts: [layout("l1", "M", "cmp")] });
 
     await expect(
       c.run({ ...deleting("cmp", nextly), executor: {} })
@@ -218,7 +322,7 @@ describe("deleting a component a Layout still uses", () => {
     // and none of the Layout names assembled here.
     const c = context();
     register(c.ctx);
-    const { nextly } = api({ published: [layout("l1", "Marketing", "cmp")] });
+    const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
 
     await expect(c.run(deleting("cmp", nextly))).rejects.toMatchObject({
       code: "CONFLICT",
@@ -232,11 +336,16 @@ describe("deleting a component a Layout still uses", () => {
     // this discards.
     const c = context();
     register(c.ctx);
-    const { nextly, asked } = api({ published: [] });
+    const { nextly, asked, overlaid } = api({
+      layouts: [layout("l1", "Marketing", "other")],
+    });
 
     await c.run(deleting("cmp", nextly));
 
-    expect(asked.map(a => a.depth)).toEqual([0, 0]);
+    expect({
+      enumerations: asked.map(a => a.depth),
+      overlays: overlaid.map(o => o.depth),
+    }).toEqual({ enumerations: [0], overlays: [0] });
   });
 
   it("does not refuse a delete it could not evaluate at all", async () => {

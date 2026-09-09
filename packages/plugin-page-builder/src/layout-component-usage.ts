@@ -50,9 +50,10 @@ export interface LayoutComponentReference {
   /**
    * Which stored form of the Layout names it.
    *
-   * BOTH are collected. A draft Layout naming the component is not yet on any
-   * page, and deleting the component would break it the moment somebody
-   * publishes — by which time the cause is a deletion nobody remembers.
+   * EVERY form is collected. A draft Layout, and a published Layout's pending
+   * edit, are both on no page yet — and deleting the component either names
+   * breaks the Layout the moment somebody publishes it, by which time the cause
+   * is a deletion nobody remembers.
    */
   variant: "published" | "draft";
 }
@@ -71,15 +72,56 @@ export interface LayoutComponentUsage {
   complete: boolean;
 }
 
+/**
+ * One Layout, in every form that can name a component.
+ *
+ * A Layout is not one document. Its main row holds the form the site currently
+ * stores, and a published Layout edited since keeps those changes in a separate
+ * pending edit — so a component can be named by one and not the other. Both
+ * travel together because deleting a component either names breaks the Layout:
+ * the stored form immediately, the pending one on the next publish.
+ *
+ * They are carried as one record rather than as separate items so that the
+ * scan's bound counts LAYOUTS. A budget spent per form would run out twice as
+ * fast on a site whose Layouts have unpublished edits, and report a scan as
+ * truncated over a population it had in fact finished.
+ */
+export interface LayoutRecord {
+  /** The main row, in whichever lifecycle state it is stored. */
+  stored: unknown;
+  /** Which lifecycle state `stored` is in. */
+  variant: "published" | "draft";
+  /**
+   * Its unpublished pending edit, or `null` when it has none.
+   *
+   * Typed `unknown` rather than a union with `null`, which says the same thing
+   * and collapses to `unknown` anyway — a stored document has no shape this
+   * module is entitled to assume, so `null` is a value the reader agrees to
+   * send rather than a type the checker enforces.
+   *
+   * REQUIRED rather than optional, so a reader that has not looked for a
+   * pending edit cannot omit the field and have that read as "there is none".
+   */
+  pending: unknown;
+}
+
 /** One page of stored Layouts, as this reads them. */
 export interface LayoutPage {
-  items: readonly unknown[];
+  items: readonly LayoutRecord[];
   hasNext: boolean;
 }
 
-/** How the stored Layouts are read, injected so this needs no Direct API. */
+/**
+ * How the stored Layouts are read, injected so this needs no Direct API.
+ *
+ * ONE enumeration covering every lifecycle state, rather than a pass per state.
+ * A published Layout holding unpublished changes keeps its main row published,
+ * so a draft-scoped read excludes precisely the Layout whose pending edit has
+ * to be inspected — the state a per-state scan is least able to see is the one
+ * it most needs.
+ */
 export interface LayoutReader {
-  (args: { variant: "published" | "draft"; page: number }): Promise<LayoutPage>;
+  (args: { page: number }): Promise<LayoutPage>;
 }
 
 /**
@@ -112,21 +154,28 @@ export async function layoutReferencesOf(args: {
 
   const references: LayoutComponentReference[] = [];
   let scanned = 0;
+  let page = 1;
 
-  for (const variant of ["published", "draft"] as const) {
-    let page = 1;
-    for (;;) {
-      const answered = await args.read({ variant, page });
-      for (const item of answered.items) {
-        scanned += 1;
-        if (scanned > MAX_LAYOUTS_SCANNED) {
-          return { references, complete: false };
-        }
-        references.push(...referencesIn(item, args.componentId, variant));
+  for (;;) {
+    const answered = await args.read({ page });
+    for (const record of answered.items) {
+      scanned += 1;
+      if (scanned > MAX_LAYOUTS_SCANNED) {
+        return { references, complete: false };
       }
-      if (!answered.hasNext) break;
-      page += 1;
+      references.push(
+        ...referencesIn(record.stored, args.componentId, record.variant)
+      );
+      if (record.pending !== null) {
+        // A pending edit is unpublished whatever state its main row is in, so
+        // it reads as a draft reference wherever it is reported.
+        references.push(
+          ...referencesIn(record.pending, args.componentId, "draft")
+        );
+      }
     }
+    if (!answered.hasNext) break;
+    page += 1;
   }
 
   return { references, complete: true };
