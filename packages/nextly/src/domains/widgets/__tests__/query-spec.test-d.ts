@@ -60,5 +60,14 @@ expectTypeOf<{
 // sources key an exhaustive table on these names, so a member disappearing
 // from here removes a compiler demand rather than raising an error.
 expectTypeOf<keyof WidgetQuery>().toEqualTypeOf<
-  "source" | "op" | "where" | "status" | "select" | "sort" | "groupBy" | "limit"
+  | "source"
+  | "op"
+  | "where"
+  | "status"
+  | "select"
+  | "sort"
+  | "groupBy"
+  | "dateField"
+  | "interval"
+  | "limit"
 >();

@@ -38,6 +38,13 @@ const groupQuery = (source: string): WidgetQuery => ({
   groupBy: "status",
 });
 
+const seriesQuery = (source: string): WidgetQuery => ({
+  source,
+  op: "timeseries",
+  dateField: "createdAt",
+  interval: "day",
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -773,6 +780,125 @@ describe("useWidgetQueries, grouped results", () => {
 
     await waitFor(() =>
       expect(result.current.cellSlots.p1?.byStatus?.ok).toBe(false)
+    );
+  });
+});
+
+describe("useWidgetQueries, timeline results", () => {
+  it("carries a timeline through to the slot, zeros included", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "timeseries",
+            interval: "day",
+            points: [
+              { start: "2026-03-02T00:00:00.000Z", count: 2 },
+              { start: "2026-03-03T00:00:00.000Z", count: 0 },
+              { start: "2026-03-04T00:00:00.000Z", count: 5 },
+            ],
+          },
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "trend",
+            query: seriesQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots.p1?.trend).toBeDefined()
+    );
+
+    // The WHOLE slot. A decoder that dropped the zero point would hand a chart
+    // two points where three were read, and the line would join 2 straight to
+    // 5 across a day that actually had nothing.
+    expect(result.current.cellSlots.p1?.trend).toEqual({
+      ok: true,
+      result: {
+        op: "timeseries",
+        interval: "day",
+        points: [
+          { start: "2026-03-02T00:00:00.000Z", count: 2 },
+          { start: "2026-03-03T00:00:00.000Z", count: 0 },
+          { start: "2026-03-04T00:00:00.000Z", count: 5 },
+        ],
+      },
+    });
+  });
+
+  it("refuses a point whose count is not a finite number", async () => {
+    // `Infinity` is `typeof "number"`, and it reaches a chart as a bar that
+    // dwarfs every real point rather than as an error.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "timeseries",
+            interval: "day",
+            points: [{ start: "2026-03-02T00:00:00.000Z", count: Number.NaN }],
+          },
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "trend",
+            query: seriesQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
+    );
+  });
+
+  it("refuses an interval outside the vocabulary", async () => {
+    // The interval labels the axis. A width nothing knows how to render is a
+    // malformed answer rather than a chart drawn on a guess.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "timeseries",
+            interval: "fortnight",
+            points: [{ start: "2026-03-02T00:00:00.000Z", count: 1 }],
+          },
+        },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "trend",
+            query: seriesQuery("collection:posts"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
     );
   });
 });

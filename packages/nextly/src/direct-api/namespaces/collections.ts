@@ -20,6 +20,8 @@ import type {
   CountResult,
   GroupArgs,
   GroupResult,
+  TimeseriesArgs,
+  TimeseriesResult,
   CreateArgs,
   RowFromCollectionSlug,
   DeleteArgs,
@@ -467,6 +469,46 @@ export async function group(
   return {
     buckets: result.data?.buckets ?? [],
     truncated: result.data?.truncated ?? false,
+  };
+}
+
+/**
+ * How many documents fall in each interval of a recent window.
+ *
+ * Reaches the same resolved row set `count` and `group` do — one pipeline
+ * settles which rows a caller may read, and each operation only decides what to
+ * compute over them — so a timeline can never describe rows a count of the same
+ * arguments would have excluded.
+ */
+export async function timeseries(
+  ctx: NextlyContext,
+  args: TimeseriesArgs
+): Promise<TimeseriesResult> {
+  const config = mergeConfig(ctx.defaultConfig, args);
+
+  const result = await ctx.collectionsHandler.timeseriesEntries({
+    collectionName: args.collection,
+    dateField: args.dateField,
+    interval: args.interval,
+    where: args.where,
+    // From `args`, never `config`, for the reason `count` takes it from
+    // `args`: an inheritable exemption would reach nested reads.
+    frameworkFilter: args.frameworkFilter,
+    status: args.status,
+    ...accessOptions(config),
+    locale: config.locale,
+    fallbackLocale: config.fallbackLocale,
+    context: config.context,
+    ...(args.intervals === undefined ? {} : { intervals: args.intervals }),
+  });
+
+  if (!result.success) {
+    throw createErrorFromResult(result);
+  }
+
+  return {
+    points: result.data?.points ?? [],
+    interval: args.interval,
   };
 }
 

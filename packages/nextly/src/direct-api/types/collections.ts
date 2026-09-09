@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import type { TimeseriesInterval } from "../../domains/collections/query/timeseries-interval";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 
 import type {
@@ -461,6 +462,63 @@ export interface GroupResult {
    * picture, and the reader acts on whichever it shows as largest.
    */
   truncated: boolean;
+}
+
+/**
+ * Arguments for a timeseries read.
+ *
+ * @example
+ * ```typescript
+ * const trend = await nextly.timeseries({
+ *   collection: 'orders',
+ *   dateField: 'createdAt',
+ *   interval: 'day',
+ *   intervals: 30,
+ * });
+ * ```
+ */
+export interface TimeseriesArgs<TSlug extends CollectionSlug = CollectionSlug>
+  extends CountArgs<TSlug> {
+  /**
+   * The date field whose values place each row on the timeline.
+   *
+   * Refused when it names a field carrying a read rule, when it names the
+   * owner column, or when the column it resolves to does not store a date —
+   * a bucketing expression over anything else answers something different on
+   * each database.
+   */
+  dateField: string;
+
+  /** How wide each point is. */
+  interval: TimeseriesInterval;
+
+  /**
+   * How many intervals the window covers, ending with the current one.
+   *
+   * Bounds the READ rather than the answer: the window's oldest start becomes
+   * a lower bound on the date column, so a long history is never scanned to
+   * produce a short chart.
+   */
+  intervals?: number;
+}
+
+/**
+ * Result of a timeseries read.
+ */
+export interface TimeseriesResult {
+  /**
+   * One point per interval in the window, oldest first.
+   *
+   * An interval with no rows is present with a count of zero rather than
+   * omitted. A `GROUP BY` cannot report a bucket it never grouped, and a line
+   * drawn through the gap would read as steady activity rather than none.
+   *
+   * Zero means no rows, never unknown: every interval in the window was read.
+   */
+  points: { start: string; count: number }[];
+
+  /** The interval the points were bucketed by. */
+  interval: TimeseriesInterval;
 }
 
 /**

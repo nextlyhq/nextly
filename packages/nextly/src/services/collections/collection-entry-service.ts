@@ -253,6 +253,13 @@ export class CollectionEntryService extends BaseService {
     return this.queryService.groupEntries(params);
   }
 
+  /** How many rows fall in each interval of a recent window. */
+  async timeseriesEntries(
+    params: Parameters<CollectionQueryService["timeseriesEntries"]>[0]
+  ): ReturnType<CollectionQueryService["timeseriesEntries"]> {
+    return this.queryService.timeseriesEntries(params);
+  }
+
   async getEntry(params: {
     collectionName: string;
     entryId: string;

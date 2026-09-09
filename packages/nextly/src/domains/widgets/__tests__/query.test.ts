@@ -869,3 +869,149 @@ describe("validateWidgetQuery, group key", () => {
     expect(q.groupBy).toBe("status");
   });
 });
+
+describe("validateWidgetQuery, timeline keys", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:timed",
+      label: "Timed",
+      kind: "collection",
+      supports: ["count", "list", "timeseries"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+  });
+
+  it("carries both timeline keys through onto the returned query", () => {
+    // Asserts the WHOLE object: a version that validated the keys and dropped
+    // them on the way out would satisfy any assertion that only read them back
+    // off the input.
+    expect(
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+      })
+    ).toEqual({
+      source: "collection:timed",
+      op: "timeseries",
+      dateField: "createdAt",
+      interval: "day",
+      limit: 5,
+    });
+  });
+
+  it("refuses a date field carried by an op that would ignore it", () => {
+    // Accepted and ignored, a `count` reads back as a timeline that was never
+    // computed.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "count",
+        dateField: "createdAt",
+      })
+    ).toThrow(/dateField is not valid for op "count"/);
+  });
+
+  it("refuses an interval carried by an op that would ignore it", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "count",
+        interval: "day",
+      })
+    ).toThrow(/interval is not valid for op "count"/);
+  });
+
+  it("refuses a timeseries op carrying no date field", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        interval: "day",
+      })
+    ).toThrow(/op "timeseries" requires a dateField/);
+  });
+
+  it("refuses a timeseries op carrying no interval", () => {
+    // Not defaulted: a width nobody chose answers a question nobody asked.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+      })
+    ).toThrow(/op "timeseries" requires an interval/);
+  });
+
+  it("refuses a date field the source never declared", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "secretAt",
+        interval: "day",
+      })
+    ).toThrow(/dateField references undeclared field "secretAt"/);
+  });
+
+  it("refuses a date field that is not a string", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: ["createdAt"],
+        interval: "day",
+      })
+    ).toThrow(/dateField must be a string/);
+  });
+
+  it("refuses an interval it has no expression for", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "fortnight",
+      })
+    ).toThrow(/interval must be one of/);
+  });
+
+  it("refuses an inherited name offered as an interval", () => {
+    // The vocabulary is checked by membership rather than by indexing an
+    // object, so a prototype name is not an interval.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "toString",
+      })
+    ).toThrow(/interval must be one of/);
+  });
+
+  it("refuses select and sort, which describe rows rather than points", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+        select: ["title"],
+      })
+    ).toThrow(/select is not valid for op "timeseries"/);
+
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+        sort: "createdAt",
+      })
+    ).toThrow(/sort is not valid for op "timeseries"/);
+  });
+});

@@ -22,7 +22,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WidgetQuery } from "../widgets/query";
 import type { WidgetResult, WidgetResultField } from "../widgets/result";
-import { failUnavailableSourceOrOp } from "../widgets/sources";
+import { refuseUnconsumedQueryFields } from "../widgets/sources";
 import { RELEASES_SOURCE_ID } from "../widgets/system-source-ids";
 import { registerSystemSource } from "../widgets/system-sources";
 
@@ -162,33 +162,15 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   sort: "refused",
   status: "refused",
   groupBy: "refused",
+  // This source answers a fixed question over rows it assembles itself, so it
+  // has no date column to place them on.
+  dateField: "refused",
+  interval: "refused",
 };
 
-/**
- * Refuse a query carrying anything this source cannot honour.
- *
- * Refused with the shared string every other dead end here uses; the field
- * names travel in the log rather than the response, which is careful not to
- * describe a source the caller may not be able to see.
- *
- * A key present but `undefined` is not carried input: `readWidgetQuery` reads
- * every property once into a fresh object, so an absent field can arrive as an
- * own key holding `undefined`, and treating that as supplied would refuse an
- * ordinary query.
- */
+/** Refuse a query carrying anything this source cannot honour. */
 function refuseUnconsumed(query: WidgetQuery): void {
-  const carried = Object.entries(query)
-    .filter(
-      ([name, value]) =>
-        value !== undefined &&
-        QUERY_FIELD_USE[name as keyof WidgetQuery] === "refused"
-    )
-    .map(([name]) => name);
-  if (carried.length > 0) {
-    failUnavailableSourceOrOp(
-      `source "${RELEASES_SOURCE_ID}" answers a fixed question and cannot honour: ${carried.join(", ")}`
-    );
-  }
+  refuseUnconsumedQueryFields(query, QUERY_FIELD_USE, RELEASES_SOURCE_ID);
 }
 
 /**
