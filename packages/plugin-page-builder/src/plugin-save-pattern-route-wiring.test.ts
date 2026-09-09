@@ -12,6 +12,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { PluginRoutePermissionScope as PermissionScope } from "@nextlyhq/plugin-sdk";
+
+import { PATTERNS_SLUG } from "./collections/patterns";
+
 import { SAVE_PATTERN_ROUTE_PATH } from "./library-contract";
 import { pageBuilder } from "./plugin";
 
@@ -31,13 +35,29 @@ describe("the save-as-pattern route is contributed, not merely written", () => {
     expect(save?.public).not.toBe(true);
   });
 
-  it("declares no permission, so a renamed collection stays writable", () => {
-    // The same deliberate omission the read makes, and worth pinning for the
-    // same reason: a declared permission has to spell the collection slug, a
-    // host may rename that collection, and the seeded grant then carries the
-    // new name while the route demands the old one. The write runs as the user,
-    // so the service enforces the real, resolved permission instead.
-    expect(save?.requiredPermission).toBeUndefined();
+  it("demands a permission that follows a renamed collection", () => {
+    // This route carried NO permission, deliberately: a declared slug has to
+    // spell the collection, a host may rename it, and the route would then
+    // demand a grant seeded under a different name — uncallable on exactly the
+    // installs that renamed it. The consequence was a write reachable by any
+    // authenticated caller.
+    //
+    // A COMPUTED permission removes the reason without reintroducing the
+    // problem, so what is pinned is that the demanded slug MOVES with the
+    // collection rather than that some permission is declared.
+    const required = save?.requiredPermission;
+    expect(typeof required).toBe("function");
+
+    const renamed = (required as (scope: PermissionScope) => string)({
+      plugin: "@nextlyhq/plugin-page-builder",
+      collection: (declared, action) =>
+        `${action}-${declared === PATTERNS_SLUG ? "host_patterns" : declared}`,
+      single: (declared, action) => `${action}-${declared}`,
+    });
+    expect(
+      renamed,
+      "the route must ask about the collection the host actually has"
+    ).toBe("create-host_patterns");
   });
 
   it("is a route of its own, not the library read wearing a second method", () => {
