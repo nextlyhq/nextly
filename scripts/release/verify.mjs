@@ -13,81 +13,25 @@
 
 import {
   fetchAllRegistryStates,
-  getExpectedDistTag,
   getReleaseManifest,
   readPreState,
+  waitForCompleteRelease,
 } from "./lib.mjs";
 
-// npm's read replicas trail a publish by a few seconds, so a package that is
-// genuinely live can 404 immediately afterwards. Retry before calling it missing.
-const ATTEMPTS = 5;
-const RETRY_DELAY_MS = 6000;
-
 const sleep = ms => new Promise(done => setTimeout(done, ms));
-
-/**
- * Packages that are not yet fully released, each with the reason. A missing
- * version and a stale dist-tag are reported separately because they need
- * different fixes: the first is a failed publish, the second a tag that was
- * never moved.
- */
-function collectProblems(manifest, registry, preState) {
-  const problems = [];
-
-  for (const entry of manifest) {
-    const state = registry.get(entry.name);
-
-    if (state === null) {
-      problems.push({
-        name: entry.name,
-        reason: "package not found on registry",
-      });
-      continue;
-    }
-
-    if (!state.versions.includes(entry.version)) {
-      problems.push({
-        name: entry.name,
-        reason: `version ${entry.version} not published`,
-      });
-      continue;
-    }
-
-    const expectedTag = getExpectedDistTag(state, preState);
-    const actual = state.distTags[expectedTag];
-    if (actual !== entry.version) {
-      problems.push({
-        name: entry.name,
-        reason:
-          `dist-tag "${expectedTag}" points at ${actual ?? "nothing"}, ` +
-          `so ${entry.name}@${expectedTag} does not resolve to ${entry.version}`,
-      });
-    }
-  }
-
-  return problems;
-}
 
 async function main() {
   const manifest = getReleaseManifest();
   const preState = readPreState();
   const expectedVersion = manifest[0].version;
 
-  let problems = [];
-  let registry;
-
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
-    registry = await fetchAllRegistryStates(manifest);
-    problems = collectProblems(manifest, registry, preState);
-    if (problems.length === 0) break;
-    if (attempt < ATTEMPTS) {
-      console.log(
-        `Waiting for ${problems.length} package(s) to settle on the registry ` +
-          `(attempt ${attempt}/${ATTEMPTS})...`
-      );
-      await sleep(RETRY_DELAY_MS);
-    }
-  }
+  const { registry, problems } = await waitForCompleteRelease({
+    manifest,
+    preState,
+    fetchStates: fetchAllRegistryStates,
+    sleep,
+    now: () => Date.now(),
+  });
 
   console.log(`Release verification for ${expectedVersion}`);
   console.log(`  expected packages: ${manifest.length}`);
