@@ -891,6 +891,16 @@ export const UNRESOLVED_IMPORT = /error TS2307: Cannot find module '([^']+)'/;
 /** An undefined name, which may or may not be a defect. */
 export const MISSING_NAME = /error TS2304: Cannot find name '([^']+)'/;
 
+/**
+ * A shorthand property with nothing in scope to fill it.
+ *
+ * `{ Page }` is the same missing name as `Page`, and TypeScript reports it as
+ * TS18004 rather than TS2304. Reading only TS2304 meant the same reader-owned
+ * name was charged or set aside according to the punctuation around it.
+ */
+export const MISSING_SHORTHAND =
+  /error TS18004: No value exists in scope for the shorthand property '([^']+)'/;
+
 /** The package part of a specifier: @nextlyhq/plugin-sdk/testing -> @nextlyhq/plugin-sdk. */
 export const packageOf = specifier => {
   const parts = specifier.split("/");
@@ -1835,14 +1845,37 @@ export function usedOnlyAsValue(code, name, extension = "tsx") {
 }
 
 /** Whether a block ever constructs this name. */
+/**
+ * The name a `new` expression needs in scope.
+ *
+ * `new AWS.S3Client()` needs `AWS`, not `S3Client`: the constructor is reached
+ * through a namespace, and the namespace is the binding the sample forgot to
+ * import. Reading only a bare identifier missed every qualified constructor.
+ */
+function constructorRoot(expression) {
+  let at = expression;
+  // Every node here is transparent to the question "what has to be in scope":
+  // a property or element access reaches through its object, and parentheses,
+  // `as`, `satisfies`, a non-null `!` and an angle-bracket assertion all wrap an
+  // expression without changing which binding it needs.
+  while (
+    ts.isPropertyAccessExpression(at) ||
+    ts.isElementAccessExpression(at) ||
+    ts.isParenthesizedExpression(at) ||
+    ts.isAsExpression(at) ||
+    ts.isSatisfiesExpression(at) ||
+    ts.isNonNullExpression(at) ||
+    ts.isTypeAssertionExpression(at)
+  ) {
+    at = at.expression;
+  }
+  return ts.isIdentifier(at) ? at.text : undefined;
+}
+
 export function constructedInBlock(code, name, extension = "tsx") {
   let constructed = false;
   const visit = node => {
-    if (
-      ts.isNewExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === name
-    ) {
+    if (ts.isNewExpression(node) && constructorRoot(node.expression) === name) {
       constructed = true;
     }
     ts.forEachChild(node, visit);
@@ -1898,10 +1931,40 @@ export function misspelledExport(name, exported = workspaceExports()) {
     if (other === wanted) continue;
     if (!withinOneEdit(wanted, other)) continue;
     if (differsOnlyAtTheEnd(wanted, other)) continue;
+    if (wanted.length < LONG_ENOUGH_TO_MISSPELL) continue;
     return true;
   }
   return false;
 }
+
+/**
+ * How long a name has to be before one edit makes it a misspelling.
+ *
+ * One edit is a wide net over short names, and the net was catching the reader.
+ * Measured against this workspace's own export set, with the case and suffix
+ * exclusions already applied:
+ *
+ * ```
+ * length 4   9 of 24 plausible component names collide
+ * length 5   1 of 65
+ * length 6+  0 of 20
+ * ```
+ *
+ * `Host` from `POST`, `Cost`, `Past`, `Cart`, `Fork`, `Last`, `Tile`, `Star`
+ * and `Tags` are all names a reader would give a component, and every one of
+ * them was charged. The population changes character between four and five, so
+ * that is where the bar sits.
+ *
+ * Length rather than a shared opening, which is what this first tried: a shared
+ * opening also discards a typo made in the first few characters, so
+ * `NNextlyError` read as the reader's. Length keeps those, because the reason
+ * short names collide is that one edit reaches most of the alphabet from them,
+ * not where in the word the edit falls.
+ *
+ * What remains is a five-letter name one edit from an export, `Watch` against
+ * `Match`, which is 1 in 65 here and genuinely indistinguishable from a typo.
+ */
+const LONG_ENOUGH_TO_MISSPELL = 5;
 
 /** Whether one name is the other with a character added at the end. */
 function differsOnlyAtTheEnd(a, b) {
@@ -2020,7 +2083,10 @@ export async function classifyDocDiagnostics({ diagnostics, samples }) {
       implicitAny.push(line);
       continue;
     }
-    const name = line.match(MISSING_NAME);
+    // Both spellings of the same question: a name the block uses and nothing
+    // here defines. `{ Page }` reports as TS18004 and `Page` as TS2304, and
+    // they get the same answer.
+    const name = line.match(MISSING_NAME) ?? line.match(MISSING_SHORTHAND);
     if (name) {
       const [file, idx] = line.split("  ")[0].split("#");
       const index = Number.parseInt(idx, 10);
@@ -2288,6 +2354,27 @@ export const pageOf = line => {
  * against the whole set-aside list, which carries entries added before
  * classification.
  */
+/**
+ * The names each continuation has to be recompiled with, by the block it came
+ * from.
+ *
+ * Both spellings of a missing name, because a continuation is excused on the
+ * strength of being rebuilt. Reading only TS2304 here excused a shorthand
+ * continuation without ever recompiling it, so whatever the pasted declaration
+ * would have revealed stayed behind an unresolved `any` while the audit
+ * reported the block as handled.
+ */
+export function namesToRebuild(continuations) {
+  const byOrigin = new Map();
+  for (const line of continuations) {
+    const origin = line.split("  ")[0].split(":")[0];
+    const name =
+      line.match(MISSING_NAME)?.[1] ?? line.match(MISSING_SHORTHAND)?.[1];
+    if (name) byOrigin.set(origin, [...(byOrigin.get(origin) ?? []), name]);
+  }
+  return byOrigin;
+}
+
 export function unaccountedFor({
   total,
   real,
@@ -2363,12 +2450,7 @@ async function auditDocs() {
   // A continuation is only harmless if the block does nothing wrong with what
   // it inherited, and that cannot be known while the value is unresolved. Each
   // one is compiled again with the declarations it needs.
-  const byOrigin = new Map();
-  for (const line of continuations) {
-    const origin = line.split("  ")[0].split(":")[0];
-    const name = line.match(MISSING_NAME)?.[1];
-    if (name) byOrigin.set(origin, [...(byOrigin.get(origin) ?? []), name]);
-  }
+  const byOrigin = namesToRebuild(continuations);
   const rebuilt = [];
   // The names each rebuild was FOR, so a name that is still missing can be told
   // from an unrelated one the block simply gets wrong.

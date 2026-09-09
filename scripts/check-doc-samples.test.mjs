@@ -17,9 +17,11 @@ import {
   isModule,
   pageOf,
   readerOwnedName,
+  classifyDocDiagnostics,
   constructedInBlock,
   mentionIsReaderOwned,
   misspelledExport,
+  namesToRebuild,
   readerOwnedMention,
   usedOnlyAsValue,
   workspaceValueExports,
@@ -1464,6 +1466,36 @@ describe("a name this workspace does not export", () => {
   // Not exporting a name is not the same as the reader owning it, and treating
   // the two as one made the gate accept samples that are simply broken.
 
+  it("reads a qualified constructor by the name it needs in scope", () => {
+    // `new AWS.S3Client()` needs `AWS`, not `S3Client`: the constructor is
+    // reached through a namespace, and the namespace is the import the sample
+    // forgot. Reading only a bare identifier missed every one of these.
+    expect(
+      constructedInBlock("const s = new AWS.S3Client();", "AWS", "ts")
+    ).toBe(true);
+    expect(
+      constructedInBlock("const s = new AWS.deep.S3();", "AWS", "ts")
+    ).toBe(true);
+    // Wrappers that change nothing about which binding has to be in scope.
+    expect(
+      constructedInBlock(
+        "const s = new (AWS.S3Client as new () => object)();",
+        "AWS",
+        "ts"
+      )
+    ).toBe(true);
+    expect(
+      constructedInBlock("const s = new AWS!.S3Client();", "AWS", "ts")
+    ).toBe(true);
+    // The control: the qualifier is what has to be in scope, not the property.
+    expect(
+      constructedInBlock("const s = new AWS.S3Client();", "S3Client", "ts")
+    ).toBe(false);
+    expect(
+      readerOwnedMention("AWS", "const s = new AWS.S3Client();", "ts")
+    ).toBe(false);
+  });
+
   it("reads a constructed name as a class the sample forgot to import", () => {
     // `nextly generate:types` writes types, and a reader authors components.
     // Neither is a thing you call `new` on, so a constructed name is a runtime
@@ -1493,6 +1525,34 @@ describe("a name this workspace does not export", () => {
     expect(misspelledExport("Skelton", exported)).toBe(true);
   });
 
+  it("does not read a short name that merely collides as a misspelling", () => {
+    // One edit is a wide net over short names, and it was catching the reader.
+    // Each of these is a name someone would plausibly give a component, and
+    // each sits one substitution from something this workspace exports.
+    const exported = new Set(["POST", "Cast", "Card", "Form", "List", "Post"]);
+    for (const name of ["Host", "Cost", "Past", "Cart", "Fork", "Last"]) {
+      expect(misspelledExport(name, exported)).toBe(false);
+    }
+  });
+
+  it("still reads a long enough name as a misspelling", () => {
+    // The control for the test above: the rule has to stay able to say yes.
+    const exported = new Set(["POST", "NextlyError", "Skeleton"]);
+    expect(misspelledExport("NextlyEror", exported)).toBe(true);
+    expect(misspelledExport("Skelton", exported)).toBe(true);
+  });
+
+  it("catches a typo made in the first characters", () => {
+    // Length is the discriminator rather than a shared opening, which this
+    // first tried. A shared opening also discards a mistake made at the start
+    // of the word, so `NNextlyError` read as a name the reader had declared.
+    const exported = new Set(["NextlyError"]);
+    expect(misspelledExport("NNextlyError", exported)).toBe(true);
+    expect(
+      readerOwnedMention("NNextlyError", "const e: NNextlyError = x;", "ts")
+    ).toBe(false);
+  });
+
   it("does not read a plural or a capital as a misspelling", () => {
     // The two that decide the rule. A generated collection type is the plural
     // of a model this workspace exports, so `Users` sits one character from
@@ -1511,10 +1571,57 @@ describe("a name this workspace does not export", () => {
   });
 
   it("asks the set it was given", () => {
-    // The control for the two above: an injectable set that failed to apply
+    // The control for the ones above: an injectable set that failed to apply
     // would leave them reading the workspace and passing for the wrong reason.
-    expect(misspelledExport("Zzy", new Set(["Zzz"]))).toBe(true);
+    // Long enough to keep an opening, since a name that shares fewer than four
+    // leading characters is not read as a misspelling at all.
+    expect(misspelledExport("Zzzzy", new Set(["Zzzzz"]))).toBe(true);
     expect(misspelledExport("NextlyEror", new Set())).toBe(false);
+  });
+});
+
+describe("a missing name in object shorthand", () => {
+  // `{ Page }` is the same missing name as `Page`, and TypeScript reports it as
+  // TS18004 rather than TS2304. Reading only TS2304 meant the same reader-owned
+  // name was charged or set aside according to the punctuation around it.
+  const shorthand = name =>
+    `docs/x.mdx#0  #0:1  error TS18004: No value exists in scope for the ` +
+    `shorthand property '${name}'. Either declare one or provide an initializer.`;
+  const samples = [
+    {
+      file: "docs/x.mdx",
+      index: 0,
+      code: "export const components = { Page, baseUrl };",
+      lang: "ts",
+    },
+  ];
+
+  it("hands a shorthand name to the rebuild like any other", () => {
+    // A continuation is excused on the strength of being recompiled with the
+    // declaration it inherited. Collecting only TS2304 names for that rebuild
+    // excused a shorthand without ever recompiling it, so whatever the pasted
+    // declaration would have revealed stayed behind an unresolved `any`.
+    const collected = lines => [...namesToRebuild(lines).values()].flat();
+    expect(collected([shorthand("Page")])).toEqual(["Page"]);
+    // The control: the spelling this always collected still arrives, so the
+    // assertion above is the new branch and not the old one.
+    expect(
+      collected(["docs/y.mdx#1  #1:1  error TS2304: Cannot find name 'Page'."])
+    ).toEqual(["Page"]);
+  });
+
+  it("is read the way the same name is read anywhere else", async () => {
+    const { readerNames, real } = await classifyDocDiagnostics({
+      diagnostics: [shorthand("Page"), shorthand("baseUrl")],
+      samples,
+    });
+    const named = lines => lines.map(l => /property '([^']+)'/.exec(l)[1]);
+    // The reader's own component, set aside.
+    expect(named(readerNames)).toEqual(["Page"]);
+    // The separating control: a lowercase shorthand is an unfinished example,
+    // and stays a finding, so this is a rule about ownership rather than a
+    // blanket exemption for the syntax.
+    expect(named(real)).toEqual(["baseUrl"]);
   });
 });
 
