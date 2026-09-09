@@ -6,13 +6,13 @@
  *
  * ## Why live, when pages are indexed
  *
- * Three things agreed, and none of them is a preference.
+ * Two properties decide it, and neither is a preference.
  *
- * `decision:pb6-layout-component-delete-policy` ruled that deleting a
- * component a Layout names is REFUSED, because a Layout wraps every page
- * assigned to it — a site-wide failure rather than the one visible, recoverable
- * placeholder an ordinary page shows. Its own implementation note says the
- * refusal could be a query.
+ * Deleting a component a Layout names is REFUSED rather than warned about,
+ * because a Layout wraps every page assigned to it — a site-wide failure rather
+ * than the one visible, recoverable placeholder an ordinary page shows. A
+ * refusal is an answer the author cannot ignore, so it has to be one this can
+ * stand behind.
  *
  * A refusal has to be exact AT THE MOMENT IT REFUSES. An index is eventually
  * consistent by construction — its maintenance is post-commit and its own

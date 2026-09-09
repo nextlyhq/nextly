@@ -1,11 +1,11 @@
 /**
  * Refusing to delete a component a Layout still names.
  *
- * `decision:pb6-layout-component-delete-policy`, ruled 2026-09-04: REFUSE the
- * delete and show where the component is used. A Layout wraps every page
- * assigned to it, so a missing piece is a site-wide failure — which is what
- * separates this from an ordinary page, where the renderer draws one visible,
- * recoverable placeholder.
+ * The delete is REFUSED, and the refusal names where the component is used. A
+ * Layout wraps every page assigned to it, so a component missing from one is a
+ * site-wide failure — which is what separates this from an ordinary page, where
+ * the renderer draws a single visible, recoverable placeholder and the author
+ * sees the gap on the one page it affects.
  *
  * ## Why a `beforeDelete` hook
  *
@@ -69,11 +69,12 @@ const SCAN_PAGE_SIZE = 100;
  * The Direct API surface this needs.
  *
  * An ALIAS of the declaration this package already pins, never a second
- * structural description of the same API. A structural restatement is checked
- * against nothing: it compiles whatever it claims, and a test fake written to
- * satisfy it agrees with the claim rather than with the API — so a wrong one
- * survives review and a green suite while the reads it describes answer
- * something else entirely, in the direction that ALLOWS a delete.
+ * structural description of the same API. Nothing checks a structural
+ * restatement against the API it describes: it compiles whatever it claims, and
+ * a test fake written to satisfy it agrees with the claim rather than with the
+ * runtime — so both sides can be wrong together, and the reads answer something
+ * else entirely while every gate is green. The direction that costs is the one
+ * where an empty result ALLOWS a delete.
  *
  * `class-usage-runtime.test-d.ts` pins this declaration against the real
  * `Nextly`, control included, which is the property a second declaration
