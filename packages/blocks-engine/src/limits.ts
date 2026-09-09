@@ -159,6 +159,22 @@ const WHY_TOO_LARGE =
   `entries at every level, so a few dozen objects can reach millions.`;
 
 /**
+ * The same question for the SERIALIZER, which counts a different population.
+ *
+ * A replacer runs for every value `JSON.stringify` visits, not for every node:
+ * a `props` object holding a large array reaches the bound with one node and no
+ * sharing at all. So this names a third route the forest explanation does not
+ * cover, and must not be replaced by it — a caller told to look for a node
+ * under two parents, in a document with one node, is being sent somewhere there
+ * is nothing to find.
+ */
+const WHY_TOO_MANY_VALUES =
+  `The serializer counts every value it visits rather than every node, so a ` +
+  `document reaches this by holding that many values in its props, by holding ` +
+  `that many nodes, or by holding a node placed under more than one parent — ` +
+  `which multiplies what is serialized at every level.`;
+
+/**
  * Visit the forest, refusing rather than answering from a partial walk.
  *
  * The one place the bound is applied, so the three readers below cannot drift
@@ -258,7 +274,7 @@ export function documentBytes(doc: BlockDocument): number {
     if (visited > MAX_SERIALIZED_VALUES) {
       throw new ForestTooLargeError(
         `this document cannot be measured: serializing it visits more than ` +
-          `${String(MAX_SERIALIZED_VALUES)} values. ${WHY_TOO_LARGE}`
+          `${String(MAX_SERIALIZED_VALUES)} values. ${WHY_TOO_MANY_VALUES}`
       );
     }
     return value;

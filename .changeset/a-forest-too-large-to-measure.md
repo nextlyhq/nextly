@@ -32,6 +32,13 @@ They walk ENTRIES, not objects, and deliberately so: one node object placed in t
 
 `documentBytes` was the sharp edge. `JSON.stringify` expands each shared node into a copy per path that reaches it, so it allocated 132 MB for 21 objects and raised `RangeError: Invalid string length` at 23 — from a document a few kilobytes in memory, in the one function that decides whether a document may be stored.
 
-Past `MAX_WALKABLE_ENTRIES` (1,000,000 — two hundred times the default node cap, so it only fires on forests no product setting would have allowed) each of the three now throws `ForestTooLargeError`, naming the cause: a node placed under more than one parent. Both are exported. Inside `applyOp` the refusal arrives as an `OpError` like every other, so the `...Refusal` helpers still return a reason rather than throwing at their caller.
+All three now throw `ForestTooLargeError`, against **two different bounds** — they count different populations and neither number stands in for the other:
+
+- `countNodes` and `treeDepth` refuse past `MAX_WALKABLE_ENTRIES` (1,000,000), which counts forest ENTRIES.
+- `documentBytes` refuses past `MAX_SERIALIZED_VALUES` (2,000,000), which counts the VALUES the serializer visits — measured at six per node, so this is roughly 333,000 nodes.
+
+Both bounds and the error are exported from the package root; `@nextlyhq/blocks-engine/format` exports the error and `MAX_SERIALIZED_VALUES`, which is the only one bounding anything that entry exposes.
+
+The messages name the routes to each bound without claiming which one a caller hit, because neither reader compares object identity and so neither can tell. Inside `applyOp` the refusal arrives as an `OpError` like every other, so the `...Refusal` helpers still return a reason rather than throwing at their caller. Composition and the builder's deletion metadata degrade rather than propagate it: an unmeasurable subtree refunds nothing and reports no descendant count, so a page still renders and a block can still be deleted.
 
 Nothing a site can store is affected. `JSON.parse` produces fresh objects and cannot express sharing, so a stored document is never such a forest; the bound is reachable only by a forest built in memory by code.
