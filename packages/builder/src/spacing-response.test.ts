@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { paddingRespondsOutward } from "./padding-response";
+import { spacingRespondsOutward } from "./spacing-response";
 
 function block(css?: string): HTMLElement {
   const element = document.createElement("div");
@@ -46,7 +46,7 @@ describe("the threshold is judged in the units the probe is SEEN in", () => {
       const bottom = call === 1 ? 100 : 100 + grewBy;
       return { top: 0, bottom, left: 0, right: 100 } as DOMRect;
     };
-    return paddingRespondsOutward(element, "bottom", scale);
+    return spacingRespondsOutward(element, "padding", "bottom", scale);
   }
 
   it("sees an outward response at full zoom", () => {
@@ -79,16 +79,49 @@ describe("the threshold is judged in the units the probe is SEEN in", () => {
   });
 });
 
+describe("the two boxes read the same probe in opposite directions", () => {
+  /*
+   * The border edge is the FAR edge of a padding band and the NEAR edge of a
+   * margin one, so a border edge that moved outward means a padding thickened
+   * away from the block and a margin thickened toward it.
+   *
+   * Measured in Chromium, and this is what made the old table wrong on both
+   * counts: `margin-top` in normal flow and in a flex column moves the block's
+   * border edge DOWN while its outer edge stays pinned by whatever precedes it,
+   * and `margin-bottom` does the opposite.
+   */
+  function respondsWith(box: "margin" | "padding", grewBy: number): boolean {
+    const element = block();
+    let call = 0;
+    element.getBoundingClientRect = () => {
+      call += 1;
+      const bottom = call === 1 ? 100 : 100 + grewBy;
+      return { top: 0, bottom, left: 0, right: 100 } as DOMRect;
+    };
+    return spacingRespondsOutward(element, box, "bottom", 1);
+  }
+
+  it("reads a moving border edge as a padding growing outward", () => {
+    expect(respondsWith("padding", 10)).toBe(true);
+    expect(respondsWith("padding", 0)).toBe(false);
+  });
+
+  it("reads the same movement as a margin growing INWARD", () => {
+    expect(respondsWith("margin", 10)).toBe(false);
+    expect(respondsWith("margin", 0)).toBe(true);
+  });
+});
+
 describe("the probe leaves the element as it found it", () => {
   it("removes an inline padding it added", () => {
     const element = block();
-    paddingRespondsOutward(element, "bottom", 1);
+    spacingRespondsOutward(element, "padding", "bottom", 1);
     expect(element.getAttribute("style")).toBeNull();
   });
 
   it("restores an inline value the author set", () => {
     const element = block("padding-bottom: 7px;");
-    paddingRespondsOutward(element, "bottom", 1);
+    spacingRespondsOutward(element, "padding", "bottom", 1);
     expect(element.style.getPropertyValue("padding-bottom")).toBe("7px");
     expect(element.style.getPropertyPriority("padding-bottom")).toBe("");
   });
@@ -101,7 +134,7 @@ describe("the probe leaves the element as it found it", () => {
    */
   it("restores the author's priority too", () => {
     const element = block("padding-bottom: 7px !important;");
-    paddingRespondsOutward(element, "bottom", 1);
+    spacingRespondsOutward(element, "padding", "bottom", 1);
     expect(element.style.getPropertyValue("padding-bottom")).toBe("7px");
     expect(element.style.getPropertyPriority("padding-bottom")).toBe(
       "important"
@@ -110,7 +143,7 @@ describe("the probe leaves the element as it found it", () => {
 
   it("leaves the other sides alone", () => {
     const element = block("padding-top: 3px; padding-left: 5px;");
-    paddingRespondsOutward(element, "bottom", 1);
+    spacingRespondsOutward(element, "padding", "bottom", 1);
     expect(element.style.getPropertyValue("padding-top")).toBe("3px");
     expect(element.style.getPropertyValue("padding-left")).toBe("5px");
   });
@@ -118,7 +151,7 @@ describe("the probe leaves the element as it found it", () => {
   it("restores every side it is asked about", () => {
     for (const side of ["top", "right", "bottom", "left"] as const) {
       const element = block();
-      paddingRespondsOutward(element, side, 1);
+      spacingRespondsOutward(element, "padding", side, 1);
       expect(element.getAttribute("style"), side).toBeNull();
     }
   });

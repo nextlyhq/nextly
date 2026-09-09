@@ -87,7 +87,6 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
-import { paddingRespondsOutward } from "./padding-response";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
@@ -98,6 +97,7 @@ import {
   type EdgeApplicability,
   type EdgeLengths,
   type SpacingBand,
+  type SpacingBox,
   type SpacingSide,
 } from "./spacing-bands";
 import {
@@ -105,6 +105,7 @@ import {
   type SpacingScrubContext,
   type SpacingSubject,
 } from "./spacing-handles";
+import { spacingRespondsOutward } from "./spacing-response";
 
 export interface SpacingOverlayProps {
   /** The editor whose primary selection is measured. */
@@ -491,7 +492,7 @@ function sameSubject(
      * margin or scale change happens to force a replacement.
      *
      * NOT covered by a test of its own, and said here rather than left to be
-     * discovered. What `paddingOutward` DOES once it reaches the handles is
+     * discovered. What `outward` DOES once it reaches the handles is
      * covered — `spacing-handles.test.tsx` asserts both the edge it places the
      * control on and the direction it drags in. What is untested is this
      * propagation step: reaching it needs a measurement whose probe answers
@@ -499,7 +500,9 @@ function sameSubject(
      * stage that in jsdom broke the measurement chain it was standing on. A
      * test that fights its harness is worth less than a note that does not.
      */
-    SIDES.every(side => one.paddingOutward[side] === other.paddingOutward[side])
+    (["margin", "padding"] as const).every(box =>
+      SIDES.every(side => one.outward[box][side] === other.outward[box][side])
+    )
   );
 }
 
@@ -546,6 +549,8 @@ export function SpacingOverlay({
    * can gain a definite size without changing size at all.
    */
   const responds = React.useRef(new Map<string, boolean>());
+  /** The document those answers were probed against. See below. */
+  const probedFor = React.useRef<EditorState["document"] | null>(null);
   /*
    * How far the layer may paint outside itself, in pixels.
    *
@@ -559,11 +564,25 @@ export function SpacingOverlay({
   /*
    * The probe cache is dropped on every edit, because an edit is the thing that
    * can turn an auto height into a fixed one. Not keyed on geometry: a block can
-   * gain a definite size without changing size at all.
+   * gain a definite size without changing size at all — which is also why
+   * clearing it late is not good enough.
+   *
+   * Cleared during RENDER rather than in an effect, and the ordering is the
+   * whole point. The measurement runs in a layout effect keyed on the same
+   * document, and a passive effect runs after it — so a cache cleared there is
+   * cleared AFTER the measurement that needed it, and `outwardFor` reuses the
+   * answer for the block the edit just changed. Nothing schedules a further
+   * measurement, and since the block's dimensions did not move there may be no
+   * resize to correct it either: the handle stays on the edge that has stopped
+   * moving until some unrelated geometry event.
+   *
+   * Comparing the previous document rather than depending on one, because a ref
+   * assignment during render has no dependency array to be ordered against.
    */
-  React.useEffect(() => {
+  if (probedFor.current !== document) {
+    probedFor.current = document;
     responds.current.clear();
-  }, [document]);
+  }
 
   /*
    * Handles are drawn only for a SINGLE selection.
@@ -687,16 +706,17 @@ export function SpacingOverlay({
      */
     const rootPainted = canvasPaintedScale(root);
 
-    /** This node's answer for one side, probed once and then remembered. */
-    const outwardFor = (side: SpacingSide): boolean => {
-      const key = `${selectedId}\u0000${side}`;
+    /** This node's answer for one box and side, probed once and remembered. */
+    const outwardFor = (box: SpacingBox, side: SpacingSide): boolean => {
+      const key = `${selectedId}\u0000${box}\u0000${side}`;
       const known = responds.current.get(key);
       if (known !== undefined) return known;
       const realm = block.ownerDocument.defaultView;
       const answer =
         realm !== null && block instanceof realm.HTMLElement
-          ? paddingRespondsOutward(
+          ? spacingRespondsOutward(
               block,
+              box,
               side,
               /*
                * The scale the probe's movement will be SEEN at. `boxAcross`
@@ -759,11 +779,19 @@ export function SpacingOverlay({
          * decided by its content, and that is not something the stored styles
          * can answer — see `padding-response.ts`.
          */
-        paddingOutward: {
-          top: outwardFor("top"),
-          right: outwardFor("right"),
-          bottom: outwardFor("bottom"),
-          left: outwardFor("left"),
+        outward: {
+          margin: {
+            top: outwardFor("margin", "top"),
+            right: outwardFor("margin", "right"),
+            bottom: outwardFor("margin", "bottom"),
+            left: outwardFor("margin", "left"),
+          },
+          padding: {
+            top: outwardFor("padding", "top"),
+            right: outwardFor("padding", "right"),
+            bottom: outwardFor("padding", "bottom"),
+            left: outwardFor("padding", "left"),
+          },
         },
       }
     );

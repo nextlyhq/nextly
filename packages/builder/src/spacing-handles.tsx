@@ -70,7 +70,12 @@ import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasPointerPoints, canvasRootFrom } from "./geometry-dom";
 import type { SideOrientation } from "./side-orientation";
-import type { EdgeLengths, SpacingBand, SpacingSide } from "./spacing-bands";
+import type {
+  EdgeLengths,
+  SpacingBand,
+  SpacingBox,
+  SpacingSide,
+} from "./spacing-bands";
 import {
   logicalSideFor,
   spacingAddress,
@@ -113,15 +118,20 @@ export interface SpacingSubject {
    */
   readonly orientation: SideOrientation | undefined;
   /**
-   * Whether each padding side's OUTER edge is the one that moves.
+   * Whether each band thickens AWAY from the block, per box and side.
    *
-   * Measured from the element rather than assumed, because it depends on the
-   * block's sizing model: on a block whose height fits its content the border
-   * edge moves outward, and on one with a fixed height the content edge moves
-   * inward. See `padding-response.ts`. A handle placed on the wrong edge sits
-   * still while the block grows away from it, and the drag runs backwards.
+   * MEASURED rather than assumed, for both boxes. Which edge moves depends on
+   * the layout: a block whose height fits its content grows its border edge
+   * outward when its padding grows, one with a fixed height moves the content
+   * edge inward — and a `margin-top` in normal flow moves the border edge down
+   * while its outer edge stays pinned by whatever precedes it, which is the
+   * opposite of what `margin-bottom` does. See `spacing-response.ts`. A handle
+   * placed on the wrong edge sits still while the block moves away from it, and
+   * the drag runs backwards.
    */
-  readonly paddingOutward: Readonly<Record<SpacingSide, boolean>>;
+  readonly outward: Readonly<
+    Record<SpacingBox, Readonly<Record<SpacingSide, boolean>>>
+  >;
 }
 
 /** The tier a scrub writes to, and what the canvas compiled it with. */
@@ -504,9 +514,9 @@ export function SpacingHandles({
       spacingGrowsOutward(
         band.box,
         band.negative,
-        subject.paddingOutward[band.side]
+        subject.outward[band.box][band.side]
       ),
-    [subject.paddingOutward]
+    [subject.outward]
   );
 
   const targetFor = React.useCallback(

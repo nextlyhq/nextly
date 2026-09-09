@@ -1,5 +1,5 @@
 /**
- * Which edge of a padding band actually moves when the value grows.
+ * Which edge of a spacing band actually moves when the value grows.
  *
  * It is not a constant, and that is the whole reason this file exists. Measured
  * in Chromium on one ordinary block and one with a fixed height:
@@ -24,27 +24,31 @@
  * that runs backwards for a reason nobody can see. Asking the element is
  * complete by construction.
  *
- * MARGINS need none of this. A margin lies outside the border box and never
- * moves it — growing one pushes the neighbour, not the block — so its band
- * always thickens away from the block, and a negative one always thickens
- * inward. That is structural, so it stays a table.
+ * MARGINS were once excluded from this on the reasoning that one lies outside
+ * the border box and never moves it. That was wrong, and measured wrong the same
+ * way: in normal flow and in a flex column alike, growing `margin-top` moves the
+ * block's border edge DOWN while the outer margin edge — pinned by whatever
+ * precedes it — stays exactly where it was. `margin-bottom` is the opposite, and
+ * so the four sides do not agree with each other any more than the paddings do.
+ *
+ * | side | what moves |
+ * | --- | --- |
+ * | `margin-top`, `margin-left` | the border edge, INWARD |
+ * | `margin-bottom`, `margin-right` | the outer edge, outward |
+ *
+ * The two boxes read the same probe in opposite directions, and that is not an
+ * inconsistency but the geometry: a padding band's far edge from the block's
+ * middle IS the border edge, and a margin band's far edge is the other one. So
+ * the border edge moving means a padding grew outward and a margin grew inward.
  *
  * @module padding-response
  */
 
 import { boxAcross } from "./geometry-dom";
-import type { SpacingSide } from "./spacing-bands";
+import type { SpacingBox, SpacingSide } from "./spacing-bands";
 
 /** How far the probe pushes the padding, in CSS pixels. */
 const PROBE_PX = 10;
-
-/** The inline property one side's padding is written through. */
-const PROPERTY: Record<SpacingSide, string> = {
-  top: "padding-top",
-  right: "padding-right",
-  bottom: "padding-bottom",
-  left: "padding-left",
-};
 
 /**
  * The same property as a computed-style key.
@@ -54,15 +58,20 @@ const PROPERTY: Record<SpacingSide, string> = {
  * overlay takes `style.paddingTop` — and asking a second way would be a second
  * shape for a test double to satisfy.
  */
-const COMPUTED: Record<
-  SpacingSide,
-  "paddingTop" | "paddingRight" | "paddingBottom" | "paddingLeft"
-> = {
-  top: "paddingTop",
-  right: "paddingRight",
-  bottom: "paddingBottom",
-  left: "paddingLeft",
-};
+const COMPUTED = {
+  padding: {
+    top: "paddingTop",
+    right: "paddingRight",
+    bottom: "paddingBottom",
+    left: "paddingLeft",
+  },
+  margin: {
+    top: "marginTop",
+    right: "marginRight",
+    bottom: "marginBottom",
+    left: "marginLeft",
+  },
+} as const satisfies Record<SpacingBox, Record<SpacingSide, string>>;
 
 /** How far the border edge on `side` moved away from the block's middle. */
 function edgeMovedOut(
@@ -98,12 +107,13 @@ function edgeMovedOut(
  * @param side - the physical side being asked about
  * @returns whether the OUTER edge is the one that moves
  */
-export function paddingRespondsOutward(
+export function spacingRespondsOutward(
   block: HTMLElement,
+  box: SpacingBox,
   side: SpacingSide,
   scale: number
 ): boolean {
-  const property = PROPERTY[side];
+  const property = `${box}-${side}`;
   const style = block.style;
   /*
    * The WHOLE attribute, restored verbatim.
@@ -120,7 +130,7 @@ export function paddingRespondsOutward(
   /* c8 ignore next -- an element outside a realm cannot be measured at all */
   if (view === null) return false;
   const current =
-    Number.parseFloat(view.getComputedStyle(block)[COMPUTED[side]]) || 0;
+    Number.parseFloat(view.getComputedStyle(block)[COMPUTED[box][side]]) || 0;
 
   /*
    * Read through `geometry-dom`, which is the one module allowed to take a
@@ -159,5 +169,13 @@ export function paddingRespondsOutward(
    * other one is not a smaller movement — it is no movement at all.
    */
   const expected = PROBE_PX * (Number.isFinite(scale) && scale > 0 ? scale : 1);
-  return edgeMovedOut(before, after, side) > expected / 2;
+  const borderEdgeMoved = edgeMovedOut(before, after, side) > expected / 2;
+  /*
+   * Read in opposite directions for the two boxes, because the border edge is
+   * the far edge of a padding band and the NEAR edge of a margin one. A border
+   * edge that moved outward therefore means a padding thickened away from the
+   * block — and means a margin thickened toward it, since its own outer edge
+   * stayed where whatever precedes it pinned it.
+   */
+  return box === "padding" ? borderEdgeMoved : !borderEdgeMoved;
 }

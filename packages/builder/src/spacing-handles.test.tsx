@@ -150,11 +150,14 @@ function subjectWith(overrides: Partial<SpacingSubject> = {}): SpacingSubject {
     scales: UNSCALED,
     orientation: { writingMode: "horizontal-tb", direction: "ltr" },
     /*
-     * The fixed-height answer by default — the content edge moves inward — so
-     * the existing cases keep describing the block they always described. The
-     * auto-height answer has its own cases.
+     * The answers the ordinary cases below were written against: a fixed-height
+     * block, whose padding moves the content edge inward, and margins reading
+     * outward on every side. Cases that care about the other answers say so.
      */
-    paddingOutward: { top: false, right: false, bottom: false, left: false },
+    outward: {
+      margin: { top: true, right: true, bottom: true, left: true },
+      padding: { top: false, right: false, bottom: false, left: false },
+    },
     ...overrides,
   };
 }
@@ -1699,7 +1702,10 @@ describe("a padding handle on a block that grows outward", () => {
     mount(
       [bottomPadding],
       subjectWith({
-        paddingOutward: { top: false, right: false, bottom: true, left: false },
+        outward: {
+          margin: { top: true, right: true, bottom: true, left: true },
+          padding: { top: false, right: false, bottom: true, left: false },
+        },
       })
     );
     expect(handle("bottom padding").style.top).toBe("115.5px");
@@ -1719,7 +1725,10 @@ describe("a padding handle on a block that grows outward", () => {
       [bottomPadding],
       subjectWith({
         padding: { top: 4, right: 4, bottom: 20, left: 4 },
-        paddingOutward: { top: false, right: false, bottom: true, left: false },
+        outward: {
+          margin: { top: true, right: true, bottom: true, left: true },
+          padding: { top: false, right: false, bottom: true, left: false },
+        },
       })
     );
     drag(handle("bottom padding"), [{ x: 0, y: 15 }]);
