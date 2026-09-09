@@ -91,6 +91,25 @@ describe("prepareSubmission", () => {
     expect(data.name).toBe("2 < 3 and 5 > 4");
   });
 
+  it("does not build a tag out of what it removed", () => {
+    // Removing the inner `<b>` puts its neighbours together: one pass over
+    // `<<b>img src=x onerror=alert(1)>` returns `<img src=x onerror=alert(1)>`,
+    // markup the sanitizer assembled itself. Narrowing the pattern to real tag
+    // syntax is what made this reachable, so it arrived with the fix above it.
+    for (const input of [
+      "<<b>img src=x onerror=alert(1)>",
+      "<<script>script>alert(1)</script>",
+      "<<div>div onmouseover=alert(1)>hover",
+    ]) {
+      const { data } = prepareSubmission({
+        data: { name: input, email: "ada@example.com" },
+        fields,
+        validate: false,
+      });
+      expect(data.name).not.toMatch(/<[a-zA-Z/!?]/);
+    }
+  });
+
   it("still removes what a browser would read as a tag", () => {
     // The control for the test above: narrowing the pattern must not stop it
     // removing markup. Each of these is tag-open syntax, including the one
@@ -470,12 +489,107 @@ describe("the write-seam hook on submissions", () => {
 
   it("hands the marks to the first taker only", async () => {
     // The mechanism under the test above, stated directly.
-    await asPluginSubmission({ keepAsEvidence: true }, () => {
-      expect(takeSubmissionMarks()?.keepAsEvidence).toBe(true);
-      expect(takeSubmissionMarks()).toBeUndefined();
+    const payload = { name: "bot" };
+    await asPluginSubmission({ keepAsEvidence: true, payload }, () => {
+      expect(takeSubmissionMarks(payload)?.keepAsEvidence).toBe(true);
+      expect(takeSubmissionMarks(payload)).toBeUndefined();
     });
     // The control: outside a marked call there is nothing to take.
-    expect(takeSubmissionMarks()).toBeUndefined();
+    expect(takeSubmissionMarks(payload)).toBeUndefined();
+  });
+
+  it("does not hand the evidence exception to another row's write", async () => {
+    // A hook registered before this plugin runs ahead of its handler, so a
+    // submission that hook writes reaches the seam first, inside the same
+    // store. Spending the marks on whoever arrives first gave the exception to
+    // the wrong row and left the evidence row to be refused.
+    const evidence = { name: "<b>bot</b>", email: "not-an-email" };
+    await asPluginSubmission(
+      { keepAsEvidence: true, payload: evidence },
+      async () => {
+        await expect(
+          prepareSubmissionForWrite(
+            {
+              data: {
+                form: "form1",
+                data: { name: "Ada", email: "also-not-an-email" },
+              },
+              operation: "create",
+            },
+            formsSlug,
+            withForm
+          )
+        ).rejects.toThrow();
+
+        const kept = await prepareSubmissionForWrite(
+          { data: { form: "form1", data: evidence }, operation: "create" },
+          formsSlug,
+          withForm
+        );
+        expect((kept?.data as Record<string, unknown>).email).toBe(
+          "not-an-email"
+        );
+      }
+    );
+  });
+
+  it("checks an evidence row on its way out of spam", async () => {
+    // A spam row is stored without being validated so a false positive stays
+    // reviewable. "Not spam" sends only a status, and letting that through
+    // unchecked turned a payload the form rejects into a counted submission.
+    await expect(
+      prepareSubmissionForWrite(
+        {
+          data: { status: "new", spamReason: null },
+          operation: "update",
+          originalData: {
+            id: "sub1",
+            form: "form1",
+            status: "spam",
+            data: { name: "bot", email: "not-an-email" },
+          },
+        },
+        formsSlug,
+        withForm
+      )
+    ).rejects.toThrow();
+  });
+
+  it("lets a valid evidence row out of spam", async () => {
+    // The control: the check must not make every false positive unrecoverable.
+    const out = await prepareSubmissionForWrite(
+      {
+        data: { status: "new" },
+        operation: "update",
+        originalData: {
+          id: "sub1",
+          form: "form1",
+          status: "spam",
+          data: { name: "Ada", email: "ada@example.com" },
+        },
+      },
+      formsSlug,
+      withForm
+    );
+    expect(out?.status).toBe("new");
+    expect(out?.data).toEqual({ name: "Ada", email: "ada@example.com" });
+  });
+
+  it("leaves a status change between two non-spam values alone", async () => {
+    // The second control: the check is about leaving spam, not about statuses.
+    const ctx = {
+      data: { status: "read" },
+      operation: "update",
+      originalData: {
+        id: "sub1",
+        form: "form1",
+        status: "new",
+        data: { name: "Ada", email: "ada@example.com" },
+      },
+    };
+    expect(await prepareSubmissionForWrite(ctx, formsSlug, withForm)).toBe(
+      ctx.data
+    );
   });
 
   it("refuses rather than emptying when the form cannot be read", async () => {

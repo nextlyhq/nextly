@@ -337,6 +337,8 @@ That happens on a `beforeChange` hook on the submissions collection, the last co
 
 Values are sanitized before they are validated, so every rule judges the value that will actually be stored rather than the one that arrived.
 
+A submission flagged as spam is stored without being validated, deliberately, so a false positive stays reviewable rather than being thrown away. That exception ends when the row leaves spam: marking one "Not spam" checks the payload it is carrying against the form, so a row that never satisfied the form has to be corrected in the same edit before it can become an ordinary counted submission.
+
 Spam protection is not part of that, and deliberately so. The honeypot, the rate limit and reCAPTCHA are facts about an HTTP request rather than about a row: a trusted server importing a thousand submissions would rate-limit its own import, and a honeypot field means nothing without a browser to have skipped it. Those run in `submitForm` only.
 
 That decides which route you point a browser at. `POST /api/forms/:slug/submit` is built into Nextly and does not reach this plugin's handler, so a submission arriving there is projected, validated and sanitized, and meets no honeypot, no rate limit and no reCAPTCHA. To get those, host a route that calls `submitForm`, as under "Handling Submissions" above, and send the browser to that one.

@@ -553,6 +553,9 @@ export function formBuilder(
       // submitted must leave a visible trace. Registered directly on the
       // registry (like the notification hook) so it runs for every API
       // surface that updates a submission.
+      // Reads the patch as it arrived. Core runs this phase before
+      // `beforeChange`, so the payload the write seam adds to a status-only
+      // patch is not here yet and cannot be mistaken for an admin's edit.
       nextly.hooks.on("beforeUpdate", submissionSlug, (context: unknown) => {
         const ctx = context as {
           data?: Record<string, unknown>;
@@ -917,18 +920,32 @@ function submittedPayload(raw: unknown): Record<string, unknown> {
  * move a submission onto any form and leave behind a payload the form it now
  * belongs to rejects.
  *
- * An update that does neither leaves nothing to check: an admin changing a
- * status sends only that, and preparing an absent payload would store an empty
- * submission over a real one. A move is left alone for the same reason when the
- * stored row did not reach this hook, since there is then no payload to judge.
+ * A patch that takes the row out of spam is the third. An evidence row was
+ * stored WITHOUT being validated, deliberately, so that a false positive stays
+ * reviewable. The admin's "Not spam" action sends only a status, and letting it
+ * through unchecked turned a payload the form rejects into an ordinary counted
+ * submission. Leaving spam is the moment that payload has to satisfy the form,
+ * and a row that cannot has to be corrected in the same update.
+ *
+ * An update that does none of these leaves nothing to check: an admin changing
+ * a status between two non-spam values sends only that, and preparing an absent
+ * payload would store an empty submission over a real one. The last two are
+ * left alone for the same reason when the stored row did not reach this hook,
+ * since there is then no payload to judge.
  */
 function updateNeedsChecking(
   submission: Record<string, unknown>,
   stored: Record<string, unknown> | undefined
 ): boolean {
   if (submission.data !== undefined) return true;
-  if (submission.form === undefined) return false;
-  return stored?.data !== undefined;
+  // Everything below judges the STORED payload, so there has to be one.
+  if (stored?.data === undefined) return false;
+  if (submission.form !== undefined) return true;
+  return (
+    stored.status === "spam" &&
+    submission.status !== undefined &&
+    submission.status !== "spam"
+  );
 }
 
 export async function prepareSubmissionForWrite(
@@ -959,10 +976,9 @@ export async function prepareSubmissionForWrite(
     submission.data !== undefined ? submission.data : stored?.data
   );
 
-  // Taken once, and not before here: an early return above would spend a mark
-  // on a write that never used it, and the next write in the same call would
-  // find it gone.
-  const marks = takeSubmissionMarks();
+  // Taken once, for this payload, and not before here: an early return above
+  // would spend a mark on a write that never used it.
+  const marks = takeSubmissionMarks(incoming);
 
   // The handler that already read this form hands it over rather than have the
   // write read it a second time. That read is not free: `findEntryById` runs

@@ -30,8 +30,10 @@ Form submissions are transformed, sanitized and validated on a `beforeChange` ho
 
 Sanitizing now runs before validation, so a rule judges the value that will actually be stored. `<b></b>` no longer satisfies a required field and then reduces to an empty string.
 
-Stripping markup no longer removes text that only looks like a tag. A `<` opens a tag only when what follows could name one, which is the HTML tokenizer's own rule, so an answer containing `2 < 3` survives intact.
+Stripping markup no longer removes text that only looks like a tag. A `<` opens a tag only when what follows could name one, which is the HTML tokenizer's own rule, so an answer containing `2 < 3` survives intact. Stripping repeats until the text stops changing, because removing one tag can put its neighbours together into another.
 
 `validateSubmission` asks the same rule rather than restating it, so a preflight check and the write can no longer disagree about the same submission.
+
+A submission flagged as spam is stored without being validated so a false positive stays reviewable, and that exception now ends where it should: it names the row it was granted for rather than the next write in the call, and marking a row "Not spam" checks the payload it carries against the form.
 
 Spam protection stays on `submitForm`, where a honeypot and a rate limit are facts about a request rather than about a row. The built-in submit route does not reach it, and the guide now says so.

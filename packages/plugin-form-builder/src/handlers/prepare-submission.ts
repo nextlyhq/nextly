@@ -59,12 +59,24 @@ const TEXT_FORM_FIELDS = new Set([
  *
  * A tag left unclosed at end of string is still removed: handed `hello <script`
  * a browser completes it rather than showing it.
+ *
+ * Repeated until the text stops changing, because removing a tag can put its
+ * neighbours together into a new one. `<<b>img src=x onerror=alert(1)>` loses
+ * the inner `<b>` and one pass hands back `<img src=x onerror=alert(1)>`, which
+ * is live markup the sanitizer assembled itself. Each pass can only shorten the
+ * text, so the loop ends, and it ends with nothing a browser would read as a
+ * tag left in it.
  */
+const HTML_TAG = /<[a-zA-Z/!?][^>]*(?:>|$)/g;
+
 function stripHtmlTags(input: string): string {
-  return input
-    .replace(/<[a-zA-Z/!?][^>]*(?:>|$)/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  let text = input;
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(HTML_TAG, "");
+  } while (text !== previous);
+  return text.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -124,6 +136,20 @@ export interface SubmissionOriginMarks {
    * the one the row names.
    */
   form?: Record<string, unknown>;
+  /**
+   * The payload the handler is writing, so the exception can name its row.
+   *
+   * Spending the marks on the first write in the scope is not enough on its
+   * own: a hook registered before this plugin runs ahead of its handler, and if
+   * that hook writes a submission of its own the nested row reaches the seam
+   * first. It would take an exception granted to somebody else, and the row the
+   * exception was for would then be validated and refused.
+   *
+   * Compared by content rather than by reference, which was measured rather
+   * than assumed: core rebuilds both the row and its payload on the way to the
+   * hook, so neither arrives as the object the handler passed.
+   */
+  payload?: Record<string, unknown>;
 }
 
 /** One marked write, and whether it has already been made. */
@@ -142,19 +168,51 @@ export function asPluginSubmission<T>(
   return submissionOrigin.run({ marks, spent: false }, write);
 }
 
+/** A form value, compared the way a form value can be. */
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left instanceof Date && right instanceof Date) {
+    return left.getTime() === right.getTime();
+  }
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return (
+      left.length === right.length &&
+      left.every((value, index) => sameValue(value, right[index]))
+    );
+  }
+  return false;
+}
+
+/** Whether two submitted payloads say the same thing. */
+function samePayload(
+  granted: Record<string, unknown>,
+  incoming: Record<string, unknown>
+): boolean {
+  const answers = Object.entries(granted);
+  if (answers.length !== Object.keys(incoming).length) return false;
+  return answers.every(([field, answer]) => sameValue(answer, incoming[field]));
+}
+
 /**
- * The marks for the write being made now, taken once.
+ * The marks for this row, if they were granted for this row, taken once.
  *
- * They describe ONE row, and the scope outlives it: `createEntry` does not
- * resolve until the `afterCreate` hooks have run, so a hook that writes a
- * second submission runs inside the same store and would otherwise inherit an
- * exception granted to the first. Spending them on the first taker is enough,
- * because the row they were granted for reaches `beforeChange` before anything
- * `afterCreate` can start.
+ * The scope outlives the write it was opened for: `createEntry` does not
+ * resolve until the `afterCreate` hooks have run, and a hook registered before
+ * this plugin runs ahead of its handler, so a submission written from either
+ * place is inside the same store. Naming the payload is what stops such a row
+ * taking an exception meant for another.
+ *
+ * Still spent once, so a second row carrying the same answers to the same form
+ * cannot be waved through on the back of the first.
  */
-export function takeSubmissionMarks(): SubmissionOriginMarks | undefined {
+export function takeSubmissionMarks(
+  payload: Record<string, unknown>
+): SubmissionOriginMarks | undefined {
   const scope = submissionOrigin.getStore();
   if (!scope || scope.spent) return undefined;
+  if (scope.marks.payload && !samePayload(scope.marks.payload, payload)) {
+    return undefined;
+  }
   scope.spent = true;
   return scope.marks;
 }
