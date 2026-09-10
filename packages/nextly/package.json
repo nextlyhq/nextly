@@ -27,6 +27,10 @@
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.mjs"
     },
+    "./route-path": {
+      "types": "./dist/route-path.d.ts",
+      "import": "./dist/runtime/routing/slug-param.mjs"
+    },
     "./auth": {
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.mjs"
