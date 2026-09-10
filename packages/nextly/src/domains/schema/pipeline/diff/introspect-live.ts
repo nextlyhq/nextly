@@ -17,7 +17,10 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-import { PG_RELATION_THE_WRITES_HIT } from "../pg-visible-relation";
+import {
+  PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT,
+  PG_RELATION_THE_WRITES_HIT,
+} from "../pg-visible-relation";
 
 import { sizeFromDeclaration } from "./declared-size";
 import type {
@@ -290,7 +293,7 @@ export async function introspectLiveSnapshot(
           JOIN pg_index ix ON ix.indrelid = t.oid
           JOIN pg_class i ON i.oid = ix.indexrelid
           JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-          WHERE t.oid = to_regclass(t.relname)
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
             AND t.relname IN (${tableNamesIn})
             AND ix.indisprimary = false
             AND ix.indpred IS NULL

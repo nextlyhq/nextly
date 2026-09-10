@@ -18,6 +18,20 @@
  * a same-named table exists in another schema on the path, ITS shape answers for
  * the real one — so the diff compares against a table nothing writes to.
  *
+ * ## Why the name is quoted before it is resolved
+ *
+ * 🔴 `to_regclass` takes TEXT and reparses it as an identifier reference, so an
+ * unquoted catalog name is folded and split exactly as if it had been typed:
+ * `dc_LegacyPosts` resolves as `dc_legacyposts`, and a name containing a dot
+ * resolves as `schema.table`. Both are reachable — `resolveCollectionTableName`
+ * passes an author's `dbName` through verbatim, prefixing `dc_` and nothing
+ * else — and both would make an existing table read as ABSENT, which is the
+ * worst answer this module can give: a diff that proposes to create a table that
+ * is already there.
+ *
+ * `quote_ident` is the inverse of that parse, so the text goes back in as the
+ * one identifier the catalog says it is.
+ *
  * @module domains/schema/pipeline/pg-visible-relation
  */
 import { sql, type SQL } from "drizzle-orm";
@@ -34,8 +48,17 @@ import { sql, type SQL } from "drizzle-orm";
  * would otherwise change WHICH TABLE is reported.
  *
  * Compared by identity rather than by spelling: `format('%I.%I', …)::regclass`
- * is this row's relation, `to_regclass(c.table_name)` is the one the search path
- * resolves, and the equality asks whether they are the same relation. The same
- * device the sequence-ownership check in `introspect-live.ts` already uses.
+ * is this row's relation, `to_regclass(…)` is the one the search path resolves,
+ * and the equality asks whether they are the same relation. The same device the
+ * sequence-ownership check in `introspect-live.ts` already uses.
  */
-export const PG_RELATION_THE_WRITES_HIT: SQL = sql`format('%I.%I', c.table_schema, c.table_name)::regclass = to_regclass(c.table_name)`;
+export const PG_RELATION_THE_WRITES_HIT: SQL = sql`format('%I.%I', c.table_schema, c.table_name)::regclass = to_regclass(quote_ident(c.table_name))`;
+
+/**
+ * The same question asked of a `pg_class` row, which carries the OID directly.
+ *
+ * Spelled here rather than inline at the index query so the two reads cannot
+ * drift: they must agree about which relation they are describing, or the
+ * columns come from one table and the indexes from another.
+ */
+export const PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT: SQL = sql`t.oid = to_regclass(quote_ident(t.relname))`;

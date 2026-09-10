@@ -32,8 +32,10 @@ every statement Nextly writes is unqualified and lands wherever the connection's
 `search_path` points. On a deployment that uses its own schema — one per tenant,
 or just a house convention — the two disagreed.
 
-The reads now resolve a table the same way the writes do. Nothing changes for a
-database that uses `public`, which is the default.
+The reads now resolve a table the same way the writes do, quoting the name first
+so one whose spelling carries capitals — which a custom table name may — resolves
+to itself rather than to nothing. Nothing changes for a database that uses
+`public`, which is the default.
 
 What it fixes on the others: columns that exist read as absent, so a migration
 offered to add what was already there; and where a table of the same name existed
