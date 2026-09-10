@@ -84,10 +84,21 @@ const asyncMutator = defineBlock<Record<string, never>, PageContext>({
   },
 });
 
+/** Writes the marker in a DIFFERENT CASE, which merges by a different key. */
+const casedForger = defineBlock<Record<string, never>, PageContext>({
+  name: "test/cased-forger",
+  version: 1,
+  description: "Returns a root carrying data-NX-instance.",
+  props: {},
+  example: { props: {} },
+  render: () => <div data-NX-instance="forged" />,
+});
+
 const blocks = createBlockResolver([
   forger,
   mutator,
   asyncMutator,
+  casedForger,
 ] as unknown as AnyBlockDefinition[]);
 
 function node(type: string, extra: Record<string, unknown> = {}): BlockNode {
@@ -421,6 +432,76 @@ describe("a placeholder is the one element an author can still click", () => {
 
     // Contained: the boundary drew its placeholder instead of throwing.
     expect(html).toContain("data-nx-block-placeholder");
+  });
+
+  it("clears a CASE VARIANT of the marker a block wrote itself", async () => {
+    // `cloneElement` merges by exact prop name, so assigning `undefined` to the
+    // canonical lowercase key leaves `data-NX-instance` untouched. HTML
+    // attribute lookup is ASCII case-insensitive, so an editor asking for
+    // `data-nx-instance` is then handed the block's forged value — the removal
+    // and the read disagreeing about what counts as the same attribute.
+    const html = renderToStaticMarkup(
+      <BlockBoundary
+        node={node("test/cased-forger")}
+        context={context()}
+        blocks={blocks}
+        classes={{}}
+        nodeAttribute
+      />
+    );
+
+    // The BLOCK really rendered, so what follows is about a root it built. A
+    // placeholder carries no forged attribute at all, which would satisfy the
+    // removal assertion while proving nothing — and did, in the first version
+    // of this test.
+    expect(html).not.toContain("data-nx-block-placeholder");
+    expect(html.toLowerCase()).not.toContain("data-nx-instance");
+    expect(html).toContain(`${NODE_ID_ATTRIBUTE}="n1"`);
+  });
+
+  // The other half of the clearing — that a block's OWN namespaced attributes
+  // survive it — is covered by `inline-props.test.tsx`, and covered better than
+  // a fixture here could manage: `data-nx-prop` is handed to blocks through
+  // `markProp`, so those tests exercise the real path rather than a stand-in.
+  //
+  // Named rather than assumed, because that coverage is what actually caught
+  // this: a first version cleared the whole `data-nx-` namespace and took the
+  // inline-edit marker with it, and those four tests went red. Deleting or
+  // rewriting them would leave the clearing here unbounded with nothing to say
+  // so.
+
+  it("reads provenance ONCE, so an accessor cannot answer twice", async () => {
+    // A snapshot that reads the property twice is not a snapshot. An accessor
+    // answering "legit" to the type test and "forged" to the assignment defeats
+    // the whole guarantee — and the emitted marker is the second answer, which
+    // is the one block code had a chance to change.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "test/does-not-exist",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "instanceOf", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? "legit" : "forged";
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      <BlockBoundary
+        node={node as unknown as BlockNode}
+        context={context()}
+        blocks={blocks}
+        classes={{}}
+        nodeAttribute
+      />
+    );
+
+    expect(html).toContain(`${INSTANCE_ATTRIBUTE}="legit"`);
+    expect(html).not.toContain("forged");
   });
 
   it("treats an EMPTY instance id as no provenance at all", async () => {
