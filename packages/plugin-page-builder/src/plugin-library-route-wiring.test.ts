@@ -13,6 +13,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { PluginRoutePermissionScope as PermissionScope } from "@nextlyhq/plugin-sdk";
+
+import { PATTERNS_SLUG } from "./collections/patterns";
+
 import { LIBRARY_ROUTE_PATH } from "./library-contract";
 import { pageBuilder } from "./plugin";
 
@@ -32,13 +36,20 @@ describe("the library route is contributed, not merely written", () => {
     expect(library?.public).not.toBe(true);
   });
 
-  it("declares no permission, so a renamed collection stays reachable", () => {
-    // Deliberate, and worth pinning because "add the obvious permission" is the
-    // natural next edit. A declared permission has to spell the collection
-    // slug, a host may rename that collection, and the seeded grant then
-    // carries the new name while the route demands the old one — a route
-    // nobody can call. The read runs as the user, so the service enforces the
-    // real, resolved permission instead.
-    expect(library?.requiredPermission).toBeUndefined();
+  it("demands a permission that follows a renamed collection", () => {
+    // Pinned as a MOVING slug rather than as "some permission is declared".
+    // A fixed one would name a grant nobody on a renamed install was seeded,
+    // which is why this route carried none at all and any authenticated caller
+    // could enumerate the library. See the save route's twin of this test.
+    const required = library?.requiredPermission;
+    expect(typeof required).toBe("function");
+
+    const renamed = (required as (scope: PermissionScope) => string)({
+      plugin: "@nextlyhq/plugin-page-builder",
+      collection: (declared, action) =>
+        `${action}-${declared === PATTERNS_SLUG ? "host_patterns" : declared}`,
+      single: (declared, action) => `${action}-${declared}`,
+    });
+    expect(renamed).toBe("read-host_patterns");
   });
 });
