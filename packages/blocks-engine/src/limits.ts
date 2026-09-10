@@ -77,48 +77,73 @@ export const DEFAULT_LIMITS: DocumentLimits = {
 };
 
 /**
- * How many entries a whole-forest reader may visit before it refuses.
+ * How many parts of a structure anything in this engine will walk.
  *
- * A machine limit like `MAX_WALKABLE_DEPTH` in `ops.ts`, not a product one:
- * {@link MAX_NODES} is a rule a site may raise, and this is the point past
- * which reading the forest at all stops being affordable whatever any site
- * says. Two hundred times the default node cap, so it only ever fires on
- * forests no product setting would have allowed.
+ * A machine limit, not a product one, and the ONE answer to that question. The
+ * op layer's preflight refuses a value with more parts than this, and the three
+ * readers below refuse a forest or a serialization that reaches it. Two numbers
+ * for one question is how a dry run comes to accept what the apply then refuses,
+ * and how a site that legitimately raises `maxNodes` finds one reader agreeing
+ * with its configuration while another does not.
  *
- * It exists because entries are not bounded by OBJECTS. `walkForest`
- * deliberately revisits a node object reached under two different parents —
- * one object placed in two slots is two elements of the document, and counting
- * it once would report half a real size and pass a cap the document exceeds.
- * That is right for a count and it makes the walk exponential in depth for a
- * forest whose branches share objects: measured on this module's own helpers, a
- * chain of 21 distinct objects each holding the next twice walks 2,097,151
- * entries, and every further object doubles it.
+ * The walks visit every key and every element, so a shallow object with millions
+ * of enumerable properties costs a full traversal — and an in-process or
+ * agent-written op can carry one. The byte cap would refuse such a value, but
+ * only after these walks have already paid for it, which is the wrong order for
+ * a guard whose job is to reject.
  *
- * A stored document can never be such a forest, because `JSON.parse` produces
- * fresh objects and cannot express sharing. One built in memory by code can be,
- * and these readers decide whether a document may be stored at all — so the
- * unbounded version failed in the worst possible place.
+ * ENTRIES are not bounded by OBJECTS, which is the other reason a bound is
+ * needed here. `walkForest` deliberately revisits a node object reached under
+ * two different parents — one object placed in two slots is two elements of the
+ * document, and counting it once would report half a real size and pass a cap
+ * the document exceeds. That is right for a count, and it makes the walk
+ * exponential in depth for a forest whose branches share objects: measured on
+ * this module's own helpers, a chain of 21 distinct objects each holding the
+ * next twice walks 2,097,151 entries, and every further object doubles it. A
+ * stored document can never be one — `JSON.parse` produces fresh objects and
+ * cannot express sharing — but one built in memory by code can.
+ *
+ * Set well above `DEFAULT_LIMITS.maxBytes`, which is 2 MiB: every part
+ * contributes at least one byte to serialized JSON, so a structure with more
+ * parts than this has more bytes than any default-configured document may hold,
+ * and refusing it unexamined agrees with the answer a full walk would have
+ * reached. A site that raises `maxBytes` past this is choosing a document larger
+ * than the editor will edit, which the machine caps already say elsewhere.
+ *
+ * What this bounds, precisely: the descriptor lookups, the nested traversal and
+ * the value reads, which are the costs that grow with what the value CONTAINS.
+ * It does not bound `Reflect.ownKeys` itself, which materialises the key list in
+ * one call before any loop can stop — and it cannot, because there is no way to
+ * enumerate own keys including non-enumerable and symbol ones without building
+ * that list. The op is already in memory by then, so this doubles a cost the
+ * caller has paid rather than admitting an unbounded new one.
  */
-export const MAX_WALKABLE_ENTRIES = 1_000_000;
+export const MAX_VALUE_PARTS = 4 * 1024 * 1024;
 
 /**
  * How many values {@link documentBytes} may serialize before it refuses.
  *
- * A different unit from {@link MAX_WALKABLE_ENTRIES} and deliberately its own
- * constant, because the serializer counts VALUES rather than nodes: measured on
- * a 5,000-node document, `JSON.stringify` visits six values per node. Two
- * million is therefore roughly 333,000 nodes — sixty-six times the default node
- * cap, the same order of headroom `MAX_WALKABLE_DEPTH` keeps over
- * `DEFAULT_LIMITS.maxDepth`.
+ * SEPARATE from {@link MAX_VALUE_PARTS}, and the separation is the point rather
+ * than an oversight. That ceiling bounds a structural walk, which reads and
+ * allocates nothing; this one bounds a walk that BUILDS as it goes, so the same
+ * numeral buys a different amount of work. Measured on a forest of shared
+ * objects, refusing at 4,194,304 callbacks takes 498ms against 145ms at this
+ * value — sharing one number there was arithmetic, not a derivation.
  *
- * Reusing the entry bound here would have been a bound in the wrong unit,
- * six times tighter than it reads, and would refuse documents a site could
- * legitimately configure.
+ * DERIVED from the byte cap it exists to protect, so it moves when that moves.
+ * Every serialized value contributes at least one byte to the output, so a
+ * document that has already emitted more values than the cap has bytes cannot
+ * come in under it, and the exact size of something that far over is not a
+ * number any caller needs.
+ *
+ * A site that raises `maxBytes` past this is choosing a document larger than the
+ * editor will edit, which is the stance {@link MAX_VALUE_PARTS} already takes
+ * for the same reason.
  */
-export const MAX_SERIALIZED_VALUES = 2_000_000;
+export const MAX_SERIALIZED_VALUES = DEFAULT_MAX_DOCUMENT_BYTES;
 
 /**
- * A forest whose entries outrun {@link MAX_WALKABLE_ENTRIES}.
+ * A structure with more parts than {@link MAX_VALUE_PARTS}.
  *
  * Thrown rather than answered around, because every honest answer here is a
  * refusal: a count taken from a walk that stopped early is a PARTIAL one, and
@@ -189,7 +214,7 @@ function walkBounded(
   let spent = false;
   walkForest(nodes, entry => {
     seen += 1;
-    if (seen > MAX_WALKABLE_ENTRIES) {
+    if (seen > MAX_VALUE_PARTS) {
       spent = true;
       return "stop";
     }
@@ -198,7 +223,7 @@ function walkBounded(
   });
   if (spent) {
     throw new ForestTooLargeError(
-      `${subject} reaches more than ${String(MAX_WALKABLE_ENTRIES)} entries ` +
+      `${subject} reaches more than ${String(MAX_VALUE_PARTS)} entries ` +
         `and cannot be measured: past that the walk is not affordable. ` +
         WHY_TOO_LARGE
     );

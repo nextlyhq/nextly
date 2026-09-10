@@ -47,3 +47,10 @@ width for those, which forces rotation or truncation. A capped bucket set says
 so rather than presenting a partial comparison as the whole one, and a
 timeseries labels each point in UTC, the zone its buckets were computed in, so
 the axis cannot name a different day than the server did.
+
+Every collection that can answer them now generates the two cards, beside the
+count, list and table it already generated — so the charts are something an
+install has rather than something a plugin author could build. A timeline is
+withheld from a collection whose only dates the read cannot bucket, and a
+status breakdown from one with no status column, because offering a card whose
+query is then refused is a card that draws an error on every load.
