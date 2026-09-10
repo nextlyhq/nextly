@@ -49,7 +49,7 @@ export default function SingleBuilderPage(): React.ReactElement | null {
       {
         slug,
         label: singular,
-        description: values.description?.trim() || undefined,
+        description: values.description,
         admin: {
           icon: values.icon,
           // Advanced tab. Code-first config can still set admin.group /

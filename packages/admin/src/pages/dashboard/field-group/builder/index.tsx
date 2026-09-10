@@ -42,11 +42,10 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
   const handleSubmit = (values: BuilderSettingsValues) => {
     const singular = values.singularName.trim();
     const slug = values.slug?.trim() || toSnakeName(singular);
-    // Normalised once. The request and the manifest projection describe the
-    // same field group, so deriving them from one value is what keeps a
-    // whitespace-only description from being stored as text in the manifest
-    // while the row it mirrors holds NULL.
-    const description = values.description?.trim() || undefined;
+    // Already normalised, at the settings form — the one boundary both this
+    // request and the manifest projection read from. Trimming again here would
+    // be a second spelling of that rule, which is how the two came to disagree.
+    const description = values.description;
 
     createFieldGroup(
       {

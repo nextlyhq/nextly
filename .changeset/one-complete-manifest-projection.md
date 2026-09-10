@@ -37,7 +37,13 @@ different setting. They now share one projection, and which settings the file
 carries is declared in a single list that the compiler checks: adding a Builder
 setting no longer compiles until somebody has said whether the file carries it.
 
-A blank description is also normalised in one place now, so the record written
-to the database and the entry written to the file can no longer disagree about
-whether a field group has one. And saving a field group's fields before its
-settings have loaded no longer replaces its entry with a nameless one.
+Which settings a _component_ may carry is part of that list, because the manifest
+refuses version history, retention, cache revalidation and webhook recording on
+one — a component has no entries of its own, so those belong to whatever embeds
+it. It refuses the key rather than the value, so a shared projection had to leave
+them out rather than send `false`.
+
+A description is also normalised in one place now — the settings form both writes
+read from — so the record in the database and the entry in the file can no longer
+disagree about one. And saving a field group's fields before its settings have
+loaded no longer replaces its entry with a nameless one.

@@ -110,6 +110,24 @@ const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
   "field-group": "field group",
 };
 
+/**
+ * The answers as everything downstream should see them.
+ *
+ * 🔴 Normalised HERE, at the one boundary the values cross, rather than by each
+ * consumer. A settings save fans out to two writes — the create/update request
+ * and the `ui-schema.json` projection — and they describe the same entity. When
+ * only one of them trimmed, a description typed with trailing spaces was stored
+ * one way in the row and another in the file, and replaying the manifest
+ * visibly changed the value a person had saved.
+ *
+ * Empty becomes `undefined` rather than `""`, because that is the difference
+ * between "no description" and "a description that is blank", and only the
+ * first is a thing a reader can mean.
+ */
+function normalized(values: BuilderSettingsValues): BuilderSettingsValues {
+  return { ...values, description: values.description?.trim() || undefined };
+}
+
 const EMPTY_VALUES: BuilderSettingsValues = {
   singularName: "",
   pluralName: "",
@@ -216,7 +234,9 @@ export function BuilderSettingsModal({
               <Button variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button onClick={() => onSubmit(values)}>{primaryLabel}</Button>
+              <Button onClick={() => onSubmit(normalized(values))}>
+                {primaryLabel}
+              </Button>
             </>
           )}
         </DialogFooter>

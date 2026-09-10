@@ -52,7 +52,7 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
       {
         name: slug,
         labels: { singular, plural },
-        description: values.description?.trim() || undefined,
+        description: values.description,
         icon: values.icon,
         // tab. Code-first config can still set admin.group / admin.order;
         // we just don't surface them in the create modal.

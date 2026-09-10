@@ -58,38 +58,64 @@ import { singleToManifestEntity } from "./to-manifest-entity-single";
  * never means "not got round to yet"; a setting that ought to travel and cannot
  * belongs in a finding, not in a silent `false`.
  */
+export type ManifestEntityKind = "collection" | "single" | "component";
+
+const EVERY_KIND: readonly ManifestEntityKind[] = [
+  "collection",
+  "single",
+  "component",
+];
+
+/** The two kinds that own entries, and so have a lifecycle of their own. */
+const ENTRY_KINDS: readonly ManifestEntityKind[] = ["collection", "single"];
+
 const CARRIED_BY_THE_MANIFEST: {
-  readonly [K in keyof Required<BuilderSettingsValues>]: boolean;
+  readonly [K in keyof Required<BuilderSettingsValues>]: readonly ManifestEntityKind[];
 } = {
   // Create-only and never persisted: it decides what the create call seeds and
   // has no meaning afterwards.
-  startingFieldType: false,
+  startingFieldType: [],
   // The entity's identity, not one of its settings. Passed as its own argument
   // because the manifest is keyed on it.
-  slug: false,
+  slug: [],
   // `ManifestEntity.admin` carries useAsTitle, defaultColumns and group, and
   // neither of these. They reach the database through the create/update request
   // instead, so projecting them here would invent a key the schema rejects.
-  icon: false,
-  category: false,
+  icon: [],
+  category: [],
 
-  singularName: true,
-  pluralName: true,
-  description: true,
-  status: true,
+  singularName: EVERY_KIND,
+  // A single and a component are one thing each; only a collection has a plural.
+  pluralName: ["collection"],
+  description: EVERY_KIND,
+  status: EVERY_KIND,
   // Spelled `localized` on the manifest; see the projection below.
-  i18n: true,
-  versions: true,
-  versionsMaxPerDoc: true,
-  revalidate: true,
-  webhooks: true,
+  i18n: EVERY_KIND,
+
+  // 🔴 The four the manifest schema REFUSES on a component, each by name and
+  // with its own reason: a component has no entries of its own, so version
+  // history, its retention, cache revalidation and outbox recording all belong
+  // to the collection or single that embeds it.
+  //
+  // `_zod/ui-schema.ts` rejects the KEY, not a truthy value — the test is
+  // `versions !== undefined` — so an explicit `false` is refused exactly like
+  // `true`. That is why this is a per-kind list and not a boolean: one shared
+  // projection emitting them would leave every field-group manifest write
+  // rejected while its database write succeeded, and `ui-schema.json` silently
+  // stale behind a warning toast.
+  versions: ENTRY_KINDS,
+  versionsMaxPerDoc: ENTRY_KINDS,
+  revalidate: ENTRY_KINDS,
+  webhooks: ENTRY_KINDS,
 };
 
-/** The settings keys the manifest carries, derived rather than restated. */
-export const MANIFEST_SETTING_KEYS = Object.entries(CARRIED_BY_THE_MANIFEST)
-  .filter(([, carried]) => carried)
-  .map(([key]) => key)
-  .sort();
+/** The settings keys the manifest carries for one kind, derived not restated. */
+export function manifestSettingKeys(kind: ManifestEntityKind): string[] {
+  return Object.entries(CARRIED_BY_THE_MANIFEST)
+    .filter(([, kinds]) => kinds.includes(kind))
+    .map(([key]) => key)
+    .sort();
+}
 
 /**
  * The builder's settings as the manifest spells them.
@@ -110,18 +136,26 @@ export const MANIFEST_SETTING_KEYS = Object.entries(CARRIED_BY_THE_MANIFEST)
  * different one.
  */
 export function manifestSettingsFrom(
-  settings: BuilderSettingsValues
+  settings: BuilderSettingsValues,
+  kind: ManifestEntityKind
 ): BuilderSettingsInput {
+  // 🔴 `undefined`, never `false`, for a key this kind does not carry.
+  // `applyCommonSettings` writes a key only when the settings object defines
+  // one, and the manifest schema refuses the KEY rather than a value — so an
+  // explicit `false` is rejected exactly like a `true`.
+  const when = <T>(key: keyof BuilderSettingsValues, value: T) =>
+    CARRIED_BY_THE_MANIFEST[key].includes(kind) ? value : undefined;
+
   return {
     singularName: settings.singularName,
-    pluralName: settings.pluralName,
-    description: settings.description?.trim() || undefined,
+    pluralName: when("pluralName", settings.pluralName),
+    description: settings.description,
     status: settings.status === true,
     localized: settings.i18n === true,
-    versions: settings.versions === true,
-    versionsMaxPerDoc: settings.versionsMaxPerDoc,
-    revalidate: settings.revalidate !== false,
-    webhooks: settings.webhooks !== false,
+    versions: when("versions", settings.versions === true),
+    versionsMaxPerDoc: when("versionsMaxPerDoc", settings.versionsMaxPerDoc),
+    revalidate: when("revalidate", settings.revalidate !== false),
+    webhooks: when("webhooks", settings.webhooks !== false),
   };
 }
 
@@ -132,7 +166,7 @@ export function collectionEntityFromSettings(
 ): ManifestEntity {
   return collectionToManifestEntity({
     slug,
-    settings: manifestSettingsFrom(settings),
+    settings: manifestSettingsFrom(settings, "collection"),
     fields,
   });
 }
@@ -144,7 +178,7 @@ export function singleEntityFromSettings(
 ): ManifestEntity {
   return singleToManifestEntity({
     slug,
-    settings: manifestSettingsFrom(settings),
+    settings: manifestSettingsFrom(settings, "single"),
     fields,
   });
 }
@@ -167,7 +201,7 @@ export function fieldGroupEntityFromSettings(
 ): ManifestEntity {
   return fieldGroupToManifestEntity({
     slug,
-    settings: manifestSettingsFrom(settings),
+    settings: manifestSettingsFrom(settings, "component"),
     fields,
   });
 }

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MANIFEST_SETTING_KEYS,
   collectionEntityFromSettings,
   fieldGroupEntityFromSettings,
+  manifestSettingKeys,
   manifestSettingsFrom,
   singleEntityFromSettings,
 } from "./settings-to-manifest";
@@ -36,17 +36,45 @@ const EVERY_SETTING = {
 };
 
 describe("the projection carries every setting the manifest declares", () => {
-  it("emits each key the classification says it carries", () => {
-    // 🔴 Against the CLASSIFICATION, not against a second hand-written list.
-    // The point of the map is that a new setting fails to compile until it is
-    // classified; this is the other half — that a key classified as carried is
-    // actually projected, rather than declared and forgotten.
-    const projected = manifestSettingsFrom(EVERY_SETTING);
-    const emitted = Object.entries(projected)
-      .filter(([, v]) => v !== undefined)
-      .map(([k]) => (k === "localized" ? "i18n" : k))
-      .sort();
-    expect(emitted).toEqual(MANIFEST_SETTING_KEYS);
+  it.each(["collection", "single", "component"] as const)(
+    "emits each key the classification says a %s carries",
+    kind => {
+      // 🔴 Against the CLASSIFICATION, not against a second hand-written list.
+      // The point of the map is that a new setting fails to compile until it is
+      // classified; this is the other half — that a key classified as carried is
+      // actually projected, rather than declared and forgotten.
+      const projected = manifestSettingsFrom(EVERY_SETTING, kind);
+      const emitted = Object.entries(projected)
+        .filter(([, v]) => v !== undefined)
+        .map(([k]) => (k === "localized" ? "i18n" : k))
+        .sort();
+      expect(emitted).toEqual(manifestSettingKeys(kind));
+    }
+  );
+
+  it("leaves a component the four keys the manifest schema refuses", () => {
+    // 🔴 `_zod/ui-schema.ts` rejects these KEYS on a component — `versions`,
+    // `versionsMaxPerDoc`, `revalidate`, `webhooks` — testing `!== undefined`,
+    // so an explicit `false` is refused exactly like a `true`. A shared
+    // projection that emitted them would leave every field-group manifest write
+    // rejected while its database write succeeded, and the file silently stale
+    // behind a warning toast.
+    const entity = fieldGroupEntityFromSettings("seo", EVERY_SETTING, FIELDS);
+    expect(entity.versions).toBeUndefined();
+    expect(entity.versionsMaxPerDoc).toBeUndefined();
+    expect(entity.revalidate).toBeUndefined();
+    expect(entity.webhooks).toBeUndefined();
+    // The control: a collection still gets all four, so the assertion above
+    // cannot pass by the projection having stopped emitting them everywhere.
+    const collection = collectionEntityFromSettings(
+      "posts",
+      EVERY_SETTING,
+      FIELDS
+    );
+    expect(collection.versions).toBe(true);
+    expect(collection.versionsMaxPerDoc).toBe(10);
+    expect(collection.revalidate).toBe(false);
+    expect(collection.webhooks).toBe(false);
   });
 
   it("keeps version retention through an EDIT, not only a create", () => {
@@ -82,33 +110,28 @@ describe("the projection carries every setting the manifest declares", () => {
     expect(entity.labels).toEqual({ singular: "Post", plural: "Post" });
   });
 
-  it("maps a blank description to an absent key, in every kind", () => {
-    // 🔴 One normalisation, so the create REQUEST and the manifest cannot
-    // disagree about whether a whitespace-only description exists. Stored as
-    // text in the file while the row holds NULL is two records of one entity
-    // saying different things.
-    for (const blank of ["", "   "]) {
-      const settings = { ...EVERY_SETTING, description: blank };
-      expect(
-        collectionEntityFromSettings("posts", settings, []).description
-      ).toBeUndefined();
-      expect(
-        singleEntityFromSettings("home", settings, []).description
-      ).toBeUndefined();
-      expect(
-        fieldGroupEntityFromSettings("seo", settings, []).description
-      ).toBeUndefined();
-    }
+  it("passes the description through, because it was normalised at the form", () => {
+    // 🔴 The projection deliberately does NOT trim. It once did, and that made
+    // it the only writer that normalised: the create and update REQUESTS send
+    // the raw value, so a description typed with trailing spaces was stored one
+    // way in the row and another in the file, and replaying the manifest
+    // visibly changed what a person had saved. The trim moved to the settings
+    // form, which is the one boundary both writes read from — see
+    // `BuilderSettingsModal`'s `normalized`.
+    const settings = { ...EVERY_SETTING, description: "  spaced  " };
+    expect(
+      collectionEntityFromSettings("posts", settings, []).description
+    ).toBe("  spaced  ");
   });
 
   it("does not project what the manifest has no place for", () => {
     // A control for the assertion above: "emits every carried key" also passes
     // if the projection emits EVERYTHING, which would put keys into the file
     // that its schema rejects.
-    const projected = manifestSettingsFrom(EVERY_SETTING) as Record<
-      string,
-      unknown
-    >;
+    const projected = manifestSettingsFrom(
+      EVERY_SETTING,
+      "collection"
+    ) as Record<string, unknown>;
     for (const key of ["icon", "category", "slug", "startingFieldType"]) {
       expect(projected[key]).toBeUndefined();
     }
