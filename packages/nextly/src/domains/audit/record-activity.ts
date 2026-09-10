@@ -186,12 +186,18 @@ export async function recordMutationActivity(
 ): Promise<void> {
   if (!willRecordMutationActivity(input.collection, input.actor)) return;
 
-  let service: ActivityLogService;
+  let service: ActivityLogService | undefined;
   try {
     service = container.get<ActivityLogService>("activityLogService");
   } catch {
     return;
   }
+  // A container can report an absent registration two ways — by throwing, and
+  // by answering `undefined` — and only the first was handled. The second then
+  // failed on the property access, turning "no dashboard service registered"
+  // into a failed content write, which is the outcome the catch above exists to
+  // prevent.
+  if (!service) return;
 
   const metadata = changedFieldNames(input);
   // No name or email is passed: the write resolves both from the account under

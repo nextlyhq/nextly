@@ -71,6 +71,22 @@ describe("describeActivityActor", () => {
     expect(actor.email).toBeNull();
   });
 
+  it("names an internal write rather than rendering a blank actor", () => {
+    // A system actor has no account either, so it falls through to the
+    // live-actor case and renders blank for the same reason a key did.
+    const actor = describeActivityActor({
+      userId: "system",
+      userName: null,
+      userEmail: null,
+      identityErasedAt: null,
+      actorType: "system",
+    });
+    expect(actor.name).toBeTruthy();
+    expect(actor.name).not.toContain("API key");
+    expect(actor.initials).toBeTruthy();
+    expect(actor.deleted).toBe(false);
+  });
+
   it("reads an ABSENT kind as a user", () => {
     // A server older than this admin does not send the field. Before it
     // existed only a signed-in person could be recorded, so the absence is

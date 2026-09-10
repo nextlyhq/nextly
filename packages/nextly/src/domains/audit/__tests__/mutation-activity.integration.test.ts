@@ -33,6 +33,8 @@ afterEach(async () => {
 /** An `activity_log` row as read back (Drizzle camelCases the columns). */
 interface ActivityRow {
   id: string;
+  /** What kind of caller `userId` names; NULL on a row that predates it. */
+  actorType: string | null;
   userId: string;
   userName: string | null;
   userEmail: string | null;
@@ -276,11 +278,15 @@ describe.each(getConfiguredTestDialects())(
       expect(updated!.entryId).toBe(id);
     });
 
-    it("does not attribute an API-key bulk write to the key's owner", async () => {
-      // The same seam, with the transport actor now honoured: a key is not a
-      // person, and the trail's actor column is an account reference. Recording
-      // API-key writes properly needs an actor-kind column; inventing the key's
-      // OWNER as the author is the one thing it must not do meanwhile.
+    it("attributes an API-key bulk write to the KEY, not the key's owner", async () => {
+      // A key is not a person. The trail's actor column used to be read as an
+      // account reference, so a key write was dropped rather than filed against
+      // an account that never made it — and this asserted the drop, because
+      // inventing the OWNER as the author was the one thing it must not do.
+      //
+      // The actor-kind column exists now, so the write is recorded as what it
+      // is. The original claim survives and is the sharper half: the row must
+      // name the KEY, never the person who owns it.
       current = await withActor(dialect);
       const handler = current.getService("collectionsHandler");
 
@@ -298,9 +304,22 @@ describe.each(getConfiguredTestDialects())(
         actor: { type: "apiKey", id: "key_bulk_probe" },
       });
 
-      expect((await activity(current)).map(row => row.action)).toEqual([
-        "create",
-      ]);
+      const rows = await activity(current);
+      // Sorted: the read places no ORDER BY and the dialects genuinely differ
+      // on what order they hand back.
+      expect(rows.map(row => row.action).sort()).toEqual(["create", "update"]);
+
+      const byKey = rows.find(row => row.action === "update");
+      if (!byKey) expect.fail("the key's bulk write recorded no row");
+      expect(byKey.actorType).toBe("apiKey");
+      // The KEY's own id. This is the assertion the test was named for.
+      expect(byKey.userId).toBe("key_bulk_probe");
+      expect(byKey.userId).not.toBe(ACTOR.id);
+      // No account backs a key, so no name is resolved and no erasure applies —
+      // filing it as an erased person would be the other way of getting this
+      // wrong.
+      expect(byKey.userName).toBeNull();
+      expect(byKey.identityErasedAt).toBeNull();
     });
 
     it("names a relationship-only change on a collection that records no events", async () => {

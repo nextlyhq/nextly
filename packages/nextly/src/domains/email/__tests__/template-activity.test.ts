@@ -200,7 +200,7 @@ describe("email template activity", () => {
     expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
   });
 
-  it("still records nothing for the system actor", async () => {
+  it("records nothing for the system actor", async () => {
     // Boot-time seeding resolves to a USER actor carrying the reserved id, and
     // no account owns it. Recording it as a user would attribute an internal
     // write to a person who does not exist, so the kind is rewritten rather
@@ -211,10 +211,9 @@ describe("email template activity", () => {
       type: "user" as const,
       id: system.id,
     });
-    // Refused for a NEW reason. A system write runs while the schema is being
-    // created, and this recorder's failures propagate — a trail insert against
-    // a table that does not exist yet would fail the seed creating it. A key,
-    // by contrast, arrives over a transport against a database already up.
+    // Refused on ordering grounds: a plugin `init()` hook writes before
+    // pending migrations run, so on an upgraded database the insert would name
+    // a column `activity_log` does not have yet and fail the boot.
     expect(logged).toHaveLength(0);
   });
 });
