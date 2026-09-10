@@ -57,9 +57,16 @@
  * ratios, so an entry here is never the same fact recorded twice.
  */
 export interface AcceptedAlphaUtility {
-  /** What the utility measures in each mode, to 2dp, as it paints today. */
-  light: number;
-  dark: number;
+  /**
+   * What the utility measures, to 2dp, in each mode that FAILS.
+   *
+   * A mode that already clears its threshold carries no number, and recording
+   * one for it is refused. Many utilities fail in one theme only — measured,
+   * `border-input/90` is about 1.14:1 in light and 3.58:1 in dark — so an entry
+   * required to record both could never be written for the commonest case.
+   */
+  light?: number;
+  dark?: number;
   /** Why the shortfall is shipped rather than corrected. */
   reason: string;
 }

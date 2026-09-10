@@ -192,7 +192,26 @@ const SCANNED_DIRS = [
 // The bracket form covers both a fraction (`[0.08]`) and a percentage
 // (`[60%]`); both are valid Tailwind arbitrary opacities and normalized below.
 const UTILITY_PATTERN =
-  "\\b(text|border|ring)-([a-z][a-z0-9-]*)/(\\[[0-9.]+%?\\]|[0-9]+)";
+  ":?\\b(text|border|ring)-([a-z][a-z0-9-]*)/(\\[[0-9.]+%?\\]|[0-9]+)";
+
+/**
+ * A scanned match, split into the utility and whether a VARIANT preceded it.
+ *
+ * Detected by the colon rather than by parsing the variant, because every
+ * Tailwind variant ends with one whatever its shape — `dark:`, `hover:`, `md:`,
+ * `group-hover:`, `data-[state=open]:`. A pattern enumerating them would buy
+ * one spelling at a time and be wrong about the next; the colon is complete.
+ *
+ * The utility is scanned WITHOUT its variant, which is why the two are reported
+ * separately: a mode-scoped utility is measured in both themes, so this scan
+ * cannot say which theme it renders in.
+ */
+const splitVariant = (
+  match: string
+): { combo: string; variantScoped: boolean } =>
+  match.startsWith(":")
+    ? { combo: match.slice(1), variantScoped: true }
+    : { combo: match, variantScoped: false };
 
 // Every name a `--color-*` utility can carry, from the theme's @theme block.
 const COLOR_NAMES = new Set(
@@ -263,7 +282,31 @@ function rendersUi(path: string): boolean {
   return !/\.test\.|\/__tests__\//.test(path);
 }
 
-function scanCombos(): Map<string, number> {
+/**
+ * One `path:match` line from the scan, or `null` when it names nothing to
+ * measure — a blank line, a test file, or a utility whose name is not a colour.
+ *
+ * The FIRST colon separates the path from the match, and the match may itself
+ * begin with one when a variant preceded the utility, so the split is by index
+ * rather than by splitting on every colon.
+ */
+function parseScanLine(
+  line: string
+): { combo: string; variantScoped: boolean } | null {
+  const separator = line.indexOf(":");
+  if (separator === -1) return null;
+  if (!rendersUi(line.slice(0, separator))) return null;
+  const raw = line.slice(separator + 1).trim();
+  if (!raw) return null;
+  const split = splitVariant(raw);
+  const name = nameOf(split.combo);
+  return name && isScannableColor(name) ? split : null;
+}
+
+function scanCombos(): {
+  combos: Map<string, number>;
+  variantScoped: Set<string>;
+} {
   const dirs = SCANNED_DIRS.map(d => `${repo}/${d}`);
   // Fail loudly if a scanned dir is missing (a moved or misspelled entry must
   // not silently scan nothing); grep's exit 1 on zero matches is not an error.
@@ -272,28 +315,20 @@ function scanCombos(): Map<string, number> {
       throw new Error(`scanned dir does not exist: ${dir}`);
     }
   }
-  // `-H` so the path survives: test files are excluded below, and without the
-  // filename there is nothing to exclude them by. The subject here is what a
-  // component RENDERS, and a test naming a class as a fixture renders nothing
-  // -- a suite asserting that `border-input/50` is reported would otherwise be
-  // failed by this scan for containing the string it was written to describe.
-  // The sibling assertion in this file already excluded tests for the same
-  // reason; this one had not, which is the inconsistency rather than the rule.
+  // `-H` so the path survives: test files are excluded by `parseScanLine`, and
+  // without the filename there is nothing to exclude them by. The subject here
+  // is what a component RENDERS, and a test naming a class as a fixture renders
+  // nothing.
   const out = scanTracked(UTILITY_PATTERN, SCANNED_DIRS);
   const combos = new Map<string, number>();
+  const variantScoped = new Set<string>();
   for (const line of out.split("\n")) {
-    const separator = line.indexOf(":");
-    if (separator === -1) continue;
-    const path = line.slice(0, separator);
-    if (!rendersUi(path)) continue;
-    const t = line.slice(separator + 1).trim();
-    if (!t) continue;
-    const name = nameOf(t);
-    if (name && isScannableColor(name)) {
-      combos.set(t, (combos.get(t) ?? 0) + 1);
-    }
+    const parsed = parseScanLine(line);
+    if (!parsed) continue;
+    combos.set(parsed.combo, (combos.get(parsed.combo) ?? 0) + 1);
+    if (parsed.variantScoped) variantScoped.add(parsed.combo);
   }
-  return combos;
+  return { combos, variantScoped };
 }
 
 /** One mode's two readings of a utility: as painted, and at full strength. */
@@ -541,13 +576,82 @@ function unacceptedFailures(
  * mode it renders in), and the precision of a bracket alpha — each of which
  * turns an acceptance into a suppression nobody agreed to.
  */
+/**
+ * What is wrong with one entry before its modes are read.
+ *
+ * Separate from the per-mode rules because these three refuse the entry
+ * OUTRIGHT: there is nothing to compare a recorded ratio against.
+ */
+function entryProblem(
+  combo: string,
+  r: UtilityReading,
+  variantScoped: ReadonlySet<string>
+): string | undefined {
+  if (variantScoped.has(combo)) {
+    // The scan reads the utility WITHOUT its variant and measures both themes,
+    // so it cannot say which theme a `dark:`-scoped utility renders in. An
+    // entry would suppress a theme it was never agreed for.
+    return (
+      `${combo}: written with a variant somewhere in the source, so this scan ` +
+      `cannot tell which theme it renders in and must not suppress either. ` +
+      `Use an ALLOWED_DECORATIVE entry, or drop the variant.`
+    );
+  }
+  if (r.modes.every(m => m.ratio >= r.need)) {
+    return (
+      `${combo}: MEETS ${r.need}:1 in every mode, so the entry is stale. ` +
+      `Delete it — leaving it makes the accepted set read as larger than it is.`
+    );
+  }
+  return undefined;
+}
+
+/**
+ * What is wrong with one mode's record.
+ *
+ * A mode that PASSES needs no acceptance, so recording one claims a shortfall
+ * that is not there; a mode that FAILS must pin how far below it sits, or the
+ * token can slide further behind an entry that already admits failure.
+ */
+function modeProblem(
+  combo: string,
+  entry: AcceptedAlphaUtility,
+  r: UtilityReading,
+  m: ModeReading
+): string | undefined {
+  const recorded = m.mode === "light" ? entry.light : entry.dark;
+  if (m.ratio >= r.need) {
+    return recorded === undefined
+      ? undefined
+      : `${combo} (${m.mode}): records ${recorded}:1 but this mode MEETS ` +
+          `${r.need}:1 at ${m.ratio.toFixed(2)}:1. Remove that mode.`;
+  }
+  if (recorded === undefined) {
+    return (
+      `${combo} (${m.mode}): fails at ${m.ratio.toFixed(2)}:1 and records no ` +
+      `ratio for this mode, so nothing pins how far below it sits.`
+    );
+  }
+  // Rounded on both sides rather than compared through a tolerance, the way
+  // token-contrast pins its own entries.
+  if (Number(m.ratio.toFixed(2)) !== recorded) {
+    return (
+      `${combo} (${m.mode}): recorded at ${recorded}:1, now measures ` +
+      `${m.ratio.toFixed(2)}:1. If the change was intended, update the record; ` +
+      `if not, the token moved under an entry that was never agreed for this ` +
+      `value.`
+    );
+  }
+  return undefined;
+}
+
 export function acceptedUtilityProblems(
   accepted: Readonly<Record<string, AcceptedAlphaUtility>>,
-  read: (combo: string) => UtilityReading | undefined
+  read: (combo: string) => UtilityReading | undefined,
+  variantScoped: ReadonlySet<string> = new Set()
 ): string[] {
   const problems: string[] = [];
   for (const combo of Object.keys(accepted)) {
-    const entry = accepted[combo];
     const r = read(combo);
     if (!r) {
       problems.push(
@@ -556,27 +660,14 @@ export function acceptedUtilityProblems(
       );
       continue;
     }
+    const blocking = entryProblem(combo, r, variantScoped);
+    if (blocking !== undefined) {
+      problems.push(blocking);
+      continue;
+    }
     for (const m of r.modes) {
-      const recorded = m.mode === "light" ? entry.light : entry.dark;
-      // Still-failing BEFORE the ratio pin. Any repair moves the ratio too, so
-      // pinning first reports every repair as drift and the stale branch never
-      // fires.
-      if (m.ratio >= r.need) {
-        problems.push(
-          `${combo} (${m.mode}): now MEETS ${r.need}:1 at ${m.ratio.toFixed(2)}:1, ` +
-            `so the entry is stale. Delete it — leaving it makes the accepted ` +
-            `set read as larger than it is.`
-        );
-      } else if (Number(m.ratio.toFixed(2)) !== recorded) {
-        // Rounded on both sides rather than compared through a tolerance, the
-        // way token-contrast pins its own entries.
-        problems.push(
-          `${combo} (${m.mode}): recorded at ${recorded}:1, now measures ` +
-            `${m.ratio.toFixed(2)}:1. If the change was intended, update the ` +
-            `record; if not, the token moved under an entry that was never ` +
-            `agreed for this value.`
-        );
-      }
+      const problem = modeProblem(combo, accepted[combo], r, m);
+      if (problem !== undefined) problems.push(problem);
     }
   }
   return problems;
@@ -590,7 +681,7 @@ const RECORD: AcceptedAlphaUtility = {
 };
 
 describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
-  const combos = scanCombos();
+  const { combos, variantScoped } = scanCombos();
 
   it("finds utilities to scan (guards against a broken scan)", () => {
     expect(combos.size).toBeGreaterThan(0);
@@ -612,7 +703,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
       // the measurement deliberately ignores -- so the run fails asking for
       // something that would change nothing.
       if (!rendersUi(path)) continue;
-      const name = nameOf(line.slice(sep + 1).trim());
+      const name = nameOf(splitVariant(line.slice(sep + 1).trim()).combo);
       if (!name || !isScannableColor(name)) continue;
       // `(?:^|/)` because `git ls-files` reports REPO-RELATIVE paths —
       // `packages/admin/src/...` with no leading slash. Requiring one matched
@@ -788,12 +879,29 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     expect(unacceptedFailures("constructor", r, {})).toEqual(failingModes(r));
   });
 
+  it("classifies a utility in one ledger, never both", () => {
+    // ALLOWED_DECORATIVE says the criterion does not scope the pairing;
+    // ACCEPTED_ALPHA_UTILITIES says it does and the shortfall is shipped
+    // anyway. A combo in both is documented as simultaneously out of scope and
+    // in-scope-failing, and the scan stays green because the decorative
+    // allowlist's early `continue` means the accepted entry is never reached.
+    const both = [...ALLOWED_DECORATIVE].filter(c =>
+      Object.hasOwn(ACCEPTED_ALPHA_UTILITIES, c)
+    );
+    // The population: an empty allowlist would satisfy this by having nothing
+    // to compare.
+    expect(ALLOWED_DECORATIVE.size).toBeGreaterThan(0);
+    expect(both).toEqual([]);
+  });
+
   it("holds every recorded utility to what it records", () => {
     // The real list, whatever it holds. Empty today, so the controls below are
     // what give these rules coverage.
     expect(
-      acceptedUtilityProblems(ACCEPTED_ALPHA_UTILITIES, c =>
-        combos.has(c) ? worstRatio(c) : undefined
+      acceptedUtilityProblems(
+        ACCEPTED_ALPHA_UTILITIES,
+        c => (combos.has(c) ? worstRatio(c) : undefined),
+        variantScoped
       )
     ).toEqual([]);
   });
@@ -854,7 +962,63 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
       });
       expect(
         acceptedUtilityProblems({ [COMBO]: RECORD }, reads(repaired))[0]
-      ).toMatch(/now MEETS 3:1/);
+      ).toMatch(/MEETS 3:1 in every mode/);
+    });
+
+    it("refuses a variant-scoped utility outright", () => {
+      // The scan reads the utility without its variant and measures both
+      // themes, so it cannot say which theme a `dark:` utility renders in.
+      expect(
+        acceptedUtilityProblems(
+          { [COMBO]: RECORD },
+          reads(),
+          new Set([COMBO])
+        )[0]
+      ).toMatch(/cannot tell which theme/);
+    });
+
+    it("accepts a utility failing in ONE mode only", () => {
+      // The commonest real case, and the one a both-modes-required entry could
+      // never express: `border-input/90` is about 1.14:1 in light and 3.58:1
+      // in dark.
+      const oneSided = reading({
+        modes: [
+          { mode: "light", ratio: 1.14, fullStrength: 1.16 },
+          { mode: "dark", ratio: 3.58, fullStrength: 4.23 },
+        ],
+      });
+      expect(
+        acceptedUtilityProblems(
+          { [COMBO]: { light: 1.14, reason: "deliberate light shortfall" } },
+          reads(oneSided)
+        )
+      ).toEqual([]);
+    });
+
+    it("refuses a ratio recorded for a mode that passes", () => {
+      const oneSided = reading({
+        modes: [
+          { mode: "light", ratio: 1.14, fullStrength: 1.16 },
+          { mode: "dark", ratio: 3.58, fullStrength: 4.23 },
+        ],
+      });
+      expect(
+        acceptedUtilityProblems(
+          { [COMBO]: { light: 1.14, dark: 3.58, reason: "x" } },
+          reads(oneSided)
+        )[0]
+      ).toMatch(/this mode MEETS 3:1/);
+    });
+
+    it("refuses a failing mode that records no ratio", () => {
+      // Without this, an entry could accept a mode while pinning nothing, and
+      // the token could slide further behind it.
+      expect(
+        acceptedUtilityProblems(
+          { [COMBO]: { light: 1.11, reason: "x" } },
+          reads()
+        )[0]
+      ).toMatch(/records no ratio for this mode/);
     });
 
     it("judges each mode against its own recorded ratio", () => {
