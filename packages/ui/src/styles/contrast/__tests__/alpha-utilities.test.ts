@@ -358,6 +358,48 @@ function worstRatio(combo: string): {
   return { ratio: worst, need, fullStrength: worstFull };
 }
 
+/**
+ * What to tell the reader about one failing utility.
+ *
+ * Two failures wear one shape here and have opposite remedies, and saying the
+ * wrong one is not a cosmetic mistake: the previous message advised "replace
+ * with a semantic token (border-border/…)" on findings where those tokens are
+ * themselves below the target, so following it removed the utility from a scan
+ * that only reads FADED utilities and changed no pixel. That advice was taken
+ * once and shipped as a contrast fix.
+ *
+ * The suggested token depends on the KIND, because the thresholds differ.
+ * `control-border` clears 1.4.11's 3:1 and is the right answer for a border or
+ * ring; it measures about 3.5:1, so recommending it for TEXT — held to 4.5 —
+ * would be a second remediation that still fails, which is the same defect one
+ * turn later.
+ *
+ * Exported because the scanned corpus has no offender: with the tree clean both
+ * arms are unreachable from the scan, so a regression here would be invisible to
+ * it. The controls below call this directly.
+ */
+export function remediation(
+  combo: string,
+  r: { ratio: number; need: number; fullStrength: number }
+): string {
+  const head = `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1)`;
+  if (r.fullStrength >= r.need) {
+    return `${head} — the token clears ${r.need}:1 at full strength, so use it un-faded.`;
+  }
+  const kind = /^text-/.test(combo) ? "text" : "border";
+  const suggestion =
+    kind === "text"
+      ? "a text token that clears 4.5:1 (muted-foreground, foreground)"
+      : "a token that holds 3:1 (control-border)";
+  return (
+    `${head} — and the token is only ${r.fullStrength.toFixed(2)}:1 at full ` +
+    `strength, so no opacity reaches ${r.need}:1. Removing the opacity only ` +
+    `hides it from this scan. Use ${suggestion}, or record it: an exclusion if ` +
+    `1.4.11 does not scope the pairing, or contrast/accepted.ts if it does and ` +
+    `the shortfall is a deliberate product decision.`
+  );
+}
+
 describe("alpha-opacity color utilities", () => {
   const combos = scanCombos();
 
@@ -413,23 +455,7 @@ describe("alpha-opacity color utilities", () => {
       if (ALLOWED_DECORATIVE.has(combo)) continue;
       const r = worstRatio(combo);
       if (r.ratio < r.need) {
-        // Say WHICH of the two failures this is. Advising "replace with a
-        // semantic token" on a token that is itself below `need` is advice that
-        // silences this scan without changing a pixel — the scan only reads
-        // utilities carrying an opacity, so dropping the opacity removes the
-        // line from view rather than making it visible. That advice was taken
-        // once, on this table's row divider, and shipped as a contrast fix.
-        offenders.push(
-          r.fullStrength < r.need
-            ? `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1) — and ` +
-                `--color-${combo.replace(/^(text|border|ring)-/, "").replace(/\/.*$/, "")} ` +
-                `is only ${r.fullStrength.toFixed(2)}:1 at full strength, so no ` +
-                `opacity reaches ${r.need}:1. Removing the opacity only hides it ` +
-                `from this scan. Use a token that holds ${r.need}:1 (e.g. ` +
-                `control-border), or allowlist it as decorative with a reason.`
-            : `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1) — the ` +
-                `token clears ${r.need}:1 at full strength, so use it un-faded.`
-        );
+        offenders.push(remediation(combo, r));
       }
     }
     expect(
@@ -439,6 +465,45 @@ describe("alpha-opacity color utilities", () => {
         `or one that cannot and needs a different token or an ALLOWED_DECORATIVE ` +
         `entry with a reason:\n${offenders.join("\n")}`
     ).toEqual([]);
+  });
+
+  // Both arms of the remediation, called directly. The scanned corpus has no
+  // offender, so with the tree clean neither arm runs during the scan — and a
+  // regression in the advice would be invisible to a suite that never reaches it.
+  it("tells a caller to un-fade a token that clears the target", () => {
+    const msg = remediation("border-input/50", {
+      ratio: 1.9,
+      need: 3,
+      fullStrength: 3.4,
+    });
+    expect(msg).toContain("use it un-faded");
+    expect(msg).not.toContain("only hides it from this scan");
+  });
+
+  it("tells a caller that no opacity reaches a target the token misses", () => {
+    const msg = remediation("border-border/50", {
+      ratio: 1.11,
+      need: 3,
+      fullStrength: 1.23,
+    });
+    expect(msg).toContain("only hides it from this scan");
+    expect(msg).toContain("control-border");
+    // The two places a sub-threshold pairing is legitimately recorded, so the
+    // reader is not left with "allowlist it somewhere" as the only exit.
+    expect(msg).toContain("accepted.ts");
+  });
+
+  it("does not recommend a border token for a TEXT failure", () => {
+    // `control-border` measures about 3.5:1 and text is held to 4.5, so naming
+    // it here would be a second remediation that still fails the threshold --
+    // the exact defect this remediation exists to stop.
+    const msg = remediation("text-border/50", {
+      ratio: 1.1,
+      need: 4.5,
+      fullStrength: 1.23,
+    });
+    expect(msg).not.toContain("control-border");
+    expect(msg).toContain("4.5:1");
   });
 
   it("puts no alpha on the control boundary, in any utility", () => {
