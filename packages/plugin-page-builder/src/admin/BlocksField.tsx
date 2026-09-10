@@ -155,6 +155,7 @@ import { readSiteStyleRecord } from "../site-style-record";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
+import { useMayCreatePattern } from "./pattern-capability-client";
 import { usePatternLibrary } from "./pattern-library-client";
 import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
@@ -1852,6 +1853,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // toolbar, the context menu and the palette all reach it — while everything
   // the form needs is mounted only while it is up. See `SavePatternPrompt`.
   const savePattern = useSavePatternVerb(editor, inline);
+  /*
+   * Whether this author may create a pattern at all, read EAGERLY here.
+   *
+   * Beside the verb it gates rather than inside it: the toolbar, the context
+   * menu and the command palette all offer the verb from one shared action
+   * list, so the answer has to exist before any of them draws — and asking in
+   * three places would be three requests answering one question.
+   */
+  const mayCreatePattern = useMayCreatePattern();
 
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -2180,6 +2190,60 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const editedBreakpoint = editedBreakpointAtWidth(
     canvasRender.styleContext.breakpoints,
     measuredWidth
+  );
+
+  /*
+   * What a spacing drag handle writes, and what its live preview compiles with.
+   *
+   * Every field is read back from the SAME context the canvas sheet was
+   * compiled under, never derived again here. A preview compiled against a
+   * different breakpoint set, container name, token prefix or scope than the
+   * rule it has to outrank simply does not match — the drag looks frozen and
+   * the value jumps into place on release, which reads as the handle being
+   * broken rather than as the two answers having diverged.
+   *
+   * The tier and the state are the inspector's own bindings, so the handle
+   * writes exactly where the Style panel's spacing fields write. Those fields
+   * are this row's click path, and a handle landing in another tier would make
+   * the two disagree about what an author just changed.
+   *
+   * Memoized because the overlay holds it in a callback dependency: rebuilt
+   * inline it is a fresh object on every render, and every gesture the handles
+   * are tracking would restart on the next keystroke anywhere in the shell.
+   */
+  const spacingScrub = useMemo(
+    () => ({
+      /*
+       * The SHOWN state, not the preserved one. `shownStyleStateFor` forces the
+       * canvas and the inspector back to `base` whenever the state switcher is
+       * off screen — a multi-selection, or a node the inspector cannot edit —
+       * while keeping the author's previous choice for when it returns. A handle
+       * reading the preserved value would preview the base spacing the canvas is
+       * showing and commit under the hidden state, so the change an author just
+       * dragged would vanish on release.
+       */
+      address: { state: shownStyleState, breakpoint: editedBreakpoint },
+      breakpoints: canvasRender.styleContext.breakpoints,
+      ...(canvasPreviewContainer === undefined
+        ? {}
+        : { previewContainer: canvasPreviewContainer }),
+      ...(canvasRender.styleContext.tokenPrefix === undefined
+        ? {}
+        : { tokenPrefix: canvasRender.styleContext.tokenPrefix }),
+      ...(canvasRender.styleContext.scope === undefined
+        ? {}
+        : { scope: canvasRender.styleContext.scope }),
+      ...(stylePolicy === undefined ? {} : { policy: stylePolicy }),
+    }),
+    [
+      canvasPreviewContainer,
+      canvasRender.styleContext.breakpoints,
+      canvasRender.styleContext.scope,
+      canvasRender.styleContext.tokenPrefix,
+      editedBreakpoint,
+      shownStyleState,
+      stylePolicy,
+    ]
   );
   /*
    * Release a requested width the site no longer offers.
@@ -2746,6 +2810,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           editor={editor}
           onEditText={inline.begin}
           onSaveAsPattern={savePattern.open}
+          /*
+            Whether the author holds the grant the save is judged by, asked of
+            the server because only it knows the RESOLVED collection: a site may
+            rename it, and the browser knows the declared name alone. Passed
+            here rather than read inside the builder for the same reason
+            `onSaveAsPattern` is passed — the collection a pattern goes in is
+            this plugin's business, not the canvas's.
+          */
+          mayCreatePattern={mayCreatePattern}
         >
           {/*
             Inside the verbs provider, which is what lets the palette run
@@ -2857,7 +2930,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   bands report a layout that is mid-change during a drag, so
                   every value on them is about to be wrong.
                 */}
-                    <SpacingOverlay editor={editor} hidden={dragging} />
+                    <SpacingOverlay
+                      editor={editor}
+                      hidden={dragging}
+                      /*
+                       * The tier a spacing handle writes to, and what the canvas
+                       * compiled this page under. Not optional in practice: the
+                       * overlay falls back to the base breakpoint of the resting
+                       * state, so without this a handle on a narrow canvas would
+                       * preview nothing and commit at the wrong tier — the same
+                       * inputs the inspector beside it is already given, read
+                       * from the ONE context that compiled the sheet rather than
+                       * derived a second time.
+                       */
+                      scrub={spacingScrub}
+                    />
                     {/*
                   Suppressed during a drag for the same reason the toolbar and
                   the bands are: the document is mid-change, so a control

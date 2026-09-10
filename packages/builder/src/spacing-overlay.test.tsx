@@ -45,6 +45,13 @@ function register() {
         version: 1,
         description: "A leaf.",
         example: { props: {} },
+        /*
+         * Declared, because the drag handles derive their availability from
+         * `supports` exactly as the Style panel does. Without it this block
+         * offers no writable spacing and every handle assertion below would
+         * pass by drawing nothing.
+         */
+        supports: { spacing: { margin: true, padding: true } },
         render: () => React.createElement("p", null, "leaf"),
       },
       {
@@ -92,6 +99,15 @@ function styleOf(values: Record<string, string>): CSSStyleDeclaration {
     // Neither is read as a length; both are read by the describability guard,
     // and jsdom supplies no default for a fake style object.
     position: "static",
+    /*
+     * The axes the handles resolve a logical side against. `orientationOfElement`
+     * reports ABSENCE for an element computing neither — deliberately, so an
+     * unread element never passes as left-to-right — and absence draws no
+     * handles at all. A fake style omitting them would therefore make every
+     * handle assertion here pass by drawing nothing.
+     */
+    writingMode: "horizontal-tb",
+    direction: "ltr",
     marginTop: "0px",
     marginRight: "0px",
     marginBottom: "0px",
@@ -190,7 +206,10 @@ class FakeResizeObserver {
   static instances: FakeResizeObserver[] = [];
   readonly observed: Element[] = [];
   disconnected = false;
-  constructor(_callback: ResizeObserverCallback) {
+  /** Kept so a test can make the overlay re-measure on demand. */
+  readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
     FakeResizeObserver.instances.push(this);
   }
   observe(target: Element): void {
@@ -205,6 +224,14 @@ class FakeResizeObserver {
 function withFakeResizeObserver() {
   FakeResizeObserver.instances = [];
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+}
+
+/** Make the overlay measure again, the way a real resize would. */
+function remeasure(): void {
+  const observer = FakeResizeObserver.instances.at(-1);
+  act(() => {
+    observer?.callback([], observer as unknown as ResizeObserver);
+  });
 }
 
 function labels(container: HTMLElement): string[] {
@@ -367,14 +394,135 @@ describe("which block it answers for", () => {
 });
 
 describe("accessibility", () => {
-  it("is hidden from assistive technology", () => {
+  it("hides every BAND from assistive technology", () => {
     // The values are in the inspector's Spacing section with real labels and
     // controls. Announcing up to eight numbers on every selection change would
     // bury that surface in the readers it exists for.
+    stubComputedStyle({ a: { marginTop: "16px", paddingLeft: "8px" } });
+    const { container } = mount(editorOf("a"));
+    const bands = Array.from(
+      container.querySelectorAll(".nx-spacing-overlay__band")
+    );
+    expect(bands.length).toBe(2);
+    for (const band of bands) {
+      expect(band.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
+  /*
+   * The attribute sits on each band rather than on the layer, and that is the
+   * property rather than a detail of where it is written. The layer also holds
+   * the drag handles, which are focusable; inside an `aria-hidden` subtree they
+   * would be reachable by keyboard while a screen reader is told they are not
+   * there, which is a defect in every audit tool there is. One attribute on the
+   * layer would have made every handle that, silently.
+   */
+  it("does not hide the LAYER, which is where the focusable handles live", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
     const layer = container.querySelector(".nx-spacing-overlay");
-    expect(layer?.getAttribute("aria-hidden")).toBe("true");
+    expect(layer).not.toBeNull();
+    expect(layer?.closest("[aria-hidden='true']")).toBeNull();
+  });
+});
+
+describe("who may write from the canvas", () => {
+  /*
+   * `selectedId` is the PRIMARY of a selection, and a handle commits to that
+   * node alone — so with two blocks outlined a drag would restyle one and say
+   * nothing about the other. `StyleInspectorPanel` refuses its writable
+   * controls on exactly that reasoning, and a control on the canvas doing what
+   * the panel beside it declines is the same partial edit by another route.
+   *
+   * The BANDS stay either way: they report, and the primary's spacing is a true
+   * thing to report about a selection containing it.
+   */
+  it("draws no handles while several blocks are selected", () => {
+    stubComputedStyle({ a: { marginTop: "16px" }, b: { marginTop: "40px" } });
+    const { container } = mount(editorOf("a", ["a", "b"]));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
+  });
+
+  it("draws them again once the selection is a single block", () => {
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("a gesture the measurement must not end", () => {
+  /*
+   * A preview can make its own block undescribable — a margin can push it
+   * partly behind an `overflow: hidden` ancestor, a padding can bring on a
+   * classic scrollbar — and the measurement that follows then legitimately has
+   * nothing to draw. Clearing the subject there unmounts the handles mid-drag:
+   * the listeners detach, the preview goes, and the drag ends without
+   * committing and without a word.
+   */
+  it("keeps the handles while a gesture is held, even with no bands to draw", () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    const grabbed = container.querySelector<HTMLElement>(
+      ".nx-spacing-handles__handle"
+    );
+    expect(grabbed).not.toBeNull();
+
+    act(() => {
+      grabbed?.dispatchEvent(
+        new window.PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 1,
+          clientX: 0,
+          clientY: 0,
+        })
+      );
+    });
+
+    /*
+     * The preview has made the block undescribable — it lays out no box at all
+     * now, which is the path that measures NOTHING rather than measuring zeros.
+     * Reaching that path is the whole point: measuring zeros still produces a
+     * subject, so a test that only zeroed the values would pass whether or not
+     * the subject is protected.
+     */
+    stubLayoutBoxes(false);
+    remeasure();
+
+    // The report goes, honestly. The control the pointer is holding does not.
+    expect(labels(container)).toEqual([]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
+  });
+
+  /*
+   * The control: with no gesture held, an unmeasurable block loses its handles
+   * as it always did. Without this, keeping the subject for ever would satisfy
+   * the assertion above.
+   */
+  it("drops the handles when nothing is held", () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
+
+    stubLayoutBoxes(false);
+    remeasure();
+
+    expect(labels(container)).toEqual([]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
   });
 });
 

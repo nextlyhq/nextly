@@ -12,6 +12,7 @@ import {
   readStyleValue,
   styleClearOp,
   styleWriteOp,
+  styleWriteOps,
   type StyleAddress,
 } from "./style-values";
 
@@ -536,5 +537,112 @@ describe("values reached only through a prototype", () => {
     expect(readStyleValue(styles, { ...BOTTOM, breakpoint: "mobile" })).toBe(
       "8px"
     );
+  });
+});
+
+describe("writing several addresses as one op", () => {
+  const side = (path: string): StyleAddress => ({ ...BOTTOM, path: [path] });
+
+  /*
+   * The defect this function exists for. Each `styleWriteOp` builds a COMPLETE
+   * `styles` envelope from the node it was handed, so four of them built from
+   * one node are four whole envelopes that each know about a single side —
+   * apply them in sequence and only the last survives. The op count, the undo
+   * depth and the last side's value all look right while three sides are gone.
+   */
+  it("carries every side, where four separate writes would keep only the last", () => {
+    const separate = ["blockStart", "blockEnd", "inlineStart"].map(path =>
+      styleWriteOp("n1", undefined, side(path), "8px")
+    );
+    const last = separate.at(-1);
+    if (last === undefined || !last.ok || last.op === null) {
+      throw new Error("expected an op");
+    }
+    // The control: the last of the separate ops knows about ONE side.
+    expect(patchedStyles(last.op)).toEqual({
+      base: { desktop: { margin: { inlineStart: "8px" } } },
+    });
+
+    const folded = styleWriteOps("n1", undefined, [
+      { address: side("blockStart"), value: "8px" },
+      { address: side("blockEnd"), value: "8px" },
+      { address: side("inlineStart"), value: "8px" },
+    ]);
+    expect(folded.ok).toBe(true);
+    if (!folded.ok || folded.op === null) throw new Error("expected an op");
+    expect(patchedStyles(folded.op)).toEqual({
+      base: {
+        desktop: {
+          margin: {
+            blockStart: "8px",
+            blockEnd: "8px",
+            inlineStart: "8px",
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps a side the node already held and does not name it in the writes", () => {
+    const result = styleWriteOps("n1", WITH_MARGIN, [
+      { address: side("blockStart"), value: "4px" },
+    ]);
+    if (!result.ok || result.op === null) throw new Error("expected an op");
+    expect(patchedStyles(result.op)).toEqual({
+      base: { desktop: { margin: { blockEnd: "24px", blockStart: "4px" } } },
+    });
+  });
+
+  /*
+   * Atomic. A gesture that wrote the sides it could and dropped the rest is not
+   * a smaller version of the edit the author asked for, and the sides that did
+   * land would be an undo entry describing something nobody did.
+   */
+  it("refuses the whole group when any one value is refused", () => {
+    const result = styleWriteOps("n1", undefined, [
+      { address: side("blockStart"), value: "4px" },
+      { address: side("blockEnd"), value: "not-a-length" },
+      { address: side("inlineStart"), value: "4px" },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  /*
+   * Judged per LEAF, exactly as the singular is. Judging the folded envelope
+   * would read the last value written to `margin` and never see the other
+   * three, so a group with one impossible side would commit all four.
+   */
+  it("judges a bad value that is not the last one written", () => {
+    const result = styleWriteOps("n1", undefined, [
+      { address: side("blockStart"), value: "not-a-length" },
+      { address: side("blockEnd"), value: "4px" },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("answers with no op when the writes change nothing", () => {
+    const result = styleWriteOps("n1", WITH_MARGIN, [
+      { address: BOTTOM, value: "24px" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected acceptance");
+    expect(result.op).toBeNull();
+  });
+
+  it("treats an empty list as a write that changes nothing", () => {
+    const result = styleWriteOps("n1", WITH_MARGIN, []);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected acceptance");
+    expect(result.op).toBeNull();
+  });
+
+  it("agrees with the singular for a list of one", () => {
+    const one = styleWriteOp("n1", WITH_MARGIN, side("blockStart"), "4px");
+    const many = styleWriteOps("n1", WITH_MARGIN, [
+      { address: side("blockStart"), value: "4px" },
+    ]);
+    if (!one.ok || one.op === null) throw new Error("expected an op");
+    if (!many.ok || many.op === null) throw new Error("expected an op");
+    expect(patchedStyles(many.op)).toEqual(patchedStyles(one.op));
   });
 });

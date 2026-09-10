@@ -98,6 +98,8 @@ import {
   putWidgetLayout,
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
+import { apiKeyScopeFrom } from "./auth/authenticated-scope";
+import { runWithCallerScope } from "./auth/caller-scope";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { readableEntities } from "./auth/entity-read-access";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -1405,7 +1407,19 @@ async function handleServiceRequest(
   };
 
   const dispatcher = await getDispatcher();
-  const result = await dispatcher.dispatch(dispatchRequest);
+  // The key's own scope is pinned for the whole dispatch rather than serialized
+  // into route params beside it. The params carry strings, so the scope written
+  // there was a lossy copy: it held the stored permission slugs and neither the
+  // caller's roles nor the rows a rule's `resource:action` spelling is derived
+  // from, and every gate underneath that read it judged the key on a scope
+  // missing most of itself. Pinning hands the same object to all of them, and a
+  // field added to the scope later reaches them without a second edit here.
+  const result = await runWithCallerScope(
+    authorizedUser?.authMethod === "api-key"
+      ? apiKeyScopeFrom(authorizedUser)
+      : undefined,
+    () => dispatcher.dispatch(dispatchRequest)
+  );
 
   if (result.status === 204 || result.status === 205 || result.status === 304) {
     return new Response(null, { status: result.status });

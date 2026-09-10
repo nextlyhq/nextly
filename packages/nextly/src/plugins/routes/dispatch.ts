@@ -1,7 +1,11 @@
 import { buildErrorResponse } from "../../api/error-response";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  type AuthenticatedScope,
+} from "../../auth/authenticated-scope";
+import { runWithCallerScope } from "../../auth/caller-scope";
 import {
   isErrorResponse,
   requireAuthentication,
@@ -14,7 +18,6 @@ import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 
-import { runWithCallerScope } from "./caller-scope";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import { buildPluginRouteCaller } from "./route-caller";
@@ -100,11 +103,7 @@ async function resolvePluginRouteAuth(
   // caller carries no scope and keeps resolving the normal way.
   const authenticatedScope =
     authResult.authMethod === "api-key"
-      ? {
-          actorType: "apiKey" as const,
-          permissions: authResult.permissions,
-          roles: authResult.roles,
-        }
+      ? apiKeyScopeFrom(authResult)
       : undefined;
   // Built from the same `authResult` the scope above is derived from, so the
   // raw grant and the question asked of it cannot disagree about who is asking.

@@ -449,6 +449,49 @@ describe("useBlockKeyboardActions", () => {
     expect(said).toMatch(/goes inside/i);
   });
 
+  it("refuses the save WITHOUT opening the form when the grant is absent", () => {
+    /*
+     * The floating toolbar keeps an unavailable verb
+     * focusable through `aria-disabled` and calls its runner anyway — that is
+     * deliberate, so a verb can announce its own refusal. A grant that only
+     * dimmed the description would therefore open the save form for exactly the
+     * authors it was added to stop, and they would then be refused by the write.
+     *
+     * `onSaveAsPattern` NOT being called is the assertion that separates
+     * stopping the gesture from narrating it, exactly as `apply` does for the
+     * refused move above.
+     */
+    const editor = editorSpy(pair(), "a");
+    const onSaveAsPattern = vi.fn();
+    let published: BlockActions | undefined;
+    function Probe(): null {
+      published = useBlockActionsContext();
+      return null;
+    }
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={onSaveAsPattern}
+          editor={editor}
+          mayCreatePattern={false}
+        >
+          <Probe />
+        </BlockKeyboardActions>
+      </ShortcutProvider>
+    );
+
+    // Pressed through the published verb, which is exactly what the toolbar's
+    // click handler calls — the surface this defect lives on.
+    // Inside `act`, so the announcement's state update is flushed before it is
+    // read — the live region is written by React, not by the call itself.
+    act(() => published?.saveAsPattern());
+
+    expect(onSaveAsPattern).not.toHaveBeenCalled();
+    // Announced, because an author who pressed a dimmed control is owed the
+    // reason and the live region is where every other refusal here is said.
+    expect(screen.getByRole("status").textContent ?? "").toMatch(/permission/i);
+  });
+
   it("stays silent at a BOUNDARY, which is not a refusal", () => {
     /*
      * The other half, and the reason this fix is not simply "announce more".

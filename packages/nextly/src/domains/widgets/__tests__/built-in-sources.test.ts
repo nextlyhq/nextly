@@ -525,3 +525,81 @@ describe("what a source calls itself, and which field names its rows", () => {
     expect(getSource("collection:posts")?.titleField).toBe("tags");
   });
 });
+
+describe("what a source claims it can do", () => {
+  it("offers timeseries only when it exposes a date the read would take", () => {
+    // A collection with no timestamps and no date field has no valid timeseries
+    // query at all, so advertising the op is a capability nothing can exercise.
+    registerBuiltInSources([
+      {
+        slug: "dateless",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: false,
+      },
+    ]);
+
+    expect(getSource("collection:dateless")?.supports).toEqual([
+      "count",
+      "list",
+      "groupBy",
+    ]);
+  });
+
+  it("offers timeseries once a date is present", () => {
+    // The control: without it, a source that never offered the op would satisfy
+    // the assertion above while making the feature unreachable everywhere.
+    registerBuiltInSources([
+      {
+        slug: "dated",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    expect(getSource("collection:dated")?.supports).toContain("timeseries");
+  });
+
+  it("does not count a localized date as one the read would take", () => {
+    // Its values live in the `_locales` companion, so the read refuses to
+    // bucket it and the op would have no usable field.
+    registerBuiltInSources([
+      {
+        slug: "i18nonly",
+        fields: [{ name: "translatedAt", type: "date", localized: true }],
+        timestamps: false,
+      },
+    ]);
+
+    expect(getSource("collection:i18nonly")?.supports).not.toContain(
+      "timeseries"
+    );
+  });
+});
+
+describe("what a source says about a date the read would refuse", () => {
+  it("marks a localized date as one that cannot be bucketed", () => {
+    // The validator runs in a module the admin type-checks, so it cannot reach
+    // the field registry to decide this for itself. The builder decides, here,
+    // and the validator reads the answer -- so there is still one place that
+    // knows what the read will accept.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [
+          { name: "publishedAt", type: "date" },
+          { name: "translatedAt", type: "date", localized: true },
+        ],
+        timestamps: true,
+      },
+    ]);
+
+    const byName = new Map(
+      (getSource("collection:posts")?.fields ?? []).map(f => [f.name, f])
+    );
+    expect(byName.get("translatedAt")?.bucketable).toBe(false);
+    // The control: an ordinary date is NOT marked, so absence keeps meaning
+    // "the read has no objection" rather than becoming a silent refusal.
+    expect(byName.get("publishedAt")?.bucketable).toBeUndefined();
+    expect(byName.get("createdAt")?.bucketable).toBeUndefined();
+  });
+});

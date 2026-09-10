@@ -15,6 +15,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, or, like, ilike, sql, asc, desc, gte, lt } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
@@ -139,7 +140,6 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import {
-  classifyFieldKind,
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
   getSystemColumnDescriptors,
@@ -160,9 +160,11 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
 import {
   timeseriesBoundOperand,
   timeseriesBucketExpression,
+  timeseriesWindowIsStorable,
 } from "../query/timeseries-bucket";
 import {
   bucketStartToDbText,
@@ -176,7 +178,6 @@ import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
-  isJsonFieldType,
   getTableName,
   getSearchableFields,
   getMinSearchLength,
@@ -389,6 +390,112 @@ function assertUsableWindowAnchor(now: Date | undefined): void {
   });
 }
 
+/**
+ * How many rows the database grouped into each bucket, keyed by its label.
+ *
+ * A row whose bucket is not text is dropped rather than coerced: every dialect
+ * renders the bucket as a fixed-width string, so anything else means the
+ * expression did not run as written and a coerced key would silently match no
+ * generated interval.
+ */
+function countedByBucket(
+  rows: Array<{ bucket: unknown; total: number | string | null }>
+): Map<string, number> {
+  const counted = new Map<string, number>();
+  for (const row of rows) {
+    if (typeof row.bucket === "string") {
+      counted.set(row.bucket, Number(row.total ?? 0));
+    }
+  }
+  return counted;
+}
+
+/**
+ * The ends of the window the dialect can actually compare against, or
+ * `undefined` when the window cannot contain a storable instant at all.
+ *
+ * Both ends compare the COLUMN rather than the bucketing expression, so an
+ * index over the date can serve them; no index covers a computed value. A bound
+ * the dialect cannot represent is OMITTED: on MySQL an out-of-range operand
+ * renders as NULL, and `column >= NULL` matches nothing, so the predicate meant
+ * to bound the scan would empty the answer. Omitting it is sound because the
+ * column cannot store an instant outside that range.
+ *
+ * Whether the read happens at all is decided from the RAW endpoints rather than
+ * from how many of them rendered. Dropping both ends means the window either
+ * misses the storable range or surrounds it, and the two want opposite answers:
+ * the first has nothing to read, while the second must scan unbounded because
+ * every stored row falls inside it.
+ *
+ * Answers the OPERANDS rather than the comparisons, so the comparison is built
+ * where the column still carries the type the schema gave it.
+ */
+function windowScope(
+  window: Date[],
+  interval: TimeseriesInterval,
+  dialect: SupportedDialect
+): { from?: Date | SQL; to?: Date | SQL } | undefined {
+  const start = window[0];
+  const end = intervalAfter(window[window.length - 1], interval);
+  if (!timeseriesWindowIsStorable(start, end, dialect)) return undefined;
+  const from = timeseriesBoundOperand(start, dialect);
+  const to = timeseriesBoundOperand(end, dialect);
+  return {
+    ...(from === undefined ? {} : { from }),
+    ...(to === undefined ? {} : { to }),
+  };
+}
+
+/**
+ * The read this timeline resolves its rows through.
+ *
+ * The date key travels as `groupBy`, so every refusal a grouped read already
+ * makes applies unchanged: a field carrying a read rule, any spelling of it,
+ * the owner column, a key naming no column. The two `require` flags move the
+ * timeline's own preconditions inside the plan, where they land after
+ * collection authorization and before the read hooks.
+ *
+ * `releaseNow` takes the REQUEST's clock, never the window anchor. Whether a
+ * scheduled release has happened is a fact about the world at the moment of the
+ * read, where the anchor is a reporting parameter the caller chooses -- so
+ * anchoring a window on a future instant would make a draft scheduled for that
+ * date count as published, and a timeline could then report rows an ordinary
+ * read still hides. They are the same instant whenever the caller states no
+ * anchor of its own, which is what keeps a release becoming due mid-read from
+ * leaving the labels describing a later window than the row filter admitted.
+ */
+function timelineReadPlanRequest(
+  params: FilteredReadParams & { dateField: string; interval: unknown },
+  anchor: Date,
+  requestNow: Date
+): FilteredReadParams {
+  return {
+    ...params,
+    groupBy: params.dateField,
+    requireTimestampGroupKey: true,
+    requireBucketableInterval: true,
+    now: anchor,
+    releaseNow: params.releaseNow ?? requestNow,
+  };
+}
+
+/**
+ * The refusals a timeline makes before the read hooks run.
+ *
+ * Grouped into one step because they share a reason as well as a position:
+ * each rejects a request that was never going to be answered, and
+ * `beforeOperation` and `beforeRead` are ordinary user code that writes audit
+ * rows and spends rate-limit budget. They sit after collection authorization,
+ * so an untrusted caller naming a bad interval gets the access refusal rather
+ * than a detailed validation response that confirms the collection exists.
+ */
+function assertTimelinePreconditions(params: FilteredReadParams): void {
+  assertUsableWindowAnchor(params.now);
+  if (params.requireBucketableInterval === true) {
+    assertBucketableInterval(params.interval);
+  }
+}
+
 /** The interval, refused unless an expression exists for it. */
 function assertBucketableInterval(value: unknown): TimeseriesInterval {
   if (isTimeseriesInterval(value)) return value;
@@ -497,6 +604,16 @@ interface FilteredReadParams {
    */
   now?: Date;
   /**
+   * The interval a timeseries buckets by, when this read is one.
+   *
+   * Carried on the shared params so the plan can refuse an unusable one after
+   * collection authorization and before the read hooks, rather than before
+   * either.
+   */
+  interval?: unknown;
+  /** Whether the plan must refuse an interval it has no expression for. */
+  requireBucketableInterval?: boolean;
+  /**
    * Refuse the group key unless the column it names stores a date.
    *
    * Carried on the params rather than checked by the caller after the fact, so
@@ -588,53 +705,6 @@ interface FilteredReadParams {
 }
 
 /**
- * Field types whose column holds a STRUCTURE rather than a value.
- *
- * Not groupable, and refused rather than serialised. Two rows carrying the
- * same content with their keys in a different order are one bucket under
- * PostgreSQL's `jsonb`, which normalises, and two under SQLite, which groups
- * the stored text — so the same data answers a different count per adapter
- * while every answer looks ordinary. A label chosen here cannot fix that: the
- * grouping already happened in the database.
- */
-/**
- * Why a declared field cannot be a group key, or `undefined` if it can.
- *
- * Asked of the CANONICAL classifier the DDL is built from, rather than of a
- * list of type names kept here. A plugin field type declaring `storage: "json"`
- * is mapped to a JSON column by that classifier and would be invisible to such
- * a list — so it would group, and answer differently per adapter.
- *
- * `skip` is a field whose values live in another table (a component, a
- * many-to-many), so this collection has no column to group by. `json` is a
- * structure: two rows holding the same content with their keys written in a
- * different order are ONE bucket under PostgreSQL's `jsonb`, which normalises,
- * and TWO under SQLite, which compares the stored text. The grouping happens in
- * the database, so no label chosen afterwards reconciles them.
- */
-function ungroupableKind(field: FieldDefinition): string | undefined {
-  // Asked of the LOGICAL storage as well as the physical column, because the
-  // two disagree and only one of them decides what the value looks like.
-  // `classifyFieldKind` answers what column the DDL emits: `richText` gets
-  // `longText`, and a `hasMany` text or select gets a text column. The read
-  // and mutation paths nonetheless serialize those values as JSON through
-  // `isJsonFieldType`, so the stored bytes are a document and grouping them
-  // returns raw serialized JSON as labels -- splitting equal content that was
-  // written with its keys in a different order.
-  if (isJsonFieldType(field.type, field)) {
-    return "is stored as serialized JSON, so its buckets would depend on how that text was written rather than on what it means";
-  }
-  const kind = classifyFieldKind(field, "collection");
-  if (kind === "skip") {
-    return "keeps its values in another table, so this collection has no column for it";
-  }
-  if (kind === "json") {
-    return "holds a structure rather than a value, so its buckets would depend on how the database compares stored JSON";
-  }
-  return undefined;
-}
-
-/**
  * Refuse a group key that would disclose by grouping, or that names nothing.
  *
  * The owner column is stripped from responses and excluded from sort, because
@@ -648,32 +718,6 @@ function ungroupableKind(field: FieldDefinition): string | undefined {
  * the wrong order; a dropped GROUP BY collapses every bucket into one row and
  * answers with a single total that reads exactly like a real one.
  */
-/**
- * Why a DECLARED field cannot be a group key, if it cannot.
- *
- * The reasons that depend on the declaration are answered together and before
- * the missing-column refusal, because a declared field can legitimately have no
- * column on this table and the reason matters more than the absence.
- */
-function declaredFieldProblem(
-  declared: FieldDefinition | undefined,
-  groupBy: string
-): string | undefined {
-  if (declared === undefined) return undefined;
-  // A localized field's values live in the `_locales` companion rather than in
-  // this table, so the column lookup finds nothing. Refusing it as "not a
-  // column on this collection" reads as a typo for a field that is declared and
-  // spelled correctly, which sends the reader looking in the wrong place.
-  if (declared.localized === true) {
-    return `"${groupBy}" is a localized field, so its values are stored per locale rather than on this collection. Grouping over a localized field is not supported yet.`;
-  }
-  const ungroupable = ungroupableKind(declared);
-  if (ungroupable !== undefined) {
-    return `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`;
-  }
-  return undefined;
-}
-
 function assertGroupKeyUsable(
   groupBy: string,
   column: unknown,
@@ -706,7 +750,7 @@ function assertGroupKeyUsable(
   ]);
   const declared = declaredFields.find(field => spelled.has(field.name));
 
-  const declaredProblem = declaredFieldProblem(declared, groupBy);
+  const declaredProblem = groupKeyDeclarationProblem(declared, groupBy);
   if (declaredProblem !== undefined) {
     throw NextlyError.validation({
       errors: [
@@ -3208,6 +3252,47 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * The window as points, taking each interval's count from what was grouped.
+   *
+   * Built from the WINDOW rather than from the rows, so the answer carries one
+   * point per interval whether or not the database grouped that interval --
+   * which is what makes a quiet stretch read as zero rather than disappear.
+   */
+  private timeseriesAnswer(
+    window: Date[],
+    interval: TimeseriesInterval,
+    counted: Map<string, number>
+  ): CollectionServiceResult<TimeseriesPoints> {
+    return {
+      success: true,
+      statusCode: 200,
+      message: "Timeseries retrieved successfully",
+      data: {
+        interval,
+        points: window.map(start => ({
+          start: start.toISOString(),
+          count: counted.get(bucketStartToDbText(start)) ?? 0,
+        })),
+      },
+    };
+  }
+
+  /**
+   * The answer for a window no stored row can fall in: every interval, zero.
+   *
+   * Shaped exactly like a queried answer, because a caller cannot tell the two
+   * apart and should not have to -- zero means no rows either way.
+   */
+  private emptyTimeseries(
+    window: Date[],
+    interval: TimeseriesInterval
+  ): CollectionServiceResult<TimeseriesPoints> {
+    // Through the same assembly a queried answer uses, with nothing counted, so
+    // the two cannot drift into different shapes.
+    return this.timeseriesAnswer(window, interval, new Map());
+  }
+
+  /**
    * The group key's column shape, with every refusal that depends on it made.
    *
    * Runs BEFORE the read hooks, for the reason the key itself is validated
@@ -3327,7 +3412,7 @@ export class CollectionQueryService extends BaseService {
     // rendered from the author's declaration -- a decimal's scale, which the
     // adapters otherwise disagree about -- rather than from whatever the driver
     // happened to hand back.
-    assertUsableWindowAnchor(params.now);
+    assertTimelinePreconditions(params);
 
     const groupDescriptor = this.settledGroupDescriptor(params, groupKey);
 
@@ -3608,24 +3693,53 @@ export class CollectionQueryService extends BaseService {
     }
   ): Promise<CollectionServiceResult<TimeseriesPoints>> {
     try {
-      const interval = assertBucketableInterval(params.interval);
       const count = boundedIntervalCount(params.intervals);
+
+      // ONE clock for the whole read. `releaseScope` takes its own `new Date()`
+      // while the plan resolves, and the window used to take a second one
+      // afterwards -- so a scheduled release or a bucket boundary passing
+      // between them left the labels describing a later window than the row
+      // filter admitted.
+      //
+      // The two are read from the same instant rather than from the same
+      // VALUE. Release visibility asks what has actually been published by now,
+      // which is not something a caller may choose; the anchor is the end of
+      // the window it asked to report on, which is. They coincide -- closing
+      // the straddle -- for every caller that states no anchor of its own.
+      const requestNow = new Date();
+      const anchor = params.now ?? requestNow;
 
       // The date key travels as `groupBy`, so every refusal a grouped read
       // already makes applies unchanged: a field carrying a read rule, any
       // spelling of it, the owner column, a key naming no column.
-      const plan = await this.resolveReadPlan<TimeseriesPoints>({
-        ...params,
-        groupBy: params.dateField,
-        requireTimestampGroupKey: true,
-      });
+      //
+      // The interval is judged INSIDE the plan, after collection
+      // authorization: refused here, an untrusted caller naming a bad interval
+      // would get a detailed validation response for a collection the same
+      // request with a good interval answers with an access refusal -- which
+      // tells them the collection exists.
+      const plan = await this.resolveReadPlan<TimeseriesPoints>(
+        timelineReadPlanRequest(params, anchor, requestNow)
+      );
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
       const column = plan.groupColumn;
 
-      const window = intervalWindow(params.now ?? new Date(), interval, count);
+      const interval = assertBucketableInterval(params.interval);
+      const window = intervalWindow(anchor, interval, count);
       const dialect = this.groupDialect();
       const bucket = timeseriesBucketExpression(column, interval, dialect);
+
+      // Built here, where the column keeps the type the schema gave it, so the
+      // comparison needs no cast the compiler cannot check.
+      const scope = windowScope(window, interval, dialect);
+      // `undefined` means the window does not overlap what the column can
+      // store, so no row can fall in it and there is nothing to ask.
+      if (scope === undefined) return this.emptyTimeseries(window, interval);
+      const bounds = [
+        ...(scope.from === undefined ? [] : [gte(column, scope.from)]),
+        ...(scope.to === undefined ? [] : [lt(column, scope.to)]),
+      ];
 
       const rows = await this.db
         .select({ bucket, total: sql<number>`count(*)` })
@@ -3642,19 +3756,13 @@ export class CollectionQueryService extends BaseService {
         //
         // Neither bound can change the answer: the points are built from the
         // window, and a bucket outside it is never looked up.
-        .where(
-          and(
-            ...whereConditions,
-            gte(column, timeseriesBoundOperand(window[0], dialect)),
-            lt(
-              column,
-              timeseriesBoundOperand(
-                intervalAfter(window[window.length - 1], interval),
-                dialect
-              )
-            )
-          )
-        )
+        // A bound the dialect cannot represent is OMITTED rather than
+        // rendered. On MySQL an out-of-range operand becomes NULL, and
+        // `column >= NULL` matches nothing -- so a predicate meant to bound the
+        // scan would empty the answer instead. Omitting it is sound: the column
+        // cannot store an instant outside that range, so the bound excludes no
+        // row that could exist.
+        .where(and(...whereConditions, ...bounds))
         // The SAME expression in the SELECT and the GROUP BY. MySQL's
         // `only_full_group_by` refuses a `GROUP BY` that differs from the
         // selected expression, so these cannot be spelled apart.
@@ -3664,27 +3772,9 @@ export class CollectionQueryService extends BaseService {
         // rows arrive in cannot reach the result.
         .groupBy(bucket);
 
-      const counted = new Map<string, number>();
-      for (const row of rows) {
-        if (typeof row.bucket === "string") {
-          counted.set(row.bucket, Number(row.total ?? 0));
-        }
-      }
+      const counted = countedByBucket(rows);
 
-      return {
-        success: true,
-        statusCode: 200,
-        message: "Timeseries retrieved successfully",
-        data: {
-          interval,
-          // Built from the WINDOW rather than from the rows, so the answer has
-          // one point per interval whether or not the database grouped it.
-          points: window.map(start => ({
-            start: start.toISOString(),
-            count: counted.get(bucketStartToDbText(start)) ?? 0,
-          })),
-        },
-      };
+      return this.timeseriesAnswer(window, interval, counted);
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : "Failed to build timeseries";

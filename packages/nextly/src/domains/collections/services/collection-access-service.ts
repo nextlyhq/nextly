@@ -19,6 +19,7 @@ import {
   apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
+import { currentCallerScope } from "../../../auth/caller-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type {
@@ -196,6 +197,20 @@ export class CollectionAccessService extends BaseService {
       return null;
     }
 
+    // The scope the request arrived with, when this caller did not name one.
+    //
+    // Two of this method's callers cannot name one: the transaction entry
+    // points (`createEntryInTransaction` and its siblings) take write params
+    // that declare no `authenticatedScope`, and the plugin service facade
+    // exposes them, so an API-key request reaching a write through a
+    // transaction was judged on the key OWNER's roles while the identical write
+    // through `createEntry` was held to the key's own grants. Widening those
+    // params would fix the two that exist; reading the request's scope here
+    // fixes the one written next as well.
+    //
+    // An explicit argument still wins, so a caller may narrow.
+    const scope = authenticatedScope ?? currentCallerScope();
+
     // Super-admin bypasses BOTH the RBAC gate and the stored rules (including
     // owner-only) so an admin can act on any record on every transport — EXCEPT
     // via a scoped API key. The bypass belongs to the session path: a key is
@@ -204,7 +219,7 @@ export class CollectionAccessService extends BaseService {
     // full account (mirrors canReadEntity). Applying the bypass here would let a
     // super-admin-owned, update-only key publish, recreating the very hole this
     // scope check closes.
-    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    const isScopedApiKey = scope?.actorType === "apiKey";
     if (!isScopedApiKey && isSuperAdminContext(user)) {
       return null;
     }
@@ -239,7 +254,7 @@ export class CollectionAccessService extends BaseService {
     const scopeDecision =
       !routeAuthorized && user
         ? await apiKeyWriteAllowed(
-            authenticatedScope,
+            scope,
             operation,
             collectionName,
             user,
@@ -422,7 +437,10 @@ export class CollectionAccessService extends BaseService {
     accessRules: CollectionAccessRules;
     user: UserContext | undefined;
   } | null {
-    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    // As in `checkCollectionAccess`: the request's scope when the caller did
+    // not name one, so a transport that cannot pass it still judges the key.
+    const scope = authenticatedScope ?? currentCallerScope();
+    const isScopedApiKey = scope?.actorType === "apiKey";
     if (!isScopedApiKey && isSuperAdminContext(user)) {
       return null;
     }
@@ -495,7 +513,8 @@ export class CollectionAccessService extends BaseService {
     // Super-admin reads are unfiltered too, matching the write-side bypass so
     // "super-admins bypass stored rules on every transport" holds for reads —
     // except through a scoped key, which is authoritative only on its own scope.
-    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    const scope = authenticatedScope ?? currentCallerScope();
+    const isScopedApiKey = scope?.actorType === "apiKey";
     if (
       overrideAccess ||
       !user ||
@@ -600,7 +619,8 @@ export class CollectionAccessService extends BaseService {
   ): Promise<{ field: string; value: string } | null> {
     // Super-admin bypasses the owner predicate on the transactional paths too —
     // EXCEPT via a scoped API key, which must still obey stored owner rules.
-    const isScopedApiKey = authenticatedScope?.actorType === "apiKey";
+    const scope = authenticatedScope ?? currentCallerScope();
+    const isScopedApiKey = scope?.actorType === "apiKey";
     if (
       overrideAccess ||
       !user ||

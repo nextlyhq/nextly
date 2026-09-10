@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { SupportedDialect } from "../../../../types/database";
-import { timeseriesBucketExpression } from "../timeseries-bucket";
+import {
+  timeseriesBucketExpression,
+  timeseriesWindowIsStorable,
+} from "../timeseries-bucket";
 import {
   bucketStartToDbText,
   bucketStartToIso,
@@ -248,5 +251,69 @@ describe("intervalWindow", () => {
     expect(() => intervalWindow(new Date(), "day", Number.NaN)).toThrow(
       NextlyError
     );
+  });
+});
+
+describe("whether a window can hold a storable instant", () => {
+  const MAX = new Date(2147483647 * 1000);
+
+  it("accepts a window that SURROUNDS the MySQL range", () => {
+    // The case two dropped bounds cannot distinguish from an unreachable
+    // window, and the reason this is asked of the raw endpoints.
+    expect(
+      timeseriesWindowIsStorable(
+        new Date("1675-01-01T00:00:00.000Z"),
+        new Date("2041-01-01T00:00:00.000Z"),
+        "mysql"
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a window lying entirely past the MySQL range", () => {
+    expect(
+      timeseriesWindowIsStorable(
+        new Date("2400-01-01T00:00:00.000Z"),
+        new Date("2400-01-04T00:00:00.000Z"),
+        "mysql"
+      )
+    ).toBe(false);
+  });
+
+  it("refuses a window lying entirely before the MySQL range", () => {
+    // The other side, which a check written only against the upper bound
+    // would answer wrongly while passing the case above.
+    expect(
+      timeseriesWindowIsStorable(
+        new Date("1900-01-01T00:00:00.000Z"),
+        new Date("1900-01-04T00:00:00.000Z"),
+        "mysql"
+      )
+    ).toBe(false);
+  });
+
+  it("accepts a window touching either end of the MySQL range", () => {
+    // Inclusive at the top and exclusive at the bottom, because `to` is the
+    // end of the last bucket rather than an instant inside it.
+    expect(
+      timeseriesWindowIsStorable(MAX, new Date(MAX.getTime() + 1000), "mysql")
+    ).toBe(true);
+    expect(
+      timeseriesWindowIsStorable(new Date(0), new Date(2000), "mysql")
+    ).toBe(true);
+    expect(
+      timeseriesWindowIsStorable(new Date(0), new Date(1000), "mysql")
+    ).toBe(false);
+  });
+
+  it("accepts any window on a dialect whose column carries no range", () => {
+    for (const dialect of ["postgresql", "sqlite"] as SupportedDialect[]) {
+      expect(
+        timeseriesWindowIsStorable(
+          new Date("2400-01-01T00:00:00.000Z"),
+          new Date("2400-01-04T00:00:00.000Z"),
+          dialect
+        )
+      ).toBe(true);
+    }
   });
 });

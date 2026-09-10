@@ -15,6 +15,7 @@ import {
   parseNearQuery,
   parseWithinQuery,
 } from "../collections/query/geo-utils";
+import { localizedGroupKeyProblem } from "../collections/query/localized-group-key";
 import {
   GEO_OPERATORS,
   isValidOperator,
@@ -712,13 +713,37 @@ function assertDateFieldBucketable(
     );
   }
   const declaredField = source.fields.find(field => field.name === dateField);
-  // A localized field's values live in the `_locales` companion, so the read
-  // cannot bucket them. Refused HERE as well, because the coarse type says
-  // "date" either way and approving it would register a widget that fails on
-  // every load with nothing pointing at the declaration that caused it.
-  if (declaredField?.localized === true) {
+  // ONE rule, asked rather than repeated. The read refuses a localized group
+  // key through `localizedGroupKeyProblem`, and this asks the same leaf — so
+  // the day localized aggregation becomes supported, both start accepting it
+  // together instead of this one refusing a read the engine now allows.
+  //
+  // Still refused HERE rather than left to the `bucketable` flag below: that
+  // flag is derived by the collection source builder, and a plugin registering
+  // its own source through the SDK carries `localized` without it. Validating
+  // from the flag alone would approve exactly those sources and leave a widget
+  // that fails on every load.
+  const localizedProblem = localizedGroupKeyProblem(declaredField);
+  if (localizedProblem !== undefined) {
+    fail(`dateField "${dateField}" on "${source.id}" ${localizedProblem}`);
+  }
+  // Read off the DESCRIPTION rather than asked of the read's own guard. That
+  // guard reaches the field-level registry, and this module is type-checked by
+  // the admin, whose project does not define the `@nextly/*` aliases that graph
+  // pulls in -- importing it here reported a hundred errors about code the
+  // admin never touches. The source builder runs server-side and marks each
+  // date it publishes, so the answer still comes from one place.
+  //
+  // ONE decision, not two. Localization is one of the reasons a date cannot be
+  // bucketed, and `groupKeyDeclarationProblem` is where that list lives — so
+  // the source builder already marks a localized date `bucketable: false` and a
+  // second `localized` test beside this one was the same question answered
+  // twice. They agree today; the day localized aggregation becomes supported
+  // they would not, and the parallel test would keep refusing a read the engine
+  // had started accepting.
+  if (declaredField?.bucketable === false) {
     fail(
-      `dateField "${dateField}" on "${source.id}" is localized, so its values are stored per locale and cannot be placed on a timeline`
+      `dateField "${dateField}" on "${source.id}" cannot be grouped, so its rows cannot be placed on a timeline`
     );
   }
   const declaredType = declaredField?.type;
