@@ -102,42 +102,67 @@ export const BARE_ERROR_ALLOWLIST_PATHS = Object.keys(BARE_ERROR_ALLOWLIST);
  * package from the CWD (`"packages/nextly/"` from the repository root).
  */
 export function bareErrorConfig(prefix = "") {
-  return {
-    // A thrown bare `Error` reaches the API layer with no code to map, so it becomes a 500
-    // whatever it actually was — a caller-fixable refusal reads as a server fault, and the
-    // message is the only thing left to act on. `NextlyError` carries the code instead.
-    //
-    // Enforced as a syntax restriction rather than a bespoke rule so there is no plugin to
-    // build or version — the same trade this repo made for the keyboard-listener guard in
-    // `packages/admin/eslint.config.js`. The selector matches the throw itself, which is the
-    // thing that must not appear.
-    files: [`${prefix}src/**/*.ts`, `${prefix}src/**/*.tsx`],
-    ignores: [
-      ...BARE_ERROR_ALLOWLIST_PATHS.map(entry => `${prefix}${entry}`),
-      // Tests may throw whatever makes a failure legible; they never cross the API boundary.
-      // The shared base config already ignores them globally, so this is what keeps the rule's
-      // scope readable rather than what enforces it.
-      `${prefix}src/**/*.test.ts`,
-      `${prefix}src/**/*.spec.ts`,
-      `${prefix}src/**/*.test-d.ts`,
-      `${prefix}src/**/__tests__/**`,
-      // Where an API-key scope literal IS the definition, or where there is
-      // nothing better to build one from. Neither file throws, so sharing this
-      // block's ignores costs the bare-Error selector no coverage.
-      ...API_KEY_SCOPE_ALLOWLIST_PATHS.map(entry => `${prefix}${entry}`),
-    ],
-    rules: {
-      // Both selectors in ONE entry, deliberately. ESLint's flat config merges
-      // `no-restricted-syntax` by rule NAME, not by selector, so a second config
-      // block declaring the same rule REPLACES this one rather than adding to
-      // it — the API-key scope guard was mounted that way first and silently
-      // took the bare-Error selector out of service. `bare-error-allowlist.test`
-      // is what caught it.
-      "no-restricted-syntax": [
-        "error",
-        { selector: BARE_ERROR_SELECTOR, message: BARE_ERROR_MESSAGE },
-        { selector: API_KEY_SCOPE_SELECTOR, message: API_KEY_SCOPE_MESSAGE },
-      ],
-    },
+  const bareError = {
+    selector: BARE_ERROR_SELECTOR,
+    message: BARE_ERROR_MESSAGE,
   };
+  const apiKeyScope = {
+    selector: API_KEY_SCOPE_SELECTOR,
+    message: API_KEY_SCOPE_MESSAGE,
+  };
+  // Tests may throw whatever makes a failure legible and may model any shape; they never cross
+  // the API boundary. The shared base config already ignores them globally, so this is what keeps
+  // each block's scope readable rather than what enforces it.
+  const tests = [
+    `${prefix}src/**/*.test.ts`,
+    `${prefix}src/**/*.spec.ts`,
+    `${prefix}src/**/*.test-d.ts`,
+    `${prefix}src/**/__tests__/**`,
+  ];
+  const bareErrorAllowed = BARE_ERROR_ALLOWLIST_PATHS.map(
+    entry => `${prefix}${entry}`
+  );
+  const scopeAllowed = API_KEY_SCOPE_ALLOWLIST_PATHS.map(
+    entry => `${prefix}${entry}`
+  );
+
+  // One block per FILE SET rather than one per selector, because ESLint's flat config merges
+  // `no-restricted-syntax` by rule NAME: two blocks naming it cannot both apply to one file, and
+  // the later one wins outright. A single block with a shared `ignores` has the same defect from
+  // the other side — `ignores` removes the whole entry, so exempting a path from one selector
+  // silently exempts it from the other, and the file that a guard stops covering is one nobody
+  // looks at again. Each set below therefore carries exactly the selectors it is not exempt from.
+  //
+  // Blocks whose file set is empty are dropped: `files: []` matches nothing, and an empty pattern
+  // list is not a configuration ESLint accepts.
+  return [
+    {
+      // A thrown bare `Error` reaches the API layer with no code to map, so it becomes a 500
+      // whatever it actually was — a caller-fixable refusal reads as a server fault, and the
+      // message is the only thing left to act on. `NextlyError` carries the code instead.
+      //
+      // Enforced as a syntax restriction rather than a bespoke rule so there is no plugin to
+      // build or version — the same trade this repo made for the keyboard-listener guard in
+      // `packages/admin/eslint.config.js`. The selector matches the throw itself, which is the
+      // thing that must not appear.
+      // Exempt from neither, which is nearly every file: both selectors apply.
+      files: [`${prefix}src/**/*.ts`, `${prefix}src/**/*.tsx`],
+      ignores: [...bareErrorAllowed, ...scopeAllowed, ...tests],
+      rules: {
+        "no-restricted-syntax": ["error", bareError, apiKeyScope],
+      },
+    },
+    {
+      // A file that still throws a bare `Error`. It keeps the scope guard.
+      files: bareErrorAllowed,
+      ignores: [...scopeAllowed, ...tests],
+      rules: { "no-restricted-syntax": ["error", apiKeyScope] },
+    },
+    {
+      // A file where a scope literal IS the definition. It keeps the bare-`Error` guard.
+      files: scopeAllowed,
+      ignores: [...bareErrorAllowed, ...tests],
+      rules: { "no-restricted-syntax": ["error", bareError] },
+    },
+  ].filter(block => block.files.length > 0);
 }

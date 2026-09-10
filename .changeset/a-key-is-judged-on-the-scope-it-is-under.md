@@ -48,3 +48,12 @@ caller.
 The API-key scope built by the Single detail route named `actorType` and
 `permissions` only, so a documented `permissions.includes("site:publish")` was
 handed the stored slugs and denied a key that held the grant.
+
+Hand-writing that scope is refused rather than corrected again, and the refusal
+runs in two places because one is not enough. A lint selector rejects the
+literal — in either key order, shorthand, with a nested object between the keys,
+and with a spread standing in for the second half. The one shape it cannot see
+is a spread of an existing scope that replaces only `permissions`, which keeps
+every original row and so keeps naming a grant the caller has just given up;
+nothing in the syntax separates that from an ordinary config overlay, so
+`ruleFacingPermissions` refuses it where the disagreement decides the answer.

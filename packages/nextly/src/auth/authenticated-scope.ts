@@ -13,6 +13,7 @@
  * @module auth/authenticated-scope
  */
 
+import { NextlyError } from "../errors/nextly-error";
 import { permissionSlug } from "../schemas/_zod/rbac";
 import type {
   CollectionAccessControl,
@@ -199,7 +200,17 @@ export function narrowScope(
 /**
  * The caller's grants in the spelling a code-defined access rule receives.
  *
- * Derived from the rows, so it cannot disagree with `permissions`.
+ * Derived from the rows, and the rows are checked against the slugs beside them
+ * first, so the answer cannot name a grant `permissions` does not.
+ *
+ * Every constructor here builds both halves from one list, so they agree by
+ * construction and this rejects nothing they produce. What it rejects is a
+ * scope assembled by SPREADING one: `{ ...scope, permissions: fewer }` narrows
+ * the slugs and keeps every original row, so this function would go on
+ * authorizing against grants the caller has just given up — and it is the one
+ * shape the lint boundary cannot refuse, because nothing in the syntax
+ * separates it from an ordinary overlay of a record holding a `permissions`
+ * field. The disagreement decides an answer here, so it is refused here.
  *
  * When the scope carries no rows the stored slugs are returned unchanged. That
  * is the honest answer rather than a good one: such a scope never had the parts
@@ -208,7 +219,24 @@ export function narrowScope(
  */
 export function ruleFacingPermissions(scope: AuthenticatedScope): string[] {
   if (!scope.grants) return [...scope.permissions];
-  return scope.grants.map(grant => `${grant.resource}:${grant.action}`);
+  const { grants } = scope;
+  // Positional, because both halves come from one `map` over one list. A set
+  // comparison would accept a reordering that no constructor can produce, and
+  // accepting shapes nothing builds is how a check stops separating anything.
+  const agree =
+    grants.length === scope.permissions.length &&
+    grants.every((grant, index) => grant.slug === scope.permissions[index]);
+  if (!agree) {
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "authenticated scope carries grants its permissions do not name",
+        grants: grants.map(grant => grant.slug),
+        permissions: [...scope.permissions],
+      },
+    });
+  }
+  return grants.map(grant => `${grant.resource}:${grant.action}`);
 }
 
 /**

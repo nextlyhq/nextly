@@ -286,10 +286,10 @@ const gatePlugin = definePlugin({
         method: "POST",
         path: "/tx-delete-narrowed",
         /**
-         * The DELETE transaction entry point, which review found untested while
-         * create and update were covered — and which reaches its gate through a
-         * different branch (`rowGate: "access-service"`), so the create test
-         * says nothing about it.
+         * The DELETE transaction entry point. It reaches its gate through a
+         * different branch from create and update (`rowGate: "access-service"`),
+         * so a passing create test says nothing about whether a narrowed scope
+         * reaches this one.
          */
         handler: async (_req, ctx) => {
           const narrowed = narrowScope(

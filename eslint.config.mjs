@@ -47,7 +47,7 @@ export default [
   // rule that lives only in the package config is absent from every root invocation — which
   // includes lint-staged, the hook that runs before a commit is written. Same reason as the
   // React block above.
-  bareErrorConfig("packages/nextly/"),
+  ...bareErrorConfig("packages/nextly/"),
   ...designTokensConfig(ADMIN_UI_FILES),
   {
     ignores: [

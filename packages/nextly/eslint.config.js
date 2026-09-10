@@ -6,7 +6,7 @@ export default [
   ...config,
   // Globs are relative to packages/nextly/ because the lint command runs `eslint .` from this
   // directory. The repository-root config mounts the same builder with a path prefix.
-  bareErrorConfig(),
+  ...bareErrorConfig(),
   // F1 PR 1 + F11 PR 5: bans on imports from the deployed app's
   // runtime code (the request graph + boot path).
   //
