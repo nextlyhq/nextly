@@ -770,6 +770,7 @@ export function EntryForm({
             <DocumentLockBanner
               notice={lock.notice}
               onTakeOver={lock.takeOver}
+              onRequestAccess={lock.requestAccess}
             />
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
@@ -990,6 +991,7 @@ export function EntryForm({
                             <DocumentLockBanner
                               notice={lock.notice}
                               onTakeOver={lock.takeOver}
+                              onRequestAccess={lock.requestAccess}
                             />
                             {/* Above the fields and below the header: the reader sees
                       the document it refers to without the offer covering it. */}
