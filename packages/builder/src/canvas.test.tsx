@@ -44,7 +44,7 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 import {
   CANVAS_ROOT_CLASS,
@@ -55,6 +55,7 @@ import {
   LOCKED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
   canvasScale,
+  nodeElement,
   nodeIdFromEvent,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
@@ -88,6 +89,127 @@ function block(id: string, label: string) {
     </section>
   );
 }
+
+/**
+ * A node the RENDERER inlined from a component definition.
+ *
+ * Its own id is re-minted during composition, so the page's document does not
+ * contain it — which is why an editor must answer with the host instance
+ * instead. Both markers are present exactly as `blocks-react` emits them.
+ */
+function definitionOwned(
+  id: string,
+  instanceId: string,
+  label: string,
+  children?: React.ReactNode
+) {
+  return (
+    <section {...{ [NODE_ID_ATTRIBUTE]: id, [INSTANCE_ATTRIBUTE]: instanceId }}>
+      <h2>
+        <span data-testid={`leaf-${id}`}>{label}</span>
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+describe("resolving a click inside a component instance", () => {
+  it("answers with the HOST INSTANCE for a node the definition supplied", () => {
+    // The definition's node ids are re-minted at composition, so `cx-remade` is
+    // an address the stored page does not contain. Answering with it hands the
+    // editor something it cannot select, edit or delete.
+    render(canvas(definitionOwned("cx-remade", "i1", "From the definition")));
+
+    expect(nodeIdFromEvent(screen.getByTestId("leaf-cx-remade"))).toBe("i1");
+  });
+
+  it("answers with its OWN id for slot content the page supplied", () => {
+    // THE case this whole design exists for, and the one `closest()` gets
+    // wrong. `page-own` belongs to the page and is deliberately unmarked, but
+    // it renders NESTED INSIDE the definition's marked box — so a walk upwards
+    // finds that box and hands back the component for a node the author can and
+    // should select directly. It is exactly what a marketer opened the editor
+    // to change.
+    render(
+      canvas(
+        definitionOwned(
+          "cx-remade",
+          "i1",
+          "From the definition",
+          block("page-own", "The page's own, in the slot")
+        )
+      )
+    );
+
+    expect(nodeIdFromEvent(screen.getByTestId("leaf-page-own"))).toBe(
+      "page-own"
+    );
+  });
+
+  it("reads an EMPTY instance marker as page-owned", () => {
+    // An address of "" is not selectable. The renderer never emits one — it
+    // treats an empty id as no provenance — but reading it as page-owned is the
+    // answer that leaves the element addressable by its own id rather than by
+    // nothing.
+    render(
+      canvas(
+        <section {...{ [NODE_ID_ATTRIBUTE]: "own", [INSTANCE_ATTRIBUTE]: "" }}>
+          <span data-testid="leaf-own">x</span>
+        </section>
+      )
+    );
+
+    expect(nodeIdFromEvent(screen.getByTestId("leaf-own"))).toBe("own");
+  });
+});
+
+describe("finding the element a selected node was rendered as", () => {
+  it("finds the instance's rendered box, which carries no node id of its own", () => {
+    // The inverse of the hit-test, and it has to answer the same addresses.
+    // Selecting inside a component yields an INSTANCE id — a real page node
+    // that renders no element of its own, because it was replaced by the
+    // definition's tree. Chrome measuring that selection would otherwise find
+    // nothing and draw nowhere.
+    const { container } = render(
+      canvas(definitionOwned("cx-remade", "i1", "From the definition"))
+    );
+    const root = container.firstElementChild as HTMLElement;
+
+    expect(nodeElement(root, "i1")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "cx-remade"
+    );
+  });
+
+  it("prefers a node's OWN element over one merely hosted by it", () => {
+    // Precedence stated rather than left to iteration order. The two cannot
+    // collide today — an instance is replaced rather than rendered — so without
+    // this the rule would be whichever the walk happened to reach first.
+    const { container } = render(
+      canvas(
+        <>
+          {definitionOwned("cx-remade", "shared", "Hosted")}
+          {block("shared", "The node's own")}
+        </>
+      )
+    );
+    const root = container.firstElementChild as HTMLElement;
+
+    expect(nodeElement(root, "shared")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "shared"
+    );
+  });
+
+  it("still finds an ordinary page node by its own id", () => {
+    // The control: without it, an implementation that only ever answered via
+    // the instance marker would satisfy the cases above.
+    const { container } = render(canvas(block("plain", "Ordinary")));
+    const root = container.firstElementChild as HTMLElement;
+
+    expect(nodeElement(root, "plain")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "plain"
+    );
+  });
+});
 
 describe("resolving a pointer target to the node that owns it", () => {
   it("walks up from a deep leaf to the block that rendered it", () => {

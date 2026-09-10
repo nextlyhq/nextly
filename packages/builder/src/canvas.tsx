@@ -42,6 +42,7 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
+  INSTANCE_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   previewContainerStyle,
@@ -245,6 +246,40 @@ export function nodeIdFromEvent(target: EventTarget | null): string | null {
   // canvas rendered within another rendered page would otherwise resolve a
   // click to the outer page's node.
   if (owner.closest(`.${CANVAS_ROOT_CLASS}`) === null) return null;
+  return addressOf(owner);
+}
+
+/**
+ * Which node an element stands for, once components are inlined.
+ *
+ * A component is inlined at render: the instance node is replaced by the tree
+ * its definition describes, and every element of that tree carries a RE-MINTED
+ * id the page's document does not contain. Returning that id hands the editor
+ * an address it cannot select, edit or delete — so a definition-owned element
+ * answers with the INSTANCE the author actually placed, which is a real node in
+ * the page.
+ *
+ * ## Asked of the ELEMENT, never of its ancestors
+ *
+ * `owner.closest(\`[${"$"}{INSTANCE_ATTRIBUTE}]\`)` is the obvious implementation and
+ * it is wrong. An instance's SLOT CONTENT belongs to the page and is
+ * deliberately unmarked, but it renders NESTED INSIDE the definition's marked
+ * box — so a walk upwards finds that box and answers with the component for a
+ * node the author can and should select directly. That content is exactly what
+ * a marketer opened the editor to change.
+ *
+ * The marker is per-node rather than a wrapper element precisely so this
+ * question can be asked without walking, and `hasAttribute` is what asks it:
+ * marked means definition-owned, unmarked means the page's own whatever
+ * encloses it.
+ */
+function addressOf(owner: Element): string | null {
+  const instance = owner.getAttribute(INSTANCE_ATTRIBUTE);
+  // Present AND non-empty. The renderer never emits an empty one — it treats
+  // that as no provenance — but an address of "" is not selectable, so reading
+  // it as page-owned is the answer that leaves the element addressable by its
+  // own id.
+  if (instance !== null && instance !== "") return instance;
   return owner.getAttribute(NODE_ID_ATTRIBUTE);
 }
 
@@ -265,15 +300,26 @@ export function nodeIdFromEvent(target: EventTarget | null): string | null {
  * effect would spend a frame measuring the wrong block.
  */
 export function nodeElement(root: HTMLElement, id: string): Element | null {
-  let found: Element | null = null;
+  let own: Element | null = null;
+  let hosted: Element | null = null;
   // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
   // that declares its iterator, and this package compiles without one.
   root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    if (found === null && element.getAttribute(NODE_ID_ATTRIBUTE) === id) {
-      found = element;
+    if (own === null && element.getAttribute(NODE_ID_ATTRIBUTE) === id) {
+      own = element;
+    }
+    // An INSTANCE id addresses a node that renders no element of its own: it
+    // was replaced by the definition's tree. The first element that tree
+    // contributed is what a caller measuring the selection needs, and document
+    // order makes that the outermost one.
+    if (hosted === null && element.getAttribute(INSTANCE_ATTRIBUTE) === id) {
+      hosted = element;
     }
   });
-  return found;
+  // The node's OWN element wins where both exist. They cannot today — an
+  // instance is replaced rather than rendered — but the precedence states which
+  // answer is the node's rather than leaving it to iteration order.
+  return own ?? hosted;
 }
 
 /**
