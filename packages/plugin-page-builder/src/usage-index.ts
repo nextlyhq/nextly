@@ -195,6 +195,23 @@ export interface UsageIndex<TRow extends UsageSubject> {
   whereReferencing(referenceId: string): Record<string, { equals: string }>;
 
   /**
+   * Which stored rows are the marker, whatever document wrote it.
+   *
+   * Takes no reference because a marker names none. The row records that a
+   * document could not be read whole, and {@link deriveUsageRows} DISCARDS the
+   * prefix it managed rather than storing it — so what that document referenced
+   * is not partially known, it is unknown. It could reference anything the
+   * library holds.
+   *
+   * That is why counting needs this and `isMarker` cannot serve. `isMarker`
+   * classifies a row already in hand; a count never has the rows, because the
+   * whole design is that the database groups and only a number comes back. The
+   * question "is any document unreadable" has to travel as a filter for the
+   * same reason the reference question does.
+   */
+  whereUndetermined(): Record<string, { equals: string }>;
+
+  /**
    * The row recording that `subject` could not be read whole.
    *
    * ONE row rather than a row per reference the walk managed, because a

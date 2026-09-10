@@ -121,6 +121,15 @@ export const componentUsageIndex: UsageIndex<ComponentUsageRow> = {
     kind: { equals: "reference" },
     componentId: { equals: referenceId },
   }),
+  // Both columns, though `kind` alone identifies the row. `componentId` is the
+  // indexed one and no reference stores the empty string, so leading with it
+  // turns this into the same indexed lookup a reference question makes; `kind`
+  // is what actually decides, and stays so that a marker which later carries a
+  // real id is still excluded here.
+  whereUndetermined: () => ({
+    kind: { equals: "unreadable" },
+    componentId: { equals: "" },
+  }),
   rowFor: (subject, referenceId) => ({
     ...subject,
     kind: "reference",

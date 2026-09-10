@@ -190,6 +190,10 @@ export const classUsageIndex: UsageIndex<ClassUsageRow> = {
   // the whole question. Its marker is disjoint by LENGTH — longer than a class
   // id may be — so it cannot be matched by an id a caller could ask about.
   whereReferencing: referenceId => ({ classId: { equals: referenceId } }),
+  // Disjoint by LENGTH, so this predicate can never collide with a question
+  // about a real class: `UNDETERMINED_CLASS_ID` is longer than a class id may
+  // be, which is the same property that lets the marker share the column.
+  whereUndetermined: () => ({ classId: { equals: UNDETERMINED_CLASS_ID } }),
   markerFor: subject => ({ ...subject, classId: UNDETERMINED_CLASS_ID }),
   isMarker: row => row.classId === UNDETERMINED_CLASS_ID,
   derive: (document, limits) => classUsageOf(document, limits),

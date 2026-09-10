@@ -23,11 +23,18 @@
  *
  * ## What `complete` is for
  *
- * The grouped read is capped, so a component used on more documents than the
- * cap comes back short — and short in the direction that reads as fine. A
- * caller that shows the number without saying so tells an author a widely used
- * component is barely used, which is the reading that makes a delete look safe.
- * So the bound travels WITH the number and the surface decides how to say it.
+ * The number can be short for two reasons, and both are short in the direction
+ * that reads as fine. The grouped read is capped, so a component used on more
+ * documents than the cap comes back at the cap. And a document that could not
+ * be walked whole is recorded as one marker with its references DISCARDED, so
+ * it is absent from every component's count rather than counted against the
+ * wrong one — a component embedded only in such a document reads as used
+ * nowhere.
+ *
+ * A caller that shows the number without saying so tells an author a widely
+ * used component is barely used, which is the reading that makes a delete look
+ * safe. So the bound travels WITH the number and the surface decides how to say
+ * it.
  *
  * @module usage-count
  */
@@ -45,9 +52,12 @@ export interface UsageCount {
   /**
    * Whether `documents` is the whole answer.
    *
-   * False means the grouped read reached its cap and stopped, so more documents
-   * use this than the number says. A surface showing the count without this
-   * says "used on 50 pages" about a component used on thousands.
+   * False means the number is a FLOOR, from either of two causes: the grouped
+   * read reached its cap and stopped, or some document could not be read whole
+   * and so is missing from the population entirely. A surface showing the count
+   * without this says "used on 50 pages" about a component used on thousands,
+   * and says "used on no pages" about one embedded in a document too large to
+   * walk.
    */
   complete: boolean;
 }
@@ -97,6 +107,43 @@ export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
     where: args.index.whereReferencing(args.referenceId),
     groupBy: DOCUMENT_COLUMN,
   });
+  const documents = grouped.bucketCount;
 
-  return { documents: grouped.bucketCount, complete: !grouped.truncated };
+  // One expression rather than an early return, so the cheap case is a
+  // CONSEQUENCE of the rule instead of a branch beside it. `&&` does not
+  // evaluate its right side once the left is false, so a capped answer still
+  // costs one read — and an edit that reorders these cannot drop the
+  // truncation, which an early return placed before the second read can.
+  const complete = !grouped.truncated && !(await anyDocumentUnreadable(args));
+
+  return { documents, complete };
+}
+
+/**
+ * Whether the index holds a document whose references were never determined.
+ *
+ * Asked of the WHOLE index rather than of this reference, and that is the
+ * point. A document that exceeded its walk bound has its discovered references
+ * discarded and only a marker stored, so it does not appear under any
+ * component — including this one. Filtering the markers by `referenceId` would
+ * ask which unreadable documents reference it, a question the marker exists
+ * precisely because nothing can answer.
+ *
+ * So the answer is the same for every reference in the library, and it is
+ * "unknown" rather than "no". Reporting `complete: true` here is the reading
+ * that says a component embedded in a document too large to walk is used
+ * nowhere, which is what an author deletes on.
+ */
+async function anyDocumentUnreadable<TRow extends UsageSubject>(args: {
+  index: UsageIndex<TRow>;
+  read: GroupedUsageReader;
+}): Promise<boolean> {
+  const markers = await args.read({
+    where: args.index.whereUndetermined(),
+    groupBy: DOCUMENT_COLUMN,
+  });
+  // Existence, not how many: one unreadable document is enough to make every
+  // count a floor, and `truncated` on this read only means there are more of
+  // them than the cap — which does not change the answer.
+  return markers.bucketCount > 0;
 }

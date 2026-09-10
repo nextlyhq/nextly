@@ -35,12 +35,19 @@ stored variant, so a page using one component in two languages while holding a
 pending draft contributes several rows — and a count of rows would report that
 page as several, then climb every time somebody added a translation.
 
-The answer carries whether it is complete. A grouped read is capped, so a
-component used on more pages than the cap comes back short and
-complete-looking, which is the reading that tells an author a widely used
-component is barely used. `complete: false` says the number is a floor, and the
-surface decides how to say so.
+The answer carries whether it is complete, and it can be short for two
+reasons. A grouped read is capped, so a component used on more pages than the
+cap comes back at the cap. And a document too large to walk whole is recorded
+as a single marker with its references discarded, so it is missing from every
+component's count rather than wrong in one of them — a component embedded only
+there would otherwise read as used by nothing at all. Either way
+`complete: false` says the number is a floor, and the surface decides how to
+say so.
 
 `usageCountReader` binds the count to the Direct API. It reads as the system
 because the index denies every access rule it declares, and an untrusted read
-answers an empty set — indistinguishable from a component nothing uses.
+answers an empty set — indistinguishable from a component nothing uses. It
+takes the index collection's slug, so `COMPONENT_USAGE_INDEX_SLUG` is exported
+beside it: the plugin resolves that name from its own context, which
+application code cannot reach, and without the export the only way to call the
+reader would be to spell the collection name as a literal.

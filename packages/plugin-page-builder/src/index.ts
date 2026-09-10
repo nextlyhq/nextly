@@ -139,8 +139,21 @@ export type { ClassUsageVariant } from "./collections/class-usage-index";
 // must run as the system, since the index denies every access rule it declares
 // and an untrusted read answers an empty set — indistinguishable from a
 // component nothing uses.
+//
+// The SLUG travels with them, because `usageCountReader` takes one and a
+// consumer of the published package has no other way to name it: the plugin
+// resolves it from its own context, and that context is not reachable from
+// application code. Without this export the only way to call the reader is to
+// spell `nx_pb_component_usage` as a literal, which then has to be re-spelled
+// by hand if the constant ever changes — a copy of an identifier the package
+// owns, kept in step by nobody.
+//
+// It is the DECLARED slug. An integrator who renamed the collection passes the
+// name they chose; the plugin's own wiring resolves a rename the same way, from
+// the declared name as the key.
 export { componentUsageCount } from "./component-usage";
 export { usageCountReader } from "./class-usage-runtime";
+export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
 export type { UsageCount, GroupedUsageReader } from "./usage-count";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
