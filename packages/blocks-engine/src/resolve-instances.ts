@@ -758,8 +758,20 @@ function inlineNode(
  * this pass's own and must survive.
  */
 function withoutInstanceOf(node: ResolvedBlockNode): ResolvedBlockNode {
-  const { instanceOf: _stored, ...rest } = node;
-  return rest;
+  // Copied by DESCRIPTOR, so the property is removed without ever being read.
+  // Destructuring and spreading both INVOKE a getter, and this runs on trees a
+  // host assembled in memory rather than only on JSON from the database — so a
+  // node carrying an enumerable `instanceOf` accessor that throws would take
+  // the whole resolution down from here, before any per-block boundary could
+  // contain it and draw a placeholder. Measured: it aborted `PageRenderer`
+  // outright.
+  //
+  // Other properties keep whatever descriptors they had, which is deliberate:
+  // this changes only when `instanceOf` is read, not how the rest of the node
+  // behaves.
+  const descriptors = Object.getOwnPropertyDescriptors(node);
+  delete descriptors.instanceOf;
+  return Object.defineProperties({}, descriptors) as ResolvedBlockNode;
 }
 
 /** Every slot of a host node, with its children resolved in the same scope. */

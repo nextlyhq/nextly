@@ -111,6 +111,32 @@ const byInstanceOf = (
   flatten(doc.nodes).filter(entry => entry.instanceOf === instanceId);
 
 describe("resolveComponentInstances", () => {
+  it("strips a stored claim without INVOKING it, so a hostile accessor cannot abort the page", () => {
+    // `resolveComponentInstances` is public and takes a tree, so it is handed
+    // objects a host assembled in memory as well as JSON from the database.
+    // Destructuring or spreading to drop a property READS it, so an enumerable
+    // `instanceOf` accessor that throws took the whole resolution down from the
+    // strip — before any per-block boundary could contain the failure and draw
+    // a placeholder. Measured: it aborted the render outright.
+    const hostile = { id: "a", type: "core/box", version: 1, props: {} };
+    Object.defineProperty(hostile, "instanceOf", {
+      enumerable: true,
+      get() {
+        throw new Error("provenance getter invoked");
+      },
+    });
+
+    const doc = page([hostile as unknown as BlockNode]);
+
+    // The control on the control: this must not throw, and the node must
+    // survive — a resolver that dropped the node entirely would also not throw.
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes).toHaveLength(1);
+    expect(result.document.nodes[0]?.id).toBe("a");
+    expect(result.document.nodes[0]?.instanceOf).toBeUndefined();
+  });
+
   it("strips a STORED provenance claim from an instance it cannot resolve", () => {
     // The refusal path is the one route a stored claim survives. A host node
     // carrying `instanceOf` is stripped on the way through, but an INSTANCE

@@ -22,7 +22,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { renderToReadableStream, renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BlockBoundary,
@@ -132,6 +132,13 @@ function render(subject: BlockNode): string {
     />
   );
 }
+
+// The env stub is process-wide, so a case that set it would otherwise decide
+// what its neighbours render — and "production" is the branch that hides the
+// element every other case asserts on.
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("provenance a block supplied is not provenance", () => {
   it("REMOVES a marker a page-owned block put on its own root", async () => {
@@ -331,6 +338,70 @@ describe("a placeholder is the one element an author can still click", () => {
     expect(
       named.filter(([name, value]) => !html.includes(`${name}="${value}"`))
     ).toEqual([]);
+  });
+
+  it("keeps the placeholder VISIBLE in a production build when an editor asked", async () => {
+    // Markers on a hidden element address nothing. `hidden` is `display: none`,
+    // so the box is not generated at all: it has no geometry for a layers panel
+    // or a drag reader, `elementFromPoint` never returns it, and a click cannot
+    // land on it. An editor served from a production build would therefore
+    // still be unable to select the host instance from the one thing an author
+    // can see when a block inside a component breaks.
+    //
+    // Asserted on VISIBILITY rather than on the attributes, because the
+    // attributes were already correct while the element was unreachable —
+    // which is exactly how the first version passed its tests and shipped the
+    // defect.
+    vi.stubEnv("NODE_ENV", "production");
+
+    const html = renderToStaticMarkup(
+      <BlockBoundary
+        node={node("test/does-not-exist", { instanceOf: "i1" })}
+        context={context()}
+        blocks={blocks}
+        classes={{}}
+        nodeAttribute
+      />
+    );
+
+    expect(html).toContain('data-nx-block-placeholder="unknown-block"');
+    expect(html).not.toContain("hidden");
+    expect(html).toContain(`${INSTANCE_ATTRIBUTE}="i1"`);
+  });
+
+  it("still HIDES it in production on a page nobody is editing", async () => {
+    // The control, and the reason the branch exists at all: a published page
+    // must not show a debug box. Without this, "always visible" passes the case
+    // above while putting dashed error boxes on live pages.
+    vi.stubEnv("NODE_ENV", "production");
+
+    const html = renderToStaticMarkup(
+      <BlockBoundary
+        node={node("test/does-not-exist", { instanceOf: "i1" })}
+        context={context()}
+        blocks={blocks}
+        classes={{}}
+      />
+    );
+
+    expect(html).toContain("hidden");
+  });
+
+  it("treats an EMPTY instance id as no provenance at all", async () => {
+    // The marker's contract is that its PRESENCE means "definition-owned,
+    // address the instance instead" — an editor tests for the attribute rather
+    // than reading it first. So emitting it empty says a node belongs to a
+    // component and then names one nothing can select, which is worse than not
+    // marking it: the node also stops being directly selectable.
+    //
+    // Reachable because a document validator accepts any string as an id, and
+    // imported or hand-edited content never passes through the editor that
+    // mints them.
+    const markers = editorMarkers({ nodeId: "n1", instanceOf: "" });
+
+    expect(markers[INSTANCE_ATTRIBUTE]).toBeUndefined();
+    // The node keeps its own address, which is what an unmarked node means.
+    expect(markers[NODE_ID_ATTRIBUTE]).toBe("n1");
   });
 
   it("carries a REMOVAL for the marker a page-owned node must not claim", async () => {

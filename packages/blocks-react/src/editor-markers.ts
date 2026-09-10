@@ -115,6 +115,18 @@ export function editorMarkers(
   return {
     [NODE_ID_ATTRIBUTE]: address.nodeId,
     [SLOTS_ATTRIBUTE]: address.declaresSlots === true ? "" : undefined,
-    [INSTANCE_ATTRIBUTE]: address.instanceOf,
+    // An EMPTY instance id is treated as no provenance at all. The marker's
+    // whole contract is that its PRESENCE means "definition-owned, address the
+    // instance instead" — an editor tests for the attribute rather than reading
+    // it first — so emitting `data-nx-instance=""` says a node belongs to a
+    // component and then names one nothing can select. A document validator
+    // accepts any string as an id, and imported or hand-edited content reaches
+    // the renderer without ever passing through the editor that mints them, so
+    // this is a value the renderer can actually receive.
+    //
+    // Absent is the safe reading of it: the element keeps its own node address
+    // and stays directly selectable, which is what an unmarked node means.
+    [INSTANCE_ATTRIBUTE]:
+      address.instanceOf === "" ? undefined : address.instanceOf,
   };
 }

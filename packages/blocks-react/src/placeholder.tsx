@@ -116,14 +116,23 @@ export function BlockPlaceholder({
   const isProduction =
     typeof process !== "undefined" && process.env?.NODE_ENV === "production";
 
-  // Spread into BOTH branches below rather than only the visible one. A
-  // published page passes no `editor`, so this is empty there and the markup is
-  // unchanged; an editor render that happens to run with NODE_ENV=production
-  // still needs the box to be addressable, and hiding it does not make it
-  // unreachable to the editor's own hit-testing.
   const markers = editorMarkerProps(editor);
 
-  if (isProduction) {
+  // HIDDEN only on a page nobody is editing, and the `editor` clause is the
+  // load-bearing half rather than a refinement.
+  //
+  // The first version hid it whenever the build was production and spread the
+  // markers into both branches, reasoning that hiding a box does not put it
+  // beyond the editor's own hit-testing. That is false: `hidden` is
+  // `display: none`, so the element generates no box — it has no geometry to
+  // read, `elementFromPoint` never returns it, and a click cannot land on it.
+  // Marking an element nobody can reach addresses nothing, so an editor served
+  // from a production build still could not select the host instance from the
+  // one thing an author can see when a block inside a component breaks.
+  //
+  // The reason the branch exists is that a PUBLISHED page must not show a debug
+  // box. An editor render is not a published page, whatever `NODE_ENV` says.
+  if (isProduction && editor === undefined) {
     return (
       <div
         hidden
