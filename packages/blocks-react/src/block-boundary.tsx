@@ -9,6 +9,11 @@ import {
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
+import {
+  editorMarkers,
+  EDITOR_NAMESPACE,
+  PROP_ATTRIBUTE,
+} from "./editor-markers";
 import { BlockPlaceholder, type EditorMarkers } from "./placeholder";
 // The SAME predicate the pipeline uses. Asking the question twice is how the
 // renderer came to hide a node the exported reader returns: the pipeline kept
@@ -23,6 +28,8 @@ import {
 } from "./renderable";
 import type { BlockResolver } from "./resolver";
 import { isUnconditional } from "./visibility";
+// Imported as well as re-exported below: this module both PUBLISHES the names,
+// which consumers outside the package address elements by, and uses them.
 
 /**
  * The wording for one reason, or nothing when the marker names none.
@@ -215,66 +222,13 @@ export function isAllowedAttribute(name: string): boolean {
  * root. Output that is not a single element has no root to carry them and is
  * returned untouched rather than guessed at.
  */
-/** The attribute an editor addresses a node by. Named, so one string decides it. */
-export const NODE_ID_ATTRIBUTE = "data-nx-node";
-
-/**
- * The attribute naming which prop an element renders, for an editor.
- *
- * Written only when the editor asked for node addresses, so a published page
- * carries none of it — the same condition {@link NODE_ID_ATTRIBUTE} rides on,
- * because the two answer one question together: an editor needs to know which
- * node it is looking at AND which of that node's values an element holds, and
- * either alone addresses nothing.
- */
-export const PROP_ATTRIBUTE = "data-nx-prop";
-
-/**
- * Marks a block whose definition declares at least one slot.
- *
- * The editor needs to find containers without knowing their names: a list of
- * built-in types would exclude every container a plugin contributes, and would
- * have to be kept in step with packages this one does not own. Whether a block
- * declares slots is the structural fact underneath that list, and it is
- * available here for nothing.
- *
- * Rides `nodeAttribute` for the same reason {@link NODE_ID_ATTRIBUTE} does: it
- * is the editor's own namespace and has no business on a published page.
- */
-export const SLOTS_ATTRIBUTE = "data-nx-slots";
-
-/**
- * Names the component INSTANCE an element's node belongs to, for an editor.
- *
- * A component is inlined at render: the instance node is replaced by the tree
- * its definition describes, so every element an author sees inside one carries
- * a node id the page's document does not contain. Without this, an editor
- * hit-testing on {@link NODE_ID_ATTRIBUTE} alone resolves a click inside a
- * component to an address it cannot select, edit or delete.
- *
- * Carries the HOST's instance rather than the nearest one, because that is what
- * `instanceOf` means — the instance the author actually placed on the page,
- * even where components nest.
- *
- * Written only for DEFINITION-owned nodes, which is the discrimination that
- * makes it useful. An instance's slot content is nested inside the inlined tree
- * and belongs to the page, so it is unmarked and stays directly selectable —
- * exactly the nodes a marketer opened the editor to edit.
- *
- * Rides `nodeAttribute` for the reason its siblings do: it is the editor's own
- * namespace and has no business on a published page.
- */
-export const INSTANCE_ATTRIBUTE = "data-nx-instance";
-
-/**
- * The prefix every marker the editor puts on a rendered element shares.
- *
- * A NAMESPACE rather than a list, because a list is a thing to keep in sync
- * and this one already fell behind once: three markers exist and only the
- * node id was protected here. Anything a future overlay needs is covered by
- * construction.
- */
-export const EDITOR_NAMESPACE = "data-nx-";
+export {
+  EDITOR_NAMESPACE,
+  INSTANCE_ATTRIBUTE,
+  NODE_ID_ATTRIBUTE,
+  PROP_ATTRIBUTE,
+  SLOTS_ATTRIBUTE,
+} from "./editor-markers";
 
 /**
  * Builds the `markProp` a block spreads onto the element carrying a value.
@@ -343,14 +297,29 @@ function placeholderEditor(
 }
 
 /**
- * Applies the two editor-only markers to an element's attribute bag, in the
- * order that keeps the node address last.
+ * Applies the editor-only markers to an element's attribute bag.
  *
- * Split out of `withNodeAttributes` so the two markers read as one small,
- * obviously-total step: every branch here is gated on `nodeAttribute`, so
- * this function's own count stays fixed regardless of how many editor
- * markers exist, while the merge of author-set fields in `withNodeAttributes`
- * is where that function's complexity actually comes from.
+ * DERIVES them rather than composing them, so this path and the placeholder
+ * path cannot disagree about what an element carries — `editorMarkers` is the
+ * one implementation and both ask it. A marker added there reaches both
+ * without either being edited, which is the property a test pinning literals
+ * could never give.
+ *
+ * The bag it returns is merged over the author-set fields collected in
+ * `withNodeAttributes`, so every marker wins over a value the document tried
+ * to set for the same key. That ordering is the enforcement: the editor's
+ * address for a node is not a value a document may write, and the position
+ * says so rather than a comment asking the loop above to behave.
+ *
+ * Values may be `undefined`, and that is load-bearing rather than tidy-up.
+ * `cloneElement` merges this OVER the element the block returned, so a key
+ * absent here leaves whatever the block put there — a page-owned block that
+ * hardcodes `data-nx-instance`, or spreads a stored attribute bag onto its
+ * root, would keep a value it wrote itself, and the editor gives that marker
+ * precedence when deciding what a click selects. Assigning `undefined` removes
+ * it. The document's own route into these attributes is already closed by the
+ * `EDITOR_NAMESPACE` skip in `withNodeAttributes`; this is the same rule for
+ * the route a BLOCK controls.
  */
 function applyEditorMarkers(
   extra: Record<string, string | undefined>,
@@ -358,44 +327,17 @@ function applyEditorMarkers(
   nodeAttribute: boolean,
   declaresSlots: boolean
 ): void {
-  // Before the node address rather than after it, so the editor markers sit
-  // together and the "LAST, so it cannot be overwritten" reasoning below still
-  // describes the line it is attached to.
-  if (nodeAttribute && declaresSlots) extra[SLOTS_ATTRIBUTE] = "";
-  /*
-   * ASSIGNED in both directions, never merely added.
-   *
-   * Where the resolver marked the node as the definition's own, this names the
-   * host instance. Where it did not, the attribute is assigned `undefined`,
-   * which React omits — and that is the load-bearing half rather than a
-   * tidy-up. `cloneElement` merges this bag OVER the element the block
-   * returned, so a key absent here leaves whatever the block put there: a
-   * page-owned block that hardcodes `data-nx-instance`, or spreads a stored
-   * attribute bag onto its root, would keep a value it wrote itself. The
-   * editor gives this marker precedence over the node address when deciding
-   * what a click selects, so that value redirects selection and editing to an
-   * unrelated component.
-   *
-   * The document's own route into these attributes is already closed — the
-   * loop in `withNodeAttributes` skips any key in `EDITOR_NAMESPACE` — and
-   * this is the same rule for the route a BLOCK controls. Both say the same
-   * thing: the editor's namespace is the renderer's to write and nobody
-   * else's.
-   */
-  if (nodeAttribute) extra[INSTANCE_ATTRIBUTE] = identity.instanceOf;
-  /*
-   * LAST, so it cannot be overwritten. This was written first, with a
-   * comment saying that made it safe — the opposite of what the code did:
-   * the author's loop in `withNodeAttributes` ran afterwards and assigning
-   * the same key simply replaced it. A document could therefore hand every
-   * block the same address, or one block another's, and the editor's
-   * hit-testing reads exactly this value to decide which block was clicked.
-   *
-   * It is the editor's address for a node, not a value the document may
-   * set, so the position enforces that rather than a note asking the loop
-   * above to.
-   */
-  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = identity.nodeId;
+  // A published render carries none of the editor's namespace, so nothing is
+  // asked for and nothing is assigned — not even the removals.
+  if (!nodeAttribute) return;
+  Object.assign(
+    extra,
+    editorMarkers({
+      nodeId: identity.nodeId,
+      instanceOf: identity.instanceOf,
+      declaresSlots,
+    })
+  );
 }
 
 function withNodeAttributes(

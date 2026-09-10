@@ -1,5 +1,7 @@
 import type { ReactElement } from "react";
 
+import { editorMarkers } from "./editor-markers";
+
 /** Why a node rendered a placeholder instead of itself. */
 export type PlaceholderReason =
   /** No definition is registered for the node's `type`. */
@@ -160,22 +162,25 @@ export function BlockPlaceholder({
 /**
  * The editor attributes a placeholder carries, or none at all.
  *
- * Spelled literally rather than importing the boundary's constants, which would
- * make this module depend on the one that renders it. The two are pinned
- * together by a test asserting these keys ARE those constants, so the
- * duplication is checked rather than trusted.
+ * DERIVED from `editorMarkers`, which is what an ordinary block root is marked
+ * from too. Spelling the names here was the first version, pinned to the
+ * boundary's constants by a test — and that test checks the NAMES and nothing
+ * else: it stays green when a marker is added to one path, and green when the
+ * two disagree about whether an absent value is omitted or removed. A
+ * placeholder would then carry a different editor address from the root it
+ * stands in for, which nothing observes.
+ *
+ * `editor-markers` is a leaf precisely so this can ask it: `block-boundary`
+ * renders this module, so importing the marking from there would be a cycle.
+ *
+ * The bag may carry `undefined` values. React omits those on a fresh element,
+ * which is exactly the "the page owns this node, so do not claim otherwise"
+ * outcome the literal version spelled by hand — and the same value REMOVES a
+ * forged attribute where the boundary clones a block's own root.
  */
 function editorMarkerProps(
   editor: EditorMarkers | undefined
-): Record<string, string> {
+): Record<string, string | undefined> {
   if (editor === undefined) return {};
-  return {
-    "data-nx-node": editor.nodeId,
-    // Omitted rather than emitted empty when the node is the page's own: an
-    // editor tests for the attribute's PRESENCE to decide whether an element
-    // belongs to a component, so an empty one would claim it does.
-    ...(editor.instanceOf === undefined
-      ? {}
-      : { "data-nx-instance": editor.instanceOf }),
-  };
+  return editorMarkers(editor);
 }

@@ -29,6 +29,7 @@ import {
   INSTANCE_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
 } from "./block-boundary";
+import { editorMarkers } from "./editor-markers";
 import type { PageContext } from "./context";
 import { createBlockResolver } from "./resolver";
 
@@ -295,15 +296,53 @@ describe("a placeholder is the one element an author can still click", () => {
     expect(html).not.toContain(INSTANCE_ATTRIBUTE);
   });
 
-  it("spells those attributes the way the boundary does", async () => {
-    // `placeholder.tsx` writes these two names as literals rather than
-    // importing them, so that the module drawing the substitute does not
-    // depend on the module that renders it. That is a duplication, and this is
-    // what keeps it honest: renaming either constant fails HERE rather than
-    // silently leaving placeholders marked in an old namespace no editor reads.
-    expect({ INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE }).toEqual({
-      INSTANCE_ATTRIBUTE: "data-nx-instance",
-      NODE_ID_ATTRIBUTE: "data-nx-node",
-    });
+  it("carries every marker the shared builder defines, not a list of its own", async () => {
+    // The property the earlier version of this test could not reach. It
+    // asserted that two constants held their literal spellings — which says
+    // nothing about whether the two PATHS agree. A marker added to the root
+    // path and not to this one leaves both names correct and the two elements
+    // carrying different editor addresses, which nothing observes.
+    //
+    // Driven from `editorMarkers` rather than from a list retyped here: a
+    // retyped list agrees with whatever it was copied from on the day it was
+    // copied, while this one grows automatically with the builder. That is what
+    // makes it a check on the DERIVATION rather than on today's field set.
+    const html = renderToStaticMarkup(
+      <BlockBoundary
+        node={node("test/does-not-exist", { instanceOf: "i1" })}
+        context={context()}
+        blocks={blocks}
+        classes={{}}
+        nodeAttribute
+      />
+    );
+
+    // The placeholder really was drawn, so what follows is about a box that
+    // exists rather than about output that never happened.
+    expect(html).toContain('data-nx-block-placeholder="unknown-block"');
+
+    const expected = editorMarkers({ nodeId: "n1", instanceOf: "i1" });
+    const named = Object.entries(expected).filter(
+      ([, value]) => value !== undefined
+    );
+    // The builder must actually define something, or "every marker is present"
+    // is satisfied by there being none.
+    expect(named.length).toBeGreaterThan(0);
+    expect(
+      named.filter(([name, value]) => !html.includes(`${name}="${value}"`))
+    ).toEqual([]);
+  });
+
+  it("carries a REMOVAL for the marker a page-owned node must not claim", async () => {
+    // `undefined` rather than an omitted key, and both callers depend on it:
+    // React drops it on the placeholder's fresh element, and `cloneElement`
+    // applies it as a removal over a root a block built — which is what clears
+    // a `data-nx-instance` a block hardcoded or spread from stored attributes.
+    // An implementation that omitted the key instead would satisfy the
+    // placeholder and silently leave the forged value on the block root.
+    const markers = editorMarkers({ nodeId: "n1" });
+
+    expect(INSTANCE_ATTRIBUTE in markers).toBe(true);
+    expect(markers[INSTANCE_ATTRIBUTE]).toBeUndefined();
   });
 });

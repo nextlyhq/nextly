@@ -702,8 +702,16 @@ function inlineNode(
   depth: number
 ): ResolvedBlockNode[] | null {
   if (!isPlainRecord(node)) return null;
-  if (node.type === COMPONENT_INSTANCE_TYPE) {
-    return expandInstance(node, run, scope, depth);
+  // Stripped HERE, before the instance branch, because both kinds of node on
+  // this walk are the page's own and neither may arrive already wearing this
+  // pass's provenance. The instance case is the one that bites: it returns
+  // below without reaching the host cleanup, and a refusal SPREADS the node it
+  // was given — so a hand-edited instance whose component is missing, cyclic or
+  // budget-refused kept its forged claim precisely when a placeholder is drawn
+  // for it, which is the element an author can see and click.
+  const own = "instanceOf" in node ? withoutInstanceOf(node) : node;
+  if (own.type === COMPONENT_INSTANCE_TYPE) {
+    return expandInstance(own, run, scope, depth);
   }
   // The same rule `expandInstance` applies to an instance's OWN gate, applied
   // to the node holding one. Gating is inherited — `pruneHiddenNodes` drops a
@@ -719,31 +727,36 @@ function inlineNode(
   // Asked of the node ITSELF rather than tracked down the walk, because
   // `inlineForest` descends one level per frame: a gated node returns here
   // before its slots are visited, so nothing below it is ever reached.
-  if (isConditionGated(node)) return null;
-  // A HOST node carrying `instanceOf` is stored data wearing this pass's
-  // provenance, and it is stripped rather than trusted.
-  //
-  // `instanceOf` means "the resolver inlined this node from a definition", and
-  // the only writer that may say so is this pass. Documents arrive from places
-  // that never ran it — an export replayed, a tree assembled by a host, content
-  // hand-edited in storage — and `sanitizeDocument` preserves unknown node keys
-  // deliberately, so a page node can reach here already claiming to belong to a
-  // component. An editor reading that marker sends a click, an edit or a delete
-  // to an instance the author never placed, and the node they were pointing at
-  // is one of their own.
-  //
-  // Cleared on the way through rather than checked at every reader: this is the
-  // pass that owns the field, so it is the one place that can tell a stored
-  // claim from provenance it created.
-  const host = "instanceOf" in node ? withoutInstanceOf(node) : node;
-  const slots = host.slots;
-  if (!isPlainRecord(slots)) return host === node ? null : [host];
+  // A gated node is dropped with its whole subtree by `pruneHiddenNodes`, so a
+  // stored claim on one reaches no reader whether or not it was cleared here.
+  // Reported as unchanged rather than as a stripped node, which keeps the
+  // identity signal below meaning what it says.
+  if (isConditionGated(own)) return null;
+  const slots = own.slots;
+  if (!isPlainRecord(slots)) return own === node ? null : [own];
   const next = inlineHostSlots(slots, run, scope, depth);
-  if (next === slots) return host === node ? null : [host];
-  return [{ ...host, slots: next }];
+  if (next === slots) return own === node ? null : [own];
+  return [{ ...own, slots: next }];
 }
 
-/** The same node with a stored provenance claim removed. */
+/**
+ * The same node with a stored provenance claim removed.
+ *
+ * `instanceOf` means "the resolver inlined this node from a definition", and
+ * the only writer that may say so is this pass. Documents arrive from places
+ * that never ran it — an export replayed, a tree a host assembled, content
+ * hand-edited in storage — and `sanitizeDocument` preserves unknown node keys
+ * deliberately, so a page node can reach the resolver already claiming to
+ * belong to a component. An editor reading that marker sends a click, an edit
+ * or a delete to an instance the author never placed, and the node they were
+ * pointing at is one of their own.
+ *
+ * Cleared on the way through rather than checked at every reader: this is the
+ * pass that OWNS the field, so it is the one place that can tell a stored claim
+ * from provenance it created. Applied only on the page walk, which is why
+ * `cloneDefinitionNode` is untouched — provenance on a definition-owned node is
+ * this pass's own and must survive.
+ */
 function withoutInstanceOf(node: ResolvedBlockNode): ResolvedBlockNode {
   const { instanceOf: _stored, ...rest } = node;
   return rest;

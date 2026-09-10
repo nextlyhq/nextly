@@ -111,6 +111,35 @@ const byInstanceOf = (
   flatten(doc.nodes).filter(entry => entry.instanceOf === instanceId);
 
 describe("resolveComponentInstances", () => {
+  it("strips a STORED provenance claim from an instance it cannot resolve", () => {
+    // The refusal path is the one route a stored claim survives. A host node
+    // carrying `instanceOf` is stripped on the way through, but an INSTANCE
+    // node branches to expansion before that, and a refusal spreads the
+    // original node — so a page node hand-edited to claim membership of a
+    // component keeps the claim exactly when the component is missing.
+    //
+    // `sanitizeDocument` preserves unknown node keys deliberately, so this
+    // arrives from an export replayed, a tree a host assembled, or content
+    // edited in storage. An editor reading the marker sends a click, an edit
+    // or a delete to an instance the author never placed.
+    const doc = page([
+      instance("i1", "missing", {}, {
+        instanceOf: "forged",
+      } as Partial<BlockNode>),
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    const refused = flatten(result.document.nodes).find(
+      entry => entry.id === "i1"
+    );
+    // Present first: an absent node is trivially unmarked, which would let a
+    // resolver that dropped the refused instance satisfy the real assertion.
+    expect(refused).toBeDefined();
+    expect(refused?.unresolvedComponent).toBeDefined();
+    expect(refused?.instanceOf).toBeUndefined();
+  });
+
   it("returns the same document object when the page holds no instance", () => {
     const doc = page([node("a"), box("b", [node("c")])]);
 
