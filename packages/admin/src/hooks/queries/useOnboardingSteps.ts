@@ -134,11 +134,26 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
   // unmounts this hook, and a guardless effect would re-invalidate on every
   // render for as long as anything kept it alive.
   const dropped = useRef(false);
+  // 🔴 Only data fetched during THIS mount may ask the host to drop the card.
+  //
+  // The card is unmounted whenever it is not offered, and a cached response
+  // outlives that. So a reader who finishes onboarding, then deletes their last
+  // collection, gets the card offered again -- and it would remount holding the
+  // previous mount's all-complete answer, announce itself finished before its
+  // own refetch landed, and ask for a layout the server has just decided should
+  // include it. One spurious round trip, and a card that flickers away from a
+  // reader who needs it.
+  //
+  // Compared against the mount rather than trusting `isStale`: the query sets no
+  // `staleTime`, so its data is stale the instant it arrives and that flag
+  // cannot separate "not yet refetched" from "just fetched".
+  const mountedAt = useRef(Date.now());
   useEffect(() => {
     if (!finished || dropped.current) return;
+    if (query.dataUpdatedAt < mountedAt.current) return;
     dropped.current = true;
     void queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
-  }, [finished, queryClient]);
+  }, [finished, query.dataUpdatedAt, queryClient]);
 
   return {
     steps,
