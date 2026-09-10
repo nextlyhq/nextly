@@ -63,7 +63,7 @@ const TABLE_ROWS = 5;
  */
 function widgetId(
   source: WidgetSource,
-  kind: "count" | "recent" | "table" | "stats"
+  kind: "count" | "recent" | "table" | "stats" | "timeline" | "breakdown"
 ): string | undefined {
   // 🔴 An underscore is legal in a collection slug (`SLUG_PATTERN` permits it)
   // and illegal in a widget id, so `customer_notes` produced an id the registry
@@ -346,6 +346,97 @@ function tableWidget(source: WidgetSource): WidgetDefinition | undefined {
 }
 
 /**
+ * The date a timeline buckets by, or `undefined` when the collection has none.
+ *
+ * ASKED of the source's own fields rather than assumed. A collection declaring
+ * `timestamps: false` has no `created_at` column at all, and a localized date
+ * keeps its values in the companion table — so naming a field here would mint a
+ * card whose query the read path then refuses, which is a card that draws an
+ * error on every load rather than a card that was never offered.
+ *
+ * `bucketable === false` is the source's own marking, decided by the same rule
+ * the read consults. Reading the coarse `type` instead would approve a
+ * localized date, because a localized date is still a date.
+ *
+ * `createdAt` is PREFERRED where it is bucketable, because "when did these
+ * arrive" is the question a timeline on a content collection is asked, and a
+ * user-declared date could be anything — an event date, an expiry, a
+ * reminder — whose curve says nothing about the collection's cadence. It is a
+ * preference and not a requirement: a collection without timestamps still gets
+ * a timeline over whatever date it does declare.
+ */
+function bucketableDate(source: WidgetSource): string | undefined {
+  const dates = source.fields.filter(
+    field => field.type === "date" && field.bucketable !== false
+  );
+  const preferred = dates.find(field => field.name === "createdAt");
+  return (preferred ?? dates[0])?.name;
+}
+
+/**
+ * The timeline card for a source: how many entries arrived per day.
+ *
+ * `status: "all"` for the reason the count card states: a curve that silently
+ * excluded drafts would disagree with the collection's own list, and nothing on
+ * the card would say which question it answered.
+ */
+function timelineWidget(source: WidgetSource): WidgetDefinition | undefined {
+  if (!source.supports.includes("timeseries")) return undefined;
+  const dateField = bucketableDate(source);
+  if (dateField === undefined) return undefined;
+  const id = widgetId(source, "timeline");
+  if (id === undefined) return undefined;
+  return {
+    id,
+    title: `${source.label} over time`,
+    description: `How many ${source.label} entries there are per day`,
+    archetype: "timeseries",
+    defaultSize: "md",
+    query: {
+      source: source.id,
+      op: "timeseries",
+      status: "all",
+      dateField,
+      interval: "day",
+    },
+  };
+}
+
+/**
+ * The breakdown card for a source: how the entries divide by status.
+ *
+ * Only for a collection that HAS a status column. Grouping by a column the
+ * table does not carry is refused by the read, so offering the card would be
+ * offering a card that cannot draw — and `status` is present on the source
+ * exactly when the collection enabled the lifecycle that creates it.
+ *
+ * Status rather than an arbitrary field: it is the one column every
+ * status-enabled collection shares, so the card means the same thing on each,
+ * and its buckets are few enough to compare at a glance. A breakdown over a
+ * free-text column would be a different card with a different bound.
+ */
+function breakdownWidget(source: WidgetSource): WidgetDefinition | undefined {
+  if (!source.supports.includes("groupBy")) return undefined;
+  const status = source.fields.find(field => field.name === "status");
+  if (status === undefined || status.bucketable === false) return undefined;
+  const id = widgetId(source, "breakdown");
+  if (id === undefined) return undefined;
+  return {
+    id,
+    title: `${source.label} by status`,
+    description: `How ${source.label} entries divide between draft and published`,
+    archetype: "bars",
+    defaultSize: "md",
+    query: {
+      source: source.id,
+      op: "groupBy",
+      status: "all",
+      groupBy: "status",
+    },
+  };
+}
+
+/**
  * Every generated card the given sources support, in source order.
  *
  * Pure, so the derivation can be asserted without a container: the refresh
@@ -370,6 +461,8 @@ export function collectionWidgets(
       statsWidget(source),
       recentWidget(source),
       tableWidget(source),
+      timelineWidget(source),
+      breakdownWidget(source),
     ]) {
       if (!widget) continue;
       claimed.set(widget.id, (claimed.get(widget.id) ?? 0) + 1);
