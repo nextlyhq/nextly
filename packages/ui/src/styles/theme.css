@@ -866,13 +866,22 @@
    * shadow at once is a single token change. */
   --nx-shadow-color: oklch(0 0 0);
 
-  /* Chart colors for data visualization */
+  /* Chart colors for data visualization.
+   *
+   * Held to the 3:1 non-text minimum against --nx-card, the surface a widget
+   * draws on, because a chart mark is a graphical object required to read the
+   * chart. The light ramp sits on near-white, so the mid steps that serve dark
+   * mode do not reach it: slots 2 and 4 measured 2.21:1 and 2.15:1 at cyan-500
+   * and amber-500, and moved down the ramp rather than being re-hued. Dark mode
+   * keeps the lighter steps, where they measure 9.0:1 and 9.3:1 -- the two modes
+   * need different steps of the same ramp, not one shared value. */
   --nx-chart-1: var(--nx-primary);
-  --nx-chart-2: oklch(0.7399 0.1277 209.34);
+  --nx-chart-2: oklch(0.6089 0.1109 221.72);
+  /* cyan-600 */
   --nx-chart-3: oklch(0.6273 0.17 149.2);
   /* green-600 */
-  --nx-chart-4: oklch(0.7686 0.1646 70.11);
-  /* amber-500 */
+  --nx-chart-4: oklch(0.5553 0.1455 49);
+  /* amber-700 */
   --nx-chart-5: oklch(0.6368 0.2078 25.33);
   /* red-500 */
 
@@ -1112,8 +1121,16 @@
    * retuned -- overriding it resolves the whole ramp to that hue. */
   --nx-shadow-color: oklch(0 0 0);
 
-  /* Chart colors for data visualization (same as light mode) */
+  /* Chart colors for data visualization.
+   *
+   * NOT the same as light mode, and slots 2 and 4 are where they differ: the
+   * light ramp sits on near-white and needs the deeper steps to stay legible,
+   * while here the lighter ones do that job. Slots 3 and 5 already differed or
+   * already cleared the minimum in both, so they carry one value each. */
   --nx-chart-1: var(--nx-primary);
+  /* A cyan of its own rather than a step of the Tailwind ramp -- deliberately
+     unnamed here, because naming a step it is not is the annotation this
+     file's own comment guard exists to refuse. */
   --nx-chart-2: oklch(0.7399 0.1277 209.34);
   --nx-chart-3: oklch(0.7229 0.1921 149.58);
   /* green-500 */
