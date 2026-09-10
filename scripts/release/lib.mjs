@@ -74,8 +74,12 @@ function getPath(object, path) {
  * stable version: `1.0.0-alpha.4` -> `"alpha"`, `1.0.0` -> `undefined`. Mirrors
  * `semver.parse(v).prerelease[0]` for the shapes npm accepts, without pulling in
  * a dependency for one field.
+ *
+ * Exported so that "is this a prerelease" is asked in ONE place. A second
+ * spelling of it, however obvious, is a second answer waiting to disagree with
+ * this one about a build-metadata suffix.
  */
-function firstPrereleaseId(version) {
+export function firstPrereleaseId(version) {
   const withoutBuildMetadata = version.split("+")[0];
   const separator = withoutBuildMetadata.indexOf("-");
   if (separator === -1) return undefined;

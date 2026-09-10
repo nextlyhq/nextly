@@ -50,6 +50,7 @@ import {
   fetchRegistryState,
   getExpectedDistTag,
   isBootstrapPlaceholderOnly,
+  firstPrereleaseId,
   readPreMode,
   readPreState,
   waitForCompleteRelease,
@@ -58,6 +59,20 @@ import {
 /** The package whose version names the release; every other one is in lockstep. */
 export const ANCHOR_PACKAGE = "nextly";
 const ANCHOR_MANIFEST = "packages/nextly/package.json";
+
+/**
+ * A manifest field that can be used to ask a question, rather than merely a
+ * field of the right type.
+ *
+ * 🔴 `typeof value === "string"` is not that test. `""` and `"   "` satisfy it
+ * and then fail downstream in silence, where a name is a registry request for
+ * a package that cannot exist and a version can match nothing the registry
+ * serves. Validation exists to stop the question being quietly shrunk, so the
+ * shapes that shrink it have to be rejected here.
+ */
+function isUsableString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
 
 /**
  * The version `main` declares, read out of git rather than off the disk.
@@ -72,7 +87,7 @@ export function versionAtRef(ref, run = execFileSync) {
     maxBuffer: 8 * 1024 * 1024,
   });
   const version = JSON.parse(source).version;
-  if (typeof version !== "string" || version === "") {
+  if (!isUsableString(version)) {
     throw new Error(`${ANCHOR_MANIFEST} at ${ref} declares no version`);
   }
   return version;
@@ -138,8 +153,13 @@ export function manifestAtRef(ref, run = execFileSync) {
      * registry about it, and a release could be reported finished while that
      * package was never published. An unreadable manifest is a question that
      * cannot be asked, not a package that is not there.
+     *
+     * An EMPTY name is the same defect wearing the right type. For the anchor
+     * it also defeats the lockstep check below, which finds no `nextly` and so
+     * compares nothing; for any other package the registry is asked about a
+     * name that cannot exist, and that answer reads as never-published.
      */
-    if (typeof pkg.name !== "string" || typeof pkg.version !== "string") {
+    if (!isUsableString(pkg.name) || !isUsableString(pkg.version)) {
       throw new Error(
         `${path} at ${ref} is publishable but declares no usable name and ` +
           "version, so the release it belongs to cannot be graded."
@@ -653,24 +673,37 @@ const STEP_TEXT = {
 /**
  * Whether the channel tag should be asserted for this subject.
  *
- * 🔴 Two situations answer "no", and they are easy to collapse into one.
+ * 🔴 Two separate questions, and only one of them is about prerelease mode.
  *
  * A HISTORICAL subject is not the release `main` declares now, so today's
  * channel tag has moved past it and was never meant to point at it.
  *
- * A repository EXITING prerelease mode is mid-transition: `pre.json` says
- * `mode: "exit"` from the exit commit until the Version PR lands, and the
- * manifests still declare the last alpha for that whole window. `readPreState`
- * answers null there, exactly as it does when the repository was never in pre
- * mode, so the expected tag comes out as `latest`. Asserting it yields a remedy
- * that says to move `latest` onto a prerelease, serving an alpha to every
- * stable install.
+ * Everything else turns on whether `pre.json` and the manifests AGREE about
+ * which kind of release this is. Changesets moves those two in separate
+ * commits, so each prerelease transition opens a window where the repository
+ * says both things at once, and in that window the expected tag is derived from
+ * one claim and compared against the other:
+ *
+ *     mode "pre",  manifests STABLE      entering    -> skip
+ *     mode "pre",  manifests prerelease  in pre mode -> assert
+ *     mode "exit", manifests PRERELEASE  leaving     -> skip
+ *     mode null,   manifests stable      outside     -> assert
+ *
+ * Both windows were reported one at a time, and a mode test answers only the
+ * one it was written for. Leaving: `readPreState` gives null for `"exit"` and
+ * for no file alike, so `latest` is expected and the remedy says to move it
+ * onto a prerelease, serving an alpha to every stable install. Entering: the
+ * new prerelease tag is expected and the remedy says to move it onto the last
+ * stable build. Comparing the two claims answers the window itself rather than
+ * naming its ends, which is why this is not a second special case beside the
+ * exit one.
  *
  * Exported because the command-line block below has no test, and a rule that
  * lives only inside it is a rule nothing can exercise.
  */
-export function shouldAssertChannel(currentTrain, preMode) {
-  return currentTrain && preMode !== "exit";
+export function shouldAssertChannel(currentTrain, preMode, version) {
+  if (!currentTrain) return false;
+  return (preMode === "pre") === (firstPrereleaseId(version) !== undefined);
 }
 
 /**
@@ -755,6 +788,10 @@ if (invokedDirectly) {
     currentTrain = false;
   }
 
+  // Decided here rather than beside the `publishState` call, so that a failure
+  // to decide it is not reported as the registry being unreachable.
+  const assertChannel = shouldAssertChannel(currentTrain, readPreMode(), version);
+
   let publish;
   try {
     /*
@@ -796,7 +833,7 @@ if (invokedDirectly) {
       manifest,
       (name) => registry.get(name) ?? null,
       readPreState(),
-      { assertChannel: shouldAssertChannel(currentTrain, readPreMode()) }
+      { assertChannel }
     );
   } catch (error) {
     console.error(
