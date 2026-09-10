@@ -27,6 +27,7 @@ import {
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { patternCapabilityRoute } from "./capability-route";
+import { blocksFieldsOf } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -65,6 +66,10 @@ import {
   usageBackfillDeps,
   type BackfillHost,
 } from "./usage-backfill-wiring";
+import {
+  USAGE_HEALTH_SERVICE,
+  usageHealthService,
+} from "./usage-health-service";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -416,6 +421,50 @@ function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
  * plugin was installed, used to decide whether an index covering the site as it
  * is now is complete.
  */
+/**
+ * Whether any declared Single carries a blocks field.
+ *
+ * The index cannot cover a Single at all: a plugin has no supported way to READ
+ * one — the available path CREATES the row when it is absent, so indexing would
+ * materialise every Single in the app as a side effect — and `writeTargetOf`
+ * declines every `single:` hook for that reason. So no scope is enumerated for
+ * them, and a backfill that finishes every collection scope has still not made
+ * the index cover a site whose homepage is a blocks-backed Single.
+ *
+ * The declaration is what is read, not the content: a Single that nobody has
+ * filled in yet still means the index will not cover it once somebody does, and
+ * this answer must not flip the day an author first saves.
+ *
+ * PAGED and exhausted, for the reason the collection listing is: a short read
+ * here answers "no Singles hold blocks" for a site where a later page does, and
+ * that is the direction that lets completeness be claimed wrongly. A listing it
+ * cannot parse answers TRUE — the conservative reading, since "I could not
+ * check" must not become "there is nothing to worry about".
+ */
+async function singlesHoldBlocks(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<boolean> {
+  for (let offset = 0; ; offset += REGISTRY_PAGE_SIZE) {
+    const listed: unknown = await ctx.services.singles.list({
+      offset,
+      limit: REGISTRY_PAGE_SIZE,
+    });
+
+    const rows = (listed as { data?: unknown }).data;
+    const total = (listed as { total?: unknown }).total;
+    if (!Array.isArray(rows) || typeof total !== "number") return true;
+
+    for (const row of rows) {
+      if (blocksFieldsOf(row as { fields?: unknown }).length > 0) return true;
+    }
+
+    // Bounded by BOTH, so neither a `total` that disagrees with the rows nor an
+    // empty page can spin this. An empty page with work still claimed is the
+    // shape that would otherwise loop for ever.
+    if (rows.length === 0 || offset + rows.length >= total) return false;
+  }
+}
+
 /** How many registry rows one page of the collection listing asks for. */
 const REGISTRY_PAGE_SIZE = 100;
 
@@ -498,6 +547,7 @@ function installContext(
     hasDrafts: async collection =>
       (await resolvedCollectionDraftSplit(resolvedCollectionView(collection)))
         .eligible,
+    singlesHoldBlocks: () => singlesHoldBlocks(ctx),
     locales: () =>
       ctx.config.localization?.locales.map(locale => locale.code) ?? [],
     // The SAME bounds the renderer draws under, for the reason the write path
@@ -670,6 +720,14 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // reached via `ctx.services.plugins`.
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
+        // The index-wide facts behind "used on N pages", bound to the
+        // installation. Offered as a service because answering needs the
+        // installed context — which collections the registry holds, which
+        // generation the index was derived under — and nothing outside this
+        // plugin can assemble those. Without it a finished backfill changes
+        // nothing anybody can observe: every consumer takes the conservative
+        // branch and the answer stays a floor for ever.
+        [USAGE_HEALTH_SERVICE]: () => usageHealthService(requireInstalled),
       },
       // The backfill sweep. Contributed unconditionally beside the index it
       // fills: the work is owed from the moment this plugin meets existing

@@ -57,6 +57,16 @@ export interface BackfillHost {
   resolveCollection: (slug: string) => Promise<unknown>;
   /** Whether a resolved collection stores a draft beside its published row. */
   hasDrafts: (collection: unknown) => Promise<boolean> | boolean;
+  /**
+   * Whether any Single declares a blocks field.
+   *
+   * A Single's content cannot be indexed at all — a plugin has no supported way
+   * to READ one, since the available path creates the row when it is absent, so
+   * `writeTargetOf` declines every `single:` hook and no scope is enumerated.
+   * The backfill therefore cannot make the index cover such a site however many
+   * collection scopes it finishes, and completeness must not claim otherwise.
+   */
+  singlesHoldBlocks: () => Promise<boolean>;
   /** The site's configured locales, read per pass. */
   locales: () => readonly string[];
   /** The bounds the renderer draws under. */
@@ -178,35 +188,38 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
  * Throwing is what leaves the scope outstanding. The sweep is re-queued and the
  * queue is durable, so refusing costs a tick and claims nothing.
  *
- * Three fields say a walk did not finish, and only the first is an error:
+ * ## What refuses, and why `undetermined` does NOT
  *
- * - `failure` — a target write or an orphan sweep rejected.
- * - `unrepaired` — documents whose rows could not be brought into agreement.
- * - `undetermined` — documents that could not be read whole. These DO leave a
- *   marker behind, so a count over them already reports itself a floor; they
- *   are refused anyway because a scope recorded as done is never walked again,
- *   and a document that was merely too big for one pass may be readable on the
- *   next.
+ * `failure` and `unrepaired` leave NO TRACE in the index. A target write that
+ * rejected, or a document whose rows could not be brought into agreement, is
+ * simply missing — and nothing downstream can tell a missing row from a
+ * document that references nothing. Those must refuse, or the scope is recorded
+ * over a hole nobody can see.
  *
- * Refusing only on `failure` would leave the narrower version of exactly the
- * defect this exists to prevent.
+ * `undetermined` is the opposite case and refusing it was a mistake worth
+ * naming, because it was made HERE while fixing the first two. A document that
+ * exceeds its walk bound leaves an `unreadable` MARKER, and `readUsageIndexHealth`
+ * reads those — so the index already reports itself incomplete, by a mechanism
+ * that survives the scope being recorded.
+ *
+ * Refusing it as well produced a worse failure than the one being fixed.
+ * Exceeding a bound is DETERMINISTIC: the same document exceeds it on every
+ * pass, so the scope could never be recorded, the sweep re-queued for ever, and
+ * every drain rescanned the whole collection — a backfill that cannot finish,
+ * monopolising a queue it shares with every other job. The marker is what makes
+ * recording safe, and a later save or a change of limits generation is what
+ * makes the document readable again.
  */
-function refuseIncompleteWalk(
+export function refuseIncompleteWalk(
   scope: BackfillScope,
   report: ClassUsageRebuildReport
 ): void {
-  if (
-    report.failure === undefined &&
-    report.unrepaired === 0 &&
-    report.undetermined === 0
-  ) {
-    return;
-  }
+  if (report.failure === undefined && report.unrepaired === 0) return;
 
   const where = `${scope.entity}.${scope.field} (${scope.locale || "shared"}, ${scope.variant})`;
   throw new Error(
     `[page-builder] the usage backfill could not walk ${where} whole — ` +
-      `${report.unrepaired} unrepaired, ${report.undetermined} undetermined — ` +
+      `${report.unrepaired} unrepaired — ` +
       "so the scope is left outstanding rather than recorded as finished",
     report.failure === undefined ? undefined : { cause: report.failure }
   );

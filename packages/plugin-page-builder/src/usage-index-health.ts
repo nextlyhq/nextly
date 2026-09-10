@@ -90,6 +90,23 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
     scopes: () => Promise<readonly BackfillScope[]>;
     /** Where completed scopes are recorded, for the current generation. */
     state: BackfillStateStore;
+    /**
+     * Whether content exists that this index cannot cover AT ALL.
+     *
+     * Separate from "not yet walked", because the remedy is different and so is
+     * the honesty. An unwalked scope becomes walked; unreachable content stays
+     * unreachable until the plugin learns to reach it, so a backfill that
+     * finished every scope it CAN see must still not claim the index covers the
+     * site.
+     *
+     * Singles are the case today: a plugin has no supported way to read one —
+     * the available path CREATES the row when absent — so `writeTargetOf`
+     * declines every `single:` hook and no scope is enumerated for them. A site
+     * whose homepage is a blocks-backed Single would otherwise have every
+     * collection scope recorded and be told the index is whole, while the
+     * component that homepage renders reads as used by nothing.
+     */
+    unreachable: () => Promise<boolean>;
   };
 }): Promise<UsageIndexHealth> {
   const [markers, covers] = await Promise.all([
@@ -123,13 +140,18 @@ async function backfillFinished(
     | {
         scopes: () => Promise<readonly BackfillScope[]>;
         state: BackfillStateStore;
+        unreachable: () => Promise<boolean>;
       }
     | undefined
 ): Promise<boolean> {
   if (backfill === undefined) return false;
-  const [scopes, completed] = await Promise.all([
+  const [scopes, completed, unreachable] = await Promise.all([
     backfill.scopes(),
     backfill.state.completed(),
+    backfill.unreachable(),
   ]);
-  return backfillComplete(scopes, completed);
+  // Both, and neither implies the other. Every scope walked says the work this
+  // index CAN do is done; unreachable content says there is content it cannot
+  // do at all, and a site can be in either state independently.
+  return backfillComplete(scopes, completed) && !unreachable;
 }

@@ -128,6 +128,7 @@ describe("reading how much of the index is there", () => {
           completed: async () => new Set([backfillScopeKey(scope)]),
           record: async () => undefined,
         },
+        unreachable: async () => false,
       },
     });
 
@@ -158,9 +159,46 @@ describe("reading how much of the index is there", () => {
           completed: async () => new Set([backfillScopeKey(walked)]),
           record: async () => undefined,
         },
+        unreachable: async () => false,
       },
     });
 
     expect(health.coversExistingDocuments).toBe(false);
+  });
+
+  it("is NOT covered while content exists that the index cannot reach", async () => {
+    // Every scope walked, no markers — and still a floor, because a Single's
+    // content cannot be indexed at all. A plugin has no supported way to READ
+    // one, so no scope is ever enumerated for it; a site whose homepage is a
+    // blocks-backed Single would otherwise be told the index is whole while the
+    // component that homepage renders reads as used by nothing.
+    //
+    // "Not yet walked" and "cannot be walked" are different states with
+    // different remedies, and only this one never resolves on its own.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+    const scope = {
+      entity: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    } as const;
+
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => [scope],
+        state: {
+          completed: async () => new Set([backfillScopeKey(scope)]),
+          record: async () => undefined,
+        },
+        unreachable: async () => true,
+      },
+    });
+
+    expect({ health, whole: indexIsWhole(health) }).toEqual({
+      health: { coversExistingDocuments: false, anyUndetermined: false },
+      whole: false,
+    });
   });
 });

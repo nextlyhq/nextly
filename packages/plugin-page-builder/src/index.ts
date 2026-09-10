@@ -168,6 +168,14 @@ export {
 export { usageCountReader } from "./class-usage-runtime";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
 export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
+// The service key and its shape, so a host can reach the reader that is
+// actually bound to the installation. `readUsageIndexHealth` above answers
+// conservatively for a caller that cannot supply the backfill's own state;
+// this is how a caller stops having to.
+export {
+  USAGE_HEALTH_SERVICE,
+  type UsageHealthService,
+} from "./usage-health-service";
 export type { UsageIndexHealth } from "./usage-index-health";
 export type { UsageCount } from "./usage-count";
 export type { GroupedUsageReader } from "./usage-index";
