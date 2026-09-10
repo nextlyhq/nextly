@@ -132,6 +132,13 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "text-muted/10", // chart ring-track backing
   "border-warning-200/50", // soft border on a light tint badge (fill+text identify it)
   "border-success-900/50", // dark tonal badge border (fill+text identify it)
+  // Row separators INSIDE a data table, lighter than the header rule above them
+  // on purpose. The structural boundary — header from body — is drawn at full
+  // strength with `border-border`; these divide rows that a screen reader
+  // already separates by `<tr>` and `<th scope="row">`, and that a sighted
+  // reader separates by alignment and spacing. Losing the line loses no
+  // information, which is what makes it supplementary rather than a state cue.
+  "border-border/50",
   // Decorative accent rings: supplementary emphasis around a badge, dot, or
   // card that is already identified by its fill and text, not a focus indicator
   // (all focus rings are full-strength) nor a sole state cue.

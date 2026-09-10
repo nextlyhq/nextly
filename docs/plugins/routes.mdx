@@ -66,6 +66,12 @@ the scope's arrays are frozen, so editing them is refused:
 
 ```ts
 import { narrowScope } from "@nextlyhq/plugin-sdk";
+import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+
+// The `ctx` your handler received, and the values it read from the request.
+declare const ctx: PluginRouteContext;
+declare const id: string;
+declare const data: Record<string, unknown>;
 
 const readOnly = narrowScope(ctx.authenticatedScope!, g => g.action === "read");
 
@@ -131,15 +137,21 @@ Two rules for the function:
   never falls back to "no permission required".
 
 ```ts
-{
+import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+
+declare const buildSitemap: (
+  services: PluginRouteContext["services"]
+) => Promise<string>;
+
+const sitemapRoute = {
   method: "GET",
   path: "/sitemap.xml",
   public: true, // no auth — public derived data
-  handler: async (_req, ctx) => {
+  handler: async (_req: Request, ctx: PluginRouteContext) => {
     const xml = await buildSitemap(ctx.services); // use { as: "system" } inside
     return new Response(xml, { headers: { "content-type": "application/xml" } });
   },
-}
+};
 ```
 
 Pair `public: true` with `{ as: "system" }` service calls only for genuinely public,
@@ -168,7 +180,15 @@ NARROW them before a particularly sensitive call. Passing it explicitly wins ove
 ambient one:
 
 ```ts
-{ as: "user", user: ctx.user ?? undefined, authenticatedScope: ctx.authenticatedScope }
+import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+
+declare const ctx: PluginRouteContext;
+
+const callOptions = {
+  as: "user",
+  user: ctx.user ?? undefined,
+  authenticatedScope: ctx.authenticatedScope,
+} as const;
 ```
 
 A session caller carries no scope at all, and resolves exactly as it always has —
@@ -180,6 +200,8 @@ Routes support an ordered, typed middleware chain (onion model). Each middleware
 `next()` to continue or returns a `Response` to short-circuit:
 
 ```ts
+import type { Middleware } from "@nextlyhq/plugin-sdk";
+
 const timing: Middleware = async (req, ctx, next) => {
   const res = await next();
   res.headers.set("x-handler", "reports");
