@@ -8,7 +8,7 @@ import {
   spacingAddress,
   spacingCssValue,
   spacingDelta,
-  spacingGrowsOutward,
+  spacingBandDrawnOutward,
   spacingKeyDelta,
   spacingSidesFor,
   spacingStart,
@@ -190,8 +190,16 @@ describe("spacingDelta", () => {
     box: SpacingBox,
     side: SpacingSide,
     dx: number,
-    dy: number
-  ): number | undefined => spacingDelta(box, side, { dx, dy }, UNSCALED);
+    dy: number,
+    /*
+     * These cases are about the SIGN TABLE, so each one names the direction it
+     * is about rather than inheriting a guess: a band thickening away from the
+     * block unless it says otherwise. Which direction a real band has is
+     * measured, and `spacingDelta` no longer supplies a default for it.
+     */
+    outward = true
+  ): number | undefined =>
+    spacingDelta(box, side, { dx, dy }, UNSCALED, outward);
 
   /*
    * One assertion per box per side, because the sign table is eight cases and a
@@ -216,10 +224,10 @@ describe("spacingDelta", () => {
    * hand.
    */
   it("grows a padding when the pointer moves toward the middle of the block", () => {
-    expect(px("padding", "top", 0, 10)).toBe(10);
-    expect(px("padding", "bottom", 0, -10)).toBe(10);
-    expect(px("padding", "left", 10, 0)).toBe(10);
-    expect(px("padding", "right", -10, 0)).toBe(10);
+    expect(px("padding", "top", 0, 10, false)).toBe(10);
+    expect(px("padding", "bottom", 0, -10, false)).toBe(10);
+    expect(px("padding", "left", 10, 0, false)).toBe(10);
+    expect(px("padding", "right", -10, 0, false)).toBe(10);
   });
 
   it("reads travel along the band's own axis and ignores the other", () => {
@@ -238,7 +246,8 @@ describe("spacingDelta", () => {
         "padding",
         "top",
         { dx: 0, dy: 10 },
-        { scale: { x: 0.5, y: 0.5 }, marginScale: { x: 1, y: 1 } }
+        { scale: { x: 0.5, y: 0.5 }, marginScale: { x: 1, y: 1 } },
+        false
       )
     ).toBe(20);
   });
@@ -253,21 +262,25 @@ describe("spacingDelta", () => {
       scale: { x: 4, y: 4 },
       marginScale: { x: 2, y: 2 },
     };
-    expect(spacingDelta("margin", "top", { dx: 0, dy: -10 }, scales)).toBe(5);
-    expect(spacingDelta("padding", "top", { dx: 0, dy: 10 }, scales)).toBe(2.5);
+    expect(
+      spacingDelta("margin", "top", { dx: 0, dy: -10 }, scales, true)
+    ).toBe(5);
+    expect(
+      spacingDelta("padding", "top", { dx: 0, dy: 10 }, scales, false)
+    ).toBe(2.5);
   });
 
   it("refuses a scale with no pixels to divide by", () => {
     const zero = { scale: { x: 0, y: 0 }, marginScale: { x: 0, y: 0 } };
     expect(
-      spacingDelta("padding", "top", { dx: 0, dy: 10 }, zero)
+      spacingDelta("padding", "top", { dx: 0, dy: 10 }, zero, false)
     ).toBeUndefined();
     const broken = {
       scale: { x: Number.NaN, y: Number.NaN },
       marginScale: { x: 1, y: 1 },
     };
     expect(
-      spacingDelta("padding", "left", { dx: 10, dy: 0 }, broken)
+      spacingDelta("padding", "left", { dx: 10, dy: 0 }, broken, false)
     ).toBeUndefined();
   });
 });
@@ -371,26 +384,61 @@ describe("spacingValue", () => {
 
 describe("which way a band thickens", () => {
   /*
-   * A margin lies outside the border box and never moves it — growing one
-   * pushes the neighbour — so it always thickens away from the block, and a
-   * negative one, laid inside the border edge, always inward. Structural.
+   * Neither box decides it, though a margin can look as though it does: lying
+   * outside the border box, growing one seems to push the neighbour and never
+   * the block. Measured in Chromium that is false on three sides of four:
+   * `margin-top`, `margin-left` and `margin-right` on an auto-width block each
+   * drive the BORDER edge inward while the outer edge stays pinned by the
+   * container or by what precedes it. So both boxes carry the measured answer
+   * and nothing is read off the box's name.
    */
-  it("is structural for a margin", () => {
-    expect(spacingGrowsOutward("margin", false, false)).toBe(true);
-    expect(spacingGrowsOutward("margin", false, true)).toBe(true);
-    expect(spacingGrowsOutward("margin", true, false)).toBe(false);
+  it("takes the measured answer, for either box", () => {
+    for (const measured of [true, false]) {
+      expect(spacingBandDrawnOutward(false, measured), String(measured)).toBe(
+        measured
+      );
+    }
   });
 
   /*
-   * A padding is NOT structural, which is the whole finding. Measured in
-   * Chromium: on a block whose height fits its content the border edge moves
-   * outward and the content edge stays; with a fixed height the content edge
-   * moves inward and the border edge stays. So the answer comes from the
-   * element, and this only carries it.
+   * A negative band is the one thing the probe cannot answer, because it is a
+   * fact about how the band is DRAWN rather than how the block responds:
+   * `spacingBands` lays it inside the border edge, mirrored across it, so the
+   * rectangle's two edges swap roles and the measured answer swaps with them.
    */
-  it("takes the measured answer for a padding", () => {
-    expect(spacingGrowsOutward("padding", false, true)).toBe(true);
-    expect(spacingGrowsOutward("padding", false, false)).toBe(false);
+  it("mirrors the answer for a band drawn inside the border edge", () => {
+    expect(spacingBandDrawnOutward(true, true)).toBe(false);
+    expect(spacingBandDrawnOutward(true, false)).toBe(true);
+  });
+
+  /*
+   * And mirrors ONLY that. Where the handle sits and which way the number grows
+   * are two questions, and a negative band answers them differently: raising a
+   * `margin-top` from `-20px` to `-10px` moves the border edge DOWN, the same
+   * direction a positive one moves it, because the sign changes where the
+   * rectangle is drawn and not which physical edge responds.
+   *
+   * Fed the mirrored answer, `spacingDelta` inverted: a drag DOWN on the
+   * correctly placed handle of a negative top margin returned a negative delta,
+   * committing `-30px` and running the block away from the pointer.
+   */
+  it("does not mirror the direction the value grows", () => {
+    const measured = false;
+    expect(spacingBandDrawnOutward(true, measured)).toBe(true);
+    // A drag DOWN on a top band grows it, which is the inward reading, and it
+    // is the measured answer that says so rather than the mirrored one.
+    expect(
+      spacingDelta("margin", "top", { dx: 0, dy: 10 }, UNSCALED, measured)
+    ).toBe(10);
+    expect(
+      spacingDelta(
+        "margin",
+        "top",
+        { dx: 0, dy: 10 },
+        UNSCALED,
+        spacingBandDrawnOutward(true, measured)
+      )
+    ).toBe(-10);
   });
 });
 
@@ -462,10 +510,15 @@ describe("spacingKeyDelta", () => {
   it("makes Up increase and Down decrease on every handle", () => {
     for (const box of ["margin", "padding"] as const) {
       for (const side of SIDES) {
-        expect(spacingKeyDelta("ArrowUp", box, side), `${box} ${side}`).toBe(1);
-        expect(spacingKeyDelta("ArrowDown", box, side), `${box} ${side}`).toBe(
-          -1
-        );
+        // Both directions, because the promise is that the edge which responds
+        // makes no difference to these two keys.
+        for (const outward of [true, false]) {
+          const where = `${box} ${side} outward=${String(outward)}`;
+          expect(spacingKeyDelta("ArrowUp", box, side, outward), where).toBe(1);
+          expect(spacingKeyDelta("ArrowDown", box, side, outward), where).toBe(
+            -1
+          );
+        }
       }
     }
   });
@@ -481,21 +534,30 @@ describe("spacingKeyDelta", () => {
     for (const box of ["margin", "padding"] as const) {
       for (const side of ["left", "right"] as const) {
         for (const key of ["ArrowLeft", "ArrowRight"] as const) {
-          const move =
-            key === "ArrowLeft" ? { dx: -1, dy: 0 } : { dx: 1, dy: 0 };
-          expect(spacingKeyDelta(key, box, side), `${key} ${box} ${side}`).toBe(
-            spacingDelta(box, side, move, UNSCALED)
-          );
+          for (const outward of [true, false]) {
+            const move =
+              key === "ArrowLeft" ? { dx: -1, dy: 0 } : { dx: 1, dy: 0 };
+            expect(
+              spacingKeyDelta(key, box, side, outward),
+              `${key} ${box} ${side} outward=${String(outward)}`
+            ).toBe(spacingDelta(box, side, move, UNSCALED, outward));
+          }
         }
       }
     }
   });
 
   it("grows a horizontal band with the arrow its edge moves toward", () => {
-    expect(spacingKeyDelta("ArrowLeft", "margin", "left")).toBe(1);
-    expect(spacingKeyDelta("ArrowRight", "margin", "right")).toBe(1);
-    expect(spacingKeyDelta("ArrowRight", "padding", "left")).toBe(1);
-    expect(spacingKeyDelta("ArrowLeft", "padding", "right")).toBe(1);
+    // Named by the direction each band is in, rather than by its box: which
+    // edge responds is measured, and both boxes answer both ways.
+    expect(spacingKeyDelta("ArrowLeft", "margin", "left", true)).toBe(1);
+    expect(spacingKeyDelta("ArrowRight", "margin", "right", true)).toBe(1);
+    expect(spacingKeyDelta("ArrowRight", "padding", "left", false)).toBe(1);
+    expect(spacingKeyDelta("ArrowLeft", "padding", "right", false)).toBe(1);
+    // And a band measured the OTHER way takes the other arrow, which is the
+    // half a box-derived table could not express at all.
+    expect(spacingKeyDelta("ArrowRight", "margin", "left", false)).toBe(1);
+    expect(spacingKeyDelta("ArrowLeft", "padding", "right", true)).toBe(-1);
   });
 
   /*
@@ -504,19 +566,21 @@ describe("spacingKeyDelta", () => {
    */
   it("takes a coarse step on the Page keys, in the same direction for every side", () => {
     for (const side of SIDES) {
-      expect(spacingKeyDelta("PageUp", "margin", side)).toBe(10);
-      expect(spacingKeyDelta("PageDown", "padding", side)).toBe(-10);
+      expect(spacingKeyDelta("PageUp", "margin", side, true)).toBe(10);
+      expect(spacingKeyDelta("PageDown", "padding", side, false)).toBe(-10);
     }
   });
 
   it("ignores a horizontal arrow on a vertical band", () => {
-    expect(spacingKeyDelta("ArrowLeft", "margin", "top")).toBeUndefined();
-    expect(spacingKeyDelta("ArrowRight", "padding", "bottom")).toBeUndefined();
+    expect(spacingKeyDelta("ArrowLeft", "margin", "top", true)).toBeUndefined();
+    expect(
+      spacingKeyDelta("ArrowRight", "padding", "bottom", false)
+    ).toBeUndefined();
   });
 
   it("ignores a key this control does not answer to", () => {
-    expect(spacingKeyDelta("Enter", "margin", "top")).toBeUndefined();
-    expect(spacingKeyDelta("a", "margin", "top")).toBeUndefined();
+    expect(spacingKeyDelta("Enter", "margin", "top", true)).toBeUndefined();
+    expect(spacingKeyDelta("a", "margin", "top", true)).toBeUndefined();
   });
 
   /*
@@ -531,7 +595,7 @@ describe("spacingKeyDelta", () => {
     for (const key of ["constructor", "toString", "valueOf", "__proto__"]) {
       for (const side of SIDES) {
         expect(
-          spacingKeyDelta(key, "margin", side),
+          spacingKeyDelta(key, "margin", side, true),
           `${key} on ${side}`
         ).toBeUndefined();
       }

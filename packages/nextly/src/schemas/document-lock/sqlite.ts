@@ -24,6 +24,8 @@ export const nextlyDocumentLock = sqliteTable(
     // `unixepoch()` rather than interval arithmetic.
     acquiredAt: integer("acquired_at", { mode: "timestamp" }).notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    // See `./postgres.ts` for what this is. Unix seconds, like the two above.
+    waitingUntil: integer("waiting_until", { mode: "timestamp" }),
   },
   t => [
     index("ndl_expires_at_idx").on(t.expiresAt),

@@ -9,17 +9,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BOOT_BUDGET_MS,
-  SCAN_ROOTS,
   BOOT_BINDING,
-  isTemplate,
-  statesBootBudget,
-  integrationName,
   INTEGRATION_SUFFIX,
+  SCAN_ROOTS,
   UNIT_LANE_SUFFIXES,
   classify,
   hasIntegrationLane,
   importsBootHelper,
+  integrationName,
   packageOf,
   testFiles,
 } from "./check-instance-boot-lane.mjs";
@@ -327,10 +324,15 @@ describe("the population it judges", () => {
     expect(calls[0][calls[0].length - 1]).toBe("templates");
   });
 
-  it("scans the package root and the template root, each on its own", () => {
-    // Listed separately so an empty one is its own answer. Combined, a missing
-    // root hides behind the other root's files.
-    expect(SCAN_ROOTS).toEqual(["packages", "templates"]);
+  it("scans the package root, and each root on its own", () => {
+    // Listed separately so an empty one is its own answer: combined, a missing
+    // root hides behind another root's files.
+    //
+    // Templates are deliberately absent. A template's budget is a runtime value,
+    // and `scaffold-plugin.test.ts` asserts it by importing the scaffolded
+    // config, which resolves wrappers, merges and spreads by construction. This
+    // check keeps to the rule it can decide completely: the filename.
+    expect(SCAN_ROOTS).toEqual(["packages"]);
   });
 
   it("collects the suffixes the unit configs name", () => {
@@ -364,192 +366,5 @@ describe("the population it judges", () => {
 
   it("uses the binding the repository actually imports", () => {
     expect(BOOT_BINDING).toBe("createTestNextly");
-  });
-});
-
-describe("a scaffolded template, which has only one lane", () => {
-  const BOOT = `import { createTestNextly } from "@nextlyhq/plugin-sdk/testing";`;
-  const budget = (t, h) =>
-    `import { defineConfig } from "vitest/config";
-export default defineConfig({ test: { testTimeout: ${t}, hookTimeout: ${h} } });`;
-
-  it("knows a template from a package", () => {
-    expect(isTemplate("templates/plugin/src/plugin.test.ts")).toBe(true);
-    expect(isTemplate("packages/nextly/src/x.test.ts")).toBe(false);
-  });
-
-  it("accepts a booting template whose config states both budgets", () => {
-    const files = {
-      "templates/plugin/vitest.config.ts": budget(30_000, 30_000),
-      "templates/plugin/src/plugin.test.ts": BOOT,
-    };
-    const { covered, underBudget, misrouted } = classify(
-      ["templates/plugin/src/plugin.test.ts"],
-      reader(files)
-    );
-
-    expect(covered).toEqual(["templates/plugin/src/plugin.test.ts"]);
-    expect(underBudget).toEqual([]);
-    // It is NOT reported as misrouted. Demanding the integration suffix here
-    // would demand a second config and script in a project shipping one test.
-    expect(misrouted).toEqual([]);
-  });
-
-  it("reports a booting template whose config states no budget", () => {
-    // The shape that shipped: vitest's defaults are 5s for a case and 10s for a
-    // hook, and the boot runs in `beforeEach`.
-    const files = {
-      "templates/plugin/vitest.config.ts":
-        `import { defineConfig } from "vitest/config";
-export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`,
-      "templates/plugin/src/plugin.test.ts": BOOT,
-    };
-    const { underBudget, covered } = classify(
-      ["templates/plugin/src/plugin.test.ts"],
-      reader(files)
-    );
-
-    expect(underBudget).toHaveLength(1);
-    expect(underBudget[0].path).toBe("templates/plugin/src/plugin.test.ts");
-    expect(covered).toEqual([]);
-  });
-
-  it("requires BOTH budgets, because the boot and the case are governed separately", () => {
-    expect(statesBootBudget(budget(30_000, 30_000))).toBe(true);
-    expect(statesBootBudget(budget(30_000, 5_000))).toBe(false);
-    expect(statesBootBudget(budget(1_000, 30_000))).toBe(false);
-  });
-
-  it("does not accept budgets from an object vitest is never handed", () => {
-    // The decoy that passed before the exported config was traced: the numbers
-    // are in the file, in an object nobody passes anywhere, while the config
-    // actually exported omits them and the suite runs on the defaults.
-    expect(
-      statesBootBudget(`import { defineConfig } from "vitest/config";
-const NOTES = { testTimeout: 30000, hookTimeout: 30000 };
-export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`)
-    ).toBe(false);
-  });
-
-  it("does NOT unwrap a call it cannot reason about, such as mergeConfig", () => {
-    // `defineConfig(x)` returns `x`, so its argument is the config. `mergeConfig`
-    // returns a composition where the SECOND argument wins, so reading the first
-    // reports budgets the exported config does not have.
-    expect(
-      statesBootBudget(`import { mergeConfig } from "vitest/config";
-export default mergeConfig(
-  { test: { testTimeout: 30000, hookTimeout: 30000 } },
-  { test: { testTimeout: 1000, hookTimeout: 1000 } }
-);`)
-    ).toBe(false);
-  });
-
-  it("still accepts the wrapper it does understand", () => {
-    // The control for the case above: it would pass on a predicate that had
-    // stopped unwrapping anything at all.
-    expect(
-      statesBootBudget(`import { defineConfig } from "vitest/config";
-export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
-    ).toBe(true);
-  });
-
-  it("does NOT accept the TypeScript `export =` form", () => {
-    // `isExportAssignment` matches both, and `export =` is the CommonJS form
-    // rather than the default export vitest loads.
-    expect(
-      statesBootBudget(
-        `export = { test: { testTimeout: 30000, hookTimeout: 30000 } };`
-      )
-    ).toBe(false);
-  });
-
-  it("does NOT accept a local function that merely shares the name", () => {
-    // A helper called `defineConfig` is not vitest's. One returning one-second
-    // timeouts while receiving a literal with thirty would read as adequate.
-    expect(
-      statesBootBudget(`const defineConfig = () => ({
-  test: { testTimeout: 1000, hookTimeout: 1000 },
-});
-export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
-    ).toBe(false);
-  });
-
-  it("accepts the vitest binding under an alias, which is the same function", () => {
-    // The control: the case above would pass on a rule that had stopped
-    // unwrapping any call at all.
-    expect(
-      statesBootBudget(`import { defineConfig as define } from "vitest/config";
-export default define({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
-    ).toBe(true);
-  });
-
-  it("does NOT accept a wrapper reached through a property access", () => {
-    // A property access says nothing about what the object is, so this is a
-    // function that has not been established to return its argument.
-    expect(
-      statesBootBudget(`export default anything.defineConfig({
-  test: { testTimeout: 30000, hookTimeout: 30000 },
-});`)
-    ).toBe(false);
-  });
-
-  it("does NOT accept a spread that can replace the test object", () => {
-    // `{ test: {...}, ...other }` hands vitest `other.test`, so the budgets
-    // read from the literal may not be the ones the suite runs under.
-    expect(
-      statesBootBudget(`export default defineConfig({
-  test: { testTimeout: 30000, hookTimeout: 30000 },
-  ...lowBudgetConfig,
-});`)
-    ).toBe(false);
-  });
-
-  it("does NOT accept a spread that can replace the budgets themselves", () => {
-    expect(
-      statesBootBudget(`export default defineConfig({
-  test: { testTimeout: 30000, hookTimeout: 30000, ...lowBudgetConfig },
-});`)
-    ).toBe(false);
-  });
-
-  it("reads a config exported without the defineConfig wrapper", () => {
-    // The positive control for the decoy case: it would pass on a predicate
-    // that had simply stopped finding budgets anywhere.
-    expect(
-      statesBootBudget(
-        `export default { test: { testTimeout: 30000, hookTimeout: 30000 } };`
-      )
-    ).toBe(true);
-  });
-
-  it("does not accept a file with no default export at all", () => {
-    expect(
-      statesBootBudget(`export const config = { test: { testTimeout: 30000, hookTimeout: 30000 } };`)
-    ).toBe(false);
-  });
-
-  it("does not accept a budget that only appears in a comment", () => {
-    // Same reason the imports are parsed: a number explaining the defaults is
-    // not a number vitest will use.
-    expect(
-      statesBootBudget(`import { defineConfig } from "vitest/config";
-// testTimeout: 30000 and hookTimeout: 30000 would be needed for a boot
-export default defineConfig({ test: {} });`)
-    ).toBe(false);
-  });
-
-  it("reports a booting template with no vitest config at all", () => {
-    const files = { "templates/plugin/src/plugin.test.ts": BOOT };
-    const { underBudget } = classify(
-      ["templates/plugin/src/plugin.test.ts"],
-      reader(files)
-    );
-
-    expect(underBudget).toHaveLength(1);
-    expect(underBudget[0].reason).toContain("no vitest config");
-  });
-
-  it("uses a budget the monorepo's own integration lane agrees with", () => {
-    expect(BOOT_BUDGET_MS).toBe(30_000);
   });
 });

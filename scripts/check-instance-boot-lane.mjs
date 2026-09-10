@@ -99,16 +99,20 @@ export function testFiles(cwd, run = execFileSync, root) {
 /**
  * The roots this scans, listed SEPARATELY so each carries its own control.
  *
- * 🔴 One combined listing cannot report a root that went missing. With both
- * roots in one pathspec, misspelling `templates` still returned two thousand
- * package files, so `covered` stayed large, the run reported success, and the
- * only trace was a count nobody compares between runs: 225 of 2073 rather than
- * 226 of 2074. The shipped template would have stopped being scanned while the
- * output went on claiming every booting suite was checked.
+ * 🔴 Asked per root so an empty one is its own answer. A combined listing
+ * cannot report a root that went missing: the other root's files keep the
+ * population large, the run reports success, and the only trace is a count
+ * nobody compares between runs.
  *
- * Asking per root makes each one's emptiness its own answer.
+ * ⚠️ Scaffolded templates are deliberately NOT a root here. A template is a
+ * single-lane project whose budget is a runtime value, and reading that value
+ * out of the source is a syntax scan over arbitrary JavaScript: it can only
+ * recognise the shapes someone thought of, and each one missed reports an
+ * adequate budget for a suite that has none. `scaffold-plugin.test.ts` imports
+ * the scaffolded config instead and asserts what vitest will actually use,
+ * which resolves wrappers, merges and spreads by construction.
  */
-export const SCAN_ROOTS = ["packages", "templates"];
+export const SCAN_ROOTS = ["packages"];
 
 /**
  * Whether a source file IMPORTS the boot helper.
@@ -188,158 +192,6 @@ export function importsBootHelper(source, fileName = "test.ts") {
   return false;
 }
 
-/**
- * Whether a path is a scaffolded project rather than one of this repo's packages.
- *
- * The two are judged by different rules because they are different shapes. A
- * package here sits in a monorepo with two lanes and a build running beside it,
- * so a boot is routed to the lane sized for one. A template is a single-package
- * project a user receives with one vitest config, one test script and nothing
- * to contend with, so there is no second lane to route to and inventing one
- * would put monorepo machinery in someone's new plugin. What it can do is state
- * a budget, which is the thing the routing was buying.
- */
-export function isTemplate(path) {
-  return path.startsWith("templates/");
-}
-
-/** The vitest budget a boot needs, whichever mechanism supplies it. */
-export const BOOT_BUDGET_MS = 30_000;
-
-/**
- * The local names bound to `defineConfig` by an import from `vitest/config`.
- *
- * A set rather than a name, because `import { defineConfig as define }` is the
- * same function under another label, and because a file importing nothing binds
- * none: a call in that file is a local helper whatever it is called.
- */
-export function vitestDefineConfigBindings(parsed) {
-  const bound = new Set();
-
-  for (const statement of parsed.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
-    if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    if (statement.moduleSpecifier.text !== "vitest/config") continue;
-
-    const clause = statement.importClause;
-    if (!clause || clause.isTypeOnly) continue;
-    const bindings = clause.namedBindings;
-    if (!bindings || !ts.isNamedImports(bindings)) continue;
-
-    for (const element of bindings.elements) {
-      if (element.isTypeOnly) continue;
-      const imported = element.propertyName ?? element.name;
-      if (imported.text === "defineConfig") bound.add(element.name.text);
-    }
-  }
-
-  return bound;
-}
-
-/**
- * Whether a config states timeouts a boot can finish inside.
- *
- * Read off the parsed config rather than matched in the text, for the same
- * reason the imports are: a number in a comment explaining the defaults is not
- * a number vitest will use. Both budgets are required because a boot in
- * `beforeEach` is governed by `hookTimeout` and the case body by `testTimeout`,
- * and vitest's defaults for the two differ.
- */
-export function statesBootBudget(source) {
-  const parsed = ts.createSourceFile(
-    "vitest.config.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    ts.ScriptKind.TS
-  );
-
-  /*
-   * 🔴 Only the object vitest is actually handed counts. A walk over the whole
-   * file records a `testTimeout` wherever it appears, including in a constant
-   * nobody passes anywhere, so a config could name the budgets in a decoy and
-   * export one that omits them: the check goes green and the suite runs on the
-   * defaults. What is traced instead is the default export, through
-   * `defineConfig(...)` if it is wrapped, down to its `test` property.
-   */
-  /*
-   * `export default x`, and not `export = x`. `isExportAssignment` matches both,
-   * and the second is the TypeScript CommonJS form, which is not the default
-   * export vitest loads.
-   */
-  const exported = parsed.statements.find(
-    statement => ts.isExportAssignment(statement) && !statement.isExportEquals
-  );
-  if (!exported) return false;
-
-  let config = exported.expression;
-  /*
-   * 🔴 Only `defineConfig` is unwrapped, and anything else FAILS CLOSED.
-   *
-   * `defineConfig(x)` returns `x`, so its argument is the config. No other call
-   * promises that. `mergeConfig(a, b)` returns a composition in which `b`
-   * overrides `a`, so unwrapping to the first argument reads budgets that the
-   * exported config does not have: `mergeConfig({test:{testTimeout:30000}},
-   * {test:{testTimeout:1000}})` would be accepted while the suite ran on one
-   * second. Evaluating composition is not something a syntax read can do, so a
-   * call this does not recognise is reported rather than guessed at.
-   */
-  if (ts.isCallExpression(config)) {
-    /*
-     * The binding is resolved, not just the name. A property access says nothing
-     * about what the object is, and a local function named `defineConfig` is not
-     * vitest's: one that returned one-second timeouts while receiving a literal
-     * with thirty would read as adequate. Only the identifier this file imported
-     * from `vitest/config` is known to return its argument unchanged.
-     */
-    const callee = config.expression;
-    if (!ts.isIdentifier(callee)) return false;
-    if (!vitestDefineConfigBindings(parsed).has(callee.text)) return false;
-    if (config.arguments.length === 0) return false;
-    config = config.arguments[0];
-  }
-  if (!ts.isObjectLiteralExpression(config)) return false;
-
-  /*
-   * 🔴 A spread can replace what was read. `{ test: {...}, ...other }` hands
-   * vitest `other.test`, and `{ testTimeout: 30000, ...other }` hands it
-   * `other.testTimeout`, so a budget read from the literal is a budget the
-   * suite may never run under. Resolving that means evaluating the spread,
-   * which a syntax read cannot do, so a config carrying one is reported rather
-   * than assumed adequate.
-   */
-  const hasSpread = object =>
-    object.properties.some(property => ts.isSpreadAssignment(property));
-  if (hasSpread(config)) return false;
-
-  const test = config.properties.find(
-    property =>
-      ts.isPropertyAssignment(property) &&
-      ts.isIdentifier(property.name) &&
-      property.name.text === "test" &&
-      ts.isObjectLiteralExpression(property.initializer)
-  );
-  if (!test) return false;
-
-  if (hasSpread(test.initializer)) return false;
-
-  const budgets = new Map();
-  for (const property of test.initializer.properties) {
-    if (
-      ts.isPropertyAssignment(property) &&
-      ts.isIdentifier(property.name) &&
-      ts.isNumericLiteral(property.initializer)
-    ) {
-      budgets.set(property.name.text, Number(property.initializer.text));
-    }
-  }
-
-  return (
-    (budgets.get("testTimeout") ?? 0) >= BOOT_BUDGET_MS &&
-    (budgets.get("hookTimeout") ?? 0) >= BOOT_BUDGET_MS
-  );
-}
-
 /** The package directory a file belongs to, as `packages/<name>`. */
 /**
  * The name this file needs in order to be collected by the integration lane.
@@ -384,7 +236,6 @@ export function hasIntegrationLane(packageDir, readManifest) {
 export function classify(files, readSource) {
   const misrouted = [];
   const stranded = [];
-  const underBudget = [];
   const covered = [];
 
   for (const path of files) {
@@ -395,33 +246,6 @@ export function classify(files, readSource) {
       continue; // a file git lists and the disk cannot read is the linter's business
     }
     if (!importsBootHelper(source, path)) continue;
-
-    /*
-     * A template boots in the one lane it has, so the question is whether that
-     * lane states a budget a boot can finish inside. Demanding the integration
-     * suffix here would demand a second config and a second script in a project
-     * that ships with one test.
-     */
-    if (isTemplate(path)) {
-      const configPath = `${packageOf(path)}/vitest.config.ts`;
-      let config;
-      try {
-        config = readSource(configPath);
-      } catch {
-        underBudget.push({ path, configPath, reason: "has no vitest config" });
-        continue;
-      }
-      if (!statesBootBudget(config)) {
-        underBudget.push({
-          path,
-          configPath,
-          reason: `does not set testTimeout and hookTimeout to at least ${BOOT_BUDGET_MS}ms`,
-        });
-        continue;
-      }
-      covered.push(path);
-      continue;
-    }
 
     if (!path.endsWith(INTEGRATION_SUFFIX)) {
       misrouted.push(path);
@@ -444,7 +268,7 @@ export function classify(files, readSource) {
     covered.push(path);
   }
 
-  return { misrouted, stranded, underBudget, covered };
+  return { misrouted, stranded, covered };
 }
 
 const invokedDirectly =
@@ -466,7 +290,7 @@ if (invokedDirectly) {
   }
 
   const readSource = path => readFileSync(join(root, path), "utf8");
-  const { misrouted, stranded, underBudget, covered } = classify(files, readSource);
+  const { misrouted, stranded, covered } = classify(files, readSource);
 
   // The control, before the verdict. Every file failing to parse, or the
   // binding being renamed upstream, produces an empty `misrouted` that reads
@@ -480,20 +304,8 @@ if (invokedDirectly) {
     process.exit(2);
   }
 
-  if (misrouted.length > 0 || stranded.length > 0 || underBudget.length > 0) {
+  if (misrouted.length > 0 || stranded.length > 0) {
     console.error("check-instance-boot-lane: FAILED\n");
-
-    for (const { path, configPath, reason } of underBudget) {
-      console.error(
-        `  ${path}\n` +
-          `    boots an instance, and ${configPath} ${reason}.\n` +
-          `    A scaffolded project has one lane and nothing to contend with, so\n` +
-          `    it states the budget rather than routing around it: set\n` +
-          `    testTimeout and hookTimeout to ${BOOT_BUDGET_MS}. A boot in\n` +
-          "    `beforeEach` is governed by hookTimeout, the case body by\n" +
-          "    testTimeout, and vitest's defaults for the two differ.\n"
-      );
-    }
 
     for (const path of stranded) {
       console.error(
@@ -531,12 +343,8 @@ if (invokedDirectly) {
 
   console.log(
     `check-instance-boot-lane: ok - ${covered.length} suite(s) that boot an ` +
-      `instance have a budget sized for one, out of ${files.length} test ` +
-      "file(s) scanned."
-  );
-  console.log(
-    "  a package suite earns it by running in the integration lane; a " +
-      "scaffolded template by stating the timeouts, having only one lane."
+      `instance are named for the integration lane AND run by a package that ` +
+      `declares one, out of ${files.length} test file(s) scanned.`
   );
   // Said on the way past, so a reader taking this as proof of routing knows the
   // shape it did not judge.

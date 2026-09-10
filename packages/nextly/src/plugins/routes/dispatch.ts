@@ -194,6 +194,42 @@ function markPluginResponse(response: Response, route: PluginRoute): Response {
 }
 
 /**
+ * The refusal a secure route owes a caller that presented no credential.
+ *
+ * Reached only before the registry is filled. A cold worker decides from the
+ * DECLARATION that this request is going to be refused, and declines to run
+ * database and plugin startup on its behalf; without this the request instead
+ * falls through to the built-in router's invalid-route 400, so the same call is
+ * answered 400 cold and 401 warm and a client debugging a missing token is told
+ * its URL is wrong.
+ *
+ * Built here beside {@link runPluginRoute} so a plugin route's error body still
+ * has one author. `authRequired` rather than a hand-written body for the same
+ * reason: it is the error `toNextlyAuthError` produces from a 401, which is
+ * what this request meets once the app is warm.
+ */
+export function pluginRouteAuthRequired(
+  req: Request,
+  route: PluginRoute
+): Response {
+  return markPluginResponse(
+    buildErrorResponse(
+      NextlyError.authRequired({
+        logContext: {
+          reason: "plugin-route-auth-required-before-boot",
+          path: route.path,
+        },
+      }),
+      {
+        requestId: readOrGenerateRequestId(req),
+        flattened: currentFlattenedErrors(),
+      }
+    ),
+    route
+  );
+}
+
+/**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error

@@ -225,6 +225,9 @@ export interface SpacingScales {
  * @param side - the physical edge being dragged
  * @param movement - pointer travel in CLIENT pixels
  * @param scales - the scales the bands were measured at
+ * @param outward - whether the responding edge moves AWAY from the block, which
+ *   is the measured answer as it comes: NOT mirrored for a negative band, since
+ *   the sign changes where the rectangle is drawn and not which edge responds
  * @returns the value change in CSS pixels, or `undefined` at an unusable scale
  */
 export function spacingDelta(
@@ -232,7 +235,7 @@ export function spacingDelta(
   side: SpacingSide,
   movement: { readonly dx: number; readonly dy: number },
   scales: SpacingScales,
-  outward = spacingGrowsOutward(box, false, false)
+  outward: boolean
 ): number | undefined {
   const scale = box === "margin" ? scales.marginScale : scales.scale;
   const vertical = side === "top" || side === "bottom";
@@ -442,13 +445,15 @@ const ARROW_MOVES = new Map<
  * @param key - the `KeyboardEvent.key` that was pressed
  * @param box - which box the focused band belongs to
  * @param side - the physical edge the focused handle sits on
+ * @param outward - whether the responding edge moves AWAY from the block, taken
+ *   unmirrored exactly as {@link spacingDelta} takes it
  * @returns the value change in CSS pixels, or `undefined` to ignore the key
  */
 export function spacingKeyDelta(
   key: string,
   box: SpacingBox,
   side: SpacingSide,
-  outward = spacingGrowsOutward(box, false, false)
+  outward: boolean
 ): number | undefined {
   if (key === "PageUp") return SPACING_PAGE_PX;
   if (key === "PageDown") return -SPACING_PAGE_PX;
@@ -492,28 +497,35 @@ export function spacingKeyDelta(
 }
 
 /**
- * Whether this band thickens AWAY from the block, so a drag outward grows it.
+ * Whether the drawn BAND thickens away from the block, which is where its
+ * handle goes.
  *
- * A margin lies outside the border box and never moves it — growing one pushes
- * the neighbour rather than the block — so a positive margin always thickens
- * outward and a negative one, laid inside the border edge, always thickens
- * inward. That much is structural.
+ * The box does not decide this, though a margin can look as though it settles
+ * the question: lying outside the border box, growing one seems unable to move
+ * it. Measured, that is false for `margin-top`, for `margin-left`, and for
+ * `margin-right` on an auto-width block — `spacing-response.ts` carries the
+ * table and answers for both boxes.
  *
- * PADDING is not, and cannot be decided here: whether the border edge moves out
- * or the content edge moves in depends on whether the block's size along that
- * axis is settled by its content. `padding-response.ts` asks the element, and
- * the answer arrives as `measured`.
+ * A NEGATIVE band mirrors it, and this is the only question it mirrors.
+ * `spacingBands` lays a negative margin INSIDE the border edge, reflected
+ * across it, so the rectangle's two edges swap which of them is the far one.
  *
- * @param box - which box the band belongs to
+ * THIS IS NOT THE DRAG DIRECTION. Where the handle sits and which way the
+ * NUMBER grows are separate questions, and a negative band answers them
+ * differently: the value of a
+ * `margin-top` rising from `-20px` to `-10px` moves the border edge DOWN, the
+ * same direction it moves for a positive one, because the physical edge that
+ * responds does not care about the sign. Only the rectangle is mirrored, so
+ * only this is. `spacingDelta` takes the measured answer unmirrored.
+ *
  * @param negative - whether a margin band is a negative one
- * @param measured - for padding, whether the OUTER edge was seen to respond
+ * @param measured - whether the band's OUTER edge was seen to respond
  */
-export function spacingGrowsOutward(
-  box: SpacingBox,
+export function spacingBandDrawnOutward(
   negative: boolean,
   measured: boolean
 ): boolean {
-  return box === "margin" ? !negative : measured;
+  return measured !== negative;
 }
 
 /** The address one side of one box occupies at the tier being edited. */

@@ -502,6 +502,29 @@
       "cache": true // Cache test results (only re-run if inputs change)
     },
 
+    // create-nextly-app#test - the one package whose tests read files OUTSIDE it.
+    //
+    // 🔴 `scaffold-plugin.test.ts` scaffolds the real repo-root `templates/`,
+    // then imports the scaffolded `vitest.config.ts` and asserts the timeout a
+    // freshly scaffolded suite will boot under. Every input above is
+    // package-relative, and `globalDependencies` covers `packages/tsconfig` and
+    // `scripts` only, so a commit that changes ONLY `templates/plugin/
+    // vitest.config.ts` leaves this task's hash untouched: CI replays a cached
+    // pass and the budget assertion never executes, in precisely the commit
+    // that changed what it asserts.
+    //
+    // A package task REPLACES the shared definition rather than merging, which
+    // is why the comment above discourages one. `$TURBO_DEFAULT$` is what makes
+    // this safe to write anyway: it takes the package's own files without
+    // copying the curated list, so there is nothing here to drift out of step
+    // with it. `dependsOn` is restated because replacement drops that too.
+    "create-nextly-app#test": {
+      "dependsOn": ["^build", "build:surface-declarations"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/templates/**"],
+      "outputs": ["coverage/**"],
+      "cache": true
+    },
+
     // test:integration - Run integration tests against real DBs (F18).
     //
     // - Runs only *.integration.test.ts files via vitest.integration.config.ts.

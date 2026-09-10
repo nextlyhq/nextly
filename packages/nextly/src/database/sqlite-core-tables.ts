@@ -482,7 +482,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "claim_token" TEXT NOT NULL,
       "owner_label" TEXT,
       "acquired_at" INTEGER NOT NULL,
-      "expires_at" INTEGER NOT NULL
+      "expires_at" INTEGER NOT NULL,
+      "waiting_until" INTEGER
     )`,
     // Separate statements for the reason the ones above are: SQLite skips a
     // CREATE TABLE wholesale once the table exists, so an index folded into it
