@@ -272,11 +272,28 @@ type EditorIdentity = EditorMarkers;
  * Total: a node carrying no provenance, or provenance that is not a string,
  * yields `undefined` rather than a value nothing can address.
  */
-function editorIdentityOf(node: ResolvedBlockNode): EditorIdentity {
+function editorIdentityOf(
+  node: ResolvedBlockNode,
+  // Whether this render wants editor markers at all. Not a micro-optimisation:
+  // see the provenance read below.
+  nodeAttribute: boolean | undefined
+): EditorIdentity {
   return {
     nodeId: node.id,
+    // Read ONLY when an editor asked for markers. `instanceOf` is an unknown
+    // key on a stored node, and this component is public — a consumer can hand
+    // it a tree assembled in memory, where the property may be an accessor that
+    // throws. On a published render nothing wants provenance, so reading it
+    // buys nothing and costs the containment this module exists for: the
+    // boundary came down before it could draw a placeholder for the block.
+    //
+    // The snapshot still happens at the boundary's first line, so an editor
+    // render reads it before any plugin code can move it. What changed is
+    // whether it is read at all, not when.
     instanceOf:
-      typeof node.instanceOf === "string" ? node.instanceOf : undefined,
+      nodeAttribute === true && typeof node.instanceOf === "string"
+        ? node.instanceOf
+        : undefined,
   };
 }
 
@@ -350,7 +367,7 @@ function withNodeAttributes(
   // The editor address, snapshotted before the block ran. Defaulted from the
   // node for the callers that never hand a node to plugin code, so those keep
   // reading the value they always did.
-  identity: EditorIdentity = editorIdentityOf(node)
+  identity: EditorIdentity = editorIdentityOf(node, nodeAttribute)
 ): ReactNode {
   const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
   // A stored envelope is whatever the database returned: `attributes: null`
@@ -878,7 +895,7 @@ function checkedOutput(
    * Carried rather than re-derived here, because this function runs AFTER the
    * block — and, on the awaited path, after an `await` inside it.
    */
-  identity: EditorIdentity = editorIdentityOf(node)
+  identity: EditorIdentity = editorIdentityOf(node, nodeAttribute)
 ): ReactNode {
   const result = normalizeRenderable(value, {
     // A promise the block returned inside a list is awaited under the same
@@ -1074,7 +1091,7 @@ export function BlockBoundary({
    * here makes the window empty rather than small, which is the only size that
    * does not need arguing about again the next time a guard moves.
    */
-  const identity = editorIdentityOf(node);
+  const identity = editorIdentityOf(node, nodeAttribute);
 
   // A node the migration pass could not bring to its block's current version
   // keeps its last-good props, which the current render would misread. The

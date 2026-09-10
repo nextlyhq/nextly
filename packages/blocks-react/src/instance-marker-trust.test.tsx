@@ -387,6 +387,42 @@ describe("a placeholder is the one element an author can still click", () => {
     expect(html).toContain("hidden");
   });
 
+  it("does not READ provenance on a published render, so a hostile accessor cannot crash it", async () => {
+    // `BlockBoundary` is public and takes a node, so a consumer can hand it a
+    // tree assembled in memory rather than JSON from the database. The identity
+    // snapshot is taken at the boundary's first line — deliberately, so no
+    // plugin code can move it — but it was taken UNCONDITIONALLY, and reading
+    // `instanceOf` invokes a getter.
+    //
+    // A published render wants no provenance at all, so the read buys nothing
+    // and costs the containment this whole module exists for: the boundary came
+    // down before it could draw a placeholder for the failing block.
+    const hostile: Record<string, unknown> = {
+      id: "n1",
+      type: "test/does-not-exist",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(hostile, "instanceOf", {
+      enumerable: true,
+      get() {
+        throw new Error("provenance getter invoked");
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      <BlockBoundary
+        node={hostile as unknown as BlockNode}
+        context={context()}
+        blocks={blocks}
+        classes={{}}
+      />
+    );
+
+    // Contained: the boundary drew its placeholder instead of throwing.
+    expect(html).toContain("data-nx-block-placeholder");
+  });
+
   it("treats an EMPTY instance id as no provenance at all", async () => {
     // The marker's contract is that its PRESENCE means "definition-owned,
     // address the instance instead" — an editor tests for the attribute rather

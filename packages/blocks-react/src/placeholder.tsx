@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { editorMarkers } from "./editor-markers";
+import { editorMarkers, type EditorAddress } from "./editor-markers";
 
 /** Why a node rendered a placeholder instead of itself. */
 export type PlaceholderReason =
@@ -52,21 +52,23 @@ export interface BlockPlaceholderProps {
   editor?: EditorMarkers;
 }
 
-/** The editor's address for the node a placeholder stands in for. */
-export interface EditorMarkers {
-  /** The node's own id, as every other marked element carries it. */
-  nodeId: string;
-  /**
-   * The instance this node was inlined from, when it is definition-owned.
-   *
-   * The load-bearing one here. A definition's node ids are RE-MINTED during
-   * composition, so a placeholder standing in for a node inside a component
-   * carries an id the stored page does not contain — and the host instance is
-   * then the only thing an editor can act on. Without it, clicking the error
-   * box for a broken block inside a component does nothing at all.
-   */
-  instanceOf: string | undefined;
-}
+/**
+ * The editor's address for the node a placeholder stands in for.
+ *
+ * PICKED from `EditorAddress` rather than declared, so it cannot drift from the
+ * shape the markers are actually built from. Re-declaring the same two fields
+ * compiles for as long as the two happen to agree — structural typing does not
+ * notice a divergence, it accepts one — and the day the shared address gains or
+ * renames a field, this path keeps compiling against a contract that no longer
+ * describes what an ordinary root carries. That is the same duplication the
+ * marker construction itself had, one level up in the types.
+ *
+ * `declaresSlots` is deliberately not picked: a placeholder is drawn INSTEAD of
+ * the block, so it has no definition to declare slots and nothing would consume
+ * the marker. Narrowing by `Pick` states that as a choice, and a field added to
+ * the address has to be considered here rather than silently omitted.
+ */
+export type EditorMarkers = Pick<EditorAddress, "nodeId" | "instanceOf">;
 
 /** Human wording per reason, kept out of the component so it reads as data. */
 const REASON_TEXT: Readonly<Record<PlaceholderReason, string>> = {
