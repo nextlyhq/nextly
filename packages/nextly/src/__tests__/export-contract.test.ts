@@ -254,4 +254,41 @@ describe("published export surface", () => {
     expect(typeof mod.isFieldGroupType).toBe("function");
     expect(typeof mod.writeFieldGroupType).toBe("function");
   });
+
+  /**
+   * The names a resolved clash left behind, asserted where they were promised.
+   *
+   * An empty {@link KNOWN_SHAPE_CLASHES} says only that no name is published
+   * twice with different shapes. Deleting `isFieldGroupFieldType` outright
+   * satisfies that too, and so does dropping `createCliAdapter`: the collision
+   * is gone either way, and a rename that quietly became a deletion reads as a
+   * pass.
+   *
+   * So each is asserted at the entry it was moved TO. A rename is a promise
+   * about where a caller finds the function afterwards, and that is the half an
+   * absence check cannot make.
+   */
+  it("keeps the names the resolved clashes were renamed to", async () => {
+    const root = (await import("../index")) as Record<string, unknown>;
+    expect(typeof root.isFieldGroupFieldType).toBe("function");
+
+    const fieldGroupType = (await import("../field-group-type")) as Record<
+      string,
+      unknown
+    >;
+    expect(typeof fieldGroupType.isFieldGroupFieldType).toBe("function");
+
+    const cli = (await import("../cli/utils")) as Record<string, unknown>;
+    expect(typeof cli.createCliAdapter).toBe("function");
+
+    const database = (await import("../database")) as Record<string, unknown>;
+    expect(typeof database.createAdapter).toBe("function");
+
+    // The root re-exports the database factory, so `createAdapter` is expected
+    // HERE and is the same function `nextly/database` publishes. That pair was
+    // never the clash: they agreed. The CLI's was the odd one, and the other
+    // half of the promise is that its old spelling has not come back.
+    expect(root.createAdapter).toBe(database.createAdapter);
+    expect(cli.createAdapter).toBeUndefined();
+  });
 });

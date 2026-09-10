@@ -120,7 +120,7 @@ export interface CLIDatabaseAdapter {
 /**
  * Create the CLI's own minimal database adapter, from environment or options.
  *
- * Named apart from `createCliAdapter` in `nextly/database`, which is a different
+ * Named apart from `createAdapter` in `nextly/database`, which is a different
  * function returning a different type: that one builds the full
  * `DrizzleAdapter` an application runs on, this one builds the small
  * `CLIDatabaseAdapter` above, which is connect, disconnect and a dialect. Both
