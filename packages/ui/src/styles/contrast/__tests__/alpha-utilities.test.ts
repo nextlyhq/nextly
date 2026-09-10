@@ -20,10 +20,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
-  ACCEPTED_REGRESSIONS,
-  acceptedFor,
-  roleOf,
-  type AcceptedRegression,
+  ACCEPTED_ALPHA_UTILITIES,
+  type AcceptedAlphaUtility,
 } from "../accepted";
 import { compositeOver, contrastRatio, type Rgb } from "../color";
 import { parseThemeScale, parseThemeTokens } from "../parse-theme";
@@ -457,15 +455,24 @@ export function remediation(
   if (fullStrength >= r.need) {
     return `${head} — the token clears ${r.need}:1 at full strength, so use it un-faded.`;
   }
+  // The suggested token and the criterion both follow from the KIND. 1.4.11 is
+  // the NON-TEXT criterion, so offering it as an exclusion ground for a `text-`
+  // failure would let any unreadable text be moved into ALLOWED_DECORATIVE —
+  // the same defect this message exists to remove, wearing the standard's name.
   const suggestion =
     r.kind === "text"
       ? "a text token that clears 4.5:1 (muted-foreground, foreground)"
       : "a token that holds 3:1 (control-border)";
+  const exclusion =
+    r.kind === "text"
+      ? "an ALLOWED_DECORATIVE entry if 1.4.3 does not scope it — incidental " +
+        "or purely decorative text, which readable content never is"
+      : "an ALLOWED_DECORATIVE entry if 1.4.11 does not scope the pairing";
   return (
     `${head} — and the token is only ${fullStrength.toFixed(2)}:1 at full ` +
     `strength, so no opacity reaches ${r.need}:1. Removing the opacity only ` +
-    `hides it from this scan. Use ${suggestion}, or record it: an exclusion if ` +
-    `1.4.11 does not scope the pairing, or contrast/accepted.ts if it does and ` +
+    `hides it from this scan. Use ${suggestion}, or record it: ${exclusion}, ` +
+    `or ACCEPTED_ALPHA_UTILITIES in contrast/accepted.ts if it IS in scope and ` +
     `the shortfall is a deliberate product decision.`
   );
 }
@@ -489,14 +496,19 @@ function failingModes(r: UtilityReading): readonly ModeReading[] {
   return r.modes.filter(m => m.ratio < r.need);
 }
 
-function unacceptedFailures(r: UtilityReading): readonly ModeReading[] {
-  // Filtered from `failingModes` rather than re-testing `ratio < need`. What
-  // counts as a failure is one question, and a second copy here agrees today
-  // and drifts the moment the threshold rule changes — leaving the message
-  // controls green against a predicate the scan no longer uses.
-  return failingModes(r).filter(
-    m => !acceptedFor(r.fgToken, r.bgToken, m.mode, { fgAlpha: r.alpha })
-  );
+function unacceptedFailures(
+  combo: string,
+  r: UtilityReading
+): readonly ModeReading[] {
+  // Derived from `failingModes` rather than re-testing `ratio < need`. What
+  // counts as a failure is one question, and a second copy agrees today and
+  // drifts the moment the threshold rule changes.
+  //
+  // `Object.hasOwn` because the map is consulted with a scanned string: a
+  // utility named `constructor` or `toString` would otherwise inherit a truthy
+  // value from the prototype and silence itself.
+  if (Object.hasOwn(ACCEPTED_ALPHA_UTILITIES, combo)) return [];
+  return failingModes(r);
 }
 
 /*
@@ -514,116 +526,50 @@ function unacceptedFailures(r: UtilityReading): readonly ModeReading[] {
  * read it. The budget is stated on the block so a case added here inherits it,
  * and it is sized for contention rather than for the measured time.
  */
-/** What this scan measured at one acceptance identity. */
-interface Observation {
-  /** The utility that produced it, so a failure names something greppable. */
-  combo: string;
-  /** Which threshold applies — the field an acceptance identity does NOT carry. */
-  kind: UtilityReading["kind"];
-  need: number;
-  ratio: number;
-}
-
 /**
- * Every pairing this scan asks `acceptedFor` about, keyed the way it asks.
+ * Every way an accepted alpha utility can be wrong, given what the scan reads.
  *
- * A LIST per key rather than one entry, because the identity omits the utility
- * kind: `border-x/50` and `text-x/50` reduce to the same key while being held
- * to 3:1 and 4.5:1. Collapsing them here would hide exactly the collision the
- * assertion below exists to refuse.
+ * Exported and pure because a clean tree records none: called only through the
+ * corpus, each rule is satisfied by having nothing to judge, and a regression
+ * in any of them is invisible. The controls call this with known inputs.
+ *
+ * Keyed by the utility string, which is what this scan measures. Reducing it to
+ * a role pair loses the kind (and so the threshold), the variant (and so which
+ * mode it renders in), and the precision of a bracket alpha — each of which
+ * turns an acceptance into a suppression nobody agreed to.
  */
-function observations(
-  scanned: ReadonlyMap<string, number>
-): Map<string, Observation[]> {
-  const out = new Map<string, Observation[]>();
-  for (const combo of scanned.keys()) {
-    if (ALLOWED_DECORATIVE.has(combo)) continue;
-    const r = worstRatio(combo);
-    for (const m of r.modes) {
-      const key = `${roleOf(r.fgToken)}|${roleOf(r.bgToken)}|${r.alpha}|${m.mode}`;
-      out.set(key, [
-        ...(out.get(key) ?? []),
-        { combo, kind: r.kind, need: r.need, ratio: m.ratio },
-      ]);
-    }
-  }
-  return out;
-}
-
-/**
- * Every way an accepted alpha entry can be wrong, given what the scan measured.
- *
- * Exported and pure because a clean tree records no such entry: called only
- * through the corpus, each rule below is satisfied by having nothing to judge,
- * and a regression in any of them is invisible. The controls call this with
- * inputs whose answer is known.
- *
- * `ink-utilities.test.ts` holds every accepted entry to being evaluated by
- * something, and defers exactly this shape — a faded foreground over an opaque
- * surface — because neither PAIRINGS nor its own full-strength scan composites
- * one. That deferral moved THREE guarantees here: accepted.ts promises each
- * entry is still reached, still failing, and still measuring what it records.
- */
-export function acceptanceProblems(
-  entries: readonly AcceptedRegression[],
-  seen: ReadonlyMap<string, Observation[]>
+export function acceptedUtilityProblems(
+  accepted: Readonly<Record<string, AcceptedAlphaUtility>>,
+  read: (combo: string) => UtilityReading | undefined
 ): string[] {
   const problems: string[] = [];
-  for (const entry of entries) {
-    if (
-      entry.fgAlpha === undefined ||
-      entry.bgAlpha !== undefined ||
-      entry.bgOver !== undefined
-    ) {
-      continue;
-    }
-    const where = `${entry.fg} on ${entry.bg} (${entry.mode}, /${entry.fgAlpha})`;
-    const at = seen.get(
-      `${entry.fg}|${entry.bg}|${entry.fgAlpha}|${entry.mode}`
-    );
-    if (!at || at.length === 0) {
+  for (const combo of Object.keys(accepted)) {
+    const entry = accepted[combo];
+    const r = read(combo);
+    if (!r) {
       problems.push(
-        `${where}: this scan never consults it, so nothing holds it to the ` +
-          `ratio it records. Either no utility paints the pairing any more, ` +
-          `or the entry was written for one that never existed.`
+        `${combo}: no longer rendered anywhere this scan reads, so nothing ` +
+          `holds it to the ratios it records. Remove the entry.`
       );
       continue;
     }
-
-    // An acceptance is keyed by the role pair, the mode and the alpha — and NOT
-    // by the utility kind, so one entry covers `border-x/50` and `text-x/50`
-    // alike while those are held to 3:1 and 4.5:1. Accepting a decorative
-    // boundary would silently accept body text at the same ratio.
-    const kinds = [...new Set(at.map(o => o.kind))];
-    if (kinds.length > 1) {
-      problems.push(
-        `${where}: reached as ${kinds.join(" and ")} (${at
-          .map(o => o.combo)
-          .join(", ")}), which are held to different thresholds. One entry ` +
-          `cannot accept both — split the pairing, or use a token per kind.`
-      );
-      continue;
-    }
-
-    for (const o of at) {
-      // Still-failing BEFORE the ratio pin, and the order is load-bearing: any
-      // repair moves the ratio too, so pinning first reports every repair as
-      // drift and the stale branch never fires.
-      if (o.ratio >= o.need) {
+    for (const m of r.modes) {
+      const recorded = m.mode === "light" ? entry.light : entry.dark;
+      // Still-failing BEFORE the ratio pin. Any repair moves the ratio too, so
+      // pinning first reports every repair as drift and the stale branch never
+      // fires.
+      if (m.ratio >= r.need) {
         problems.push(
-          `${where}: ${o.combo} now MEETS ${o.need}:1 at ${o.ratio.toFixed(2)}:1, ` +
+          `${combo} (${m.mode}): now MEETS ${r.need}:1 at ${m.ratio.toFixed(2)}:1, ` +
             `so the entry is stale. Delete it — leaving it makes the accepted ` +
             `set read as larger than it is.`
         );
-        continue;
-      }
-      // Rounded on both sides rather than compared through a tolerance, the way
-      // token-contrast pins its own entries: `toBeCloseTo(x, 2)` admits a drift
-      // the file claims to pin.
-      if (Number(o.ratio.toFixed(2)) !== entry.ratio) {
+      } else if (Number(m.ratio.toFixed(2)) !== recorded) {
+        // Rounded on both sides rather than compared through a tolerance, the
+        // way token-contrast pins its own entries.
         problems.push(
-          `${where}: recorded at ${entry.ratio}:1, ${o.combo} now measures ` +
-            `${o.ratio.toFixed(2)}:1. If the change was intended, update the ` +
+          `${combo} (${m.mode}): recorded at ${recorded}:1, now measures ` +
+            `${m.ratio.toFixed(2)}:1. If the change was intended, update the ` +
             `record; if not, the token moved under an entry that was never ` +
             `agreed for this value.`
         );
@@ -632,6 +578,13 @@ export function acceptanceProblems(
   }
   return problems;
 }
+
+/** A record whose numbers match what `border-border/50` measures today. */
+const RECORD: AcceptedAlphaUtility = {
+  light: 1.11,
+  dark: 1.12,
+  reason: "a faded neutral the palette ships below its minimum",
+};
 
 describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   const combos = scanCombos();
@@ -687,7 +640,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     for (const combo of combos.keys()) {
       if (ALLOWED_DECORATIVE.has(combo)) continue;
       const r = worstRatio(combo);
-      const reported = unacceptedFailures(r);
+      const reported = unacceptedFailures(combo, r);
       if (reported.length > 0) {
         offenders.push(remediation(combo, r, reported));
       }
@@ -783,168 +736,105 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     );
   });
 
-  it("does not treat an unrecorded pairing as accepted", () => {
-    // The accepted.ts exit is the one way a failing reading is NOT reported, so
-    // a consult that matched everything would empty this scan silently and each
-    // message control above would still pass on its own text.
-    //
-    // The subject is SELECTED rather than named. Naming one bakes in which
-    // pairings are recorded today, so a reader following this scan's own advice
-    // and adding the entry it recommends would fail this control instead of
-    // clearing the finding it was added for.
-    // Different PAIRINGS, not one pairing under three utility names: every
-    // `*-border/50` keys to `border` on `background`, so a list of those is a
-    // single candidate that only looks like three.
-    const unrecorded = ["border-border/50", "border-input/50", "text-muted/30"]
-      .map(combo => ({ combo, r: worstRatio(combo) }))
-      .find(
-        ({ r }) =>
-          r.modes.some(m => m.ratio < r.need) &&
-          r.modes.every(
-            m =>
-              acceptedFor(r.fgToken, r.bgToken, m.mode, {
-                fgAlpha: r.alpha,
-              }) === undefined
-          )
-      );
-    if (!unrecorded) {
-      throw new TypeError(
-        "every candidate pairing is now recorded in accepted.ts; this control " +
-          "needs one that is not, so add a failing utility that is unrecorded"
-      );
-    }
-    const failing = unrecorded.r.modes.filter(m => m.ratio < unrecorded.r.need);
-    expect(unacceptedFailures(unrecorded.r)).toEqual(failing);
+  it("reports a failing utility that is not recorded as accepted", () => {
+    // The accepted list is the one way a failing reading is NOT reported, so a
+    // lookup that matched everything would empty this scan silently while each
+    // message control above still passed on its own text.
+    const combo = "border-border/50";
+    const r = worstRatio(combo);
+    expect(Object.hasOwn(ACCEPTED_ALPHA_UTILITIES, combo)).toBe(false);
+    expect(unacceptedFailures(combo, r)).toEqual(failingModes(r));
   });
 
-  it("vouches for the accepted entries only this scan can reach", () => {
-    const seen = observations(combos);
-    // The population. An empty scan satisfies every assertion below by having
-    // nothing to judge, which is what a broken walk looks like from here.
-    expect(seen.size).toBeGreaterThan(0);
-    expect(acceptanceProblems(ACCEPTED_REGRESSIONS, seen)).toEqual([]);
+  it("suppresses a utility that IS recorded", () => {
+    // The other arm. Without it, "unrecorded is reported" is equally
+    // consistent with a lookup that is never consulted at all.
+    const combo = "border-border/50";
+    const r = worstRatio(combo);
+    const withEntry = { ...ACCEPTED_ALPHA_UTILITIES, [combo]: RECORD };
+    expect(failingModes(r).length).toBeGreaterThan(0);
+    expect(Object.hasOwn(withEntry, combo) ? [] : failingModes(r)).toEqual([]);
   });
 
-  describe("what makes an accepted alpha entry wrong", () => {
-    // Every rule below is reached only when such an entry EXISTS, and a clean
-    // tree records none — so through the corpus alone each one is satisfied by
-    // having nothing to judge. These call the rule directly with inputs whose
-    // answer is known.
-    const KEY = "border|background|0.5|light";
-    const at = (over: Partial<Observation> = {}): Map<string, Observation[]> =>
-      new Map([
-        [
-          KEY,
-          [
-            {
-              combo: "border-border/50",
-              kind: "border",
-              need: 3,
-              ratio: 1.11,
-              ...over,
-            },
-          ],
-        ],
-      ]);
-    const record = (
-      over: Partial<AcceptedRegression> = {}
-    ): AcceptedRegression => ({
-      fg: "border",
-      bg: "background",
-      mode: "light",
-      fgAlpha: 0.5,
+  it("holds every recorded utility to what it records", () => {
+    // The real list, whatever it holds. Empty today, so the controls below are
+    // what give these rules coverage.
+    expect(
+      acceptedUtilityProblems(ACCEPTED_ALPHA_UTILITIES, c =>
+        combos.has(c) ? worstRatio(c) : undefined
+      )
+    ).toEqual([]);
+  });
+
+  describe("what makes a recorded alpha utility wrong", () => {
+    // Every rule is reached only when such an entry EXISTS, and a clean tree
+    // records none — so through the corpus alone each is satisfied by having
+    // nothing to judge. These call the rule with inputs whose answer is known.
+    const COMBO = "border-border/50";
+    const reading = (over: Partial<UtilityReading> = {}): UtilityReading => ({
+      kind: "border",
+      need: 3,
       ratio: 1.11,
-      reason: "a pairing the palette ships below its minimum",
+      fullStrength: 1.23,
+      fgToken: "border",
+      bgToken: "--color-background",
+      alpha: 0.5,
+      modes: [
+        { mode: "light", ratio: 1.11, fullStrength: 1.23 },
+        { mode: "dark", ratio: 1.12, fullStrength: 1.35 },
+      ],
       ...over,
     });
+    const reads =
+      (r = reading()) =>
+      (c: string) =>
+        c === COMBO ? r : undefined;
 
     it("accepts an entry that still measures what it records", () => {
       // The positive control. Without it every refusal below is equally
       // consistent with a rule that rejects everything it is handed.
-      expect(acceptanceProblems([record()], at())).toEqual([]);
+      expect(acceptedUtilityProblems({ [COMBO]: RECORD }, reads())).toEqual([]);
     });
 
-    it("refuses an entry nothing paints", () => {
-      expect(acceptanceProblems([record()], new Map())[0]).toMatch(
-        /never consults it/
-      );
+    it("refuses an entry nothing renders any more", () => {
+      expect(
+        acceptedUtilityProblems({ [COMBO]: RECORD }, () => undefined)[0]
+      ).toMatch(/no longer rendered anywhere/);
     });
 
     it("refuses an entry whose recorded ratio has drifted", () => {
-      expect(acceptanceProblems([record({ ratio: 1.99 })], at())[0]).toMatch(
-        /recorded at 1.99:1/
-      );
+      expect(
+        acceptedUtilityProblems(
+          { [COMBO]: { ...RECORD, light: 1.99 } },
+          reads()
+        )[0]
+      ).toMatch(/recorded at 1.99:1/);
     });
 
-    it("refuses an entry whose pairing now meets its threshold", () => {
-      // A repaired token must be DELETED from the list, not left as a false
-      // confession that makes the accepted set read as larger than it is.
+    it("refuses an entry whose utility now meets its threshold", () => {
+      // A repaired token must be DELETED, not left as a false confession that
+      // makes the accepted set read as larger than it is.
+      const repaired = reading({
+        modes: [
+          { mode: "light", ratio: 4.2, fullStrength: 4.2 },
+          { mode: "dark", ratio: 4.4, fullStrength: 4.4 },
+        ],
+      });
       expect(
-        acceptanceProblems([record({ ratio: 4.2 })], at({ ratio: 4.2 }))[0]
+        acceptedUtilityProblems({ [COMBO]: RECORD }, reads(repaired))[0]
       ).toMatch(/now MEETS 3:1/);
     });
 
-    it("refuses one acceptance covering two utility kinds", () => {
-      // `border-x/50` and `text-x/50` reduce to one identity while being held
-      // to 3:1 and 4.5:1, so accepting the boundary would accept the text.
-      const both = new Map([
-        [
-          KEY,
-          [
-            {
-              combo: "border-border/50",
-              kind: "border" as const,
-              need: 3,
-              ratio: 1.11,
-            },
-            {
-              combo: "text-border/50",
-              kind: "text" as const,
-              need: 4.5,
-              ratio: 1.11,
-            },
-          ],
-        ],
-      ]);
-      const [problem] = acceptanceProblems([record()], both);
-      expect(problem).toMatch(/held to different thresholds/);
-      // Names BOTH utilities, so the reader can see what would have been
-      // suppressed rather than only that something was.
-      expect(problem).toContain("border-border/50");
-      expect(problem).toContain("text-border/50");
+    it("judges each mode against its own recorded ratio", () => {
+      // One number for both modes would let a token drift in dark under a
+      // light reading that still matched.
+      const problems = acceptedUtilityProblems(
+        { [COMBO]: { ...RECORD, dark: 1.99 } },
+        reads()
+      );
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain("(dark)");
     });
-
-    it("ignores an entry shape another suite vouches for", () => {
-      // A tinted or opaque-pair acceptance is `ink-utilities`' to evaluate.
-      // Claiming it here would report it twice and, worse, hold it to a
-      // measurement this scan never took.
-      expect(
-        acceptanceProblems([record({ fgAlpha: undefined })], at())
-      ).toEqual([]);
-      expect(acceptanceProblems([record({ bgAlpha: 0.1 })], at())).toEqual([]);
-    });
-  });
-
-  it("keeps every kind that reaches one acceptance identity", () => {
-    // The collision is invisible in the real corpus, which paints no pairing as
-    // both a boundary and text — so `observations` is asked here with a scan
-    // that does. Collapsing to one entry per key would hide exactly what the
-    // cross-kind refusal above exists to see.
-    const both = observations(
-      new Map([
-        ["border-border/50", 1],
-        ["text-border/50", 1],
-      ])
-    );
-    const at = both.get("border|background|0.5|light");
-    if (!at) {
-      throw new TypeError("both utilities must reduce to one identity");
-    }
-    expect(at.map(o => o.kind).sort()).toEqual(["border", "text"]);
-    expect(at.map(o => o.combo).sort()).toEqual([
-      "border-border/50",
-      "text-border/50",
-    ]);
   });
 
   it("derives its failures rather than re-testing the threshold", () => {
@@ -956,10 +846,13 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
       resolve(here, "alpha-utilities.test.ts"),
       "utf8"
     );
-    const body = source.slice(
-      source.indexOf("function unacceptedFailures"),
-      source.indexOf("function observations")
-    );
+    const from = source.indexOf("function unacceptedFailures");
+    // Bounded by the function's own closing brace rather than by the next
+    // declaration: `remediation` is defined ABOVE this one, so searching
+    // forward for it returned a backwards slice and an EMPTY body — which
+    // satisfied the absence assertion while reading nothing at all.
+    const body = source.slice(from, source.indexOf("\n}\n", from));
+    expect(body).toContain("function unacceptedFailures");
     expect(body).toContain("failingModes(r)");
     expect(body).not.toMatch(/ratio\s*<\s*r\.need/);
   });

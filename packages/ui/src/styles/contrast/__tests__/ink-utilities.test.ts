@@ -689,23 +689,6 @@ describe("ink utilities are readable on the surfaces they land on", () => {
     );
 
     const unreached = ACCEPTED_REGRESSIONS.filter(entry => {
-      // A FADED foreground over an opaque surface is reached by neither source
-      // here: PAIRINGS measures tokens, and this scan resolves ink utilities at
-      // full strength. `alpha-utilities.test.ts` is the suite that composites a
-      // `token/NN` utility, and it vouches for exactly these entries — the
-      // assertion there is the other half of this one, and the two conditions
-      // partition the list so no entry is left unclaimed by both.
-      //
-      // Narrow deliberately: an entry carrying `bgAlpha` or `bgOver` as well is
-      // outside that suite's shape too, so it stays this assertion's problem
-      // and is correctly reported as evaluated by nothing.
-      if (
-        entry.fgAlpha !== undefined &&
-        entry.bgAlpha === undefined &&
-        entry.bgOver === undefined
-      ) {
-        return false;
-      }
       const key =
         `${entry.fg}|${entry.bg}|${entry.fgAlpha ?? "-"}|${entry.bgAlpha ?? "-"}|` +
         `${entry.bgOver ? roleOf(entry.bgOver) : "-"}|${entry.mode}`;
