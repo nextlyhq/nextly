@@ -508,7 +508,14 @@ async function registeredCollectionSlugs(
 
     for (const row of rows) {
       const slug = (row as { slug?: unknown }).slug;
-      if (typeof slug === "string" && slug.length > 0) slugs.push(slug);
+      // A row whose slug cannot be read is a collection this cannot enumerate,
+      // and dropping it silently is the same defect as a short page: its scopes
+      // are never created, so completeness is judged against a list missing it
+      // and reports the index whole while that collection's content is
+      // unindexed. Refused rather than skipped, for the reason every other
+      // unreadable input here is.
+      if (typeof slug !== "string" || slug.length === 0) return undefined;
+      slugs.push(slug);
     }
 
     if (!pagination.hasMore) return slugs;

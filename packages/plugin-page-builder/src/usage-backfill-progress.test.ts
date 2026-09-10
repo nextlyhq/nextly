@@ -14,7 +14,10 @@ import { describe, expect, it } from "vitest";
 import { usageBackfillStateStore } from "./class-usage-runtime";
 
 /** A progress table as rows, recording what was deleted from it. */
-function table(rows: { id: string; scopeKey: string; generation: string }[]) {
+function table(
+  rows: { id: string; scopeKey: string; generation: string }[],
+  options: { deleteFails?: boolean } = {}
+) {
   const deleted: string[] = [];
   const created: Record<string, unknown>[] = [];
   const nextly = {
@@ -24,6 +27,9 @@ function table(rows: { id: string; scopeKey: string; generation: string }[]) {
       return undefined;
     },
     delete: async (args: { id: string }) => {
+      if (options.deleteFails === true) {
+        throw new Error("the database refused the delete");
+      }
       deleted.push(args.id);
       return undefined;
     },
@@ -97,5 +103,27 @@ describe("reading which scopes are already done", () => {
     expect(t.created).toEqual([
       { scopeKey: "a-scope", generation: "10x500x1000" },
     ]);
+  });
+
+  it("REFUSES when a stale row cannot be discarded", async () => {
+    // Swallowing it is only safe if this cleanup runs again BEFORE the bounds
+    // return to that row's generation, and nothing guarantees that ordering. A
+    // row that outlives the discard is accepted as progress over an index the
+    // intervening generation changed — the exact defect the discard exists to
+    // prevent, arriving through the mechanism built to stop it.
+    const t = table(
+      [
+        { id: "r1", scopeKey: "here", generation: "10x500x1000" },
+        { id: "r2", scopeKey: "elsewhere", generation: "10x400x1000" },
+      ],
+      { deleteFails: true }
+    );
+    const store = usageBackfillStateStore(
+      t.nextly as never,
+      "state",
+      "10x500x1000"
+    );
+
+    await expect(store.completed()).rejects.toThrow(/could not discard stale/);
   });
 });

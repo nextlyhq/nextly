@@ -550,10 +550,16 @@ export function usageBackfillStateStore(
       // delete during an offset-paged read shifts the rows behind it and the
       // next page skips one.
       //
-      // Failures are swallowed deliberately. A stale row that survives costs a
-      // repeat of THIS cleanup on the next pass; letting the delete fail the
-      // pass would stop the backfill over bookkeeping, and the keys returned
-      // above are already correct without it.
+      // A failure PROPAGATES. The first version swallowed it, reasoning that a
+      // surviving stale row costs one repeat of this cleanup on the next pass —
+      // true only if the cleanup runs again BEFORE the bounds return to that
+      // row's generation, and nothing guarantees that ordering. A row that
+      // outlives the discard is then accepted as progress over an index the
+      // intervening generation changed, which is exactly the defect the discard
+      // exists to prevent.
+      //
+      // Failing the pass is cheap by comparison: the sweep is re-queued and the
+      // queue is durable, so refusing costs a tick and claims nothing.
       for (const id of stale) {
         try {
           await nextly.delete({
@@ -561,8 +567,11 @@ export function usageBackfillStateStore(
             id,
             ...AS_THE_SYSTEM,
           });
-        } catch {
-          // Retried on the next pass; see above.
+        } catch (failure) {
+          throw new Error(
+            `[page-builder] the usage backfill could not discard stale progress row "${id}", so progress from another derivation would survive to be reused`,
+            { cause: failure }
+          );
         }
       }
 
