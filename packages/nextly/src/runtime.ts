@@ -9,8 +9,15 @@
  * re-export from here. That keeps the root Node-safe so:
  *   - The CLI can load user configs without dragging Next.js in.
  *   - Plugin authors can `import { defineCollection } from "nextly"`
- *     in their own packages without forcing a `next` peer dep on
- *     consumers.
+ *     in their own packages without pulling `next/*` into a module
+ *     graph that gets bundled for the browser.
+ *
+ * The distinction is what an import PULLS IN, not what a package
+ * manager installs. `next` is the one peer dependency this package
+ * does not mark optional, so a consumer resolves it whichever subpath
+ * they import; choosing the root does not avoid it. What the root
+ * avoids is Next.js appearing in a graph that has no request
+ * lifecycle to run inside.
  *
  * Templates wire the catch-all admin route from this subpath:
  *
