@@ -430,17 +430,42 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
 }
 
 /**
- * Return the already-initialised Nextly instance from the singleton cache.
+ * The already-initialised Nextly instance, waiting for boot to settle first.
  *
- * Use this inside Nextly's own internal API handlers (anywhere under
- * `packages/nextly/src/api/*`) where the user-provided config is not in
- * scope. Throws a clear error if the singleton has not been initialised
- * yet — the typical fix is to ensure the project ships an
- * `instrumentation.ts` that calls `createRegister(config)` so init runs
- * once per worker before the first request.
+ * ## Which of the three to reach for
  *
- * Do NOT use this in user code. User code should always call
- * `getNextly({ config })` directly.
+ * `getNextly({ config })` from `nextly` INITIALISES. It takes the config, is
+ * idempotent and cached, and is correct whether or not anything has booted. An
+ * application reaches for this one.
+ *
+ * This function READS what has already booted, and waits. It takes no config,
+ * so it is what to use where the config is not in scope, and it is async, so it
+ * can await the boot migration gate rather than refusing while that gate is
+ * still open. Nextly's own API handlers under `src/api/*` use it, and so does
+ * PLUGIN code doing server work outside a route, where there is no
+ * `ctx.services` to reach through.
+ *
+ * `requireNextly()` from `nextly/runtime` also reads, but SYNCHRONOUSLY, so it
+ * cannot wait and asserts instead: it throws when the migration gate has not
+ * settled. Correct inside a request lifecycle, where boot is already proven.
+ *
+ * Throws when nothing has registered. The usual fix is an `instrumentation.ts`
+ * that calls `createRegister(config)`, so init runs once per worker before the
+ * first request.
+ *
+ * ## Why this lives on the Node-safe root
+ *
+ * It has no Next.js coupling, and its audience includes plugin authors. The
+ * `nextly/runtime` entry, where `requireNextly` sits, is the one allowed to
+ * import `next/*`, and its own contract says plugin authors should import from
+ * the root so their consumers are not forced into a `next` peer dependency.
+ * Moving this beside `requireNextly` would put the pair together and charge
+ * every plugin that reads a document a Next.js dependency for the privilege.
+ *
+ * An earlier version of this block said "do NOT use this in user code". That
+ * was never true of plugins, which are exactly the callers with no config in
+ * scope, and `plugin-page-builder` has been following the other half of the
+ * sentence while the docblock forbade it.
  */
 export async function getCachedNextly(): Promise<Nextly> {
   // Before ANY return, including the cached one. This is the surface that could
