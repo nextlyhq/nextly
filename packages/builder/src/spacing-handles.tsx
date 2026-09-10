@@ -443,14 +443,21 @@ export function SpacingHandles({
    */
   const [held, setHeld] = React.useState<SpacingBand | null>(null);
   /**
-   * The edge a POINTER gesture's handle sits on, frozen at the press.
+   * The MEASURED response a pointer gesture began with, before any mirroring.
+   *
+   * Unmirrored on purpose. Which edge of the drawn rectangle carries the handle
+   * depends on the band's sign as well, and a drag can change that sign by
+   * carrying a margin through zero — so the sign is applied where the handle is
+   * placed rather than baked in here.
    *
    * `null` whenever no pointer gesture is live, which includes a band merely
    * held by focus: each key press is an edit of its own and reads the current
    * measurement, so freezing there would pin the handle to an answer the block
    * has stopped giving.
    */
-  const [drawnOutward, setDrawnOutward] = React.useState<boolean | null>(null);
+  const [draggedResponse, setDraggedResponse] = React.useState<boolean | null>(
+    null
+  );
   const [message, setMessage] = React.useState("");
 
   const { document: doc } = editor;
@@ -575,11 +582,19 @@ export function SpacingHandles({
     (band: SpacingBand): boolean => {
       const dragging =
         held !== null && held.box === band.box && held.side === band.side;
-      return dragging && drawnOutward !== null
-        ? drawnOutward
+      /*
+       * Mirrored against the band as it is drawn NOW, not as it was drawn at
+       * the press. A drag can carry a margin through zero, and `spacingBands`
+       * reflects a negative one across the border edge — so the rectangle's far
+       * edge swaps while the measurement that decides which edge responds does
+       * not. Freezing the mirrored answer would leave the handle on the edge the
+       * old sign put it, and it would stop following the pointer there.
+       */
+      return dragging && draggedResponse !== null
+        ? spacingBandDrawnOutward(band.negative, draggedResponse)
         : drawnOutwardOf(band);
     },
-    [drawnOutward, drawnOutwardOf, held]
+    [draggedResponse, drawnOutwardOf, held]
   );
 
   const targetFor = React.useCallback(
@@ -819,7 +834,7 @@ export function SpacingHandles({
     gesture.current = null;
     setPreview(null);
     setHeld(null);
-    setDrawnOutward(null);
+    setDraggedResponse(null);
     if (live === null) return;
     live.detach();
     if (live.active && live.host.hasPointerCapture?.(live.pointerId) === true) {
@@ -1028,7 +1043,7 @@ export function SpacingHandles({
        * Frozen together, from one reading, so the edge the handle sits on and
        * the direction the number moves cannot come from different measurements.
        */
-      setDrawnOutward(drawnOutwardOf(band));
+      setDraggedResponse(valueOutwardOf(band));
       gesture.current = {
         band,
         valueOutward: valueOutwardOf(band),
@@ -1047,15 +1062,7 @@ export function SpacingHandles({
       owner.addEventListener("pointercancel", onCancel);
       owner.addEventListener("keydown", onEscape);
     },
-    [
-      commit,
-      drawnOutwardOf,
-      endGesture,
-      showPreview,
-      startsFor,
-      subject.scales,
-      valueOutwardOf,
-    ]
+    [commit, endGesture, showPreview, startsFor, subject.scales, valueOutwardOf]
   );
 
   /*

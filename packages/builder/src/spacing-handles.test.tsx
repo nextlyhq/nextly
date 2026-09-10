@@ -2007,3 +2007,74 @@ describe("a drag keeps the direction it began with", () => {
     expect(stored("margin", "blockStart")).toBe("40px");
   });
 });
+
+describe("a drag that carries a margin through zero", () => {
+  /*
+   * `spacingBands` reflects a NEGATIVE margin across the border edge, so the
+   * rectangle's far edge swaps when the sign does. The measurement that decides
+   * which edge responds does not swap — it is about the layout, not the sign —
+   * so the response is frozen unmirrored for the gesture and the sign is applied
+   * where the handle is placed. Freezing the mirrored answer instead leaves the
+   * handle on the edge the old sign chose, where it stops following the pointer.
+   */
+  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  const positive: SpacingBand = {
+    box: "margin",
+    side: "bottom",
+    rect,
+    label: "20",
+    negative: false,
+  };
+  const negative: SpacingBand = { ...positive, label: "-20", negative: true };
+  const responds = (): SpacingSubject =>
+    subjectWith({
+      margin: { top: 10, right: 10, bottom: 20, left: 10 },
+      outward: {
+        margin: { top: true, right: true, bottom: true, left: true },
+        padding: { top: false, right: false, bottom: false, left: false },
+      },
+    });
+
+  it("moves the handle to the mirrored edge when the sign flips", () => {
+    const initial = documentWith();
+    const view = mount([positive], responds(), initial);
+    const control = handle("bottom margin");
+    // The band spans 100..120; a positive one thickening away from the block
+    // carries its handle on the far edge.
+    expect(control.style.top).toBe("115.5px");
+
+    act(() => {
+      fireEvent.pointerDown(control, {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(control, { pointerId: 1, clientX: 0, clientY: 10 });
+    });
+
+    // The drag carries the value through zero, and the band comes back drawn
+    // inside the border edge.
+    view.rerender(
+      <Harness
+        bands={[negative]}
+        subject={responds()}
+        context={BASE}
+        initial={initial}
+      />
+    );
+
+    /*
+     * The same measured response, mirrored by the band's NEW sign, puts the
+     * handle on the other end of the rectangle. Keeping the answer mirrored at
+     * the press would leave it at 115.5 while the pointer went on.
+     */
+    expect(handle("bottom margin").style.top).toBe("95.5px");
+
+    act(() => {
+      fireEvent.pointerUp(control, { pointerId: 1, clientX: 0, clientY: 10 });
+    });
+  });
+});
