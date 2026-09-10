@@ -19,7 +19,7 @@
  * @module components/features/widgets/archetypes/bars
  */
 
-import { ChartFrame } from "./chart-frame";
+import { ChartFrame, type ChartRow } from "./chart-frame";
 import { barFractions } from "./chart-scale";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
@@ -43,15 +43,17 @@ import type { ArchetypeAccepts, ArchetypeBody } from "./types";
  * arbitrary text — so the placeholder rows are marked and drawn differently
  * instead of relying on their wording to separate them.
  */
-function bucketRow(
-  value: string | null,
-  count: number
-): { key: string; label: string; count: number; placeholder?: boolean } {
+function bucketRow(value: string | null, count: number): ChartRow {
   if (value === null) {
-    return { key: "null", label: "(none)", count, placeholder: true };
+    return { key: "null", label: "(none)", count, announce: "no value stored" };
   }
   if (value === "") {
-    return { key: "empty", label: "(empty)", count, placeholder: true };
+    return {
+      key: "empty",
+      label: "(empty)",
+      count,
+      announce: "an empty value",
+    };
   }
 
   return { key: `v${value}`, label: value, count };
@@ -135,7 +137,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
                       attribute keeps the whole string reachable on hover. */}
                   <span
                     className={
-                      row.placeholder
+                      row.announce
                         ? "truncate text-xs italic text-muted-foreground"
                         : "truncate text-xs text-foreground"
                     }
