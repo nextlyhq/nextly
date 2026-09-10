@@ -84,8 +84,16 @@ POST /admin/api/jobs/run
 Authorization: Bearer $NEXTLY_DRAIN_SECRET
 ```
 
-A secret shorter than 32 characters is ignored rather than accepted, so a value that looks
-configured can still be refused.
+The two variables fail differently when the value is too short, and knowing which one you
+set decides where to look:
+
+| | A value under 32 characters |
+|---|---|
+| `NEXTLY_DRAIN_SECRET` | **The app refuses to boot.** The environment schema requires 32, so this fails validation before any request reaches the route |
+| `CRON_SECRET` | The app starts, prints a warning at boot, and the route refuses the call with a 403 |
+
+`CRON_SECRET` is Vercel Cron's convention, which is why it is accepted at all and why it is
+tolerated rather than rejected.
 
 A signed-in human can pull the trigger instead, with the `manage-background-jobs`
 permission and a POST. `GET` always requires the secret, because a permission check alone
@@ -96,8 +104,8 @@ Two ways to get a queue that grows and never drains, both silent:
 
 - a scheduler pointed at `/api/jobs/run`, which 404s because a scaffolded app has no
   general `/api` handler
-- a call with no `Authorization` header, or a secret under 32 characters, which is
-  refused with a 403
+- a call with no `Authorization` header, or a short `CRON_SECRET`, which is refused
+  with a 403
 
 Neither reports anything from the application's side. Check your scheduler's own log for
 the response code the first time you wire it up.

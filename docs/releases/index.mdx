@@ -47,10 +47,20 @@ shared secret the caller needs, and the two ways a scheduler ends up silently do
 Wire it there once and every scheduled release depends on it.
 
 <Callout type="warn">
-**With no scheduler configured, a release stays scheduled forever.** Its due time passes and
-nothing happens, because nothing ran the sweep. A scheduler that is configured but refused,
-by the wrong path or a missing secret, looks exactly the same from here.
+**With no scheduler configured, a release is never applied.** Its due time passes and the
+sweep that would carry it out never runs. A scheduler configured but refused, by the wrong
+path or a missing secret, leaves you in the same place.
 </Callout>
+
+What that does **not** mean is that the content change is invisible. A read consults the
+same due-release rule the sweep does, so a scheduled draft is revealed and a scheduled
+takedown hidden the moment their instant passes, whether or not anything ran. As
+`apply-due-releases.ts` puts it, the read path can only make a due release LOOK applied.
+
+The sweep is what applies it for real, writing as the member's own author, and marks the
+release `published` once every action has succeeded. Until then the release stays open, and
+anything reading the stored rows rather than going through the read path still sees the
+unapplied state.
 
 A pass is bounded, which is why a due release is not always applied by the next tick: it
 claims at most 10 queued jobs and stops starting new ones after 20 seconds. The bounds and
