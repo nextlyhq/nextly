@@ -149,7 +149,17 @@ export function manifestSettingsFrom(
   return {
     singularName: settings.singularName,
     pluralName: when("pluralName", settings.pluralName),
-    description: settings.description,
+    // 🔴 Empty becomes ABSENT, and only here. `applyCommonSettings` writes the
+    // key only when it is defined, and `ManifestEntity.description` records the
+    // standing limitation this expresses: the upsert omits the column when a
+    // manifest carries none, so a CLEARED description cannot travel through a
+    // migration. Writing `""` instead would not fix that — it would publish a
+    // description that is the empty string, which is a different claim.
+    //
+    // The trim is deliberately NOT repeated here: it happens once, at the
+    // settings form, so this projection and the create/update request cannot
+    // disagree about a value with spaces around it.
+    description: settings.description || undefined,
     status: settings.status === true,
     localized: settings.i18n === true,
     versions: when("versions", settings.versions === true),

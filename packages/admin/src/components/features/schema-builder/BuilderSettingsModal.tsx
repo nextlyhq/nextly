@@ -120,12 +120,20 @@ const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
  * one way in the row and another in the file, and replaying the manifest
  * visibly changed the value a person had saved.
  *
- * Empty becomes `undefined` rather than `""`, because that is the difference
- * between "no description" and "a description that is blank", and only the
- * first is a thing a reader can mean.
+ * 🔴 TRIMMED, and nothing else. An emptied box stays `""` and must not become
+ * `undefined`: the update handlers all read `description !== undefined` as "the
+ * caller is not talking about this field", and `JSON.stringify` drops an
+ * undefined property entirely — so clearing a description would leave the old
+ * one in the database while the manifest's full replace dropped it, with the
+ * interface reporting success either way. `""` is a person saying "remove it",
+ * which is a different message from not mentioning it, and only the request can
+ * carry that difference.
+ *
+ * What the MANIFEST does with an empty description is the manifest's own
+ * question, answered where its entity is built.
  */
 function normalized(values: BuilderSettingsValues): BuilderSettingsValues {
-  return { ...values, description: values.description?.trim() || undefined };
+  return { ...values, description: values.description?.trim() };
 }
 
 const EMPTY_VALUES: BuilderSettingsValues = {

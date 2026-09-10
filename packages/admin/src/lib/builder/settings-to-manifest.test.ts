@@ -110,6 +110,25 @@ describe("the projection carries every setting the manifest declares", () => {
     expect(entity.labels).toEqual({ singular: "Post", plural: "Post" });
   });
 
+  it("omits a cleared description from the manifest, in every kind", () => {
+    // 🔴 The manifest can only carry a description or not carry one; there is
+    // no key that means "cleared". `ManifestEntity.description` records that
+    // limitation, and writing `""` would publish a description that IS the
+    // empty string, which is a different claim from having none. The database
+    // still receives the explicit `""` that clears the column — see
+    // `BuilderSettingsModal`.
+    const settings = { ...EVERY_SETTING, description: "" };
+    expect(
+      collectionEntityFromSettings("posts", settings, []).description
+    ).toBeUndefined();
+    expect(
+      singleEntityFromSettings("home", settings, []).description
+    ).toBeUndefined();
+    expect(
+      fieldGroupEntityFromSettings("seo", settings, []).description
+    ).toBeUndefined();
+  });
+
   it("passes the description through, because it was normalised at the form", () => {
     // 🔴 The projection deliberately does NOT trim. It once did, and that made
     // it the only writer that normalised: the create and update REQUESTS send

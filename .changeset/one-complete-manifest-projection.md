@@ -43,7 +43,8 @@ one — a component has no entries of its own, so those belong to whatever embed
 it. It refuses the key rather than the value, so a shared projection had to leave
 them out rather than send `false`.
 
-A description is also normalised in one place now — the settings form both writes
+A description is also trimmed in one place now — the settings form both writes
 read from — so the record in the database and the entry in the file can no longer
-disagree about one. And saving a field group's fields before its settings have
+disagree about one with spaces around it. Clearing a description still sends the
+value that clears it, which is not the same as saying nothing about the field. And saving a field group's fields before its settings have
 loaded no longer replaces its entry with a nameless one.

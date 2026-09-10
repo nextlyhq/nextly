@@ -65,12 +65,22 @@ describe("BuilderSettingsModal — what it hands the page", () => {
     ).toBe("Long-form writing");
   });
 
-  it("hands back nothing for a description that is only whitespace", () => {
-    // "No description" and "a description that is blank" are different things
-    // and only the first is one a reader can mean. `undefined` is also what
-    // makes the manifest projection omit the key rather than write "".
-    expect(submitted({ description: "   " }).description).toBeUndefined();
-    expect(submitted({ description: "" }).description).toBeUndefined();
+  it("keeps a CLEARED description as an explicit empty string", () => {
+    // 🔴 Not `undefined`. Every update handler reads `description !== undefined`
+    // as "the caller is not talking about this field", and `JSON.stringify`
+    // drops an undefined property — so an emptied box would leave the old
+    // description in the database while the manifest's full replace dropped it,
+    // and the interface would report success. `""` is the only value that says
+    // "remove it".
+    expect(submitted({ description: "   " }).description).toBe("");
+    expect(submitted({ description: "" }).description).toBe("");
+  });
+
+  it("still hands back undefined when there was never a description", () => {
+    // The control for the case above: "" must mean CLEARED, so an absent one
+    // must not also arrive as "" — that would turn every save of an entity
+    // without a description into an instruction to clear one.
+    expect(submitted({}).description).toBeUndefined();
   });
 
   it("leaves every other answer exactly as it was", () => {
