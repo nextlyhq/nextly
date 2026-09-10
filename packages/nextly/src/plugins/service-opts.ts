@@ -21,7 +21,20 @@ import type { AuthUser } from "../types/auth";
  * DB RBAC, for now (documented v1 limitation).
  */
 export interface ServiceOpts {
-  as?: "user" | "system";
+  /**
+   * Who this operation runs as.
+   *
+   * `user` is a signed-in caller and requires one. `system` is the plugin
+   * acting on its own behalf, and bypasses the access check.
+   *
+   * `public` is a caller with no session AT ALL, with the collection's access
+   * rules still enforced. A plugin serving a `public: true` route needs it and
+   * had no way to say it: `user` throws without a user, and everything else
+   * elevated to `system`, so a public route could only read by bypassing the
+   * host's configured rules. Route auth and collection access are separate
+   * questions, and `public: true` answers only the first.
+   */
+  as?: "user" | "system" | "public";
   user?: AuthUser;
   /**
    * Arbitrary data handed to this operation's hooks as `ctx.context`.
@@ -81,6 +94,14 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   // exception, so the ambient value is what makes the key's grants reach the
   // access check at all.
   const authenticatedScope = effectiveCallerScope(opts.authenticatedScope);
+
+  // No caller, rules still enforced. Named rather than inferred from an absent
+  // `user`, because that shape already means "system" and quietly changing it
+  // would elevate nothing and demote every existing plugin call at once.
+  if (as === "public") {
+    return { overrideAccess: false, context, request };
+  }
+
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {

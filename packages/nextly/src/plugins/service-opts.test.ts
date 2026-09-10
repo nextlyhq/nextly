@@ -34,6 +34,44 @@ describe("resolveServiceOpts", () => {
     });
   });
 
+  /**
+   * The mode a public plugin route needs, and the one that did not exist.
+   *
+   * `public: true` on a route waives the ROUTE's authentication. It says
+   * nothing about the collections behind it, and before this mode a route
+   * serving an anonymous visitor had no way to say so: `user` throws without a
+   * user, and every other spelling set `overrideAccess`. So a public route
+   * could only read by bypassing whatever the host had configured.
+   */
+  it("as:'public' enforces access with no user at all", () => {
+    expect(resolveServiceOpts({ as: "public" })).toEqual({
+      overrideAccess: false,
+    });
+  });
+
+  it("as:'public' does not become a user when one is in scope", () => {
+    // A route may hold a `user` for other reasons while deliberately reading as
+    // the public. Letting the presence of one silently upgrade the mode would
+    // make the elevation depend on an unrelated field.
+    expect(
+      resolveServiceOpts({
+        as: "public",
+        user: { id: "u1", email: "u@e.com", name: "U" },
+      })
+    ).toEqual({ overrideAccess: false });
+  });
+
+  it("as:'public' is the ONLY mode that enforces without a user", () => {
+    // The control that makes the two above mean something. If any other
+    // spelling also enforced, a route could reach the right behaviour by
+    // accident and this mode would not need to exist.
+    const enforcingWithoutUser = (
+      [{}, { as: "system" as const }, { as: "public" as const }] as const
+    ).filter(opts => resolveServiceOpts(opts).overrideAccess === false);
+
+    expect(enforcingWithoutUser).toEqual([{ as: "public" }]);
+  });
+
   it("as:'user' without a user throws", () => {
     expect(() => resolveServiceOpts({ as: "user" })).toThrow();
   });

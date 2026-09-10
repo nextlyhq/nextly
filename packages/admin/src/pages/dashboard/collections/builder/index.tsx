@@ -24,8 +24,8 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
 import { toSnakeName } from "@admin/lib/builder";
+import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { startingFields } from "@admin/lib/builder/starting-field";
-import { collectionToManifestEntity } from "@admin/lib/builder/to-manifest-entity";
 import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 
@@ -52,7 +52,7 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
       {
         name: slug,
         labels: { singular, plural },
-        description: values.description?.trim() || undefined,
+        description: values.description,
         icon: values.icon,
         // tab. Code-first config can still set admin.group / admin.order;
         // we just don't surface them in the create modal.
@@ -94,25 +94,13 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
           void (async () => {
             try {
               await schemaFileApi.writeCollection(
-                collectionToManifestEntity({
+                collectionEntityFromSettings(
                   slug,
-                  settings: {
-                    singularName: singular,
-                    pluralName: plural,
-                    status: values.status === true,
-                    // keep ui-schema.json in sync with the localized flag.
-                    localized: values.i18n === true,
-                    // and with version history.
-                    versions: values.versions === true,
-                    // and with its retention setting.
-                    versionsMaxPerDoc: values.versionsMaxPerDoc,
-                    // and with cache revalidation (on unless explicitly off).
-                    revalidate: values.revalidate !== false,
-                    // and with webhook recording (on unless explicitly off).
-                    webhooks: values.webhooks !== false,
-                  },
-                  fields: [],
-                })
+                  // The names the form collected, which are not yet on `values`
+                  // at create time.
+                  { ...values, singularName: singular, pluralName: plural },
+                  []
+                )
               );
             } catch (err) {
               const m = (err as { message?: string })?.message;

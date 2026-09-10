@@ -1,11 +1,16 @@
 /**
  * What a request with no user meets on the way through, at both layers.
  *
- * The coarse RBAC gate needs a user in order to have permissions to check, so
- * it does not run for an anonymous caller. The stored rules run regardless, and
- * that is where the caller is refused: an `owner-only` rule has nobody to
- * compare against and denies. Skipping the gate is therefore not a way past the
- * rules, and the two must not be confused for each other.
+ * The gate is two things, and only one of them needs a user. The DB PERMISSION
+ * check does, so it does not run for an anonymous caller. The collection's own
+ * CODE-DEFINED rule does not: it reads nothing off the caller, and it is
+ * consulted. Treating the two as one is what left `access: { create: false }`
+ * accepted at boot and never asked.
+ *
+ * The stored rules run regardless, and are where an `owner-only` rule refuses:
+ * it has nobody to compare against and denies. So skipping the permission check
+ * is not a way past the rules, and the three layers must not be confused for
+ * one another.
  *
  * Driven through `checkCollectionAccess` with the real leaf evaluator, because
  * this is a claim about how the layers combine. Calling the evaluator directly
@@ -32,6 +37,8 @@ function buildService(accessRules: Record<string, unknown>) {
   // tests assert.
   const rbac = {
     checkAccess: vi.fn().mockResolvedValue(true),
+    // Answers `undefined`: no code-defined rule, so the stored rules decide.
+    checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     getRegisteredAccess: vi.fn().mockReturnValue(undefined),
   };
   const service = new CollectionAccessService(

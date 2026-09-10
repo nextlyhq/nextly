@@ -6,9 +6,12 @@
 // AdvancedTab tests in their own files; this file only verifies the wiring.
 import { describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
-import { BuilderSettingsModal } from "../BuilderSettingsModal";
+import {
+  BuilderSettingsModal,
+  type BuilderSettingsValues,
+} from "../BuilderSettingsModal";
 import type { BuilderConfig } from "../builder-config";
 
 const collectionConfig: BuilderConfig = {
@@ -26,6 +29,74 @@ const componentConfig: BuilderConfig = {
   toolbar: { previewSchemaChange: false },
   picker: {},
 };
+
+describe("BuilderSettingsModal — what it hands the page", () => {
+  /** Submit with `initialValues` and hand back the single argument onSubmit got. */
+  function submitted(values: Partial<BuilderSettingsValues>) {
+    const onSubmit = vi.fn();
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={{
+          singularName: "Post",
+          slug: "posts",
+          icon: "Database",
+          ...values,
+        }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    return onSubmit.mock.calls[0][0] as BuilderSettingsValues;
+  }
+
+  it("trims the description before anyone writes it", () => {
+    // 🔴 A settings save fans out to TWO writes — the create/update request and
+    // the `ui-schema.json` projection — describing the same entity. Normalising
+    // in one of them is what let a row and the file record different
+    // descriptions, so replaying the manifest visibly changed a saved value.
+    // Trimmed here, at the one boundary both of them read from.
+    expect(
+      submitted({ description: "  Long-form writing  " }).description
+    ).toBe("Long-form writing");
+  });
+
+  it("keeps a CLEARED description as an explicit empty string", () => {
+    // 🔴 Not `undefined`. Every update handler reads `description !== undefined`
+    // as "the caller is not talking about this field", and `JSON.stringify`
+    // drops an undefined property — so an emptied box would leave the old
+    // description in the database while the manifest's full replace dropped it,
+    // and the interface would report success. `""` is the only value that says
+    // "remove it".
+    expect(submitted({ description: "   " }).description).toBe("");
+    expect(submitted({ description: "" }).description).toBe("");
+  });
+
+  it("still hands back undefined when there was never a description", () => {
+    // The control for the case above: "" must mean CLEARED, so an absent one
+    // must not also arrive as "" — that would turn every save of an entity
+    // without a description into an instruction to clear one.
+    expect(submitted({}).description).toBeUndefined();
+  });
+
+  it("leaves every other answer exactly as it was", () => {
+    // The control. Normalising at this boundary must not become a second place
+    // that quietly reshapes the values — only the description is touched.
+    const values = submitted({
+      status: true,
+      i18n: true,
+      category: "  Content  ",
+    });
+    expect(values.status).toBe(true);
+    expect(values.i18n).toBe(true);
+    expect(values.category).toBe("  Content  ");
+    expect(values.singularName).toBe("Post");
+  });
+});
 
 describe("BuilderSettingsModal — shell", () => {
   it("renders the kind-aware title in create mode", () => {
