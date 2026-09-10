@@ -83,6 +83,17 @@ const spelledNotes = defineCollection({
   fields: [
     text({ name: "title" }),
     text({
+      name: "writeGated",
+      // Gated on CREATE, so a transactional write reaches a FIELD-level gate.
+      // The coarse collection check is not the only gate a write passes, and it
+      // is the only one an explicit `authenticatedScope` argument ever reached;
+      // this field is what makes the difference observable.
+      access: {
+        create: ({ permissions }: { permissions: string[] }) =>
+          permissions.includes("posts:read"),
+      },
+    } as never),
+    text({
       name: "gatedByPermission",
       // A DIFFERENT grant from the collection's own read rule above. Narrowing
       // this one away must hide the field while leaving the row readable; gate
@@ -211,11 +222,58 @@ const gatePlugin = definePlugin({
               collections.createEntryInTransaction(
                 tx,
                 "notes",
-                { title: "written after giving up the grant" },
+                {
+                  title: "written after giving up the grant",
+                  writeGated: "should be stripped",
+                },
                 { user: ctx.user ?? undefined, authenticatedScope: narrowed }
               )
             );
             return Response.json({ wrote: true });
+          } catch (error) {
+            return Response.json(
+              { wrote: false, reason: String(error) },
+              { status: 403 }
+            );
+          }
+        },
+      },
+      {
+        method: "POST",
+        path: "/tx-field-narrowed",
+        /**
+         * Surrenders ONLY the grant a FIELD rule reads, keeping the coarse
+         * one — so the write passes the collection gate and the field gate is
+         * the one that has to see the narrowing.
+         *
+         * This is what the pin exists for. The coarse gate also takes the scope
+         * as an argument, so a test that stops there passes whether or not
+         * anything was pinned; the gates behind it have no argument to take.
+         */
+        handler: async (_req, ctx) => {
+          const narrowed = narrowScope(
+            ctx.authenticatedScope,
+            grant => grant.slug !== "read-posts"
+          );
+          const collections = ctx.services.collections as unknown as {
+            withTransaction: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
+            createEntryInTransaction: (
+              tx: unknown,
+              slug: string,
+              data: Record<string, unknown>,
+              context: Record<string, unknown>
+            ) => Promise<{ id: string }>;
+          };
+          try {
+            const created = await collections.withTransaction(async tx =>
+              collections.createEntryInTransaction(
+                tx,
+                "notes",
+                { title: "field gate", writeGated: "should be stripped" },
+                { user: ctx.user ?? undefined, authenticatedScope: narrowed }
+              )
+            );
+            return Response.json({ wrote: true, id: created.id });
           } catch (error) {
             return Response.json(
               { wrote: false, reason: String(error) },
@@ -393,6 +451,7 @@ function post(
     | "narrow-then-read"
     | "tx-plain"
     | "tx-narrowed"
+    | "tx-field-narrowed"
     | "tx-delete-narrowed"
     | "can-read-notes"
     | "mutate-scope",
@@ -823,6 +882,39 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
         "that re-pins an explicit scope, so the narrowing reached the argument " +
         `and never a gate. ${body.reason ?? ""}`
     ).toBe(false);
+  });
+
+  it("carries a narrowing to a FIELD gate inside a transaction write", async () => {
+    const key = await viewerKeyOwnedBySuperAdmin();
+
+    const res = await post("tx-field-narrowed", {
+      authorization: `Bearer ${key}`,
+    });
+    const body = (await res.json()) as {
+      wrote: boolean;
+      id?: string;
+      reason?: string;
+    };
+    // The control. The route kept `create-notes`, so the write must go through
+    // — otherwise the field is absent because the whole write was refused, and
+    // the assertion below cannot tell that from a narrowing that worked.
+    expect(
+      body.wrote,
+      `the coarse grant was kept, so the write must succeed. ${body.reason ?? ""}`
+    ).toBe(true);
+
+    const rows = await handle!.adapter.select<{
+      title: string;
+      writeGated?: string | null;
+    }>("dc_notes", {});
+    const written = rows.find(row => row.title === "field gate");
+    expect(written, "the row must exist to inspect").toBeDefined();
+    expect(
+      written?.writeGated ?? null,
+      "the route surrendered `read-posts` and the field gated on it was " +
+        "written anyway. The coarse gate takes the scope as an argument; the " +
+        "field gate reads the ambient one, so only pinning reaches it."
+    ).toBeNull();
   });
 
   it("carries a narrowing into a transaction DELETE", async () => {
