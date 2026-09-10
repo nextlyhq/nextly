@@ -25,6 +25,9 @@ export const nextlyDocumentLock = mysqlTable(
     // would otherwise disagree about when this claim ends by five hours.
     acquiredAt: datetime("acquired_at").notNull(),
     expiresAt: datetime("expires_at").notNull(),
+    // See `./postgres.ts` for what this is. Written from `UTC_TIMESTAMP()` like
+    // the two above, and for the same reason.
+    waitingUntil: datetime("waiting_until"),
   },
   t => [
     index("ndl_expires_at_idx").on(t.expiresAt),

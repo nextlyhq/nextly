@@ -70,13 +70,18 @@ import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
 import { canvasPointerPoints, canvasRootFrom } from "./geometry-dom";
 import type { SideOrientation } from "./side-orientation";
-import type { EdgeLengths, SpacingBand, SpacingSide } from "./spacing-bands";
+import type {
+  EdgeLengths,
+  SpacingBand,
+  SpacingBox,
+  SpacingSide,
+} from "./spacing-bands";
 import {
   logicalSideFor,
   spacingAddress,
   spacingCssValue,
   spacingDelta,
-  spacingGrowsOutward,
+  spacingBandDrawnOutward,
   spacingKeyDelta,
   spacingSidesFor,
   spacingStart,
@@ -113,15 +118,20 @@ export interface SpacingSubject {
    */
   readonly orientation: SideOrientation | undefined;
   /**
-   * Whether each padding side's OUTER edge is the one that moves.
+   * Whether each band thickens AWAY from the block, per box and side.
    *
-   * Measured from the element rather than assumed, because it depends on the
-   * block's sizing model: on a block whose height fits its content the border
-   * edge moves outward, and on one with a fixed height the content edge moves
-   * inward. See `padding-response.ts`. A handle placed on the wrong edge sits
-   * still while the block grows away from it, and the drag runs backwards.
+   * MEASURED rather than assumed, for both boxes. Which edge moves depends on
+   * the layout: a block whose height fits its content grows its border edge
+   * outward when its padding grows, one with a fixed height moves the content
+   * edge inward — and a `margin-top` in normal flow moves the border edge down
+   * while its outer edge stays pinned by whatever precedes it, which is the
+   * opposite of what `margin-bottom` does. See `spacing-response.ts`. A handle
+   * placed on the wrong edge sits still while the block moves away from it, and
+   * the drag runs backwards.
    */
-  readonly paddingOutward: Readonly<Record<SpacingSide, boolean>>;
+  readonly outward: Readonly<
+    Record<SpacingBox, Readonly<Record<SpacingSide, boolean>>>
+  >;
 }
 
 /** The tier a scrub writes to, and what the canvas compiled it with. */
@@ -170,6 +180,17 @@ const HANDLE_PX = 9;
 /** A gesture in flight. */
 interface Gesture {
   readonly band: SpacingBand;
+  /**
+   * Which way the value grows, frozen at the press.
+   *
+   * A drag must not reverse under the hand. The answer is MEASURED, so it can
+   * change while the pointer is down — the drag's own preview resizes the block,
+   * and a block that gains a settled width answers the opposite way — and a
+   * gesture that read it fresh would send the pointer one way and the number the
+   * other, mid-stroke. Frozen for the same reason as the scale and the starting
+   * values above it: these are properties OF the gesture.
+   */
+  readonly valueOutward: boolean;
   /** Every side of this box that has a usable starting value. */
   readonly starts: ReadonlyMap<SpacingSide, number>;
   /** Why each remaining side has none. See `commit`. */
@@ -270,10 +291,9 @@ function handleRect(band: SpacingBand, outward: boolean, nudged = false): Rect {
   const far = side === "bottom" || side === "right";
   /*
    * The edge that MOVES when the value grows, which is where the control
-   * belongs. `outward` says which one that is, and it is not a property of the
-   * box alone: a margin always thickens away from the block and a negative one
-   * always inward, but a padding depends on the block's sizing model and is
-   * measured. See `spacingGrowsOutward` and `padding-response.ts`.
+   * belongs. `outward` says which one that is, and it is a property of neither
+   * the box nor the side: both boxes depend on the block's sizing model, so both
+   * are measured. See `spacingBandDrawnOutward` and `spacing-response.ts`.
    */
   const atMax = far === outward;
   const half = HANDLE_PX / 2;
@@ -422,6 +442,15 @@ export function SpacingHandles({
    * decision and has to survive the re-render the measurement causes.
    */
   const [held, setHeld] = React.useState<SpacingBand | null>(null);
+  /**
+   * The edge a POINTER gesture's handle sits on, frozen at the press.
+   *
+   * `null` whenever no pointer gesture is live, which includes a band merely
+   * held by focus: each key press is an edit of its own and reads the current
+   * measurement, so freezing there would pin the handle to an answer the block
+   * has stopped giving.
+   */
+  const [drawnOutward, setDrawnOutward] = React.useState<boolean | null>(null);
   const [message, setMessage] = React.useState("");
 
   const { document: doc } = editor;
@@ -492,21 +521,65 @@ export function SpacingHandles({
   latest.current.scale = scaleKey;
 
   /**
-   * Which way each band thickens, and therefore which edge carries its handle
-   * and which way a drag on it grows the value.
+   * Which edge of the drawn band carries its handle, and ONLY that.
    *
-   * Structural for a margin — it lies outside the border box and never moves
-   * it. MEASURED for a padding, because it depends on whether the block's size
-   * along that axis is settled by its content: see `padding-response.ts`.
+   * Not the direction a drag grows the value: `valueOutwardOf` below answers
+   * that, unmirrored, and the two disagree for a negative band — which is drawn
+   * reflected across the border edge while the edge the layout moves stays
+   * where it was. Reading placement as direction runs those drags backwards.
+   *
+   * MEASURED for both boxes, a margin no less than a padding. The reasoning that
+   * makes a margin look structural — that it lies outside the border box and so
+   * cannot move it — is one the element disagrees with: growing `margin-top`
+   * drives the border edge down while the outer edge stays pinned by whatever
+   * precedes it. See `spacing-response.ts`, which asks rather than assumes.
    */
-  const outwardOf = React.useCallback(
+  const drawnOutwardOf = React.useCallback(
     (band: SpacingBand): boolean =>
-      spacingGrowsOutward(
-        band.box,
+      spacingBandDrawnOutward(
         band.negative,
-        subject.paddingOutward[band.side]
+        subject.outward[band.box][band.side]
       ),
-    [subject.paddingOutward]
+    [subject.outward]
+  );
+
+  /**
+   * Which way the VALUE grows, which is a different question from where the
+   * handle sits.
+   *
+   * The measured answer, taken unmirrored. A negative band is drawn reflected
+   * across the border edge, so its rectangle's far edge swaps — but the
+   * physical edge that responds does not, and neither does the arithmetic:
+   * raising a `margin-top` from `-20px` to `-10px` moves the border edge down,
+   * exactly as raising a positive one does. Feeding the mirrored answer to
+   * `spacingDelta` made a drag on the correctly placed handle commit `-30px`
+   * and run the block away from the pointer.
+   */
+  const valueOutwardOf = React.useCallback(
+    (band: SpacingBand): boolean => subject.outward[band.box][band.side],
+    [subject.outward]
+  );
+
+  /**
+   * Where this band's handle sits, holding still for the band being dragged.
+   *
+   * Everything else takes the current measurement. The band under a pointer
+   * takes the one its gesture began with, because the alternative is a handle
+   * that jumps to the opposite edge of its own band mid-stroke: the drag's
+   * preview resizes the block, a block that gains a settled width answers the
+   * other way, and the arithmetic is frozen at the press regardless. Reading the
+   * two from different moments is what puts the pointer and the number in
+   * disagreement.
+   */
+  const drawnEdgeOf = React.useCallback(
+    (band: SpacingBand): boolean => {
+      const dragging =
+        held !== null && held.box === band.box && held.side === band.side;
+      return dragging && drawnOutward !== null
+        ? drawnOutward
+        : drawnOutwardOf(band);
+    },
+    [drawnOutward, drawnOutwardOf, held]
   );
 
   const targetFor = React.useCallback(
@@ -746,6 +819,7 @@ export function SpacingHandles({
     gesture.current = null;
     setPreview(null);
     setHeld(null);
+    setDrawnOutward(null);
     if (live === null) return;
     live.detach();
     if (live.active && live.host.hasPointerCapture?.(live.pointerId) === true) {
@@ -883,7 +957,7 @@ export function SpacingHandles({
           live.band.side,
           canvas,
           subject.scales,
-          outwardOf(live.band)
+          live.valueOutward
         );
         if (delta === undefined) return;
         const shown = modifiersOf(moved);
@@ -900,7 +974,7 @@ export function SpacingHandles({
             live.band.side,
             travelled(lifted).canvas,
             subject.scales,
-            outwardOf(live.band)
+            live.valueOutward
           );
           if (delta !== undefined) {
             /*
@@ -950,8 +1024,14 @@ export function SpacingHandles({
       };
 
       setHeld(band);
+      /*
+       * Frozen together, from one reading, so the edge the handle sits on and
+       * the direction the number moves cannot come from different measurements.
+       */
+      setDrawnOutward(drawnOutwardOf(band));
       gesture.current = {
         band,
+        valueOutward: valueOutwardOf(band),
         starts,
         refusals,
         shown: modifiersOf(event),
@@ -967,7 +1047,15 @@ export function SpacingHandles({
       owner.addEventListener("pointercancel", onCancel);
       owner.addEventListener("keydown", onEscape);
     },
-    [commit, endGesture, outwardOf, showPreview, startsFor, subject.scales]
+    [
+      commit,
+      drawnOutwardOf,
+      endGesture,
+      showPreview,
+      startsFor,
+      subject.scales,
+      valueOutwardOf,
+    ]
   );
 
   /*
@@ -1012,7 +1100,7 @@ export function SpacingHandles({
         event.key,
         band.box,
         band.side,
-        outwardOf(band)
+        valueOutwardOf(band)
       );
       if (delta === undefined) return;
       /*
@@ -1041,7 +1129,7 @@ export function SpacingHandles({
       setHeld(band);
       commit(band, starts, refusals, delta, modifiersOf(event));
     },
-    [commit, outwardOf, startsFor]
+    [commit, startsFor, valueOutwardOf]
   );
 
   /*
@@ -1072,7 +1160,7 @@ export function SpacingHandles({
     held === null ||
     bands.some(band => band.box === held.box && band.side === held.side)
       ? bands
-      : [...bands, collapsed(held, outwardOf(held))];
+      : [...bands, collapsed(held, drawnEdgeOf(held))];
 
   if (orientation === undefined || nodeClass === undefined) {
     /*
@@ -1107,11 +1195,13 @@ export function SpacingHandles({
          * them occupy. Both strips then take pointer events and neither leaves
          * the space it describes.
          */
-        const outward = outwardOf(band);
+        const outward = drawnEdgeOf(band);
         const rect = handleRect(
           band,
           outward,
-          drawn.slice(index + 1).some(later => sameEdge(band, later, outwardOf))
+          drawn
+            .slice(index + 1)
+            .some(later => sameEdge(band, later, drawnEdgeOf))
         );
         return (
           <div

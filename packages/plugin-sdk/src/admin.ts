@@ -510,10 +510,20 @@ export { usePluginRoute } from "@nextlyhq/admin";
  * learn rather than two.
  */
 export { usePluginRouteMutation } from "@nextlyhq/admin";
+/**
+ * `PluginRouteInvalidation` is what a write names as gone stale. A plugin
+ * serving both mounts has to say which one an entry belongs to, so the type has
+ * to be nameable by the author building that array rather than reconstructed
+ * from the hook's parameter.
+ *
+ * Stated here rather than inside the export list: the public-surface snapshot
+ * reads that list as names, so a comment between them is recorded as one.
+ */
 export type {
   PluginRouteMethod,
   PluginRouteWrite,
   PluginRouteWriter,
+  PluginRouteInvalidation,
 } from "@nextlyhq/admin";
 export type { PluginRouteRead, PluginRouteRequest } from "@nextlyhq/admin";
 

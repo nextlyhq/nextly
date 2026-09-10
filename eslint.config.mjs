@@ -47,7 +47,7 @@ export default [
   // rule that lives only in the package config is absent from every root invocation — which
   // includes lint-staged, the hook that runs before a commit is written. Same reason as the
   // React block above.
-  bareErrorConfig("packages/nextly/"),
+  ...bareErrorConfig("packages/nextly/"),
   ...designTokensConfig(ADMIN_UI_FILES),
   {
     ignores: [
@@ -77,6 +77,7 @@ export default [
       // reason: same as the configs above — a rule module beside a package's eslint config is
       // not in that package's tsconfig project, so typed linting cannot resolve it.
       "packages/nextly/eslint-bare-error-rule.js",
+      "packages/nextly/eslint-api-key-scope-rule.js",
       // reason: vitest config files aren't in any tsconfig project either.
       // F18 added vitest.integration.config.ts as a sibling of vitest.config.ts
       // to split unit/integration suites; both are config-only and not

@@ -17,9 +17,29 @@
  *
  * @module plugins/routes/route-path
  */
+
+import type { PluginRouteMount } from "./route-types";
+
+/**
+ * The first segment every namespaced route sits under.
+ *
+ * Read by the reachability check that refuses a root route here, and by the
+ * boot predicate that uses it to rule the namespaced pass out for a path that
+ * cannot be under it. Both were spelling the literal themselves, which is the
+ * same agreement-by-retyping the path builder below exists to end.
+ */
+export const PLUGIN_NAMESPACE_SEGMENT = "plugins";
+
 export function pluginRouteFullPath(
   pluginName: string,
-  routePath: string
+  routePath: string,
+  mount: PluginRouteMount = "plugin"
 ): string {
-  return `/plugins/${pluginName}${routePath}`;
+  // A root route answers at the address it declares. It is still collected and
+  // collision-checked like any other, and the dispatcher consults it only after
+  // the built-in router declines, so the namespace it gives up buys no reach
+  // into anything core serves.
+  return mount === "root"
+    ? routePath
+    : `/${PLUGIN_NAMESPACE_SEGMENT}/${pluginName}${routePath}`;
 }

@@ -282,6 +282,7 @@ export type {
   PluginRouteCaller,
   PluginRouteContext,
   PluginRouteHandler,
+  PluginRouteMount,
   Middleware,
   RouteMethod,
   AuthenticatedScope,

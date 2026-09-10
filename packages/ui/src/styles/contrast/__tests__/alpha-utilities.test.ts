@@ -461,7 +461,22 @@ function unacceptedFailures(
   );
 }
 
-describe("alpha-opacity color utilities", () => {
+/*
+ * 🔴 Budgeted for a repository scan, because that is what these cases do.
+ *
+ * `scanCombos` walks every scanned package's source for colour utilities, and
+ * two cases then measure each match against both themes. On an idle machine
+ * they take 2818ms and 2695ms, against vitest's 5000ms default: more than half
+ * the budget with nothing else running. Under `pnpm turbo test`, which runs
+ * every package's suite at once, one of them crossed it and failed a push with
+ * "Test timed out in 5000ms" while passing on its own moments earlier.
+ *
+ * A timeout that only fires when the machine is busy reports a contrast defect
+ * that does not exist, and teaches the next person to re-run rather than to
+ * read it. The budget is stated on the block so a case added here inherits it,
+ * and it is sized for contention rather than for the measured time.
+ */
+describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   const combos = scanCombos();
 
   it("finds utilities to scan (guards against a broken scan)", () => {

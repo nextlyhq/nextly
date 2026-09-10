@@ -62,6 +62,19 @@ export const nextlyDocumentLock = pgTable(
     ownerLabel: varchar("owner_label", { length: 255 }),
     acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // A standing request to edit, held on a lease of its own.
+    //
+    // Null while nobody is asking. The editor that is locked out re-states it on
+    // the SAME heartbeat the holder renews the claim on, so this column answers
+    // "is somebody waiting right now" rather than "did somebody once ask": a
+    // requester who closed the tab stops refreshing it and the mark lapses
+    // within one TTL, instead of nudging the holder forever on behalf of a
+    // colleague who left. Cleared outright whenever the claim changes hands,
+    // because a request is about the claim it was made against.
+    //
+    // Not indexed. It is only ever read through the primary key, on the row the
+    // heartbeat has already fetched.
+    waitingUntil: timestamp("waiting_until", { withTimezone: true }),
   },
   t => [
     index("ndl_expires_at_idx").on(t.expiresAt),
