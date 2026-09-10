@@ -199,6 +199,59 @@ export class RBACAccessControlService {
    * @param resource - The collection/single slug
    * @returns Fully resolved AccessControlContext
    */
+  /**
+   * A collection's code-defined rule, judged for a caller with NO session.
+   *
+   * `checkAccess` above cannot answer this: it returns `false` at `!userId`
+   * before it reads the rule, because everything below that line resolves roles
+   * and permissions from a user id. So an anonymous caller reached no rule at
+   * all, and a collection declaring `create: false` or `read: ({ user }) =>
+   * !!user` was judged only on its STORED rules, which is a different place and
+   * usually empty. The declaration was accepted, recorded and never consulted.
+   *
+   * Answers `undefined` when no code-defined rule governs this operation, which
+   * means "no opinion" and leaves the stored rules to decide. A boolean is a
+   * verdict.
+   *
+   * The context is a real anonymous one rather than a stand-in: `user` is
+   * `null`, which the type has always allowed, and both lists are empty. A rule
+   * reading `roles` sees no roles, which is the truth about this caller.
+   */
+  async checkAnonymousCodeAccess(params: {
+    operation: AccessOperation;
+    resource: string;
+    codeAccess?: CollectionAccessControl | SingleAccessControl;
+  }): Promise<boolean | undefined> {
+    const { operation, resource } = params;
+    const codeAccess = params.codeAccess ?? this.getRegisteredAccess(resource);
+    const rule =
+      codeAccess?.[
+        operation as keyof (CollectionAccessControl | SingleAccessControl)
+      ];
+
+    if (rule === undefined) return undefined;
+    if (typeof rule === "boolean") return rule;
+    if (typeof rule !== "function") return undefined;
+
+    try {
+      return await rule({
+        user: null,
+        roles: [],
+        permissions: [],
+        operation,
+        collection: resource,
+      });
+    } catch (error) {
+      // Fail-secure, exactly as the authenticated path does. A rule that threw
+      // did not allow anything.
+      console.error(
+        `[rbac] Code access function for ${operation}:${resource} threw:`,
+        error
+      );
+      return false;
+    }
+  }
+
   async buildContext(
     userId: string,
     operation: AccessOperation,

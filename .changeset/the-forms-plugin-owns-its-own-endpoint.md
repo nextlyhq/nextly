@@ -64,3 +64,12 @@ stored times in the installation's timezone the way the built-in read does.
 
 The response envelopes and `trustedClientIp` are re-exported through
 `@nextlyhq/plugin-sdk`, which is the surface a plugin author is promised.
+
+A collection's code-defined `access` rule is now evaluated for a caller with no
+session. The coarse gate resolved roles and permissions from a user id and so
+returned early without one, which meant `access: { create: false }` and
+`read: ({ user }) => !!user` were accepted at boot, recorded, and never asked
+about the one caller they most clearly describe. Only the stored rules ran,
+which live elsewhere and are usually empty, so the declaration was inert while
+looking deliberate. The DB permission check still needs a user and still does
+not run without one.

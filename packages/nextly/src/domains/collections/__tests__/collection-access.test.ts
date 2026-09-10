@@ -412,6 +412,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     it("should deny when RBAC service denies access", async () => {
       const rbac = {
         checkAccess: vi.fn().mockResolvedValue(false),
+        // Answers `undefined`: no code-defined rule, so the stored rules decide.
+        checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       };
       const { service } = buildService({
         rbacAccessControlService: rbac,
@@ -436,6 +438,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     it("should allow when RBAC service allows access", async () => {
       const rbac = {
         checkAccess: vi.fn().mockResolvedValue(true),
+        // Answers `undefined`: no code-defined rule, so the stored rules decide.
+        checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       };
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
@@ -473,6 +477,8 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     it("should skip RBAC when no user is provided", async () => {
       const rbac = {
         checkAccess: vi.fn().mockResolvedValue(false),
+        // Answers `undefined`: no code-defined rule, so the stored rules decide.
+        checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       };
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
@@ -484,8 +490,12 @@ describe("CollectionEntryService — Access Control Contracts", () => {
         // No user provided
       });
 
-      // RBAC only runs when user is provided
+      // The DB permission check needs a user to have permissions for, so it
+      // still does not run. The code-defined rule does: it reads nothing off
+      // the caller, and skipping it left a collection's own `access` inert for
+      // exactly the caller it describes.
       expect(rbac.checkAccess).not.toHaveBeenCalled();
+      expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalled();
       expect(result.success).toBe(true);
     });
   });
@@ -1097,6 +1107,8 @@ describe("publish-transition access control", () => {
     });
     const rbac = {
       checkAccess: vi.fn().mockResolvedValue(true),
+      // Answers `undefined`: no code-defined rule, so the stored rules decide.
+      checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       getRegisteredAccess: vi.fn().mockReturnValue(undefined),
     };
     const { service, selectData } = buildService({
