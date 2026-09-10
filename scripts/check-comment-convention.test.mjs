@@ -19,7 +19,6 @@ import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  ALLOWLIST_FILE,
   DEFAULT_ROOTS,
   EXCLUDED_FILES,
   FORBIDDEN,

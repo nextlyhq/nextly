@@ -515,6 +515,17 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
+      # The dev-tooling scripts, which no other lint reaches. `turbo run lint`
+      # is per-package and stops at the workspace boundary, and the shared
+      # eslint config ignores `**/scripts/**/*` because type-aware linting
+      # cannot resolve files outside a tsconfig project. That ignore takes the
+      # UNTYPED rules with it, so an undefined reference in a release script
+      # reached a pull request with the whole scripts suite green: the
+      # reference was in the command-line block no test enters.
+      - name: Scripts lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:scripts
+
       # Identified for the same reason `install` is, and the reason is in
       # AGENTS.md rather than here: these steps read `dist`, and what they say
       # without one is misleading rather than merely absent.

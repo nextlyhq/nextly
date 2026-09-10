@@ -26,6 +26,8 @@ import {
   type SeedStatus as SeedStatusRow,
 } from "@admin/services/seedApi";
 
+import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
+
 export type SeedStatus =
   | { kind: "loading" }
   | { kind: "hidden" }
@@ -77,6 +79,14 @@ export function useSeedStatus(): UseSeedStatusReturn {
       setOverlay({ kind: "success", result });
       // Refresh the meta read so reload-as-other-user sees completedAt.
       void qc.invalidateQueries({ queryKey: QK_STATUS });
+      // Seeding is the moment the get-started card's condition stops holding:
+      // the reader can now see content, so the server no longer offers that
+      // card and the scope token shaping the arrangement has changed. The
+      // layout query has no polling and refetches only on focus, so without
+      // this the open dashboard keeps drawing the stale arrangement and the
+      // next save of it is refused with a scope conflict the reader did
+      // nothing to cause.
+      void qc.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
     },
     onError: err => {
       setOverlay({ kind: "error", message: err.message });
