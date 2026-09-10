@@ -280,6 +280,12 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 export {
   componentIdsIn,
   componentUsageIn,
+  // What ONE instance currently shows for each property its definition exposes.
+  // Published because the editor draws that panel and the resolver applies the
+  // same precedence to render it: definition, then variant, then the instance's
+  // own value. Two implementations of that order agree until a variant rule
+  // changes in one of them.
+  instanceExposure,
   resolveComponentInstances,
   // Why an instance was left standing. Published because the surfaces that
   // REPORT one are in other packages — the renderer draws a placeholder, the
@@ -293,6 +299,10 @@ export type {
   ComponentUnresolvedReason,
   ComponentUsage,
   DefinitionsById,
+  ExposedPropertyState,
+  ExposedValueSource,
+  InstanceExposure,
+  OverriddenBy,
   ResolveComponentOptions,
   ResolvedBlockNode,
   ResolvedComposition,

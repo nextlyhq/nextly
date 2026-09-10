@@ -20,6 +20,7 @@ import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
   componentUsageIn,
+  instanceExposure,
   resolveComponentInstances,
   type DefinitionsById,
   type ResolvedBlockNode,
@@ -2428,5 +2429,177 @@ describe("componentUsageIn", () => {
         ids: componentUsageIn(nodes, budget).ids,
       });
     }
+  });
+});
+
+/**
+ * What the editor's instance panel reads.
+ *
+ * The cases below are the ones where a panel can be wrong while looking right:
+ * a value that is inherited rendering as blank, a variant's preset reported as
+ * the author's own edit, and a deliberate blank indistinguishable from a
+ * definition that holds nothing. Each of those draws a plausible panel.
+ */
+describe("instanceExposure", () => {
+  const headline = {
+    id: "headline",
+    label: "Headline",
+    nodeId: "d1",
+    propPath: "text",
+    type: "text",
+  } as const;
+
+  const hero = component([node("d1", { props: { text: "base" } })], {
+    exposed: [headline],
+    variants: { loud: { label: "Loud", overrides: { headline: "VARIANT" } } },
+  });
+
+  it("reads the DEFINITION's own value when nothing overrides it", () => {
+    // The case a panel gets wrong by assuming "no override" means "no value":
+    // it would draw an empty box over a heading the component author wrote.
+    const [state] = instanceExposure(hero, instance("i1", "hero")).properties;
+
+    expect(state?.source).toBe("definition");
+    expect(state?.value).toBe("base");
+    expect(state?.cleared).toBe(false);
+  });
+
+  it("attributes a variant's value to the VARIANT, not to the author", () => {
+    const node = instance("i1", "hero", { variant: "loud" });
+    const [state] = instanceExposure(hero, node).properties;
+
+    // Not "instance": offering to reset this would offer to undo something the
+    // author never set.
+    expect(state?.source).toBe("variant");
+    expect(state?.value).toBe("VARIANT");
+  });
+
+  it("prefers the instance's own value over the variant's, and says so", () => {
+    const node = instance("i1", "hero", {
+      variant: "loud",
+      overrides: { headline: "MINE" },
+    });
+    const [state] = instanceExposure(hero, node).properties;
+
+    expect(state?.source).toBe("instance");
+    expect(state?.value).toBe("MINE");
+  });
+
+  it("reports a cleared property as cleared, not as inherited", () => {
+    const node = instance("i1", "hero", {
+      overrides: { headline: { $unset: true } },
+    });
+    const [state] = instanceExposure(hero, node).properties;
+
+    expect(state?.cleared).toBe(true);
+    expect(state?.value).toBeUndefined();
+    // The source still matters: an author cleared this and can put it back.
+    expect(state?.source).toBe("instance");
+  });
+
+  it("separates a deliberate blank from a definition that holds nothing", () => {
+    // Both render as an empty control, and only `cleared` tells them apart —
+    // which is the whole reason the value is tri-state rather than optional.
+    const empty = component([node("d1", { props: {} })], {
+      exposed: [headline],
+    });
+
+    const inherited = instanceExposure(empty, instance("i1", "hero"))
+      .properties[0];
+    const blanked = instanceExposure(
+      empty,
+      instance("i1", "hero", { overrides: { headline: { $unset: true } } })
+    ).properties[0];
+
+    expect(inherited?.value).toBeUndefined();
+    expect(blanked?.value).toBeUndefined();
+    expect(inherited?.cleared).toBe(false);
+    expect(blanked?.cleared).toBe(true);
+  });
+
+  it("surfaces an override the definition no longer exposes", () => {
+    const node = instance("i1", "hero", {
+      overrides: { headline: "MINE", subtitle: "STRANDED" },
+    });
+
+    const exposure = instanceExposure(hero, node);
+
+    expect(exposure.orphanedOverrideIds).toEqual(["subtitle"]);
+    // And it is not silently folded into the drawn rows.
+    expect(exposure.properties.map(p => p.property.id)).toEqual(["headline"]);
+  });
+
+  it("keeps the definition's declared order", () => {
+    // Declaration order, not alphabetical: a component author writes a heading
+    // before its subtitle, and sorting rearranges a form somebody designed.
+    const two = component([node("d1", { props: { a: "1", b: "2" } })], {
+      exposed: [
+        { ...headline, id: "zeta", propPath: "a" },
+        { ...headline, id: "alpha", propPath: "b" },
+      ],
+    });
+
+    const ids = instanceExposure(two, instance("i1", "hero")).properties.map(
+      p => p.property.id
+    );
+
+    expect(ids).toEqual(["zeta", "alpha"]);
+  });
+
+  it("reads a nested path", () => {
+    const nested = component(
+      [node("d1", { props: { link: { href: "/a" } } })],
+      {
+        exposed: [{ ...headline, propPath: "link.href", type: "link" }],
+      }
+    );
+
+    const [state] = instanceExposure(nested, instance("i1", "hero")).properties;
+
+    expect(state?.value).toBe("/a");
+  });
+
+  it("never reads a path off the prototype", () => {
+    // The segments come from a stored definition, and `constructor` reads a
+    // function off a record that never had the key.
+    const hostile = component([node("d1", { props: {} })], {
+      exposed: [{ ...headline, propPath: "constructor" }],
+    });
+
+    const [state] = instanceExposure(
+      hostile,
+      instance("i1", "hero")
+    ).properties;
+
+    expect(state?.value).toBeUndefined();
+  });
+
+  it("answers for a pointer whose node is gone, rather than throwing", () => {
+    const dangling = component([node("d1", { props: { text: "base" } })], {
+      exposed: [{ ...headline, nodeId: "vanished" }],
+    });
+
+    const [state] = instanceExposure(
+      dangling,
+      instance("i1", "hero")
+    ).properties;
+
+    expect(state?.value).toBeUndefined();
+    expect(state?.source).toBe("definition");
+  });
+
+  it("has no path value for a visibility exposure", () => {
+    // `visibility` decides whether the node is served at all; it names no prop,
+    // so reading `propPath` off the definition would report an unrelated value.
+    const gated = component(
+      [node("d1", { props: { visibility: "nonsense" } })],
+      {
+        exposed: [{ ...headline, propPath: "visibility", type: "visibility" }],
+      }
+    );
+
+    const [state] = instanceExposure(gated, instance("i1", "hero")).properties;
+
+    expect(state?.value).toBeUndefined();
   });
 });
