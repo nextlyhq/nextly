@@ -440,6 +440,12 @@ export function remediation(
   // case that separates them: the accepted theme can hold the worse full
   // strength, and reading it here would say "no opacity reaches the target"
   // about a mode that un-fading repairs.
+  if (reported.length === 0) {
+    // `Math.min()` of nothing is Infinity, which reads as a measured ratio and
+    // prints as a confident wrong number. There is no message to write about a
+    // utility with nothing to report.
+    throw new TypeError(`${combo}: remediation needs at least one mode`);
+  }
   const ratio = Math.min(...reported.map(m => m.ratio));
   const fullStrength = Math.min(...reported.map(m => m.fullStrength));
   const head = `${combo} = ${ratio.toFixed(2)}:1 (needs ${r.need}:1)`;
@@ -474,6 +480,10 @@ export function remediation(
  * nothing about a faded one: they are different colours and they measure
  * differently.
  */
+function failingModes(r: UtilityReading): readonly ModeReading[] {
+  return r.modes.filter(m => m.ratio < r.need);
+}
+
 function unacceptedFailures(r: UtilityReading): readonly ModeReading[] {
   return r.modes.filter(
     m =>
@@ -588,7 +598,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio(combo);
     expect(r.ratio).toBeLessThan(r.need);
     expect(r.fullStrength).toBeGreaterThanOrEqual(r.need);
-    const msg = remediation(combo, r, unacceptedFailures(r));
+    const msg = remediation(combo, r, failingModes(r));
     expect(msg).toContain("use it un-faded");
     expect(msg).not.toContain("only hides it from this scan");
   });
@@ -601,7 +611,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio(combo);
     expect(r.ratio).toBeLessThan(r.need);
     expect(r.fullStrength).toBeLessThan(r.need);
-    const msg = remediation(combo, r, unacceptedFailures(r));
+    const msg = remediation(combo, r, failingModes(r));
     expect(msg).toContain("only hides it from this scan");
     expect(msg).toContain("control-border");
     // Both places a sub-threshold pairing is legitimately recorded, and the
@@ -619,7 +629,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio(combo);
     expect(r.kind).toBe("text");
     expect(r.need).toBe(4.5);
-    const msg = remediation(combo, r, unacceptedFailures(r));
+    const msg = remediation(combo, r, failingModes(r));
     expect(msg).not.toContain("control-border");
     expect(msg).toContain("4.5:1");
   });
@@ -656,7 +666,10 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     // pairings are recorded today, so a reader following this scan's own advice
     // and adding the entry it recommends would fail this control instead of
     // clearing the finding it was added for.
-    const unrecorded = ["border-border/50", "text-border/50", "ring-border/50"]
+    // Different PAIRINGS, not one pairing under three utility names: every
+    // `*-border/50` keys to `border` on `background`, so a list of those is a
+    // single candidate that only looks like three.
+    const unrecorded = ["border-border/50", "border-input/50", "text-muted/30"]
       .map(combo => ({ combo, r: worstRatio(combo) }))
       .find(
         ({ r }) =>
