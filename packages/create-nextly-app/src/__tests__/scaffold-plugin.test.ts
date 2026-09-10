@@ -90,6 +90,36 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
     expect(pkg.pnpm).toBeUndefined();
+
+    /*
+     * The scaffolded suite boots a real instance, so its budget is asserted
+     * against what vitest will actually use rather than against the text of the
+     * config.
+     *
+     * `plugin.test.ts` calls `createTestNextly` in `beforeEach`, which builds a
+     * DI container, registers the plugin's schema and runs auto-sync over a real
+     * SQLite database. Vitest's defaults are sized for a unit test that touches
+     * none of that, and this is the first command a new plugin author runs, so a
+     * timeout there reads as a broken scaffold rather than a tight budget.
+     *
+     * 🔴 The config is IMPORTED rather than parsed. Reading the source can only
+     * ever recognise the shapes someone thought of - a wrapper, a spread, a
+     * merge, an alias, a local helper of the same name - and each one that is
+     * missed reports an adequate budget for a suite that does not have one.
+     * Importing asks the runtime, which resolves all of them by construction,
+     * and asserts the value the suite will really run under.
+     */
+    const scaffoldedConfig = (await import(
+      /* @vite-ignore */ path.join(target, "vitest.config.ts")
+    )) as {
+      default: { test?: { testTimeout?: number; hookTimeout?: number } };
+    };
+    const budget = scaffoldedConfig.default.test;
+
+    // Both, because the boot is in a hook and the case body is not, and vitest
+    // budgets the two separately.
+    expect(budget?.testTimeout).toBeGreaterThanOrEqual(30_000);
+    expect(budget?.hookTimeout).toBeGreaterThanOrEqual(30_000);
     expect(await exists(path.join(target, "pnpm-workspace.yaml"))).toBe(true);
     const workspaceYaml = await readFile(
       path.join(target, "pnpm-workspace.yaml"),
