@@ -35,5 +35,6 @@ On an installation that keeps Nextly in its own schema those two disagreed, in
 both directions at once: Nextly's own tables were never listed, so they survived
 the reset — and whatever else happened to be in `public` was listed, and dropped.
 
-Discovery now asks for the schema the drop will actually reach. Nothing changes
-for a database that uses `public`, which is the default.
+Discovery now asks which tables the drop will actually reach, rather than naming
+a schema at all. Nothing changes for a database that uses `public`, which is the
+default.

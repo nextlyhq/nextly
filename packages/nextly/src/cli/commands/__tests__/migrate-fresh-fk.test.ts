@@ -12,11 +12,19 @@ import {
   disableForeignKeyChecks,
   discoverTables,
   enableForeignKeyChecks,
+  type SqlRunner,
 } from "../migrate-fresh";
 
-type FakeAdapter = {
-  executeQuery: (sql: string) => Promise<unknown>;
-};
+/**
+ * The double is typed as the surface under test, not as a shape of its own.
+ *
+ * 🔴 It used to be a hand-written `{ executeQuery: (sql: string) => ... }` that
+ * only fitted through a cast — and the cast was hiding that it did not match:
+ * the real `executeQuery` is generic and takes params. A double checked against
+ * the real surface fails to compile when that surface changes, which is the
+ * whole reason to have one.
+ */
+type FakeAdapter = SqlRunner;
 
 function permissionDeniedAdapter(): FakeAdapter {
   return {
@@ -46,19 +54,24 @@ describe("migrate:fresh discovers what it is about to drop", () => {
     };
   }
 
-  it("asks for the schema the DROP will resolve to, on postgresql", async () => {
+  it("asks which relations the DROP will resolve to, on postgresql", async () => {
     // 🔴 `dropTable` emits `DROP TABLE "name"` with no schema on it, so it
-    // resolves through the search path. Discovery naming `public` asked a
-    // different question, and on `tenant, public` they came apart both ways:
-    // Nextly's tables in `tenant` were never listed and survived, while
-    // whatever else was in `public` was listed and dropped.
+    // resolves through the WHOLE search path. Discovery has to ask that same
+    // question or the two come apart in both directions: tables the drop would
+    // reach go unlisted and survive a reset, and tables it would never reach
+    // are listed and handed to it.
     const { adapter, seen } = recordingAdapter();
+    await discoverTables(adapter, "postgresql");
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await discoverTables(adapter as any, "postgresql");
-
-    expect(seen[0]).toContain("current_schema()");
+    expect(seen[0]).toContain("pg_table_is_visible");
+    // Neither way of naming a schema instead: `public` may hold none of these
+    // tables, and `current_schema()` is only the first entry of the path, so it
+    // misses one the drop still reaches through a later entry.
     expect(seen[0]).not.toContain("'public'");
+    expect(seen[0]).not.toContain("current_schema()");
+    // The system schemas sit on every path implicitly, so visibility on its own
+    // would hand `pg_catalog` to a DROP.
+    expect(seen[0]).toContain("pg_catalog");
   });
 
   it("still scopes MySQL to the connected database", async () => {
@@ -66,9 +79,7 @@ describe("migrate:fresh discovers what it is about to drop", () => {
     // scopes to nothing at all, which on this command would enumerate every
     // table the role can see.
     const { adapter, seen } = recordingAdapter();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await discoverTables(adapter as any, "mysql");
+    await discoverTables(adapter, "mysql");
 
     expect(seen[0]).toContain("DATABASE()");
   });
@@ -78,8 +89,7 @@ describe("migrate:fresh FK toggling on managed Postgres", () => {
   it("disableForeignKeyChecks swallows permission-denied on postgresql", async () => {
     const adapter = permissionDeniedAdapter();
     await expect(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      disableForeignKeyChecks(adapter as any, "postgresql")
+      disableForeignKeyChecks(adapter, "postgresql")
     ).resolves.toBeUndefined();
     expect(adapter.executeQuery).toHaveBeenCalledOnce();
   });
@@ -87,8 +97,7 @@ describe("migrate:fresh FK toggling on managed Postgres", () => {
   it("enableForeignKeyChecks swallows permission-denied on postgresql", async () => {
     const adapter = permissionDeniedAdapter();
     await expect(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      enableForeignKeyChecks(adapter as any, "postgresql")
+      enableForeignKeyChecks(adapter, "postgresql")
     ).resolves.toBeUndefined();
   });
 
@@ -99,16 +108,14 @@ describe("migrate:fresh FK toggling on managed Postgres", () => {
       }),
     };
     await expect(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      disableForeignKeyChecks(adapter as any, "postgresql")
+      disableForeignKeyChecks(adapter, "postgresql")
     ).rejects.toThrow(/connection terminated/);
   });
 
   it("sqlite PRAGMA path is unaffected (no swallowing)", async () => {
     const adapter: FakeAdapter = { executeQuery: vi.fn(async () => []) };
     await expect(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      disableForeignKeyChecks(adapter as any, "sqlite")
+      disableForeignKeyChecks(adapter, "sqlite")
     ).resolves.toBeUndefined();
     expect(adapter.executeQuery).toHaveBeenCalledWith(
       "PRAGMA foreign_keys = OFF"

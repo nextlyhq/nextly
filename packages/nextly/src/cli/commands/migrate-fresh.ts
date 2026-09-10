@@ -319,6 +319,18 @@ async function dropAllTables(
 }
 
 /**
+ * The only thing these three helpers ask of an adapter.
+ *
+ * Narrower than `DrizzleAdapter` on purpose: a parameter that demands the whole
+ * adapter forces every caller — a test most of all — to produce one, and the
+ * usual way to do that is a cast that switches type checking off for the
+ * argument. Naming the surface instead lets a double be checked against exactly
+ * what the function uses, so a change to that surface breaks the double rather
+ * than slipping past a cast.
+ */
+export type SqlRunner = Pick<DrizzleAdapter, "executeQuery">;
+
+/**
  * Discover all user tables in the database.
  *
  * Exported for the same reason `disableForeignKeyChecks` is: what it asks the
@@ -326,30 +338,37 @@ async function dropAllTables(
  * does not have to drive the whole command to reach it.
  */
 export async function discoverTables(
-  adapter: DrizzleAdapter,
+  adapter: SqlRunner,
   dialect: SupportedDialect
 ): Promise<string[]> {
   let query: string;
 
   switch (dialect) {
     case "postgresql":
-      // 🔴 The schema an unqualified statement CREATES in, which is the one
-      // `dropTable` below will resolve to — it emits `DROP TABLE "name"` with
-      // no schema on it. Naming `public` here asked a different question from
-      // the one the drop answers, and on a `search_path` of `tenant, public`
-      // the two came apart in both directions at once: Nextly's own tables in
-      // `tenant` were never listed, so they survived, while whatever else lived
-      // in `public` was listed and handed to a DROP.
+      // 🔴 Exactly the relations an UNQUALIFIED name resolves to, because that
+      // is what `dropTable` below emits — `DROP TABLE "name"` with no schema on
+      // it. Any other predicate asks a different question from the one the drop
+      // answers, and on a `search_path` of `tenant, public` the two come apart
+      // in both directions: tables the drop WOULD reach go unlisted and survive
+      // a reset, while tables it would never reach are listed and handed to it.
       //
-      // Deliberately `current_schema()` and not every schema on the path.
-      // Dropping less than intended leaves a table behind; dropping more
-      // destroys data this command was never pointed at, and only one of those
-      // is recoverable.
+      // `pg_table_is_visible` is that question asked directly: true for the one
+      // relation of a given name the search path resolves to, and false for the
+      // ones it shadows. Naming a schema cannot express it — not `public`,
+      // which may hold none of these tables, and not `current_schema()`, which
+      // is only the first entry and misses a table the drop still reaches
+      // through a later one.
+      //
+      // The system schemas are excluded by name because `pg_catalog` is on
+      // every search path implicitly, so its tables are visible too.
       query = `
-        SELECT tablename
-        FROM pg_tables
-        WHERE schemaname = current_schema()
-        ORDER BY tablename
+        SELECT c.relname AS tablename
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('r', 'p')
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND pg_table_is_visible(c.oid)
+        ORDER BY c.relname
       `;
       break;
 
@@ -407,7 +426,7 @@ function isReplicationRolePermissionError(err: unknown): boolean {
  * propagated so real failures still surface.
  */
 async function bestEffortReplicationRole(
-  adapter: DrizzleAdapter,
+  adapter: SqlRunner,
   value: "replica" | "origin"
 ): Promise<void> {
   try {
@@ -423,7 +442,7 @@ async function bestEffortReplicationRole(
  * Exported for unit testing the managed-Postgres best-effort path.
  */
 export async function disableForeignKeyChecks(
-  adapter: DrizzleAdapter,
+  adapter: SqlRunner,
   dialect: SupportedDialect
 ): Promise<void> {
   switch (dialect) {
@@ -452,7 +471,7 @@ export async function disableForeignKeyChecks(
  * Exported for unit testing the managed-Postgres best-effort path.
  */
 export async function enableForeignKeyChecks(
-  adapter: DrizzleAdapter,
+  adapter: SqlRunner,
   dialect: SupportedDialect
 ): Promise<void> {
   switch (dialect) {
