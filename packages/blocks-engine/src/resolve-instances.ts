@@ -1528,6 +1528,21 @@ export interface ExposedPropertyState {
   readonly value: OverrideValue;
   /** True when the value in force is the `$unset` sentinel rather than a value. */
   readonly cleared: boolean;
+  /**
+   * The exposure actually in force at this target, when it is not this one.
+   *
+   * Two exposures may carry different ids and point at the SAME node and path,
+   * which a definition is free to declare. The resolver applies them in
+   * declaration order onto one prop, so at most one is what the page shows.
+   *
+   * Both directions matter, which is why this is not "the later one". Where two
+   * rows are overridden, the LAST write is in force and the earlier row's value
+   * is stale. Where only one is overridden, that write is in force and the
+   * OTHER row — inheriting, and reporting the definition's own value — is the
+   * stale one. A panel drawing either as live shows a value the page does not
+   * render.
+   */
+  readonly shadowedBy?: string;
 }
 
 /** What an instance may edit, and what it has stored that no longer applies. */
@@ -1558,9 +1573,10 @@ export function instanceExposure(
   instance: BlockNode
 ): InstanceExposure {
   const overrides = effectiveOverrides(definition, instance);
-  const declared = Array.isArray(definition.exposed) ? definition.exposed : [];
+  const declared = usableExposures(definition.exposed);
+  const shadows = shadowedExposures(declared, overrides);
   const properties = declared.map(property =>
-    exposedState(definition, property, overrides.get(property.id))
+    exposedState(definition, property, overrides.get(property.id), shadows)
   );
 
   const exposedIds = new Set(declared.map(property => property.id));
@@ -1575,14 +1591,19 @@ export function instanceExposure(
 function exposedState(
   definition: ComponentDocument,
   property: ExposedProperty,
-  override: SourcedOverride | undefined
+  stored: SourcedOverride | undefined,
+  shadows: ReadonlyMap<string, string>
 ): ExposedPropertyState {
+  const shadow = shadows.get(property.id);
+  const shadowedBy = shadow === undefined ? {} : { shadowedBy: shadow };
+  const override = inForce(property, stored);
   if (override === undefined) {
     return {
       property,
       source: "definition",
       value: definitionValue(definition, property),
       cleared: false,
+      ...shadowedBy,
     };
   }
   const cleared = isUnsetOverride(override.value);
@@ -1591,7 +1612,89 @@ function exposedState(
     source: override.source,
     value: cleared ? undefined : override.value,
     cleared,
+    ...shadowedBy,
   };
+}
+
+/**
+ * The stored override only if the RESOLVER would act on it.
+ *
+ * A `visibility` exposure decides whether the node is served, and the resolver
+ * reads only booleans and the clear sentinel there — a string left behind when
+ * an exposure changed type is ignored, and the definition's own visibility
+ * stays in force. Reporting that stale value as the value in force would tell
+ * an editor something the page does not render, which is the exact disagreement
+ * deriving this from the resolver's precedence exists to prevent.
+ */
+function inForce(
+  property: ExposedProperty,
+  stored: SourcedOverride | undefined
+): SourcedOverride | undefined {
+  if (stored === undefined || property.type !== "visibility") return stored;
+  return visibilityDecision(stored.value) === undefined ? undefined : stored;
+}
+
+/**
+ * What an exposure writes to, as one comparable string.
+ *
+ * A `visibility` exposure names no prop — it decides whether the node is served
+ * at all — so two of them on one node collide with each other and with nothing
+ * else. Keying those on the node alone keeps them apart from the prop paths.
+ */
+function targetKey(property: ExposedProperty): string {
+  const target =
+    property.type === "visibility" ? "\u0000visible" : property.propPath;
+  return `${property.nodeId}\u0000${target}`;
+}
+
+/**
+ * The exposures whose overrides the resolver writes over, keyed to the winner.
+ *
+ * `planExposed` walks the declared list in order and each write lands on the
+ * same target, so among exposures sharing one the LAST carrying an override is
+ * what the page shows. The earlier rows are reported as shadowed rather than
+ * silently drawn as live.
+ */
+function shadowedExposures(
+  declared: readonly ExposedProperty[],
+  overrides: ReadonlyMap<string, SourcedOverride>
+): ReadonlyMap<string, string> {
+  const winner = new Map<string, string>();
+  for (const property of declared) {
+    if (overrides.has(property.id))
+      winner.set(targetKey(property), property.id);
+  }
+
+  const shadows = new Map<string, string>();
+  for (const property of declared) {
+    const wins = winner.get(targetKey(property));
+    if (wins !== undefined && wins !== property.id) {
+      shadows.set(property.id, wins);
+    }
+  }
+  return shadows;
+}
+
+/**
+ * The exposures a caller can act on, from an array that may hold anything.
+ *
+ * A stored or imported definition reaches here unvalidated — `exposed` may be
+ * an array containing `null` — and the resolver tolerates that by skipping the
+ * member. An editor asking the same document a question must not crash where
+ * the renderer draws the page, so the same members are skipped here, under the
+ * same envelope bound.
+ */
+function usableExposures(exposed: unknown): readonly ExposedProperty[] {
+  if (!Array.isArray(exposed)) return [];
+  const count = Math.min(exposed.length, MAX_ENVELOPE_ENTRIES);
+  const usable: ExposedProperty[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const entry: unknown = exposed[i];
+    if (isPlainRecord(entry) && typeof entry.id === "string") {
+      usable.push(entry as unknown as ExposedProperty);
+    }
+  }
+  return usable;
 }
 
 /**

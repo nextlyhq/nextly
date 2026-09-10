@@ -2588,6 +2588,132 @@ describe("instanceExposure", () => {
     expect(state?.source).toBe("definition");
   });
 
+  it("skips a malformed member instead of throwing on it", () => {
+    // `exposed` reaches here unvalidated — a stored or imported definition may
+    // hold `null` in that array, and the resolver skips such a member rather
+    // than failing. An editor asking the same document a question must not
+    // crash where the renderer draws the page.
+    const malformed = component([node("d1", { props: { text: "base" } })], {
+      exposed: [null, headline, 7] as unknown as ComponentDocument["exposed"],
+    });
+
+    const exposure = instanceExposure(malformed, instance("i1", "hero"));
+
+    expect(exposure.properties.map(p => p.property.id)).toEqual(["headline"]);
+  });
+
+  it("ignores a visibility override the RENDERER would ignore", () => {
+    // A string left behind when an exposure changed type. `visibilityDecision`
+    // reads only booleans and the clear sentinel, so the definition's own
+    // visibility stays in force — and reporting the stale string as the value
+    // would tell the editor something the page does not render.
+    const gated = component([node("d1")], {
+      exposed: [{ ...headline, propPath: "", type: "visibility" }],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { headline: "not-a-boolean" },
+    });
+
+    const [state] = instanceExposure(gated, node1).properties;
+
+    expect(state?.source).toBe("definition");
+    expect(state?.value).toBeUndefined();
+
+    // The RESOLVER is the oracle: the node is still served, so "in force" here
+    // has to mean the definition, exactly as this reports.
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: gated })
+    );
+    expect(rendered.document.nodes).toHaveLength(1);
+  });
+
+  it("honours a visibility override the renderer DOES act on", () => {
+    // The other direction, so the case above cannot pass by ignoring every
+    // visibility override.
+    const gated = component([node("d1")], {
+      exposed: [{ ...headline, propPath: "", type: "visibility" }],
+    });
+    const node1 = instance("i1", "hero", { overrides: { headline: false } });
+
+    const [state] = instanceExposure(gated, node1).properties;
+
+    expect(state?.source).toBe("instance");
+    expect(state?.value).toBe(false);
+  });
+
+  it("marks an exposure the resolver writes over as shadowed", () => {
+    // Two ids, one target. `planExposed` walks in declaration order and both
+    // land on `d1.text`, so the page shows the LAST one — and a panel drawing
+    // both as live controls would show a value the page does not render.
+    const twoPointers = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        { ...headline, id: "first" },
+        { ...headline, id: "second" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { first: "one", second: "two" },
+    });
+
+    const [first, second] = instanceExposure(twoPointers, node1).properties;
+
+    expect(first?.shadowedBy).toBe("second");
+    expect(second?.shadowedBy).toBeUndefined();
+
+    // And the oracle agrees about which one the page shows.
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: twoPointers })
+    );
+    expect(rendered.document.nodes[0]!.props.text).toBe("two");
+  });
+
+  it("marks the INHERITING row when its neighbour's override is in force", () => {
+    // The other direction, and the one that is easy to get backwards. Only
+    // `first` is overridden, so the page shows "one" — while `second`, which
+    // points at the same prop and inherits, reports the definition's "base".
+    // That row is the stale one here, even though it was never edited.
+    const twoPointers = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        { ...headline, id: "first" },
+        { ...headline, id: "second" },
+      ],
+    });
+    const node1 = instance("i1", "hero", { overrides: { first: "one" } });
+
+    const [first, second] = instanceExposure(twoPointers, node1).properties;
+
+    expect(first?.shadowedBy).toBeUndefined();
+    expect(second?.shadowedBy).toBe("first");
+
+    // The oracle: "base" is not what the page renders, which is what makes the
+    // second row stale rather than merely different.
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: twoPointers })
+    );
+    expect(rendered.document.nodes[0]!.props.text).toBe("one");
+  });
+
+  it("marks nothing shadowed when no exposure is overridden at all", () => {
+    // Sharing a target is not itself a conflict. With no override in play every
+    // row reports the definition's own value, which is exactly what renders.
+    const twoPointers = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        { ...headline, id: "first" },
+        { ...headline, id: "second" },
+      ],
+    });
+
+    const rows = instanceExposure(
+      twoPointers,
+      instance("i1", "hero")
+    ).properties;
+
+    expect(rows.map(r => r.shadowedBy)).toEqual([undefined, undefined]);
+  });
+
   it("has no path value for a visibility exposure", () => {
     // `visibility` decides whether the node is served at all; it names no prop,
     // so reading `propPath` off the definition would report an unrelated value.
