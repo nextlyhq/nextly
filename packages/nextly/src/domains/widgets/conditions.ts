@@ -17,13 +17,13 @@
 import { getService } from "../../di";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
+import { conditionProbe, type ConditionProbe } from "./condition-probe";
 import {
   declaredConditions,
   isWidgetCondition,
   type WidgetCondition,
 } from "./lifecycle";
 import { onboardingIsIncomplete } from "./onboarding";
-import { readerHasContent } from "./reader-content";
 
 /**
  * Whether this reader can see any content at all.
@@ -38,8 +38,8 @@ import { readerHasContent } from "./reader-content";
  * The scoping, the short-circuit and the `status: "all"` reasoning now live
  * with the counting, in `reader-content.ts`.
  */
-async function contentIsEmpty(caller: ReadCaller): Promise<boolean> {
-  return !(await readerHasContent(caller));
+async function contentIsEmpty(probe: ConditionProbe): Promise<boolean> {
+  return !(await probe.hasContent());
 }
 
 /**
@@ -79,7 +79,7 @@ async function seedIsUnanswered(): Promise<boolean> {
  */
 const EVALUATORS: Record<
   WidgetCondition,
-  (caller: ReadCaller) => Promise<boolean>
+  (probe: ConditionProbe) => Promise<boolean>
 > = {
   "content:empty": contentIsEmpty,
   "onboarding:incomplete": onboardingIsIncomplete,
@@ -105,8 +105,14 @@ export async function evaluateConditions(
   // on one collection, would answer the whole request as an error and take
   // every PERMANENT card down with the optional one it was asked about. The
   // blast radius of a condition has to be the widget that named it.
+  // ONE probe for the whole request, so two conditions asking overlapping
+  // questions of the same rows resolve them once between them rather than once
+  // each. Built here rather than per evaluator, which is what made the sharing
+  // accidental before: a helper calling another helper re-resolved what its
+  // caller had just resolved.
+  const probe = conditionProbe(caller);
   const settled = await Promise.allSettled(
-    wanted.map(condition => EVALUATORS[condition](caller))
+    wanted.map(condition => EVALUATORS[condition](probe))
   );
   const verdicts = new Map<WidgetCondition, boolean>();
   wanted.forEach((condition, index) => {

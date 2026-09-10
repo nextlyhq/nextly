@@ -128,25 +128,52 @@ describe("the onboarding checklist", () => {
     ).toBeInTheDocument();
   });
 
-  it("drops a step id this build cannot draw, rather than crashing on it", async () => {
-    // 🔴 The presentation map is exhaustive over the ids core owns, and that is
-    // a COMPILE-time guarantee about two packages built together. It says
-    // nothing about the wire: a newer server sending an id this build has no
-    // entry for would have had its row destructured out of `undefined`, taking
-    // the whole dashboard down rather than one row.
-    //
-    // The union is imported from core now, so the two definitions cannot drift.
-    // This covers the case that survives that: the definitions agreeing and the
-    // RUNTIME disagreeing anyway.
+  it("reports UNAVAILABLE for a step id this build cannot draw", async () => {
+    // 🔴 Dropping the row keeps the card from crashing, and on its own it
+    // introduces something worse. A newer server sending an INCOMPLETE step
+    // this build cannot name leaves every remaining row complete, so a card
+    // that merely filtered would report 100%, announce itself finished, and ask
+    // the host to drop it -- while the host went on offering it for the step
+    // that was dropped. A checklist claiming completion it cannot see is worse
+    // than one that says it cannot describe your progress.
     protectedGet.mockResolvedValue({
-      steps: [...ALL_BUT_ONE, { id: "billing:configured", complete: false }],
+      steps: [
+        { id: "account", complete: true },
+        { id: "collection", complete: true },
+        { id: "entry", complete: true },
+        { id: "billing:configured", complete: false },
+      ],
     });
     draw(client());
 
     await waitFor(() =>
-      expect(screen.getAllByRole("listitem")).toHaveLength(ALL_BUT_ONE.length)
+      expect(
+        screen.getByText(/Setup progress is unavailable/)
+      ).toBeInTheDocument()
     );
-    expect(screen.getByText(/of 3 done/)).toBeInTheDocument();
+    expect(screen.queryByText(/of 3 done/)).not.toBeInTheDocument();
+  });
+
+  it("does NOT ask for a fresh layout when a row was unreadable", async () => {
+    // The consequence that made the filtered reading dangerous: the card would
+    // have told the host to stop offering it, on the strength of rows it could
+    // not see.
+    protectedGet.mockResolvedValue({
+      steps: [
+        { id: "account", complete: true },
+        { id: "collection", complete: true },
+        { id: "entry", complete: true },
+        { id: "billing:configured", complete: false },
+      ],
+    });
+    const { readLayout } = await drawBesideLayout(client());
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Setup progress is unavailable/)
+      ).toBeInTheDocument()
+    );
+    expect(readLayout).toHaveBeenCalledTimes(1);
   });
 
   it("says progress is unavailable rather than showing it finished", async () => {

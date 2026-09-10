@@ -19,6 +19,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
+import { conditionProbe } from "../condition-probe";
 import { onboardingIsIncomplete, onboardingSteps } from "../onboarding";
 
 const NOTES = "notes";
@@ -92,7 +93,7 @@ async function boot(): Promise<TestNextly> {
 
 /** The steps as a map, so a case names the step it is about. */
 async function stepsFor(caller: ReadCaller): Promise<Record<string, boolean>> {
-  const steps = await onboardingSteps(caller);
+  const steps = await onboardingSteps(conditionProbe(caller));
   return Object.fromEntries(steps.map(step => [step.id, step.complete]));
 }
 
@@ -111,7 +112,7 @@ describe("onboarding steps against a real instance", () => {
 
     expect(steps.collection).toBe(true);
     expect(steps.entry).toBe(false);
-    expect(await onboardingIsIncomplete(admin)).toBe(true);
+    expect(await onboardingIsIncomplete(conditionProbe(admin))).toBe(true);
   });
 
   it("finishes once a row exists", async () => {
@@ -122,7 +123,7 @@ describe("onboarding steps against a real instance", () => {
     await write(t, NOTES, { title: "the first note" });
 
     expect((await stepsFor(admin)).entry).toBe(true);
-    expect(await onboardingIsIncomplete(admin)).toBe(false);
+    expect(await onboardingIsIncomplete(conditionProbe(admin))).toBe(false);
   });
 
   it("counts a DRAFT as content", async () => {
@@ -152,7 +153,7 @@ describe("onboarding steps against a real instance", () => {
     await write(t, SECRETS, { title: "not for you" });
 
     expect((await stepsFor(admin)).entry).toBe(false);
-    expect(await onboardingIsIncomplete(admin)).toBe(true);
+    expect(await onboardingIsIncomplete(conditionProbe(admin))).toBe(true);
   });
 
   // No case asserts that the condition agrees with the steps it reports.

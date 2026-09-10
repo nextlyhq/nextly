@@ -100,6 +100,13 @@ export function useSeedStatus(): UseSeedStatusReturn {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: QK_STATUS });
+      // Declining now closes the `seed:unanswered` condition, so the server
+      // stops offering this card exactly as it does after a successful seed.
+      // Without this the open dashboard keeps the pre-skip arrangement: edit
+      // mode can surface a placement the server has dropped, and saving it is
+      // refused on the scope token. Skip used to change nothing the host could
+      // see, which is why only the seed path invalidated.
+      void qc.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
     },
   });
 

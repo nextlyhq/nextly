@@ -228,6 +228,56 @@ describe("useSeedStatus", () => {
     await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
   });
 
+  it("refetches the dashboard layout once the offer is DECLINED", async () => {
+    // 🔴 Declining now closes `seed:unanswered`, so the server stops offering
+    // this card exactly as it does after a successful seed. Skip used to change
+    // nothing the host could see, which is why only the seed path invalidated
+    // -- and that made this the one gesture that left the open dashboard
+    // holding a placement the server had dropped. Entering edit mode then
+    // surfaces it, and saving is refused on the scope token.
+    vi.mocked(seedApi.probe).mockResolvedValue({
+      available: true,
+      template: { slug: "blog", label: "Blog" },
+    });
+    vi.mocked(seedApi.getStatus).mockResolvedValue({
+      completedAt: null,
+      skippedAt: null,
+    });
+    vi.mocked(seedApi.setSkipped).mockResolvedValue(undefined);
+
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    const readLayout = vi.fn().mockResolvedValue({ placements: [] });
+
+    const { result } = renderHook(
+      () => ({
+        seed: useSeedStatus(),
+        layout: useQuery({
+          queryKey: DASHBOARD_LAYOUT_KEY,
+          queryFn: readLayout,
+        }),
+      }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      }
+    );
+
+    await waitFor(() => expect(result.current.seed.status.kind).toBe("idle"));
+    await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      result.current.seed.skip();
+    });
+
+    await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
+  });
+
   it("skip writes skippedAt and transitions to hidden", async () => {
     vi.mocked(seedApi.probe).mockResolvedValue({
       available: true,
