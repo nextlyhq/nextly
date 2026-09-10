@@ -146,6 +146,17 @@ export interface SubmitFormResult {
   redirect?: string;
 
   /**
+   * The error that ended a `failed` submission, kept rather than flattened.
+   *
+   * A collection can refuse a write for reasons its host chose: a
+   * `beforeValidate` hook throwing `NextlyError.validation`, a uniqueness
+   * conflict. Those carry their own status and field detail, and reporting them
+   * all as one internal error tells a visitor the server broke when in fact
+   * their submission was answered deliberately.
+   */
+  cause?: unknown;
+
+  /**
    * The toast the form's author wrote for a successful submission.
    *
    * Carried on the result rather than read from the form again by whoever
@@ -503,6 +514,7 @@ export async function submitForm(
       success: false,
       outcome: "failed",
       error: "An error occurred processing your submission. Please try again.",
+      cause: error,
     };
   }
 }

@@ -294,7 +294,13 @@ function refusalFor(
         logContext: { slug },
       });
 
+    // A typed refusal is re-thrown as itself. The collection may refuse a write
+    // for a reason its host chose, and those carry their own status and field
+    // detail; answering all of them with one internal error tells a visitor the
+    // server broke when their submission was in fact answered deliberately.
+    // Anything untyped stays a 500, which is what an unexpected failure is.
     default:
+      if (result.cause instanceof NextlyError) return result.cause;
       return NextlyError.internal({
         logContext: { ...entity, reason: "submission-failed" },
       });

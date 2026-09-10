@@ -231,7 +231,7 @@ export function prepareSubmission({
     return {
       data: transformed,
       validationErrors: getValidationErrors(result),
-      validationIssues: getValidationIssues(result),
+      validationIssues: getValidationIssues(result, transformed),
     };
   }
 

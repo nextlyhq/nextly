@@ -701,6 +701,21 @@ export interface ValidationIssue {
 }
 
 /**
+ * Whether the visitor supplied nothing at this field.
+ *
+ * The same four shapes the endpoint has always counted as blank. A `false`
+ * checkbox and a `0` are answers, so neither is absent.
+ */
+function isBlank(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+/**
  * The failures with their codes, first one per field.
  *
  * A code as well as a sentence, because the public submission error has always
@@ -708,13 +723,15 @@ export interface ValidationIssue {
  * not an email" without parsing English. Flattening every failure to `INVALID`
  * silently stopped required-field detection working for those clients.
  *
- * Zod says `invalid_type` for an absent key and `too_small` for a value that is
- * present but empty, which together are exactly the condition the endpoint
- * used to test for by hand. Anything else is a value that was supplied and
- * rejected on its own terms.
+ * The code is decided by looking at the SUBMITTED VALUE, not at the Zod issue.
+ * Zod's codes do not divide the same way: `too_small` covers a blank answer and
+ * a four-character password under a minimum of eight, and `invalid_type` covers
+ * an absent key and a string sent to a number field. Reading the code alone
+ * told a visitor to fill in a field they had already filled in.
  */
 export function getValidationIssues(
-  result: z.ZodSafeParseResult<unknown>
+  result: z.ZodSafeParseResult<unknown>,
+  submitted: Record<string, unknown> = {}
 ): ValidationIssue[] {
   if (result.success) return [];
 
@@ -728,10 +745,10 @@ export function getValidationIssues(
     seen.add(path);
     issues.push({
       path,
-      code:
-        issue.code === "invalid_type" || issue.code === "too_small"
-          ? "REQUIRED"
-          : "INVALID",
+      // Read at the top level, which is the only depth a form field has: a
+      // declared field is one key, so a dotted path can only come from inside a
+      // value the visitor did supply.
+      code: isBlank(submitted[path]) ? "REQUIRED" : "INVALID",
       message: issue.message,
     });
   }
