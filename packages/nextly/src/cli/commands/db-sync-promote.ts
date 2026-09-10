@@ -13,7 +13,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { CommandContext } from "../program";
-import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 
 export async function runPromote(
   slug: string,
@@ -21,7 +21,7 @@ export async function runPromote(
 ): Promise<void> {
   const { logger } = context;
 
-  // 1. Database wiring. Reuses the same validateDatabaseEnv + createAdapter
+  // 1. Database wiring. Reuses the same validateDatabaseEnv + createCliAdapter
   // pipeline as the normal db:sync flow so DATABASE_URL errors look the
   // same as always.
   const env = validateDatabaseEnv();
@@ -29,7 +29,7 @@ export async function runPromote(
     logger.error(env.errors.join("; "));
     process.exit(1);
   }
-  const adapter = await createAdapter({ logger });
+  const adapter = await createCliAdapter({ logger });
 
   // CollectionRegistryService expects a full DrizzleAdapter. The CLI
   // adapter is structurally compatible; same cast pattern as dev-build.ts.

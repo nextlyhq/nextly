@@ -31,7 +31,7 @@ import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
 import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
 } from "../utils/adapter";
@@ -171,7 +171,7 @@ export async function runPruneCommand(
 
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createAdapter({
+    adapter = await createCliAdapter({
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
     });

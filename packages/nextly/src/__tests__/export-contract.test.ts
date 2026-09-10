@@ -79,23 +79,19 @@ function namesPublishedTwice(
 }
 
 /**
- * Names already published from two entry points meaning different things.
+ * Names published from two entry points meaning different things.
  *
- * 🔴 Recorded, not accepted. Each is the same defect `getNextly` was: one name,
- * two functions, and nothing at an import site to say which one arrived.
- * `isFieldGroupType` is a boolean test in one place and a generic narrowing in
- * the other; `createAdapter` is the CLI's and the database factory's, which
- * take different arguments and do different work.
+ * 🔴 EMPTY, and that is the point. It held the two this check found when it was
+ * written, `isFieldGroupType` and `createAdapter`, each recorded rather than
+ * fixed because each needed the decision `getNextly` needed about which keeps
+ * the name. Both have now been made, so nothing is exempt and the next one
+ * fails on the day it appears rather than joining a list.
  *
- * They are listed rather than fixed here because each needs the same decision
- * `getNextly` needed about which keeps the name, and answering several of those
- * inside one rename is how a considered API becomes an incidental one. Listing
- * them is what makes a NEW one fail this test on the day it appears.
+ * Add to this only to record a clash somebody has decided to keep, with the
+ * reason. A name added here to make a red test green is the defect being
+ * written down instead of fixed.
  */
-const KNOWN_SHAPE_CLASHES = [
-  "isFieldGroupType: nextly sync/1, nextly/field-group-type sync/2",
-  "createAdapter: nextly async/1, nextly/database async/1, nextly/cli/utils async/0",
-];
+const KNOWN_SHAPE_CLASHES: string[] = [];
 
 const manifestUrl = new URL("../../package.json", import.meta.url);
 const packageRoot = path.dirname(fileURLToPath(manifestUrl));

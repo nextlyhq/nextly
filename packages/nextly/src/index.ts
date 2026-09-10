@@ -974,7 +974,7 @@ export type { FieldGroupFieldConfig } from "./collections/fields/types/component
 // literal, so a migrated definition renders as what it is.
 export {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "./domains/field-groups/storage/field-group-field-type";
 
 // Declares an entry field whose type a plugin contributed. `FieldConfig` is a

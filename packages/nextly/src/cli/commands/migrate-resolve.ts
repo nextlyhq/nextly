@@ -30,7 +30,7 @@ import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-
 import { describeError, NextlyError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
 } from "../utils/adapter";
@@ -136,7 +136,7 @@ export async function runMigrateResolve(
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
   const metaDir = resolve(migrationsDir, "meta");
 
-  const adapter: CLIDatabaseAdapter = await createAdapter({
+  const adapter: CLIDatabaseAdapter = await createCliAdapter({
     dialect: dbValidation.dialect,
     databaseUrl: dbValidation.databaseUrl,
     logger: options.verbose ? logger : undefined,

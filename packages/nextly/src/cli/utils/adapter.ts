@@ -20,7 +20,7 @@ export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 /**
  * Options for creating a database adapter
  */
-export interface CreateAdapterOptions {
+export interface CreateCliAdapterOptions {
   /**
    * Database dialect (postgresql, mysql, sqlite)
    * If not provided, will be detected from DATABASE_URL or DB_DIALECT env var
@@ -118,15 +118,22 @@ export interface CLIDatabaseAdapter {
 }
 
 /**
- * Create a database adapter from environment or options
+ * Create the CLI's own minimal database adapter, from environment or options.
+ *
+ * Named apart from `createCliAdapter` in `nextly/database`, which is a different
+ * function returning a different type: that one builds the full
+ * `DrizzleAdapter` an application runs on, this one builds the small
+ * `CLIDatabaseAdapter` above, which is connect, disconnect and a dialect. Both
+ * were published under one name from two entries, so an import site said
+ * nothing about which had arrived or what it could do.
  *
  * @param options - Adapter creation options
- * @returns Database adapter instance
+ * @returns The CLI adapter instance
  * @throws Error if environment is invalid or adapter creation fails
  *
  * @example
  * ```typescript
- * const adapter = await createAdapter({ logger });
+ * const adapter = await createCliAdapter({ logger });
  * try {
  *   // Use adapter...
  * } finally {
@@ -134,8 +141,8 @@ export interface CLIDatabaseAdapter {
  * }
  * ```
  */
-export async function createAdapter(
-  options: CreateAdapterOptions = {}
+export async function createCliAdapter(
+  options: CreateCliAdapterOptions = {}
 ): Promise<CLIDatabaseAdapter> {
   const { logger } = options;
 
@@ -197,9 +204,9 @@ export async function createAdapter(
  */
 export async function withAdapter<T>(
   fn: (adapter: CLIDatabaseAdapter) => Promise<T>,
-  options: CreateAdapterOptions = {}
+  options: CreateCliAdapterOptions = {}
 ): Promise<T> {
-  const adapter = await createAdapter(options);
+  const adapter = await createCliAdapter(options);
   try {
     return await fn(adapter);
   } finally {

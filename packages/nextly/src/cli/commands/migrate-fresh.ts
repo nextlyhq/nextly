@@ -44,7 +44,7 @@ import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { describeError, immediateMessage } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
@@ -185,7 +185,7 @@ export async function runMigrateFresh(
 
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createAdapter({
+    adapter = await createCliAdapter({
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
       logger: options.verbose ? logger : undefined,

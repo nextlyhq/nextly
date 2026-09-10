@@ -36,7 +36,7 @@ import type {
 
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { isFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
@@ -563,7 +563,7 @@ function isComponentFieldDef(field: {
   name: string;
   type: string;
 }): field is ComponentFieldDefinition {
-  return isFieldGroupType(field.type);
+  return isFieldGroupFieldType(field.type);
 }
 
 /**
