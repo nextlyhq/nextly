@@ -1007,6 +1007,7 @@ export function SingleForm({
                             <DocumentLockBanner
                               notice={lock.notice}
                               onTakeOver={lock.takeOver}
+                              onRequestAccess={lock.requestAccess}
                               className="mx-6 mt-3"
                             />
                             {/* The recovery offer restores work into the LIVE
