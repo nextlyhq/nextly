@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,80 @@ const exists = (p: string): Promise<boolean> =>
     () => true,
     () => false
   );
+
+/**
+ * What a freshly scaffolded suite must budget for a case and for a hook.
+ *
+ * A scaffolded project boots a real instance: `createTestNextly` builds a DI
+ * container, registers the schema and runs auto-sync over a real SQLite
+ * database. Vitest's defaults are sized for a unit test that touches none of
+ * that, and the first `pnpm test` in a new project is the least warm moment
+ * there is, so a timeout there reads as a broken scaffold rather than as a
+ * tight budget.
+ */
+const BOOT_BUDGET_MS = 30_000;
+
+type TestBudget = { testTimeout?: number; hookTimeout?: number };
+
+/**
+ * The `test` block vitest will actually apply, from a config file on disk.
+ *
+ * 🔴 The config is EVALUATED rather than parsed. Reading the source can only
+ * ever recognise the shapes someone thought of - a wrapper, a spread, a merge,
+ * an alias, a local helper of the same name - and each shape that is missed
+ * reports an adequate budget for a suite that does not have one.
+ *
+ * A config may export the object, a function returning it, or an async function
+ * returning it; vitest calls and awaits whichever it finds. `import()` hands
+ * back the export itself and does neither, so a functional config read straight
+ * off `default` has no `test` block at all, and an adequately budgeted project
+ * would be reported as having no budget.
+ */
+async function resolvedConfigOf(
+  configPath: string
+): Promise<{ test?: TestBudget; plugins?: unknown[] }> {
+  const module = (await import(/* @vite-ignore */ configPath)) as {
+    default: unknown;
+  };
+
+  const exported = module.default;
+  const resolved =
+    typeof exported === "function"
+      ? await (exported as (env: { mode: string; command: string }) => unknown)(
+          {
+            mode: "test",
+            command: "serve",
+          }
+        )
+      : await exported;
+
+  return (resolved ?? {}) as { test?: TestBudget; plugins?: unknown[] };
+}
+
+/** The budget a config declares, or nothing. */
+async function bootBudgetOf(
+  configPath: string
+): Promise<TestBudget | undefined> {
+  return (await resolvedConfigOf(configPath)).test;
+}
+
+/**
+ * Whether a directory contains any test file at all, ignoring installed
+ * packages and dot directories.
+ */
+async function shipsTests(dir: string): Promise<boolean> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (await shipsTests(full)) return true;
+      continue;
+    }
+    if (/\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name)) return true;
+  }
+  return false;
+}
 
 describe("scaffold --template plugin (D44/D45 smoke test)", () => {
   let workdir: string;
@@ -90,6 +164,31 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
     expect(pkg.pnpm).toBeUndefined();
+
+    /*
+     * The scaffolded suite boots a real instance, so its budget is asserted
+     * against what vitest will actually use rather than against the text of the
+     * config.
+     *
+     * `plugin.test.ts` calls `createTestNextly` in `beforeEach`, which builds a
+     * DI container, registers the plugin's schema and runs auto-sync over a real
+     * SQLite database. Vitest's defaults are sized for a unit test that touches
+     * none of that, and this is the first command a new plugin author runs, so a
+     * timeout there reads as a broken scaffold rather than a tight budget.
+     *
+     * 🔴 The config is IMPORTED rather than parsed. Reading the source can only
+     * ever recognise the shapes someone thought of - a wrapper, a spread, a
+     * merge, an alias, a local helper of the same name - and each one that is
+     * missed reports an adequate budget for a suite that does not have one.
+     * Importing asks the runtime, which resolves all of them by construction,
+     * and asserts the value the suite will really run under.
+     */
+    const budget = await bootBudgetOf(path.join(target, "vitest.config.ts"));
+
+    // Both, because the boot is in a hook and the case body is not, and vitest
+    // budgets the two separately.
+    expect(budget?.testTimeout).toBeGreaterThanOrEqual(BOOT_BUDGET_MS);
+    expect(budget?.hookTimeout).toBeGreaterThanOrEqual(BOOT_BUDGET_MS);
     expect(await exists(path.join(target, "pnpm-workspace.yaml"))).toBe(true);
     const workspaceYaml = await readFile(
       path.join(target, "pnpm-workspace.yaml"),
@@ -112,5 +211,80 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     );
     expect(devConfig).toContain('"@acme/nextly-plugin-test"');
     expect(devConfig).not.toMatch(/\{\{\s*\w+\s*\}\}/);
+  });
+});
+
+/*
+ * 🔴 The population is DISCOVERED, so a template added later is covered without
+ * anyone remembering this file. The case above proves the scaffold pipeline
+ * carries the plugin template's budget through to a real project; on its own it
+ * says nothing about `base`, `blank`, `blog`, or whatever is added next, and
+ * naming the one template that exists today is how the gap reopens.
+ *
+ * The rule turns on whether a template SHIPS TESTS, not on whether it ships a
+ * config. Keying on the config leaves the worse case uncovered: a template that
+ * adds a booting suite and no `vitest.config.ts` runs on vitest's 5s default,
+ * which is the exact defect this guard exists for, and a config-keyed filter
+ * would skip that directory silently while the one good template kept the
+ * population non-empty.
+ *
+ * It is deliberately broader than "templates whose suite boots". Deciding which
+ * suites boot means reading their source for a call, and a template that boots
+ * through a helper would be missed. A generous timeout costs a passing suite
+ * nothing, and every scaffold is a real project sooner or later.
+ */
+describe("every scaffold template budgets for a boot", () => {
+  it("requires a budgeted vitest config in each template that ships tests", async () => {
+    const entries = await readdir(templatesRoot, { withFileTypes: true });
+
+    const withTests: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(templatesRoot, entry.name);
+      if (await shipsTests(dir)) withTests.push(dir);
+    }
+
+    // An empty population would pass every assertion below without running one,
+    // so it is refused rather than reported as a clean sweep.
+    expect(withTests.length).toBeGreaterThan(0);
+
+    for (const dir of withTests) {
+      const name = path.basename(dir);
+      const configPath = path.join(dir, "vitest.config.ts");
+
+      expect(
+        await exists(configPath),
+        `templates/${name} ships tests but no vitest.config.ts, so its suite ` +
+          "runs on vitest's defaults"
+      ).toBe(true);
+
+      const config = await resolvedConfigOf(configPath);
+
+      /*
+       * ⚠️ The precondition that makes the budget above authoritative. A Vite
+       * plugin's `config` hook can contribute or override `test.testTimeout`,
+       * and vitest merges that before running, so with a plugin present the
+       * declared literal is no longer what the suite runs under. Resolving that
+       * properly means vitest's own config loader, and `vite` is not resolvable
+       * anywhere under this workspace's pnpm isolation. So the assertion states
+       * its precondition instead of hoping for it: no plugins, therefore no
+       * hook, therefore the declaration IS the resolved value. A template that
+       * genuinely needs one has to revisit this.
+       */
+      expect(
+        config.plugins ?? [],
+        `templates/${name} declares vitest plugins, and a plugin's config hook ` +
+          "can change the timeouts this asserts"
+      ).toHaveLength(0);
+
+      expect(
+        config.test?.testTimeout,
+        `templates/${name} has no testTimeout`
+      ).toBeGreaterThanOrEqual(BOOT_BUDGET_MS);
+      expect(
+        config.test?.hookTimeout,
+        `templates/${name} has no hookTimeout`
+      ).toBeGreaterThanOrEqual(BOOT_BUDGET_MS);
+    }
   });
 });
