@@ -134,16 +134,47 @@ GET /admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
 catch-all there. Check where your own `createDynamicHandlers` route file sits if the URL
 above does not resolve.
 
-It lists the published entries of the configured collections, generated per request. There
-is no `next` dependency involved, which is what lets a headless consumer with no
+It lists entries from the configured collections, generated per request. There is no
+`next` dependency involved, which is what lets a headless consumer with no
 `app/sitemap.ts` read it.
+
+**"Published" means the built-in lifecycle, and only that.** The `status: published`
+filter is applied to a collection that declares `status: true`, read from the collection
+itself. A collection without that lifecycle has no unpublished state as far as the
+platform is concerned, so **every row is listed**, including rows you consider drafts via
+an ordinary field you happen to have named `status`. Filtering on a same-named custom
+field would be the plugin guessing at your semantics. If you keep drafts that way, exclude
+that collection from the sitemap.
+
+<Callout type="warn">
+**The route is not rate limited by default.** Nextly's limiter skips `/admin/api/` through
+`defaultSkipAdminApi`, which is where the scaffold mounts plugin routes, so this public
+endpoint is exempt out of the box. Each anonymous request can page and serialize up to
+50,000 rows, and with no `baseUrl` configured the response is `no-store`, so an
+intermediary will not absorb the repeats either.
+
+Set `baseUrl` so the document is cacheable, put a CDN or your host's cache in front of
+`/sitemap.xml`, or pass a `skip` to the rate limiter that does not exempt this path.
+
+</Callout>
 
 **One document, and the protocol bounds it.** Collection stops at **50,000 URLs**, or
 sooner if the serialized document would pass **50 MB**, because a single `<urlset>` past
 either is invalid. It stops rather than failing, so a site above those limits gets a
-sitemap that is quietly short. A corpus that large needs a sitemap **index** splitting it
-into several documents, which belongs to the delivery layer: Next.js `generateSitemaps()`
-is the usual answer, using the exported generators below for each shard.
+sitemap that is quietly short, with no error to say so.
+
+<Callout type="warn">
+**These exports cannot shard, so do not reach for them from `generateSitemaps()`.**
+`SitemapOptions` takes `collections`, `baseUrl`, `urlFor`, `basePath`, `pageSize` and
+`maxBytes`. There is no offset, cursor or predicate, and `buildSitemapUrls` always starts
+at the first page and returns at the global cap, so calling it once per shard yields the
+same first 50,000 URLs every time.
+
+Until a shard-aware option exists, a corpus past the cap needs a sitemap index built from
+your own queries, splitting the work by something you control: one document per
+collection, per locale, or per date range, each within the cap.
+
+</Callout>
 
 <Callout type="warn">
 **The sitemap is public and reads as the system.** It enumerates every published entry's
@@ -206,6 +237,20 @@ export default defineConfig({
 Prefer `basePath` where only the prefix differs. A hand-built path has to reproduce
 correctly what the route already answers for nested, encoded and unservable slugs, and
 `basePath` keeps that half derived.
+
+**`seo.canonical` has the last word, after `urlFor` has run.** A stored canonical is
+resolved against the site origin, and then:
+
+| The canonical is                                      | What the sitemap does              |
+| ----------------------------------------------------- | ---------------------------------- |
+| Same origin (`/about` or `https://example.com/about`) | **Replaces** the generated `<loc>` |
+| A different origin                                    | **Drops the entry** entirely       |
+| A non-http scheme, or carrying credentials            | Ignored, generated URL kept        |
+| Unparseable                                           | Ignored, generated URL kept        |
+
+So an entry can vanish from the sitemap, or appear at a path your `urlFor` never returned,
+because of a value an editor typed into a field. That is the intended meaning of a
+canonical, and it is worth knowing before debugging the callback.
 
 Two things `basePath` does not do. It does not claim the mount's own root is served: an
 entry with an empty slug is skipped whatever the prefix says, because whether that root
