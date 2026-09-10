@@ -54,7 +54,7 @@ describe("a conditional widget", () => {
     // render, where an unknown condition would simply never hold and the card
     // would read as broken.
     const problem = lifecycleProblem(
-      conditional({ visibleWhen: "onboarding:incomplete" })
+      conditional({ visibleWhen: "billing:overdue" })
     );
     expect(problem).toContain("visibleWhen");
     // The known set is NAMED, because a mistyped condition and one this

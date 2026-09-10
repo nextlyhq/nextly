@@ -59,8 +59,7 @@ describe("what a dashboard asks about", () => {
     // evaluators disagree. Asking the host about a name it has no arm for would
     // throw; the card is dropped by the verdict rule below instead.
     expect(
-      conditionsNeeded([{ ...transient, visibleWhen: "onboarding:incomplete" }])
-        .size
+      conditionsNeeded([{ ...transient, visibleWhen: "billing:overdue" }]).size
     ).toBe(0);
   });
 
@@ -98,7 +97,7 @@ describe("which widgets are kept", () => {
   });
 
   it("hides a transient widget naming a condition this host cannot evaluate", () => {
-    const unknown = { ...transient, visibleWhen: "onboarding:incomplete" };
+    const unknown = { ...transient, visibleWhen: "billing:overdue" };
     expect(widgetsHeldByVerdict([unknown], verdict(true))).toEqual([]);
   });
 
@@ -112,11 +111,7 @@ describe("which widgets are kept", () => {
       visibleWhen: "content:empty",
     };
     const mixed = widgetsHeldByVerdict(
-      [
-        permanent,
-        transient,
-        { ...other, visibleWhen: "onboarding:incomplete" },
-      ],
+      [permanent, transient, { ...other, visibleWhen: "billing:overdue" }],
       verdict(true)
     );
     expect(mixed.map(w => w.id)).toEqual([permanent.id, transient.id]);

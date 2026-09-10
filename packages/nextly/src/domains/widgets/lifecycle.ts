@@ -63,11 +63,22 @@ export type WidgetLifecycle = (typeof WIDGET_LIFECYCLES)[number];
  * "nothing to show" is correct; the same editor told the install is empty is
  * being told something false.
  *
+ * `onboarding:incomplete` — this READER still has setup steps outstanding.
+ * Reader-scoped for the same reason and more sharply: the steps are detected
+ * from what this reader can see, so an editor who may not read a collection is
+ * not held short of finishing by content they cannot know about. It is NOT a
+ * narrower `content:empty`, and the two are deliberately separable — an install
+ * with content can still have onboarding outstanding, and a reader who has
+ * written nothing may have finished every step available to them.
+ *
  * Namespaced `subject:state` so a later condition about a different subject
  * cannot be mistaken for a variant of this one, and so the set stays readable
  * as it grows.
  */
-export const WIDGET_CONDITIONS = ["content:empty"] as const;
+export const WIDGET_CONDITIONS = [
+  "content:empty",
+  "onboarding:incomplete",
+] as const;
 export type WidgetCondition = (typeof WIDGET_CONDITIONS)[number];
 
 const LIFECYCLE_SET: ReadonlySet<string> = new Set(WIDGET_LIFECYCLES);

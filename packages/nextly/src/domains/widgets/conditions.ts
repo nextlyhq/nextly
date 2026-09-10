@@ -14,96 +14,27 @@
  * @module domains/widgets/conditions
  */
 
-import {
-  readableEntities,
-  readAccessCaller,
-} from "../../auth/entity-read-access";
-import { requireNextly } from "../../direct-api/nextly";
-import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
 import { isWidgetCondition, type WidgetCondition } from "./lifecycle";
-import { listSources, sourceKindFromId, sourceTarget } from "./sources";
-
-/**
- * The access arguments every condition reads through.
- *
- * The SAME shape a widget query uses, so a condition and the cards it governs
- * cannot disagree about who the reader is. `overrideAccess: false` is the whole
- * point: a condition answered with the guard off would describe an install
- * rather than a reader, and `content:empty` is deliberately about the reader.
- */
-function readArgs(caller: ReadCaller) {
-  return {
-    overrideAccess: false as const,
-    user: caller.user,
-    ...(caller.authenticatedScope
-      ? ({ actor: caller.authenticatedScope } satisfies Pick<
-          FindArgs<string>,
-          "actor"
-        >)
-      : {}),
-  };
-}
+import { onboardingIsIncomplete } from "./onboarding";
+import { readerHasContent } from "./reader-content";
 
 /**
  * Whether this reader can see any content at all.
  *
- * SHORT-CIRCUITS on the first collection holding a row, so the expensive shape
- * — many collections — is the one that returns soonest, and the exhaustive walk
- * happens only on an install that is genuinely empty, where every count is
- * against an empty table.
+ * DERIVED from {@link readerHasContent} rather than counting here, because the
+ * onboarding steps ask the same question of the same rows. Counted in both
+ * places the two would agree on the day they were written and drift after:
+ * one counting drafts and the other not, or one reading the source registry
+ * and the other the collections registry, produces a dashboard that offers an
+ * onboarding card while telling the reader their install has content.
  *
- * Asked per collection through the ordinary counted read rather than through
- * one unscoped total, because "any content" has to mean "any content THIS
- * reader may read": a total taken with the guard off would answer from rows the
- * reader is not allowed to know exist.
- *
- * `status: "all"` because a draft is content. A reader who has written one
- * post and not published it is not looking at an empty install, and telling
- * them they are is the onboarding equivalent of losing their work.
- *
- * The collections come from the WIDGET SOURCE registry, which `visibleWidgets`
- * has just refreshed, rather than from the collections registry directly. That
- * registry excludes a collection whose stored metadata is known to be ahead of
- * its table — a transient reload state — so such a collection's rows are not
- * counted and an install holding only those would read as empty.
- *
- * Accepted, because the alternative is worse in the case this exists for.
- * Counting straight from the collections registry would query tables that may
- * not exist yet; that count throws, the condition goes unanswered, and an
- * unanswered condition HIDES its widget — so the onboarding card would
- * disappear on exactly the fresh install it is meant to greet. A card that
- * lingers briefly during a reload is the cheaper error than one that never
- * appears.
- *
- * Note what is NOT a gap here: a `pending` migration status does not drop a
- * collection. The source builder treats that label as a fast path only and
- * asks the database whether the table exists when the label declines.
+ * The scoping, the short-circuit and the `status: "all"` reasoning now live
+ * with the counting, in `reader-content.ts`.
  */
 async function contentIsEmpty(caller: ReadCaller): Promise<boolean> {
-  const slugs = listSources()
-    .filter(source => sourceKindFromId(source.id) === "collection")
-    .map(source => sourceTarget(source.id));
-
-  // Asked once for the whole set rather than per collection: a permission
-  // decision resolves a session caller through a per-user TTL cache, so asking
-  // separately is one database read per collection for one answer.
-  // Converted rather than taken as a second parameter: the entity-level shape
-  // is DERIVED from this one, and asking a caller to pass both invites the two
-  // describing different readers.
-  const readable = await readableEntities(slugs, readAccessCaller(caller));
-
-  for (const slug of slugs) {
-    if (!readable.has(slug)) continue;
-    const { total } = await requireNextly().count({
-      collection: slug,
-      status: "all",
-      ...readArgs(caller),
-    });
-    if (total > 0) return false;
-  }
-  return true;
+  return !(await readerHasContent(caller));
 }
 
 /**
@@ -119,6 +50,7 @@ const EVALUATORS: Record<
   (caller: ReadCaller) => Promise<boolean>
 > = {
   "content:empty": contentIsEmpty,
+  "onboarding:incomplete": onboardingIsIncomplete,
 };
 
 /**
