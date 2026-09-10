@@ -30,7 +30,7 @@ import {
   type AuthenticatedScope,
   ruleFacingPermissions,
 } from "../../auth/authenticated-scope";
-import { currentCallerScope } from "../../auth/caller-scope";
+import { effectiveCallerScope } from "../../auth/caller-scope";
 import { NextlyError } from "../../errors/nextly-error";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
@@ -103,7 +103,7 @@ function grantsResolver(
     //
     // No database read at all in this branch: the key's grants were resolved at
     // authentication and travel with the request.
-    const effective = scope ?? currentCallerScope();
+    const effective = effectiveCallerScope(scope);
     if (effective?.actorType === "apiKey") {
       pending = Promise.resolve({
         permissions: ruleFacingPermissions(effective),

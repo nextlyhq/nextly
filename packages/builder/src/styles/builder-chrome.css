@@ -2366,9 +2366,16 @@
  * state an author most needs to spot reads as a full stop.
  *
  * What is left is the pair the affordance actually wants: `--nx-chart-2` for a
- * value set here and `--nx-chart-4`, amber-500, for one arriving from elsewhere
- * — the blue-and-orange distinction the prior art established, in tokens that
- * are retuned with the theme rather than pinned to a hex.
+ * value set here and `--nx-chart-4` for one arriving from elsewhere — the
+ * blue-and-orange distinction the prior art established, in tokens that are
+ * retuned with the theme rather than pinned to a hex.
+ *
+ * Deliberately named by SLOT rather than by ramp step. Both resolve to a
+ * different step per mode — amber-700 and cyan-600 on the light surface here,
+ * the 500s on the dark one — because this inspector's background is
+ * `--nx-builder-surface`, an alias of `--nx-muted`, and a 6px dot has to clear
+ * the non-text minimum against it in both. Writing the step into the prose is
+ * what made this comment wrong the first time the two modes diverged.
  */
 .nx-style-inspector__provenance {
   display: inline-block;

@@ -493,7 +493,58 @@ const BOUNDARIES: Pairing[] = [
   },
 ];
 
+/**
+ * The marks a chart paints, against the surface it paints them on.
+ *
+ * A chart mark is a graphical object required to read the chart, which is the
+ * scope WCAG 1.4.11 sets, so each is held to 3:1. The surface is `--nx-card`
+ * throughout: a widget draws inside a card, and that is the only surface these
+ * marks meet. Deliberately not asserted against the page or the container tint
+ * — a pairing that never renders is noise, and the light ramp is close enough
+ * to the minimum that a surface nobody draws on would fail for no one.
+ *
+ * The whole slot range is asserted rather than only the slots something reads
+ * today. A palette is a menu: the next chart takes slot 3 without touching this
+ * file, and a slot that fails the day it is first used is a defect shipped by
+ * whoever adds the chart rather than by whoever chose the colour.
+ *
+ * Slot 1 is `var(--nx-primary)` and is asserted through "chart series 1"
+ * rather than separately, so a rebrand moving primary is caught here too.
+ */
+const CHART_MARKS: Pairing[] = [
+  ...[1, 2, 3, 4, 5].map(
+    (n): Pairing => ({
+      fg: `--nx-chart-${n}`,
+      bg: "--nx-card",
+      kind: "ui",
+      label: `chart series ${n} on card`,
+    })
+  ),
+  {
+    // The bars archetype paints the fill over its own track, not over the card,
+    // so the track is the surface that decides whether the bar is visible.
+    fg: "--nx-primary",
+    bg: "--nx-muted",
+    kind: "ui",
+    label: "bar fill on its track",
+  },
+  // The builder's style inspector paints a 6px provenance dot per row, and its
+  // background is `--nx-builder-surface`, an alias of `--nx-muted`. Slots 2 and
+  // 4 are the two it uses -- 1 is skipped there because it resolves to the
+  // label text's own colour, and 5 reads as an error. So these two slots meet a
+  // second surface, and it is the one where the light ramp has least headroom.
+  ...[2, 4].map(
+    (n): Pairing => ({
+      fg: `--nx-chart-${n}`,
+      bg: "--nx-muted",
+      kind: "ui",
+      label: `chart series ${n} on the inspector surface`,
+    })
+  ),
+];
+
 export const PAIRINGS: Pairing[] = [
+  ...CHART_MARKS,
   ...BASE_TEXT,
   ...CODE_TEXT,
   ...STATUS_TEXT,
@@ -547,9 +598,19 @@ export const EXCLUSIONS: Exclusion[] = [
       "The solid gap between a focus ring and the content it surrounds, not a foreground/background pair; its job is separation, which the ring's own contrast already covers.",
   },
   {
-    token: "--nx-chart-1..5",
+    token: "--nx-chart-1..5 against the page and the page container tint",
     reason:
-      "A categorical data-visualization palette. Meaningful chart contrast is adjacent-series and against-plot-background, not a single token pair; assert it where charts are actually rendered.",
+      "Every slot IS asserted against --nx-card, and slots 2 and 4 against --nx-muted as well, which are the two surfaces charts are actually painted on: a widget draws inside a card, and the builder's style inspector draws its provenance dots on --nx-builder-surface, an alias of --nx-muted. What is left here is --nx-background and --nx-page-background, where no chart is drawn. Holding the palette to a surface nothing paints on would cost real headroom in the light ramp for nobody's benefit.",
+  },
+  {
+    token: "adjacent-series contrast (one chart series against its neighbour)",
+    reason:
+      "Not a foreground/surface pair, so this table cannot express it: both sides are marks. The requirement is real -- WCAG 1.4.11 asks for 3:1 against adjacent colours, and two arcs of a ring are adjacent colours -- and it is met by SEPARATION rather than by constraining the palette. RingChart draws a surface-coloured separator under each segment (see SEGMENT_SEPARATION and its tests), so the boundary is not a colour boundary. That is deliberate: the ring's own pair is the primary against a chart slot, and no palette choice fixes it while one segment is the primary -- a colour 3:1 from both white and a near-black card exists, but picking the amber for every chart to settle one boundary is the wrong trade. Nothing here checks a chart that puts two slots side by side WITHOUT a separator; such a chart has to bring its own.",
+  },
+  {
+    token: "--nx-chart-1 and --nx-chart-2 after a tenant branding override",
+    reason:
+      "This suite resolves theme.css, so it asserts the DEFAULTS. BrandingProvider writes --nx-chart-1 and --nx-chart-2 from a tenant's primary and accent at runtime, in both modes, and a light brand primary can put those two below the minimum with every assertion here still green. Not closed by this table, which cannot see a runtime value: closing it needs the branding pipeline to constrain what it emits, which is a change to that pipeline rather than an entry here. Stated so the green is not read as covering it -- the same limit applies to every primary-coloured control, not only to charts.",
   },
   {
     token:
