@@ -6,10 +6,14 @@
  * include that exact combination, because a check written after an incident
  * should be able to fail on the incident.
  */
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
   ANCHOR_PACKAGE,
+  channelDecision,
   manifestAtRef,
   publishState,
   releaseState,
@@ -21,6 +25,10 @@ import {
   verdict,
   versionAtRef,
 } from "./check-finalized.mjs";
+// The bootstrap placeholder is what makes a package NOT `only-pre`, which is
+// what makes the prerelease tag the expected one below. Imported rather than
+// spelled, so the fixture cannot drift from the rule it depends on.
+import { PLACEHOLDER_VERSION } from "./lib.mjs";
 
 const ALL = { kind: "all", published: 20, total: 20 };
 const NONE = { kind: "none", published: 0, total: 20 };
@@ -695,6 +703,68 @@ describe("deriving the train from git", () => {
     expect(() => manifestAtRef("abc123", run)).toThrow(/packages\/broken/);
   });
 
+  it("refuses a public package whose name is EMPTY, not just missing", () => {
+    /*
+     * 🔴 `""` is a string, so a type check passes it through. The registry is
+     * then asked about a package that cannot exist, that answer reads as never
+     * published, and the package leaves the train without a word: the same
+     * silent shrink the malformed-manifest refusal above exists to stop,
+     * reached through a value of the correct type.
+     */
+    const files = {
+      "packages/nextly/package.json": { name: "nextly", version: VERSION },
+      "packages/blank/package.json": { name: "", version: VERSION },
+    };
+    const run = (_cmd, args) => {
+      if (args[0] === "ls-tree") return Object.keys(files).join("\n");
+      return JSON.stringify(files[args[1].split(":")[1]]);
+    };
+
+    expect(() => manifestAtRef("abc123", run)).toThrow(/packages\/blank/);
+  });
+
+  it("refuses a whitespace-only name, and an empty version too", () => {
+    // Whitespace reaches the registry exactly as emptiness does, and a version
+    // is asked of the registry in the same breath as the name, so both fields
+    // have to clear the same bar.
+    const spaced = {
+      "packages/nextly/package.json": { name: "nextly", version: VERSION },
+      "packages/spaced/package.json": { name: "   ", version: VERSION },
+    };
+    const versionless = {
+      "packages/nextly/package.json": { name: "nextly", version: VERSION },
+      "packages/unversioned/package.json": { name: "@nextlyhq/unversioned", version: "" },
+    };
+    const runner = files => (_cmd, args) => {
+      if (args[0] === "ls-tree") return Object.keys(files).join("\n");
+      return JSON.stringify(files[args[1].split(":")[1]]);
+    };
+
+    expect(() => manifestAtRef("abc123", runner(spaced))).toThrow(/packages\/spaced/);
+    expect(() => manifestAtRef("abc123", runner(versionless))).toThrow(
+      /packages\/unversioned/
+    );
+  });
+
+  it("refuses an ANCHOR with an empty name, which defeats the lockstep check", () => {
+    /*
+     * 🔴 The worst shape. With no readable `nextly` in the manifest the
+     * lockstep comparison finds no anchor and compares nothing, so a ref where
+     * every other package has drifted to a different version is graded as a
+     * single coherent release.
+     */
+    const files = {
+      "packages/nextly/package.json": { name: "", version: VERSION },
+      "packages/admin/package.json": { name: "@nextlyhq/admin", version: "9.9.9" },
+    };
+    const run = (_cmd, args) => {
+      if (args[0] === "ls-tree") return Object.keys(files).join("\n");
+      return JSON.stringify(files[args[1].split(":")[1]]);
+    };
+
+    expect(() => manifestAtRef("abc123", run)).toThrow(/packages\/nextly/);
+  });
+
   it("still skips a PRIVATE manifest that declares no version", () => {
     // The control: refusing every unreadable manifest would refuse the private
     // ones this deliberately ignores, and no release would ever be gradable.
@@ -835,22 +905,183 @@ describe("when the channel tag is worth asserting", () => {
    * which shows the MECHANISM works and says nothing about whether the caller
    * chooses correctly.
    */
-  it("asserts it for the train main declares now", () => {
-    expect(shouldAssertChannel(true, "pre")).toBe(true);
-    expect(shouldAssertChannel(true, null)).toBe(true);
+  const STABLE = "0.0.2";
+  const IN_ALPHA = { mode: "pre", tag: "alpha" };
+  const IN_BETA = { mode: "pre", tag: "beta" };
+  const LEAVING = { mode: "exit", tag: "alpha" };
+  const OUTSIDE = null;
+
+  it("asserts it when pre.json and the manifests agree", () => {
+    // The two settled states. Both files say the same thing about this release,
+    // so the tag derived from one can be held against the other.
+    expect(shouldAssertChannel(true, IN_ALPHA, VERSION)).toBe(true);
+    expect(shouldAssertChannel(true, OUTSIDE, STABLE)).toBe(true);
   });
 
   it("does not assert it for a historical subject", () => {
     // Today's channel tag moved past an older release and was never meant to
-    // point at it.
-    expect(shouldAssertChannel(false, "pre")).toBe(false);
+    // point at it. Independent of the mode, so both settled states are shown.
+    expect(shouldAssertChannel(false, IN_ALPHA, VERSION)).toBe(false);
+    expect(shouldAssertChannel(false, OUTSIDE, STABLE)).toBe(false);
   });
 
-  it("does not assert it while prerelease mode is being exited", () => {
-    // The dangerous one: `readPreState` answers null for `mode: "exit"` just as
-    // it does for "never in pre mode", so the expected tag becomes `latest` and
-    // the remedy says to move `latest` onto the alpha still in the manifests.
-    expect(shouldAssertChannel(true, "exit")).toBe(false);
+  it("does not assert it while prerelease mode is being EXITED", () => {
+    // `readPreState` answers null for `mode: "exit"` just as it does for "never
+    // in pre mode", so the expected tag becomes `latest` and the remedy says to
+    // move `latest` onto the alpha still in the manifests.
+    expect(shouldAssertChannel(true, LEAVING, VERSION)).toBe(false);
+  });
+
+  it("does not assert it while prerelease mode is being ENTERED", () => {
+    /*
+     * 🔴 The mirror of the exit. `pnpm changeset pre enter alpha` writes
+     * `mode: "pre"` in its own commit, and `release.yml` runs on it while every
+     * manifest still declares the preceding STABLE release. A mode test alone
+     * answers "assert" here, the new prerelease dist-tag is expected of a
+     * stable version, and the remedy prescribes moving `alpha` onto the last
+     * stable build.
+     */
+    expect(shouldAssertChannel(true, IN_ALPHA, STABLE)).toBe(false);
+  });
+
+  it("does not assert it when pre mode was RE-ENTERED under a different tag", () => {
+    /*
+     * 🔴 Why this compares identifiers rather than asking "is it a prerelease".
+     * Changesets allows an exit and a re-entry under a new tag before the
+     * Version PR lands, so `pre.json` can say `beta` while the manifests still
+     * carry `-alpha.N`. Both claims agree that this is a prerelease and still
+     * disagree about which one, and asserting there expects `beta` to resolve
+     * to the old alpha build.
+     */
+    expect(shouldAssertChannel(true, IN_BETA, VERSION)).toBe(false);
+  });
+
+  it("does not answer the same way for every input", () => {
+    /*
+     * The control. A rule that never fires satisfies every case above that
+     * expects false, and a rule that always fires satisfies the two that expect
+     * true, so neither group proves anything on its own.
+     */
+    const answers = [
+      shouldAssertChannel(true, IN_ALPHA, VERSION),
+      shouldAssertChannel(true, IN_ALPHA, STABLE),
+      shouldAssertChannel(true, IN_BETA, VERSION),
+      shouldAssertChannel(true, LEAVING, VERSION),
+      shouldAssertChannel(true, OUTSIDE, STABLE),
+    ];
+    expect(new Set(answers).size).toBe(2);
+  });
+
+  it("refuses a mode it does not recognise, rather than reading it as exit", () => {
+    /*
+     * 🔴 The last corner. A `pre.json` with no `mode`, or one this checker has
+     * never heard of, used to fall through to the not-pre branch and be read as
+     * a repository outside prerelease mode. With prerelease manifests that
+     * answers "do not assert", and the check switches itself off in the state
+     * where it is most likely to be needed.
+     */
+    for (const mode of [null, undefined, "exiting", "", 3]) {
+      expect(() =>
+        shouldAssertChannel(true, { mode, tag: "alpha" }, VERSION)
+      ).toThrow(/does not know how to read/);
+    }
+
+    // The control: the two modes it DOES know are still read, not refused.
+    expect(shouldAssertChannel(true, IN_ALPHA, VERSION)).toBe(true);
+    expect(shouldAssertChannel(true, LEAVING, VERSION)).toBe(false);
+  });
+
+  it("does not accept a NESTED cycle's build for the shorter tag", () => {
+    /*
+     * 🔴 `changeset version` writes `<version>-<tag>.<n>`, so `next` produces
+     * `-next.0` and `next.1` produces `-next.1.0`. A prefix test alone reads
+     * the second as an artifact of `next` as well, and a cycle exited under
+     * `next.1` and re-entered under `next` would have its old builds accepted
+     * as the new channel's.
+     */
+    const NEXT = { mode: "pre", tag: "next" };
+
+    expect(shouldAssertChannel(true, NEXT, "1.2.3-next.0")).toBe(true);
+    expect(shouldAssertChannel(true, NEXT, "1.2.3-next.1.0")).toBe(false);
+    // And a counter has to BE a counter.
+    expect(shouldAssertChannel(true, NEXT, "1.2.3-next.rc")).toBe(false);
+  });
+
+  it("refuses prerelease mode with no usable tag, rather than answering no", () => {
+    /*
+     * 🔴 `{ "mode": "pre" }` survives a merge or a hand edit, and a null tag
+     * compares unequal to every version there is. Answering "do not assert"
+     * there switches the channel check off and reports nothing, which reads
+     * exactly like a check that ran and found nothing wrong. The question
+     * cannot be asked, so it leaves by the unanswerable door.
+     */
+    for (const tag of [null, undefined, "", "   "]) {
+      expect(() => shouldAssertChannel(true, { mode: "pre", tag }, VERSION)).toThrow(
+        /no usable tag/
+      );
+    }
+
+    // And it reaches the caller as exit-2 material rather than as a crash.
+    const decision = channelDecision(true, VERSION, () => ({ mode: "pre", tag: null }));
+    expect(decision.ok).toBe(false);
+    expect(decision.message).toContain("no usable tag");
+  });
+
+  it("reports an unreadable pre.json as unanswerable, not as a defect", () => {
+    /*
+     * 🔴 The exit code carries this distinction and nothing else does.
+     * `release-health.yml` treats exit 1 as a CONFIRMED unfinished release and
+     * opens an issue from the report, so a parse error escaping here becomes an
+     * issue whose headline is a stack trace and whose remedy is nonsense. The
+     * question could not be asked; that is exit 2.
+     */
+    const unreadable = () => {
+      throw new SyntaxError("Unexpected token } in JSON at position 4");
+    };
+
+    const decision = channelDecision(true, VERSION, unreadable);
+
+    expect(decision.ok).toBe(false);
+    expect(decision.message).toContain("pre.json");
+    expect(decision.message).toContain("unknown rather than wrong");
+  });
+
+  it("passes the decision through when pre.json can be read", () => {
+    // The control. A decision that reported every read as unanswerable would
+    // satisfy the case above and switch the channel check off permanently.
+    const decision = channelDecision(true, VERSION, () => IN_ALPHA);
+
+    expect(decision).toEqual({ ok: true, assertChannel: true });
+  });
+
+  it("recognises a DOTTED tag, whose versions carry more than one identifier", () => {
+    /*
+     * 🔴 `pnpm changeset pre enter next.1` produces `1.2.3-next.1.0`, whose
+     * first prerelease identifier is `next`. Comparing that against the tag
+     * `next.1` is false for every version the cycle will ever produce, so the
+     * channel check would report nothing for the whole cycle while looking
+     * exactly like a check that ran and found nothing wrong.
+     *
+     * `getExpectedDistTag` keeps the first-identifier comparison, because it
+     * exists to mirror what Changesets does and Changesets classifies that way.
+     * These are two questions, not one rule spelled twice.
+     */
+    const DOTTED = { mode: "pre", tag: "next.1" };
+
+    expect(shouldAssertChannel(true, DOTTED, "1.2.3-next.1.0")).toBe(true);
+    // Still discriminating: a different cycle's build does not pass.
+    expect(shouldAssertChannel(true, DOTTED, "1.2.3-next.2.0")).toBe(false);
+    // And a tag is not a prefix of an unrelated identifier that starts the same.
+    expect(shouldAssertChannel(true, { mode: "pre", tag: "next" }, "1.2.3-nextly.1")).toBe(
+      false
+    );
+  });
+
+  it("reads build metadata as part of the version, not as a prerelease", () => {
+    // Shares `firstPrereleaseId` with the tag rule rather than re-deciding what
+    // a prerelease looks like, so `+build` cannot be mistaken for `-alpha`.
+    expect(shouldAssertChannel(true, OUTSIDE, "0.0.2+build.7")).toBe(true);
+    expect(shouldAssertChannel(true, IN_ALPHA, "0.0.2+build.7")).toBe(false);
   });
 });
 
@@ -880,6 +1111,45 @@ describe("a repository part-way out of prerelease mode", () => {
     expect(asserted.channelStale[0]).toContain("latest");
 
     const skipped = await publishState(manifest, async () => state, null, {
+      assertChannel: false,
+    });
+    expect(skipped.kind).toBe("all");
+    expect(skipped.channelStale ?? []).toEqual([]);
+  });
+});
+
+describe("a repository part-way INTO prerelease mode", () => {
+  it("does not expect a channel tag while pre mode is being entered", async () => {
+    /*
+     * 🔴 The mirror of the exit above, and it goes wrong in the opposite
+     * direction. `pnpm changeset pre enter alpha` writes `mode: "pre"` in its
+     * own commit, so `readPreState` answers with the new tag while every
+     * manifest still declares the preceding STABLE release, and `release.yml`
+     * runs on exactly that commit.
+     *
+     * `getExpectedDistTag` reads the REGISTRY to decide `only-pre`, and a
+     * package with real stable versions is not only-pre, so `alpha` is expected
+     * to point at the stable version the manifests name. It points at the last
+     * prerelease instead, and the remedy that follows says to move `alpha` onto
+     * a stable build.
+     */
+    const STABLE = "0.0.2";
+    const manifest = [{ name: "nextly", version: STABLE }];
+    const state = {
+      versions: [PLACEHOLDER_VERSION, "0.0.2-alpha.65", STABLE],
+      distTags: { latest: STABLE, alpha: "0.0.2-alpha.65" },
+    };
+    const entering = { mode: "pre", tag: "alpha" };
+
+    const asserted = await publishState(manifest, async () => state, entering, {
+      assertChannel: true,
+    });
+    // What a mode-only rule produced here: `alpha` expected of a stable
+    // version, and a remedy that would move the prerelease channel onto it.
+    expect(asserted.channelStale).toHaveLength(1);
+    expect(asserted.channelStale[0]).toContain("alpha");
+
+    const skipped = await publishState(manifest, async () => state, entering, {
       assertChannel: false,
     });
     expect(skipped.kind).toBe("all");
@@ -993,5 +1263,41 @@ describe("what the settle actually waits for", () => {
     ]);
 
     expect(unsettledPackages(manifest, registry)).toEqual([]);
+  });
+});
+
+describe("the command-line path, run as a program", () => {
+  /*
+   * 🔴 The first test that enters `if (invokedDirectly)` at all. Importing the
+   * module never does, which is how a rewrite deleted a constant the block
+   * still referenced while 1200 unit tests passed, and how two mutations of the
+   * channel rule passed the entire suite.
+   *
+   * This covers the exit-code contract rather than the whole block, because the
+   * rest of it reaches the registry. It is the half that matters most to a
+   * reader: `.github/workflows/release-health.yml` treats exit 1 as a CONFIRMED
+   * unfinished release and files an issue for it, so any question that could
+   * not be asked has to leave by a different door.
+   */
+  const SCRIPT = fileURLToPath(new URL("./check-finalized.mjs", import.meta.url));
+
+  const runProgram = ref =>
+    spawnSync(process.execPath, [SCRIPT, ref], { encoding: "utf8" });
+
+  it("exits 2, not 1, when the ref it was given cannot be read", () => {
+    // A ref this shape resolves to nothing, so the run ends before any network
+    // call: `versionAtRef` throws and the block has to classify that.
+    const result = runProgram("0000000000000000000000000000000000000000");
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("nothing");
+  });
+
+  it("says which ref it could not read", () => {
+    // The workflow prints this report into an issue body. A diagnosis that does
+    // not name its subject is one a reader cannot act on.
+    const result = runProgram("refs/heads/no-such-branch-here");
+
+    expect(result.stderr).toContain("refs/heads/no-such-branch-here");
   });
 });
