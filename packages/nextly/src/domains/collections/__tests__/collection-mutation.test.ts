@@ -329,6 +329,58 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
     });
 
+    it("runs field-level beforeChange after collection-level beforeChange", async () => {
+      // The order a plugin author has to know and nothing documented: the
+      // field phase is the LAST hook before the write, and it is handed the
+      // whole record, so a collection-level beforeChange is not the final word
+      // on any field. Payload orders these the same way; this pins that the
+      // implementation matches what the guide now says.
+      selectData.rows = [{ id: "new-1", title: "New Post" }];
+
+      await service.createEntry(
+        { collectionName: "posts" },
+        { title: "Ordered Post" }
+      );
+
+      const collectionPhase = mockHookRegistry.execute.mock.calls.findIndex(
+        call => call[0] === "beforeChange"
+      );
+      expect(collectionPhase, "collection beforeChange ran").toBeGreaterThan(
+        -1
+      );
+
+      const fieldPhase = runFieldHooksSpy.mock.calls.findIndex(
+        call => (call[0] as { phase?: string }).phase === "beforeChange"
+      );
+      expect(fieldPhase, "field beforeChange ran").toBeGreaterThan(-1);
+
+      // Invocation order across two different mocks, since neither list alone
+      // can say which came first.
+      const collectionOrder =
+        mockHookRegistry.execute.mock.invocationCallOrder[collectionPhase];
+      const fieldOrder = runFieldHooksSpy.mock.invocationCallOrder[fieldPhase];
+      expect(collectionOrder).toBeLessThan(fieldOrder!);
+    });
+
+    it("hands the field-level beforeChange hook the whole record", async () => {
+      // The consequence of the order above. A field hook that receives only its
+      // own value could not undo a collection hook's work on some other field;
+      // one that receives the record can, and does in Payload too.
+      selectData.rows = [{ id: "new-1", title: "New Post" }];
+
+      await service.createEntry(
+        { collectionName: "posts" },
+        { title: "Whole Record", summary: "kept" }
+      );
+
+      const fieldPhase = runFieldHooksSpy.mock.calls.find(
+        call => (call[0] as { phase?: string }).phase === "beforeChange"
+      );
+      const handed = (fieldPhase?.[0] as { data?: Record<string, unknown> })
+        .data;
+      expect(handed).toMatchObject({ title: "Whole Record", summary: "kept" });
+    });
+
     it("should execute afterCreate hooks", async () => {
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 

@@ -908,13 +908,22 @@ Each function receives `{ req, id?, data? }` and returns `boolean | Promise<bool
 ### `hooks`
 
 Field-level lifecycle hooks. Each hook is an array of handlers run in order.
+Each phase runs **after** the collection-level hook of the same name; see the
+[execution order](/docs/configuration/collections#execution-order) for how the
+two levels interleave.
 
 | Hook | When it runs |
 |---|---|
-| `beforeValidate` | Before validation. Can transform the value. |
-| `beforeChange` | Before the database write. |
+| `beforeValidate` | Before validation, after the collection's `beforeValidate`. Can transform the value. |
+| `beforeChange` | After the collection's `beforeChange`. The last hook before the database write. |
 | `afterChange` | After the database write. |
 | `afterRead` | After reading from the database. Can transform the returned value. |
+
+Every handler receives its own `value` **and the whole record as `data`**. A
+`beforeChange` handler can therefore read, and change, fields other than its
+own, and because it is the last thing to run before the write, nothing after it
+will put them back. Return the value you want stored; touch other fields only
+when that is the intent.
 
 ```typescript
 text({

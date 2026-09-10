@@ -379,18 +379,39 @@ Hooks let you run custom logic at specific points in a document's lifecycle. Eve
 
 ### Execution order
 
+Collection-level and [field-level](/docs/configuration/fields#hooks) hooks
+interleave. On a write:
+
 1. `beforeOperation`
-2. `beforeValidate` (create/update)
-3. **Validation** - the schema's declared rules are enforced
-4. `beforeChange` (create/update)
-5. **Database write or read**
-6. `afterChange` (create/update) **or** `afterRead` (reads)
-7. `beforeDelete` / `afterDelete` (deletes)
+2. `beforeValidate` (collection)
+3. `beforeValidate` (each field that declares one)
+4. **Validation** - the schema's declared rules are enforced
+5. `beforeChange` (collection)
+6. `beforeChange` (each field that declares one)
+7. **Database write**
+8. `afterChange` (collection), then `afterChange` (fields)
+
+Reads run `beforeRead`, the query, then `afterRead` at the collection level and
+then per field. Deletes run `beforeDelete` and `afterDelete`.
 
 The validation gate is what separates the two write hooks. Use `beforeValidate`
 to supply or repair a value you want the rules applied to; use `beforeChange` to
 derive the value that gets stored, knowing the document has already passed them.
 What a `beforeChange` handler returns is written without being re-validated.
+
+<Warning>
+  **The field-level `beforeChange` is the last hook before the write, and it
+  receives the whole record.** A field hook is handed `data` alongside its own
+  `value`, so it can change any field, not only its own. That means a
+  collection-level `beforeChange` is not the final word: a field hook
+  registered later, by a plugin or by the application, runs after it and can
+  overwrite what it set.
+
+  There is no collection-level phase after the field hooks. If you need a
+  guarantee about the stored shape of a record, put it in the field hook of the
+  field it concerns, which is the latest point that runs. This matches
+  Payload's ordering, so hooks written against that model behave the same here.
+</Warning>
 
 ### Hook handler signature
 
