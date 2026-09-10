@@ -140,12 +140,18 @@ export function ChartFrame({
               </tr>
             </thead>
             <tbody>
-              {/* Row separators at FULL strength, matching the shared table
-                  primitive. A separator in a data table is structural rather
-                  than decorative — it is what tells a reader which number
-                  belongs to which row — so it carries the contrast a reader
-                  needs. Drawn at half alpha it measured 1.11:1 against the page
-                  surface, where 3:1 is required. */}
+              {/* The separator token at full strength, matching the shared table
+                  primitive every other table already uses. Drawn at half alpha
+                  it was a call-site variant the contrast suite flags: faint
+                  alpha borders are what that guard polices, and this one
+                  measured 1.11:1 against the page surface.
+
+                  Full strength is NOT a claim that the line clears 3:1 —
+                  `theme.css` records `--nx-border` as deliberately below that
+                  minimum to keep the palette's light border weight, and
+                  `contrast/accepted.ts` is where those pairings are held. What
+                  this fixes is a one-off that was both fainter than the token
+                  and inconsistent with every other table in the product. */}
               {rows.map(row => (
                 <tr key={row.key} className="border-b border-border">
                   {/* A row header, so a screen reader announces which row a
