@@ -57,6 +57,7 @@ const { readLock, acquireLock, renewLock, releaseLock } = await import(
 );
 
 const ref = { scopeKind: "collection", slug: "posts", entryId: "42" };
+const holder = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 const post = (body: unknown, method = "POST") =>
   new Request("https://x.test/api/document-lock", {
     method,
@@ -85,7 +86,7 @@ describe("document lock route", () => {
     expect(service.acquire).toHaveBeenCalledWith(
       ref,
       { ownerId: "u1", ownerLabel: "Ada" },
-      { takeover: false }
+      { takeover: false, requestAccess: false }
     );
   });
 
@@ -95,12 +96,56 @@ describe("document lock route", () => {
     await acquireLock(post({ ...ref, takeover: true }));
     expect(service.acquire).toHaveBeenLastCalledWith(ref, expect.anything(), {
       takeover: true,
+      requestAccess: false,
     });
 
     // Anything other than the boolean is not a request to displace a colleague.
     await acquireLock(post({ ...ref, takeover: "yes" }));
     expect(service.acquire).toHaveBeenLastCalledWith(ref, expect.anything(), {
       takeover: false,
+      requestAccess: false,
+    });
+  });
+
+  it("forwards a request to edit, and never mistakes it for a takeover", async () => {
+    // The two intents share a call and are opposites: one displaces a
+    // colleague, the other leaves word and changes nothing. Read from separate
+    // keys so neither can be produced by asking for the other -- a body that
+    // asked to wait must not come out the far side as a steal.
+    service.acquire.mockResolvedValue({
+      status: "held",
+      holder,
+      waiting: true,
+    });
+
+    await acquireLock(post({ ...ref, requestAccess: true }));
+    expect(service.acquire).toHaveBeenLastCalledWith(ref, expect.anything(), {
+      takeover: false,
+      requestAccess: true,
+    });
+
+    // And the same reading rule: a truthy string is not a person asking.
+    await acquireLock(post({ ...ref, requestAccess: "yes" }));
+    expect(service.acquire).toHaveBeenLastCalledWith(ref, expect.anything(), {
+      takeover: false,
+      requestAccess: false,
+    });
+  });
+
+  it("hands the refused editor back the fact that its ask is on record", async () => {
+    // A control that silently does nothing is worse than no control: the
+    // interface can only confirm the ask if the answer carries it, and it must
+    // read the SERVER's answer rather than the click it just handled.
+    service.acquire.mockResolvedValue({
+      status: "held",
+      holder,
+      waiting: true,
+    });
+
+    const response = await acquireLock(post({ ...ref, requestAccess: true }));
+
+    expect(await response.json()).toMatchObject({
+      item: { status: "held", waiting: true },
     });
   });
 
@@ -108,7 +153,8 @@ describe("document lock route", () => {
     // Advisory: the second editor is told and not stopped.
     service.acquire.mockResolvedValue({
       status: "held",
-      holder: { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 },
+      holder,
+      waiting: false,
     });
 
     const response = await acquireLock(post(ref));
