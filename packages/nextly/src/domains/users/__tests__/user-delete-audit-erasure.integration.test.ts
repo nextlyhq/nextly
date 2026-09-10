@@ -183,6 +183,7 @@ describe("deleting a user erases them from the activity log without erasing the 
       isActive: true,
     });
     await activity.logActivity({
+      actorType: "user",
       userId: String(actor.id),
       userName: "No Audit",
       userEmail: "no-audit-table@test.local",
@@ -304,6 +305,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     // Written through the production writer rather than a hand-built INSERT,
     // so the columns under test are the ones the product actually fills.
     await activity.logActivity({
+      actorType: "user",
       userId: String(author.id),
       userName: "Ada Author",
       userEmail: "erasure-author@test.local",
@@ -369,6 +371,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     expect(account).toHaveLength(0);
 
     await activity.logActivity({
+      actorType: "user",
       userId: String(gone.id),
       userName: "Late Writer",
       userEmail: "erasure-late@test.local",
@@ -402,6 +405,7 @@ describe("deleting a user erases them from the activity log without erasing the 
       isActive: true,
     });
     await activity.logActivity({
+      actorType: "user",
       userId: String(author.id),
       userName: "Read Path",
       userEmail: "erasure-readpath@test.local",
@@ -460,6 +464,7 @@ describe("deleting a user erases them from the activity log without erasing the 
     });
     for (const title of ["older", "newer"]) {
       await activity.logActivity({
+        actorType: "user",
         userId: String(author.id),
         userName: "Orderly",
         userEmail: "erasure-order@test.local",
@@ -503,6 +508,7 @@ describe("deleting a user erases them from the activity log without erasing the 
       isActive: true,
     });
     await activity.logActivity({
+      actorType: "user",
       userId: String(author.id),
       userName: "Stamped",
       userEmail: "erasure-stamp@test.local",
@@ -556,6 +562,7 @@ describe("deleting a user erases them from the activity log without erasing the 
       [staying, "staying_posts"],
     ] as const) {
       await activity.logActivity({
+        actorType: "user",
         userId: String(user.id),
         userName: user.name ?? "",
         userEmail: user.email,

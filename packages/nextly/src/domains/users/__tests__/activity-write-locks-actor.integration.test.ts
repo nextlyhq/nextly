@@ -140,6 +140,7 @@ describeMaybe(
       expect(account).toHaveLength(0);
 
       await activity.logActivity({
+        actorType: "user",
         userId: goneId,
         userName: "Already Gone",
         userEmail: "gone@test.local",
@@ -174,6 +175,7 @@ describeMaybe(
     it("keeps the author's identity while the account still exists", async () => {
       // The other half, so the test above cannot pass by erasing everything.
       await activity.logActivity({
+        actorType: "user",
         userId: actorId,
         userName: "Locked Actor",
         userEmail: "locked@test.local",
@@ -234,6 +236,7 @@ describeMaybe(
 
       const write = activity
         .logActivity({
+          actorType: "user",
           userId: actorId,
           userName: "Locked Actor",
           userEmail: "locked@test.local",
