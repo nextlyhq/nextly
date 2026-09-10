@@ -1,3 +1,7 @@
+import {
+  NEXTLY_ERROR_STATUS,
+  type NextlyErrorCode,
+} from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 
 /**
@@ -12,7 +16,7 @@ export function routeCollisionError(
 ): NextlyError {
   return new NextlyError({
     code: "NEXTLY_ROUTE_COLLISION",
-    statusCode: 409,
+    statusCode: NEXTLY_ERROR_STATUS.NEXTLY_ROUTE_COLLISION,
     publicMessage: "Route configuration is invalid.",
     logMessage: `Duplicate route ${method} ${fullPath} contributed by ${owners.join(" and ")}`,
     logContext: { reason: "route-collision", method, fullPath, owners },
@@ -30,7 +34,7 @@ export function routeInvalidPathError(
 ): NextlyError {
   return new NextlyError({
     code: "NEXTLY_ROUTE_INVALID_PATH",
-    statusCode: 400,
+    statusCode: NEXTLY_ERROR_STATUS.NEXTLY_ROUTE_INVALID_PATH,
     publicMessage: "Route configuration is invalid.",
     logMessage: `Plugin "${pluginName}" declares a route path "${path}" that does not start with "/"`,
     logContext: { reason: "route-invalid-path", pluginName, path },
@@ -38,7 +42,22 @@ export function routeInvalidPathError(
 }
 
 /**
- * Whether an error is one of the two a route fold raises.
+ * Every refusal a route fold raises, in one list.
+ *
+ * `isRouteError` reads it, and so does each constructor's status. Spelled out
+ * per site, a new refusal is recognised by whichever of them its author
+ * remembered: a code missing from the classifier is rethrown by
+ * `mountableRoutes`, which turns "this plugin's routes do not mount" into a
+ * failed `/api/admin-meta` for every reader.
+ */
+const ROUTE_ERROR_CODES = [
+  "NEXTLY_ROUTE_COLLISION",
+  "NEXTLY_ROUTE_INVALID_PATH",
+  "NEXTLY_ROUTE_UNREACHABLE_ROOT",
+] as const satisfies readonly NextlyErrorCode[];
+
+/**
+ * Whether an error is one a route fold raises.
  *
  * Narrow on purpose. A caller that treats "these routes do not mount" as a
  * verdict must not reach that verdict from an unrelated failure — a
@@ -48,8 +67,7 @@ export function routeInvalidPathError(
 export function isRouteError(error: unknown): boolean {
   return (
     error instanceof NextlyError &&
-    (error.code === "NEXTLY_ROUTE_COLLISION" ||
-      error.code === "NEXTLY_ROUTE_INVALID_PATH")
+    (ROUTE_ERROR_CODES as readonly string[]).includes(error.code)
   );
 }
 
@@ -67,7 +85,7 @@ export function routeUnreachableRootError(
 ): NextlyError {
   return new NextlyError({
     code: "NEXTLY_ROUTE_UNREACHABLE_ROOT",
-    statusCode: 400,
+    statusCode: NEXTLY_ERROR_STATUS.NEXTLY_ROUTE_UNREACHABLE_ROOT,
     publicMessage: "Route configuration is invalid.",
     logMessage: `Plugin "${pluginName}" declares a root-mounted route at "${path}", which cannot answer: ${reason}`,
     logContext: { reason: "route-unreachable-root", pluginName, path },

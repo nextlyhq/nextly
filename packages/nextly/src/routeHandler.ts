@@ -1048,6 +1048,7 @@ async function resolveAuthorization(
  * boot for an unauthenticated caller by definition.
  */
 async function ensurePluginRoutesRegistered(
+  req: Request,
   httpMethod: string,
   requestPath: string
 ): Promise<void> {
@@ -1056,8 +1057,16 @@ async function ensurePluginRoutesRegistered(
     !shouldRegisterPluginRoutes(
       registry.list().length,
       getHandlerConfig()?.plugins,
-      httpMethod,
-      requestPath
+      {
+        method: httpMethod,
+        path: requestPath,
+        // Both reads are free of the container: a header read and a cookie parse.
+        // A request carrying neither is refused by the route's own auth without
+        // resolving a service, so booting for it would be work nobody asked for.
+        hasCredential:
+          req.headers.get("authorization") !== null ||
+          readAccessTokenCookie(req) !== null,
+      }
     )
   ) {
     return;
@@ -1079,7 +1088,7 @@ async function handleServiceRequest(
   // router (which would 400 on these paths). The verb wrappers' withSecurity()
   // already applies CORS/rate-limit/headers around this.
   const requestPath = "/" + params.join("/");
-  await ensurePluginRoutesRegistered(httpMethod, requestPath);
+  await ensurePluginRoutesRegistered(req, httpMethod, requestPath);
   const pluginRouteMatch = getPluginRouteRegistry().match(
     httpMethod,
     requestPath,
