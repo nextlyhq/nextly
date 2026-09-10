@@ -902,6 +902,19 @@ function ClassRowView({
 }
 
 /**
+ * What a refusal says when the host gave it no words.
+ *
+ * Three answers put the author in the same position — refused, and not told
+ * why: a host that threw, a write that rejected, and a conforming refusal whose
+ * `reason` is empty or only whitespace. The type admits that last one, and
+ * rendering it produced an alert with nothing in it; but a host that answered
+ * `{ ok: false }` DID refuse, so unlike a result that is not an outcome at all
+ * this cannot be silence — the rename failed, and the row would otherwise
+ * clear as though it had landed.
+ */
+const UNEXPLAINED_REFUSAL = "This class could not be renamed.";
+
+/**
  * The name, edited in place, committed only when the engine would accept it.
  *
  * The draft is local so a half-typed name is not reported as a rename on every
@@ -948,8 +961,11 @@ function NameField({
    */
   const survive = useSurvivingReport();
   const report = (reason: string): void => {
-    survive(reason, () => {
-      setRefused(reason);
+    // Substituted here, ahead of both sinks, so the shell notice a departed
+    // row falls back to never carries the blank either.
+    const shown = reason.trim() === "" ? UNEXPLAINED_REFUSAL : reason;
+    survive(shown, () => {
+      setRefused(shown);
       return true;
     });
   };
@@ -997,7 +1013,7 @@ function NameField({
       answered = onRename(row.id, outcome.slug);
     } catch {
       setDraft(null);
-      report("This class could not be renamed.");
+      report(UNEXPLAINED_REFUSAL);
       return;
     }
     /*
@@ -1052,7 +1068,7 @@ function NameField({
        */
       .catch(() => {
         if (attempt.current !== mine) return;
-        report("This class could not be renamed.");
+        report(UNEXPLAINED_REFUSAL);
       });
   };
 
