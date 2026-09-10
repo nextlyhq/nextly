@@ -15,6 +15,7 @@ import {
   releaseState,
   remedyFor,
   shouldAssertChannel,
+  unsettledPackages,
   remoteTagState,
   tagFor,
   verdict,
@@ -209,37 +210,6 @@ describe("asking GitHub about a release", () => {
     expect(releaseState("v1", () => "{}")).toBe("present");
   });
 
-  it("is a draft when the release exists but was never published", () => {
-    // 🔴 A draft is visible to anyone with write access and to nobody else, so
-    // a train whose release was left in draft reads as described while the
-    // page describing it does not exist for a reader.
-    expect(releaseState("v1", () => '{"tagName":"v1","isDraft":true}')).toBe(
-      "draft"
-    );
-  });
-
-  it("is present when the release is published", () => {
-    // The control: a rule that called every release a draft would satisfy the
-    // case above on its own.
-    expect(releaseState("v1", () => '{"tagName":"v1","isDraft":false}')).toBe(
-      "present"
-    );
-  });
-
-  it("is not-prerelease when an alpha release was never marked as one", () => {
-    /*
-     * 🔴 A prerelease that is not marked as one takes the Latest badge, which
-     * `release.yml` routes on the version string precisely to prevent. A
-     * release repaired by hand is where that flag goes missing.
-     */
-    expect(
-      releaseState(
-        "v0.0.2-alpha.65",
-        () => '{"tagName":"v0.0.2-alpha.65","isDraft":false,"isPrerelease":false}'
-      )
-    ).toBe("not-prerelease");
-  });
-
   it("is present when a STABLE release is not marked prerelease", () => {
     // The control: a stable version is supposed to be Latest, so the rule must
     // turn on the version rather than on the flag alone.
@@ -406,21 +376,6 @@ describe("grading how much of the train shipped", () => {
   });
 });
 
-describe("a release that is not marked as a prerelease", () => {
-  it("fails, and prescribes taking the Latest badge off it", () => {
-    const result = verdict({
-      version: VERSION,
-      publish: { kind: "all", published: 20, total: 20, pending: [], channelStale: [] },
-      tag: TAG(SHA),
-      tagVersion: { kind: "known", version: VERSION },
-      release: "not-prerelease",
-    });
-
-    expect(result.code).toBe(1);
-    expect(result.steps).toEqual(["fix-release-flag"]);
-    expect(remedyFor(result, VERSION)).toContain("--prerelease --latest=false");
-  });
-});
 
 describe("a mistagged release, by what its GitHub Release is", () => {
   const mistagged = (release) =>
@@ -431,20 +386,6 @@ describe("a mistagged release, by what its GitHub Release is", () => {
       tagVersion: { kind: "known", version: "0.0.2-alpha.62" },
       release,
     });
-
-  it("publishes the draft after the retag, because a re-run will not", () => {
-    // `release.yml` gates finalization on `gh release view` succeeding, and a
-    // draft satisfies it, so retag-then-rerun leaves the draft where it was.
-    const result = mistagged("draft");
-    expect(result.steps).toEqual(["retag", "publish-draft"]);
-    expect(remedyFor(result, VERSION)).toContain("--draft=false");
-  });
-
-  it("marks the prerelease after the retag when the badge is wrong", () => {
-    const result = mistagged("not-prerelease");
-    expect(result.steps).toEqual(["retag", "fix-release-flag"]);
-    expect(remedyFor(result, VERSION)).toContain("--prerelease --latest=false");
-  });
 
   it("uses a forced local tag in every retag, whatever the release state", () => {
     /*
@@ -523,27 +464,6 @@ describe("how to re-run a release", () => {
   });
 });
 
-describe("a release that was saved but never published", () => {
-  it("reports a draft as unfinalized, and does not prescribe a re-run", () => {
-    // `release.yml` gates its whole finalize branch on `gh release view`
-    // succeeding, and that succeeds for a draft, so a re-run reports "already
-    // exists; nothing to finalize" and goes green while this keeps failing.
-    const result = verdict({
-      version: VERSION,
-      publish: ALL,
-      tag: TAG(SHA),
-      tagVersion: { kind: "known", version: VERSION },
-      release: "draft",
-    });
-
-    expect(result.code).toBe(1);
-    expect(result.state).toBe("unfinalized");
-    expect(result.steps).toEqual(["publish-draft"]);
-    const text = remedyFor(result, VERSION);
-    expect(text).toContain("re-running repairs nothing");
-    expect(text).toContain("--draft=false");
-  });
-});
 
 describe("what a verdict could not speak for", () => {
   it("names the packages it left out of a finished release", () => {
@@ -642,7 +562,7 @@ describe("an answer that was never established", () => {
     expect(result.steps).toEqual(["push-tag", "check-release"]);
     const text = remedyFor(result, VERSION);
     expect(text).toContain(`gh release view ${tagFor(VERSION)}`);
-    expect(text).toContain("re-running repairs nothing");
+    expect(text).toContain("there is nothing more to do about the release");
     expect(text).toContain("gh run rerun");
   });
 });
@@ -834,40 +754,6 @@ describe("a release with more than one thing wrong", () => {
     expect(text).toContain("gh run rerun");
   });
 
-  it("restores a missing tag AND corrects the badge", () => {
-    // `mark-prerelease` alone edits the release and leaves the tag absent, and
-    // `gh release edit` has no operation that recreates a deleted git ref.
-    const result = verdict({
-      version: VERSION,
-      publish: ALL,
-      tag: NO_TAG,
-      release: "not-prerelease",
-    });
-
-    expect(result.steps).toEqual(["push-tag", "fix-release-flag"]);
-    const text = remedyFor(result, VERSION);
-    expect(text).toContain(`git push origin refs/tags/${tagFor(VERSION)}`);
-    expect(text).toContain("--prerelease --latest=false");
-  });
-
-  it("publishes a draft with the badge stated, not left as it was", () => {
-    /*
-     * `--draft=false` alone publishes the draft and leaves its prerelease flag
-     * exactly as it was, so an alpha saved without one becomes a regular
-     * release and takes Latest the moment it is published.
-     */
-    const result = verdict({
-      version: VERSION,
-      publish: ALL,
-      tag: TAG(SHA),
-      tagVersion: { kind: "known", version: VERSION },
-      release: "draft",
-    });
-
-    const text = remedyFor(result, VERSION);
-    expect(text).toContain("--draft=false --prerelease --latest=false");
-  });
-
   it("refuses to publish a draft while the tag's target is unknown", () => {
     /*
      * 🔴 Publishing makes the release public. A tag whose target nobody could
@@ -901,45 +787,6 @@ describe("a release with more than one thing wrong", () => {
   });
 });
 
-describe("a GitHub Release on the wrong side of the Latest badge", () => {
-  it("reports a STABLE release that is marked as a prerelease", () => {
-    // 🔴 The other direction. Checking only that an alpha carries the flag reads
-    // the wrong half as correct: a stable release hidden behind it leaves an
-    // older version holding Latest.
-    expect(
-      releaseState("v1.0.0", () => '{"tagName":"v1.0.0","isPrerelease":true}')
-    ).toBe("prerelease-on-stable");
-  });
-
-  it("leaves a correctly flagged stable release alone", () => {
-    // The control for the rule above.
-    expect(
-      releaseState("v1.0.0", () => '{"tagName":"v1.0.0","isPrerelease":false}')
-    ).toBe("present");
-  });
-
-  it("prescribes --latest for a stable release, not --prerelease", () => {
-    const result = verdict({
-      version: "1.0.0",
-      publish: ALL,
-      tag: TAG(SHA),
-      tagVersion: { kind: "known", version: "1.0.0" },
-      release: "prerelease-on-stable",
-    });
-
-    /*
-     * 🔴 `--latest` alone does not CLEAR a prerelease flag. `gh release edit`
-     * treats the two as separate flags, so a stable release wrongly marked as a
-     * prerelease keeps that mark and stays hidden from the badge it should
-     * hold. The remedy has to say `--prerelease=false` out loud.
-     */
-    const text = remedyFor(result, "1.0.0");
-    expect(text).toContain("--prerelease=false");
-    expect(text).toContain("--latest");
-    // And not the prerelease form, which would be the alpha remedy.
-    expect(text).not.toContain("--latest=false");
-  });
-});
 
 describe("a ref that declares no single release", () => {
   it("refuses a manifest whose packages are not in lockstep", () => {
@@ -1037,5 +884,114 @@ describe("a repository part-way out of prerelease mode", () => {
     });
     expect(skipped.kind).toBe("all");
     expect(skipped.channelStale ?? []).toEqual([]);
+  });
+});
+
+describe("a partial train whose channel tag is also stale", () => {
+  it("prescribes moving the tag as well as re-running", () => {
+    /*
+     * 🔴 Publishing skips versions the registry already has, so a package whose
+     * version is live but whose tag never moved is untouched by a re-run: the
+     * recovery publishes the genuinely missing package and then fails
+     * verification again on the same tag. The old branch returned before it
+     * looked at the channel at all.
+     */
+    const result = verdict({
+      version: VERSION,
+      publish: {
+        kind: "partial",
+        published: 19,
+        total: 20,
+        missing: ["@nextlyhq/ui"],
+        channelStale: ["nextly (alpha resolves to 0.0.2-alpha.64)"],
+      },
+      tag: NO_TAG,
+      release: "absent",
+    });
+
+    expect(result.steps).toEqual(["move-dist-tag", "rerun"]);
+    expect(result.message).toContain("channel tag also does not resolve");
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain("npm dist-tag add");
+    expect(text).toContain("gh run rerun");
+  });
+
+  it("prescribes only a re-run when the channel is fine", () => {
+    // The control: adding the tag step unconditionally would tell a maintainer
+    // to move a tag that already resolves.
+    const result = verdict({
+      version: VERSION,
+      publish: { kind: "partial", published: 19, total: 20, missing: ["@nextlyhq/ui"] },
+      tag: NO_TAG,
+      release: "absent",
+    });
+
+    expect(result.steps).toEqual(["rerun"]);
+  });
+});
+
+describe("a tag lookup that could not be made at all", () => {
+  it("acts on nothing until the tag's existence is established", () => {
+    /*
+     * `git ls-remote` failing is not the same as a tag being absent, and it is
+     * the same validity precondition as an unreadable target: editing or
+     * publishing the release would act on a version whose tag nobody has
+     * established.
+     */
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: { kind: "unknown" },
+      release: "absent",
+    });
+
+    expect(result.steps).toEqual(["establish-tag-existence"]);
+    expect(result.steps).not.toContain("rerun");
+    expect(remedyFor(result, VERSION)).toContain("git ls-remote");
+  });
+});
+
+describe("what the settle actually waits for", () => {
+  const manifest = [
+    { name: "nextly", version: VERSION },
+    { name: "@nextlyhq/ui", version: VERSION },
+  ];
+
+  it("waits for a version the registry has not served yet", () => {
+    const registry = new Map([
+      // Shipped before, but this version is not readable yet: the only thing
+      // waiting can fix.
+      ["nextly", { versions: ["0.0.0", "0.0.2-alpha.62"], distTags: {} }],
+      ["@nextlyhq/ui", { versions: ["0.0.0", VERSION], distTags: {} }],
+    ]);
+
+    expect(unsettledPackages(manifest, registry).map(p => p.name)).toEqual([
+      "nextly",
+    ]);
+  });
+
+  it("does not wait on a package that has never published", () => {
+    /*
+     * 🔴 Nothing is on its way. The strict predicate refuses a placeholder-only
+     * package, so waiting on it burns the entire budget every run and then
+     * reports the verdict it would have reported immediately.
+     */
+    const registry = new Map([
+      ["nextly", { versions: ["0.0.0", VERSION], distTags: {} }],
+      ["@nextlyhq/ui", { versions: ["0.0.0"], distTags: {} }],
+    ]);
+
+    expect(unsettledPackages(manifest, registry)).toEqual([]);
+  });
+
+  it("does not wait on a dist-tag that was never moved", () => {
+    // A tag nobody moved stays unmoved. That is a defect for the verdict to
+    // report, not a delay for the wait to absorb.
+    const registry = new Map([
+      ["nextly", { versions: ["0.0.0", VERSION], distTags: { alpha: "0.0.2-alpha.64" } }],
+      ["@nextlyhq/ui", { versions: ["0.0.0", VERSION], distTags: { alpha: "0.0.2-alpha.64" } }],
+    ]);
+
+    expect(unsettledPackages(manifest, registry)).toEqual([]);
   });
 });

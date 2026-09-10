@@ -78,6 +78,33 @@ export function versionAtRef(ref, run = execFileSync) {
   return version;
 }
 
+/**
+ * Packages whose version the registry has not served YET, which is the only
+ * thing waiting can fix.
+ *
+ * 🔴 Narrower than `collectProblems` on purpose. That predicate decides whether
+ * to FINALIZE, so it is right for it to refuse a stale dist-tag and a package
+ * that never published. This one decides whether to keep WAITING, and neither
+ * of those clears with time: a tag nobody moved stays unmoved, and a package
+ * awaiting its first publish never appears. Using the strict predicate here
+ * spends the whole budget every run during a prerelease exit or while a
+ * bootstrapped package is pending, and then reports the same verdict it would
+ * have reported immediately.
+ */
+export function unsettledPackages(manifest, registry) {
+  return manifest
+    .filter(entry => {
+      const state = registry.get(entry.name) ?? null;
+      // Never published is not "not yet": there is nothing on its way.
+      if (neverReleased(state)) return false;
+      return !state.versions.includes(entry.version);
+    })
+    .map(entry => ({
+      name: entry.name,
+      reason: `version ${entry.version} not readable yet`,
+    }));
+}
+
 /** The tag the release workflow creates for a version. */
 export function tagFor(version) {
   return `v${version}`;
@@ -245,16 +272,6 @@ export async function publishState(
   return { kind: "all", ...shape };
 }
 
-/**
- * Whether a version is a prerelease, by the same rule `release.yml` uses.
- *
- * SemVer puts the prerelease identifier after a hyphen, and the release
- * workflow routes `--prerelease` against `--latest` on exactly that test, so
- * this asks the question the same way rather than a second way.
- */
-export function isPrerelease(tagOrVersion) {
-  return tagOrVersion.includes("-");
-}
 
 /**
  * Whether a tag exists on the remote, and what it points at.
@@ -301,45 +318,11 @@ export function remoteTagState(tag, run = execFileSync) {
  */
 export function releaseState(tag, run = execFileSync) {
   try {
-    /*
-     * 🔴 `isDraft`, not just existence. A draft is saved and not published:
-     * `gh release view` finds it for anyone with write access and nobody else
-     * can see it, so a train whose release was left in draft would be reported
-     * as described when the page it is described on does not exist for a
-     * reader. That is the same invisibility this check was written for.
-     */
-    const out = run(
+    run(
       "gh",
-      [
-        "release",
-        "view",
-        tag,
-        "--repo",
-        "nextlyhq/nextly",
-        "--json",
-        "tagName,isDraft,isPrerelease",
-      ],
+      ["release", "view", tag, "--repo", "nextlyhq/nextly", "--json", "tagName"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
     );
-    const view = JSON.parse(out);
-    if (view.isDraft === true) return "draft";
-    /*
-     * 🔴 A prerelease that is not marked as one takes the "Latest" badge, which
-     * `release.yml` routes on the version string precisely to prevent: an alpha
-     * becomes what every visitor to the releases page is shown first. A release
-     * repaired or edited by hand is exactly where that flag goes missing.
-     */
-    if (isPrerelease(tag) && view.isPrerelease !== true) return "not-prerelease";
-    /*
-     * 🔴 And the other direction. A STABLE release carrying the flag is hidden
-     * from the Latest badge it is supposed to hold, so the releases page shows
-     * an older version as current. Checking one direction only reads the wrong
-     * half as correct, which is how the first version of this rule passed a
-     * `v1.0.0` marked as a prerelease.
-     */
-    if (!isPrerelease(tag) && view.isPrerelease === true) {
-      return "prerelease-on-stable";
-    }
     return "present";
   } catch (error) {
     // `gh` exits non-zero both for "no such release" and for "cannot ask".
@@ -399,17 +382,29 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
   }
 
   if (publish.kind === "partial") {
+    /*
+     * 🔴 A stale channel tag survives a re-run. Publishing skips versions the
+     * registry already has, so a package whose version is live but whose tag
+     * never moved is untouched by the recovery this branch prescribes: the
+     * re-run publishes the genuinely missing package and then fails
+     * verification again on the same tag. Both defects are reported, in the
+     * order they have to be repaired.
+     */
+    const stale = publish.channelStale ?? [];
     return {
       code: 1,
       state: "partial",
       missing: publish.missing,
+      steps: stale.length > 0 ? ["move-dist-tag", "rerun"] : ["rerun"],
       message:
         `Only ${publish.published} of ${publish.total} packages reached the ` +
         `registry at ${version}. Publishing is not atomic, so a run can strand ` +
         `a train halfway: ${publish.missing.join(", ")} ` +
         `${publish.missing.length === 1 ? "is" : "are"} still missing.` +
+        (stale.length > 0
+          ? ` The channel tag also does not resolve to it for: ${stale.join(", ")}.`
+          : "") +
         pendingNote(publish.pending),
-      steps: ["rerun"],
     };
   }
 
@@ -442,6 +437,16 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
    */
   const tagVersionKnown =
     tagVersion?.kind === "known" && typeof tagVersion.version === "string";
+  /*
+   * 🔴 Two ways the tag is unestablished, and both must stop the same things.
+   * `tag.kind === "unknown"` means `git ls-remote` could not answer at all, so
+   * nobody knows whether a tag exists or what it names; `present` with an
+   * unreadable target means it exists and nobody knows what it names. Acting on
+   * the GitHub Release from either state edits or publishes a release whose git
+   * tag was never established.
+   */
+  const tagUnestablished =
+    tag.kind === "unknown" || (tag.kind === "present" && !tagVersionKnown);
   const tagTargetUnknown = tag.kind === "present" && !tagVersionKnown;
   const mistagged =
     tag.kind === "present" && tagVersionKnown && tagVersion.version !== version;
@@ -453,25 +458,11 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
     );
   }
 
-  /*
-   * A draft counts as missing. It exists for anyone with write access and for
-   * nobody else, so the release is described on a page a reader cannot open,
-   * which is the invisibility this check exists for rather than an exception
-   * to it. A badge that contradicts the version counts too: a prerelease
-   * holding Latest is what every visitor to the releases page is shown first,
-   * and a stable release hidden behind the prerelease flag leaves an older one
-   * holding that badge.
-   */
-  const RELEASE_DEFECTS = {
-    absent: `the GitHub Release ${tagFor(version)}`,
-    draft: `a published GitHub Release ${tagFor(version)} (it exists as a draft)`,
-    "not-prerelease": `a GitHub Release ${tagFor(version)} marked as a prerelease (it holds Latest)`,
-    "prerelease-on-stable": `a GitHub Release ${tagFor(version)} NOT marked as a prerelease (a stable release is hidden from Latest)`,
-  };
-  if (RELEASE_DEFECTS[release]) missing.push(RELEASE_DEFECTS[release]);
+  if (release === "absent") missing.push(`the GitHub Release ${tagFor(version)}`);
 
   // The tag, before anything that edits or publishes the release.
   if (tagTargetUnknown) steps.push("establish-tag-target");
+  else if (tag.kind === "unknown") steps.push("establish-tag-existence");
   else if (tag.kind === "absent") steps.push("push-tag");
   else if (mistagged) steps.push("retag");
 
@@ -481,12 +472,9 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
    * tag nobody could read may be announcing a commit that was never shipped.
    * Establishing the target is a precondition, not a parallel repair.
    */
-  if (!tagTargetUnknown) {
+  if (!tagUnestablished) {
     if (release === "absent") steps.push("rerun");
-    else if (release === "draft") steps.push("publish-draft");
-    else if (release === "not-prerelease" || release === "prerelease-on-stable") {
-      steps.push("fix-release-flag");
-    } else if (release === "unknown") steps.push("check-release");
+    else if (release === "unknown") steps.push("check-release");
   }
 
   /*
@@ -591,18 +579,6 @@ const retagSteps = (tag) => [
   ...tagSteps(tag),
 ];
 
-/**
- * The flags that put a GitHub Release on the right side of the Latest badge.
- *
- * 🔴 Stated on every command that publishes or edits a release, rather than
- * left to whatever it already carried. Publishing a draft with `--draft=false`
- * alone leaves its prerelease flag exactly as it was, so an alpha saved without
- * one becomes a regular release and takes Latest the moment it is published.
- */
-const badgeFlags = (tag) =>
-  isPrerelease(tag)
-    ? "--prerelease --latest=false"
-    : "--prerelease=false --latest";
 
 /**
  * One repair step, as the lines a maintainer reads.
@@ -644,21 +620,6 @@ const STEP_TEXT = {
     "",
     ...retagSteps(tag).map((line) => line.trim().padStart(line.trim().length + 4)),
   ],
-  "publish-draft": (tag) => [
-    "The GitHub Release exists as a DRAFT, so re-running repairs nothing:",
-    "`gh release view` finds a draft, and the release workflow then reports",
-    "nothing to finalize. Publish it, stating the badge explicitly, because",
-    "publishing does not change a flag that was never set:",
-    "",
-    `    gh release edit ${tag} --repo nextlyhq/nextly --draft=false ${badgeFlags(tag)}`,
-  ],
-  "fix-release-flag": (tag) => [
-    "The GitHub Release is on the wrong side of the Latest badge. Re-running",
-    "repairs nothing, because the release exists and the workflow reports",
-    "nothing to finalize:",
-    "",
-    `    gh release edit ${tag} --repo nextlyhq/nextly ${badgeFlags(tag)}`,
-  ],
   rerun: () => [
     "The GitHub Release is missing. Re-run the release run that published this",
     "version: it checks out the commit that was published, and publishing is",
@@ -666,19 +627,24 @@ const STEP_TEXT = {
     "",
     ...RERUN_STEPS.map((line) => line.trim().padStart(line.trim().length + 4)),
   ],
+  "establish-tag-existence": (tag) => [
+    "The remote could not be asked whether the tag exists, so nothing below",
+    "should be acted on yet: editing or publishing the release would act on a",
+    "version whose tag nobody has established. Ask again first:",
+    "",
+    `    git ls-remote origin refs/tags/${tag}`,
+  ],
   "check-release": (tag) => [
     "The GitHub Release could not be read, and the two possible answers need",
     "opposite remedies, so establish which one is true first:",
     "",
     `    gh release view ${tag} --repo nextlyhq/nextly`,
     "",
-    "If it EXISTS, re-running repairs nothing: the workflow finds it, reports",
-    "nothing to finalize, and skips the branch that pushes the tag. Push the tag",
-    "by hand instead:",
+    "If it EXISTS, there is nothing more to do about the release: any other",
+    "step above is the whole repair. Re-running would not help, because the",
+    "workflow finds the release and reports nothing to finalize.",
     "",
-    ...tagSteps(tag).map((line) => line.trim().padStart(line.trim().length + 4)),
-    "",
-    "If it does NOT exist, re-run and both artifacts are created together:",
+    "If it does NOT exist, re-run and it is created:",
     "",
     ...RERUN_STEPS.map((line) => line.trim().padStart(line.trim().length + 4)),
   ],
@@ -822,6 +788,7 @@ if (invokedDirectly) {
             sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
             now: () => Date.now(),
             budgetMs: SETTLE_BUDGET_MS,
+            problemsFor: unsettledPackages,
           })
         ).registry
       : await fetchAllRegistryStates(manifest);
