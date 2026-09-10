@@ -303,6 +303,32 @@ export class CollectionAccessService extends BaseService {
           data: null as unknown as T,
         };
       }
+    } else if (!routeAuthorized && this.rbacAccessControlService && !user) {
+      // A caller with NO session, judged against the collection's own
+      // code-defined rule.
+      //
+      // Both branches above require a user, because everything they do resolves
+      // roles and permissions from a user id. That left `access: { create:
+      // false }` and `read: ({ user }) => !!user` accepted at boot, recorded in
+      // the registry, and never consulted for the one caller they most clearly
+      // describe. Only the STORED rules ran, which are a different place and
+      // usually empty, so the declaration was silently inert.
+      //
+      // `undefined` means no code-defined rule governs this operation, and the
+      // stored rules below still decide. A boolean is the rule's own verdict.
+      const allowed =
+        await this.rbacAccessControlService.checkAnonymousCodeAccess({
+          operation,
+          resource: collectionName,
+        });
+      if (allowed === false) {
+        return {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
+          data: null as unknown as T,
+        };
+      }
     }
 
     // The caller (transition pre-resolve) will evaluate the document-dependent
