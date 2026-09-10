@@ -728,13 +728,19 @@ describe("the probe is asked again on every measurement", () => {
    * what a remembered answer would have avoided.
    */
   function countProbeWrites(block: HTMLElement): () => number {
-    let writes = 0;
+    let probes = 0;
     const real = block.style.setProperty.bind(block.style);
     block.style.setProperty = (...args: Parameters<typeof real>): void => {
-      writes += 1;
+      /*
+       * The MEASURED property, not every write. Each probe also turns
+       * transitions off, and counting that too would make this number describe
+       * how the probe is written rather than how often it runs — so it would
+       * move for a change that alters nothing about the caching this asserts.
+       */
+      if (args[0] !== "transition") probes += 1;
       real(...args);
     };
-    return () => writes;
+    return () => probes;
   }
 
   function selectedBlock(container: HTMLElement): HTMLElement {

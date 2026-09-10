@@ -166,14 +166,37 @@ export function spacingRespondsOutward(
    */
   const { before, after } = boxAcross(
     block,
-    // `important`, so an author's own `!important` padding cannot win and make
-    // every block answer "the outer edge never moves".
-    () =>
+    () => {
+      /*
+       * Transitions off FIRST, and it is the difference between a measurement
+       * and a reading of nothing.
+       *
+       * `transition` is a catalog property, so a block may carry one over the
+       * very side being probed — and then the push does not land, it begins to
+       * animate. Measured in Chromium: with `transition: margin-top 2s`, the
+       * edge moves ZERO pixels in the same task, so the probe reads a block
+       * whose margin responds as one that does not, places the handle on the
+       * pinned edge and inverts the drag. Writing the declaration at important
+       * priority does not help, because priority decides the cascade rather
+       * than whether a transition runs.
+       *
+       * An ANIMATION needs nothing here and gets nothing: measured the same
+       * way, a running keyframe animation over the same property answers
+       * correctly either way, because an author declaration at important
+       * priority outranks an animation in the cascade. Only the transition had
+       * to be turned off.
+       *
+       * Restored with everything else: the whole attribute goes back verbatim.
+       */
+      style.setProperty("transition", "none", "important");
+      // `important`, so an author's own `!important` padding cannot win and
+      // make every block answer "the outer edge never moves".
       style.setProperty(
         property,
         `${String(current + PROBE_PX)}px`,
         "important"
-      ),
+      );
+    },
     () => {
       if (had !== null) {
         block.setAttribute("style", had);
@@ -196,8 +219,7 @@ export function spacingRespondsOutward(
        * attribute is invisible to rendering and perfectly visible to a
        * `MutationObserver`, which is the difference between a probe and an edit
        * nobody made. jsdom removes the attribute on the first call, so no test
-       * in this package can tell the two apart — the browser run in the pull
-       * request is the evidence.
+       * in this package can tell the two apart; only a browser can.
        */
       if (block.hasAttribute("style")) block.removeAttribute("style");
     }

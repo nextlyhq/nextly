@@ -39,10 +39,11 @@ margins as it already did for paddings, so the handle sits on the edge that
 responds and the drag follows the pointer.
 
 It asks each time it draws, so the handle follows whatever the block is doing
-now: an edit that settles a height, a breakpoint that swaps the width model, a
-container query answering to a sibling, a state being previewed, or the pointer
-arriving and matching a hover rule. None of those has to be anticipated for the
-handle to be right.
+whenever anything prompts a fresh look: an edit that settles a height, a
+breakpoint that swaps the width model, a container query answering to a sibling,
+a state being previewed. None of those has to be anticipated for the handle to
+be right. A margin that changes only under a real `:hover` is still described at
+rest, which is what the editor has always done, because nothing reports that.
 
 The measurement also leaves the page alone properly now. It works by pushing a
 value onto the block and putting it back, and on a block with no inline style of

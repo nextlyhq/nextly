@@ -507,14 +507,6 @@ function sameSubject(
 }
 
 /**
- * One document's probe answers, made on the first probe that needs them.
- *
- * Lifted out of `measure` rather than inlined there: the measurement is already
- * the longest thing in this file, and the question "has this document been
- * probed before" is a whole one that reads better with a name than as another
- * branch inside a function about geometry.
- */
-/**
  * The scale the probe's movement will be SEEN at, for one box on one side.
  *
  * A margin takes the ANCESTOR scale and a padding the composed one, and what
@@ -810,10 +802,11 @@ export function SpacingOverlay({
       return;
     }
     measure();
-    // `document` is `measure`'s own dependency and is listed here too, because
-    // this effect must run for a reason of its own: an edit resizes the selected
-    // block, which is most of what the inspector does, and bands keyed on the
-    // selection alone would keep describing the layout it had.
+    // `document` is NOT one of `measure`'s own dependencies — it reads the tree
+    // as it stands — and is listed here because this effect is what has to run
+    // again after an edit: an edit resizes the selected block, which is most of
+    // what the inspector does, and an effect keyed on the selection alone would
+    // leave the bands describing the layout it had.
   }, [measure, hidden, document]);
 
   /*

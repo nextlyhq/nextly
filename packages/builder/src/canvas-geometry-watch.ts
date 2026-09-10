@@ -153,17 +153,35 @@ function isElement(node: Node): node is Element {
  * The FIRST record for an attribute is the one holding its pre-batch value; a
  * later record for the same attribute reports an intermediate one.
  */
+interface AttributeBefore {
+  /**
+   * Kept because `attributeName` is the LOCAL name.
+   *
+   * A namespaced attribute — `xlink:href` on an SVG `<use>`, say — is reported
+   * as `href`, and `getAttribute("href")` answers `null` for it however it was
+   * set. Reading it back by local name alone therefore asks about a DIFFERENT
+   * attribute, one that is usually absent, so `null` matches `null` and every
+   * namespaced change passes as no change at all.
+   */
+  readonly namespace: string | null;
+  readonly name: string;
+  readonly was: string | null;
+}
+
 function beforeBatch(
   records: readonly MutationRecord[]
-): Map<Element, Map<string, string | null>> | undefined {
-  const before = new Map<Element, Map<string, string | null>>();
+): Map<Element, Map<string, AttributeBefore>> | undefined {
+  const before = new Map<Element, Map<string, AttributeBefore>>();
   for (const record of records) {
     const name = record.attributeName;
     if (record.type !== "attributes" || name === null) return undefined;
     if (!isElement(record.target)) return undefined;
+    const namespace = record.attributeNamespace;
     const byName =
-      before.get(record.target) ?? new Map<string, string | null>();
-    if (!byName.has(name)) byName.set(name, record.oldValue);
+      before.get(record.target) ?? new Map<string, AttributeBefore>();
+    const key = `${namespace ?? ""}\u0000${name}`;
+    if (!byName.has(key))
+      byName.set(key, { namespace, name, was: record.oldValue });
     before.set(record.target, byName);
   }
   return before;
@@ -193,8 +211,8 @@ function changedNothing(records: readonly MutationRecord[]): boolean {
   const before = beforeBatch(records);
   if (before === undefined) return false;
   for (const [target, byName] of before) {
-    for (const [name, was] of byName) {
-      if (target.getAttribute(name) !== was) return false;
+    for (const [, { namespace, name, was }] of byName) {
+      if (target.getAttributeNS(namespace, name) !== was) return false;
     }
   }
   return true;

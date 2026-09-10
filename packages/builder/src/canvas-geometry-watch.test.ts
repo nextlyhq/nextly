@@ -112,6 +112,33 @@ describe("a batch that changed nothing", () => {
   });
 
   /*
+   * A NAMESPACED attribute is addressed by its namespace, not by the local name
+   * the record reports. `MutationRecord.attributeName` for `xlink:href` is
+   * `href`, and `getAttribute("href")` answers `null` for it however it was
+   * set — so comparing by local name asks about a different, absent attribute,
+   * finds `null` on both sides, and passes a real change off as no change.
+   */
+  it("re-measures for a namespaced attribute the local name cannot see", async () => {
+    const { root, layer } = canvas();
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    svg.append(use);
+    root.append(svg);
+    let moves = 0;
+    const stop = watchCanvasFor(
+      () => layer,
+      () => {
+        moves += 1;
+      }
+    );
+    use.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#icon");
+
+    await delivered();
+    expect(moves).toBe(1);
+    stop?.();
+  });
+
+  /*
    * And the caller's OWN output is still its own. A net-zero test would let a
    * layer's real redraw through if ownership stopped being checked.
    */
