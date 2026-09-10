@@ -498,7 +498,10 @@ function failingModes(r: UtilityReading): readonly ModeReading[] {
 
 function unacceptedFailures(
   combo: string,
-  r: UtilityReading
+  r: UtilityReading,
+  accepted: Readonly<
+    Record<string, AcceptedAlphaUtility>
+  > = ACCEPTED_ALPHA_UTILITIES
 ): readonly ModeReading[] {
   // Derived from `failingModes` rather than re-testing `ratio < need`. What
   // counts as a failure is one question, and a second copy agrees today and
@@ -507,7 +510,7 @@ function unacceptedFailures(
   // `Object.hasOwn` because the map is consulted with a scanned string: a
   // utility named `constructor` or `toString` would otherwise inherit a truthy
   // value from the prototype and silence itself.
-  if (Object.hasOwn(ACCEPTED_ALPHA_UTILITIES, combo)) return [];
+  if (Object.hasOwn(accepted, combo)) return [];
   return failingModes(r);
 }
 
@@ -698,6 +701,27 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     expect(msg).toContain("accepted.ts");
   });
 
+  it("offers a TEXT failure the criterion that scopes text", () => {
+    // 1.4.11 is the NON-TEXT criterion, so naming it here would tell a reader
+    // any unreadable text may be moved into ALLOWED_DECORATIVE — the same
+    // defect this message exists to remove, wearing the standard's name.
+    const combo = "text-border/50";
+    const r = worstRatio(combo);
+    const msg = remediation(combo, r, failingModes(r));
+    expect(msg).toContain("1.4.3");
+    expect(msg).not.toContain("1.4.11");
+  });
+
+  it("offers a BORDER failure the non-text criterion", () => {
+    // The other arm, so the assertion above cannot be satisfied by a message
+    // that simply never mentions 1.4.11 for anything.
+    const combo = "border-border/50";
+    const r = worstRatio(combo);
+    const msg = remediation(combo, r, failingModes(r));
+    expect(msg).toContain("1.4.11");
+    expect(msg).not.toContain("1.4.3");
+  });
+
   it("does not recommend a border token for a TEXT failure", () => {
     // `control-border` measures about 3.5:1 and text is held to 4.5, so naming
     // it here would be a second remediation that still fails the threshold --
@@ -747,13 +771,21 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   });
 
   it("suppresses a utility that IS recorded", () => {
-    // The other arm. Without it, "unrecorded is reported" is equally
-    // consistent with a lookup that is never consulted at all.
+    // The other arm, through the real function. Without it, "unrecorded is
+    // reported" is equally consistent with a lookup never consulted at all.
     const combo = "border-border/50";
     const r = worstRatio(combo);
-    const withEntry = { ...ACCEPTED_ALPHA_UTILITIES, [combo]: RECORD };
     expect(failingModes(r).length).toBeGreaterThan(0);
-    expect(Object.hasOwn(withEntry, combo) ? [] : failingModes(r)).toEqual([]);
+    expect(unacceptedFailures(combo, r, { [combo]: RECORD })).toEqual([]);
+  });
+
+  it("is not silenced by a name the prototype carries", () => {
+    // The map is consulted with a SCANNED string. A utility whose token is
+    // named `constructor` or `toString` inherits a truthy value from any plain
+    // object, so an `in` test or a truthiness check would suppress a real
+    // failure that nobody recorded.
+    const r = worstRatio("border-border/50");
+    expect(unacceptedFailures("constructor", r, {})).toEqual(failingModes(r));
   });
 
   it("holds every recorded utility to what it records", () => {
