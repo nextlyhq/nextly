@@ -44,7 +44,15 @@ mount, because the two are matched in separate passes and a root route that
 merely resembles a namespaced one never competes with it for a request.
 
 A route is also refused at boot when it is rooted somewhere the request never
-arrives, rather than registering and silently answering nothing.
+arrives, rather than registering and silently answering nothing. That covers
+`/auth`, `/plugins`, `/admin-meta` and the development endpoints, all of which
+are answered before the point a root route is consulted. A `mount` outside
+`"plugin" | "root"` is refused for the same reason: only an untyped caller can
+produce one, and it would register under one name and be looked up under
+another.
+
+`PluginRouteMount` is exported from `nextly` and `@nextlyhq/plugin-sdk` beside
+`PluginRoute`, so a plugin author writing a reusable route builder can name it.
 
 A request that could reach a plugin route always waits for initialisation to
 finish, not merely for the routes to appear. The route registry fills partway

@@ -286,6 +286,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginRouteCaller (type)",
   "PluginRouteContext (type)",
   "PluginRouteHandler (type)",
+  "PluginRouteMount (type)",
   "PluginRoutePermissionResolver (type)",
   "PluginRoutePermissionScope (type)",
   "PluginSingleRecord (type)",

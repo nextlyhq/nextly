@@ -113,6 +113,49 @@ describe("collectPluginRoutes", () => {
     ).toBe("NEXTLY_ROUTE_COLLISION");
   });
 
+  /**
+   * The type says `"plugin" | "root"`, and a plugin authored in JavaScript
+   * reaches the fold without ever meeting it. Downstream nothing agrees about
+   * an unknown value: `pluginRouteFullPath` reads anything but `"root"` as
+   * namespaced, the registry files the typo verbatim, and the matcher asks only
+   * for the two it knows. The route registers, appears in `/api/admin-meta`,
+   * and can never match, which is the same silent shape a root route on an
+   * unreachable prefix has.
+   */
+  it("rejects a mount outside the union", () => {
+    expect(
+      thrownCode(() =>
+        collectPluginRoutes([
+          plugin("@a/x", [
+            {
+              method: "GET",
+              path: "/p",
+              mount: "roots" as "root",
+            },
+          ]),
+        ])
+      )
+    ).toBe("NEXTLY_ROUTE_INVALID_MOUNT");
+  });
+
+  it("accepts both declared mounts, and an absent one", () => {
+    // The control. A check that refused everything would pass the assertion
+    // above while making the whole contract unusable.
+    const collected = collectPluginRoutes([
+      plugin("@a/x", [
+        { method: "GET", path: "/a" },
+        { method: "GET", path: "/b", mount: "plugin" },
+        { method: "GET", path: "/c", mount: "root" },
+      ]),
+    ]);
+
+    expect(collected.map(r => r.fullPath)).toEqual([
+      "/plugins/@a/x/a",
+      "/plugins/@a/x/b",
+      "/c",
+    ]);
+  });
+
   it("returns an empty list when no plugin contributes routes", () => {
     expect(
       collectPluginRoutes([

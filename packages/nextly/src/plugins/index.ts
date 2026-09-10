@@ -76,6 +76,7 @@ export type {
   PluginRouteCaller,
   PluginRouteContext,
   PluginRouteHandler,
+  PluginRouteMount,
   Middleware,
   RouteMethod,
 } from "./routes/route-types";

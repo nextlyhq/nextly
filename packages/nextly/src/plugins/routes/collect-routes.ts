@@ -3,6 +3,7 @@ import type { PluginDefinition } from "../plugin-context";
 import { rootMountUnreachableReason } from "./root-mount-reach";
 import {
   routeCollisionError,
+  routeInvalidMountError,
   routeInvalidPathError,
   routeUnreachableRootError,
 } from "./route-error";
@@ -22,13 +23,17 @@ export interface CollectedRoute {
 }
 
 /**
- * Pure fold of every ENABLED plugin's `contributes.routes` into namespaced,
- * collision-checked routes. Disabled plugins (`enabled: false`) skip
- * behavior — including routes — while their schema is still applied.
+ * Every mount a route may declare.
  *
- * Throws {@link routeInvalidPathError} for a path without a leading slash and
- * {@link routeCollisionError} when two routes share a `(method, full path)`.
+ * Spelled once here and compared against, rather than asked as
+ * `mount === "plugin" || mount === "root"`, so adding a third mount to the
+ * union makes this fail to compile instead of silently rejecting it.
  */
+const MOUNTS = [
+  "plugin",
+  "root",
+] as const satisfies readonly PluginRouteMount[];
+
 /** A pattern already claimed, kept whole so overlap can be asked of the pair. */
 interface ClaimedPattern {
   method: PluginRoute["method"];
@@ -42,12 +47,20 @@ interface ClaimedPattern {
 /**
  * Refuse a path this route could not answer on, before it is registered.
  *
- * A leading slash is the shape every path needs. A ROOT path additionally has
- * to sit somewhere the root pass is consulted, and two prefixes never reach it.
+ * A leading slash is the shape every path needs, and the mount has to be one
+ * the matcher will ask for. A ROOT path additionally has to sit somewhere the
+ * root pass is consulted, which `root-mount-reach` decides.
  */
 function assertPathUsable(pluginName: string, route: PluginRoute): void {
   if (!route.path.startsWith("/")) {
     throw routeInvalidPathError(pluginName, route.path);
+  }
+  // Checked rather than trusted to the type, because a plugin authored in
+  // JavaScript reaches here unchecked. Everything downstream then disagrees
+  // about the value: the path builder reads anything but "root" as namespaced,
+  // the registry keeps the typo, and the matcher asks for neither.
+  if (route.mount !== undefined && !MOUNTS.includes(route.mount)) {
+    throw routeInvalidMountError(pluginName, route.path, route.mount);
   }
   if (route.mount !== "root") return;
   const unreachable = rootMountUnreachableReason(route.path);
@@ -96,6 +109,15 @@ function assertUnclaimed(
   }
 }
 
+/**
+ * Pure fold of every ENABLED plugin's `contributes.routes` into namespaced,
+ * collision-checked routes. Disabled plugins (`enabled: false`) skip
+ * behavior, routes included, while their schema is still applied.
+ *
+ * Every refusal it raises is built in `route-error.ts` and listed there, so a
+ * caller deciding what a throw means reads that list rather than one repeated
+ * here, which is how the reachability refusal came to be unhandled.
+ */
 export function collectPluginRoutes(
   plugins: PluginDefinition[]
 ): CollectedRoute[] {

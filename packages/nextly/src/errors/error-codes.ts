@@ -105,6 +105,9 @@ export const NEXTLY_ERROR_STATUS = {
   // root pass. 400 like an invalid path and not 409: nothing else claims the
   // address, the declaration simply cannot be served from there.
   NEXTLY_ROUTE_UNREACHABLE_ROOT: 400,
+  // A `mount` outside the declared union, which only an untyped caller can
+  // produce. 400 for the same reason: the declaration itself is unserveable.
+  NEXTLY_ROUTE_INVALID_MOUNT: 400,
   // An email transport whose library is an optional peer dependency the host
   // has not installed. 503 rather than 500: the request is not malformed and
   // nothing is broken, the install simply cannot carry it out yet, and the

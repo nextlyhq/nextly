@@ -54,6 +54,7 @@ const ROUTE_ERROR_CODES = [
   "NEXTLY_ROUTE_COLLISION",
   "NEXTLY_ROUTE_INVALID_PATH",
   "NEXTLY_ROUTE_UNREACHABLE_ROOT",
+  "NEXTLY_ROUTE_INVALID_MOUNT",
 ] as const satisfies readonly NextlyErrorCode[];
 
 /**
@@ -89,5 +90,29 @@ export function routeUnreachableRootError(
     publicMessage: "Route configuration is invalid.",
     logMessage: `Plugin "${pluginName}" declares a root-mounted route at "${path}", which cannot answer: ${reason}`,
     logContext: { reason: "route-unreachable-root", pluginName, path },
+  });
+}
+
+/**
+ * A `mount` outside the union the type declares.
+ *
+ * Only reachable from an untyped caller, which is exactly why it is checked:
+ * `pluginRouteFullPath` reads anything that is not `"root"` as namespaced,
+ * while the registry stores the value verbatim and the matcher only ever asks
+ * for `"plugin"` or `"root"`. A typo therefore mounts under one name and is
+ * looked up under another, so the route registers, advertises itself, and can
+ * never match.
+ */
+export function routeInvalidMountError(
+  pluginName: string,
+  path: string,
+  mount: unknown
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_ROUTE_INVALID_MOUNT",
+    statusCode: NEXTLY_ERROR_STATUS.NEXTLY_ROUTE_INVALID_MOUNT,
+    publicMessage: "Route configuration is invalid.",
+    logMessage: `Plugin "${pluginName}" declares route "${path}" with an unknown mount ${JSON.stringify(mount)}; expected "plugin" or "root"`,
+    logContext: { reason: "route-invalid-mount", pluginName, path, mount },
   });
 }
