@@ -39,32 +39,40 @@ live", that is not what a release does.
 ## Scheduling stores a time; a job runner applies it
 
 Scheduling records when a release is due. The work is done by a `releases:drain` sweep that
-runs as part of the [background jobs](/docs/jobs) pass, triggered by calling the jobs route
-from a cron job, a platform scheduler, or an operator.
+runs as part of the [background jobs](/docs/jobs) pass, which happens only when something
+calls the jobs route.
 
-The scaffolded apps mount Nextly's handlers at `src/app/admin/api/[[...params]]/route.ts`, so
-the URL is:
-
-```
-POST /admin/api/jobs/run
-```
+[Running the queue](/docs/jobs#running-the-queue) is where that is set up: the path, the
+shared secret the caller needs, and the two ways a scheduler ends up silently doing nothing.
+Wire it there once and every scheduled release depends on it.
 
 <Callout type="warn">
-There is no general `/api` handler in a scaffolded app, so a scheduler pointed at
-`/api/jobs/run` gets a 404 and your releases never publish. If you mounted the handlers
-somewhere else, use that path instead.
+**With no scheduler configured, a release is never applied.** Its due time passes and the
+sweep that would carry it out never runs. A scheduler configured but refused, by the wrong
+path or a missing secret, leaves you in the same place.
 </Callout>
+
+What that does **not** mean is that the content change is invisible. A read consults the
+same due-release rule the sweep does, so a scheduled draft can be revealed, and a takedown
+hidden, before anything has run. On a multi-instance deployment an instance other than the
+one that scheduled it can be up to 30 seconds behind, so treat this as "within seconds of
+the instant" rather than exactly at it.
+
+As `apply-due-releases.ts` puts it, the read path can only make a due release LOOK applied.
+The sweep is what applies it for real, writing as the member's own author, and it is the
+only thing that advances the release's own state.
 
 <Callout type="warn">
-**With no scheduler configured, a release stays scheduled forever.** Its due time passes and
-nothing happens, because nothing ran the sweep. Set up an authenticated periodic call to
-`/api/jobs/run` before you rely on scheduling.
+What a reader sees and what the stored rows hold are therefore two different questions
+while a release is waiting for the sweep, and the second one has more cases than the first:
+overlapping releases, a member whose author is gone, and a pass that applied some members
+before failing on another. If you integrate against the database directly rather than
+through Nextly, read `apply-due-releases.ts` before relying on release state.
 </Callout>
 
-A pass is bounded: it claims at most 10 queued jobs, and it stops **starting** new ones after
-20 seconds. That 20 seconds is a budget for starting work, not a hard ceiling on the request —
-the check happens before each claim, so a handler already running is awaited to completion and
-the call can overrun. Size any serverless timeout for the slowest handler, not for 20 seconds.
+A pass is bounded, which is why a due release is not always applied by the next tick: it
+claims at most 10 queued jobs and stops starting new ones after 20 seconds. The bounds and
+what they mean for a serverless timeout are on the [jobs page](/docs/jobs#running-the-queue).
 
 The sweep can also defer work past its deadline while still reporting success. So a release is
 applied on the first pass that actually **reaches and completes** it, which is not always the

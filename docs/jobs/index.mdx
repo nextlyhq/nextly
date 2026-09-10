@@ -59,6 +59,82 @@ A job is not run with the authority of whoever enqueued it. It resolves a **run-
 and that identity is what access control sees while the job runs, so a job cannot quietly
 do more than the user it runs as is allowed to do.
 
+## Running the queue
+
+Queuing a job records it. Nothing runs it until something calls the jobs route, so a
+Nextly installation with no scheduler has a queue that fills and never drains.
+
+The scaffolded apps mount Nextly's handlers at `src/app/admin/api/[[...params]]/route.ts`,
+so the URL is:
+
+```
+POST /admin/api/jobs/run
+```
+
+If you mounted the handlers somewhere else, use that path instead.
+
+### Authenticating the caller
+
+The route is not open. A scheduler has no session, so it authenticates with a shared
+secret: set `NEXTLY_DRAIN_SECRET` (or `CRON_SECRET`) to a value of **at least 32
+characters**, and send it as a bearer token.
+
+```
+POST /admin/api/jobs/run
+Authorization: Bearer $NEXTLY_DRAIN_SECRET
+```
+
+The two variables fail differently when the value is too short, and knowing which one you
+set decides where to look:
+
+| | A value under 32 characters |
+|---|---|
+| `NEXTLY_DRAIN_SECRET` | **The app refuses to boot.** The environment schema requires 32, so this fails validation before any request reaches the route |
+| `CRON_SECRET` | The app starts, prints a warning at boot, and the route refuses the call with a 403 |
+
+`CRON_SECRET` is Vercel Cron's convention, which is why it is accepted at all and why it is
+tolerated rather than rejected.
+
+A signed-in human can pull the trigger instead, with the `manage-background-jobs`
+permission and a POST. `GET` always requires the secret, because a permission check alone
+would let a browser be steered into firing it.
+
+<Callout type="warn">
+Three ways to get a queue that grows and never drains, and the status code tells them
+apart:
+
+| Response | What happened |
+|---|---|
+| 404 | Pointed at `/api/jobs/run`; a scaffolded app has no general `/api` handler |
+| 401 | No `Authorization` header, or a bearer the route does not accept, on a `POST`. It falls through to ordinary authentication and finds no caller |
+| 403 | A `GET` with no usable secret. That route never falls back to a permission check |
+
+Only the short-`CRON_SECRET` case announces itself, and it does so at boot rather than at
+request time. Check your scheduler's own log for the response code the first time you wire
+it up.
+</Callout>
+
+A pass is bounded. It claims at most 10 queued jobs, and it stops **starting** new ones
+after 20 seconds. That 20 seconds is a budget for starting work, not a ceiling on the
+request: the check happens before each claim, so a handler already running is awaited to
+completion and the call can overrun. Size any serverless timeout for your slowest handler,
+not for 20 seconds.
+
+The queue is durable, so a pass that stops early loses no work: the next call continues
+from the same table.
+
+<Callout type="warn">
+**Delivery is at-least-once, so handlers must be idempotent.** A lease stops two runners
+claiming a job at the same instant, and a fence stops a runner that lost its lease
+recording an outcome over its successor's. Neither stops a handler that OUTLIVES its
+lease: a process that stalls, is paused, or loses its connection stops renewing while its
+side effects are still in flight, and a later pass can reclaim and run the same job.
+
+The fence can refuse the first runner's database write. It cannot undo an email it already
+sent. Size `leaseMs` to the work, and write handlers that can run twice without harm. This
+is the same contract SQS, BullMQ and pg-boss give, for the same reason.
+</Callout>
+
 ## Retention
 
 Finished jobs are pruned on a schedule, so the table holds recent history rather than
@@ -67,4 +143,5 @@ everything that has ever run.
 ## Related
 
 - [Webhooks](/docs/webhooks) — telling another system that something changed
+- [Releases](/docs/releases) — scheduling one depends on this queue draining
 - [Audit log](/docs/audit-log)
