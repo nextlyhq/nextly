@@ -13,14 +13,50 @@ import type { DocumentLockHolder } from "nextly/document-lock";
 
 import type { DocumentLockState } from "@admin/hooks/queries/useDocumentLock";
 
+/**
+ * What this editor may do about a colleague's claim, short of taking it.
+ *
+ * 🔴 A union rather than a label and a flag. "Nothing to offer", "a button" and
+ * "we told them" are three states, and carrying them as a nullable label beside
+ * a boolean admits a fourth that means nothing — a confirmation with a button
+ * still under it, which is what a control that silently re-arms looks like.
+ */
+export type DocumentAccessRequest =
+  /** Not asked yet: the button, and what it says. */
+  | { readonly kind: "offer"; readonly label: string }
+  /**
+   * Asked, and the server has it on record.
+   *
+   * A whole sentence rather than a tick, because this is the entire answer the
+   * person gets: nothing else in the interface changes, by design. A control
+   * that silently does nothing is worse than no control.
+   */
+  | { readonly kind: "sent"; readonly message: string };
+
 /** What the strip above the document says, and what it offers. */
 export interface DocumentLockNotice {
-  /** Distinguishes "someone has it" from "we cannot vouch for yours". */
-  readonly tone: "held" | "surrendered" | "unchecked";
+  /**
+   * Distinguishes "someone has it" from "we cannot vouch for yours" — and
+   * `awaited`, which is the only one that is not about a loss at all: the reader
+   * holds the document and is simply being told a colleague would like it.
+   */
+  readonly tone: "held" | "surrendered" | "unchecked" | "awaited";
   /** A whole sentence: the banner is read on its own, without the chrome. */
   readonly message: string;
   /** Present when the editor may claim the document. */
   readonly takeOverLabel: string | null;
+  /**
+   * Present only where asking means something: a colleague holds the document
+   * and this editor is polling for it.
+   *
+   * Null everywhere the ask could not be carried. On `taken-over` and `lost`
+   * the beat has stopped polling and the offer is already "take it back", so a
+   * button here would ask a server this editor is no longer talking to — which
+   * is exactly the silent control the `sent` state exists to avoid. On
+   * `unavailable` the last beat did not reach the server at all, and on
+   * `unchecked` nobody has been reported to ask.
+   */
+  readonly accessRequest: DocumentAccessRequest | null;
 }
 
 export interface DocumentLockAffordances {
@@ -55,17 +91,62 @@ const UNLOCKED: DocumentLockAffordances = {
   notice: null,
 };
 
+/**
+ * The holder, told that a colleague is waiting.
+ *
+ * 🔴 Withholds NOTHING, and that is the whole design rather than an oversight.
+ * It is a courtesy notice and not a consent gate: the reader is not asked a
+ * question, is not interrupted, and keeps every action they had. The lease
+ * expiring stays the only thing that transfers a document, so a notice that
+ * disabled Save would take away the very thing the holder is being given time
+ * to finish.
+ */
+const AWAITED: DocumentLockAffordances = {
+  readOnly: false,
+  actionsDisabled: false,
+  notice: {
+    tone: "awaited",
+    // Unnamed on purpose. The server records THAT somebody is waiting and not
+    // who, so naming one would be a claim about a colleague — and the request
+    // is a standing one that any locked-out editor refreshes, so there may be
+    // more than one of them.
+    message: "Someone is waiting to edit this document.",
+    takeOverLabel: null,
+    accessRequest: null,
+  },
+};
+
 /** Everything a colleague's claim withholds, with the sentence that explains it. */
 function withheld(
   tone: DocumentLockNotice["tone"],
   message: string,
-  takeOverLabel: string
+  takeOverLabel: string,
+  accessRequest: DocumentAccessRequest | null = null
 ): DocumentLockAffordances {
   return {
     readOnly: true,
     actionsDisabled: true,
-    notice: { tone, message, takeOverLabel },
+    notice: { tone, message, takeOverLabel, accessRequest },
   };
+}
+
+/** What a locked-out editor may say to the colleague holding the document. */
+function accessRequestFor(
+  holder: DocumentLockHolder,
+  requestSent: boolean
+): DocumentAccessRequest {
+  return requestSent
+    ? {
+        kind: "sent",
+        // Named when the server named them, because the point of the sentence
+        // is that a PERSON was told. Honest when it could not: a claim carries
+        // no label when the account had no name to record.
+        message:
+          holder.ownerLabel === null
+            ? "We have let them know you are waiting."
+            : `We have let ${holder.ownerLabel} know you are waiting.`,
+      }
+    : { kind: "offer", label: "Request edit access" };
 }
 
 /**
@@ -94,6 +175,12 @@ function withheld(
  * because a colleague holds the row now. Clearing the form would be the one
  * unrecoverable thing this could do.
  *
+ * 🔴 **Holding the document is no longer always silent.** It gains a notice, and
+ * only a notice: `held-by-me` with a colleague waiting keeps every action the
+ * holder had. A request moves nothing, cannot be refused, and is not a step in
+ * any handover — so anything withheld here would be a consent gate wearing a
+ * courtesy notice's words.
+ *
  * 🔴 **Autosave is NOT stopped, and this is worth stating because the opposite
  * looks obviously right.** `useDocumentAutosave` does not write the document: it
  * upserts a recovery row keyed by document AND author, marked `isAutosave`,
@@ -114,14 +201,17 @@ export function documentLockAffordances(
   switch (state.status) {
     case "idle":
     case "acquiring":
-    case "held-by-me":
       return UNLOCKED;
+
+    case "held-by-me":
+      return state.someoneWaiting ? AWAITED : UNLOCKED;
 
     case "held-by-other":
       return withheld(
         "held",
         `${state.holder.ownerLabel} is editing this document. You can read it, or take over.`,
-        "Take over"
+        "Take over",
+        accessRequestFor(state.holder, state.requestSent)
       );
 
     case "taken-over":
@@ -155,6 +245,7 @@ export function documentLockAffordances(
               message:
                 "We could not check whether anyone else is editing this document. You can keep working, but a colleague may be in it too.",
               takeOverLabel: null,
+              accessRequest: null,
             },
           }
         : withheld(

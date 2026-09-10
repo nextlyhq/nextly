@@ -549,11 +549,14 @@ export default function EditEntryPage({
             onDefaultLocale={!isNonDefaultLocale}
           />
           {/* Said for the same reason, about the other fact a second editor
-              needs: who has this document open. The strip renders nothing while
-              the claim is this editor's own. */}
+              needs: who has this document open. The strip is silent while the
+              claim is this editor's own AND nobody is waiting for it; a
+              colleague who asks for the document is spoken here too, since this
+              is the one live region the lock uses. */}
           <DocumentLockBanner
             notice={customViewLock.notice}
             onTakeOver={customViewLock.takeOver}
+            onRequestAccess={customViewLock.requestAccess}
           />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
