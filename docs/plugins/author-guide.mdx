@@ -116,7 +116,7 @@ something newer.
 - `extend` — add fields to existing entities by slug.
 - `permissions` — custom (non-CRUD) permissions; CRUD is auto-seeded per collection/single.
 - `events` — custom event names you may emit.
-- `routes` — HTTP endpoints, namespaced under `/api/plugins/<name>/…`, secure by default.
+- `routes` — HTTP endpoints, namespaced under `/plugins/<name>/…` beneath wherever your app mounts the Nextly handler (`/admin/api` in a scaffolded project), secure by default.
 - `admin` — menu, pages, settings, and per-collection view overrides (referenced by string component path).
 
 ### Lifecycle

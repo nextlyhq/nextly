@@ -609,6 +609,208 @@ function metaReachability(repoRoot, tracked, findings) {
  * reports it until a reader hits a 404. The set of pages is derived from the same tracked
  * list everything else here reads, so a link to a page that exists only locally fails too.
  */
+/**
+ * Where a plugin route actually answers, checked against the scaffold rather
+ * than against a convention someone remembered.
+ *
+ * 🔴 Four documentation pages named `/api/plugins/<name>` because a comment in
+ * `route-path.ts` called that the convention. The base template mounts the
+ * dynamic handler under `/admin/api`, and `/api` carries only `health` and
+ * `media` with no catch-all, so every one of those URLs answers 404 in a
+ * generated project. It is the first thing a plugin author hits.
+ *
+ * Everything this compares against is DERIVED on each run: the namespace
+ * segment from its one declaration, and the mount from BOTH places that decide
+ * it, since `create-nextly-app` scaffolds into an empty project from the
+ * template and into an existing one from its own generator. Two sources that
+ * disagree mean the docs cannot state one answer, so this refuses instead of
+ * picking a side.
+ *
+ * Comments in published source are read too. The wrong claim started in a
+ * `@public` JSDoc, so a guard that watched only Markdown would leave the
+ * original mistake free to come back and take the pages with it. Code is
+ * blanked first: integration tests address the dispatcher directly at an
+ * arbitrary prefix, which is theirs to choose and not a claim about anything.
+ */
+const NAMESPACE_DECLARATION =
+  /export const PLUGIN_NAMESPACE_SEGMENT\s*=\s*"([^"]+)"/;
+const NAMESPACE_SOURCE = "packages/nextly/src/plugins/routes/route-path.ts";
+const TEMPLATE_APP_DIR = "templates/base/src/app/";
+const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
+const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
+const GENERATOR_MOUNT =
+  /path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/;
+const QUOTED_SEGMENT = /"([^"]*)"/g;
+
+/** The mount the base template hard-codes by where its route file sits. */
+function templateMount(repoRoot, tracked, refuse) {
+  const candidates = tracked
+    .filter(
+      rel => rel.startsWith(TEMPLATE_APP_DIR) && rel.endsWith(TEMPLATE_CATCH_ALL)
+    )
+    .filter(rel => {
+      try {
+        return /createDynamicHandlers/.test(
+          readFileSync(join(repoRoot, rel), "utf-8")
+        );
+      } catch {
+        return false;
+      }
+    });
+  if (candidates.length !== 1) {
+    refuse(
+      TEMPLATE_APP_DIR,
+      `expected exactly one scaffolded createDynamicHandlers route to read the mount from, found ${String(candidates.length)}`
+    );
+    return null;
+  }
+  return `/${candidates[0].slice(
+    TEMPLATE_APP_DIR.length,
+    candidates[0].length - TEMPLATE_CATCH_ALL.length
+  )}`;
+}
+
+/** The mount the generator builds when scaffolding into an existing project. */
+function generatorMount(repoRoot, refuse) {
+  let source;
+  try {
+    source = readFileSync(join(repoRoot, GENERATOR_SOURCE), "utf-8");
+  } catch {
+    refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
+    return null;
+  }
+  const declared = GENERATOR_MOUNT.exec(source);
+  if (declared === null) {
+    refuse(
+      GENERATOR_SOURCE,
+      "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown"
+    );
+    return null;
+  }
+  const segments = [...declared[1].matchAll(QUOTED_SEGMENT)].map(m => m[1]);
+  if (segments.length === 0) {
+    refuse(GENERATOR_SOURCE, "builds a catch-all route path with no leading segments");
+    return null;
+  }
+  return `/${segments.join("/")}`;
+}
+
+function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
+  const refuse = (file, message) => {
+    findings.push({
+      check: "plugin-route-mount-unreadable",
+      file,
+      line: null,
+      message,
+    });
+  };
+
+  // Fails closed on every input. Checking the docs against a mount this could
+  // not establish would report "no findings" for a question it never asked.
+  const fromTemplate = templateMount(repoRoot, tracked, refuse);
+  const fromGenerator = generatorMount(repoRoot, refuse);
+  if (fromTemplate === null || fromGenerator === null) return;
+  if (fromTemplate !== fromGenerator) {
+    refuse(
+      GENERATOR_SOURCE,
+      `generates ${fromGenerator} while the template mounts at ${fromTemplate}; a scaffolded project's plugin routes would answer at two different addresses, so the docs cannot name one`
+    );
+    return;
+  }
+
+  let namespace;
+  try {
+    const declared = NAMESPACE_DECLARATION.exec(
+      readFileSync(join(repoRoot, NAMESPACE_SOURCE), "utf-8")
+    );
+    if (declared === null) {
+      refuse(
+        NAMESPACE_SOURCE,
+        "PLUGIN_NAMESPACE_SEGMENT is not declared where this check reads it"
+      );
+      return;
+    }
+    namespace = declared[1];
+  } catch {
+    refuse(
+      NAMESPACE_SOURCE,
+      "could not be read, so the documented plugin route path has nothing to be checked against"
+    );
+    return;
+  }
+
+  const mount = fromTemplate;
+  const expected = `${mount}/${namespace}/`;
+  // Built from the two derived values, so renaming either reports the pages
+  // that now disagree rather than quietly matching nothing.
+  const tail = mount.slice(mount.lastIndexOf("/") + 1);
+  const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const mountedPath = new RegExp(
+    `((?:\\/[A-Za-z0-9_-]+)*\\/${escape(tail)})\\/${escape(namespace)}\\/`,
+    "g"
+  );
+
+  // Counted, because everything above is a search for a WRONG shape and a
+  // search finds nothing in two different situations. Renaming the namespace
+  // makes every correct reference stop matching and every stale one invisible,
+  // so the run goes green by having asked about nothing at all. At least one
+  // reference has to be found saying the right thing.
+  let correct = 0;
+
+  const isDoc = rel =>
+    (rel.startsWith("docs/") || rel.endsWith("/README.md")) &&
+    (rel.endsWith(".mdx") || rel.endsWith(".md")) &&
+    basename(rel) !== "CHANGELOG.md";
+  const isSource = rel =>
+    rel.startsWith("packages/") &&
+    /\.(ts|tsx|mjs)$/.test(rel) &&
+    !rel.includes("/dist/");
+
+  for (const rel of tracked) {
+    const doc = isDoc(rel);
+    if (!doc && !isSource(rel)) continue;
+    let text;
+    try {
+      text = readFileSync(join(repoRoot, rel), "utf-8");
+    } catch {
+      continue;
+    }
+    // Source is read as its comments alone. A test that calls the dispatcher at
+    // some prefix of its own is not claiming anything about where a route
+    // answers, and `sourceComments` keeps the line numbers a reader needs.
+    const lines = (doc ? text : sourceComments(text)).split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      mountedPath.lastIndex = 0;
+      let match;
+      while ((match = mountedPath.exec(lines[i])) !== null) {
+        const found = `${match[1]}/${namespace}/`;
+        if (found === expected) {
+          correct += 1;
+          continue;
+        }
+        // A page teaching that the OLD address 404s has to be able to write it
+        // down. That is one line of prose rather than a pattern this can
+        // recognise, so it goes through the same per-line allowlist every other
+        // deliberate exception here uses.
+        if (isExempt(rel, lines[i])) continue;
+        findings.push({
+          check: "plugin-route-mount",
+          file: rel,
+          line: i + 1,
+          message: `names a plugin route at ${found}, but the handler is mounted at ${mount}, so it answers at ${expected}`,
+        });
+      }
+    }
+  }
+
+  if (correct === 0) {
+    refuse(
+      NAMESPACE_SOURCE,
+      `nothing documents a plugin route at ${expected}, so this check compared the docs against a shape none of them use. Either the namespace or the mount moved and every reference is now stale, or the pages that named one are gone`
+    );
+  }
+}
+
 function internalLinks(repoRoot, tracked, findings) {
   const pages = new Set(tracked.filter(rel => rel.endsWith(".mdx")));
   const resolves = target => {
@@ -1631,6 +1833,7 @@ export async function runChecks({
     repairs
   );
   internalLinks(repoRoot, tracked, findings);
+  pluginRouteMount(repoRoot, tracked, findings, exemption("plugin-route-mount"));
   metaReachability(repoRoot, tracked, findings);
 
   return { findings, unverifiable };

@@ -341,6 +341,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "defineEmailProvider (value)",
   "defineJob (value)",
   "definePlugin (value)",
+  "getCachedNextly (value)",
   "group (value)",
   "isPluginCategory (value)",
   "isSecret (value)",
