@@ -109,6 +109,43 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
 - **Opt out:** set `public: true` to make a route callable without a session (e.g. a
   public sitemap or a webhook receiver). `ctx.user` will be `null`.
 
+### Gating on one of your OWN collections
+
+A permission slug spells a collection — and a host can rename your plugin's
+collections. So a fixed `"create-patterns"` demands a grant that was seeded under
+a different name on any install that renamed it, leaving a route nobody there can
+call.
+
+Give a function instead. It receives your plugin's resolved names and returns the
+slug to require:
+
+```ts
+{
+  method: "POST",
+  path: "/patterns",
+  // `collection()` resolves the rename AND composes the slug, so you never
+  // spell one yourself.
+  requiredPermission: ({ collection }) => collection("patterns", "create"),
+  handler: savePattern,
+}
+```
+
+`collection(declaredSlug, action)` takes the slug **you declared**, not the one
+the host ended up with. `single(declaredSlug, action)` does the same for a
+Single.
+
+Keep the plain string for a permission that cannot move — one your plugin
+declared itself, like `"export-submissions"`.
+
+Two rules for the function:
+
+- **It must be pure and synchronous.** It runs on every request to the route,
+  before anything about the caller is known — so it is given your names and
+  nothing about the request. Deciding on the caller is the access rule's job, and
+  it runs after authentication rather than before it.
+- **If it throws, the request is refused.** A gate that cannot be worked out
+  never falls back to "no permission required".
+
 ```ts
 {
   method: "GET",

@@ -29,6 +29,32 @@
 
 import { useId, type ReactNode } from "react";
 
+/**
+ * One row behind a chart: its identity, its label, and its number.
+ *
+ * `key` is kept APART from `label` because a grouped column holds arbitrary
+ * strings, so no label is safe to identify a row by. A bucket whose value is
+ * literally the placeholder text would share a React key with the null bucket,
+ * and two rows under one key is a reconciliation defect rather than a cosmetic
+ * one — React keeps one of them and the counts stop belonging to the rows they
+ * are drawn beside.
+ */
+export interface ChartRow {
+  /** Unique within one result, derived from the bucket rather than its text. */
+  key: string;
+  label: string;
+  count: number;
+  /**
+   * Whether the label STANDS IN for a value rather than being one.
+   *
+   * Rendered differently for that reason. No string can be reserved from a
+   * column of arbitrary text, so a row whose stored value happens to read
+   * "(none)" cannot be told apart from the null bucket BY ITS TEXT — the
+   * distinction has to be carried visually and structurally instead.
+   */
+  placeholder?: boolean;
+}
+
 export interface ChartFrameProps {
   /** What the chart shows, announced in place of the shapes. */
   title: string;
@@ -37,7 +63,7 @@ export interface ChartFrameProps {
   /** Heading for the label column of the table. */
   labelHeading: string;
   /** The rows behind the picture, in the order they are drawn. */
-  rows: ReadonlyArray<{ label: string; count: number }>;
+  rows: ReadonlyArray<ChartRow>;
   /** Said above the table when the series is not the whole answer. */
   note?: string;
   /**
@@ -115,12 +141,16 @@ export function ChartFrame({
             </thead>
             <tbody>
               {rows.map(row => (
-                <tr key={row.label} className="border-b border-border/50">
+                <tr key={row.key} className="border-b border-border/50">
                   {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
                   <th
                     scope="row"
-                    className="py-1 pr-2 text-left font-normal text-foreground"
+                    className={
+                      row.placeholder
+                        ? "py-1 pr-2 text-left font-normal italic text-muted-foreground"
+                        : "py-1 pr-2 text-left font-normal text-foreground"
+                    }
                   >
                     {row.label}
                   </th>

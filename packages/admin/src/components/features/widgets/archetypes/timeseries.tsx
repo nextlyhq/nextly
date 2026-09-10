@@ -75,6 +75,9 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
   }
 
   const rows = result.points.map(point => ({
+    // The instant, not the label: two intervals can format identically at a
+    // coarse label while being different points.
+    key: point.start,
     label: pointLabel(point.start, result.interval),
     count: point.count,
   }));

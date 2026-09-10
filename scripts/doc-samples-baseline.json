@@ -1,7 +1,7 @@
 {
   "coverage": {
     "pages": 49,
-    "samples": 335,
+    "samples": 336,
     "compiled": 204
   },
   "samplesPerPage": {
@@ -174,7 +174,7 @@
       "compiled": 1
     },
     "docs/plugins/routes.mdx": {
-      "samples": 6,
+      "samples": 7,
       "compiled": 2
     },
     "docs/plugins/schema.mdx": {
