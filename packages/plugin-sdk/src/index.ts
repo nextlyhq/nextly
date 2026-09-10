@@ -277,7 +277,31 @@ export type {
 // ABOVE the braces, never inside them: `plugin-surface.test.ts` splits this
 // block on commas without stripping comments, so an inline note is recorded as
 // an export name and the real one is not.
+/**
+ * @experimental The canonical response envelopes, and the trusted-client-IP
+ *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
+ *   ship in a release.
+ *
+ * A plugin that owns a top-level route answers a browser directly, so it needs
+ *   the body shape every first-party endpoint answers in and the address the
+ *   deployment's proxy-trust settings resolve. Hand-building either is how a
+ *   route that preserved its URL changed its contract underneath the clients
+ *   already calling it, and how an author ends up trusting `x-forwarded-for`.
+ *
+ *   Re-exported HERE rather than left on the `nextly` root, because this is the
+ *   surface a plugin author is promised. Reaching into the root entry for them
+ *   couples a published plugin to core's internal layout.
+ */
+export {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+  trustedClientIp,
+} from "nextly";
+
 export type {
+  PaginationMeta,
   PluginRoute,
   PluginRouteCaller,
   PluginRouteContext,
@@ -485,11 +509,15 @@ export {
   WIDGET_OPS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
   registerWidget,
   registerSource,
   type WidgetDefinition,
+  type WidgetLifecycle,
+  type WidgetCondition,
   type WidgetAction,
   type WidgetSetting,
   type WidgetQuery,

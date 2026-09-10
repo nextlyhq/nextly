@@ -146,7 +146,19 @@ export { NextlyError } from "./errors";
 // the shape by hand also gains whatever the builder gains next only if somebody
 // remembers to copy it — the same defect the plugin error path already had, one
 // level along.
-export { respondMutation } from "./api/response-shapes";
+// The read and action shapes go with it, for the same reason and one step
+// further: a plugin that takes over an endpoint core used to serve has to
+// answer in the body core answered in, or the URL is preserved while the
+// contract silently changes underneath every client already calling it.
+// `respondAction` reads the same warning scope `respondMutation` does, and a
+// plugin route runs inside it, so these behave identically wherever they are
+// called from. `PaginationMeta`, which `respondList` takes, is exported below.
+export {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "./api/response-shapes";
 
 // The slug rule, published because it was already documented as though it were.
 // `prebuilt`'s own auto-slug docblock shows `slugify(context.data.title)` as the
@@ -519,6 +531,8 @@ export {
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
   WIDGET_OPS,
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
   registerWidget,
@@ -551,6 +565,8 @@ export {
   type WidgetOp,
   type WidgetPatch,
   type TimeseriesInterval,
+  type WidgetLifecycle,
+  type WidgetCondition,
 } from "./domains/widgets";
 
 // Value exports for the email provider contract. A plugin calls
@@ -1077,6 +1093,13 @@ export {
   parseTrustedProxyIpsEnv,
   type TrustedClientIpOptions,
 } from "./utils/get-trusted-client-ip";
+
+// The same resolution with the settings already read, which is the only form a
+// plugin can call: the options above come from the running configuration
+// through the container, so exporting the resolver alone left it reachable and
+// unusable, and a plugin needing an address was left reading `x-forwarded-for`
+// itself -- the forgeable read the resolver exists to replace.
+export { trustedClientIp } from "./hooks/request-facts";
 
 // Published because a plugin storing text a visitor typed has to strip markup
 // the way core does, and the absence of this export is why a second copy grew

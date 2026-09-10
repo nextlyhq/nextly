@@ -19,7 +19,7 @@ import {
   apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
-import { currentCallerScope } from "../../../auth/caller-scope";
+import { effectiveCallerScope } from "../../../auth/caller-scope";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import type {
@@ -209,7 +209,7 @@ export class CollectionAccessService extends BaseService {
     // fixes the one written next as well.
     //
     // An explicit argument still wins, so a caller may narrow.
-    const scope = authenticatedScope ?? currentCallerScope();
+    const scope = effectiveCallerScope(authenticatedScope);
 
     // Super-admin bypasses BOTH the RBAC gate and the stored rules (including
     // owner-only) so an admin can act on any record on every transport — EXCEPT
@@ -300,6 +300,32 @@ export class CollectionAccessService extends BaseService {
           success: false,
           statusCode: 500,
           message: "Failed to verify RBAC permissions",
+          data: null as unknown as T,
+        };
+      }
+    } else if (!routeAuthorized && this.rbacAccessControlService && !user) {
+      // A caller with NO session, judged against the collection's own
+      // code-defined rule.
+      //
+      // Both branches above require a user, because everything they do resolves
+      // roles and permissions from a user id. That left `access: { create:
+      // false }` and `read: ({ user }) => !!user` accepted at boot, recorded in
+      // the registry, and never consulted for the one caller they most clearly
+      // describe. Only the STORED rules ran, which are a different place and
+      // usually empty, so the declaration was silently inert.
+      //
+      // `undefined` means no code-defined rule governs this operation, and the
+      // stored rules below still decide. A boolean is the rule's own verdict.
+      const allowed =
+        await this.rbacAccessControlService.checkAnonymousCodeAccess({
+          operation,
+          resource: collectionName,
+        });
+      if (allowed === false) {
+        return {
+          success: false,
+          statusCode: 403,
+          message: `Access denied: insufficient permissions for ${operation} on ${collectionName}`,
           data: null as unknown as T,
         };
       }
@@ -439,7 +465,7 @@ export class CollectionAccessService extends BaseService {
   } | null {
     // As in `checkCollectionAccess`: the request's scope when the caller did
     // not name one, so a transport that cannot pass it still judges the key.
-    const scope = authenticatedScope ?? currentCallerScope();
+    const scope = effectiveCallerScope(authenticatedScope);
     const isScopedApiKey = scope?.actorType === "apiKey";
     if (!isScopedApiKey && isSuperAdminContext(user)) {
       return null;
@@ -513,7 +539,7 @@ export class CollectionAccessService extends BaseService {
     // Super-admin reads are unfiltered too, matching the write-side bypass so
     // "super-admins bypass stored rules on every transport" holds for reads —
     // except through a scoped key, which is authoritative only on its own scope.
-    const scope = authenticatedScope ?? currentCallerScope();
+    const scope = effectiveCallerScope(authenticatedScope);
     const isScopedApiKey = scope?.actorType === "apiKey";
     if (
       overrideAccess ||
@@ -619,7 +645,7 @@ export class CollectionAccessService extends BaseService {
   ): Promise<{ field: string; value: string } | null> {
     // Super-admin bypasses the owner predicate on the transactional paths too —
     // EXCEPT via a scoped API key, which must still obey stored owner rules.
-    const scope = authenticatedScope ?? currentCallerScope();
+    const scope = effectiveCallerScope(authenticatedScope);
     const isScopedApiKey = scope?.actorType === "apiKey";
     if (
       overrideAccess ||

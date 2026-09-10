@@ -1,13 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
-
-/** This module's sibling script, resolved from here rather than from the cwd. */
-const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "gate-scope.mjs");
 
 import {
   EXIT,

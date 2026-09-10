@@ -17,10 +17,13 @@
  * by nobody else. The same reasoning already separates `/blocks`, so that a
  * plugin unrelated to blocks never pulls the engine into its type graph.
  *
- * Note what a subpath does NOT do: the helper still arrives through
- * `nextly/runtime`, so a consumer of THIS entry still pays that graph. Making it
- * genuinely cheap means moving the function to a leaf module in core — it
- * depends only on the reserved-path list — which is filed separately.
+ * A subpath was only half of it, and this module used to say so: the helper
+ * still arrived through `nextly/runtime`, so a consumer of THIS entry paid that
+ * graph anyway. Core now publishes the function as its own entry,
+ * `nextly/route-path`, built from a module that imports only the reserved-path
+ * list — so the cost is no longer opt-in, it is gone. Measured through package
+ * resolution: this entry pulled 2,471 inputs and 21.1 MB before, and pulls 5 and
+ * 1.4 KB now.
  *
  * @module routing
  */
@@ -42,4 +45,10 @@
  *   `@nextlyhq/plugin-seo` exercises it for sitemap URLs, which starts the D55
  *   clock rather than ending it.
  */
-export { slugToStaticParam } from "nextly/runtime";
+// 🔴 From `nextly/route-path`, NOT `nextly/runtime`. Both spell the same
+// function and only one of them is a leaf: `nextly/runtime` is the built route
+// bundle, which has already inlined this beside its eager Direct API imports,
+// so a consumer that bundles rather than externalises `nextly` pays 21 MB for a
+// string function. Measured through package resolution, which is the only way
+// this is visible — a source-graph check reports the leaf either way.
+export { slugToStaticParam } from "nextly/route-path";

@@ -1362,7 +1362,7 @@ export function declaredNamesIn(source, extension = "tsx") {
  * program a reader pastes. `await nextly.logout()` calls a value an earlier
  * fence built, and is.
  */
-export function declaredValuesIn(source, extension = "tsx") {
+export function declaredValuesIn(source, _extension = "tsx") {
   const code = topLevelOnly(source);
   const names = new Set();
   for (const m of code.matchAll(

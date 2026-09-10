@@ -692,22 +692,81 @@ export function validateFormData(
  * @param result - Zod safe parse result
  * @returns Object mapping field names to error messages
  */
+/** A field that failed, with the machine code a wire error reports. */
+export interface ValidationIssue {
+  path: string;
+  /** `REQUIRED` for an answer that is missing or empty, else `INVALID`. */
+  code: "REQUIRED" | "INVALID";
+  message: string;
+}
+
+/**
+ * Whether the visitor supplied nothing at this field.
+ *
+ * The same four shapes the endpoint has always counted as blank. A `false`
+ * checkbox and a `0` are answers, so neither is absent.
+ */
+function isBlank(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+/**
+ * The failures with their codes, first one per field.
+ *
+ * A code as well as a sentence, because the public submission error has always
+ * carried one and a client uses it to tell "you left this blank" from "this is
+ * not an email" without parsing English. Flattening every failure to `INVALID`
+ * silently stopped required-field detection working for those clients.
+ *
+ * The code is decided by looking at the SUBMITTED VALUE, not at the Zod issue.
+ * Zod's codes do not divide the same way: `too_small` covers a blank answer and
+ * a four-character password under a minimum of eight, and `invalid_type` covers
+ * an absent key and a string sent to a number field. Reading the code alone
+ * told a visitor to fill in a field they had already filled in.
+ */
+export function getValidationIssues(
+  result: z.ZodSafeParseResult<unknown>,
+  submitted: Record<string, unknown> = {}
+): ValidationIssue[] {
+  if (result.success) return [];
+
+  const seen = new Set<string>();
+  const issues: ValidationIssue[] = [];
+
+  // Zod 4 renamed ZodError.errors to ZodError.issues.
+  for (const issue of result.error.issues) {
+    const path = issue.path.join(".");
+    if (seen.has(path)) continue;
+    seen.add(path);
+    issues.push({
+      path,
+      // Read at the top level, which is the only depth a form field has: a
+      // declared field is one key, so a dotted path can only come from inside a
+      // value the visitor did supply.
+      code: isBlank(submitted[path]) ? "REQUIRED" : "INVALID",
+      message: issue.message,
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * The same failures as a field-to-message map.
+ *
+ * Derived from {@link getValidationIssues} rather than walking the issues a
+ * second time, so the two cannot disagree about which message belongs to a
+ * field or which failure won when one field had several.
+ */
 export function getValidationErrors(
   result: z.ZodSafeParseResult<unknown>
 ): Record<string, string> {
-  if (result.success) {
-    return {};
-  }
-
-  const errors: Record<string, string> = {};
-
-  // Zod 4 renamed ZodError.errors to ZodError.issues.
-  for (const error of result.error.issues) {
-    const path = error.path.join(".");
-    if (!errors[path]) {
-      errors[path] = error.message;
-    }
-  }
-
-  return errors;
+  return Object.fromEntries(
+    getValidationIssues(result).map(issue => [issue.path, issue.message])
+  );
 }

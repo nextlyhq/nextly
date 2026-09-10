@@ -24,6 +24,8 @@ function buildAccessService() {
   const accessControlService = createMockAccessControlService();
   const rbac = {
     checkAccess: vi.fn().mockResolvedValue(true),
+    // Answers `undefined`: no code-defined rule, so the stored rules decide.
+    checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     // No code-defined access by default: a scoped API key is judged on its
     // permission grant alone unless a test registers a rule.
     getRegisteredAccess: vi.fn().mockReturnValue(undefined),
@@ -435,6 +437,8 @@ describe("getOwnerConstraint — scoped API key", () => {
     const accessControlService = createMockAccessControlService();
     const rbac = {
       checkAccess: vi.fn().mockResolvedValue(true),
+      // Answers `undefined`: no code-defined rule, so the stored rules decide.
+      checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       getRegisteredAccess: vi.fn().mockReturnValue(undefined),
     };
     const collectionService = {
@@ -494,6 +498,8 @@ describe("getAccessQueryConstraint — scoped API key", () => {
     });
     const rbac = {
       checkAccess: vi.fn().mockResolvedValue(true),
+      // Answers `undefined`: no code-defined rule, so the stored rules decide.
+      checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       getRegisteredAccess: vi.fn().mockReturnValue(undefined),
     };
     const collectionService = {

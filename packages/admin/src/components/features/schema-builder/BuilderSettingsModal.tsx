@@ -110,6 +110,32 @@ const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
   "field-group": "field group",
 };
 
+/**
+ * The answers as everything downstream should see them.
+ *
+ * 🔴 Normalised HERE, at the one boundary the values cross, rather than by each
+ * consumer. A settings save fans out to two writes — the create/update request
+ * and the `ui-schema.json` projection — and they describe the same entity. When
+ * only one of them trimmed, a description typed with trailing spaces was stored
+ * one way in the row and another in the file, and replaying the manifest
+ * visibly changed the value a person had saved.
+ *
+ * 🔴 TRIMMED, and nothing else. An emptied box stays `""` and must not become
+ * `undefined`: the update handlers all read `description !== undefined` as "the
+ * caller is not talking about this field", and `JSON.stringify` drops an
+ * undefined property entirely — so clearing a description would leave the old
+ * one in the database while the manifest's full replace dropped it, with the
+ * interface reporting success either way. `""` is a person saying "remove it",
+ * which is a different message from not mentioning it, and only the request can
+ * carry that difference.
+ *
+ * What the MANIFEST does with an empty description is the manifest's own
+ * question, answered where its entity is built.
+ */
+function normalized(values: BuilderSettingsValues): BuilderSettingsValues {
+  return { ...values, description: values.description?.trim() };
+}
+
 const EMPTY_VALUES: BuilderSettingsValues = {
   singularName: "",
   pluralName: "",
@@ -216,7 +242,9 @@ export function BuilderSettingsModal({
               <Button variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button onClick={() => onSubmit(values)}>{primaryLabel}</Button>
+              <Button onClick={() => onSubmit(normalized(values))}>
+                {primaryLabel}
+              </Button>
             </>
           )}
         </DialogFooter>

@@ -178,13 +178,21 @@ function permissionArgs(slug: string): [string, string] {
  * to everyone, and forcing `no-store` would throw away caching it is entitled
  * to.
  *
+ * Timestamp formatting is skipped unless the route asks for it. The boundary
+ * rewrites date-looking strings by VALUE, so a plugin returning descriptors or
+ * free text would have fields mangled that were never timestamps. A route
+ * answering with collection documents sets `formatTimestamps` and is treated
+ * like the built-in read it replaced.
+ *
  * Headers are REBUILT rather than set in place. A handler may return a
  * response whose headers are immutable — one that came from `fetch`, say —
  * and setting a header on that throws, turning a marking step into a 500.
  */
 function markPluginResponse(response: Response, route: PluginRoute): Response {
   const headers = new Headers(response.headers);
-  headers.set(SKIP_TIMEZONE_FORMAT_HEADER, "1");
+  if (route.formatTimestamps !== true) {
+    headers.set(SKIP_TIMEZONE_FORMAT_HEADER, "1");
+  }
   if (route.public !== true) applySessionCacheHeaders(headers);
   return new Response(response.body, {
     status: response.status,

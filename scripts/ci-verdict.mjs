@@ -1092,12 +1092,6 @@ async function main(argv) {
   }
 
   const head = headOf();
-  const reviews = gh([
-    "api",
-    `repos/${repo}/pulls/${pr}/reviews`,
-    "--paginate",
-    "--slurp",
-  ]).flat();
   // The pull request's own commit ORDER, which is what decides whether one
   // review's revision is later than another's. Timestamps cannot: reviews
   // arrive out of order, and the current head is a moving target that
@@ -1164,12 +1158,6 @@ async function main(argv) {
         `an objection on a revision absent from it will NOT be cleared\n`
     );
   }
-  const issueComments = gh([
-    "api",
-    `repos/${repo}/issues/${pr}/comments`,
-    "--paginate",
-    "--slurp",
-  ]).flat();
   // Paged explicitly: `reviewThreads(first: 100)` silently truncates, and an
   // unresolved thread past the first page would leave the verdict clean. An
   // invalid `after` is NOT rejected by the API — it is ignored and page one
@@ -1214,7 +1202,6 @@ async function main(argv) {
     }
     return collected;
   };
-  const threads = readThreads();
 
   // The head is re-read AFTER the other queries. A push landing mid-run would
   // otherwise be judged against the revision captured at the start, so a review
