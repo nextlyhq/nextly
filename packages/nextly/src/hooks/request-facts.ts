@@ -63,3 +63,27 @@ export function resolveRequestFacts(
 function readConfig(): unknown {
   return container.has("config") ? container.get("config") : undefined;
 }
+
+/**
+ * The client address behind a request, under this deployment's proxy trust.
+ *
+ * @public
+ *
+ * `getTrustedClientIp` is exported beside this and takes the settings as an
+ * argument, which a plugin cannot supply: they are read from the running
+ * configuration through the container. Exported as a pair, the resolver was
+ * reachable and unusable, so a plugin needing an address had the choice of
+ * reading `x-forwarded-for` itself, which is the forgeable read the resolver
+ * exists to replace.
+ *
+ * `null` when the deployment does not trust a proxy, or when no request
+ * produced this work. Both mean the same thing to a caller: there is no address
+ * here worth acting on. A rule that treats `null` as a distinct visitor is
+ * reading a value that was never a visitor at all.
+ *
+ * The request may be omitted inside anything Nextly pins one around, including
+ * a plugin route handler, and the ambient one is used.
+ */
+export function trustedClientIp(request?: Request): string | null {
+  return resolveRequestFacts(request).http?.ip ?? null;
+}

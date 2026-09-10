@@ -32,6 +32,7 @@ import {
   prepareSubmission,
 } from "./handlers/prepare-submission";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
+import { publicFormRoutes } from "./routes/public-forms";
 import type {
   AnyFormField,
   BeforeEmailFilterContext,
@@ -241,6 +242,10 @@ export function formBuilder(
       // resolves its OWN slug through `ctx.self`. The canonical
       // contributes.routes example for third-party authors.
       routes: [
+        // The public form endpoints, at the addresses core used to serve
+        // before this plugin took them over. Root-mounted, so no caller's URL
+        // changes; see `routes/public-forms`.
+        ...publicFormRoutes(resolvedConfig),
         {
           method: "GET",
           path: "/submissions/export",

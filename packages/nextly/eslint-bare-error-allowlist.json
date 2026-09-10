@@ -21,7 +21,6 @@
   "src/dispatcher/handlers/collection-dispatcher.ts": 27,
   "src/dispatcher/handlers/component-dispatcher.ts": 13,
   "src/dispatcher/handlers/email-dispatcher.ts": 4,
-  "src/dispatcher/handlers/form-dispatcher.ts": 1,
   "src/dispatcher/handlers/single-dispatcher.ts": 22,
   "src/dispatcher/handlers/user-dispatcher.ts": 5,
   "src/dispatcher/handlers/user-field-dispatcher.ts": 2,

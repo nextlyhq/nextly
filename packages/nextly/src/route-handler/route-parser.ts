@@ -56,10 +56,6 @@ export function isPublicEndpoint(service: string, method: string): boolean {
       "verifyEmail",
     ].includes(method);
   }
-  // Forms endpoints are public (for form builder submissions)
-  if (service === "forms") {
-    return true;
-  }
   return false;
 }
 
@@ -1553,55 +1549,6 @@ function parseComponentRoutes(
 // Forms Routes Parser
 // ============================================================================
 
-/**
- * Parse Forms routes
- *
- * Handles public form endpoints for form builder plugin:
- * - GET /api/forms → list published forms
- * - GET /api/forms/[slug] → get form by slug
- * - POST /api/forms/[slug]/submit → submit form
- */
-function parseFormsRoutes(
-  slug: string | undefined,
-  action: string | undefined,
-  httpMethod: string,
-  routeParams: Record<string, string>
-): ParsedRoute | null {
-  // GET /api/forms → list published forms
-  if (!slug && httpMethod === "GET") {
-    return {
-      service: "forms",
-      operation: "list",
-      method: "listForms",
-      routeParams,
-    };
-  }
-
-  // GET /api/forms/[slug] → get form by slug
-  if (slug && !action && httpMethod === "GET") {
-    routeParams.slug = slug;
-    return {
-      service: "forms",
-      operation: "single",
-      method: "getFormBySlug",
-      routeParams,
-    };
-  }
-
-  // POST /api/forms/[slug]/submit → submit form
-  if (slug && action === "submit" && httpMethod === "POST") {
-    routeParams.slug = slug;
-    return {
-      service: "forms",
-      operation: "create",
-      method: "submitForm",
-      routeParams,
-    };
-  }
-
-  return null;
-}
-
 // ============================================================================
 // Email Provider Routes Parser
 // ============================================================================
@@ -2831,12 +2778,6 @@ export function parseRestRoute(
       httpMethod,
       routeParams
     );
-    if (result) return result;
-  }
-
-  // Handle Forms endpoints (public form builder)
-  if (resource === "forms") {
-    const result = parseFormsRoutes(id, subresource, httpMethod, routeParams);
     if (result) return result;
   }
 

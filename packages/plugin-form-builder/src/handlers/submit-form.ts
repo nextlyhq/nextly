@@ -69,11 +69,40 @@ export interface SubmitFormOptions {
 }
 
 /**
+ * Why a submission ended the way it did.
+ *
+ * `success` alone cannot carry this. An HTTP route has to answer 404 for a slug
+ * nobody used, 409 for a form its author closed and 400 for data that did not
+ * validate, and a boolean plus a human sentence cannot tell those apart without
+ * matching on the sentence.
+ *
+ * `accepted` covers every ending a visitor is told succeeded, INCLUDING the two
+ * that are deliberately indistinguishable from success: a submission the
+ * honeypot flagged, and one the rate limiter refused. A caller must not try to
+ * separate them, which is why they do not appear here as their own names.
+ */
+export type SubmitFormOutcome =
+  | "accepted"
+  | "no-such-form"
+  | "closed"
+  | "invalid"
+  | "duplicate"
+  | "failed";
+
+/**
  * Result of form submission.
  */
 export interface SubmitFormResult {
   /** Whether the submission was successful */
   success: boolean;
+
+  /**
+   * Which ending this was, for a caller that has to map it to a status code.
+   *
+   * Required rather than optional, so a return path added later cannot omit it
+   * and leave the HTTP route guessing from the message text.
+   */
+  outcome: SubmitFormOutcome;
 
   /** The created submission document (on success) */
   submission?: SubmissionDocument;
@@ -86,6 +115,19 @@ export interface SubmitFormResult {
 
   /** Redirect URL (if form configured for redirect on success) */
   redirect?: string;
+
+  /**
+   * The toast the form's author wrote for a successful submission.
+   *
+   * Carried on the result rather than read from the form again by whoever
+   * presents it: the HTTP route would otherwise have to fetch the form a second
+   * time purely to learn a string this function already had in hand, and a
+   * second read is a second chance to disagree about which form was submitted.
+   *
+   * Present on every `accepted` ending, including the ones a bot caused, so the
+   * message cannot be used to tell an accepted submission from a flagged one.
+   */
+  successMessage?: string;
 }
 
 /**
@@ -161,7 +203,7 @@ export async function submitForm(
       logger.warn?.("Form submission attempted for non-existent form", {
         formSlug,
       });
-      return { success: false, error: NO_SUCH_FORM };
+      return { success: false, outcome: "no-such-form", error: NO_SUCH_FORM };
     }
 
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
@@ -181,6 +223,7 @@ export async function submitForm(
       // four came to give four different answers in the first place.
       return {
         success: false,
+        outcome: availability.kind === "closed" ? "closed" : "no-such-form",
         error:
           availability.kind === "closed" ? availability.message : NO_SUCH_FORM,
       };
@@ -225,6 +268,7 @@ export async function submitForm(
         });
         return {
           success: false,
+          outcome: "duplicate",
           error: "You have already submitted this form.",
         };
       }
@@ -282,6 +326,7 @@ export async function submitForm(
       });
       return {
         success: false,
+        outcome: "invalid",
         error: "Validation failed",
         validationErrors: prepared.validationErrors,
       };
@@ -328,20 +373,25 @@ export async function submitForm(
       );
     } catch (error) {
       // The seam refuses a submission over the limit, and refuses it the same
-      // way at every door. This helper answers its own caller with a success
-      // anyway: a host route calls it to serve a browser, and a bot told it was
-      // limited learns the rate to sit under.
+      // way at every door. This answers its own caller with a success anyway: a
+      // browser is on the other end of it, and a bot told it was limited learns
+      // the rate to sit under.
       //
-      // This is NOT the built-in `POST /api/forms/:slug/submit`, which core's
-      // form dispatcher serves without calling this at all. That endpoint
-      // returns the refusal as a 429.
+      // `POST /api/forms/:slug/submit` reaches this. The route is contributed
+      // by this plugin and calls this function, so the refusal a visitor sees
+      // is decided here rather than being reconstructed as a 429 by an endpoint
+      // that never consulted the seam.
       //
       // Nothing is stored. A limiter that wrote a row per refusal would hand an
       // attacker a way to fill the database with the very volume it exists to
       // refuse.
       if (NextlyError.isRateLimited(error)) {
         logger.info?.("Form submission refused (rate limit)", { formSlug });
-        return { success: true };
+        return {
+          success: true,
+          outcome: "accepted",
+          successMessage: settings.successMessage,
+        };
       }
       throw error;
     }
@@ -378,11 +428,18 @@ export async function submitForm(
     );
 
     if (isContentSpam) {
-      return { success: true, redirect };
+      return {
+        success: true,
+        outcome: "accepted",
+        successMessage: settings.successMessage,
+        redirect,
+      };
     }
 
     return {
       success: true,
+      outcome: "accepted",
+      successMessage: settings.successMessage,
       // The created ROW, not the envelope around it. Through the shared
       // conversion, which is where the unchecked step lives and says so; the
       // integration test reads `submission.id` off the result because nothing
@@ -398,6 +455,7 @@ export async function submitForm(
 
     return {
       success: false,
+      outcome: "failed",
       error: "An error occurred processing your submission. Please try again.",
     };
   }

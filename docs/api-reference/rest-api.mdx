@@ -260,9 +260,6 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 | `DELETE` | `/api/field-groups/{slug}` | Delete field group. | `manage-settings` |
 | `POST` | `/api/field-groups/schema/{slug}/preview` | Dry-run field group schema diff. | `manage-settings` |
 | `POST` | `/api/field-groups/schema/{slug}/apply` | Apply field group schema changes. | `manage-settings` |
-| `GET` | `/api/forms` | List published forms. | Public |
-| `GET` | `/api/forms/{slug}` | Get form by slug. | Public |
-| `POST` | `/api/forms/{slug}/submit` | Submit a form. | Public |
 | `POST` | `/api/email/send` | Send a raw email. | Authenticated |
 | `POST` | `/api/email/send-with-template` | Send a templated email. | Authenticated |
 | `GET` | `/api/email-providers` | List providers. | `read-email-providers` |
@@ -302,6 +299,8 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 | `DELETE` | `/api/image-sizes/{id}` | Delete preset. | `manage-settings` |
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
+
+A plugin may serve its own endpoints, and they are not listed here. `/api/forms`, `/api/forms/{slug}` and `/api/forms/{slug}/submit` are served by [`@nextlyhq/plugin-form-builder`](/plugins/form-builder) at those exact addresses, and answer only when it is installed. They were once built in, which never worked without the plugin either: the collections they read are declared by it.
 
 ## Per-section detail
 
