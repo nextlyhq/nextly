@@ -181,7 +181,11 @@ export function contextMenuTargetOf(
    * a block nobody was pointing at.
    */
   if (owner.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return null;
-  return owner.getAttribute(NODE_ID_ATTRIBUTE);
+  // The same address the click path resolves. Returning the raw attribute here
+  // hands the menu a re-minted id the stored document does not contain, so
+  // `applySelection` keeps the PREVIOUS selection — and a destructive verb then
+  // acts on a block nobody pointed at.
+  return nodeAddressOf(owner);
 }
 
 /**
@@ -246,11 +250,17 @@ export function nodeIdFromEvent(target: EventTarget | null): string | null {
   // canvas rendered within another rendered page would otherwise resolve a
   // click to the outer page's node.
   if (owner.closest(`.${CANVAS_ROOT_CLASS}`) === null) return null;
-  return addressOf(owner);
+  return nodeAddressOf(owner);
 }
 
 /**
  * Which node an element stands for, once components are inlined.
+ *
+ * EXPORTED because it is the one rule, and every reader of the element-to-node
+ * mapping has to use it. Slice one of this work updated the click path and the
+ * geometry lookup and left three other readers on the raw attribute — the
+ * context menu, the selection markers and the drag rectangles — which is how a
+ * right-click came to act on the previously selected block.
  *
  * A component is inlined at render: the instance node is replaced by the tree
  * its definition describes, and every element of that tree carries a RE-MINTED
@@ -273,7 +283,7 @@ export function nodeIdFromEvent(target: EventTarget | null): string | null {
  * marked means definition-owned, unmarked means the page's own whatever
  * encloses it.
  */
-function addressOf(owner: Element): string | null {
+export function nodeAddressOf(owner: Element): string | null {
   const instance = owner.getAttribute(INSTANCE_ATTRIBUTE);
   // Present AND non-empty. The renderer never emits an empty one — it treats
   // that as no provenance — but an address of "" is not selectable, so reading
@@ -281,6 +291,35 @@ function addressOf(owner: Element): string | null {
   // own id.
   if (instance !== null && instance !== "") return instance;
   return owner.getAttribute(NODE_ID_ATTRIBUTE);
+}
+
+/**
+ * Whether this element is the OUTERMOST one standing for its address.
+ *
+ * Two different things put one address on several elements, and they need
+ * opposite answers:
+ *
+ * - A node rendered more than once — a block that draws its child twice — puts
+ *   the same node id on SIBLING elements. Every copy is a rendering of that
+ *   node, and marking only one outlines a single row of ten while previewing a
+ *   state on another. Neither copy encloses the other, so both are outermost.
+ * - A component instance puts one address on every element its definition
+ *   contributed, NESTED. Those are renderings of different definition nodes
+ *   that share a host, so marking all of them outlines everything inside the
+ *   component and measuring all of them keys the drag geometry to whichever was
+ *   visited last.
+ *
+ * Enclosure is what separates them, so enclosure is what this asks. The host
+ * marker is contiguous over a subtree, so the nearest enclosing one carrying
+ * the same value is the whole test — no walk to the root is needed.
+ */
+export function isOutermostForAddress(
+  element: Element,
+  address: string
+): boolean {
+  const host = element.parentElement?.closest(`[${INSTANCE_ATTRIBUTE}]`);
+  if (host === null || host === undefined) return true;
+  return host.getAttribute(INSTANCE_ATTRIBUTE) !== address;
 }
 
 /**
@@ -877,8 +916,19 @@ function useCanvasMarkers(
         .forEach(element => touched.add(element));
 
       touched.forEach(element => {
-        const id = element.getAttribute(NODE_ID_ATTRIBUTE);
-        if (id === null || !marked.includes(id)) {
+        // The ADDRESS, not the raw attribute. A definition-owned element
+        // carries a re-minted id the selection never holds, so comparing the
+        // attribute leaves a selected component with no outline at all.
+        const id = nodeAddressOf(element);
+        // OUTERMOST only, which draws one outline per instance while still
+        // marking every copy of a node a block rendered more than once — see
+        // `isOutermostForAddress` for why those two cases need opposite
+        // answers.
+        if (
+          id === null ||
+          !marked.includes(id) ||
+          !isOutermostForAddress(element, id)
+        ) {
           // Guarded like the writes below: this walk now visits the page root
           // and the container, which never carry the attribute, and removing an
           // absent one still touches the element.

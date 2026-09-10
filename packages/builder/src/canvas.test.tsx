@@ -55,6 +55,8 @@ import {
   LOCKED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
   canvasScale,
+  contextMenuTargetOf,
+  isOutermostForAddress,
   nodeElement,
   nodeIdFromEvent,
 } from "./canvas";
@@ -160,6 +162,83 @@ describe("resolving a click inside a component instance", () => {
     );
 
     expect(nodeIdFromEvent(screen.getByTestId("leaf-own"))).toBe("own");
+  });
+});
+
+describe("addressing a definition-owned element from every reader", () => {
+  it("gives the CONTEXT MENU the instance, not the re-minted id", () => {
+    // The menu's verbs act on the selection, and `applySelection` ignores an id
+    // the stored document does not contain — so a right-click inside a
+    // component left the PREVIOUS selection in place and Delete acted on a
+    // block nobody pointed at.
+    const { container } = render(
+      canvas(definitionOwned("cx-remade", "i1", "From the definition"))
+    );
+    const root = container.firstElementChild as Element;
+
+    expect(
+      contextMenuTargetOf(screen.getByTestId("leaf-cx-remade"), root)
+    ).toBe("i1");
+  });
+
+  it("still gives the menu a page-owned node its own id", () => {
+    // The control: an implementation that always answered with an instance
+    // would satisfy the case above and break every ordinary right-click.
+    const { container } = render(canvas(block("plain", "Ordinary")));
+    const root = container.firstElementChild as Element;
+
+    expect(contextMenuTargetOf(screen.getByTestId("leaf-plain"), root)).toBe(
+      "plain"
+    );
+  });
+
+  it("treats sibling copies of one node as each outermost", () => {
+    // A block that renders its child twice puts one id on two SIBLING elements,
+    // and both are renderings of that node. Marking or measuring only one
+    // outlines a single row of ten. Neither encloses the other, so enclosure is
+    // what separates this from a component's nested elements.
+    const { container } = render(
+      canvas(
+        <>
+          {block("twin", "First")}
+          {block("twin", "Second")}
+        </>
+      )
+    );
+    const copies = container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}="twin"]`);
+
+    expect(copies).toHaveLength(2);
+    copies.forEach(copy => {
+      expect(isOutermostForAddress(copy, "twin")).toBe(true);
+    });
+  });
+
+  it("treats an instance's inner elements as NOT outermost", () => {
+    // The other half. Every element the definition contributed shares one
+    // address, nested — so marking all of them outlines everything inside the
+    // component, and measuring all of them keys the drag rectangle to whichever
+    // was visited last.
+    const { container } = render(
+      canvas(
+        definitionOwned(
+          "cx-outer",
+          "i1",
+          "Outer",
+          definitionOwned("cx-inner", "i1", "Inner")
+        )
+      )
+    );
+    const outer = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="cx-outer"]`
+    ) as Element;
+    const inner = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="cx-inner"]`
+    ) as Element;
+
+    expect({
+      outer: isOutermostForAddress(outer, "i1"),
+      inner: isOutermostForAddress(inner, "i1"),
+    }).toEqual({ outer: true, inner: false });
   });
 });
 
