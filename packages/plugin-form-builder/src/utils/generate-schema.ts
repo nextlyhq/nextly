@@ -692,22 +692,64 @@ export function validateFormData(
  * @param result - Zod safe parse result
  * @returns Object mapping field names to error messages
  */
+/** A field that failed, with the machine code a wire error reports. */
+export interface ValidationIssue {
+  path: string;
+  /** `REQUIRED` for an answer that is missing or empty, else `INVALID`. */
+  code: "REQUIRED" | "INVALID";
+  message: string;
+}
+
+/**
+ * The failures with their codes, first one per field.
+ *
+ * A code as well as a sentence, because the public submission error has always
+ * carried one and a client uses it to tell "you left this blank" from "this is
+ * not an email" without parsing English. Flattening every failure to `INVALID`
+ * silently stopped required-field detection working for those clients.
+ *
+ * Zod says `invalid_type` for an absent key and `too_small` for a value that is
+ * present but empty, which together are exactly the condition the endpoint
+ * used to test for by hand. Anything else is a value that was supplied and
+ * rejected on its own terms.
+ */
+export function getValidationIssues(
+  result: z.ZodSafeParseResult<unknown>
+): ValidationIssue[] {
+  if (result.success) return [];
+
+  const seen = new Set<string>();
+  const issues: ValidationIssue[] = [];
+
+  // Zod 4 renamed ZodError.errors to ZodError.issues.
+  for (const issue of result.error.issues) {
+    const path = issue.path.join(".");
+    if (seen.has(path)) continue;
+    seen.add(path);
+    issues.push({
+      path,
+      code:
+        issue.code === "invalid_type" || issue.code === "too_small"
+          ? "REQUIRED"
+          : "INVALID",
+      message: issue.message,
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * The same failures as a field-to-message map.
+ *
+ * Derived from {@link getValidationIssues} rather than walking the issues a
+ * second time, so the two cannot disagree about which message belongs to a
+ * field or which failure won when one field had several.
+ */
 export function getValidationErrors(
   result: z.ZodSafeParseResult<unknown>
 ): Record<string, string> {
-  if (result.success) {
-    return {};
-  }
-
-  const errors: Record<string, string> = {};
-
-  // Zod 4 renamed ZodError.errors to ZodError.issues.
-  for (const error of result.error.issues) {
-    const path = error.path.join(".");
-    if (!errors[path]) {
-      errors[path] = error.message;
-    }
-  }
-
-  return errors;
+  return Object.fromEntries(
+    getValidationIssues(result).map(issue => [issue.path, issue.message])
+  );
 }

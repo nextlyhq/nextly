@@ -53,3 +53,14 @@ the post-commit warnings these carry.
 `trustedClientIp` is exported beside `getTrustedClientIp`, which needed
 settings a plugin cannot read. Exported alone, the resolver was reachable and
 unusable, leaving a plugin to read `x-forwarded-for` itself.
+
+A plugin route can now say who it acts as and how its timestamps are presented,
+which is what owning a top-level endpoint actually requires. `ServiceOpts` gains
+`as: "public"`, a caller with no session whose collection access rules are still
+enforced; a public route previously had to elevate to `system` to read at all,
+silently overriding a host that had restricted a collection. `PluginRoute` gains
+`formatTimestamps`, so a route answering with collection documents presents
+stored times in the installation's timezone the way the built-in read does.
+
+The response envelopes and `trustedClientIp` are re-exported through
+`@nextlyhq/plugin-sdk`, which is the surface a plugin author is promised.

@@ -300,7 +300,7 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
 
-A plugin may serve its own endpoints, and they are not listed here. `/api/forms`, `/api/forms/{slug}` and `/api/forms/{slug}/submit` are served by [`@nextlyhq/plugin-form-builder`](/plugins/form-builder) at those exact addresses, and answer only when it is installed. They were once built in, which never worked without the plugin either: the collections they read are declared by it.
+A plugin may serve its own endpoints, and they are not listed here. `/api/forms`, `/api/forms/{slug}` and `/api/forms/{slug}/submit` are served by [`@nextlyhq/plugin-form-builder`](/docs/plugins/form-builder) at those exact addresses, and answer only when it is installed. They were once built in, which never worked without the plugin either: the collections they read are declared by it.
 
 ## Per-section detail
 

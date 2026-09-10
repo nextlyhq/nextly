@@ -26,6 +26,8 @@ import type { AnyFormField } from "../types";
 import {
   generateZodSchema,
   getValidationErrors,
+  getValidationIssues,
+  type ValidationIssue,
   transformFormData,
 } from "../utils/generate-schema";
 
@@ -174,6 +176,15 @@ export interface PreparedSubmission {
    * submission is storable.
    */
   validationErrors?: Record<string, string>;
+  /**
+   * The same failures carrying their machine codes.
+   *
+   * Beside the map rather than replacing it: the map is this plugin's public
+   * result shape, while an HTTP route needs the code to report `REQUIRED` for a
+   * blank answer the way the endpoint always has. Both come from one walk of
+   * the issues, so they cannot disagree.
+   */
+  validationIssues?: ValidationIssue[];
 }
 
 /**
@@ -217,7 +228,11 @@ export function prepareSubmission({
     // The transformed payload comes back with the errors rather than nothing,
     // so a caller that wants to store it anyway has the same value the valid
     // path would have produced, minus the schema's blessing.
-    return { data: transformed, validationErrors: getValidationErrors(result) };
+    return {
+      data: transformed,
+      validationErrors: getValidationErrors(result),
+      validationIssues: getValidationIssues(result),
+    };
   }
 
   return { data: result.data };

@@ -25,6 +25,7 @@
  */
 
 import {
+  buildPaginatedResponse,
   formAvailability,
   NextlyError,
   NO_SUCH_FORM,
@@ -40,6 +41,17 @@ import {
 
 import { submitForm } from "../handlers/submit-form";
 import type { ResolvedFormBuilderConfig } from "../types";
+
+/**
+ * These routes read and write as the anonymous visitor on the other end.
+ *
+ * `public: true` waives the ROUTE's authentication and says nothing about the
+ * collections behind it. Elevating to `system` here would hand a form to any
+ * caller on an install whose host set `formOverrides.access.read` to something
+ * narrower, and accept a submission on one that closed creation, which is the
+ * host's configuration being silently overridden rather than obeyed.
+ */
+const PUBLIC = { as: "public" } as const;
 
 /** How many forms a page of the public listing holds when none is asked for. */
 const DEFAULT_LIST_LIMIT = 100;
@@ -100,25 +112,31 @@ function positiveInt(raw: string | null): number | undefined {
 /**
  * The service's offset-based pagination, as the wire's page-based meta.
  *
- * The two count differently and the endpoint has always answered in pages, so
- * the conversion happens here rather than the shape changing under clients that
- * read `page` and `totalPages`. A limit of zero cannot be paged at all, so it
- * reports one page rather than dividing by it.
+ * The page arithmetic is `buildPaginatedResponse`'s, not a second copy of it.
+ * Its edge cases are the ones this endpoint has always answered with and are
+ * easy to get subtly wrong alone: an empty collection reports ONE page rather
+ * than zero, and a page past the end reports the clamped page rather than the
+ * one that was asked for, so `?page=100` on a single-page list cannot answer
+ * "page 100 of 1".
  */
 function toPageMeta(pagination: {
   total: number;
   limit: number;
   offset: number;
-  hasMore: boolean;
 }): PaginationMeta {
   const limit = pagination.limit > 0 ? pagination.limit : DEFAULT_LIST_LIMIT;
-  return {
+  const built = buildPaginatedResponse([], {
     total: pagination.total,
-    limit,
     page: Math.floor(pagination.offset / limit) + 1,
-    totalPages: Math.ceil(pagination.total / limit),
-    hasNext: pagination.hasMore,
-    hasPrev: pagination.offset > 0,
+    limit,
+  });
+  return {
+    total: built.totalDocs,
+    page: built.page,
+    limit: built.limit,
+    totalPages: built.totalPages,
+    hasNext: built.hasNextPage,
+    hasPrev: built.hasPrevPage,
   };
 }
 
@@ -142,7 +160,7 @@ async function listPublishedForms(
         page: positiveInt(url.searchParams.get("page")) ?? 1,
       },
     },
-    { as: "system" }
+    PUBLIC
   );
 
   return respondList(result.data ?? [], toPageMeta(result.pagination));
@@ -162,7 +180,7 @@ async function readFormBySlug(
   const result = await ctx.services.collections.listEntries(
     slugs.forms,
     { where: { slug: { equals: slug } }, pagination: { limit: 1 } },
-    { as: "system" }
+    PUBLIC
   );
 
   const doc = result.data?.[0] as FormAvailabilityInput | undefined;
@@ -262,11 +280,17 @@ function refusalFor(
         logContext: { ...entity, reason: "duplicate" },
       });
 
+    // The codes come from the issue list, not from the message map beside it.
+    // A client tells "you left this blank" from "this is not an email" by the
+    // code, and reporting every failure as `INVALID` stops that working while
+    // looking correct in a status-only test.
     case "invalid":
       return NextlyError.validation({
-        errors: Object.entries(result.validationErrors ?? {}).map(
-          ([path, message]) => ({ path, code: "INVALID", message })
-        ),
+        errors: (result.validationIssues ?? []).map(issue => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        })),
         logContext: { slug },
       });
 
@@ -301,8 +325,12 @@ async function acceptSubmission(
         ipAddress: trustedClientIp(req) ?? undefined,
         userAgent: req.headers.get("user-agent") ?? undefined,
       },
+      access: PUBLIC,
     },
-    { pluginContext: ctx, pluginConfig: configForInstall(config, ctx.self) }
+    {
+      pluginContext: ctx,
+      pluginConfig: configForInstall(config, ctx.self),
+    }
   );
 
   if (result.outcome !== "accepted") throw refusalFor(result, slug);
@@ -318,7 +346,15 @@ async function acceptSubmission(
   // always returned it to.
   return respondAction(
     result.successMessage ?? DEFAULT_SUCCESS_MESSAGE,
-    result.submission ? { submissionId: result.submission.id } : {},
+    {
+      ...(result.submission ? { submissionId: result.submission.id } : {}),
+      // Forwarded because this route is the only thing that can act on it. A
+      // form configured to redirect on success resolves one here, and core's
+      // endpoint dropped it, so the setting did nothing for any client posting
+      // over HTTP. Additive, and present on a flagged submission too, so it
+      // cannot be diffed against an accepted one.
+      ...(result.redirect ? { redirect: result.redirect } : {}),
+    },
     { status: 201 }
   );
 }
@@ -338,6 +374,9 @@ export function publicFormRoutes(
       path: "/forms",
       mount: "root",
       public: true,
+      // Collection documents, so their stored timestamps are presented in the
+      // installation's timezone exactly as the built-in read did.
+      formatTimestamps: true,
       handler: (req, ctx) => listPublishedForms(req, ctx, config),
     },
     {
@@ -345,6 +384,7 @@ export function publicFormRoutes(
       path: "/forms/:slug",
       mount: "root",
       public: true,
+      formatTimestamps: true,
       handler: (_req, ctx) => readFormBySlug(ctx.params.slug, ctx, config),
     },
     {
