@@ -23,7 +23,7 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateFieldGroup } from "@admin/hooks/queries/useFieldGroups";
 import { toSnakeName } from "@admin/lib/builder";
-import { fieldGroupToManifestEntity } from "@admin/lib/builder/to-manifest-entity-field-group";
+import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 
@@ -42,11 +42,10 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
   const handleSubmit = (values: BuilderSettingsValues) => {
     const singular = values.singularName.trim();
     const slug = values.slug?.trim() || toSnakeName(singular);
-    // Normalised once. The request and the manifest projection describe the
-    // same field group, so deriving them from one value is what keeps a
-    // whitespace-only description from being stored as text in the manifest
-    // while the row it mirrors holds NULL.
-    const description = values.description?.trim() || undefined;
+    // Already normalised, at the settings form — the one boundary both this
+    // request and the manifest projection read from. Trimming again here would
+    // be a second spelling of that rule, which is how the two came to disagree.
+    const description = values.description;
 
     createFieldGroup(
       {
@@ -72,20 +71,15 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
           void (async () => {
             try {
               await schemaFileApi.writeFieldGroup(
-                fieldGroupToManifestEntity({
+                fieldGroupEntityFromSettings(
                   slug,
-                  settings: {
-                    singularName: singular,
-                    // Carried so the description reaches a database the
-                    // manifest is replayed against; the builder omits the
-                    // column when it is absent, so this is what supplies it
-                    // rather than what protects it.
-                    description,
-                    // i18n: mirror the Internationalization flag into ui-schema.json.
-                    localized: values.i18n === true,
-                  },
-                  fields: [],
-                })
+                  // The name the form collected, which is not yet on `values` at
+                  // create time. The description needs no normalising here: the
+                  // projection does it, which is what keeps this write and the
+                  // create request above agreeing about a blank one.
+                  { ...values, singularName: singular },
+                  []
+                )
               );
             } catch (err) {
               const m = (err as { message?: string })?.message;
