@@ -99,11 +99,16 @@ await resolveContent("posts", slug, { overrideAccess: true, status: "all" });
 ```
 
 > An anonymous read enforces stored rules that **deny outright**
-> (public/authenticated/role-based). A **row-level constraint** rule (owner-only,
-> or a custom rule returning a query) and inline `defineCollection({ access })`
-> code rules need a `user` context to evaluate, so they are not applied for an
-> anonymous read. Gate that content behind an authenticated read (pass a `user`)
-> rather than the anonymous default.
+> (public/authenticated/role-based), and it enforces inline
+> `defineCollection({ access })` code rules: those are handed a real anonymous
+> context (`user: null`, no roles) and decide on it, so a rule like
+> `read: ({ user }) => !!user` hides the content as written.
+>
+> What an anonymous read still cannot apply is a **row-level constraint** rule
+> (owner-only, or a custom rule returning a query). Those compare a row against
+> somebody, and there is nobody to compare it to. Gate content that depends on
+> one behind an authenticated read (pass a `user`) rather than the anonymous
+> default.
 
 **Caching.** Only a **trusted** (`overrideAccess: true`) read with no `user` is
 F1-cached — an enforced read is never cached, because its result depends on an

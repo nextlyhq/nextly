@@ -87,6 +87,46 @@ describe("checkCollectionAccess with no user", () => {
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
+  it("applies the collection's inline code rule, which needs no user", async () => {
+    // The layer the doc on `resolveContent` said could not run. A code rule
+    // reads what it is given, and an anonymous caller is a thing it can be
+    // given: `user: null`, no roles. So it is consulted, and its refusal is the
+    // answer, even though the permission check beside it never runs.
+    const { service, rbac } = buildService({});
+    rbac.checkAnonymousCodeAccess.mockResolvedValue(false);
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "read",
+      undefined
+    );
+
+    expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalledWith({
+      operation: "read",
+      resource: "posts",
+    });
+    expect(result?.success).toBe(false);
+    expect(result?.statusCode).toBe(403);
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("lets the stored rules decide when no inline rule governs the operation", async () => {
+    // The control that keeps the case above from meaning "anonymous is denied".
+    // `undefined` is no opinion, not a refusal, so a collection with no inline
+    // rule for this operation still reads as it always did.
+    const { service, rbac } = buildService({});
+    rbac.checkAnonymousCodeAccess.mockResolvedValue(undefined);
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "read",
+      undefined
+    );
+
+    expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
   it("refuses publish with no user and no rule for it", async () => {
     // The exception to that default, decided in this service rather than the
     // leaf: publishing anonymously needs a rule that says so.
