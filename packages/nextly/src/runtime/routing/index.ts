@@ -19,11 +19,13 @@ export { isReservedPath } from "./reserved-paths";
 // a canonical, a link between entries — has to agree with the route or it names
 // a path the route does not serve, and re-deriving the rule is how the two come
 // to disagree.
-export {
-  createContentRoute,
-  createPublicContentRoute,
-  slugToStaticParam,
-} from "./content-route";
+//
+// Taken from the LEAF module rather than through `./content-route`, which also
+// re-exports it. Both spellings compile and one of them hands every consumer of
+// this barrel the route's whole import graph for a pure string function.
+export { slugToStaticParam } from "./slug-param";
+
+export { createContentRoute, createPublicContentRoute } from "./content-route";
 export type {
   ContentRoute,
   StaticContentRoute,
