@@ -5,7 +5,7 @@ description: An SEO field group on the collections you name, and a sitemap of pu
 
 > **Alpha (`0.x`): pin your versions.**
 >
-> The plugin API surface is **stable and semver-protected** (see [API stability](/docs/plugins/stability)); the plugin packages themselves are still `0.x` alpha, so pin your versions and read the release notes before upgrading.
+> The stability boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)). This package's own exports, `seoPlugin`, its option types and the sitemap generators below, are **not** covered by that guarantee and are alpha. Pin your versions and read the release notes before upgrading.
 
 The SEO plugin adds one field group to the collections you name, and serves a sitemap of
 their published entries.
@@ -24,9 +24,14 @@ plugin owns the data, and delivery belongs to whatever is serving the pages. See
 npm install @nextlyhq/plugin-seo
 ```
 
-Its peer dependencies are `nextly` and `@nextlyhq/plugin-sdk`. The plugin declares a core
-compatibility floor of `>=0.0.2-alpha.55`, which is the oldest core exporting everything it
-imports, so an older core fails at module load rather than at first use.
+Its peer dependencies are `nextly` and `@nextlyhq/plugin-sdk`, and while Nextly is in
+alpha the manifest pins `nextly` at the **matching lockstep version**: every publishable
+package ships on one train, so install the plugin and the core at the same version.
+
+The plugin also declares a compatibility range of `>=0.0.2-alpha.55` for the runtime
+check. That is a floor, not an invitation: it records the oldest core that exported
+everything the plugin imported at the time, and the import graph has moved since, so a
+deliberately older pairing can be refused by npm or fail to resolve at module load.
 
 ## Basic setup
 
@@ -48,12 +53,18 @@ Every field goes inside a single group named `seo`, so entries always expose the
 in one predictable place:
 
 ```ts
-entry.seo.metaTitle;
-entry.seo.metaDescription;
-entry.seo.ogImage;
-entry.seo.canonical;
-entry.seo.noindex;
+entry.seo?.metaTitle;
+entry.seo?.metaDescription;
+entry.seo?.ogImage;
+entry.seo?.canonical;
+entry.seo?.noindex;
 ```
+
+**Read the group defensively.** Adding the plugin to a collection that already has rows
+adds a nullable column, and those existing rows carry `null` until they are next saved. A
+bulk insert can omit it too, because that path does not apply nested defaults. So
+`entry.seo` is optional even though every field inside it is. Core's own
+`MetadataEntry` type declares it as `seo?: SeoMetaInput | null` for this reason.
 
 ### The default fields
 
@@ -110,15 +121,29 @@ Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKe
 
 ## The sitemap
 
-The plugin mounts one public route:
+The plugin mounts one public route. Plugin routes are namespaced under
+`/plugins/<plugin-name>` **relative to wherever the dynamic handler is mounted**, and the
+scaffolded app mounts it at `src/app/admin/api/[[...params]]/route.ts`, so in a default
+project the sitemap is served at:
 
 ```
-GET /api/plugins/@nextlyhq/plugin-seo/sitemap.xml
+GET /admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
 ```
+
+`/api/plugins/...` returns 404 unless the project has deliberately added a second
+catch-all there. Check where your own `createDynamicHandlers` route file sits if the URL
+above does not resolve.
 
 It lists the published entries of the configured collections, generated per request. There
 is no `next` dependency involved, which is what lets a headless consumer with no
 `app/sitemap.ts` read it.
+
+**One document, and the protocol bounds it.** Collection stops at **50,000 URLs**, or
+sooner if the serialized document would pass **50 MB**, because a single `<urlset>` past
+either is invalid. It stops rather than failing, so a site above those limits gets a
+sitemap that is quietly short. A corpus that large needs a sitemap **index** splitting it
+into several documents, which belongs to the delivery layer: Next.js `generateSitemaps()`
+is the usual answer, using the exported generators below for each shard.
 
 <Callout type="warn">
 **The sitemap is public and reads as the system.** It enumerates every published entry's
@@ -218,9 +243,18 @@ rather than a second implementation: `generateSitemap`, `buildSitemapUrls`,
 
 The plugin stores; core renders. `buildMetadata` reads the `seo` group and returns a Next.js
 `Metadata` object, and Open Graph, robots and hreflang come from there rather than from the
-plugin. The `buildMetadata` section of
-[Routing and SEO](/docs/guides/routing-and-seo) covers it, including what happens when a
-field is empty.
+plugin.
+
+<Callout type="warn">
+  **Populate `ogImage`, or the social image is silently dropped.** It is an
+  upload relation, so at `depth: 0` (the default for `createPublicContentRoute`)
+  it is an unresolved id rather than an object. `buildMetadata` only emits an
+  image when `seo.ogImage` is a populated record carrying a `url`, so the page
+  gets a title and a description, no image, and no error. Fetch the entry at a
+  depth that resolves the relation, or pass `fallback.image`.
+</Callout>
+The `buildMetadata` section of [Routing and SEO](/docs/guides/routing-and-seo)
+covers it, including what happens when a field is empty.
 
 ## Next steps
 
