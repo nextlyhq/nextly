@@ -482,6 +482,7 @@ export {
   type PluginRouteCaller,
   type PluginRouteContext,
   type PluginRouteHandler,
+  type PluginRouteMount,
   type Middleware,
   type RouteMethod,
   type ComponentPath,

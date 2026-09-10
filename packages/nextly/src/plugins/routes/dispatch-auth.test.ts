@@ -20,7 +20,7 @@ import {
 } from "../../auth/middleware";
 import type { PluginContext } from "../plugin-context";
 
-import { runPluginRoute } from "./dispatch";
+import { pluginRouteAuthRequired, runPluginRoute } from "./dispatch";
 import type { RouteMatch } from "./route-registry";
 import type { PluginRoute } from "./route-types";
 
@@ -81,6 +81,50 @@ describe("secure-by-default plugin route dispatch", () => {
         requestId: expect.any(String),
       }),
     });
+  });
+
+  /**
+   * The same refusal, decided from the declaration before anything has booted.
+   *
+   * A cold worker must not run database and plugin startup on behalf of a
+   * request it can already see will be refused -- and must not pay for that by
+   * answering differently. Before this, the cold request fell through to the
+   * built-in router's invalid-route 400, so the one call was answered 400 cold
+   * and 401 warm and a client debugging a missing token was told its URL was
+   * wrong.
+   *
+   * Compared against the warm answer rather than asserted on its own, because
+   * "these two agree" is the property, and two independent assertions of 401
+   * drift the moment either side's envelope changes.
+   */
+  it("refuses a cold request exactly as the booted route would", async () => {
+    reqAuth.mockResolvedValue({ statusCode: 401 } as never);
+    const secure = route({});
+
+    const warm = await runPluginRoute(req(), match(secure));
+    const cold = pluginRouteAuthRequired(req(), secure);
+
+    expect(cold.status).toBe(warm.status);
+    expect(cold.headers.get("content-type")).toBe(
+      warm.headers.get("content-type")
+    );
+
+    const [coldBody, warmBody] = (await Promise.all([
+      cold.json(),
+      warm.json(),
+    ])) as [
+      { error: Record<string, unknown> },
+      { error: Record<string, unknown> },
+    ];
+    // The request id differs per request by design; everything that describes
+    // WHAT was refused has to be identical.
+    expect({ ...coldBody.error, requestId: null }).toEqual({
+      ...warmBody.error,
+      requestId: null,
+    });
+    expect(coldBody.error.code).toBe("AUTH_REQUIRED");
+    // And no handler ran on either path.
+    expect(handlerCalls).toBe(0);
   });
 
   it("protected route runs with a mapped ctx.user when authenticated", async () => {
