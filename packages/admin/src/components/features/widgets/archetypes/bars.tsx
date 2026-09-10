@@ -19,19 +19,45 @@
  * @module components/features/widgets/archetypes/bars
  */
 
-import { ChartFrame } from "./chart-frame";
+import { ChartFrame, type ChartRow } from "./chart-frame";
 import { barFractions } from "./chart-scale";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /**
- * What a bucket with no value is called.
+ * What a bucket that stores no readable value is called, and how it is keyed.
  *
  * A null bucket is a real answer — "how many entries have no author" — and the
- * result carries it as a bucket in its own right rather than dropping it. It
- * needs a NAME to be drawn and to appear in the table, and an empty label would
- * read as a rendering fault.
+ * result carries it as a bucket in its own right rather than dropping it. So is
+ * an EMPTY STRING, which is a different answer: the column holds a value and
+ * that value is blank. They are named apart, because folding them together
+ * would report two groups as one.
+ *
+ * The identity is derived from the bucket rather than from what it is called.
+ * A grouped column holds arbitrary text, so a row whose stored value reads
+ * `(none)` would otherwise share both its label and its React key with the null
+ * bucket. The prefixes make that impossible: `null` and `empty` carry no
+ * payload, and every stored value is prefixed `v`, so no two distinct buckets
+ * can collide however they are spelled.
+ *
+ * Their LABELS can still coincide — no string can be reserved from a column of
+ * arbitrary text — so the placeholder rows are marked and drawn differently
+ * instead of relying on their wording to separate them.
  */
-const NO_VALUE_LABEL = "(none)";
+function bucketRow(value: string | null, count: number): ChartRow {
+  if (value === null) {
+    return { key: "null", label: "(none)", count, announce: "no value stored" };
+  }
+  if (value === "") {
+    return {
+      key: "empty",
+      label: "(empty)",
+      count,
+      announce: "an empty value",
+    };
+  }
+
+  return { key: `v${value}`, label: value, count };
+}
 
 export const barsAccepts: ArchetypeAccepts = definition => {
   if (definition.query) return undefined;
@@ -47,10 +73,9 @@ export const barsBody: ArchetypeBody = (result, definition) => {
     };
   }
 
-  const rows = result.buckets.map(bucket => ({
-    label: bucket.value ?? NO_VALUE_LABEL,
-    count: bucket.count,
-  }));
+  const rows = result.buckets.map(bucket =>
+    bucketRow(bucket.value, bucket.count)
+  );
 
   if (rows.length === 0) {
     return {
@@ -105,13 +130,17 @@ export const barsBody: ArchetypeBody = (result, definition) => {
               {text}
             </span>
             {rows.map((row, index) => (
-              <div key={row.label} className="flex flex-col gap-0.5">
+              <div key={row.key} className="flex flex-col gap-0.5">
                 <div className="flex min-w-0 items-baseline justify-between gap-2">
                   {/* Truncated with an accessible full value: a long author
                       name must not push the count off the card, and the title
                       attribute keeps the whole string reachable on hover. */}
                   <span
-                    className="truncate text-xs text-foreground"
+                    className={
+                      row.announce
+                        ? "truncate text-xs italic text-muted-foreground"
+                        : "truncate text-xs text-foreground"
+                    }
                     title={row.label}
                   >
                     {row.label}

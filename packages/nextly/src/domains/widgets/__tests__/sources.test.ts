@@ -111,6 +111,45 @@ describe("registerSource validation (M8)", () => {
     );
   });
 
+  it("refuses a bucketable flag that is not a boolean", () => {
+    // The flag decides whether a timeline read is REFUSED, and query
+    // validation refuses only the literal `false`. A source declaring the
+    // STRING `"false"` — legal in untyped JavaScript, and what a serialized
+    // source carries — would therefore advertise a date the read rejects, and
+    // the widget would fail on every load with nothing naming the cause.
+    expect(() =>
+      registerSource({
+        ...VALID_SOURCE,
+        fields: [
+          {
+            name: "publishedAt",
+            type: "date",
+            bucketable: "false" as unknown as boolean,
+          },
+        ],
+      })
+    ).toThrow(/bucketable flag that is not a boolean/);
+  });
+
+  it("CONTROL: accepts the flag when it IS a boolean, and when it is absent", () => {
+    // Without this, a check that refused every source carrying the flag would
+    // satisfy the case above while making the derived marking unusable.
+    expect(() =>
+      registerSource({
+        ...VALID_SOURCE,
+        id: "collection:marked",
+        fields: [{ name: "publishedAt", type: "date", bucketable: false }],
+      })
+    ).not.toThrow();
+    expect(() =>
+      registerSource({
+        ...VALID_SOURCE,
+        id: "collection:unmarked",
+        fields: [{ name: "publishedAt", type: "date" }],
+      })
+    ).not.toThrow();
+  });
+
   it("refuses an unknown kind", () => {
     expect(() =>
       registerSource({

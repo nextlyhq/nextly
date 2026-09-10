@@ -298,14 +298,24 @@ export function groupableFieldProblem(
   groupBy: unknown,
   opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
 ): Array<{ path: string; code: string; message: string }> | undefined {
-  // `undefined` and `null` both mean "no group key was given", and an empty
-  // string is the same absence spelled differently. Anything else non-string is
-  // MALFORMED, and is refused here rather than reaching `.split` or
-  // `toSnakeCase` -- whose `.replace` throws a raw `TypeError` the calling
-  // service catches as an unclassified 500. Checked BEFORE the absence test,
-  // because `0`, `false` and `NaN` are falsy AND wrong: treating them as absent
-  // let them through to exactly the crash this exists to replace.
-  if (groupBy === undefined || groupBy === null) return undefined;
+  // `undefined` means "no group key was given", and an empty string is the same
+  // absence spelled differently. Anything else non-string is MALFORMED, and is
+  // refused here rather than reaching `.split` or `toSnakeCase` -- whose
+  // `.replace` throws a raw `TypeError` the calling service catches as an
+  // unclassified 500. Checked BEFORE the absence test, because `0`, `false` and
+  // `NaN` are falsy AND wrong: treating them as absent let them through to
+  // exactly the crash this exists to replace.
+  //
+  // `null` is MALFORMED here rather than absent, and the difference is not a
+  // preference. Every read that consumes this decides absence with
+  // `groupBy === undefined`, so a `null` this waved through as "no key given"
+  // was still a key as far as they were concerned, and it reached `toSnakeCase`
+  // -- the crash this function exists to replace, arriving through the one
+  // value it excused. The API asks for a required string on both paths
+  // (`GroupArgs.groupBy`, `TimeseriesArgs.dateField`), so no caller can mean
+  // "absent" by writing `null`; only an untyped one reaches here with it, and a
+  // named refusal is what it should get.
+  if (groupBy === undefined) return undefined;
   if (typeof groupBy !== "string") {
     return [
       {

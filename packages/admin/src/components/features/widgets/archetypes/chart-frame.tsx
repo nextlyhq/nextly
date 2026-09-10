@@ -29,6 +29,40 @@
 
 import { useId, type ReactNode } from "react";
 
+/**
+ * One row behind a chart: its identity, its label, and its number.
+ *
+ * `key` is kept APART from `label` because a grouped column holds arbitrary
+ * strings, so no label is safe to identify a row by. A bucket whose value is
+ * literally the placeholder text would share a React key with the null bucket,
+ * and two rows under one key is a reconciliation defect rather than a cosmetic
+ * one — React keeps one of them and the counts stop belonging to the rows they
+ * are drawn beside.
+ */
+export interface ChartRow {
+  /** Unique within one result, derived from the bucket rather than its text. */
+  key: string;
+  label: string;
+  count: number;
+  /**
+   * What a placeholder row is ANNOUNCED as, when it stands in for a value.
+   *
+   * Present only for a row whose label names the absence of a value rather than
+   * a value. Styling alone was not enough and reads as if it were: italic and
+   * muted separate the null bucket from a stored `(none)` on screen, and a
+   * screen reader announces both as "(none)" — so the readers who most need the
+   * distinction were the ones not given it.
+   *
+   * Spoken as a description instead — "no value stored" — which is a different
+   * utterance from any label a column is likely to hold. Not a guarantee: no
+   * string can be reserved from a column of arbitrary text, so a stored value
+   * spelled exactly like this description would still coincide. That case is
+   * accepted rather than papered over; what is fixed is that the placeholder
+   * now says what it is instead of relying on a colour.
+   */
+  announce?: string;
+}
+
 export interface ChartFrameProps {
   /** What the chart shows, announced in place of the shapes. */
   title: string;
@@ -37,7 +71,7 @@ export interface ChartFrameProps {
   /** Heading for the label column of the table. */
   labelHeading: string;
   /** The rows behind the picture, in the order they are drawn. */
-  rows: ReadonlyArray<{ label: string; count: number }>;
+  rows: ReadonlyArray<ChartRow>;
   /** Said above the table when the series is not the whole answer. */
   note?: string;
   /**
@@ -114,15 +148,41 @@ export function ChartFrame({
               </tr>
             </thead>
             <tbody>
+              {/* The separator token at full strength, matching the shared table
+                  primitive every other table already uses. Drawn at half alpha
+                  it was a call-site variant the contrast suite flags: faint
+                  alpha borders are what that guard polices, and this one
+                  measured 1.11:1 against the page surface.
+
+                  Full strength is NOT a claim that the line clears 3:1 —
+                  `theme.css` records `--nx-border` as deliberately below that
+                  minimum to keep the palette's light border weight, and
+                  `contrast/accepted.ts` is where those pairings are held. What
+                  this fixes is a one-off that was both fainter than the token
+                  and inconsistent with every other table in the product. */}
               {rows.map(row => (
-                <tr key={row.label} className="border-b border-border/50">
+                <tr key={row.key} className="border-b border-border">
                   {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
                   <th
                     scope="row"
-                    className="py-1 pr-2 text-left font-normal text-foreground"
+                    className={
+                      row.announce
+                        ? "py-1 pr-2 text-left font-normal italic text-muted-foreground"
+                        : "py-1 pr-2 text-left font-normal text-foreground"
+                    }
                   >
-                    {row.label}
+                    {row.announce ? (
+                      <>
+                        {/* The drawn text is hidden from the reader and the
+                            spoken one from the screen, so the row has ONE name
+                            in each medium rather than both read in sequence. */}
+                        <span aria-hidden="true">{row.label}</span>
+                        <span className="sr-only">{row.announce}</span>
+                      </>
+                    ) : (
+                      row.label
+                    )}
                   </th>
                   <td className="py-1 text-right tabular-nums text-foreground">
                     {row.count.toLocaleString()}
