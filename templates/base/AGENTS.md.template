@@ -147,6 +147,33 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   If you are unsure whether a collection has read rules, do not cache it. A
   missing cache is slow; a shared one leaks.
 
+## Which Nextly this is, and where its docs are
+
+An agent working here will otherwise answer from whatever it remembers of some
+other version. Ask the project instead:
+
+```bash
+{{execCommand}} nextly --version      # the running core version
+```
+
+That is the same version the plugin resolver validates a plugin's `nextly`
+range against, so a compatibility answer and a reported version cannot
+disagree. The dependency range this project pins is in `package.json` under
+`nextly`; the resolved version is what the command above prints.
+
+**The authoritative documentation is <https://nextlyhq.com/docs>.** Two files
+are published for machine readers and are the ones to fetch:
+
+| file | what it is |
+| ---- | ---------- |
+| <https://nextlyhq.com/llms.txt> | the index — every documentation page, with a one-line summary |
+| <https://nextlyhq.com/llms-full.txt> | the same documentation as one file |
+
+Both are generated from the pages the site publishes, so they cannot describe a
+page that does not exist. Neither is version-stamped: they describe the CURRENT
+release, so check the version above before trusting a detail against an older
+pin.
+
 ## Conventions worth keeping
 
 - Server components read content directly; do not build an API route to fetch
