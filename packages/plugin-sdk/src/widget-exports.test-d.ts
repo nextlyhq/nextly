@@ -11,7 +11,10 @@
  * Using each export in a type position makes the compiler error if any is
  * missing.
  */
+import { WIDGET_CONDITIONS, WIDGET_LIFECYCLES } from "@nextlyhq/plugin-sdk";
 import type {
+  WidgetLifecycle,
+  WidgetCondition,
   WidgetDefinition,
   WidgetQuery,
   WidgetSize,
@@ -47,5 +50,20 @@ const _op: WidgetOp = "count";
 void _height;
 void _field;
 void _op;
+
+// The lifecycle pair, both halves. `WidgetDefinition.lifecycle` is a
+// `WidgetLifecycle` and `visibleWhen` a `WidgetCondition`, so an author who
+// cannot name them cannot annotate a declaration they write. The CONSTANTS
+// travel too -- a closed set is what an options UI enumerates, and enumerating
+// it by retyping the literals is a copy that stops matching when the set grows.
+const _lifecycle: WidgetLifecycle = "conditional";
+const _condition: WidgetCondition = "content:empty";
+const _vocabulary: readonly string[] = [
+  ...WIDGET_LIFECYCLES,
+  ...WIDGET_CONDITIONS,
+];
+void _lifecycle;
+void _condition;
+void _vocabulary;
 
 export type { _WidgetSurface };

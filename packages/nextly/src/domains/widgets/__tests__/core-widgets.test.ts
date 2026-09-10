@@ -98,6 +98,26 @@ describe("core widget definitions", () => {
    * of these hides a card every authenticated admin can see today, which is the
    * behaviour change that docblock exists to prevent.
    */
+  it("offers the get-started card only while there is nothing to look at", () => {
+    // The card used to hide ITSELF: it was placed, given an order, and then
+    // rendered nothing once seeding was done -- so the arrangement reserved a
+    // slot for a card drawing nothing. The host now answers the part it can,
+    // and the declaration is where that is stated.
+    const seed = CORE_WIDGETS.find(w => w.id === "core/seed-demo-content");
+    expect(seed?.lifecycle).toBe("conditional");
+    expect(seed?.visibleWhen).toBe("content:empty");
+  });
+
+  it("keeps every OTHER core card permanent", () => {
+    // The control. A conversion that made the whole list conditional would
+    // satisfy the case above while emptying the dashboard, and nothing in that
+    // assertion could tell the difference.
+    const conditional = CORE_WIDGETS.filter(
+      w => w.lifecycle === "conditional"
+    ).map(w => w.id);
+    expect(conditional).toEqual(["core/seed-demo-content"]);
+  });
+
   it("gates no card that predates the grid", () => {
     const gated = CORE_WIDGETS.filter(
       widget => widget.requiredPermission !== undefined

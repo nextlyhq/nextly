@@ -258,6 +258,15 @@ export type {
   WidgetSize,
   WidgetChrome,
 } from "./domains/widgets/definition";
+// The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
+// leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
+// and without it the two fields have types no config author can write down.
+export {
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
+  type WidgetLifecycle,
+  type WidgetCondition,
+} from "./domains/widgets/lifecycle";
 export type { WidgetQuery } from "./domains/widgets/query";
 // A VALUE, and for the same reason as the batch limit below: the admin resolves
 // a contributed widget's deprecated `size` alias into the enum, and so does the
