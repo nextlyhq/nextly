@@ -52,11 +52,19 @@ export class DocumentLockService {
    * repository implements by replacing the claim rather than by deleting and
    * re-taking it, so the displaced holder's next renew reports `lost` with the
    * new holder attached and their editor can name who took over.
+   *
+   * `requestAccess` is the courtesy at the other end of that scale: leave word
+   * that this caller is waiting, and change nothing. It is answered only when
+   * the document is held, it moves no claim, and the holder learns of it on the
+   * heartbeat they were already making.
    */
   async acquire(
     ref: DocumentRef,
     claimant: DocumentLockClaimant,
-    options?: { readonly takeover?: boolean }
+    options?: {
+      readonly takeover?: boolean;
+      readonly requestAccess?: boolean;
+    }
   ): Promise<AcquireDocumentLockOutcome> {
     return await acquireDocumentLock(this.adapter, ref, claimant, options);
   }
