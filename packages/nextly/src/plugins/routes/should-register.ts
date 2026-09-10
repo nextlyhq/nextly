@@ -1,5 +1,5 @@
 /**
- * Whether THIS request could reach a plugin route that is not registered yet.
+ * Whether THIS request could reach a plugin route, answered from the config.
  *
  * Plugin routes are registered during service initialisation, and that is lazy.
  * An app wired through `createDynamicHandlers({ config })` has an empty registry
@@ -13,11 +13,20 @@
  * to be about this request: does some declared, enabled route match the method
  * and path in front of us?
  *
- * Answered from the config alone, using the matcher's own grammar and its own
- * tie-break, so no boot is needed to decide whether to boot -- and so the route
- * this reaches is the route the warm registry would reach. Asked PER MOUNT,
- * because the two are consulted at different points in the request and a
- * decision that pooled them would boot for a path the built-in router serves.
+ * Answered using the matcher's own grammar and its own tie-break, so no boot is
+ * needed to decide whether to boot, and so the route this reaches is the route
+ * the warm registry would reach. Asked PER MOUNT, because the two are consulted
+ * at different points in the request and a decision that pooled them would boot
+ * for a path the built-in router serves.
+ *
+ * It does NOT ask whether boot has finished. That belongs to
+ * `ensureServicesInitialized`, which holds the single-flight latch and the boot
+ * migration gate. This module once shortcut on a populated route registry, and
+ * a populated registry is an intermediate state of boot rather than the end of
+ * one: `initializePlugins` fills it well before `registerServices` seeds
+ * permissions, runs user-extension setup and settles migrations. A second
+ * request arriving in that window read the count, skipped the latch, and ran a
+ * handler against a half-built runtime.
  *
  * @module plugins/routes/should-register
  */
@@ -70,6 +79,7 @@ function declaredFor(
 ): { plugin: RouteContributor; route: PluginRoute; segments: string[] }[] {
   const declared = [];
   for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
     for (const route of plugin.contributes?.routes ?? []) {
       if (route.method !== method) continue;
       if ((route.mount ?? "plugin") !== mount) continue;
@@ -101,42 +111,56 @@ function mountCouldReach(mount: PluginRouteMount, path: string): boolean {
   return splitPath(path)[0] === PLUGIN_NAMESPACE_SEGMENT;
 }
 
+/**
+ * Whether anything here could change the route set during initialisation.
+ *
+ * Read across EVERY plugin, disabled included, because
+ * `applyPluginConfigTransformers` runs `setup` for every plugin that has one
+ * without consulting `enabled`. A disabled plugin's transformer can add routes,
+ * or enable the plugin that owns them, so filtering the disabled out first
+ * answers a question about a config that is not the one boot will build.
+ */
+function couldTransformRoutes(plugins: readonly RouteContributor[]): boolean {
+  return plugins.some(plugin => typeof plugin.setup === "function");
+}
+
 export function pluginRouteBootDecision(
-  registeredCount: number,
   plugins: readonly RouteContributor[] | undefined,
   request: BootDecisionRequest,
   mount: PluginRouteMount
 ): PluginRouteBootDecision {
-  // Already filled: every request after the first, which is nearly all of them.
-  // The registry answers from here on, including the 401 a secure route owes an
-  // anonymous caller, so there is nothing for this to decide.
-  if (registeredCount > 0) return SKIP;
+  const all = plugins ?? [];
 
   if (!mountCouldReach(mount, request.path)) return SKIP;
-
-  const enabled = (plugins ?? []).filter(plugin => plugin.enabled !== false);
 
   // A `setup` transformer runs during initialisation and may add, replace or
   // alter routes, so what a plugin declares is not the whole set. Only running
   // it can say, which is the thing being decided, so an app that has one boots
   // and this stops claiming to know. No in-tree plugin does, so the precise
   // path below is the one almost every app takes.
-  if (enabled.some(plugin => typeof plugin.setup === "function")) return BOOT;
+  if (couldTransformRoutes(all)) return BOOT;
 
   const selected = selectMostSpecific(
-    declaredFor(enabled, request.method, mount),
+    declaredFor(all, request.method, mount),
     declared => declared.segments,
     splitPath(request.path)
   );
   if (selected === null) return SKIP;
+
+  const route = selected.candidate.route;
+  if (route.public === true || request.hasCredential) return BOOT;
+
+  // A permission resolver names one of the plugin's own collections, so it can
+  // only be computed against a booted `ctx.self`. Warm dispatch runs it BEFORE
+  // authenticating and fail-closes to 403 when it throws; refusing 401 from
+  // here would hide a broken gate behind a missing credential, and change the
+  // answer the moment unrelated traffic warmed the process.
+  if (typeof route.requiredPermission === "function") return BOOT;
 
   // A secure route answers 401 to a caller carrying nothing, and that answer
   // needs no database. Booting for it would hand an anonymous caller a cold
   // start on every protected endpoint it can name -- but simply not booting
   // leaves the request to the invalid-route 400, so the same call is refused
   // two different ways depending on whether a worker happened to be warm.
-  if (selected.candidate.route.public === true || request.hasCredential) {
-    return BOOT;
-  }
-  return { kind: "authRequired", route: selected.candidate.route };
+  return { kind: "authRequired", route };
 }

@@ -13,6 +13,9 @@
  *
  * @module plugins/routes/should-register
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { pluginRouteBootDecision } from "./should-register";
@@ -50,7 +53,6 @@ describe("whether to fill the plugin registry first", () => {
   it("boots for a request a rooted route would answer", () => {
     expect(
       pluginRouteBootDecision(
-        0,
         plugins,
         {
           method: "POST",
@@ -65,7 +67,6 @@ describe("whether to fill the plugin registry first", () => {
   it("boots for a request a namespaced route would answer", () => {
     expect(
       pluginRouteBootDecision(
-        0,
         plugins,
         {
           method: "GET",
@@ -83,7 +84,6 @@ describe("whether to fill the plugin registry first", () => {
     // database, or scanning it is a way to force startup work.
     expect(
       pluginRouteBootDecision(
-        0,
         plugins,
         { method: "GET", path: "/garbage", hasCredential: true },
         "root"
@@ -94,7 +94,6 @@ describe("whether to fill the plugin registry first", () => {
   it("does NOT boot when the method is the only thing that differs", () => {
     expect(
       pluginRouteBootDecision(
-        0,
         plugins,
         {
           method: "GET",
@@ -122,7 +121,6 @@ describe("whether to fill the plugin registry first", () => {
     ] as never;
     expect(
       pluginRouteBootDecision(
-        0,
         disabled,
         {
           method: "POST",
@@ -134,27 +132,56 @@ describe("whether to fill the plugin registry first", () => {
     ).toEqual({ kind: "skip" });
   });
 
-  it("does not boot once the registry holds anything", () => {
-    // Every request after the first. An await in front of the match on the hot
-    // path would buy nothing, and the warm registry owes the 401 itself.
-    expect(
+  /**
+   * This used to shortcut on a populated route registry, which is not the same
+   * question. `initializePlugins` fills that registry well before
+   * `registerServices` finishes seeding permissions and settling migrations, so
+   * a second request arriving in that window read a positive count, skipped the
+   * single-flight latch, and ran its handler against a half-built runtime.
+   *
+   * Whether boot has finished belongs to `ensureServicesInitialized`, which
+   * holds the latch. This decides only whether a route could answer, so the
+   * same config and request give the same verdict at any point during boot.
+   * There is no longer a state it could read at the wrong moment.
+   */
+  it("gives one verdict for one request, whatever boot is doing", () => {
+    const ask = () =>
       pluginRouteBootDecision(
-        3,
         plugins,
         {
           method: "POST",
           path: "/forms/contact/submit",
-          hasCredential: false,
+          hasCredential: true,
         },
         "root"
-      )
-    ).toEqual({ kind: "skip" });
+      );
+
+    expect(ask()).toEqual({ kind: "boot" });
+    expect(ask()).toEqual(ask());
+  });
+
+  /**
+   * The invariant behind the verdict above, stated where re-adding a shortcut
+   * would trip it. Any read of the registry here is a read of boot's own
+   * intermediate state: it is populated by `initializePlugins`, long before
+   * `registerServices` finishes. The completion signal lives with the latch, in
+   * `ensureServicesInitialized`, and this module must not grow a second opinion
+   * about it.
+   */
+  it("does not read the route registry to decide", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./should-register.ts", import.meta.url)),
+      "utf8"
+    );
+
+    // The control: the file was actually found and is the module in question.
+    expect(source).toContain("export function pluginRouteBootDecision");
+    expect(source).not.toContain("getPluginRouteRegistry");
   });
 
   it("does not boot for an app that declares no routes", () => {
     expect(
       pluginRouteBootDecision(
-        0,
         [],
         { method: "GET", path: "/anything", hasCredential: true },
         "root"
@@ -162,7 +189,6 @@ describe("whether to fill the plugin registry first", () => {
     ).toEqual({ kind: "skip" });
     expect(
       pluginRouteBootDecision(
-        0,
         undefined,
         { method: "GET", path: "/anything", hasCredential: true },
         "root"
@@ -179,7 +205,6 @@ describe("scoped to the mount being consulted", () => {
   it("does not reach a root route from the namespaced pass", () => {
     expect(
       pluginRouteBootDecision(
-        0,
         publicPlugins,
         {
           method: "POST",
@@ -194,7 +219,6 @@ describe("scoped to the mount being consulted", () => {
   it("does not reach a namespaced route from the root pass", () => {
     expect(
       pluginRouteBootDecision(
-        0,
         plugins,
         {
           method: "GET",
@@ -218,12 +242,37 @@ describe("scoped to the mount being consulted", () => {
     ] as never;
     expect(
       pluginRouteBootDecision(
-        0,
         withSetup,
         { method: "GET", path: "/collections", hasCredential: false },
         "plugin"
       )
     ).toEqual({ kind: "skip" });
+  });
+
+  /**
+   * `applyPluginConfigTransformers` runs `setup` for every plugin that declares
+   * one, without consulting `enabled` - and an existing integration test
+   * requires exactly that. So a DISABLED plugin's transformer still runs, and
+   * can add routes or enable the plugin that owns them. Filtering the disabled
+   * out before looking for transformers answers a question about a config boot
+   * is not going to build.
+   */
+  it("boots for a transformer on a DISABLED plugin", () => {
+    const disabledSetup = [
+      {
+        name: "@acme/x",
+        enabled: false,
+        setup: () => ({}),
+        contributes: { routes: [] },
+      },
+    ] as never;
+    expect(
+      pluginRouteBootDecision(
+        disabledSetup,
+        { method: "GET", path: "/anything-at-all", hasCredential: false },
+        "root"
+      )
+    ).toEqual({ kind: "boot" });
   });
 
   it("boots when a setup transformer could add the route", () => {
@@ -237,7 +286,6 @@ describe("scoped to the mount being consulted", () => {
     ] as never;
     expect(
       pluginRouteBootDecision(
-        0,
         withSetup,
         { method: "GET", path: "/anything-at-all", hasCredential: false },
         "root"
@@ -254,7 +302,6 @@ describe("a secure route a caller brought nothing for", () => {
     // would leave the request to the invalid-route 400, answering the same call
     // 400 cold and 401 warm.
     const decision = pluginRouteBootDecision(
-      0,
       plugins,
       {
         method: "GET",
@@ -270,13 +317,79 @@ describe("a secure route a caller brought nothing for", () => {
     );
   });
 
+  /**
+   * A resolver-valued `requiredPermission` names one of the plugin's own
+   * collections, so it can only be computed against a booted `ctx.self`. Warm
+   * dispatch runs it BEFORE authenticating and fail-closes to 403 when it
+   * throws. Refusing 401 from here would hide a broken gate behind a missing
+   * credential, and flip the answer as soon as unrelated traffic warmed the
+   * process.
+   */
+  it("boots rather than refusing when the gate is a resolver", () => {
+    const resolverGated = [
+      {
+        name: "@acme/forms",
+        contributes: {
+          routes: [
+            {
+              method: "GET",
+              path: "/export",
+              requiredPermission: () => "create-patterns",
+            },
+          ],
+        },
+      },
+    ] as never;
+    expect(
+      pluginRouteBootDecision(
+        resolverGated,
+        {
+          method: "GET",
+          path: "/plugins/@acme/forms/export",
+          hasCredential: false,
+        },
+        "plugin"
+      )
+    ).toEqual({ kind: "boot" });
+  });
+
+  it("still refuses when the gate is a fixed slug", () => {
+    // The control. A fixed slug cannot throw, so nothing is hidden by deciding
+    // here, and the cold start an anonymous caller could force is worth more
+    // than the boot.
+    const slugGated = [
+      {
+        name: "@acme/forms",
+        contributes: {
+          routes: [
+            {
+              method: "GET",
+              path: "/export",
+              requiredPermission: "export-submissions",
+            },
+          ],
+        },
+      },
+    ] as never;
+    expect(
+      pluginRouteBootDecision(
+        slugGated,
+        {
+          method: "GET",
+          path: "/plugins/@acme/forms/export",
+          hasCredential: false,
+        },
+        "plugin"
+      ).kind
+    ).toBe("authRequired");
+  });
+
   it("boots a PUBLIC route for a caller carrying nothing", () => {
     // The control. A public route is meant to be reached without credentials,
     // so refusing to boot for one would make it permanently unreachable on a
     // cold worker, which is the defect this predicate exists to prevent.
     expect(
       pluginRouteBootDecision(
-        0,
         publicPlugins,
         {
           method: "POST",
@@ -313,7 +426,6 @@ describe("reaches the same route the warm registry would", () => {
   it("prefers the literal route over an earlier capture", () => {
     expect(
       pluginRouteBootDecision(
-        0,
         overlapping,
         { method: "GET", path: "/items/count", hasCredential: false },
         "root"
@@ -323,7 +435,6 @@ describe("reaches the same route the warm registry would", () => {
 
   it("still reaches the capture for a path only it matches", () => {
     const decision = pluginRouteBootDecision(
-      0,
       overlapping,
       { method: "GET", path: "/items/42", hasCredential: false },
       "root"

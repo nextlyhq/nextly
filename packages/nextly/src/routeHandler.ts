@@ -1054,6 +1054,14 @@ async function resolveAuthorization(
  *
  * Called once per mount, at the point that mount is consulted, so the decision
  * to boot is never made on behalf of a pass whose turn has not come.
+ *
+ * A matching route always goes through `ensureServicesInitialized`, warm or
+ * cold. Whether boot has FINISHED is that function's own question, and it holds
+ * the single-flight latch and the migration gate that answer it; a cheaper
+ * check here read the route registry, which `initializePlugins` fills long
+ * before the rest of registration completes, so a second request arriving in
+ * that window ran its handler against a half-built runtime. On a booted process
+ * the call settles an already-resolved latch.
  */
 async function reachPluginRoute(
   req: Request,
@@ -1062,7 +1070,6 @@ async function reachPluginRoute(
   mount: PluginRouteMount
 ): Promise<Response | null> {
   const decision = pluginRouteBootDecision(
-    getPluginRouteRegistry().list().length,
     getHandlerConfig()?.plugins,
     {
       method: httpMethod,

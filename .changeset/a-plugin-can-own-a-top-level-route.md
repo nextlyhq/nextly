@@ -46,5 +46,10 @@ merely resembles a namespaced one never competes with it for a request.
 A route is also refused at boot when it is rooted somewhere the request never
 arrives, rather than registering and silently answering nothing.
 
+A request that could reach a plugin route always waits for initialisation to
+finish, not merely for the routes to appear. The route registry fills partway
+through startup, so a second request arriving in that window could previously
+run a handler before permissions were seeded and migrations had settled.
+
 Nothing changes for a route that does not ask. The default is unchanged, so
 every existing plugin route stays where it is.
