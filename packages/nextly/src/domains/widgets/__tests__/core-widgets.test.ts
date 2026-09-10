@@ -105,7 +105,10 @@ describe("core widget definitions", () => {
     // and the declaration is where that is stated.
     const seed = CORE_WIDGETS.find(w => w.id === "core/seed-demo-content");
     expect(seed?.lifecycle).toBe("conditional");
-    expect(seed?.visibleWhen).toBe("content:empty");
+    // BOTH, and the pair is the point: `content:empty` alone left a reader who
+    // declined the offer still holding the slot, because declining does not
+    // create content.
+    expect(seed?.visibleWhen).toEqual(["content:empty", "seed:unanswered"]);
   });
 
   it("offers the checklist only while setup is outstanding", () => {

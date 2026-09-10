@@ -14,9 +14,14 @@
  * @module domains/widgets/conditions
  */
 
+import { getService } from "../../di";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
-import { isWidgetCondition, type WidgetCondition } from "./lifecycle";
+import {
+  declaredConditions,
+  isWidgetCondition,
+  type WidgetCondition,
+} from "./lifecycle";
 import { onboardingIsIncomplete } from "./onboarding";
 import { readerHasContent } from "./reader-content";
 
@@ -38,6 +43,33 @@ async function contentIsEmpty(caller: ReadCaller): Promise<boolean> {
 }
 
 /**
+ * Whether the offer of demo content is still open.
+ *
+ * Reads the two flags the seed card already writes, and takes NO caller: the
+ * answer is a property of the install rather than of the reader. That is the
+ * one place this file departs from `content:empty`'s reader-scoping, and it is
+ * deliberate — whether a project accepted demo data is recorded once, and a
+ * second admin arriving after the first declined should not be offered it
+ * again. Nothing about rows is disclosed by it, only that a setup question was
+ * answered.
+ *
+ * Either flag settles it. `completedAt` and `skippedAt` are the two ways the
+ * offer stops being open, and a card asking this wants to know whether to make
+ * the offer, not which way it went.
+ */
+async function seedIsUnanswered(): Promise<boolean> {
+  // Reached through the container rather than the Direct API: `meta` lives on
+  // the INSTANCE, and `requireNextly()` answers with the Direct API's own
+  // `Nextly` -- a different type of the same name, which has no meta accessor.
+  const meta = getService("metaService");
+  const [completedAt, skippedAt] = await Promise.all([
+    meta.get<string>("seed.completedAt"),
+    meta.get<string>("seed.skippedAt"),
+  ]);
+  return !completedAt && !skippedAt;
+}
+
+/**
  * One arm per condition, exhaustively.
  *
  * A `Record` keyed by the union rather than a `switch` with a default: a
@@ -51,6 +83,7 @@ const EVALUATORS: Record<
 > = {
   "content:empty": contentIsEmpty,
   "onboarding:incomplete": onboardingIsIncomplete,
+  "seed:unanswered": seedIsUnanswered,
 };
 
 /**
@@ -117,7 +150,11 @@ export function conditionsNeeded<T extends ConditionalDeclaration>(
   const needed = new Set<WidgetCondition>();
   for (const widget of widgets) {
     if (widget.lifecycle !== "conditional") continue;
-    if (isWidgetCondition(widget.visibleWhen)) needed.add(widget.visibleWhen);
+    for (const condition of declaredConditions(widget.visibleWhen)) {
+      // A Set, so two cards naming the same condition -- or one card naming it
+      // twice -- still cost one evaluation.
+      if (isWidgetCondition(condition)) needed.add(condition);
+    }
   }
   return needed;
 }
@@ -140,8 +177,18 @@ export function widgetsHeldByVerdict<T extends ConditionalDeclaration>(
 ): T[] {
   return widgets.filter(widget => {
     if (widget.lifecycle !== "conditional") return true;
-    if (!isWidgetCondition(widget.visibleWhen)) return false;
-    return verdicts.get(widget.visibleWhen) === true;
+    const named = declaredConditions(widget.visibleWhen);
+    // Nothing named is not "no rule to fail": registration refuses it, so
+    // reaching here means a declaration that got past validation some other
+    // way, and a conditional card with no rule is one that shows always.
+    if (named.length === 0) return false;
+    // EVERY condition, not any. A card naming several is offered only while all
+    // of them hold, so declining one offer removes the card even while another
+    // condition still holds.
+    return named.every(
+      condition =>
+        isWidgetCondition(condition) && verdicts.get(condition) === true
+    );
   });
 }
 

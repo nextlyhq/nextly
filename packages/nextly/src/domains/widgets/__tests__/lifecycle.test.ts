@@ -84,11 +84,46 @@ describe("a conditional widget", () => {
   });
 
   it("refuses a condition that is not a string at all", () => {
-    for (const value of [0, false, null, {}, ["content:empty"]]) {
+    for (const value of [0, false, null, {}]) {
       expect(lifecycleProblem(conditional({ visibleWhen: value }))).toContain(
         "visibleWhen"
       );
     }
+  });
+
+  it("accepts SEVERAL conditions, which the card must satisfy together", () => {
+    expect(
+      lifecycleProblem(
+        conditional({ visibleWhen: ["content:empty", "seed:unanswered"] })
+      )
+    ).toBeUndefined();
+  });
+
+  it("refuses an EMPTY list as firmly as an absent one", () => {
+    // 🔴 A card declaring `visibleWhen: []` has named no rule, so every
+    // condition it must satisfy is vacuously satisfied -- a conditional widget
+    // that is in fact permanent, which is the one thing the lifecycle promises
+    // it is not. It reaches the rule with the same length as an absent field
+    // and is refused the same way.
+    expect(lifecycleProblem(conditional({ visibleWhen: [] }))).toContain(
+      "must name the condition"
+    );
+  });
+
+  it("refuses a list where any member is unknown", () => {
+    // One good name does not license the rest: the card is offered only while
+    // EVERY condition holds, so a name nothing answers would hide it forever.
+    expect(
+      lifecycleProblem(
+        conditional({ visibleWhen: ["content:empty", "billing:overdue"] })
+      )
+    ).toContain("billing:overdue");
+  });
+
+  it("refuses a list on a widget that never declared the lifecycle", () => {
+    expect(lifecycleProblem({ visibleWhen: ["content:empty"] })).toContain(
+      "only meaningful"
+    );
   });
 });
 

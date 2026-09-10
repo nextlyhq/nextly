@@ -71,6 +71,14 @@ export type WidgetLifecycle = (typeof WIDGET_LIFECYCLES)[number];
  * with content can still have onboarding outstanding, and a reader who has
  * written nothing may have finished every step available to them.
  *
+ * `seed:unanswered` — nobody has accepted or declined the offer of demo
+ * content. The one condition here that is deliberately about the INSTALL
+ * rather than the reader, and the name says `seed` rather than `content` for
+ * that reason: whether a project took the demo data is a property of the
+ * project, recorded once in `nextly_meta`, and a second admin arriving after
+ * the first declined should not be offered it again. It discloses nothing
+ * about rows — only that a setup offer was answered.
+ *
  * Namespaced `subject:state` so a later condition about a different subject
  * cannot be mistaken for a variant of this one, and so the set stays readable
  * as it grows.
@@ -78,6 +86,7 @@ export type WidgetLifecycle = (typeof WIDGET_LIFECYCLES)[number];
 export const WIDGET_CONDITIONS = [
   "content:empty",
   "onboarding:incomplete",
+  "seed:unanswered",
 ] as const;
 export type WidgetCondition = (typeof WIDGET_CONDITIONS)[number];
 
@@ -137,31 +146,71 @@ function kindProblem(lifecycle: unknown): string | undefined {
 }
 
 /**
- * Whether the condition and the lifecycle agree, and whether the host knows it.
+ * Every condition a declaration names, as a list.
+ *
+ * A card may name one or several, and one is written as a bare string because
+ * that is what almost every card wants. Normalising here means the rules below
+ * and the filter both see one shape, rather than each carrying its own
+ * "string or array" branch that could disagree about the empty case.
+ */
+export function declaredConditions(visibleWhen: unknown): unknown[] {
+  if (visibleWhen === undefined) return [];
+  return Array.isArray(visibleWhen) ? [...visibleWhen] : [visibleWhen];
+}
+
+/**
+ * Where the first unknown condition sits, or -1.
+ *
+ * An INDEX rather than the value, because the value's type is `unknown` and
+ * `unknown | undefined` collapses back to `unknown` — leaving no way to say
+ * "every name was known" that a caller could tell apart from a name that
+ * happened to be `undefined`.
+ */
+function unknownConditionIndex(named: readonly unknown[]): number {
+  return named.findIndex(condition => !isWidgetCondition(condition));
+}
+
+/**
+ * Whether the conditions and the lifecycle agree, and whether the host knows
+ * them.
  *
  * The two directions are one rule: a conditional widget without a condition has
  * nothing to evaluate, and a condition without the lifecycle is a field nobody
  * reads. Separating them would let a declaration satisfy one and fail the other
  * silently.
+ *
+ * SEVERAL conditions are ANDed, and the card shows only while every one holds.
+ * The alternative reading — any of them — was rejected because it cannot express
+ * the case that motivated the list: a card offered while the install is empty
+ * AND the offer it makes has not been answered. Under "any", declining the offer
+ * would leave the card showing on the strength of the other condition, which is
+ * the behaviour the list exists to remove.
  */
 function conditionProblem(
   conditional: boolean,
   visibleWhen: unknown
 ): string | undefined {
+  const named = declaredConditions(visibleWhen);
   if (!conditional) {
-    return visibleWhen === undefined
+    return named.length === 0
       ? undefined
       : 'visibleWhen is only meaningful on a widget declaring lifecycle: "conditional"';
   }
-  if (visibleWhen === undefined) {
+  // An empty ARRAY is refused as firmly as an absent field, and reaches here as
+  // the same length. A card declaring `visibleWhen: []` has named no rule, so
+  // every condition it must satisfy is vacuously satisfied -- a conditional
+  // widget that is permanent, which is the one thing the lifecycle promises it
+  // is not.
+  if (named.length === 0) {
     return "a conditional widget must name the condition it shows under, as `visibleWhen`";
   }
-  if (isWidgetCondition(visibleWhen)) return undefined;
+  const at = unknownConditionIndex(named);
+  if (at === -1) return undefined;
   // The known set is NAMED in the refusal. An author who mistyped a condition,
   // and one who reached for a condition this release does not have, need
   // different next steps and the message cannot tell them apart -- so it shows
   // what is available and lets them see which of the two they are.
-  return `visibleWhen must be one of ${WIDGET_CONDITIONS.map(c => `"${c}"`).join(", ")}; received ${describe(visibleWhen)}`;
+  return `visibleWhen must name only ${WIDGET_CONDITIONS.map(c => `"${c}"`).join(", ")}; received ${describe(named[at])}`;
 }
 
 /**

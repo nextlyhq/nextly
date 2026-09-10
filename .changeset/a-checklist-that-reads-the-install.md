@@ -49,3 +49,21 @@ The first step is complete for everyone, and truthfully so — reaching the card
 means an account exists and they made it. A checklist that opens above zero is
 finished far more often than one that opens empty, and that head start is worth
 having only if it is true.
+
+A transient card can now name SEVERAL conditions, and is offered only while
+every one of them holds.
+
+The get-started card needed two, and neither answers alone: is there nothing to
+look at, and is the offer of demo content still open. Declining that offer
+creates no content, so the card kept its slot on the strength of the install
+still being empty — visible, drawing nothing, for a reader who had already said
+no. The two conditions are scoped differently on purpose: whether there is
+content to see is about the reader, while whether a project took the demo data
+is recorded once for the project, so a second admin is not offered it again
+after the first declined.
+
+The dashboard's last browser-stored dismissal is gone with it. A hook that
+derived onboarding steps in the browser and remembered dismissal in
+`localStorage` had no consumer left once the host started answering, and the
+types beside it described a checklist that no longer exists — including a step
+vocabulary listing five names none of which are detected any more.

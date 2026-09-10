@@ -22,7 +22,7 @@ import type { WidgetCondition } from "../lifecycle";
 interface Card {
   id: string;
   lifecycle?: string;
-  visibleWhen?: string;
+  visibleWhen?: string | readonly string[];
 }
 
 const permanent: Card = { id: "core/team" };
@@ -115,6 +115,70 @@ describe("which widgets are kept", () => {
       verdict(true)
     );
     expect(mixed.map(w => w.id)).toEqual([permanent.id, transient.id]);
+  });
+
+  it("keeps a card naming SEVERAL conditions only while every one holds", () => {
+    // 🔴 ANDed, not any. The case this exists for is a card offered while the
+    // install is empty AND its offer is unanswered: under "any", declining the
+    // offer would leave the card showing on the strength of emptiness, which is
+    // the behaviour the list was added to remove.
+    const pair: Card = {
+      id: "core/seed",
+      lifecycle: "conditional",
+      visibleWhen: ["content:empty", "seed:unanswered"],
+    };
+    const verdicts = (
+      empty: boolean,
+      unanswered: boolean
+    ): ReadonlyMap<WidgetCondition, boolean> =>
+      new Map([
+        ["content:empty", empty],
+        ["seed:unanswered", unanswered],
+      ] as const);
+
+    expect(widgetsHeldByVerdict([pair], verdicts(true, true))).toEqual([pair]);
+    expect(widgetsHeldByVerdict([pair], verdicts(true, false))).toEqual([]);
+    expect(widgetsHeldByVerdict([pair], verdicts(false, true))).toEqual([]);
+    expect(widgetsHeldByVerdict([pair], verdicts(false, false))).toEqual([]);
+  });
+
+  it("hides a card whose list holds one condition nobody answered", () => {
+    // Fail closed, per member. One answered condition does not carry a card
+    // whose other condition went unevaluated.
+    const pair: Card = {
+      id: "core/seed",
+      lifecycle: "conditional",
+      visibleWhen: ["content:empty", "seed:unanswered"],
+    };
+    expect(
+      widgetsHeldByVerdict([pair], new Map([["content:empty", true]]))
+    ).toEqual([]);
+  });
+
+  it("hides a card that names an EMPTY list", () => {
+    // Registration refuses it, so arriving here means a declaration that got
+    // past validation another way -- and a conditional card with no rule is one
+    // that shows always, which is what the lifecycle exists to stop.
+    const empty: Card = {
+      id: "core/none",
+      lifecycle: "conditional",
+      visibleWhen: [],
+    };
+    expect(widgetsHeldByVerdict([empty], verdict(true))).toEqual([]);
+  });
+
+  it("asks once for a condition two cards share through different shapes", () => {
+    // One card names it alone, the other inside a list. A set keyed on the NAME
+    // is what makes that one evaluation rather than two.
+    const needed = conditionsNeeded<Card>([
+      { id: "a", lifecycle: "conditional", visibleWhen: "content:empty" },
+      {
+        id: "b",
+        lifecycle: "conditional",
+        visibleWhen: ["content:empty", "seed:unanswered"],
+      },
+    ]);
+    expect([...needed].sort()).toEqual(["content:empty", "seed:unanswered"]);
   });
 
   it("preserves the order it was given", () => {
