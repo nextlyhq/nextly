@@ -692,6 +692,127 @@ describe('the "avoid" DOM id policy', () => {
   });
 });
 
+describe('the "restore" DOM id policy', () => {
+  /*
+   * The arm a SAVE uses. An insert renames an authored id only because the page
+   * it landed on already held that name, so the new one is a fact about that
+   * page; saving the copy back out has to put the authored one back or the
+   * library grows another suffix on every insert-save cycle.
+   */
+  it("puts back the id the map names, and leaves the rest alone", () => {
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "hero-7f3" }), node("b", { cssId: "aside" })],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    // Both in ONE copy, so this cannot pass by treating the policy as a
+    // whole-forest switch: the decision is per id.
+    expect(nodes[1].cssId).toBe("aside");
+  });
+
+  it("records only the id that moved", () => {
+    const { domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero-7f3" }), node("b", { cssId: "aside" })],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect([...domIds.entries()]).toEqual([["hero-7f3", "hero"]]);
+  });
+
+  it("follows a reference to the id it put back", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("a", { cssId: "hero-7f3" }),
+        node("p", {
+          attributes: { "aria-describedby": "hero-7f3" },
+          props: { href: "#hero-7f3" },
+        }),
+      ],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("hero");
+    expect((nodes[1].props as { href: string }).href).toBe("#hero");
+  });
+
+  it("leaves everything alone when the map is empty", () => {
+    const { nodes, domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero" })],
+      { restore: new Map<string, string>() }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(domIds.size).toBe(0);
+  });
+
+  /*
+   * A shadowed spelling is not the rendered id, so it does not move even when
+   * the map names it — the same rule the other policies follow, asserted here
+   * because a restore reaches for the map first and could answer before asking.
+   */
+  it("leaves a shadowed attribute id alone", () => {
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "actual", attributes: { id: "hero-7f3" } })],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].cssId).toBe("actual");
+    expect(nodes[0].attributes?.id).toBe("hero-7f3");
+  });
+
+  /*
+   * A REFERENCE WITHOUT THE NODE IT NAMES, which is the case the whole map is
+   * seeded for.
+   *
+   * A save works on a selection, and a selection may hold the node carrying
+   * `aria-describedby` while the node rendering that id stays behind. Nothing
+   * in this forest renders `hero-7f3`, so nothing asks what it should become —
+   * and without the map already in the memo the reference keeps a page-specific
+   * id, putting a pattern in the library that names an id existing on exactly
+   * one page.
+   *
+   * It is also the only assertion here that DISCRIMINATES. Where a node renders
+   * the id, two paths answer independently — the seeded memo and the copier's
+   * own lookup — so removing either leaves the other giving the right answer.
+   */
+  it("rewrites a reference whose target is not in the selection", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("p", {
+          attributes: { "aria-describedby": "hero-7f3" },
+          props: { href: "#hero-7f3" },
+        }),
+      ],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].attributes?.["aria-describedby"]).toBe("hero");
+    expect((nodes[0].props as { href: string }).href).toBe("#hero");
+  });
+
+  /*
+   * THE LIMIT OF A FLAT MAP, characterised rather than fixed here.
+   *
+   * A rename record belongs to the expansion that made it, and the map carries
+   * no note of which. A node that reached this forest by another route and
+   * happens to render the same id is restored with the rest — it is asked only
+   * whether the map holds the value, never whether the record governs it.
+   */
+  it("restores ANY node rendering a named id, whatever its origin", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("from-the-expansion", { cssId: "hero-7f3" }),
+        node("from-somewhere-else", { cssId: "hero-7f3" }),
+      ],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[1].cssId).toBe("hero");
+  });
+});
+
 describe("only the id a node RENDERS may be reminted", () => {
   it("leaves a shadowed attribute id alone, and the references to it", () => {
     // The node renders `actual`; its `attributes.id: "hero"` is overwritten and
