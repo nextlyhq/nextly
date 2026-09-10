@@ -71,10 +71,12 @@ const route: PluginRoute = {
   method: "PATCH",
   path: "/posts/:id",
   handler: async (req, ctx) => {
-    // A SESSION caller carries no scope at all, so there is nothing to narrow
-    // and nothing to give up. Guard before narrowing: `narrowScope` reads the
-    // grants off the scope, so handing it `undefined` is a crash rather than a
-    // refusal — and the refusal is what you meant.
+    // A SESSION caller carries no scope, so there is nothing to narrow. That is
+    // safe to pass on — `narrowScope` answers `undefined` for `undefined`, and a
+    // call with no scope resolves by the caller's own RBAC exactly as it would
+    // have. Refused here anyway, because THIS route is for API keys: a session
+    // reaching it would run unnarrowed, and the point of the narrowing is that
+    // this call is restricted whoever makes it.
     const scope = ctx.authenticatedScope;
     if (scope === undefined) {
       return Response.json({ error: "this route requires an API key" }, {
