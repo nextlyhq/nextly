@@ -28,14 +28,16 @@
 
 A dashboard card that only matters sometimes had to hide itself. The
 get-started card was placed in the grid, given an order, and then rendered
-nothing once seeding was done or declined — so the arrangement reserved a slot
-for a card drawing nothing, and the reason lived in a component rather than in
-the declaration.
+nothing once seeding was done — so the arrangement reserved a slot for a card
+drawing nothing, and the reason lived in a component rather than in the
+declaration.
 
-A widget can now declare that it is transient: the named condition it shows
-under, whether it sits above the ordinary order while visible, and whether a
-reader may end it early. The host evaluates the condition and stops offering
-the card when it lapses.
+A widget can now declare that it is transient: it names the condition it shows
+under, and the host stops offering the card once that condition lapses.
+Pinning and reader dismissal are not part of this release — a card cannot yet
+ask to sit above the ordinary order, and a reader cannot yet end one early —
+a reader who declines the get-started offer keeps its slot until the install
+has content.
 
 The condition is a NAME from a closed set the host owns, never a predicate or
 callback a widget supplies, so an onboarding surface cannot become the kind of

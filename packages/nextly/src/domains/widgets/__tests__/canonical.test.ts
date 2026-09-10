@@ -80,6 +80,41 @@ describe("the canonical widget set", () => {
     ).toHaveProperty("defaultHeight", "tall");
   });
 
+  it("keeps a CONTRIBUTED lifecycle the registration did not state", () => {
+    // 🔴 The collision path dropped it. A registration that says nothing about
+    // the lifecycle contributes no such fields, and the merge then returned the
+    // registration's summary alone -- so a contributed conditional card became
+    // permanent here and was offered forever, which is the one behaviour the
+    // lifecycle exists to remove.
+    registerWidget(registered({ id: "dup/one" }));
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        lifecycle: "conditional",
+        visibleWhen: "content:empty",
+      },
+    ]);
+    expect(merged[0]).toHaveProperty("lifecycle", "conditional");
+    expect(merged[0]).toHaveProperty("visibleWhen", "content:empty");
+  });
+
+  it("lets a registration OVERRIDE a contributed lifecycle, condition and all", () => {
+    // The pair moves together. A registration stating `"always"` has decided
+    // the question, and keeping the contributed condition beside it would leave
+    // a `visibleWhen` on a permanent card -- a field nothing reads, describing
+    // a rule that no longer applies.
+    registerWidget(registered({ id: "dup/one", lifecycle: "always" }));
+    const merged = canonicalWidgets([
+      {
+        id: "dup/one",
+        lifecycle: "conditional",
+        visibleWhen: "content:empty",
+      },
+    ]);
+    expect(merged[0]).toHaveProperty("lifecycle", "always");
+    expect(merged[0]).not.toHaveProperty("visibleWhen");
+  });
+
   it("does NOT inherit a contributed permission, matching the admin", () => {
     // The asymmetry is deliberate. The registry is the override channel, so a
     // registration that states no permission has stated that, and

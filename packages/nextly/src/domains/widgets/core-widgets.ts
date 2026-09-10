@@ -92,11 +92,15 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
      * order, and then rendered nothing -- so the arrangement reserved a slot
      * for a card drawing nothing and the reason lived in a component.
      *
-     * The host now answers the part it can: while this reader can see no
-     * content, the card is offered; once they can, it is not. The component
-     * keeps the finer state it alone knows -- whether seeding is available,
-     * running, or already finished -- which is a different question rather
-     * than a second answer to this one.
+     * The host answers one half: while this reader can see no content, the
+     * card is offered; once they can, it is not. The other half is a DECLINE,
+     * which `nextly_meta` records and this condition does not read -- so a
+     * reader who declined on an empty install still holds the slot, exactly as
+     * before. That residual is not folded into `content:empty`, and the reason
+     * is that conditions are evaluated once per NAME and shared by every widget
+     * asking: a plugin's card declaring `content:empty` would then vanish
+     * because someone dismissed a core onboarding offer. Ending a card early is
+     * a per-reader decision and belongs to dismissal, which nothing reads yet.
      */
     lifecycle: "conditional",
     visibleWhen: "content:empty",

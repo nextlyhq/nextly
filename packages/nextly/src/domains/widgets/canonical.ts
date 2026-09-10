@@ -139,8 +139,19 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
  * requires it and `validateWidgetDefinition` enforces it, so a registration
  * always states one.
  *
- * What is left is the two fields a registration may legally omit and a
- * contribution may legally state, and for those the contribution is read.
+ * What is left is the fields a registration may legally omit and a contribution
+ * may legally state, and for those the contribution is read.
+ *
+ * The LIFECYCLE falls back as a PAIR, and only as a pair. `visibleWhen` means
+ * nothing without `lifecycle: "conditional"` beside it, so taking one
+ * declaration's lifecycle with the other's condition would build a summary
+ * neither channel declared — and one no validation ever saw, since each
+ * declaration is checked on its own. A registration that states `"always"` has
+ * overridden a contributed condition deliberately, and is read that way; one
+ * that states no lifecycle has said nothing about the question, and the
+ * contribution's answer stands. Substituted rather than merged, a contributed
+ * conditional card became permanent here — offered forever, which is the
+ * behaviour the lifecycle exists to remove.
  */
 function mergeCanonical(
   contribution: CanonicalWidget,
@@ -149,12 +160,24 @@ function mergeCanonical(
   const defaultOrder = registration.defaultOrder ?? contribution.defaultOrder;
   const defaultHeight =
     registration.defaultHeight ?? contribution.defaultHeight;
+  const contributedLifecycle =
+    registration.lifecycle === undefined
+      ? {
+          ...(contribution.lifecycle === undefined
+            ? {}
+            : { lifecycle: contribution.lifecycle }),
+          ...(contribution.visibleWhen === undefined
+            ? {}
+            : { visibleWhen: contribution.visibleWhen }),
+        }
+      : {};
   return {
     // The registration wholesale first: id, `requiredPermission` and
     // `defaultSize` are its to state, including by stating nothing.
     ...registration,
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
+    ...contributedLifecycle,
   };
 }
 

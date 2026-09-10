@@ -518,6 +518,8 @@ export {
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
   WIDGET_OPS,
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
   TIMESERIES_INTERVALS,
   isTimeseriesInterval,
   registerWidget,
@@ -550,6 +552,8 @@ export {
   type WidgetOp,
   type WidgetPatch,
   type TimeseriesInterval,
+  type WidgetLifecycle,
+  type WidgetCondition,
 } from "./domains/widgets";
 
 // Value exports for the email provider contract. A plugin calls

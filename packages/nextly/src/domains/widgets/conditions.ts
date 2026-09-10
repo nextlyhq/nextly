@@ -172,25 +172,6 @@ interface ConditionalDeclaration {
 }
 
 /**
- * The widgets whose condition currently holds, with permanent ones untouched.
- *
- * A SEPARATE pass from the permission gate, deliberately. The two look alike —
- * both remove widgets from a list — and they answer different questions: the
- * gate decides what a reader may be TOLD EXISTS, and this decides what is
- * worth showing right now. Folding them together would make a lapsed
- * onboarding card indistinguishable from a refusal, and the next person
- * reading the filter would have no way to tell which rule dropped a card.
- *
- * Nothing is evaluated unless some widget asks for it: a dashboard of
- * permanent cards resolves an empty set and issues no reads at all.
- *
- * A condition this host cannot answer keeps its widget HIDDEN rather than
- * showing it. Registration already refuses an unknown name, so reaching here
- * means the vocabulary and the evaluators disagree — and a card shown on a
- * condition nobody evaluated is a card shown always, which is the failure this
- * whole mechanism exists to remove.
- */
-/**
  * The conditions this set of widgets actually asks about.
  *
  * Pure, and exported so the "asks nothing" case can be asserted directly: a

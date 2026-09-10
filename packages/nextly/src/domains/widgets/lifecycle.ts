@@ -70,6 +70,7 @@ export type WidgetLifecycle = (typeof WIDGET_LIFECYCLES)[number];
 export const WIDGET_CONDITIONS = ["content:empty"] as const;
 export type WidgetCondition = (typeof WIDGET_CONDITIONS)[number];
 
+const LIFECYCLE_SET: ReadonlySet<string> = new Set(WIDGET_LIFECYCLES);
 const CONDITION_SET: ReadonlySet<string> = new Set(WIDGET_CONDITIONS);
 
 /** Whether a value is a condition this host knows how to evaluate. */
@@ -107,10 +108,20 @@ function describe(value: unknown): string {
   return `a ${typeof value}`;
 }
 
-/** Whether the lifecycle names one of the two dispositions there are. */
+/**
+ * Whether the lifecycle names one of the dispositions there are.
+ *
+ * Membership is read from the vocabulary rather than spelled out, so the type
+ * and this boundary cannot come apart. Spelled out, a third disposition added
+ * to the tuple would be accepted by `WidgetDefinition` and named in the refusal
+ * below while registration still rejected it — a message listing the value it
+ * had just refused.
+ */
 function kindProblem(lifecycle: unknown): string | undefined {
   if (lifecycle === undefined) return undefined;
-  if (lifecycle === "always" || lifecycle === "conditional") return undefined;
+  if (typeof lifecycle === "string" && LIFECYCLE_SET.has(lifecycle)) {
+    return undefined;
+  }
   return `lifecycle, when given, must be ${WIDGET_LIFECYCLES.map(l => `"${l}"`).join(" or ")}`;
 }
 
