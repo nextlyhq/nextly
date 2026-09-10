@@ -463,6 +463,56 @@ describe("useDocumentLock", () => {
     });
   });
 
+  it("keeps the newest answer when the system clock jumps backwards", async () => {
+    // 🔴 The test above cannot tell a correct fence from a plausible broken one.
+    // Its clock only ever moves forwards, so "newest dispatch" and "largest
+    // `Date.now()`" are the same number there, and a fence built on either
+    // passes. `Date.now()` is WALL time: an NTP correction, a VM resuming or
+    // somebody setting the clock moves it backwards, and a timestamp fence then
+    // ranks a later renewal BELOW an earlier one and ignores every answer until
+    // wall time catches up. Rolling the clock back is what separates the two.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    let settleOlder: (value: unknown) => void = () => {};
+    patch.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleOlder = resolve;
+      })
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    // The clock is corrected backwards while that renewal is still in flight,
+    // so every beat after this one carries a SMALLER timestamp than it does.
+    vi.setSystemTime(Date.now() - 10 * 60 * 1000);
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: true,
+      })
+    );
+
+    await act(async () => {
+      settleOlder({ message: "", item: { status: "renewed", waiting: false } });
+    });
+
+    // The earlier beat is still the earlier beat, whatever the clock says.
+    expect(result.current.state).toEqual({
+      status: "held-by-me",
+      someoneWaiting: true,
+    });
+  });
+
   it("says it once, not once per beat", async () => {
     // 🔴 The notice lives in a live region, so re-rendering it on an unchanged
     // answer would read the same sentence to somebody every fifteen seconds.
