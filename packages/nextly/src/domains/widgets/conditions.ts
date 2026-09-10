@@ -62,6 +62,24 @@ function readArgs(caller: ReadCaller) {
  * `status: "all"` because a draft is content. A reader who has written one
  * post and not published it is not looking at an empty install, and telling
  * them they are is the onboarding equivalent of losing their work.
+ *
+ * The collections come from the WIDGET SOURCE registry, which `visibleWidgets`
+ * has just refreshed, rather than from the collections registry directly. That
+ * registry excludes a collection whose stored metadata is known to be ahead of
+ * its table — a transient reload state — so such a collection's rows are not
+ * counted and an install holding only those would read as empty.
+ *
+ * Accepted, because the alternative is worse in the case this exists for.
+ * Counting straight from the collections registry would query tables that may
+ * not exist yet; that count throws, the condition goes unanswered, and an
+ * unanswered condition HIDES its widget — so the onboarding card would
+ * disappear on exactly the fresh install it is meant to greet. A card that
+ * lingers briefly during a reload is the cheaper error than one that never
+ * appears.
+ *
+ * Note what is NOT a gap here: a `pending` migration status does not drop a
+ * collection. The source builder treats that label as a fast path only and
+ * asks the database whether the table exists when the label declines.
  */
 async function contentIsEmpty(caller: ReadCaller): Promise<boolean> {
   const slugs = listSources()
@@ -117,10 +135,25 @@ export async function evaluateConditions(
   caller: ReadCaller
 ): Promise<ReadonlyMap<WidgetCondition, boolean>> {
   const wanted = [...needed];
-  const held = await Promise.all(
+  // SETTLED, not all-or-nothing. `Promise.all` rejects on the first evaluator
+  // that throws, and this runs inside the layout read -- so one failing count,
+  // on one collection, would answer the whole request as an error and take
+  // every PERMANENT card down with the optional one it was asked about. The
+  // blast radius of a condition has to be the widget that named it.
+  const settled = await Promise.allSettled(
     wanted.map(condition => EVALUATORS[condition](caller))
   );
-  return new Map(wanted.map((condition, index) => [condition, held[index]]));
+  const verdicts = new Map<WidgetCondition, boolean>();
+  wanted.forEach((condition, index) => {
+    const outcome = settled[index];
+    // A failure is recorded as UNANSWERED rather than as `false`, and the
+    // difference is not cosmetic: the filter hides a widget whose condition has
+    // no verdict, so both readings hide the card, but only this one leaves
+    // "nobody could answer" distinguishable from "the answer was no" for
+    // anything that later reads these verdicts.
+    if (outcome.status === "fulfilled") verdicts.set(condition, outcome.value);
+  });
+  return verdicts;
 }
 
 /**

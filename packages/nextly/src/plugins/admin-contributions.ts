@@ -231,6 +231,17 @@ interface PluginAdminWidgetBase {
    */
   defaultOrder?: number;
   /**
+   * How long this card stays, and the condition it stays under.
+   *
+   * The same two fields the registration channel takes, validated by the same
+   * shared rule — a contribution declaring a lifecycle the host cannot answer
+   * is refused here rather than published and quietly treated as permanent.
+   * `pin` and `dismissible` are deliberately absent from both channels until
+   * something reads them.
+   */
+  lifecycle?: "always" | "conditional";
+  visibleWhen?: "content:empty";
+  /**
    * What a reader may change about this card, drawn by the settings panel.
    *
    * On the BASE for the same reason `defaultOrder` is: any widget may offer

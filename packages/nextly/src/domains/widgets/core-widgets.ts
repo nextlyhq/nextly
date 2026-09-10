@@ -100,11 +100,6 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
      */
     lifecycle: "conditional",
     visibleWhen: "content:empty",
-    // Above the ordinary order while it lasts. A transient card has no
-    // position worth persisting: a reader who dragged it somewhere would lose
-    // that arrangement the moment it stopped applying.
-    pin: "top",
-    dismissible: true,
   },
   {
     id: "core/collections",

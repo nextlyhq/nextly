@@ -33,24 +33,11 @@ describe("a permanent widget", () => {
     expect(problem).toContain("visibleWhen");
     expect(problem).toContain("conditional");
   });
-
-  it("may not pin itself", () => {
-    // Refused rather than ignored: a pinned permanent card would be a promise
-    // the grid never keeps, and nothing in the running product would say so.
-    expect(lifecycleProblem({ pin: "top" })).toContain("pin");
-  });
-
-  it("may not be dismissible", () => {
-    expect(lifecycleProblem({ dismissible: true })).toContain("dismissible");
-  });
 });
 
 describe("a conditional widget", () => {
   it("is accepted with a known condition", () => {
     expect(lifecycleProblem(conditional())).toBeUndefined();
-    expect(
-      lifecycleProblem(conditional({ pin: "top", dismissible: true }))
-    ).toBeUndefined();
   });
 
   it("must name the condition it shows under", () => {
@@ -78,22 +65,30 @@ describe("a conditional widget", () => {
     }
   });
 
-  it("refuses a condition that is not a string at all", () => {
-    for (const value of [0, false, null, {}, ["content:empty"]]) {
+  it("names a value it cannot print, rather than throwing while refusing", () => {
+    // 🔴 `JSON.stringify` throws a native TypeError on a BigInt and on a cyclic
+    // object. This string is built while composing a REFUSAL, so the throw
+    // would escape before the refusal became a developer-facing error -- the
+    // message that exists to help an author replaced by a crash from the code
+    // writing it.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const value of [1n, cyclic, Symbol("x")]) {
+      expect(() =>
+        lifecycleProblem(conditional({ visibleWhen: value }))
+      ).not.toThrow();
       expect(lifecycleProblem(conditional({ visibleWhen: value }))).toContain(
         "visibleWhen"
       );
     }
   });
 
-  it("refuses a pin that is not the one position there is", () => {
-    expect(lifecycleProblem(conditional({ pin: "bottom" }))).toContain("pin");
-  });
-
-  it("refuses a non-boolean dismissible", () => {
-    expect(lifecycleProblem(conditional({ dismissible: "yes" }))).toContain(
-      "dismissible"
-    );
+  it("refuses a condition that is not a string at all", () => {
+    for (const value of [0, false, null, {}, ["content:empty"]]) {
+      expect(lifecycleProblem(conditional({ visibleWhen: value }))).toContain(
+        "visibleWhen"
+      );
+    }
   });
 });
 

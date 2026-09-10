@@ -317,16 +317,6 @@ export interface WidgetDefinition {
    */
   visibleWhen?: WidgetCondition;
   /**
-   * Placed above the ordinary grid while visible, ignoring reader order.
-   *
-   * Only meaningful on a conditional widget, because only a transient card has
-   * no position worth persisting -- a reader who dragged it somewhere would
-   * lose that arrangement the moment its condition stopped holding.
-   */
-  pin?: "top";
-  /** Whether a reader may dismiss this widget before its condition lapses. */
-  dismissible?: boolean;
-  /**
    * Whether the host frames this widget. Defaults to `"card"`.
    *
    * Only a `custom` widget may decline the frame, because only a `custom`
@@ -532,6 +522,15 @@ export function widgetValueProblem(
 
   const geometry = geometryShapeProblem(widget);
   if (geometry !== undefined) return geometry;
+
+  // Asked HERE rather than in the registration validator, because both channels
+  // must answer it the same way. Left on the registration side, a plugin using
+  // the contributed channel could declare a lifecycle nothing validated: the
+  // summary carried the fields through and the layout server treated the card
+  // as permanent, so a transient card shipped by the documented route would
+  // simply never lapse -- and the author would have no refusal to read.
+  const lifecycle = lifecycleProblem(widget);
+  if (lifecycle !== undefined) return lifecycle;
 
   // A permission slug is a STRING in every version -- a newer core may mint new
   // slugs, but it cannot make a slug stop being a string -- so this is shape
@@ -1009,19 +1008,6 @@ export function chromeProblem(
   return undefined;
 }
 
-/**
- * The lifecycle fields, judged together.
- *
- * Delegated to `lifecycle.ts` rather than restated here, so the vocabulary and
- * the rules that read it stay in one module: a condition added there is
- * accepted here with no second edit, and cannot be accepted by one and refused
- * by the other.
- */
-function validateLifecycle(d: Partial<WidgetDefinition>): void {
-  const problem = lifecycleProblem(d);
-  if (problem !== undefined) fail(`${d.id}: ${problem}`);
-}
-
 function validateChrome(d: Partial<WidgetDefinition>): void {
   // Registry-only vocabulary, for the reason `chromeProblem` gives.
   if (d.chrome !== undefined && !WIDGET_CHROME.includes(d.chrome)) {
@@ -1262,6 +1248,5 @@ export function validateWidgetDefinition(
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
-  validateLifecycle(d);
   validateWidgetSettings(d.settings, d.id ?? "widget");
 }

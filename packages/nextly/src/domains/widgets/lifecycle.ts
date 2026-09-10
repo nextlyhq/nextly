@@ -23,6 +23,14 @@
  * declaration that always hides the widget, which reads to the author as a
  * broken card rather than as a missing feature.
  *
+ * `pin` and `dismissible` are deliberately NOT here yet. The design calls for
+ * both, and nothing reads either one: pinning is a property of how the grid
+ * materialises an arrangement, and dismissal needs somewhere per-reader to
+ * record it. Accepting them now would publish two options that look like they
+ * work — an author would declare `pin: "top"`, watch the card sit wherever it
+ * was dragged, and have nothing to tell them the field was never read. They
+ * arrive with the code that honours them.
+ *
  * @module domains/widgets/lifecycle
  */
 
@@ -70,18 +78,35 @@ export function isWidgetCondition(value: unknown): value is WidgetCondition {
 }
 
 /**
- * What a conditional widget may declare, and what a permanent one may not.
+ * A value named in a diagnostic, without the formatter ever throwing.
  *
- * The two halves are stated together because they are one question — is this
- * declaration coherent — and answering them apart is how a card ends up
- * `dismissible` with nothing to dismiss it from.
+ * `JSON.stringify` was the obvious choice and is the wrong one here: it throws
+ * a native `TypeError` on a BigInt and on a cyclic object, and this string is
+ * built while composing a REFUSAL. The throw would escape before the refusal
+ * could be turned into the developer-facing error, so a plugin sending `1n`
+ * would abort registration with the wrong error shape and lose the diagnostic
+ * naming the widget — the message that exists to help them replaced by a crash
+ * from the code writing it.
  *
- * `pin` and `dismissible` are refused on a permanent widget rather than
- * ignored. Both are meaningless there and both look like they work: a reader
- * would see `pin: "top"` in a declaration, place the card, watch it sit
- * wherever they dragged it, and have nothing to tell them the field was never
- * read. A refusal at registration says so once, to the person who wrote it.
+ * A SHAPE rather than a value for anything structured: a diagnostic needs to
+ * say what kind of thing arrived, and printing a whole object into a validation
+ * message helps nobody.
  */
+function describe(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
+  if (typeof value === "string") return `"${value}"`;
+  if (typeof value === "bigint") return `${value.toString()}n`;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "object") return "an object";
+  // A symbol or a function, named by KIND. A diagnostic needs to say what sort
+  // of thing arrived, and these two carry nothing a reader could act on beyond
+  // that -- so they are not enumerated one by one.
+  return `a ${typeof value}`;
+}
+
 /** Whether the lifecycle names one of the two dispositions there are. */
 function kindProblem(lifecycle: unknown): string | undefined {
   if (lifecycle === undefined) return undefined;
@@ -114,55 +139,19 @@ function conditionProblem(
   // and one who reached for a condition this release does not have, need
   // different next steps and the message cannot tell them apart -- so it shows
   // what is available and lets them see which of the two they are.
-  return `visibleWhen must be one of ${WIDGET_CONDITIONS.map(c => `"${c}"`).join(", ")}; received ${JSON.stringify(visibleWhen)}`;
-}
-
-/** Whether a field that only a transient card may carry was carried legally. */
-function transientOnlyProblem(
-  conditional: boolean,
-  field: "pin" | "dismissible",
-  value: unknown,
-  legal: (value: unknown) => boolean,
-  shape: string
-): string | undefined {
-  if (value === undefined) return undefined;
-  if (!conditional) {
-    return `${field} is only meaningful on a widget declaring lifecycle: "conditional"`;
-  }
-  return legal(value) ? undefined : `${field}, when given, must be ${shape}`;
+  return `visibleWhen must be one of ${WIDGET_CONDITIONS.map(c => `"${c}"`).join(", ")}; received ${describe(visibleWhen)}`;
 }
 
 /**
  * What a conditional widget may declare, and what a permanent one may not.
  *
  * Composed from the rules above rather than written as one chain, and each is
- * named for the question it answers. `pin` and `dismissible` are refused on a
- * permanent widget rather than ignored: both are meaningless there and both
- * LOOK like they work -- a reader would see `pin: "top"` in a declaration,
- * place the card, watch it sit wherever they dragged it, and have nothing to
- * tell them the field was never read.
+ * named for the question it answers.
  */
 export function lifecycleProblem(
   widget: Record<string, unknown>
 ): string | undefined {
-  const { lifecycle, visibleWhen, pin, dismissible } = widget;
+  const { lifecycle, visibleWhen } = widget;
   const conditional = lifecycle === "conditional";
-  return (
-    kindProblem(lifecycle) ??
-    conditionProblem(conditional, visibleWhen) ??
-    transientOnlyProblem(
-      conditional,
-      "pin",
-      pin,
-      value => value === "top",
-      '"top"'
-    ) ??
-    transientOnlyProblem(
-      conditional,
-      "dismissible",
-      dismissible,
-      value => typeof value === "boolean",
-      "a boolean"
-    )
-  );
+  return kindProblem(lifecycle) ?? conditionProblem(conditional, visibleWhen);
 }

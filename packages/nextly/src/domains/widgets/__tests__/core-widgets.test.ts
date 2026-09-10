@@ -106,10 +106,6 @@ describe("core widget definitions", () => {
     const seed = CORE_WIDGETS.find(w => w.id === "core/seed-demo-content");
     expect(seed?.lifecycle).toBe("conditional");
     expect(seed?.visibleWhen).toBe("content:empty");
-    // Transient, so it has no position worth persisting and a reader may end
-    // it early.
-    expect(seed?.pin).toBe("top");
-    expect(seed?.dismissible).toBe(true);
   });
 
   it("keeps every OTHER core card permanent", () => {

@@ -89,8 +89,6 @@ export interface CanonicalWidget {
    */
   lifecycle?: string;
   visibleWhen?: string;
-  pin?: string;
-  dismissible?: boolean;
 }
 
 /** The summary of one registered widget. */
@@ -115,10 +113,6 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ...(definition.visibleWhen === undefined
       ? {}
       : { visibleWhen: definition.visibleWhen }),
-    ...(definition.pin === undefined ? {} : { pin: definition.pin }),
-    ...(definition.dismissible === undefined
-      ? {}
-      : { dismissible: definition.dismissible }),
   };
 }
 
