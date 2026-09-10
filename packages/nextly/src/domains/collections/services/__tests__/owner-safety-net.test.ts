@@ -23,8 +23,11 @@ const BASE = {
   hasUser: true,
   overrideAccess: false,
   isSuperAdmin: false,
-  isScopedApiKey: false,
+  scope: undefined,
 } as const;
+
+/** A request arriving on a scoped API key. */
+const KEY = { actorType: "apiKey" } as const;
 
 describe("ownerSafetyNetApplies", () => {
   it("applies to an ordinary caller under an owner-only rule", () => {
@@ -45,13 +48,26 @@ describe("ownerSafetyNetApplies", () => {
       ownerSafetyNetApplies({
         ...BASE,
         isSuperAdmin: true,
-        isScopedApiKey: true,
+        scope: KEY,
       })
     ).toBe(true);
   });
 
   it("applies to a scoped key whose owner is NOT a super-admin", () => {
-    expect(ownerSafetyNetApplies({ ...BASE, isScopedApiKey: true })).toBe(true);
+    expect(ownerSafetyNetApplies({ ...BASE, scope: KEY })).toBe(true);
+  });
+
+  it("treats a session scope as a session, not a key", () => {
+    // The negative half of reading `actorType`. A predicate that answered
+    // "scoped key" for any scope at all would satisfy the case above while
+    // taking the bypass away from every super-admin session.
+    expect(
+      ownerSafetyNetApplies({
+        ...BASE,
+        isSuperAdmin: true,
+        scope: { actorType: "user" },
+      })
+    ).toBe(false);
   });
 
   it("does not apply under a trusted override", () => {
@@ -65,7 +81,7 @@ describe("ownerSafetyNetApplies", () => {
       ownerSafetyNetApplies({
         ...BASE,
         overrideAccess: true,
-        isScopedApiKey: true,
+        scope: KEY,
       })
     ).toBe(false);
   });
@@ -97,6 +113,15 @@ describe("both write paths ask this function", () => {
     // path goes on deciding inline, which is the state this replaced.
     const calls = source.match(/ownerSafetyNetApplies\(/g) ?? [];
     expect(calls).toHaveLength(2);
+  });
+
+  it("hands both of them the caller's real scope", () => {
+    // Calling the shared rule is not the same as calling it with the right
+    // argument: a site passing `undefined` compiles, reads as wired up, and
+    // restores the exact bypass this replaced. Both sites, so one correct call
+    // does not vouch for the other.
+    const wired = source.match(/scope: params\.authenticatedScope,/g) ?? [];
+    expect(wired).toHaveLength(2);
   });
 
   it("leaves no inline copy of the super-admin bypass behind", () => {
