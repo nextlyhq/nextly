@@ -176,6 +176,9 @@ export { pluginAdminSlug } from "./plugins/plugin-slug";
 // because a plugin's own UI calling its own route has to address it, and the
 // dispatcher is the only thing that knows where that is.
 export { pluginRouteFullPath } from "./plugins/routes/route-path";
+// The mount travels with the path builder, so a client that resolves a route
+// names the same union the server declared it with.
+export type { PluginRouteMount } from "./plugins/routes/route-types";
 
 // The VERBS those routes may declare, published beside the path helper and for
 // the same reason: the admin's client for calling a plugin route has to know

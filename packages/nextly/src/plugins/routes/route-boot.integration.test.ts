@@ -33,7 +33,8 @@ describe("plugin route registration at boot", () => {
     handle = await createTestNextly({ plugins: [routePlugin] });
     const match = getPluginRouteRegistry().match(
       "GET",
-      "/plugins/@test/routes-boot/ping"
+      "/plugins/@test/routes-boot/ping",
+      "plugin"
     );
     expect(match).not.toBeNull();
     expect(match?.pluginName).toBe("@test/routes-boot");

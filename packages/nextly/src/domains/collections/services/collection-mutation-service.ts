@@ -26,6 +26,7 @@ import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -407,6 +408,15 @@ interface DeleteEntryWriteParams {
    * codes `undefined` for it, as the transaction API always has.
    */
   overrideAccess?: boolean;
+  /**
+   * The caller's own grants when they arrived on an API key.
+   *
+   * Reaches `getOwnerConstraint`, which uses it to decide whether the
+   * super-admin bypass applies. Without it a key OWNED by a super-admin skipped
+   * the owner predicate on a transactional delete — the bypass belongs to the
+   * session path, never to a key issued narrower than the account behind it.
+   */
+  authenticatedScope?: AuthenticatedScope;
   /** Who performed the delete, recorded on the outbox event. */
   actor?: RequestActor;
 }
@@ -469,6 +479,19 @@ interface UpdateEntryWriteOptions {
 }
 
 interface CreateEntryWriteParams {
+  /**
+   * The caller's own grants when they arrived on an API key.
+   *
+   * Declared here because a route may NARROW its scope before a transactional
+   * write, and this is the only way that narrowing reaches the gate. The
+   * transaction methods sit outside the plugin facade's `CONTEXT_INDEX`, so the
+   * proxy binds them straight through and the re-pinning wrapper never runs;
+   * the access check would otherwise read the request's ORIGINAL scope from
+   * `AsyncLocalStorage` and authorize a grant the route had deliberately given
+   * up. Absent means "use whatever the request pinned", which is right for the
+   * caller that did not narrow.
+   */
+  authenticatedScope?: AuthenticatedScope;
   /** Arbitrary data passed to this operation's hooks via context. */
   context?: Record<string, unknown>;
   /** The HTTP request behind this operation, when one produced it. */
@@ -8240,12 +8263,24 @@ export class CollectionMutationService extends BaseService {
     params: CreateEntryWriteParams,
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.createEntryWrite(tx, params, body, {
-      enforceCollectionAccess: true,
-      runHooks: true,
-      shapeCallerObject: true,
-      failureMessage: "Failed to create entry in transaction",
-    });
+    // The scope this write runs under becomes the ambient one for the whole
+    // operation, not an argument handed to its first gate.
+    //
+    // A write passes several: the coarse collection check, the owner predicate,
+    // and the field-level write and redaction passes. Only the first took an
+    // `authenticatedScope` argument, so a caller that NARROWED its scope was
+    // held to it once and judged on the request's original scope everywhere
+    // after — a key that kept its write grant but surrendered a field grant
+    // still wrote that field. Pinning covers every gate below, including the
+    // ones added next.
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.createEntryWrite(tx, params, body, {
+        enforceCollectionAccess: true,
+        runHooks: true,
+        shapeCallerObject: true,
+        failureMessage: "Failed to create entry in transaction",
+      })
+    );
   }
 
   /**
@@ -8296,7 +8331,11 @@ export class CollectionMutationService extends BaseService {
           undefined,
           params.overrideAccess,
           params.routeAuthorized,
-          undefined,
+          // The caller's OWN scope when it narrowed one. Passing `undefined`
+          // sent the gate to the scope pinned for the request, which is the
+          // full one — so a route that gave up a grant before a transactional
+          // write was still judged on the grant it surrendered.
+          params.authenticatedScope,
           undefined,
           txExecutor
         );
@@ -8744,12 +8783,24 @@ export class CollectionMutationService extends BaseService {
     params: UpdateEntryWriteParams & { entryId: string },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.updateEntryWrite(tx, params, params.entryId, body, {
-      rowGate: "access-service",
-      runHooks: true,
-      identifyMissingEntry: false,
-      failureMessage: "Failed to update entry in transaction",
-    });
+    // The scope this write runs under becomes the ambient one for the whole
+    // operation, not an argument handed to its first gate.
+    //
+    // A write passes several: the coarse collection check, the owner predicate,
+    // and the field-level write and redaction passes. Only the first took an
+    // `authenticatedScope` argument, so a caller that NARROWED its scope was
+    // held to it once and judged on the request's original scope everywhere
+    // after — a key that kept its write grant but surrendered a field grant
+    // still wrote that field. Pinning covers every gate below, including the
+    // ones added next.
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.updateEntryWrite(tx, params, params.entryId, body, {
+        rowGate: "access-service",
+        runHooks: true,
+        identifyMissingEntry: false,
+        failureMessage: "Failed to update entry in transaction",
+      })
+    );
   }
 
   // Replaces updateEntryInTransaction (cyclomatic 43) and
@@ -8890,7 +8941,10 @@ export class CollectionMutationService extends BaseService {
           existingEntry,
           params.overrideAccess,
           params.routeAuthorized,
-          undefined,
+          // See the create path: without this a narrowed scope never reaches
+          // the gate, because the transaction methods sit outside the plugin
+          // facade's re-pinning wrapper.
+          params.authenticatedScope,
           undefined,
           tx.getDrizzle()
         );
@@ -9507,16 +9561,30 @@ export class CollectionMutationService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /** The caller's own grants; see {@link DeleteEntryWriteParams}. */
+      authenticatedScope?: AuthenticatedScope;
       /** Who performed the delete, recorded on the outbox event. */
       actor?: RequestActor;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    return this.deleteEntryWrite(tx, params, params.entryId, {
-      rowGate: "access-service",
-      runHooks: true,
-      identifyMissingEntry: false,
-      failureMessage: "Failed to delete entry in transaction",
-    });
+    // The scope this write runs under becomes the ambient one for the whole
+    // operation, not an argument handed to its first gate.
+    //
+    // A write passes several: the coarse collection check, the owner predicate,
+    // and the field-level write and redaction passes. Only the first took an
+    // `authenticatedScope` argument, so a caller that NARROWED its scope was
+    // held to it once and judged on the request's original scope everywhere
+    // after — a key that kept its write grant but surrendered a field grant
+    // still wrote that field. Pinning covers every gate below, including the
+    // ones added next.
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.deleteEntryWrite(tx, params, params.entryId, {
+        rowGate: "access-service",
+        runHooks: true,
+        identifyMissingEntry: false,
+        failureMessage: "Failed to delete entry in transaction",
+      })
+    );
   }
 
   /**
@@ -9581,9 +9649,12 @@ export class CollectionMutationService extends BaseService {
               // A trusted override must not have an owner predicate forced onto its
               // fetch, or it would 404 rows it is entitled to delete.
               params.overrideAccess,
-              // This worker carries no scoped-API-key context (unlike the update
-              // worker); the owner predicate is resolved from the session user only.
-              undefined,
+              // The caller's scope, so a key owned by a super-admin does not
+              // take the bypass that belongs to a session. This worker used to
+              // pass nothing and say it carried no scoped-API-key context; it
+              // carries one whenever the caller had one, and resolving the owner
+              // predicate without it let such a key delete rows it does not own.
+              params.authenticatedScope,
               // Bound to the caller's transaction connection so the metadata read does
               // not re-enter the pool from inside the transaction.
               tx.getDrizzle()
@@ -9960,12 +10031,14 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.createEntryWrite(tx, params, body, {
-      enforceCollectionAccess: false,
-      runHooks: !skipHooks,
-      shapeCallerObject: false,
-      failureMessage: "Failed to create entry",
-    });
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.createEntryWrite(tx, params, body, {
+        enforceCollectionAccess: false,
+        runHooks: !skipHooks,
+        shapeCallerObject: false,
+        failureMessage: "Failed to create entry",
+      })
+    );
   }
 
   /**
@@ -9985,12 +10058,14 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.updateEntryWrite(tx, params, entryId, body, {
-      rowGate: "owner-predicate",
-      runHooks: !skipHooks,
-      identifyMissingEntry: true,
-      failureMessage: "Failed to update entry",
-    });
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.updateEntryWrite(tx, params, entryId, body, {
+        rowGate: "owner-predicate",
+        runHooks: !skipHooks,
+        identifyMissingEntry: true,
+        failureMessage: "Failed to update entry",
+      })
+    );
   }
 
   /**
@@ -10009,11 +10084,13 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    return this.deleteEntryWrite(tx, params, entryId, {
-      rowGate: "owner-predicate",
-      runHooks: !skipHooks,
-      identifyMissingEntry: true,
-      failureMessage: "Failed to delete entry",
-    });
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.deleteEntryWrite(tx, params, entryId, {
+        rowGate: "owner-predicate",
+        runHooks: !skipHooks,
+        identifyMissingEntry: true,
+        failureMessage: "Failed to delete entry",
+      })
+    );
   }
 }

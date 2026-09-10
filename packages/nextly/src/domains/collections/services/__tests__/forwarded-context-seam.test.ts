@@ -22,29 +22,18 @@ import { describe, expect, it } from "vitest";
 const FACADE = join(__dirname, "..", "collection-service.ts");
 
 /**
- * The transaction entry points, which forward `user` alone.
+ * No exemptions left.
  *
- * Their destination params (`CreateEntryWriteParams`, `UpdateEntryWriteParams`,
- * and the inline type on `deleteEntryInTransaction`) declare no
- * `authenticatedScope`, so there is nowhere in the argument for it to go.
+ * This was 3. The transaction entry points forwarded `user` alone because their
+ * destination params declared no `authenticatedScope` — so a route that NARROWED
+ * its scope before a transactional write had that narrowing silently discarded,
+ * and the gate judged it on the scope the request arrived with instead.
  *
- * An earlier version of this comment also claimed no plugin route reaches them,
- * on the grounds that `CONTEXT_INDEX` in `plugins/service-opts.ts` wraps seven
- * methods and none of these is among them. That was wrong in the direction that
- * excuses: `PluginCollectionService` is `Omit<CollectionService, AccessMethod |
- * WriteMethod>`, which KEEPS every method not in those two unions, and the
- * proxy binds anything absent from `CONTEXT_INDEX` straight through. So a
- * plugin reaches all four, and a scoped key writing through one of them was
- * judged on its owner.
- *
- * What closes it is not this argument: `checkCollectionAccess` reads the
- * request's own scope when its caller did not name one, so the gate is correct
- * whether or not the params ever carry it. These sites stay listed because the
- * FORWARD is still incomplete — a caller wanting to narrow a transaction write
- * has no way to say so — and a new one should come here and say why rather than
- * joining an unbounded set nothing reads.
+ * The params now carry it and all three spread the seam like every other method,
+ * so the count is zero and stays zero. A new bare forward has to come here and
+ * argue for itself rather than joining a list that already had members.
  */
-const TRANSACTION_SITES = 3;
+const TRANSACTION_SITES = 0;
 
 function facadeSource(): string {
   return readFileSync(FACADE, "utf8");

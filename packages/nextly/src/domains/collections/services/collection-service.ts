@@ -878,9 +878,7 @@ export class CollectionService extends BaseService {
       tx,
       {
         collectionName,
-        user: context.user,
-        context: context.context,
-        request: context.request,
+        ...forwardedFromContext(context),
       },
       data
     );
@@ -943,9 +941,7 @@ export class CollectionService extends BaseService {
       {
         collectionName,
         entryId,
-        user: context.user,
-        context: context.context,
-        request: context.request,
+        ...forwardedFromContext(context),
       },
       data
     );
@@ -1011,10 +1007,8 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.deleteEntryInTransaction(tx, {
       collectionName,
       entryId,
-      user: context.user,
       actor,
-      context: context.context,
-      request: context.request,
+      ...forwardedFromContext(context),
     });
 
     // Collect before the success check, so a caller that commits despite a

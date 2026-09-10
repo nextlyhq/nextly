@@ -6,6 +6,13 @@
  * refused anywhere, so a claim left behind by a closed laptop costs a second
  * editor a dialog rather than access.
  *
+ * Claiming carries one optional extra rather than a fifth operation: a caller
+ * that is refused may say it is still waiting, which leaves a mark on the row
+ * for the holder's own heartbeat to find. It rides the claim because the
+ * locked-out editor is already sending one on every beat. It is a courtesy and
+ * not a consent gate — nothing about it moves the document, and the lease
+ * expiring stays the only thing that does.
+ *
  * The claimant is taken from the SESSION, never from the body. A caller that
  * could name its own owner id could claim a document as a colleague, and the
  * label shown to the next editor would be evidence of something that did not
@@ -243,7 +250,12 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
       ownerId: auth.userId,
       ownerLabel: auth.userName ?? auth.userEmail ?? null,
     },
-    { takeover: body.takeover === true }
+    {
+      takeover: body.takeover === true,
+      // Read the same way `takeover` is, and for the same reason: anything
+      // other than the boolean is not a person asking for anything.
+      requestAccess: body.requestAccess === true,
+    }
   );
 
   // The canonical mutation envelope, so a client reads this with the same

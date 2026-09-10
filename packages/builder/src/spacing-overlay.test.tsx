@@ -20,6 +20,7 @@ import {
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import { previewStateClass } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
@@ -27,7 +28,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
 import type { EditorState } from "./editor-state";
-import { SpacingOverlay } from "./spacing-overlay";
+import { probeScale, SpacingOverlay } from "./spacing-overlay";
 
 afterEach(() => {
   cleanup();
@@ -650,5 +651,155 @@ describe("a computed style that changes with nothing else", () => {
     await settle();
 
     expect(labels(container)).toEqual(["16"]);
+  });
+});
+
+describe("the scale a probe's movement is seen at", () => {
+  /*
+   * Measured in Chromium. Under `scale(0.5)` on the BLOCK itself, a ten-pixel
+   * margin probe still moves the edge ten pixels while a ten-pixel padding
+   * probe moves it five — because a padding renders inside the element's own
+   * transform and scales with it, while a margin displaces the box in the
+   * PARENT's coordinates, which that transform never touches.
+   *
+   * `renderedScale` separates the two and `spacingDelta` already divides by the
+   * matching one. Reading the composed scale for both asked the margin for
+   * twice the movement there was, read a moving edge as pinned, and inverted
+   * the handle on any transformed block.
+   */
+  const halfItself = {
+    // The COMPOSED scale: the block's own half, with no ancestor transform.
+    x: 0.5,
+    y: 0.5,
+    describable: true,
+    selfMoved: { top: false, right: false, bottom: false, left: false },
+    ancestor: { x: 1, y: 1 },
+  };
+  const unpainted = { x: 1, y: 1 };
+
+  it("ignores the block's own transform for a margin", () => {
+    expect(probeScale("margin", "left", halfItself, unpainted)).toBe(1);
+    expect(probeScale("margin", "top", halfItself, unpainted)).toBe(1);
+  });
+
+  it("applies it for a padding", () => {
+    expect(probeScale("padding", "left", halfItself, unpainted)).toBe(0.5);
+    expect(probeScale("padding", "top", halfItself, unpainted)).toBe(0.5);
+  });
+
+  /*
+   * An ANCESTOR's transform scales the whole subtree it lays out, gaps
+   * included, so it applies to both boxes.
+   */
+  it("applies an ancestor's transform to both boxes", () => {
+    const halfAbove = {
+      ...halfItself,
+      x: 0.5,
+      y: 0.5,
+      ancestor: { x: 0.5, y: 0.5 },
+    };
+    expect(probeScale("margin", "left", halfAbove, unpainted)).toBe(0.5);
+    expect(probeScale("padding", "left", halfAbove, unpainted)).toBe(0.5);
+  });
+
+  /*
+   * And the canvas's own painted scale composes either way, because it is above
+   * the element and the probe is read off the viewport through it.
+   */
+  it("composes the canvas's painted scale for both", () => {
+    expect(probeScale("margin", "top", halfItself, { x: 0.5, y: 0.5 })).toBe(
+      0.5
+    );
+    expect(probeScale("padding", "top", halfItself, { x: 0.5, y: 0.5 })).toBe(
+      0.25
+    );
+  });
+});
+
+describe("the probe is asked again on every measurement", () => {
+  /*
+   * The answer describes how a block responds under the CSS applying to it, and
+   * what changes that CSS is open-ended: an edit, a breakpoint re-resolving at a
+   * new canvas width, a container query answering to a sibling, a forced state,
+   * a pointer matching `:hover`. Remembering it means dropping it for each of
+   * those in turn, which is a list that stays complete until the next one.
+   *
+   * Counted by the WRITES the probe makes, since that is what asking costs and
+   * what a remembered answer would have avoided.
+   */
+  function countProbeWrites(block: HTMLElement): () => number {
+    let probes = 0;
+    const real = block.style.setProperty.bind(block.style);
+    block.style.setProperty = (...args: Parameters<typeof real>): void => {
+      /*
+       * The MEASURED property, named by what it IS rather than by excluding
+       * what it is not. A probe writes more than the value it is measuring — it
+       * also says which transitions to keep — and a count that listed those by
+       * name would move whenever the probe's mechanics changed, describing how
+       * it is written rather than how often it runs.
+       */
+      const measured = /^(?:margin|padding)-/.test(String(args[0]));
+      if (measured) probes += 1;
+      real(...args);
+    };
+    return () => probes;
+  }
+
+  function selectedBlock(container: HTMLElement): HTMLElement {
+    const block = container.querySelector(`[${NODE_ID_ATTRIBUTE}="a"]`);
+    if (!(block instanceof HTMLElement)) throw new Error("no block to probe");
+    return block;
+  }
+
+  /*
+   * Mounting marks the selection on the block, which is a real attribute change
+   * and earns a measurement of its own. Counting from AFTER that settles is what
+   * separates the probe's own cost from the canvas's.
+   */
+  async function settled(): Promise<void> {
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  it("re-probes on a measurement that changed nothing else", async () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    await settled();
+    const writes = countProbeWrites(selectedBlock(container));
+
+    remeasure();
+    await settled();
+    // One per side of each box, with nothing carried over from the earlier pass.
+    expect(writes()).toBe(8);
+
+    remeasure();
+    await settled();
+    expect(writes()).toBe(16);
+  });
+
+  /*
+   * And asking every pass does not become a loop, which is the property that
+   * makes it safe rather than merely correct. The probe writes to a node this
+   * overlay's own subscription watches; what stops it is the canvas ignoring a
+   * batch of mutations whose net effect is nothing.
+   */
+  it("does not schedule another measurement by probing", async () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    await settled();
+    const writes = countProbeWrites(selectedBlock(container));
+
+    remeasure();
+    await settled();
+    const afterOnePass = writes();
+    expect(afterOnePass).toBe(8);
+
+    // Nothing further, however long the observer is given to deliver.
+    await settled();
+    await settled();
+    expect(writes()).toBe(afterOnePass);
   });
 });
