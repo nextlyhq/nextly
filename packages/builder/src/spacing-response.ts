@@ -133,6 +133,24 @@ function transitionsToKeep(block: Element, property: string): string {
   return running.length === 0 ? "none" : [...new Set(running)].join(", ");
 }
 
+/**
+ * Let the browser settle the style written so far, by reading through it.
+ *
+ * A pair of writes in one task otherwise lands in a single recalculation, and
+ * a transition then sees the wrong value as the one it starts from. Computed
+ * style rather than a rectangle: it flushes just the same, and a rectangle read
+ * belongs to `geometry-dom`, which owns that question for this package.
+ */
+function settle(
+  view: Window,
+  block: Element,
+  computed: keyof CSSStyleDeclaration
+): void {
+  const styles = view.getComputedStyle(block);
+  // Read into nothing on purpose: the READ is the effect being asked for.
+  if (styles[computed] === undefined) return;
+}
+
 /** How far the border edge on `side` moved away from the block's middle. */
 function edgeMovedOut(
   before: DOMRect,
@@ -189,8 +207,37 @@ export function spacingRespondsOutward(
   const view = block.ownerDocument.defaultView;
   /* c8 ignore next -- an element outside a realm cannot be measured at all */
   if (view === null) return false;
+  const computed = COMPUTED[box][side];
   const current =
-    Number.parseFloat(view.getComputedStyle(block)[COMPUTED[box][side]]) || 0;
+    Number.parseFloat(view.getComputedStyle(block)[computed]) || 0;
+  const keep = transitionsToKeep(block, property);
+
+  /** The element's own inline style, exactly as it was found. */
+  const release = (): void => {
+    if (had !== null) {
+      block.setAttribute("style", had);
+      return;
+    }
+    block.removeAttribute("style");
+    /*
+     * Removed TWICE, with a read between, and only the read makes the second
+     * one work.
+     *
+     * Measured in Chromium: an element that had no `style` attribute is left
+     * carrying `style=""` after one removal, because the declaration this probe
+     * dirtied is re-serialised back into the attribute. Calling
+     * `removeAttribute` twice in a row does not help — nothing between them
+     * forces that pending write to happen — while asking whether the attribute
+     * is there does, so the removal after it clears the attribute for real.
+     *
+     * It matters because the canvas watches this subtree: an empty `style`
+     * attribute is invisible to rendering and perfectly visible to a
+     * `MutationObserver`, which is the difference between a probe and an edit
+     * nobody made. jsdom removes the attribute on the first call, so no test in
+     * this package can tell the two apart; only a browser can.
+     */
+    if (block.hasAttribute("style")) block.removeAttribute("style");
+  };
 
   /*
    * Read through `geometry-dom`, which is the one module allowed to take a
@@ -221,11 +268,7 @@ export function spacingRespondsOutward(
        *
        * Restored with everything else: the whole attribute goes back verbatim.
        */
-      style.setProperty(
-        "transition-property",
-        transitionsToKeep(block, property),
-        "important"
-      );
+      style.setProperty("transition-property", keep, "important");
       // `important`, so an author's own `!important` padding cannot win and
       // make every block answer "the outer edge never moves".
       style.setProperty(
@@ -235,30 +278,25 @@ export function spacingRespondsOutward(
       );
     },
     () => {
-      if (had !== null) {
-        block.setAttribute("style", had);
-        return;
-      }
-      block.removeAttribute("style");
       /*
-       * Removed TWICE, with a read between, and only the read makes the second
-       * one work.
+       * Put the VALUE back while the transition is still suppressed, and only
+       * then let the transition back.
        *
-       * Measured in Chromium: an element that had no `style` attribute is left
-       * carrying `style=""` after one removal, because the declaration this
-       * probe dirtied is re-serialised back into the attribute. Calling
-       * `removeAttribute` twice in a row does not help — nothing between them
-       * forces that pending write to happen — while asking whether the
-       * attribute is there does, so the removal after it clears the attribute
-       * for real.
-       *
-       * It matters because the canvas watches this subtree: an empty `style`
-       * attribute is invisible to rendering and perfectly visible to a
-       * `MutationObserver`, which is the difference between a probe and an edit
-       * nobody made. jsdom removes the attribute on the first call, so no test
-       * in this package can tell the two apart; only a browser can.
+       * Restoring both at once starts the very animation the suppression was
+       * for, in reverse. The measurement above has already committed the probed
+       * value — that is what reading the rectangle does — so a restore that
+       * also re-enables the author's transition presents a transitionable change
+       * FROM the probed value back to the real one. Measured in Chromium on a
+       * block with `transition: margin-top 2s`: after one probe the computed
+       * margin reads thirty pixels, and the block spends two seconds sliding
+       * back to twenty from a value nobody wrote. Eight probes make that eight
+       * properties, on nothing more than a selection.
        */
-      if (block.hasAttribute("style")) block.removeAttribute("style");
+      release();
+      style.setProperty("transition-property", keep, "important");
+      settle(view, block, computed);
+      // The value is already back, so this changes nothing that can transition.
+      release();
     }
   );
 

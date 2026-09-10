@@ -521,8 +521,12 @@ export function SpacingHandles({
   latest.current.scale = scaleKey;
 
   /**
-   * Which way each band thickens, and therefore which edge carries its handle
-   * and which way a drag on it grows the value.
+   * Which edge of the drawn band carries its handle, and ONLY that.
+   *
+   * Not the direction a drag grows the value: `valueOutwardOf` below answers
+   * that, unmirrored, and the two disagree for a negative band — which is drawn
+   * reflected across the border edge while the edge the layout moves stays
+   * where it was. Reading placement as direction ran those drags backwards.
    *
    * MEASURED for both boxes. It was once structural for a margin, on reasoning
    * the element disagrees with: growing `margin-top` drives the border edge down
