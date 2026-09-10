@@ -56,27 +56,27 @@ import { SYSTEM_CONTEXT } from "../../shared/types";
 export function recordableActor(
   actor?: RequestActor | null
 ): { type: RequestActorType; id: string } | null {
-  if (!actor?.id) return null;
-  // A SYSTEM write is deliberately still refused, and the reason is not the one
-  // that used to refuse a key.
+  if (!actor) return null;
+
+  // A system write names no id of its own: `actorForWrite(null, null)` returns
+  // `SYSTEM_ACTOR`, which carries a type and nothing else, and that is what
+  // every import, job, migration and internal call arrives as. The row's actor
+  // reference is NOT NULL, so it takes the reserved id the rest of the codebase
+  // already uses for itself.
   //
-  // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
-  // names no actor — seeds, migrations, maintenance, and any internal call that
-  // simply did not pass one. Those run while the schema is being created, and
-  // this recorder's failures PROPAGATE and take the surrounding write with
-  // them: a trail insert against a table that does not exist yet would fail the
-  // seed that was creating it.
-  //
-  // A key is different. It arrives on a request, over a transport, against a
-  // database that is already up — so admitting it costs nothing that was not
-  // already true of a user's write.
-  if (actor.type === "system") return null;
-  // `SYSTEM_CONTEXT` carries the reserved user id `system`, so a seed or a
-  // migration with no transport actor to override it arrives as a USER actor.
-  // No account owns that id, and it is a system write wearing a user's shape —
-  // so it is refused for the reason above rather than filed as a person.
-  // Compared against the sentinel itself so the two cannot drift apart.
-  if (actor.id === SYSTEM_CONTEXT.user?.id) return null;
+  // A seed arriving as a USER actor holding that same reserved id is the same
+  // write wearing a different shape — no account owns it — so both land here
+  // rather than one being filed as a person. Compared against the sentinel
+  // itself so the two cannot drift apart.
+  const reserved = SYSTEM_CONTEXT.user?.id ?? "system";
+  if (actor.type === "system" || actor.id === reserved) {
+    return { type: "system", id: actor.id ?? reserved };
+  }
+
+  // Every other kind has to name itself. A `user` or `apiKey` without an id is
+  // an actor this cannot attribute, which is a different case from one that is
+  // not a person.
+  if (!actor.id) return null;
   return { type: actor.type, id: actor.id };
 }
 
