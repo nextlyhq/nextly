@@ -43,14 +43,19 @@ function exportedFunctions(module: string): string[] {
  */
 const reachable = new Set(Object.keys(entry));
 
-/**
- * Names the entry does not re-export.
+/*
+ * There is no allowlist, and that is the point.
  *
- * A record of what the entry holds today, not a judgement that it should: the
- * assertion below fails on a name listed here that IS reachable, so the list
- * cannot quietly outlive the state it describes.
+ * One existed while `isPartName` was declared shared and not reachable, and it
+ * carried a second assertion to stop an entry outliving the state it described.
+ * An empty list cannot do that job: the loop over it would run no assertion at
+ * all and report a pass, which is the one result this file must never give.
+ *
+ * So an exception is not a list entry any more, it is a diff. A function added
+ * to `document.ts` or `tree.ts` and not re-exported fails the assertion below,
+ * and anyone who believes it genuinely should not be published has to say so
+ * where a reader will see it rather than by adding a name to a set.
  */
-const KNOWN_UNPUBLISHED = new Set(["isPartName"]);
 
 describe("the package entry reaches every primitive that claims to be shared", () => {
   for (const module of ["document", "tree"]) {
@@ -61,17 +66,8 @@ describe("the package entry reaches every primitive that claims to be shared", (
       // testing no symbol at all.
       expect(declared.length).toBeGreaterThan(5);
 
-      const missing = declared.filter(
-        name => !reachable.has(name) && !KNOWN_UNPUBLISHED.has(name)
-      );
+      const missing = declared.filter(name => !reachable.has(name));
       expect(missing).toEqual([]);
     });
   }
-
-  it("still names something the entry genuinely does not export", () => {
-    // The allowlist has to describe reality, or it is a place defects hide.
-    for (const name of KNOWN_UNPUBLISHED) {
-      expect(reachable.has(name)).toBe(false);
-    }
-  });
 });

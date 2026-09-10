@@ -42,6 +42,11 @@ export {
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
+  // Published on the argument its own docblock makes: it is the ONE answer to
+  // whether a value names a part, for the same reason `isBlockType` above is.
+  // A caller outside this package that bounds a part name where the compiler
+  // does not emits a class the compiler refuses to read.
+  isPartName,
   isComponentDocument,
   isComponentInstance,
   isUnsetOverride,
