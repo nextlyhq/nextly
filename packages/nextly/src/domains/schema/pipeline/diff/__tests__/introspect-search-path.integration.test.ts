@@ -17,6 +17,14 @@
  * "read the right table" from "read any table" passes on a predicate that names
  * `public` outright.
  *
+ * The fixture tables are SYNTHETIC — a decoy and a subject that exist only to be
+ * resolved, with no production counterpart. So they are written here rather than
+ * derived from a DDL helper: the hazard that rule guards, a fixture copying a
+ * real table's definition and then drifting from it, has nothing to drift from,
+ * and deriving them from a real table would couple this file to that table's
+ * shape and change what it measures. Their DDL still travels through Drizzle,
+ * like every other statement here.
+ *
  * 🔴 ONE SESSION, held open for the whole file. `PostgresAdapter.getDrizzle()`
  * wraps a `pg.Pool`, so `SET search_path` binds to whichever client served that
  * statement and the next `execute()` may run on another — which would make this
@@ -57,7 +65,13 @@ describePg("introspection follows the search path (postgres)", () => {
     await client.connect();
     db = drizzle({ client });
 
-    const run = (text: string) => client!.query(text);
+    // 🔴 Through Drizzle, not `client.query`. Database access in this repository
+    // is Drizzle-only, and the exemption a test might claim — that a fixture is
+    // not product code — does not apply to the thing under test here: these
+    // statements ESTABLISH the session state the assertions depend on, so they
+    // have to travel the same path the reads do. Sent on the client-bound
+    // instance, so `SET search_path` below lands on the connection that reads.
+    const run = (text: string) => db.execute(sql.raw(text));
 
     await run(`DROP TABLE IF EXISTS public."${TABLE}"`);
     await run(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`);
@@ -78,9 +92,11 @@ describePg("introspection follows the search path (postgres)", () => {
 
   afterAll(async () => {
     if (client === undefined) return;
-    await client.query(`SET search_path TO public`);
-    await client.query(`DROP TABLE IF EXISTS public."${TABLE}"`);
-    await client.query(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`);
+    await db.execute(sql.raw(`SET search_path TO public`));
+    await db.execute(sql.raw(`DROP TABLE IF EXISTS public."${TABLE}"`));
+    await db.execute(sql.raw(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`));
+    // The connection itself is still the client's to close: it is what pins the
+    // session, so nothing above can release it.
     await client.end();
   });
 
