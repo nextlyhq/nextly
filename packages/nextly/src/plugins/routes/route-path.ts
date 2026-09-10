@@ -12,8 +12,12 @@
  * `/admin/plugins/acme-p`; the slug is how the ADMIN names a plugin and has
  * never been how the dispatcher does.
  *
- * No mount prefix: the host app decides where the Nextly handler is mounted
- * (`/api/...` by convention), so that half is the caller's to add.
+ * No mount prefix: the host app decides where the Nextly handler is mounted, so
+ * that half is the caller's to add. The scaffold mounts it at
+ * `src/app/admin/api/[[...params]]/route.ts`, which makes the full address
+ * `/admin/api/plugins/<name><path>` in a generated project. This comment said
+ * `/api/...` "by convention" and four documentation pages were written from it,
+ * every one of them naming a URL that 404s in a scaffolded app.
  *
  * @module plugins/routes/route-path
  */

@@ -555,7 +555,10 @@ export interface PluginContributions {
   fieldTypes?: PluginFieldType[];
   /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
-  /** @public HTTP routes, namespaced under /api/plugins/<name>. */
+  /**
+   * @public HTTP routes, namespaced under `/plugins/<name>` beneath wherever the
+   * app mounts the Nextly handler (`/admin/api` in a scaffolded project).
+   */
   routes?: PluginRoute[];
   /**
    * @public Admin UI contributions: menu, pages +

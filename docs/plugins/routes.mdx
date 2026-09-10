@@ -30,11 +30,28 @@ definePlugin({
 The route above is served at:
 
 ```
-/api/plugins/@acme/nextly-plugin-reports/summary
+/admin/api/plugins/@acme/nextly-plugin-reports/summary
 ```
 
-i.e. `/api/plugins/<plugin-name><path>`. Paths support `:param` segments
-(`/items/:id`), captured into `ctx.params`.
+That address has two halves, and only the second one is Nextly's.
+
+**The namespace** is `/plugins/<plugin-name><path>`, and the plugin name is the raw
+package name rather than the admin slug: `@acme/p` answers at `/plugins/@acme/p/export`,
+even though the admin addresses that plugin as `/admin/plugins/acme-p`.
+
+**The mount** is wherever your app puts `createDynamicHandlers`, and Nextly cannot know
+it: the handler is a route file in your app directory. A scaffolded project mounts it at
+`src/app/admin/api/[[...params]]/route.ts`, which is where the `/admin/api` above comes
+from. Move that file and every plugin route moves with it.
+
+<Callout type="warn">
+A bare `/api` prefix is **not** the mount in a scaffolded app. The base template puts only
+`health` and `media` under `/api`, with no catch-all, so a plugin route addressed there is
+a 404 with nothing to explain it. If your routes are not answering, check where your own
+`createDynamicHandlers` route file actually sits.
+</Callout>
+
+Paths support `:param` segments (`/items/:id`), captured into `ctx.params`.
 
 ## The handler context
 

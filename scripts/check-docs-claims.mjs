@@ -609,6 +609,116 @@ function metaReachability(repoRoot, tracked, findings) {
  * reports it until a reader hits a 404. The set of pages is derived from the same tracked
  * list everything else here reads, so a link to a page that exists only locally fails too.
  */
+/**
+ * Where a plugin route actually answers, checked against the scaffold rather
+ * than against a convention someone remembered.
+ *
+ * 🔴 Four documentation pages named `/api/plugins/<name>` because a comment in
+ * `route-path.ts` called that the convention. The base template mounts the
+ * dynamic handler at `src/app/admin/api/[[...params]]/route.ts`, and `/api`
+ * carries only `health` and `media` with no catch-all, so every one of those
+ * URLs 404s in a generated project with nothing to explain why. It is the
+ * first thing a plugin author hits.
+ *
+ * The mount is DERIVED from the template on every run, so moving that route
+ * file reports the pages that now disagree instead of leaving them wrong, and
+ * the namespace segment is read from its one declaration for the same reason.
+ */
+const DYNAMIC_HANDLER_IMPORT = /createDynamicHandlers/;
+const NAMESPACE_DECLARATION =
+  /export const PLUGIN_NAMESPACE_SEGMENT\s*=\s*"([^"]+)"/;
+const NAMESPACE_SOURCE = "packages/nextly/src/plugins/routes/route-path.ts";
+const TEMPLATE_APP_DIR = "templates/base/src/app/";
+const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
+/** A path ending in `api` that then namespaces plugins, i.e. a mounted route. */
+const MOUNTED_PLUGIN_PATH = /((?:\/[A-Za-z0-9_-]+)*\/api)\/plugins\//g;
+
+function pluginRouteMount(repoRoot, tracked, findings) {
+  const refuse = message => {
+    findings.push({
+      check: "plugin-route-mount-unreadable",
+      file: NAMESPACE_SOURCE,
+      line: null,
+      message,
+    });
+  };
+
+  // Fails closed on both halves. Checking the docs against a mount this could
+  // not establish would report "no findings" for a question it never asked.
+  const mounts = tracked
+    .filter(
+      rel => rel.startsWith(TEMPLATE_APP_DIR) && rel.endsWith(TEMPLATE_CATCH_ALL)
+    )
+    .filter(rel => {
+      try {
+        return DYNAMIC_HANDLER_IMPORT.test(
+          readFileSync(join(repoRoot, rel), "utf-8")
+        );
+      } catch {
+        return false;
+      }
+    });
+  if (mounts.length !== 1) {
+    refuse(
+      `expected exactly one scaffolded createDynamicHandlers route to read the mount from, found ${String(mounts.length)}`
+    );
+    return;
+  }
+
+  let namespace;
+  try {
+    const declared = NAMESPACE_DECLARATION.exec(
+      readFileSync(join(repoRoot, NAMESPACE_SOURCE), "utf-8")
+    );
+    if (declared === null) {
+      refuse(
+        "PLUGIN_NAMESPACE_SEGMENT is not declared where this check reads it"
+      );
+      return;
+    }
+    namespace = declared[1];
+  } catch {
+    refuse(
+      "could not be read, so the documented plugin route path has nothing to be checked against"
+    );
+    return;
+  }
+
+  // `templates/base/src/app/admin/api/[[...params]]/route.ts` -> `/admin/api`
+  const mount = `/${mounts[0].slice(
+    TEMPLATE_APP_DIR.length,
+    mounts[0].length - TEMPLATE_CATCH_ALL.length
+  )}`;
+  const expected = `${mount}/${namespace}/`;
+
+  for (const rel of tracked) {
+    if (!rel.startsWith("docs/") && !rel.endsWith("/README.md")) continue;
+    if (!rel.endsWith(".mdx") && !rel.endsWith(".md")) continue;
+    if (basename(rel) === "CHANGELOG.md") continue;
+    let text;
+    try {
+      text = readFileSync(join(repoRoot, rel), "utf-8");
+    } catch {
+      continue;
+    }
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      MOUNTED_PLUGIN_PATH.lastIndex = 0;
+      let match;
+      while ((match = MOUNTED_PLUGIN_PATH.exec(lines[i])) !== null) {
+        const found = `${match[1]}/${namespace}/`;
+        if (found === expected) continue;
+        findings.push({
+          check: "plugin-route-mount",
+          file: rel,
+          line: i + 1,
+          message: `documents a plugin route at ${found}, but the scaffold mounts the handler at ${mount}, so it answers at ${expected}`,
+        });
+      }
+    }
+  }
+}
+
 function internalLinks(repoRoot, tracked, findings) {
   const pages = new Set(tracked.filter(rel => rel.endsWith(".mdx")));
   const resolves = target => {
@@ -1631,6 +1741,7 @@ export async function runChecks({
     repairs
   );
   internalLinks(repoRoot, tracked, findings);
+  pluginRouteMount(repoRoot, tracked, findings);
   metaReachability(repoRoot, tracked, findings);
 
   return { findings, unverifiable };
