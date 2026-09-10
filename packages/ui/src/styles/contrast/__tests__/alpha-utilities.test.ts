@@ -299,7 +299,12 @@ function scanCombos(): Map<string, number> {
  * cannot silently bypass the assertion; the scan only admits names that map to
  * a real `--color-*`, so a throw here means the theme dropped a used token.
  */
-function worstRatio(combo: string): { ratio: number; need: number } {
+function worstRatio(combo: string): {
+  ratio: number;
+  need: number;
+  /** The same token with no opacity — the best this utility could ever measure. */
+  fullStrength: number;
+} {
   const m = /^(text|border|ring)-(.+)\/(\[[0-9.]+%?\]|\d+)$/.exec(combo);
   if (!m) {
     throw new Error(`unparseable alpha utility: ${combo}`);
@@ -314,6 +319,7 @@ function worstRatio(combo: string): { ratio: number; need: number } {
   const need = kind === "text" ? 4.5 : 3;
   const surface = surfaceFor(name);
   let worst = Infinity;
+  let worstFull = Infinity;
   for (const tokens of [light, dark]) {
     const ctx: ResolveContext = { tokens, scale };
     let base: Rgb;
@@ -339,8 +345,17 @@ function worstRatio(combo: string): { ratio: number; need: number } {
     // composite over the surface, then measure the painted pixel's contrast.
     const ratio = contrastRatio(opaque(applyOpacity(base, alpha), bg), bg);
     worst = Math.min(worst, ratio);
+    // The same token at FULL strength. Whether the token can reach `need` at all
+    // decides what the failure means, and the two readings are different advice:
+    // a token that clears it was faded too far and should be un-faded; a token
+    // that does not clear it cannot be repaired by any opacity, so un-fading
+    // only removes it from this scan. See the message this feeds.
+    worstFull = Math.min(
+      worstFull,
+      contrastRatio(opaque(applyOpacity(base, 1), bg), bg)
+    );
   }
-  return { ratio: worst, need };
+  return { ratio: worst, need, fullStrength: worstFull };
 }
 
 describe("alpha-opacity color utilities", () => {
@@ -398,17 +413,31 @@ describe("alpha-opacity color utilities", () => {
       if (ALLOWED_DECORATIVE.has(combo)) continue;
       const r = worstRatio(combo);
       if (r.ratio < r.need) {
+        // Say WHICH of the two failures this is. Advising "replace with a
+        // semantic token" on a token that is itself below `need` is advice that
+        // silences this scan without changing a pixel — the scan only reads
+        // utilities carrying an opacity, so dropping the opacity removes the
+        // line from view rather than making it visible. That advice was taken
+        // once, on this table's row divider, and shipped as a contrast fix.
         offenders.push(
-          `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1)`
+          r.fullStrength < r.need
+            ? `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1) — and ` +
+                `--color-${combo.replace(/^(text|border|ring)-/, "").replace(/\/.*$/, "")} ` +
+                `is only ${r.fullStrength.toFixed(2)}:1 at full strength, so no ` +
+                `opacity reaches ${r.need}:1. Removing the opacity only hides it ` +
+                `from this scan. Use a token that holds ${r.need}:1 (e.g. ` +
+                `control-border), or allowlist it as decorative with a reason.`
+            : `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1) — the ` +
+                `token clears ${r.need}:1 at full strength, so use it un-faded.`
         );
       }
     }
     expect(
       offenders,
-      `Faint alpha color utilities below WCAG on the page surface. Replace with a ` +
-        `semantic token (text-muted-foreground, border-border/border-input, or the ` +
-        `full-strength status token), or, if genuinely decorative, add it to ` +
-        `ALLOWED_DECORATIVE with a reason:\n${offenders.join("\n")}`
+      `Faint alpha color utilities below WCAG on the page surface. Each line ` +
+        `says which remedy applies — a token that clears the target un-faded, ` +
+        `or one that cannot and needs a different token or an ALLOWED_DECORATIVE ` +
+        `entry with a reason:\n${offenders.join("\n")}`
     ).toEqual([]);
   });
 

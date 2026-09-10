@@ -141,6 +141,13 @@ export function ChartFrame({
             </thead>
             <tbody>
               {rows.map(row => (
+                // The house divider token at full strength, which is what
+                // the other 83 dividers in this admin use. Deliberately NOT a
+                // 3:1 claim: `--nx-border` measures 1.23:1 on the card, and
+                // 1.4.11 does not reach a table rule — the row structure is
+                // carried by the markup (`<th scope="row">` below), so the line
+                // is a visual aid rather than information. It was `/50`, which
+                // is fainter still at 1.11:1 and the only faded divider here.
                 <tr key={row.key} className="border-b border-border">
                   {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
