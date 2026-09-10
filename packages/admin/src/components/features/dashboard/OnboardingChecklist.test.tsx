@@ -16,7 +16,7 @@ import {
   QueryClientProvider,
   useQuery,
 } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -39,10 +39,25 @@ const ALL_BUT_ONE = [
 
 const EVERY_STEP = ALL_BUT_ONE.map(step => ({ ...step, complete: true }));
 
+/**
+ * A client carrying the defaults PRODUCTION uses.
+ *
+ * 🔴 `gcTime: 0` and an absent `staleTime` are what a test client reaches for,
+ * and both hide real defects here. The admin's `QueryProvider` holds data fresh
+ * for five minutes, keeps it for ten, and does not refetch on focus — so a
+ * cached answer genuinely survives an unmount and genuinely is not refreshed by
+ * returning to the tab. A client that collects the entry immediately, or treats
+ * it as stale on arrival, can never meet either case.
+ */
 function client() {
   return new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
+      queries: {
+        retry: false,
+        staleTime: 5 * 60 * 1000,
+        gcTime: 10 * 60 * 1000,
+        refetchOnWindowFocus: false,
+      },
       mutations: { retry: false },
     },
   });
@@ -174,6 +189,58 @@ describe("the onboarding checklist", () => {
       ).toBeInTheDocument()
     );
     expect(readLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT act on a completed answer cached by an EARLIER mount", async () => {
+    // 🔴 The card is unmounted whenever it is not offered, and a cached response
+    // outlives that. A reader who finishes onboarding and then deletes their
+    // last collection gets the card offered again -- and it would remount
+    // holding the previous mount's all-complete answer, announce itself
+    // finished before its own refetch landed, and ask the host for a layout the
+    // server has just decided should include it.
+    //
+    // Two things this fixture must get right, both found by the break killing
+    // nothing: the client has to KEEP its cache across the unmount, which the
+    // shared `client()` does not (`gcTime: 0` collects it immediately); and the
+    // layout consumer has to stay mounted for the SECOND mount too, or the
+    // invalidation has no observer and its refetch count cannot move either way.
+    protectedGet.mockResolvedValue({ steps: EVERY_STEP });
+    const qc = client();
+    const readLayout = vi.fn().mockResolvedValue({ placements: [] });
+    const LayoutConsumer = () => {
+      useQuery({ queryKey: DASHBOARD_LAYOUT_KEY, queryFn: readLayout });
+      return null;
+    };
+    const withCard = (card: boolean) => (
+      <QueryClientProvider client={qc}>
+        <LayoutConsumer />
+        {card ? <OnboardingChecklist /> : null}
+      </QueryClientProvider>
+    );
+
+    const view = render(withCard(true));
+    // The first mount completes and correctly asks the host to drop the card.
+    await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
+
+    // The host drops it, so the card unmounts while its answer stays cached.
+    view.rerender(withCard(false));
+    const afterDrop = readLayout.mock.calls.length;
+
+    // The reader deletes their last collection: the host offers the card again,
+    // and the fresh answer has work outstanding.
+    protectedGet.mockResolvedValue({ steps: ALL_BUT_ONE });
+    view.rerender(withCard(true));
+
+    // 🔴 Asserted on the PROGRESS, not the row count. Both answers hold three
+    // rows -- the cached one has them all ticked -- so counting rows cannot
+    // separate the obsolete answer from the fresh one, and a test that counts
+    // them passes with the refetch removed entirely. "2 of 3" is true only of
+    // the answer this mount fetched.
+    await waitFor(() =>
+      expect(screen.getByText(/2 of 3 done/)).toBeInTheDocument()
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(ALL_BUT_ONE.length);
+    expect(readLayout).toHaveBeenCalledTimes(afterDrop);
   });
 
   it("says progress is unavailable rather than showing it finished", async () => {
