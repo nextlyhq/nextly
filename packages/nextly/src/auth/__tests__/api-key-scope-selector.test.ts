@@ -69,6 +69,17 @@ describe("the API-key scope selector", () => {
     ).toBe(true);
   });
 
+  it("fires on a const-asserted literal before a spread", async () => {
+    // `as const` wraps the literal in a TSAsExpression, so an attribute match
+    // on the property's own value cannot see it — and this is the ordinary
+    // TypeScript spelling of the shape the arm above exists for.
+    expect(
+      await firesOn(
+        'const a = {}; const s = { actorType: "apiKey" as const, ...a };'
+      )
+    ).toBe(true);
+  });
+
   it("does NOT fire on a row that merely has an actorType and a spread", async () => {
     // An activity-log row records what KIND of caller wrote it and spreads its
     // optional columns. It is no kind of scope, and a guard that refuses it is

@@ -16,6 +16,7 @@ import { container } from "../../../di/container";
 import { getCoreSchema } from "../../../schemas";
 import type { LogActivityInput } from "../../../services/dashboard/activity-log-service";
 import type { Logger } from "../../../services/shared";
+import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import { SYSTEM_CONTEXT } from "../../../shared/types";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../provider-activity";
@@ -509,11 +510,26 @@ describe("email provider activity", () => {
       }
     );
 
-    expect(logged).toHaveLength(2);
+    expect(logged).toHaveLength(1);
     expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
-    // The reserved id arrives as a USER actor and must not be filed as one:
-    // no account owns it, so the erasure would read it as an erased person.
-    expect(logged[1]).toMatchObject({ actorType: "system" });
+  });
+
+  it("records nothing for the canonical system actor", async () => {
+    // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
+    // names no actor, and those run while the schema is being created. This
+    // recorder's failures PROPAGATE, so a trail insert against a table that
+    // does not exist yet would fail the seed that was creating it.
+    //
+    // Both spellings, because they arrive by different routes: the canonical
+    // actor carries no id at all, and a seed passing SYSTEM_CONTEXT arrives as
+    // a USER actor holding the reserved id.
+    await service.createProvider({ ...INPUT, name: "By a job" }, SYSTEM_ACTOR);
+    await service.createProvider(
+      { ...INPUT, name: "By a seed" },
+      { type: "user", id: SYSTEM_CONTEXT.user?.id ?? "system" }
+    );
+
+    expect(logged).toHaveLength(0);
   });
 
   it("does not fail the mutation when the trail cannot be written", async () => {

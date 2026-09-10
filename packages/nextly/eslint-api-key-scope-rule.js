@@ -69,7 +69,16 @@ export const API_KEY_SCOPE_SELECTOR =
   // scope. A guard that fires on correct code is the one people work around,
   // and the workarounds — renaming the field, disabling the rule — cost its
   // true positives too.
-  'ObjectExpression:has(> Property[key.name="actorType"][value.value="apiKey"])' +
+  //
+  // Both spellings of the literal, because `{ actorType: "apiKey" as const }`
+  // wraps it in a `TSAsExpression` and an attribute match on the property's own
+  // value cannot see through one. Two attribute paths rather than a descendant
+  // match: measured, a descendant `Literal[value="apiKey"]` matches NEITHER
+  // spelling, and `as const` is the ordinary TypeScript way to write this.
+  "ObjectExpression:has(" +
+  '> Property[key.name="actorType"][value.value="apiKey"], ' +
+  '> Property[key.name="actorType"][value.expression.value="apiKey"]' +
+  ")" +
   ":has(> SpreadElement)";
 
 export const API_KEY_SCOPE_MESSAGE =

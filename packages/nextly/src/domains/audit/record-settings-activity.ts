@@ -57,17 +57,27 @@ export function recordableActor(
   actor?: RequestActor | null
 ): { type: RequestActorType; id: string } | null {
   if (!actor?.id) return null;
+  // A SYSTEM write is deliberately still refused, and the reason is not the one
+  // that used to refuse a key.
+  //
+  // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
+  // names no actor — seeds, migrations, maintenance, and any internal call that
+  // simply did not pass one. Those run while the schema is being created, and
+  // this recorder's failures PROPAGATE and take the surrounding write with
+  // them: a trail insert against a table that does not exist yet would fail the
+  // seed that was creating it.
+  //
+  // A key is different. It arrives on a request, over a transport, against a
+  // database that is already up — so admitting it costs nothing that was not
+  // already true of a user's write.
+  if (actor.type === "system") return null;
   // `SYSTEM_CONTEXT` carries the reserved user id `system`, so a seed or a
   // migration with no transport actor to override it arrives as a USER actor.
-  // No account owns that id, so recording it as a user would attribute an
-  // internal write to a person who does not exist. Compared against the
-  // sentinel itself so the two cannot drift apart, and rewritten rather than
-  // refused: the write IS a system write, and a row can say so now.
-  const type =
-    actor.type === "user" && actor.id === SYSTEM_CONTEXT.user?.id
-      ? "system"
-      : actor.type;
-  return { type, id: actor.id };
+  // No account owns that id, and it is a system write wearing a user's shape —
+  // so it is refused for the reason above rather than filed as a person.
+  // Compared against the sentinel itself so the two cannot drift apart.
+  if (actor.id === SYSTEM_CONTEXT.user?.id) return null;
+  return { type: actor.type, id: actor.id };
 }
 
 /** One recorded settings mutation. */

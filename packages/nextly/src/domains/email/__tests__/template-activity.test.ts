@@ -200,7 +200,7 @@ describe("email template activity", () => {
     expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
   });
 
-  it("records the system actor AS system, not as a person", async () => {
+  it("still records nothing for the system actor", async () => {
     // Boot-time seeding resolves to a USER actor carrying the reserved id, and
     // no account owns it. Recording it as a user would attribute an internal
     // write to a person who does not exist, so the kind is rewritten rather
@@ -211,10 +211,10 @@ describe("email template activity", () => {
       type: "user" as const,
       id: system.id,
     });
-    expect(logged).toHaveLength(1);
-    expect(logged[0]).toMatchObject({ actorType: "system" });
-    // NOT a user: the erasure joins the account table on user rows, and a
-    // reserved id there would be filed as an already-erased person.
-    expect(logged[0]).not.toMatchObject({ actorType: "user" });
+    // Refused for a NEW reason. A system write runs while the schema is being
+    // created, and this recorder's failures propagate — a trail insert against
+    // a table that does not exist yet would fail the seed creating it. A key,
+    // by contrast, arrives over a transport against a database already up.
+    expect(logged).toHaveLength(0);
   });
 });

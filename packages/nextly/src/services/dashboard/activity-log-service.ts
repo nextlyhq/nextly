@@ -49,6 +49,13 @@ export type ActivityLogAction = "create" | "update" | "delete";
 export interface ActivityLogEntry {
   id: string;
   /**
+   * What KIND of caller `userId` refers to.
+   *
+   * `"user"` on a row written before the column existed: no other kind was
+   * recordable then, so the NULL is read rather than guessed.
+   */
+  actorType: RequestActorType;
+  /**
    * The actor, as an opaque reference that outlives their account.
    *
    * Still set after the account is deleted — that is what keeps one deleted
@@ -84,12 +91,17 @@ export interface LogActivityInput {
   /**
    * What KIND of caller `userId` refers to.
    *
-   * `userId` is the actor's opaque reference whatever the kind: a user's id, an
-   * API key's own id, or a system caller's name. This says which, so the
-   * identity erasure and the feed can tell an account from a credential — the
-   * distinction that made a non-user write unrecordable before.
+   * Decides how the write is stored, not just how it reads: only a `user` has
+   * an account, so only a user's write is routed through the erasure-aware
+   * insert. A key or system identifier has no row in `users`, and looking it up
+   * there would write the entry already-erased.
    */
   actorType: RequestActorType;
+  /**
+   * The actor's opaque reference, whatever the kind — a user's id, an API key's
+   * own id, or a system caller's reserved name. Never null: it is what keeps
+   * one actor's entries distinguishable from another's after erasure.
+   */
   userId: string;
   /**
    * Display name to denormalize onto the row. Omit to take it from the account
@@ -597,6 +609,19 @@ export class ActivityLogService extends BaseService {
     // Taking it from the account is what a caller holding only an actor id
     // does: the write already looks at that row to decide whether the account
     // exists, so the name comes from the same look as that decision.
+    // Only a USER has an account, so only a user's write can race an erasure.
+    //
+    // `insertErasureAware` decides by looking the actor up in `users`, and an
+    // API key's own id or a system caller's name has no row there — so routing
+    // one through it writes the entry already-erased, with null identity
+    // columns and a non-null stamp. That is precisely the record the old gate
+    // refused to create, reappearing one layer down now that the gate admits
+    // these actors.
+    if (input.actorType !== "user") {
+      await db.insert(activityLog).values(this.entryValues(input, new Date()));
+      return;
+    }
+
     const supplied: Record<string, unknown> = {};
     const fromAccount: Record<string, Column> = {};
     if (input.userName !== undefined) supplied.userName = input.userName;
@@ -970,6 +995,18 @@ export class ActivityLogService extends BaseService {
     return kept;
   }
 
+  /**
+   * The kind a stored row records, defaulting a legacy NULL to `"user"`.
+   *
+   * An unrecognised value reads as `"user"` too. The column is written only by
+   * this service, so anything else came from outside it, and treating an
+   * unknown kind as a NON-person would attribute a real person's write to a
+   * machine — the more misleading of the two directions.
+   */
+  private static toActorType(value: unknown): RequestActorType {
+    return value === "apiKey" || value === "system" ? value : "user";
+  }
+
   private mapRow = (row: Record<string, unknown>): ActivityLogEntry => {
     let metadata: Record<string, unknown> | null = null;
     if (row.metadata) {
@@ -993,6 +1030,11 @@ export class ActivityLogService extends BaseService {
 
     return {
       id: String(row.id),
+      // NULL means a row written before the column existed. No kind but `user`
+      // was recordable then, so this reads the old gate rather than guessing —
+      // and a reader that dropped the field would silently attribute a key's
+      // write to a person.
+      actorType: ActivityLogService.toActorType(row.actorType),
       userId: String(row.userId),
       // Through the same narrowing as the other nullable columns: an erased
       // row holds SQL NULL here, and `String(null)` would surface the literal
