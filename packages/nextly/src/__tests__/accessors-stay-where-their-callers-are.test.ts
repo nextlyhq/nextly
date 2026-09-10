@@ -83,25 +83,36 @@ describe("instance accessors are published where their callers can reach them", 
   });
 
   it("does not forbid the callers it names, however the prohibition is worded", () => {
-    // Not a search for one historical sentence. Any phrasing that tells this
-    // function's audience to stay away contradicts the paragraph above it, and
-    // a docblock that does both is worse than either alone.
+    // A list of forbidden phrasings is the wrong shape for this. "must not
+    // call" was covered and "should not call" was not, and the next wording
+    // nobody anticipates passes just as easily. So it is structural instead.
+    //
+    // Every sentence mentioning this function's audience is examined, and none
+    // of them may be a prohibition. A docblock cannot then name plugins as
+    // callers in one breath and warn them off in the next, whatever verb it
+    // reaches for.
     const doc = docblockFor(
       initSource,
       "export async function getCachedNextly"
     );
 
-    const prohibitions = [
-      /do not use this/i,
-      /don't use this/i,
-      /must not (be )?call/i,
-      /not for (user|plugin)/i,
-      /internal use only/i,
-    ];
+    const sentences = doc
+      .replace(/^\s*\*+ ?/gm, "")
+      .split(/(?<=[.:])\s+/)
+      .map(line => line.trim())
+      .filter(line => /plugin|user code|caller/i.test(line));
 
-    expect(
-      prohibitions.filter(pattern => pattern.test(doc)).map(String)
-    ).toEqual([]);
+    // The control. With nothing matched the assertion below is vacuous, and
+    // would stay green through a docblock that never names the audience at all.
+    expect(sentences.length).toBeGreaterThan(0);
+
+    const forbidding = sentences.filter(line =>
+      /\b(do not|don't|does not|must not|should not|never|cannot|not for|internal use only)\b/i.test(
+        line
+      )
+    );
+
+    expect(forbidding).toEqual([]);
   });
 
   it("does not claim the root avoids the Next peer dependency", () => {
