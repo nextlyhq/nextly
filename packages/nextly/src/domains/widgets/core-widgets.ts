@@ -106,6 +106,30 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     visibleWhen: "content:empty",
   },
   {
+    id: "core/onboarding-checklist",
+    title: "Set up your project",
+    description:
+      "The setup steps still outstanding, detected from the install rather than ticked by hand.",
+    archetype: "custom",
+    chrome: "none",
+    defaultSize: "full",
+    // Between the seed offer and the first content card. Both are transient and
+    // both address a reader who has just arrived, so they sit together rather
+    // than with the cards that stay.
+    defaultOrder: 5,
+    component: "core#OnboardingChecklist",
+    /*
+     * Offered only while there is something left to do, and dropped by the host
+     * the moment there is not. The card used to decide that for itself from
+     * `localStorage`, which made it a per-BROWSER answer to a per-reader
+     * question: the same person on a second machine met a checklist they had
+     * already finished, and a colleague met one reporting someone else's
+     * progress.
+     */
+    lifecycle: "conditional",
+    visibleWhen: "onboarding:incomplete",
+  },
+  {
     id: "core/collections",
     title: "Collections",
     description: "Entry counts per collection, grouped by what provides them.",

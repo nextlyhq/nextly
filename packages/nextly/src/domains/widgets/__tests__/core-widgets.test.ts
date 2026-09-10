@@ -108,14 +108,32 @@ describe("core widget definitions", () => {
     expect(seed?.visibleWhen).toBe("content:empty");
   });
 
+  it("offers the checklist only while setup is outstanding", () => {
+    // Same move as the card above, for the same reason: this one decided from
+    // `localStorage`, which answered a per-reader question per browser -- the
+    // same person on a second machine met a checklist they had finished.
+    const checklist = CORE_WIDGETS.find(
+      w => w.id === "core/onboarding-checklist"
+    );
+    expect(checklist?.lifecycle).toBe("conditional");
+    expect(checklist?.visibleWhen).toBe("onboarding:incomplete");
+  });
+
   it("keeps every OTHER core card permanent", () => {
     // The control. A conversion that made the whole list conditional would
-    // satisfy the case above while emptying the dashboard, and nothing in that
-    // assertion could tell the difference.
+    // satisfy the cases above while emptying the dashboard, and nothing in
+    // those assertions could tell the difference.
+    //
+    // Membership rather than a count: a change that made one card transient
+    // while making another permanent leaves any total unmoved, and the card
+    // that quietly stopped being offered is the one nobody would look for.
     const conditional = CORE_WIDGETS.filter(
       w => w.lifecycle === "conditional"
     ).map(w => w.id);
-    expect(conditional).toEqual(["core/seed-demo-content"]);
+    expect(conditional).toEqual([
+      "core/seed-demo-content",
+      "core/onboarding-checklist",
+    ]);
   });
 
   it("gates no card that predates the grid", () => {
