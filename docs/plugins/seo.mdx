@@ -68,13 +68,27 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 
 ### The default fields
 
-| Field             | Type     | Notes                                                                           |
-| ----------------- | -------- | ------------------------------------------------------------------------------- |
-| `metaTitle`       | text     | Capped at 60 characters, which is roughly where search engines truncate a title |
-| `metaDescription` | textarea | Capped at 160 characters, for the same reason                                   |
-| `ogImage`         | upload   | Relates to `media`. The social preview image                                    |
-| `canonical`       | text     | A per-page canonical URL                                                        |
-| `noindex`         | checkbox | Defaults to `false`. Keeps a single entry out of search results                 |
+| Field             | Type     | Notes                                                                                                                                                           |
+| ----------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `metaTitle`       | text     | Capped at 60 characters, which is roughly where search engines truncate a title                                                                                 |
+| `metaDescription` | textarea | Capped at 160 characters, for the same reason                                                                                                                   |
+| `ogImage`         | upload   | Relates to `media`. The social preview image                                                                                                                    |
+| `canonical`       | text     | A per-page canonical URL                                                                                                                                        |
+| `noindex`         | checkbox | Defaults to `false`. Drops the entry from this plugin's sitemap. The `robots` directive that actually tells a crawler comes from `buildMetadata`, which is core |
+
+<Callout type="warn">
+**Ticking `noindex` does not on its own keep a page out of search results.** The plugin
+does two things with it, and one of them is nothing: the entry leaves this sitemap, and
+that is all. A crawler that reaches the page by any other route still indexes it, because
+the `robots` meta tag is emitted only if your app calls `buildMetadata` and renders what
+it returns. An inbound link from another site, one of your own pages still linking to it,
+and a URL already in an index are each enough.
+
+That is the same split as everywhere else on this page: the plugin stores, core renders.
+If you rely on `noindex`, make sure the pages for that collection actually render metadata
+from `buildMetadata`.
+
+</Callout>
 
 All five are optional. `canonical` and `noindex` ship by default rather than being left for
 you to add, because a canonical URL and a search opt-out are baseline controls rather than
@@ -110,14 +124,14 @@ Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKe
 
 ## Configuration
 
-| Option        | Type                                    | Default                | What it does                                                                |
-| ------------- | --------------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
-| `collections` | `string[]`                              | required               | The collections that get the `seo` group                                    |
-| `fields`      | `FieldConfig[]`                         | the five above         | The fields placed inside the group                                          |
-| `baseUrl`     | `string`                                | the request origin     | Absolute origin for `<loc>` in the sitemap                                  |
-| `basePath`    | `string`, or a function, or absent      | `/<collection>`        | Where each collection's route is mounted                                    |
-| `urlFor`      | `(entry, collection) => string \| null` | `/<collection>/<slug>` | Builds a whole entry path. Returning `null` or `undefined` drops that entry |
-| `sitemap`     | `boolean` or `{ collections }`          | `true`                 | Controls the public sitemap route                                           |
+| Option        | Type                                                 | Default                | What it does                                                                |
+| ------------- | ---------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
+| `collections` | `string[]`                                           | required               | The collections that get the `seo` group                                    |
+| `fields`      | `FieldConfig[]`                                      | the five above         | The fields placed inside the group                                          |
+| `baseUrl`     | `string`                                             | the request origin     | Absolute origin for `<loc>` in the sitemap                                  |
+| `basePath`    | `string`, or a function, or absent                   | `/<collection>`        | Where each collection's route is mounted                                    |
+| `urlFor`      | `(entry, collection) => string \| null \| undefined` | `/<collection>/<slug>` | Builds a whole entry path. Returning `null` or `undefined` drops that entry |
+| `sitemap`     | `boolean` or `{ collections }`                       | `true`                 | Controls the public sitemap route                                           |
 
 ## The sitemap
 
@@ -146,22 +160,45 @@ an ordinary field you happen to have named `status`. Filtering on a same-named c
 field would be the plugin guessing at your semantics. If you keep drafts that way, exclude
 that collection from the sitemap.
 
+**One document, and the protocol bounds it.** The builder stops once it has emitted
+**50,000 URLs**, or sooner if the serialized document would pass **50 MB**, because a
+single `<urlset>` past either is invalid. It stops rather than failing, so a site above
+those limits gets a sitemap that is quietly short with no error to say so.
+
+Both limits are **on the whole document**, not per collection. Collections are walked in
+the order you configure them, so a first collection large enough to reach the cap means
+the later ones contribute nothing at all and never say so.
+
 <Callout type="warn">
-**The route is not rate limited by default.** Nextly's limiter skips `/admin/api/` through
-`defaultSkipAdminApi`, which is where the scaffold mounts plugin routes, so this public
-endpoint is exempt out of the box. Each anonymous request can page and serialize up to
-50,000 rows, and with no `baseUrl` configured the response is `no-store`, so an
-intermediary will not absorb the repeats either.
+**The cap counts URLs emitted, not rows read, and the route is not rate limited.**
 
-Set `baseUrl` so the document is cacheable, put a CDN or your host's cache in front of
-`/sitemap.xml`, or pass a `skip` to the rate limiter that does not exempt this path.
+Those two facts are worse together than apart. Every exclusion is a skip that keeps
+paging: an entry with `seo.noindex`, an unusable slug, an off-origin `canonical`, or a
+location over 2,048 characters is dropped without counting toward the 50,000.
 
-</Callout>
+The builder still stops the moment it holds 50,000 acceptable URLs, so a large collection
+that mostly yields valid entries is not read in full. The expensive case is a configured
+set that cannot reach the cap: if it produces fewer than 50,000 URLs and stays under
+50 MB, then every row of every collection is read on **every request**, however many rows
+that is.
 
-**One document, and the protocol bounds it.** Collection stops at **50,000 URLs**, or
-sooner if the serialized document would pass **50 MB**, because a single `<urlset>` past
-either is invalid. It stops rather than failing, so a site above those limits gets a
-sitemap that is quietly short, with no error to say so.
+Nextly's rate limiter skips paths beginning `/admin/api/` through `defaultSkipAdminApi`,
+which is exactly where the scaffold mounts plugin routes, so on a default install this
+public endpoint is exempt out of the box. A handler mounted anywhere else goes through the
+ordinary read limiter, so this is about the scaffolded layout rather than about the
+plugin. With no `baseUrl` set the response is `no-store`, so nothing in front absorbs the
+repeats either.
+
+Three things that each help, in the order they are worth doing:
+
+1. **Set `baseUrl`**, so the document is cacheable at all.
+2. **Cache the route that generates the document**, at
+   `/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`. Caching only `/sitemap.xml`
+   works when that address rewrites or proxies. Behind a redirect the crawler follows on
+   to the plugin route, so it is that route's cache, not the one in front of
+   `/sitemap.xml`, that decides whether the origin rebuilds.
+3. **Pass a `skip`** to the rate limiter that does not exempt this path.
+   </Callout>
 
 <Callout type="warn">
 **These exports cannot shard, so do not reach for them from `generateSitemaps()`.**
@@ -273,9 +310,17 @@ document and serve it for another. **Configure `baseUrl` if you want a cacheable
 
 ### Advertising it to crawlers
 
-The mounted path is not where a crawler looks. Serve or redirect `/sitemap.xml` to it, and
-name it in `robots.txt`. Core ships `nextlySitemap` and `nextlyRobots` for a Next.js app;
-see [Routing and SEO](/docs/guides/routing-and-seo#nextlysitemap-and-nextlyrobots).
+The mounted path is not where a crawler looks, so expose it at `/sitemap.xml` and name
+that in `robots.txt`.
+
+**A rewrite and a redirect both work for the crawler, but they cache in different
+places.** A rewrite or proxy is served under `/sitemap.xml`, so a cache in front of that
+address holds the answer. A redirect sends the crawler on to the plugin route, so it is
+that route's own cache that decides whether the origin rebuilds. Either is fine; what is
+not fine is caching one address and generating at the other.
+
+Core ships `nextlySitemap` and `nextlyRobots` for a Next.js app; see
+[Routing and SEO](/docs/guides/routing-and-seo#nextlysitemap-and-nextlyrobots).
 
 ### Building a sitemap yourself
 
