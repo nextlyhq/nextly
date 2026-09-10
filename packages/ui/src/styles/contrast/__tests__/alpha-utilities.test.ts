@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { acceptedFor } from "../accepted";
+import { ACCEPTED_REGRESSIONS, acceptedFor, roleOf } from "../accepted";
 import { compositeOver, contrastRatio, type Rgb } from "../color";
 import { parseThemeScale, parseThemeTokens } from "../parse-theme";
 import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
@@ -293,6 +293,15 @@ function scanCombos(): Map<string, number> {
   return combos;
 }
 
+/** One mode's two readings of a utility: as painted, and at full strength. */
+interface ModeReading {
+  mode: "light" | "dark";
+  /** Faded and composited — what this mode actually paints. */
+  ratio: number;
+  /** The same token with no opacity, in THIS mode. */
+  fullStrength: number;
+}
+
 /**
  * One utility's measured contrast, and the keys the reading is identified by.
  *
@@ -317,8 +326,13 @@ interface UtilityReading {
   bgToken: string;
   /** The call site's opacity, which separates a tint from its opaque pair. */
   alpha: number;
-  /** Per mode, because an accepted regression is recorded for one mode at a time. */
-  modes: readonly { mode: "light" | "dark"; ratio: number }[];
+  /**
+   * Per mode, because an accepted regression is recorded for one mode at a time
+   * — and so is the remedy. The cross-mode minimums above describe the utility
+   * as a whole; a message about SOME modes has to be built from those modes,
+   * or an acceptance in one theme decides the advice given for the other.
+   */
+  modes: readonly ModeReading[];
 }
 
 /**
@@ -345,7 +359,7 @@ function worstRatio(combo: string): UtilityReading {
   const surface = surfaceFor(name);
   let worst = Infinity;
   let worstFull = Infinity;
-  const modes: { mode: "light" | "dark"; ratio: number }[] = [];
+  const modes: ModeReading[] = [];
   for (const [mode, tokens] of [
     ["light", light],
     ["dark", dark],
@@ -374,16 +388,14 @@ function worstRatio(combo: string): UtilityReading {
     // composite over the surface, then measure the painted pixel's contrast.
     const ratio = contrastRatio(opaque(applyOpacity(base, alpha), bg), bg);
     worst = Math.min(worst, ratio);
-    modes.push({ mode, ratio });
+    const full = contrastRatio(opaque(applyOpacity(base, 1), bg), bg);
+    modes.push({ mode, ratio, fullStrength: full });
     // The same token at FULL strength. Whether the token can reach `need` at all
     // decides what the failure means, and the two readings are different advice:
     // a token that clears it was faded too far and should be un-faded; a token
     // that does not clear it cannot be repaired by any opacity, so un-fading
     // only removes it from this scan. See the message this feeds.
-    worstFull = Math.min(
-      worstFull,
-      contrastRatio(opaque(applyOpacity(base, 1), bg), bg)
-    );
+    worstFull = Math.min(worstFull, full);
   }
   return {
     kind,
@@ -418,9 +430,20 @@ function worstRatio(combo: string): UtilityReading {
  * Exported because a clean tree gives the scan no offender to reach, leaving
  * both arms unreachable from it. The controls below call this directly.
  */
-export function remediation(combo: string, r: UtilityReading): string {
-  const head = `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1)`;
-  if (r.fullStrength >= r.need) {
+export function remediation(
+  combo: string,
+  r: UtilityReading,
+  reported: readonly ModeReading[]
+): string {
+  // Built from the modes being REPORTED, not from the utility's cross-mode
+  // minimums. A pairing accepted in one theme and failing in the other is the
+  // case that separates them: the accepted theme can hold the worse full
+  // strength, and reading it here would say "no opacity reaches the target"
+  // about a mode that un-fading repairs.
+  const ratio = Math.min(...reported.map(m => m.ratio));
+  const fullStrength = Math.min(...reported.map(m => m.fullStrength));
+  const head = `${combo} = ${ratio.toFixed(2)}:1 (needs ${r.need}:1)`;
+  if (fullStrength >= r.need) {
     return `${head} — the token clears ${r.need}:1 at full strength, so use it un-faded.`;
   }
   const suggestion =
@@ -428,7 +451,7 @@ export function remediation(combo: string, r: UtilityReading): string {
       ? "a text token that clears 4.5:1 (muted-foreground, foreground)"
       : "a token that holds 3:1 (control-border)";
   return (
-    `${head} — and the token is only ${r.fullStrength.toFixed(2)}:1 at full ` +
+    `${head} — and the token is only ${fullStrength.toFixed(2)}:1 at full ` +
     `strength, so no opacity reaches ${r.need}:1. Removing the opacity only ` +
     `hides it from this scan. Use ${suggestion}, or record it: an exclusion if ` +
     `1.4.11 does not scope the pairing, or contrast/accepted.ts if it does and ` +
@@ -451,9 +474,7 @@ export function remediation(combo: string, r: UtilityReading): string {
  * nothing about a faded one: they are different colours and they measure
  * differently.
  */
-function unacceptedFailures(
-  r: UtilityReading
-): readonly { mode: "light" | "dark"; ratio: number }[] {
+function unacceptedFailures(r: UtilityReading): readonly ModeReading[] {
   return r.modes.filter(
     m =>
       m.ratio < r.need &&
@@ -530,11 +551,9 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     for (const combo of combos.keys()) {
       if (ALLOWED_DECORATIVE.has(combo)) continue;
       const r = worstRatio(combo);
-      if (unacceptedFailures(r).length > 0) {
-        // Reported at the worst reading across both modes, which is what the
-        // utility can paint; the accepted check decides only WHETHER a reading
-        // is reported, not which number describes it.
-        offenders.push(remediation(combo, r));
+      const reported = unacceptedFailures(r);
+      if (reported.length > 0) {
+        offenders.push(remediation(combo, r, reported));
       }
     }
     expect(
@@ -569,7 +588,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio(combo);
     expect(r.ratio).toBeLessThan(r.need);
     expect(r.fullStrength).toBeGreaterThanOrEqual(r.need);
-    const msg = remediation(combo, r);
+    const msg = remediation(combo, r, unacceptedFailures(r));
     expect(msg).toContain("use it un-faded");
     expect(msg).not.toContain("only hides it from this scan");
   });
@@ -582,7 +601,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio(combo);
     expect(r.ratio).toBeLessThan(r.need);
     expect(r.fullStrength).toBeLessThan(r.need);
-    const msg = remediation(combo, r);
+    const msg = remediation(combo, r, unacceptedFailures(r));
     expect(msg).toContain("only hides it from this scan");
     expect(msg).toContain("control-border");
     // Both places a sub-threshold pairing is legitimately recorded, and the
@@ -600,20 +619,96 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio(combo);
     expect(r.kind).toBe("text");
     expect(r.need).toBe(4.5);
-    const msg = remediation(combo, r);
+    const msg = remediation(combo, r, unacceptedFailures(r));
     expect(msg).not.toContain("control-border");
     expect(msg).toContain("4.5:1");
+  });
+
+  it("classifies from the modes it reports, not the utility's worst", () => {
+    // The two themes can disagree about which remedy applies, and an acceptance
+    // recorded for one of them leaves the other to be reported alone.
+    // `border-input/50` is the case: 1.16:1 un-faded in light, 4.23:1 in dark.
+    // A message built from the cross-mode minimum answers for light while
+    // reporting dark, and tells the reader no opacity reaches a target that
+    // un-fading clears.
+    const combo = "border-input/50";
+    const r = worstRatio(combo);
+    const light = r.modes.find(m => m.mode === "light");
+    const dark = r.modes.find(m => m.mode === "dark");
+    if (!light || !dark) {
+      throw new TypeError("a reading must carry both modes");
+    }
+    expect(light.fullStrength).toBeLessThan(r.need);
+    expect(dark.fullStrength).toBeGreaterThanOrEqual(r.need);
+
+    expect(remediation(combo, r, [dark])).toContain("use it un-faded");
+    expect(remediation(combo, r, [light])).toContain(
+      "only hides it from this scan"
+    );
   });
 
   it("does not treat an unrecorded pairing as accepted", () => {
     // The accepted.ts exit is the one way a failing reading is NOT reported, so
     // a consult that matched everything would empty this scan silently and each
     // message control above would still pass on its own text.
-    const r = worstRatio("border-border/50");
-    expect(r.modes.some(m => m.ratio < r.need)).toBe(true);
-    expect(unacceptedFailures(r)).toHaveLength(
-      r.modes.filter(m => m.ratio < r.need).length
-    );
+    //
+    // The subject is SELECTED rather than named. Naming one bakes in which
+    // pairings are recorded today, so a reader following this scan's own advice
+    // and adding the entry it recommends would fail this control instead of
+    // clearing the finding it was added for.
+    const unrecorded = ["border-border/50", "text-border/50", "ring-border/50"]
+      .map(combo => ({ combo, r: worstRatio(combo) }))
+      .find(
+        ({ r }) =>
+          r.modes.some(m => m.ratio < r.need) &&
+          r.modes.every(
+            m =>
+              acceptedFor(r.fgToken, r.bgToken, m.mode, {
+                fgAlpha: r.alpha,
+              }) === undefined
+          )
+      );
+    if (!unrecorded) {
+      throw new TypeError(
+        "every candidate pairing is now recorded in accepted.ts; this control " +
+          "needs one that is not, so add a failing utility that is unrecorded"
+      );
+    }
+    const failing = unrecorded.r.modes.filter(m => m.ratio < unrecorded.r.need);
+    expect(unacceptedFailures(unrecorded.r)).toEqual(failing);
+  });
+
+  it("vouches for the accepted entries only this scan can reach", () => {
+    // `ink-utilities.test.ts` holds every accepted entry to being evaluated by
+    // something, and defers exactly this shape — a faded foreground over an
+    // opaque surface — because neither PAIRINGS nor its own full-strength scan
+    // composites one. Without this half, recording such an entry would satisfy
+    // the message's advice and then be reported there as accepted by nothing.
+    const consulted = new Set<string>();
+    for (const combo of combos.keys()) {
+      if (ALLOWED_DECORATIVE.has(combo)) continue;
+      const r = worstRatio(combo);
+      for (const { mode } of r.modes) {
+        consulted.add(
+          `${roleOf(r.fgToken)}|${roleOf(r.bgToken)}|${r.alpha}|${mode}`
+        );
+      }
+    }
+    const unreached = ACCEPTED_REGRESSIONS.filter(
+      entry =>
+        entry.fgAlpha !== undefined &&
+        entry.bgAlpha === undefined &&
+        entry.bgOver === undefined &&
+        !consulted.has(`${entry.fg}|${entry.bg}|${entry.fgAlpha}|${entry.mode}`)
+    ).map(entry => `${entry.fg} on ${entry.bg} (${entry.mode})`);
+
+    expect(
+      unreached,
+      "these accepted-regression entries name a faded foreground this scan " +
+        "never consults, so nothing holds them to the ratio they record. " +
+        "Either a utility that paints the pairing is no longer in the source, " +
+        "or the entry was written for a pairing that never existed"
+    ).toEqual([]);
   });
 
   it("puts no alpha on the control boundary, in any utility", () => {
