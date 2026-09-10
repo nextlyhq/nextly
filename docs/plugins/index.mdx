@@ -14,6 +14,13 @@ Plugins extend Nextly with new functionality without modifying core code. A plug
 | Plugin | Package | Description |
 |--------|---------|-------------|
 | [Form Builder](/docs/plugins/form-builder) | `@nextlyhq/plugin-form-builder` | Visual drag-and-drop form builder with submission management, email notifications, spam protection, and export |
+| [Page Builder](/docs/page-builder) | `@nextlyhq/plugin-page-builder` | Let your team compose pages from blocks you define, rendered on the server with no client JavaScript by default |
+| SEO | [`@nextlyhq/plugin-seo`](https://www.npmjs.com/package/@nextlyhq/plugin-seo) | SEO fields on the collections you name, and a sitemap of published content served over plain HTTP. Framework-agnostic, so it is safe in a headless or admin-only project |
+
+Turning those SEO fields into `<meta>` tags is core rather than plugin work: use
+`buildMetadata` from `nextly/runtime`, described in
+[Routing and SEO](/docs/guides/routing-and-seo). The plugin supplies the fields and the
+sitemap; Open Graph, robots and hreflang come from core.
 
 ## Community Plugins
 

@@ -44,6 +44,38 @@ A job that is defined but not listed in `jobs` is absent from the registry. Rows
 its slug sit there with no handler to pick them up.
 </Callout>
 
+## Running the queue
+
+Defining a job queues it. **Nothing runs it on its own.** A pass over the queue happens
+when something calls the jobs route, so if nothing ever calls it, queued work waits
+forever.
+
+The scaffolded apps mount Nextly's handlers at `src/app/admin/api/[[...params]]/route.ts`,
+so the URL is:
+
+```
+POST /admin/api/jobs/run
+```
+
+<Callout type="warn">
+There is no general `/api` handler in a scaffolded app, so a scheduler pointed at
+`/api/jobs/run` gets a 404 and nothing in the queue ever runs. If you mounted the handlers
+somewhere else, use that path instead.
+</Callout>
+
+Point a cron job, a platform scheduler or an operator at it, authenticated, on whatever
+interval your soonest deadline allows.
+
+A pass is bounded: it claims at most 10 queued jobs, and it stops **starting** new ones
+after 20 seconds. That 20 seconds is a budget for starting work, not a hard ceiling on the
+request — the check happens before each claim, so a handler already running is awaited to
+completion and the call can overrun. Size any serverless timeout for the slowest handler,
+not for 20 seconds.
+
+A pass can also defer work past its deadline and still report success, so a job runs on the
+first pass that actually **reaches and completes** it, which is not always the first pass
+after it became due. Treat a due time as "not before", not as "at".
+
 ## Retries and backoff
 
 A failed job is retried with exponential backoff, starting at **1 second** and capped at
