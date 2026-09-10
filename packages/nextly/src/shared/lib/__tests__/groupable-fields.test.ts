@@ -75,6 +75,39 @@ describe("grouping by a field that carries a read rule", () => {
     ).not.toThrow();
   });
 
+  it("refuses a NULL key rather than reading it as no key at all", () => {
+    // The seam this closes: every read that consumes this decision tests
+    // `groupBy === undefined` for absence, so a `null` excused here was still a
+    // key by the time it reached `toSnakeCase`, whose `.replace` threw a raw
+    // `TypeError` the service reports as an unclassified 500 — the exact
+    // outcome this validator exists to replace, arriving through the one value
+    // it waved through.
+    // Asserted on the SERIALIZED error for the reason the cases above are:
+    // `NextlyError.validation` carries a generic public message and puts the
+    // reason in `errors`.
+    registerVaults();
+    try {
+      assertGroupableField("collection", SLUG, null as unknown as string);
+      expect.unreachable("should have refused");
+    } catch (error) {
+      expect(JSON.stringify(error)).toMatch(/must be given as a string/i);
+    }
+  });
+
+  it("refuses the other FALSY non-strings for the same reason", () => {
+    // `0`, `false` and `NaN` are falsy AND wrong. A falsy test alone reads them
+    // as absent, which is how they reached the crash.
+    registerVaults();
+    for (const bad of [0, false, Number.NaN]) {
+      try {
+        assertGroupableField("collection", SLUG, bad as unknown as string);
+        expect.unreachable(`should have refused ${String(bad)}`);
+      } catch (error) {
+        expect(JSON.stringify(error)).toMatch(/must be given as a string/i);
+      }
+    }
+  });
+
   it("judges the field that OWNS the rule for a nested path", () => {
     registerVaults();
     expect(() =>

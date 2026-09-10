@@ -3,6 +3,8 @@ import type { AuthUser } from "../../types/auth";
 import type { PermissionSlug } from "../contributions";
 import type { PluginContext } from "../plugin-context";
 
+import type { PluginRoutePermissionResolver } from "./route-permission";
+
 /**
  * @public HTTP methods a plugin route may declare.
  */
@@ -126,8 +128,28 @@ export interface PluginRoute {
    */
   path: string;
   handler: PluginRouteHandler;
-  /** Secure-by-default: the permission slug required to call this route. */
-  requiredPermission?: PermissionSlug;
+  /**
+   * Secure-by-default: the permission required to call this route.
+   *
+   * A fixed slug when the route gates on a name that cannot move —
+   * `"export-submissions"`, or any permission the plugin declared itself.
+   *
+   * A FUNCTION when the permission names one of the plugin's own collections
+   * or singles, because the host can rename those (`ctx.self`'s P2 remap) and a
+   * fixed slug would then demand a grant seeded under a different name — a
+   * route nobody on that install can call. The scope composes the slug, so the
+   * route never spells one:
+   *
+   * ```ts
+   * requiredPermission: ({ collection }) => collection(PATTERNS_SLUG, "create"),
+   * ```
+   *
+   * The resolver runs on every request to the route, before the caller is
+   * known, and must be pure and synchronous. A resolver that throws refuses the
+   * request: a gate that cannot be computed must not fall through to the
+   * ungated path.
+   */
+  requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
   /** Ordered, typed route-level middleware chain. */

@@ -1,3 +1,5 @@
+import { measureBytes } from "@nextlyhq/blocks-engine";
+import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
 /**
  * The one read the insert panel makes to find out what it may offer.
  *
@@ -41,7 +43,6 @@
  *
  * @module library-route
  */
-import { measureBytes } from "@nextlyhq/blocks-engine";
 
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
@@ -450,14 +451,16 @@ function optionalText(
 export function patternLibraryRoute(): {
   method: "GET";
   path: string;
+  requiredPermission: (scope: PluginRoutePermissionScope) => string;
   handler: (req: Request, ctx: LibraryRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: LIBRARY_ROUTE_PATH,
-    // No `public: true`, which is what makes this authenticated, and no
+    // No `public: true`, which is what makes this authenticated, and a COMPUTED
     // `requiredPermission`, which is what keeps it callable on a site that
     // renamed the collection. See the module docblock.
+    requiredPermission: ({ collection }) => collection(PATTERNS_SLUG, "read"),
     handler: async (_req: Request, ctx: LibraryRouteContext) =>
       Response.json(await readPatternLibrary(ctx)),
   };
