@@ -16,6 +16,15 @@
  * A leaf that imports a leaf that imports the Direct API is not a leaf, and a
  * one-level check reports it as one.
  *
+ * 🔴 And a leaf MODULE is only half of it. The first version of this guard
+ * checked the source graph alone and passed while every published spelling still
+ * resolved to the built route bundle, which has already inlined this function
+ * beside its eager Direct API imports — measured through package resolution at
+ * 3,251 inputs and 21.3 MB, against 4 and 1.4 KB for the leaf entry. The source
+ * graph cannot see that, so what a CONSUMER can reach is asserted separately
+ * below, from the export map and the build config rather than from `dist`: a
+ * stale artifact would agree with itself and fail in the passing direction.
+ *
  * @module runtime/routing/__tests__/slug-param-is-a-leaf
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -95,5 +104,29 @@ describe("slug-param stays a leaf", () => {
     // And it still carries the function's public name, so moving the definition
     // did not move the export a published entry point promises.
     expect([...local]).toContain("runtime/routing/slug-param.ts");
+  });
+});
+
+describe("the leaf is reachable as one", () => {
+  const PKG = JSON.parse(
+    readFileSync(resolve(SRC_DIR, "../package.json"), "utf8")
+  ) as { exports: Record<string, { types?: string; import?: string }> };
+
+  it("publishes the leaf under its own entry", () => {
+    // Without an entry of its own, both documented spellings resolve to the
+    // route bundle and the split reaches nobody.
+    expect(PKG.exports["./route-path"]?.import).toBe(
+      "./dist/runtime/routing/slug-param.mjs"
+    );
+    expect(PKG.exports["./route-path"]?.types).toBe("./dist/route-path.d.ts");
+  });
+
+  it("builds the artifact that entry promises", () => {
+    // 🔴 The two halves are written in different files and neither fails
+    // without the other: an export map naming an artifact the build does not
+    // emit is a published entry point that 404s on install, and it would pass
+    // the assertion above on its own.
+    const tsup = readFileSync(resolve(SRC_DIR, "../tsup.config.js"), "utf8");
+    expect(tsup).toContain('"src/runtime/routing/slug-param.ts"');
   });
 });

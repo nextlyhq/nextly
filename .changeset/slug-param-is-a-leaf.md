@@ -38,11 +38,16 @@ and the content resolver. Measured with esbuild against the source, importing th
 function pulled **1042 modules and 18.4 MB**; from its own module it pulls **2
 modules and 1.4 KB**.
 
-It now lives in a leaf module that imports only the reserved-path check, with a
-test asserting that its whole transitive import graph stays exactly that. Every
-published spelling — `nextly/runtime`, `@nextlyhq/plugin-sdk/routing`, and the
-route module itself — still exports the same function, and a test asserts they
-are one function rather than three that agree today.
+It now lives in a leaf module that imports only the reserved-path check, and is
+published as its own entry point, `nextly/route-path`. Both halves were needed: a
+leaf module alone changed nothing a consumer could reach, because every published
+spelling still resolved to the built route bundle, which had already inlined the
+function beside its Direct API imports. `@nextlyhq/plugin-sdk/routing` — which is
+how the SEO plugin reaches it — now pulls **5 modules and 1.4 KB in place of 2,471
+and 21.1 MB**.
+
+Every published spelling still exports the same function, and tests assert they
+are one function rather than several that agree today.
 
 Its published documentation was also wrong: the generated types carried a
 paragraph about Direct API access defaults, left behind by an unrelated change,

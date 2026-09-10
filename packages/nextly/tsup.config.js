@@ -120,6 +120,17 @@ const clientEntries = [
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
   "src/query/index.ts",
+  // The rule that maps a stored slug to the path a route serves, as its own
+  // entry. A sitemap, a canonical and a static-params build all have to agree
+  // with the route about which paths exist, so three packages call this one
+  // function rather than re-deriving it.
+  //
+  // 🔴 A leaf MODULE is not enough on its own, and this entry is the half that
+  // makes the split reach a consumer. Reached through `nextly/runtime`, the
+  // built artifact has already inlined it beside the route's eager Direct API
+  // chunk imports: measured through package resolution, `nextly/runtime` pulls
+  // 3,251 inputs and 21.3 MB, while this entry pulls 2 and 1.4 KB.
+  "src/runtime/routing/slug-param.ts",
   // The one helper an out-of-tree storage adapter needs, as its OWN entry.
   //
   // Reaching it through `nextly/storage` instead makes a bundler traverse that
