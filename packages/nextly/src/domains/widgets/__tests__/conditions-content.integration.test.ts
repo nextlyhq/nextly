@@ -27,6 +27,8 @@ import { refreshCollectionSources } from "../collection-sources";
 import { evaluateConditions } from "../conditions";
 
 const NOTES = "notes";
+/** A collection whose rows the reader under test may NOT read. */
+const SECRETS = "secrets";
 
 /** An admin: the reader onboarding actually meets, and one who may read all. */
 const admin: ReadCaller = {
@@ -49,11 +51,12 @@ type WriteHandler = {
  */
 async function write(
   t: TestNextly,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  collection: string = NOTES
 ): Promise<void> {
   const handler = t.getService("collectionsHandler") as unknown as WriteHandler;
   const result = await handler.createEntry(
-    { collectionName: NOTES, overrideAccess: true },
+    { collectionName: collection, overrideAccess: true },
     data
   );
   expect(result.success).toBe(true);
@@ -69,6 +72,13 @@ afterEach(async () => {
 async function boot(): Promise<TestNextly> {
   const t = await createTestNextly({
     collections: [
+      defineCollection({
+        slug: SECRETS,
+        // Readable by nobody. The condition must not see these rows, and the
+        // only way to know it does not is to have some.
+        access: { read: () => false, create: () => true, update: () => true },
+        fields: [text({ name: "title" })],
+      }),
       defineCollection({
         slug: NOTES,
         // The publishing lifecycle is ON, so a draft is a thing this collection
@@ -109,6 +119,27 @@ describe("content:empty against a real instance", () => {
     await write(t, { title: "the first note" });
 
     expect(await contentEmpty()).toBe(false);
+  });
+
+  it("does NOT count content this reader may not read", async () => {
+    // 🔴 The claim `content:empty` makes is that it is READER-SCOPED, and every
+    // other case here grants the reader everything -- so none of them could
+    // tell a reader-scoped count from an unscoped one.
+    //
+    // The guard this actually exercises is the ENTITY filter: a collection the
+    // reader may not read is dropped before any count is issued. Verified by
+    // removing that filter, which fails this case by name.
+    //
+    // What it does NOT reach is the row-level guard. `overrideAccess: false` on
+    // the count protects rows inside a collection the reader MAY read, and this
+    // fixture denies the whole collection, so the rows never get that far --
+    // flipping `overrideAccess` here changes nothing, which was measured rather
+    // than assumed. Covering that needs a readable collection with a row rule,
+    // and it is stated here rather than left to look covered.
+    const t = await boot();
+    await write(t, { title: "not for you" }, SECRETS);
+
+    expect(await contentEmpty()).toBe(true);
   });
 
   it("counts a DRAFT as content", async () => {

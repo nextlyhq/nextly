@@ -10,6 +10,10 @@ import type {
   WidgetSetting,
   WidgetSize,
 } from "../domains/widgets";
+import type {
+  WidgetCondition,
+  WidgetLifecycle,
+} from "../domains/widgets/lifecycle";
 
 import type { PermissionSlug } from "./contributions";
 
@@ -238,9 +242,15 @@ interface PluginAdminWidgetBase {
    * is refused here rather than published and quietly treated as permanent.
    * `pin` and `dismissible` are deliberately absent from both channels until
    * something reads them.
+   *
+   * The types are IMPORTED rather than spelled out. A literal union here would
+   * be a second copy of a vocabulary `lifecycle.ts` owns, and the drift is
+   * one-directional and silent: a condition added there passes the shared
+   * validation both channels run, and is still rejected by this type — so the
+   * contributed channel would refuse a value core had just started accepting.
    */
-  lifecycle?: "always" | "conditional";
-  visibleWhen?: "content:empty";
+  lifecycle?: WidgetLifecycle;
+  visibleWhen?: WidgetCondition;
   /**
    * What a reader may change about this card, drawn by the settings panel.
    *
