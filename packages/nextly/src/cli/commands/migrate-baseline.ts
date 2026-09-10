@@ -73,7 +73,7 @@ import { describeError, NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
 } from "../utils/adapter";
@@ -640,7 +640,7 @@ export async function runMigrateBaseline(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  const adapter: CLIDatabaseAdapter = await createAdapter({
+  const adapter: CLIDatabaseAdapter = await createCliAdapter({
     dialect,
     databaseUrl: dbValidation.databaseUrl,
     logger: options.verbose ? logger : undefined,

@@ -28,7 +28,7 @@ import {
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import {
-  isFieldGroupType,
+  isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
 } from "../storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
@@ -151,7 +151,7 @@ export interface PopulateComponentDataManyParams {
 // Duplicated here (and in the mutation service) to avoid a cross-domain
 // import into collections just for a type predicate.
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
-  return isFieldGroupType(field.type);
+  return isFieldGroupFieldType(field.type);
 }
 
 /**

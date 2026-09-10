@@ -39,7 +39,7 @@ import type {
 } from "../../schemas/dynamic-collections/types";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
@@ -220,7 +220,7 @@ export async function runMigrateStatus(
 
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createAdapter({
+    adapter = await createCliAdapter({
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
       logger: options.verbose ? logger : undefined,

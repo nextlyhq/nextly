@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { createContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
 } from "../utils/adapter";
@@ -36,7 +36,7 @@ export function createPermissionsCleanupCommand(): Command {
         const dbValidation = validateDatabaseEnv();
 
         context.logger.info("Creating database adapter...");
-        adapter = await createAdapter({
+        adapter = await createCliAdapter({
           dialect: dbValidation.dialect,
           databaseUrl: dbValidation.databaseUrl,
           logger: context.options.verbose ? context.logger : undefined,
