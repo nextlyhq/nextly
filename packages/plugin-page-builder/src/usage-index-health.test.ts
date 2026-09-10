@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { componentUsageIndex } from "./component-usage";
 import type { GroupedUsageReader } from "./usage-index";
+import { backfillScopeKey } from "./usage-backfill-scope";
 import { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
 
 function reader(markers: { bucketCount: number; truncated: boolean }) {
@@ -66,12 +67,11 @@ describe("reading how much of the index is there", () => {
     expect(health.anyUndetermined).toBe(true);
   });
 
-  it("says the index does NOT cover existing documents, because nothing fills it", async () => {
-    // Not a reading of any database: no mechanism backfills the index yet, so
-    // there is no site on which this could honestly be true. A site that
-    // installed the plugin before creating content IS fully covered and still
-    // answers false — the plugin cannot tell the two apart, and the
-    // conservative reading is the one that does not invite a delete.
+  it("says the index does NOT cover existing documents when it cannot ask", async () => {
+    // A caller outside the plugin cannot assemble the scopes or the progress
+    // store, so it gets the conservative answer rather than a convenience. It
+    // is the honest one for a caller that genuinely cannot tell, and it is the
+    // direction that does not invite a delete.
     const { read } = reader({ bucketCount: 0, truncated: false });
 
     const health = await readUsageIndexHealth({
@@ -106,5 +106,61 @@ describe("reading how much of the index is there", () => {
     expect(
       indexIsWhole({ coversExistingDocuments: true, anyUndetermined: true })
     ).toBe(false);
+  });
+
+  it("reports the index COVERED once every scope is recorded", async () => {
+    // The whole point of the backfill: a site whose scopes have all been walked
+    // gets an exact count rather than a floor.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+    const scope = {
+      entity: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    } as const;
+
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => [scope],
+        state: {
+          completed: async () => new Set([backfillScopeKey(scope)]),
+          record: async () => undefined,
+        },
+      },
+    });
+
+    expect({ health, whole: indexIsWhole(health) }).toEqual({
+      health: { coversExistingDocuments: true, anyUndetermined: false },
+      whole: true,
+    });
+  });
+
+  it("is NOT covered while one scope is still outstanding", async () => {
+    // The control on the case above: without it, "covered whenever a backfill
+    // was supplied" would satisfy it while reporting a half-walked site whole.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+    const walked = {
+      entity: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    } as const;
+    const outstanding = { ...walked, entity: "posts" } as const;
+
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => [walked, outstanding],
+        state: {
+          completed: async () => new Set([backfillScopeKey(walked)]),
+          record: async () => undefined,
+        },
+      },
+    });
+
+    expect(health.coversExistingDocuments).toBe(false);
   });
 });

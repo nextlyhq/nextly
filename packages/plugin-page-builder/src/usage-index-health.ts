@@ -20,6 +20,8 @@
  *
  * @module usage-index-health
  */
+import { backfillComplete, type BackfillStateStore } from "./usage-backfill";
+import type { BackfillScope } from "./usage-backfill-scope";
 import type {
   GroupedUsageReader,
   UsageIndex,
@@ -73,21 +75,61 @@ export function indexIsWhole(health: UsageIndexHealth): boolean {
 export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
   index: UsageIndex<TRow>;
   read: GroupedUsageReader;
+  /**
+   * How to ask whether the backfill has finished, when the caller can.
+   *
+   * OPTIONAL, and the default is the conservative answer rather than a
+   * convenience. A caller that cannot supply this — anything outside the
+   * plugin, which is where the scopes and the progress store are assembled —
+   * gets `coversExistingDocuments: false`, so its counts read as floors. That
+   * is the honest answer for a caller that genuinely cannot tell, and it is the
+   * direction that does not invite a delete.
+   */
+  backfill?: {
+    /** Every scope that exists now. */
+    scopes: () => Promise<readonly BackfillScope[]>;
+    /** Where completed scopes are recorded, for the current generation. */
+    state: BackfillStateStore;
+  };
 }): Promise<UsageIndexHealth> {
-  const markers = await args.read({
-    where: args.index.whereUndetermined(),
-    groupBy: "entityKey",
-  });
+  const [markers, covers] = await Promise.all([
+    args.read({
+      where: args.index.whereUndetermined(),
+      groupBy: "entityKey",
+    }),
+    backfillFinished(args.backfill),
+  ]);
 
   return {
-    // Nothing backfills the index yet, so no reading of the database can make
-    // this true. Stated as a constant HERE rather than left for each caller to
-    // remember, so the day a backfill lands there is one place that learns to
-    // ask it.
-    coversExistingDocuments: false,
+    coversExistingDocuments: covers,
     // Existence, not how many. One unreadable document is enough to make every
     // count a floor, and `truncated` on this read only means there are more of
     // them than the cap — which does not change the answer.
     anyUndetermined: markers.bucketCount > 0,
   };
+}
+
+/**
+ * Whether every scope that exists now has been walked under the current
+ * derivation.
+ *
+ * Recomputed against the scopes that exist NOW rather than read from a stored
+ * flag. A flag is true about the site it was written for; add a collection, a
+ * locale or drafts and there are scopes nothing has walked while the flag still
+ * says the index is whole.
+ */
+async function backfillFinished(
+  backfill:
+    | {
+        scopes: () => Promise<readonly BackfillScope[]>;
+        state: BackfillStateStore;
+      }
+    | undefined
+): Promise<boolean> {
+  if (backfill === undefined) return false;
+  const [scopes, completed] = await Promise.all([
+    backfill.scopes(),
+    backfill.state.completed(),
+  ]);
+  return backfillComplete(scopes, completed);
 }

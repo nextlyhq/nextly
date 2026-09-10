@@ -13,9 +13,11 @@
  *
  * @module class-usage-runtime
  */
+import type { ClassUsageDocumentStore } from "./class-usage-index-rebuild";
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageDocumentReader } from "./class-usage-write";
+import type { BackfillStateStore } from "./usage-backfill";
 import type { GroupedUsageReader } from "./usage-index";
 
 /**
@@ -175,12 +177,55 @@ export function classUsageIndexStore(
 export function classUsageDocumentReader(
   nextly: ClassUsageDirectApi
 ): ClassUsageDocumentReader {
-  return async (subject: ClassUsageSubject) => {
-    const row =
-      subject.variant === "draft"
-        ? await readDraft(nextly, subject)
-        : await readPublished(nextly, subject);
-    return documentIn(row, subject);
+  const readRow = classUsageDocumentRowReader(nextly);
+  return async (subject: ClassUsageSubject) =>
+    documentIn(await readRow(subject), subject);
+}
+
+/**
+ * Where one document lives, without saying which field is wanted from it.
+ *
+ * A rebuild walks whole documents and picks the field out itself, so the field
+ * is not part of addressing a row. Separating them is what lets both callers
+ * share one variant rule.
+ */
+export interface UsageDocumentAddress {
+  /** The collection holding it. */
+  entity: string;
+  /** The document's id. */
+  entityKey: string;
+  /** The locale to resolve, or the empty string for a shared field. */
+  locale: string;
+  /** Which stored form to read. */
+  variant: ClassUsageSubject["variant"];
+}
+
+/**
+ * The stored ROW a subject names, before any field is taken from it.
+ *
+ * The variant rule lives here and nowhere else. Both callers need it and they
+ * want different things out of the answer — the write path wants one field's
+ * block document, a rebuild wants the whole row because it carries the `id`
+ * the sweep records as visited — so the projection is what differs and the
+ * READ is what is shared. Written the other way round, a rebuild would either
+ * re-decide draft-versus-published for itself, or index the published row
+ * under the draft subject the first time the two disagreed.
+ */
+export function classUsageDocumentRowReader(
+  nextly: ClassUsageDirectApi
+): (address: UsageDocumentAddress) => Promise<unknown> {
+  return async address => {
+    // `field` is not part of the address and no read below consults it; the
+    // empty string is what the shared subject shape requires, never a claim
+    // that some field is named that.
+    const subject: ClassUsageSubject = {
+      scope: "collection",
+      field: "",
+      ...address,
+    };
+    return subject.variant === "draft"
+      ? readDraft(nextly, subject)
+      : readPublished(nextly, subject);
   };
 }
 
@@ -388,5 +433,208 @@ export function usageCountReader(
       bucketCount: grouped.buckets.length,
       truncated: grouped.truncated,
     };
+  };
+}
+
+/**
+ * How many recorded scopes one page of the progress read returns.
+ *
+ * The population is small by construction — one row per (collection, field,
+ * locale, variant), so tens on a large site rather than thousands — but it is
+ * PAGED anyway, because "small" is a property of today's configuration and a
+ * single unpaged read that silently returns the server's default page would
+ * report the scopes past it as outstanding. A backfill would then walk them
+ * again on every tick, for ever, never reporting complete.
+ */
+const PROGRESS_PAGE_SIZE = 200;
+
+/**
+ * The backfill's progress record, backed by the Direct API.
+ *
+ * Read as the system for the reason every access to these tables is: the
+ * collection denies every rule it declares, so a read respecting the acting
+ * user answers an empty set — which reads as "no scope has been walked" and
+ * sends the backfill round again from the start.
+ */
+export function usageBackfillStateStore(
+  nextly: Pick<ClassUsageDirectApi, "find" | "create">,
+  /** The progress collection's RESOLVED slug, since an integrator may rename it. */
+  stateCollection: string,
+  /**
+   * The derivation the current index is being built under.
+   *
+   * Rows from any other generation are read as ABSENT rather than deleted. A
+   * host can move the bounds back — the numbers are configuration, not a
+   * migration — and progress recorded under the bounds they returned to is
+   * still true, so discarding it would make a reverted setting cost a full
+   * re-walk of the site.
+   */
+  generation: string
+): BackfillStateStore {
+  return {
+    completed: async () => {
+      const keys = new Set<string>();
+      for (let page = 1; ; page += 1) {
+        const result = await nextly.find({
+          collection: stateCollection,
+          where: { generation: { equals: generation } },
+          limit: PROGRESS_PAGE_SIZE,
+          page,
+          // Sorted so the pages partition the rows. An unsorted paged read has
+          // no defined order between pages, so a row can appear twice or not at
+          // all — and a key missed here is a scope walked again on every tick.
+          sort: "id",
+          depth: 0,
+          ...AS_THE_SYSTEM,
+        });
+        for (const item of result.items) {
+          const key = (item as { scopeKey?: unknown }).scopeKey;
+          // A row whose key is not a string records nothing this can act on.
+          // Skipped rather than refused: the scope it meant to name is then
+          // simply outstanding, which costs a repeat walk and is the safe
+          // direction — treating it as a completed scope of unknown identity
+          // is what would leave a real scope permanently unwalked.
+          if (typeof key === "string" && key.length > 0) keys.add(key);
+        }
+        if (!result.meta.hasNext) return keys;
+      }
+    },
+    record: async key => {
+      await nextly.create({
+        collection: stateCollection,
+        data: { scopeKey: key, generation },
+        ...AS_THE_SYSTEM,
+      });
+    },
+  };
+}
+
+/**
+ * The document store a rebuild walks, backed by the Direct API.
+ *
+ * Its absence is why `rebuildPageBuilderUsageIndexes` had no production caller:
+ * the rebuild has always taken this interface, and nothing turned it into real
+ * calls. Tests supplied their own, which is exactly the shape that leaves a
+ * mechanism fully tested and never run.
+ *
+ * ## Why it lists ids and then reads each document by id
+ *
+ * A list read cannot answer a VARIANT correctly. `readPublished` above sets out
+ * why an explicit `status` on a list is a conjunction across the main row and
+ * its localized companion, and a working draft lives in a sidecar that only the
+ * by-id read overlays. So a page of documents taken straight from a list would
+ * record published content under the draft subject — filing one variant's
+ * classes as the other's, which is the mis-attribution that makes a class a
+ * pending draft still uses look safe to delete.
+ *
+ * Listing ids and resolving each through `classUsageDocumentReader` reuses the
+ * per-subject read the write path already uses, so both derive their documents
+ * the same way. It costs a query per document, which is the price of the walk
+ * agreeing with the index it is repairing.
+ */
+export function usageRebuildDocumentStore(
+  nextly: ClassUsageDirectApi
+): ClassUsageDocumentStore {
+  const readRow = classUsageDocumentRowReader(nextly);
+  // The last id this walk handed back, which is where the next page resumes.
+  // Held per STORE, and a store is built per scope, so one walk's cursor cannot
+  // reach another's.
+  let after: string | undefined;
+
+  return {
+    find: async args => {
+      // Keyset paging, not offsets, and the difference decides whether a
+      // backfill can be trusted.
+      //
+      // An offset walk over a collection other writers are changing SKIPS a
+      // document: delete one the walk already passed and everything behind it
+      // shifts back, so the row now sitting at the next offset was already
+      // read and the one that moved across the boundary is never visited. The
+      // rebuild tolerates that when it runs as a REPAIR, because a document it
+      // misses keeps the rows it already had and `exists` refuses to sweep
+      // them.
+      //
+      // A first fill has no such protection. A document that predates the index
+      // has no rows at all, so there is nothing for the orphan sweep to
+      // inspect and nothing to notice it was missed — the walk returns without
+      // a failure, the scope is recorded, and it is never revisited.
+      //
+      // Resuming after the last id seen removes the shift entirely: a deletion
+      // behind the cursor cannot move anything across it, because position is
+      // no longer what decides the next page.
+      if (args.page === 1) after = undefined;
+      // The cursor is an id, so a walk ordered by anything else would resume at
+      // a point in a different sequence. Refused rather than quietly falling
+      // back to offsets, which is the behaviour this exists to remove.
+      if (args.sort !== "id") {
+        throw new Error(
+          `[page-builder] the usage backfill pages by id and was asked to sort by "${args.sort}"`
+        );
+      }
+
+      const listed = await nextly.find({
+        collection: args.collection,
+        limit: args.limit,
+        // Always the first page OF WHAT REMAINS. The window moves by the
+        // `where` below rather than by an offset, so asking for page N of a
+        // filtered set would skip N-1 windows' worth of documents.
+        page: 1,
+        sort: args.sort,
+        ...(after === undefined
+          ? {}
+          : { where: { id: { greater_than: after } } }),
+        // No `status`, deliberately, and for the reason `readPublished` gives
+        // at length: an explicit one is a conjunction over the main row and the
+        // companion, so a translation unpublished while the default stays
+        // published matches neither value and is indexed nowhere. This lists
+        // whatever rows exist and lets the by-id read below decide the variant.
+        depth: 0,
+        ...AS_THE_SYSTEM,
+      });
+
+      const items: unknown[] = [];
+      for (const row of listed.items) {
+        const id = (row as { id?: unknown }).id;
+        // A listed row with no usable id addresses nothing, so there is no
+        // subject to read it as. Skipped rather than refused: the alternative
+        // is failing a whole scope over one malformed row, and a scope that
+        // never completes is one the backfill retries for ever.
+        if (typeof id !== "string" || id.length === 0) continue;
+        // The whole ROW, not one field's value: the rebuild picks the field out
+        // itself, and it needs the `id` to record the document as visited. A
+        // page of field values would be swept as documents that do not exist.
+        const document = await readRow({
+          entity: args.collection,
+          entityKey: id,
+          locale: args.locale,
+          variant: args.variant,
+        });
+        // A row the variant read declines — an id whose draft was discarded
+        // between the list and this read — contributes nothing. Pushing
+        // `undefined` would make the rebuild skip it as unreadable, and the
+        // sweep would then not count it as visited either.
+        if (document !== undefined) items.push(document);
+        // Advanced for every LISTED row, including one whose variant read
+        // declined and one this loop skipped. The cursor records where the
+        // listing got to, not what the walk kept — advancing only on kept rows
+        // would re-read a declined document for ever and never finish.
+        after = id;
+      }
+
+      return { items, meta: { hasNext: listed.meta.hasNext } };
+    },
+    exists: async args => {
+      // The same variant-scoped read the walk uses, asked about one document.
+      // Scoping matters here: a published document and a working draft come and
+      // go independently, so an unscoped check answers `true` for a draft that
+      // is gone and its rows survive every future pass.
+      const document = await readRow({
+        entity: args.collection,
+        entityKey: args.id,
+        locale: args.locale,
+        variant: args.variant,
+      });
+      return document !== undefined;
+    },
   };
 }

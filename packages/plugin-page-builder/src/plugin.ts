@@ -10,6 +10,7 @@ import {
   resolvedCollectionView,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
+import { requireNextly } from "nextly/runtime";
 
 // Imported rather than read at runtime so it can never drift from the published
 // package: a hardcoded literal had fallen eight releases behind, and
@@ -43,6 +44,10 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import {
+  USAGE_BACKFILL_STATE_SLUG,
+  usageBackfillStateCollection,
+} from "./collections/usage-backfill-state";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -54,6 +59,12 @@ import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
+import { usageBackfillJob } from "./usage-backfill-job";
+import {
+  backfillScopes,
+  usageBackfillDeps,
+  type BackfillHost,
+} from "./usage-backfill-wiring";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -395,7 +406,153 @@ function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
   );
 }
 
+/**
+ * Turn the installed plugin context into what a backfill pass needs.
+ *
+ * Every member is a FUNCTION rather than a resolved value, and that is the
+ * whole shape of it. A site can gain a collection, a locale or a draft variant
+ * after boot, and the Direct API is not resolvable until services are
+ * registered — so anything captured here would be a fact about the moment the
+ * plugin was installed, used to decide whether an index covering the site as it
+ * is now is complete.
+ */
+/** How many registry rows one page of the collection listing asks for. */
+const REGISTRY_PAGE_SIZE = 100;
+
+/**
+ * Every collection slug the registry holds, or `undefined` when it could not
+ * be read.
+ *
+ * PAGED, and the paging is the point rather than a formality. The listing is
+ * paginated, so a single unpaged call returns the server's default page — and
+ * the collections past it would simply have no scopes, while completion is
+ * judged against that same short list and reports the index whole. That is the
+ * defect this enumeration exists to remove, reintroduced by reading it
+ * carelessly.
+ *
+ * `hasMore` is what ends the loop, so the read is exhausted rather than assumed
+ * to fit. A page that cannot be understood ends it as a REFUSAL — `undefined`
+ * rather than what was collected so far — because a short list here is
+ * indistinguishable from a small site.
+ */
+async function registeredCollectionSlugs(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<readonly string[] | undefined> {
+  const slugs: string[] = [];
+
+  for (let page = 1; ; page += 1) {
+    const listed: unknown = await ctx.services.collections.listCollections(
+      // Ordered so the pages partition the rows: an unordered paged read has no
+      // defined order between pages, so a slug can appear twice or not at all.
+      { page, limit: REGISTRY_PAGE_SIZE, sortBy: "slug", sortOrder: "asc" },
+      // A sweep acts as nobody, and listing which collections exist is not the
+      // privileged part.
+      undefined as never
+    );
+
+    const rows = (listed as { data?: unknown }).data;
+    const pagination = (listed as { pagination?: { hasMore?: unknown } })
+      .pagination;
+    if (!Array.isArray(rows) || typeof pagination?.hasMore !== "boolean") {
+      return undefined;
+    }
+
+    for (const row of rows) {
+      const slug = (row as { slug?: unknown }).slug;
+      if (typeof slug === "string" && slug.length > 0) slugs.push(slug);
+    }
+
+    if (!pagination.hasMore) return slugs;
+  }
+}
+
+function installContext(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  opts: PageBuilderOptions
+): BackfillHost {
+  return {
+    // Resolved per pass. `requireNextly` refuses until services are registered
+    // and boot migrations have settled, which is exactly the guard a job wants:
+    // a pass that ran too early fails and is re-queued rather than reading a
+    // database whose schema is unverified.
+    nextly: () => requireNextly(),
+    // The LIVE registry, not the configured list. `class-usage-hook` opens by
+    // saying the set of collections is not known when a plugin is wired — which
+    // is why the write path registers on the wildcard — because the Schema
+    // Builder creates collections at runtime and those exist only here. A
+    // backfill reading the configured set would walk a narrower population than
+    // the hooks maintain while judging readiness against that same short list.
+    //
+    // A superset rather than a different set: code-first collections are synced
+    // into the registry with `source: "code"`, so nothing declared is lost.
+    //
+    // `undefined` when the registry cannot be read, which the enumeration
+    // treats as a refusal rather than as a site with nothing to index.
+    collectionSlugs: () => registeredCollectionSlugs(ctx),
+    // The REGISTRY record, which is what carries the resolved fields and the
+    // draft split — the declared config alone answers neither after a rename.
+    // No request context: a sweep acts as nobody, and reading a collection's
+    // own configuration is not the privileged part.
+    resolveCollection: slug =>
+      ctx.services.collections.getCollection(slug, undefined as never),
+    hasDrafts: async collection =>
+      (await resolvedCollectionDraftSplit(resolvedCollectionView(collection)))
+        .eligible,
+    locales: () =>
+      ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+    // The SAME bounds the renderer draws under, for the reason the write path
+    // reads them per call: an index derived under different ones records a
+    // different document than the page serves.
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    // RESOLVED slugs, not the declared ones. An integrator may rename any of
+    // the three, and a pass holding a literal would write to a table that does
+    // not exist while reporting the scope backfilled.
+    slugs: () => ({
+      classIndex:
+        ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
+      componentIndex:
+        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+        COMPONENT_USAGE_INDEX_SLUG,
+      backfillState:
+        ctx.self.collections[USAGE_BACKFILL_STATE_SLUG] ??
+        USAGE_BACKFILL_STATE_SLUG,
+    }),
+  };
+}
+
 export const pageBuilder = (opts: PageBuilderOptions = {}) => {
+  /**
+   * The installed context, published by `init` for the backfill job to read.
+   *
+   * `contributes` is evaluated when the plugin is DEFINED and a job handler
+   * runs long afterwards, so the two cannot share a value through an argument.
+   * A holder is what bridges them, and it is safe in the one direction it is
+   * used: nothing reads it until a handler runs, and a handler runs only after
+   * the runner exists, which is after `init`.
+   *
+   * Deliberately not a captured Direct API. `requireNextly` refuses until
+   * services are registered and boot migrations have settled, so resolving it
+   * at definition time would throw during config; the holder stores the CONTEXT
+   * and every pass resolves the API itself.
+   */
+  let installed: BackfillHost | null = null;
+
+  /**
+   * The installed context, or a refusal naming why it is missing.
+   *
+   * Throwing beats defaulting here. Every plausible default is a claim about a
+   * site this has not read — no collections, no locales, the declared slugs —
+   * and each of those reports the backfill finished on a site it never looked
+   * at. A refusal fails the pass, and the sweep is re-queued.
+   */
+  const requireInstalled = (): BackfillHost => {
+    if (installed === null) {
+      throw new Error(
+        "[page-builder] the usage backfill ran before the plugin was installed, so it has no configuration to enumerate"
+      );
+    }
+    return installed;
+  };
   // Resolved once, with no stored tier: at config time there is no database to
   // read, so what the factory can wire into the validator and the canvas is
   // the defaults tier. The stored tier reaches the published route through
@@ -449,6 +606,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
     // because the factory is memoized for the boot and clears only on its
     // first resolution.
     init: ctx => {
+      installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
       // Class-usage maintenance. Registered here rather than beside the
@@ -513,6 +671,21 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
+      // The backfill sweep. Contributed unconditionally beside the index it
+      // fills: the work is owed from the moment this plugin meets existing
+      // content, and no request or hook ever becomes the moment to enqueue it.
+      //
+      // The deps are resolved through the holder on every pass rather than
+      // captured, so a handler that somehow ran before `init` refuses with a
+      // named reason instead of walking a half-built configuration.
+      jobs: [
+        usageBackfillJob({
+          scopes: async () => backfillScopes(requireInstalled()),
+          state: () => usageBackfillDeps(requireInstalled()).state(),
+          rebuild: scope =>
+            usageBackfillDeps(requireInstalled()).rebuild(scope),
+        }),
+      ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
       // to it without a first-run branch, exactly as the site style single is
@@ -532,6 +705,12 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // The backfill's progress. Contributed beside the indexes it fills,
+        // because an index whose write hooks only maintain it going FORWARD is
+        // empty for every document that already existed — and an empty index
+        // answers "used by nothing" for every component, which is the answer a
+        // delete acts on.
+        usageBackfillStateCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated
