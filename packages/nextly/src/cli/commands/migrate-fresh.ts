@@ -319,9 +319,13 @@ async function dropAllTables(
 }
 
 /**
- * Discover all user tables in the database
+ * Discover all user tables in the database.
+ *
+ * Exported for the same reason `disableForeignKeyChecks` is: what it asks the
+ * database decides what this command destroys, and that is worth a test that
+ * does not have to drive the whole command to reach it.
  */
-async function discoverTables(
+export async function discoverTables(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
 ): Promise<string[]> {
@@ -329,11 +333,22 @@ async function discoverTables(
 
   switch (dialect) {
     case "postgresql":
-      // Get all tables from public schema, excluding system tables
+      // 🔴 The schema an unqualified statement CREATES in, which is the one
+      // `dropTable` below will resolve to — it emits `DROP TABLE "name"` with
+      // no schema on it. Naming `public` here asked a different question from
+      // the one the drop answers, and on a `search_path` of `tenant, public`
+      // the two came apart in both directions at once: Nextly's own tables in
+      // `tenant` were never listed, so they survived, while whatever else lived
+      // in `public` was listed and handed to a DROP.
+      //
+      // Deliberately `current_schema()` and not every schema on the path.
+      // Dropping less than intended leaves a table behind; dropping more
+      // destroys data this command was never pointed at, and only one of those
+      // is recoverable.
       query = `
         SELECT tablename
         FROM pg_tables
-        WHERE schemaname = 'public'
+        WHERE schemaname = current_schema()
         ORDER BY tablename
       `;
       break;
