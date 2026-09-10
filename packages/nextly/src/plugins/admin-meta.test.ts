@@ -827,6 +827,31 @@ describe("dormant routes", () => {
     expect(meta.whenEnabled).toBeUndefined();
   });
 
+  /**
+   * The third refusal, and the one that showed the classifier had to be a list
+   * rather than a habit. A root route under `/auth` is unreachable, so boot
+   * refuses it -- and a DISABLED plugin declaring one must still only lose its
+   * dormant branch. Unclassified, the throw escapes `mountableRoutes` and
+   * `/api/admin-meta` fails for every reader over a plugin nobody enabled.
+   */
+  it("omits a dormant root route the request pipeline never reaches", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/shadowed",
+          version: "1.0.0",
+          enabled: false,
+          contributes: {
+            routes: [{ method: "GET", path: "/auth/whoami", mount: "root" }],
+          },
+        } as unknown as PluginDefinition,
+      ],
+      undefined
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
   it("omits the dormant branch for a plugin that declares no routes", () => {
     const [meta] = buildPluginAdminMeta(
       [
