@@ -73,10 +73,10 @@ function draw(qc: QueryClient) {
 /**
  * The card rendered beside a LIVE consumer of the dashboard layout key.
  *
- * The consumer is a mounted `useQuery` rather than a prefetch: only an active
- * query refetches on invalidation, and an entry nothing observes is collected
- * immediately under `gcTime: 0` — so a prefetched one reports no state at all
- * and the assertion would pass or fail for the wrong reason.
+ * The consumer is a mounted `useQuery` rather than a prefetch, because an
+ * invalidation refetches ACTIVE queries only: a prefetched entry is marked
+ * stale and nothing reads it again, so `readLayout` would sit at one call
+ * whether the card asked for a fresh layout or not.
  */
 async function drawBesideLayout(qc: QueryClient) {
   const readLayout = vi.fn().mockResolvedValue({ placements: [] });
@@ -96,8 +96,58 @@ async function drawBesideLayout(qc: QueryClient) {
   return { readLayout };
 }
 
+/**
+ * Finish onboarding, let the host drop the card, then have it offered again.
+ *
+ * The sequence every staleness case shares. The first mount completes and
+ * correctly asks for a fresh layout; the host drops the card, so it unmounts
+ * while its all-complete answer stays cached; then the reader deletes their
+ * last collection and the host offers it again. `secondAnswer` arranges what
+ * that second mount's OWN read returns.
+ *
+ * The cache has to SURVIVE the unmount, which is what the ten-minute `gcTime`
+ * in `client()` is for -- the reflexive `gcTime: 0` collects the entry the
+ * moment the card goes, so the second mount starts from nothing and the case
+ * under test cannot arise. The layout consumer has to stay mounted across BOTH
+ * mounts too, or the invalidation has no observer and its refetch count cannot
+ * move either way. Both were found by the break killing nothing.
+ *
+ * `afterDrop` is the layout read count at the moment the card came back. Any
+ * later call means the remount acted on an answer it did not fetch itself.
+ */
+async function finishThenReoffer(secondAnswer: () => void) {
+  const qc = client();
+  const readLayout = vi.fn().mockResolvedValue({ placements: [] });
+  const LayoutConsumer = () => {
+    useQuery({ queryKey: DASHBOARD_LAYOUT_KEY, queryFn: readLayout });
+    return null;
+  };
+  const withCard = (card: boolean) => (
+    <QueryClientProvider client={qc}>
+      <LayoutConsumer />
+      {card ? <OnboardingChecklist /> : null}
+    </QueryClientProvider>
+  );
+
+  protectedGet.mockResolvedValue({ steps: EVERY_STEP });
+  const view = render(withCard(true));
+  // The first mount completes and correctly asks the host to drop the card.
+  await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
+
+  // The host drops it, so the card unmounts while its answer stays cached.
+  view.rerender(withCard(false));
+  const afterDrop = readLayout.mock.calls.length;
+
+  secondAnswer();
+  view.rerender(withCard(true));
+  return { readLayout, afterDrop };
+}
+
 afterEach(() => {
   vi.clearAllMocks();
+  // Restores `Date.now`, which one case replaces. `clearAllMocks` empties a
+  // spy's calls and leaves the replacement installed.
+  vi.restoreAllMocks();
 });
 
 describe("the onboarding checklist", () => {
@@ -199,37 +249,11 @@ describe("the onboarding checklist", () => {
     // finished before its own refetch landed, and ask the host for a layout the
     // server has just decided should include it.
     //
-    // Two things this fixture must get right, both found by the break killing
-    // nothing: the client has to KEEP its cache across the unmount, which the
-    // shared `client()` does not (`gcTime: 0` collects it immediately); and the
-    // layout consumer has to stay mounted for the SECOND mount too, or the
-    // invalidation has no observer and its refetch count cannot move either way.
-    protectedGet.mockResolvedValue({ steps: EVERY_STEP });
-    const qc = client();
-    const readLayout = vi.fn().mockResolvedValue({ placements: [] });
-    const LayoutConsumer = () => {
-      useQuery({ queryKey: DASHBOARD_LAYOUT_KEY, queryFn: readLayout });
-      return null;
-    };
-    const withCard = (card: boolean) => (
-      <QueryClientProvider client={qc}>
-        <LayoutConsumer />
-        {card ? <OnboardingChecklist /> : null}
-      </QueryClientProvider>
-    );
-
-    const view = render(withCard(true));
-    // The first mount completes and correctly asks the host to drop the card.
-    await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
-
-    // The host drops it, so the card unmounts while its answer stays cached.
-    view.rerender(withCard(false));
-    const afterDrop = readLayout.mock.calls.length;
-
-    // The reader deletes their last collection: the host offers the card again,
-    // and the fresh answer has work outstanding.
-    protectedGet.mockResolvedValue({ steps: ALL_BUT_ONE });
-    view.rerender(withCard(true));
+    // The reader deletes their last collection, so the answer this mount
+    // fetches for itself has work outstanding.
+    const { readLayout, afterDrop } = await finishThenReoffer(() => {
+      protectedGet.mockResolvedValue({ steps: ALL_BUT_ONE });
+    });
 
     // 🔴 Asserted on the PROGRESS, not the row count. Both answers hold three
     // rows -- the cached one has them all ticked -- so counting rows cannot
@@ -240,6 +264,48 @@ describe("the onboarding checklist", () => {
       expect(screen.getByText(/2 of 3 done/)).toBeInTheDocument()
     );
     expect(screen.getAllByRole("listitem")).toHaveLength(ALL_BUT_ONE.length);
+    expect(readLayout).toHaveBeenCalledTimes(afterDrop);
+  });
+
+  it("separates the two mounts when the CLOCK cannot", async () => {
+    // 🔴 Which mount fetched an answer is not a question a wall clock can
+    // settle. `Date.now()` is coarsened for anti-fingerprinting -- to 100ms
+    // under Firefox's resistFingerprinting -- and steps backwards under an NTP
+    // correction, so a cached response can carry a stamp at or after the mount
+    // that is reading it. Frozen here, which is the extreme of the same thing:
+    // every reading collides, so ordering the response against the mount
+    // accepts the earlier mount's all-complete answer and drops the card on it.
+    vi.spyOn(Date, "now").mockReturnValue(1_760_000_000_000);
+
+    const { readLayout, afterDrop } = await finishThenReoffer(() => {
+      protectedGet.mockResolvedValue({ steps: ALL_BUT_ONE });
+    });
+
+    // Waited on the fresh answer rather than asserting the count immediately,
+    // which is true before this mount has read anything at all.
+    await waitFor(() =>
+      expect(screen.getByText(/2 of 3 done/)).toBeInTheDocument()
+    );
+    expect(readLayout).toHaveBeenCalledTimes(afterDrop);
+  });
+
+  it("does NOT act on a cached answer whose refresh FAILED", async () => {
+    // 🔴 An update landing is not an answer arriving. The observer counts a
+    // failed update alongside a successful one, and a rejected refetch leaves
+    // the earlier mount's all-complete data in place -- so a guard reading the
+    // count alone drops the card on an answer nobody managed to refresh, at the
+    // exact moment the refresh reported it could not.
+    const { readLayout, afterDrop } = await finishThenReoffer(() => {
+      protectedGet.mockRejectedValue(new Error("network"));
+    });
+
+    // Waited on the FAILURE, for the same reason: the count is unmoved before
+    // the refetch has been attempted, so asserting it first passes vacuously.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Setup progress is unavailable/)
+      ).toBeInTheDocument()
+    );
     expect(readLayout).toHaveBeenCalledTimes(afterDrop);
   });
 
@@ -266,8 +332,8 @@ describe("the onboarding checklist", () => {
     // Asserted as a REFETCH by a LIVE consumer of the key rather than as a call
     // on `invalidateQueries`, which any key at all satisfies -- including one
     // nothing is mounted under. The consumer also has to be mounted rather than
-    // prefetched: an invalidation refetches ACTIVE queries, and an entry with
-    // no observer is collected outright under this client's `gcTime: 0`.
+    // prefetched: an invalidation refetches ACTIVE queries only, so a
+    // prefetched entry is marked stale and never read again.
     protectedGet.mockResolvedValue({ steps: EVERY_STEP });
     const { readLayout } = await drawBesideLayout(client());
 
