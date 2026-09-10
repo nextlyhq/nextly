@@ -38,7 +38,13 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +52,28 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT = fileURLToPath(new URL("./run-with-budget.sh", import.meta.url));
+
+/**
+ * A directory holding ONLY the tools the script needs besides `timeout`.
+ *
+ * PATH is set to this and nothing else, so the script's own `awk`, `date` and
+ * `sleep` resolve while `timeout` resolves only when a case supplies one. The
+ * obvious alternative — appending `/bin:/usr/bin` — makes the "no `timeout`"
+ * case find the REAL `/usr/bin/timeout` on every Ubuntu runner, run the command
+ * through it, and pass or fail for reasons that have nothing to do with the
+ * refusal being tested. That was live: it read as green on a Mac, which has no
+ * `timeout`, and would have gone red on CI for the wrong reason.
+ */
+function toolsDir() {
+  const dir = mkdtempSync(join(tmpdir(), "tools-"));
+  for (const tool of ["awk", "date", "sleep"]) {
+    const real = execFileSync("/bin/sh", ["-c", `command -v ${tool}`], {
+      encoding: "utf8",
+    }).trim();
+    symlinkSync(real, join(dir, tool));
+  }
+  return dir;
+}
 
 /** A `timeout` that exits with whatever the case asks for, and records its argv. */
 function stubDir(exitCode, sleepSeconds = 0) {
@@ -81,10 +109,11 @@ function run(args, { path }) {
     // and fail identically in every case, which reads as seven passing
     // refusals rather than a broken harness.
     const stdout = execFileSync("/bin/sh", [SCRIPT, ...args], {
-      // `/bin` after the stub so the script finds the STUB `timeout` while
-      // `sleep`, `date` and `awk` still resolve. Order is what makes the stub
-      // win; dropping /bin entirely would fail every case for the wrong reason.
-      env: { PATH: `${path}:/bin:/usr/bin` },
+      // The case's directory first, then the tools the script needs — and no
+      // system directory at all, so a real `timeout` can never be found by
+      // accident. `/bin/sh` itself is invoked by absolute path for the same
+      // reason.
+      env: { PATH: `${path}:${toolsDir()}` },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -146,9 +175,10 @@ describe("run-with-budget.sh", () => {
   });
 
   it("refuses rather than running unbounded when there is no `timeout`", () => {
-    // PATH with no system directories at all, so this cannot accidentally find
-    // a real `timeout` on a machine that has one — the case would then pass for
-    // having run the command rather than for refusing it.
+    // An empty directory as the case's own, so PATH holds the tools and nothing
+    // that could resolve `timeout`. On a runner with `/usr/bin/timeout` the old
+    // PATH found it, ran `anything` through it, and exited 127 — a red that
+    // said nothing about the refusal.
     const empty = mkdtempSync(join(tmpdir(), "no-timeout-"));
     const result = run(["55m", "the suite", "anything"], { path: empty });
 

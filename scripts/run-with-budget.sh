@@ -22,8 +22,16 @@
 # bound always fires first.
 #
 # Usage: run-with-budget.sh <budget> <what> <command> [args...]
-#   budget   any GNU `timeout` DURATION, e.g. 55m
+#   budget   a whole number of seconds, minutes or hours: 3300, 55m, 1h
 #   what     what to name in the error, e.g. "the MySQL integration suite"
+#
+# The budget grammar is DELIBERATELY narrower than GNU `timeout`'s, which also
+# takes fractions and a `d` suffix. This script has to convert the budget to
+# seconds to judge the outcome, and every form it accepts is one it has to
+# parse — so the contract is the set it parses, stated here, rather than a
+# broader one the parser silently fails on. A CI budget written as `0.5h` or
+# `1d` is refused with a message naming the value, not run under a bound
+# nobody checked.
 
 set -e
 

@@ -1,6 +1,5 @@
 /**
- * The `run:` script of each named step in a workflow file, and each job's
- * ceiling.
+ * The `run:` script of each step in a workflow file, and each job's ceiling.
  *
  * Its own module rather than a helper inside the test that needs it, for the
  * reason `ci-gate.mjs` and `ci-verdict.mjs` are: a derivation a gate depends on
@@ -12,22 +11,31 @@
  * rather than by declaration, and a resolution that depends on hoisting is not
  * one to build a gate on.
  *
- * ## Two ways a reader like this credits a step with somebody else's script
+ * ## What a reader like this gets wrong, and why each is silent
  *
- * Both are silent, and both make a gate built on it pass over the thing it
- * exists to catch.
+ * A gate built on it then passes over exactly the thing it exists to catch.
  *
  * A step boundary is a LIST ITEM, not a `name:` key. `- name: X` and a bare `-`
  * followed by an indented `run:` are both steps, so tracking ownership by name
- * alone leaves an anonymous step's script recorded against whichever named step
- * came before it — and a gate then reads a wrapped command on a step that does
- * not run one.
+ * alone records an anonymous step's script against whichever named step came
+ * before it. Steps are therefore returned as a LIST, each with the name it has
+ * or `null` — dropping the unnamed ones instead would trade crediting the wrong
+ * step for not seeing it at all, which a gate scanning for unwrapped commands
+ * cannot afford.
  *
- * And two steps may legitimately carry the SAME name — conditional variants of
- * one job usually do. A map keeps the last, so a wrapped later step hides an
- * unwrapped earlier one. Reported rather than merged, because which of the two
- * a caller wants is the caller's question and silently answering it is how the
- * hiding happens.
+ * Two steps may legitimately carry the SAME name — conditional variants of one
+ * job usually do, and every job repeats `Install dependencies`. Returning a map
+ * keyed by name kept only the last, so a wrapped step could hide an unwrapped
+ * one; a LIST cannot, which is why this returns one. A boundary the parser
+ * cannot cross beats a check that looks for crossings.
+ *
+ * A script may be written INLINE (`run: pnpm test`) as well as as a block
+ * scalar, and both are ordinary YAML. Reading only `run: |` makes a step with
+ * an inline command invisible.
+ *
+ * And `timeout-minutes` is legal on a STEP as well as on a job, so a matcher
+ * that ignores indentation records a step's value as its job's ceiling — which
+ * reads as a bounded job whose own bound was deleted.
  *
  * @module workflow-run-blocks
  */
@@ -62,12 +70,6 @@ function stepNameOn(line) {
   return named === null ? null : named[1];
 }
 
-/** The indentation of a `run: |` key on this line, or null. */
-function runIndentOn(line) {
-  const run = /^(\s*)run:\s*\|/.exec(line);
-  return run === null ? null : run[1].length;
-}
-
 /**
  * True when a line opens a new step.
  *
@@ -85,59 +87,99 @@ function applyBoundary(state, line) {
   if (!startsStep(line, state.stepIndent)) return;
   state.stepIndent = indentOf(line);
   state.owner = stepNameOn(line);
+  state.opened = true;
 }
 
-/** Record a run block against the step that owns it, if any step does. */
-function recordRun(state, lines, index, indent) {
-  const owner = state.owner;
-  if (owner === null) return;
-  if (state.blocks.has(owner)) state.duplicated.push(owner);
-  state.blocks.set(owner, blockBody(lines, index + 1, indent));
+/**
+ * The script a `run:` line carries: the inline command, or the block below it.
+ *
+ * Returns null when the line opens no script at all. Both YAML forms are read,
+ * because a step written `run: pnpm test` is as ordinary as one written
+ * `run: |`, and a reader that saw only the second would report a step with an
+ * inline command as running nothing.
+ */
+function runScript(lines, index) {
+  const run = /^(\s*)run:(\s*\|)?(.*)$/.exec(lines[index]);
+  if (run === null) return null;
+  if (run[2] !== undefined) return blockBody(lines, index + 1, run[1].length);
+  return run[3].trim() === "" ? null : run[3].trim();
+}
+
+/** Record a script against the step that owns it. */
+function recordRun(state, script) {
+  if (!state.opened) return;
+  state.steps.push({ name: state.owner, block: script });
 }
 
 /** One line's effect: it may open a step, and it may open that step's script. */
 function readStepLine(state, lines, index) {
   applyBoundary(state, lines[index]);
-  const indent = runIndentOn(lines[index]);
-  if (indent !== null) recordRun(state, lines, index, indent);
+  const script = runScript(lines, index);
+  if (script !== null) recordRun(state, script);
 }
 
 /**
- * Every step's own run block, keyed by step name, plus the names that appeared
- * more than once.
+ * Every step's own script, in file order, plus the names seen more than once.
  *
- * A step's OWN block — never the text running to the next step. A chunk bounded
- * by the following `- name:` would include the comment block that introduces
- * the NEXT step, and workflow comments here quote commands verbatim, so a
- * comment about step N+1 would certify step N. The bound is the block scalar's
- * indentation instead, which ends where `env:` or the next step's comments
- * begin.
+ * A step's OWN script — never the text running to the next step. A chunk
+ * bounded by the following `- name:` would include the comment block that
+ * introduces the NEXT step, and workflow comments here quote commands verbatim,
+ * so a comment about step N+1 would certify step N. The bound is the block
+ * scalar's indentation instead, which ends where `env:` or the next step's
+ * comments begin.
  *
  * @param {string} text the workflow file's contents
- * @returns {{ blocks: Map<string, string>, duplicated: string[] }}
+ * @returns {{name: string|null, block: string}[]} every step's script, in order
  */
 export function workflowSteps(text) {
   const lines = text.split("\n");
-  const state = {
-    blocks: new Map(),
-    duplicated: [],
-    owner: null,
-    stepIndent: null,
-  };
+  const state = { steps: [], owner: null, stepIndent: null, opened: false };
 
   for (let i = 0; i < lines.length; i += 1) readStepLine(state, lines, i);
 
-  return { blocks: state.blocks, duplicated: state.duplicated };
+  return state.steps;
 }
 
-/** Collect a job id, once inside `jobs:`. */
-function collectJobId(state, line) {
-  if (!state.inJobs) {
-    state.inJobs = line.trimEnd() === "jobs:";
-    return;
-  }
+/**
+ * The job a line opens, or null.
+ *
+ * ONE recogniser, used by both readers below. Two of them agreed on the day
+ * they were written and would drift the first time either learned about another
+ * key shape — and the drift is invisible, because one supplies the population
+ * of jobs to check and the other supplies the ceilings, so a job could fall out
+ * of exactly one of them.
+ */
+function jobKeyOn(line) {
   const job = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
-  if (job !== null) state.ids.push(job[1]);
+  return job === null ? null : job[1];
+}
+
+/**
+ * A JOB's own ceiling on this line, or null.
+ *
+ * Four spaces exactly. `timeout-minutes` is legal on a step too, at a deeper
+ * indentation, and an indentation-agnostic matcher records that step's value
+ * against the job — so a job whose own ceiling was deleted reads as bounded by
+ * one of its steps.
+ */
+function jobTimeoutOn(line) {
+  const found = /^ {4}timeout-minutes:\s*(\d+)\s*$/.exec(line);
+  return found === null ? null : Number(found[1]);
+}
+
+/** Walk `jobs:`, handing each line to a visitor once inside it. */
+function walkJobs(text, visit) {
+  let job = null;
+  let inJobs = false;
+
+  for (const line of text.split("\n")) {
+    if (!inJobs) {
+      inJobs = line.trimEnd() === "jobs:";
+      continue;
+    }
+    job = jobKeyOn(line) ?? job;
+    visit(job, line);
+  }
 }
 
 /**
@@ -152,36 +194,15 @@ function collectJobId(state, line) {
  * @returns {string[]} job ids
  */
 export function jobIds(text) {
-  const state = { ids: [], inJobs: false };
-  for (const line of text.split("\n")) collectJobId(state, line);
-  return state.ids;
-}
-
-/** Note the job a two-space key opens. */
-function noteJob(state, line) {
-  const job = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
-  if (job !== null) state.job = job[1];
-}
-
-/** Note a ceiling against the job currently open. */
-function noteTimeout(state, line) {
-  const found = /^\s*timeout-minutes:\s*(\d+)\s*$/.exec(line);
-  if (found === null || state.job === null) return;
-  state.timeouts.set(state.job, Number(found[1]));
-}
-
-/** One line's effect while inside `jobs:`. */
-function readJobLine(state, line) {
-  if (!state.inJobs) {
-    state.inJobs = line.trimEnd() === "jobs:";
-    return;
-  }
-  noteJob(state, line);
-  noteTimeout(state, line);
+  const ids = [];
+  walkJobs(text, (job, line) => {
+    if (jobKeyOn(line) !== null) ids.push(job);
+  });
+  return ids;
 }
 
 /**
- * Each job's `timeout-minutes`, keyed by job id.
+ * Each job's own `timeout-minutes`, keyed by job id.
  *
  * Per JOB rather than as one list of the numbers in the file. A caller checking
  * that every ceiling clears some floor is satisfied by a list that is merely
@@ -193,7 +214,10 @@ function readJobLine(state, line) {
  * @returns {Map<string, number>} job id to its ceiling in minutes
  */
 export function jobTimeouts(text) {
-  const state = { timeouts: new Map(), job: null, inJobs: false };
-  for (const line of text.split("\n")) readJobLine(state, line);
-  return state.timeouts;
+  const timeouts = new Map();
+  walkJobs(text, (job, line) => {
+    const minutes = jobTimeoutOn(line);
+    if (minutes !== null && job !== null) timeouts.set(job, minutes);
+  });
+  return timeouts;
 }

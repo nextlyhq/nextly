@@ -2,27 +2,37 @@
  * `workflowSteps` is the reader every workflow gate built on it inherits, so
  * the cases here are the ones where a reader can be wrong while looking right.
  *
- * Three of them credit a step with a script it does not run, and each makes a
- * gate pass over exactly what it exists to catch:
+ * Each of these credits a step with a script it does not run, or fails to see
+ * a script at all — and each makes a gate pass over exactly what it exists to
+ * catch:
  *
  * - a chunk bounded by the next `- name:` sweeps in the comment block
  *   introducing the FOLLOWING step, and workflow comments here quote commands
  *   verbatim, so a comment about step N+1 satisfies an assertion about step N;
  * - an ANONYMOUS step — a bare `-` with an indented `run:` — has no name, so a
  *   reader tracking ownership by name records its script against whichever
- *   named step came before it;
- * - two steps may legitimately share a name, and a map keeps the last, so a
- *   wrapped later step hides an unwrapped earlier one.
+ *   named step came before it, and a reader that DROPS it instead cannot see
+ *   the unwrapped command it runs;
+ * - two steps may legitimately share a name, and a map keeps only the last;
+ * - a script may be INLINE (`run: pnpm test`), which a reader matching only
+ *   `run: |` never sees;
+ * - `timeout-minutes` is legal on a step, and an indentation-blind matcher
+ *   records a step's value as its job's ceiling.
  *
  * @module workflow-run-blocks.test
  */
 import { describe, expect, it } from "vitest";
 
-import { jobTimeouts, workflowSteps } from "./workflow-run-blocks.mjs";
+import { jobIds, jobTimeouts, workflowSteps } from "./workflow-run-blocks.mjs";
+
+/** The script of the FIRST step with this name, or undefined. */
+function blockOf(steps, name) {
+  return steps.find(step => step.name === name)?.block;
+}
 
 describe("workflowSteps", () => {
   it("reads a step's run block", () => {
-    const { blocks } = workflowSteps(
+    const steps = workflowSteps(
       [
         "    steps:",
         "      - name: Build",
@@ -32,11 +42,22 @@ describe("workflowSteps", () => {
       ].join("\n")
     );
 
-    expect(blocks.get("Build")).toBe("          pnpm build");
+    expect(blockOf(steps, "Build")).toBe("          pnpm build");
+  });
+
+  it("reads an INLINE run command as well as a block scalar", () => {
+    // `run: pnpm test` is as ordinary as `run: |`. A reader that saw only the
+    // block form would report this step as running nothing — and a lane
+    // invoked this way would be invisible to a gate scanning for bare ones.
+    const steps = workflowSteps(
+      ["      - name: Quick", "        run: pnpm test"].join("\n")
+    );
+
+    expect(blockOf(steps, "Quick")).toBe("pnpm test");
   });
 
   it("stops at `env:` rather than swallowing the keys after the script", () => {
-    const { blocks } = workflowSteps(
+    const steps = workflowSteps(
       [
         "      - name: Test",
         "        run: |",
@@ -46,12 +67,12 @@ describe("workflowSteps", () => {
       ].join("\n")
     );
 
-    expect(blocks.get("Test")).toBe("          pnpm test");
-    expect(blocks.get("Test")).not.toContain("TOKEN");
+    expect(blockOf(steps, "Test")).toBe("          pnpm test");
+    expect(blockOf(steps, "Test")).not.toContain("TOKEN");
   });
 
   it("does NOT let a comment introducing the next step land in this one", () => {
-    const { blocks } = workflowSteps(
+    const steps = workflowSteps(
       [
         "      - name: First",
         "        run: |",
@@ -64,16 +85,16 @@ describe("workflowSteps", () => {
       ].join("\n")
     );
 
-    expect(blocks.get("First")).toBe("          safe-thing");
-    expect(blocks.get("First")).not.toContain("dangerous-thing");
-    expect(blocks.get("Second")).toBe("          dangerous-thing");
+    expect(blockOf(steps, "First")).toBe("          safe-thing");
+    expect(blockOf(steps, "First")).not.toContain("dangerous-thing");
+    expect(blockOf(steps, "Second")).toBe("          dangerous-thing");
   });
 
-  it("does NOT credit a named step with a following ANONYMOUS step's script", () => {
-    // A bare `-` is a legal step. A reader that changed owner only on `name:`
-    // records `unbounded-thing` against `Guarded` — so a gate asserting that
-    // `Guarded` runs a wrapped command reads one that another step runs.
-    const { blocks } = workflowSteps(
+  it("keeps an ANONYMOUS step's script, under no name, rather than mis-crediting or dropping it", () => {
+    // Both wrong answers are live. Crediting `unbounded-thing` to `Guarded`
+    // makes a gate read a wrapped command on a step that runs none; dropping
+    // it makes the gate unable to see the unwrapped command at all.
+    const steps = workflowSteps(
       [
         "      - name: Guarded",
         "        run: |",
@@ -84,15 +105,15 @@ describe("workflowSteps", () => {
       ].join("\n")
     );
 
-    expect(blocks.get("Guarded")).toBe("          wrapped-thing");
-    expect(blocks.get("Guarded")).not.toContain("unbounded-thing");
+    expect(blockOf(steps, "Guarded")).toBe("          wrapped-thing");
+    expect(steps).toContainEqual({ name: null, block: "          unbounded-thing" });
   });
 
   it("keeps a blank line inside a script from truncating it", () => {
     // A reader that ended the block at the first blank line would return a
     // PREFIX of the script — and a prefix still contains the first command, so
     // an assertion about that command passes while the rest is invisible.
-    const { blocks } = workflowSteps(
+    const steps = workflowSteps(
       [
         "      - name: Two parts",
         "        run: |",
@@ -102,14 +123,14 @@ describe("workflowSteps", () => {
       ].join("\n")
     );
 
-    expect(blocks.get("Two parts")).toContain("first");
-    expect(blocks.get("Two parts")).toContain("second");
+    expect(blockOf(steps, "Two parts")).toContain("first");
+    expect(blockOf(steps, "Two parts")).toContain("second");
   });
 
   it("does not treat a list nested INSIDE a step as a new step", () => {
     // The `- chromium` belongs to `with:`. Ending the step there would leave
-    // the script that follows owned by nobody and silently unchecked.
-    const { blocks } = workflowSteps(
+    // the script that follows owned by nobody.
+    const steps = workflowSteps(
       [
         "      - name: Install",
         "        with:",
@@ -120,14 +141,14 @@ describe("workflowSteps", () => {
       ].join("\n")
     );
 
-    expect(blocks.get("Install")).toBe("          install-thing");
+    expect(blockOf(steps, "Install")).toBe("          install-thing");
   });
 
-  it("reports a repeated step name instead of keeping only the last", () => {
-    // Conditional variants of one step legitimately share a name. Keeping the
-    // last lets a wrapped variant hide an unwrapped one, which is a gate
-    // passing on the strength of the step it did not read.
-    const { blocks, duplicated } = workflowSteps(
+  it("keeps BOTH steps when two share a name, so neither can hide the other", () => {
+    // Conditional variants of one step legitimately share a name, and every job
+    // repeats `Install dependencies`. A map keyed by name kept the last, which
+    // let a wrapped variant hide an unwrapped one. A list cannot.
+    const steps = workflowSteps(
       [
         "      - name: Run tests",
         "        if: matrix.dialect == 'mysql'",
@@ -140,35 +161,24 @@ describe("workflowSteps", () => {
       ].join("\n")
     );
 
-    expect(duplicated).toEqual(["Run tests"]);
-    // Still readable, so a caller can refuse rather than having nothing.
-    expect(blocks.has("Run tests")).toBe(true);
+    const blocks = steps.filter(s => s.name === "Run tests").map(s => s.block);
+    expect(blocks).toEqual(["          bare-thing", "          wrapped-thing"]);
   });
 
-  it("reports nothing duplicated when every step name is distinct", () => {
-    const { duplicated } = workflowSteps(
-      ["      - name: A", "        run: |", "          a"].join("\n")
-    );
+  it("ignores a run key that no step has opened", () => {
+    // A `run:` before any list item is not a step's script. Recording it would
+    // invent a step the workflow does not have.
+    const steps = workflowSteps(["    run: |", "      stray"].join("\n"));
 
-    expect(duplicated).toEqual([]);
-  });
-
-  it("ignores a run block that no step owns", () => {
-    const { blocks } = workflowSteps(["      - run: |", "          orphan"].join("\n"));
-
-    // The step is anonymous, so there is no name to record it under — and
-    // attributing it to whichever name came last is the defect above.
-    expect([...blocks.keys()]).toEqual([]);
+    expect(steps).toEqual([]);
   });
 
   it("returns nothing for a file with no steps, rather than throwing", () => {
-    expect([...workflowSteps("name: Nothing\non: push\n").blocks.keys()]).toEqual(
-      []
-    );
+    expect(workflowSteps("name: Nothing\non: push\n")).toEqual([]);
   });
 });
 
-describe("jobTimeouts", () => {
+describe("jobIds and jobTimeouts", () => {
   const workflow = [
     "on:",
     "  push:",
@@ -176,9 +186,30 @@ describe("jobTimeouts", () => {
     "  integration:",
     "    name: Integration",
     "    timeout-minutes: 75",
+    "    steps:",
+    "      - name: Install",
+    "        timeout-minutes: 8",
+    "        run: pnpm install",
     "  integration-sqlite:",
     "    timeout-minutes: 60",
+    "  unbounded:",
+    "    name: No ceiling",
+    "    steps:",
+    "      - name: Slow",
+    "        timeout-minutes: 30",
+    "        run: pnpm slow",
   ].join("\n");
+
+  it("lists every job the workflow declares, ceiling or not", () => {
+    // The population. `jobTimeouts` alone answers only about jobs that HAVE a
+    // ceiling, so a job whose ceiling was deleted vanishes from that answer
+    // instead of being reported.
+    expect(jobIds(workflow)).toEqual([
+      "integration",
+      "integration-sqlite",
+      "unbounded",
+    ]);
+  });
 
   it("keys each ceiling to the job that declares it", () => {
     expect([...jobTimeouts(workflow).entries()]).toEqual([
@@ -187,18 +218,17 @@ describe("jobTimeouts", () => {
     ]);
   });
 
-  it("omits a job that declares no ceiling, rather than inventing one", () => {
-    // The absence is the finding. A reader that supplied a default would report
-    // an unbounded job as bounded, which is the state a ceiling removes.
-    const missing = ["jobs:", "  a:", "    timeout-minutes: 30", "  b:", "    name: B"].join(
-      "\n"
-    );
-
-    expect(jobTimeouts(missing).has("b")).toBe(false);
+  it("does NOT read a STEP's timeout-minutes as its job's ceiling", () => {
+    // `unbounded` has no ceiling of its own; its `Slow` step has one. An
+    // indentation-blind matcher would record 30 against the job, and a gate
+    // would then call an unbounded job bounded.
+    expect(jobTimeouts(workflow).has("unbounded")).toBe(false);
+    // And the step-level 8 must not overwrite integration's own 75.
+    expect(jobTimeouts(workflow).get("integration")).toBe(75);
   });
 
   it("does not read a two-space key from OUTSIDE jobs as a job", () => {
-    // `on:` has `push:` and `pull_request:` at the same indentation as a job id.
-    expect([...jobTimeouts(workflow).keys()]).not.toContain("push");
+    // `on:` has `push:` at the same indentation as a job id.
+    expect(jobIds(workflow)).not.toContain("push");
   });
 });

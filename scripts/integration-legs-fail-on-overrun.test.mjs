@@ -15,7 +15,7 @@
  * armed. So the real bound lives on the STEP, in `run-with-budget.sh`, where an
  * overrun exits non-zero and the job fails like any other red.
  *
- * ## Every assertion here derives its population from the workflow
+ * ## Every assertion here derives its population from the artifacts
  *
  * The first version of this file did not, and that is the defect it exists to
  * prevent, committed inside the guard against it. It iterated a three-item list
@@ -24,17 +24,19 @@
  * every assertion passed without ever looking at it.
  *
  * So a leg is anything the workflow runs a `lane:test:integration:` script for,
- * and a job is anything `jobs:` declares. A floor check keeps that from failing
- * open: if the reader finds no legs at all, an assertion over "every leg" is
- * satisfied by having nothing to check.
+ * a job is anything `jobs:` declares, and the escalation delay is read from the
+ * script that enforces it rather than repeated here. A floor check keeps the
+ * derivation from failing open: if the reader finds no legs at all, an
+ * assertion over "every leg" is satisfied by having nothing to check.
  *
  * ## And each assertion tests a RELATIONSHIP, not a coincidence
  *
- * Asserting that a block contains the wrapper and contains the lane script is
- * satisfied by a block that runs the lane bare and calls the wrapper on
- * something else entirely. What has to hold is that the wrapper INVOKES the
- * lane, so the commands are joined across their line continuations and read as
- * one.
+ * A block containing the wrapper and containing the lane script is satisfied by
+ * one that runs the lane bare beside a wrapper call on something else. String
+ * ORDER does not settle it either: `wrapper ... true && pnpm lane:...` puts the
+ * wrapper first and still runs the lane unbounded. So each script is split into
+ * its simple commands — across line continuations, and at `&&`, `||`, `;` and
+ * `|` — and the wrapper must be the command that invokes the lane.
  *
  * @module integration-legs-fail-on-overrun.test
  */
@@ -54,106 +56,112 @@ const WORKFLOW = path.join(
   "workflows",
   "integration.yml"
 );
+const SCRIPT = path.join(HERE, "run-with-budget.sh");
 
-const LANE = "lane:test:integration:";
+const LANE = /\blane:test:integration:([a-z0-9]+)/;
 const WRAPPER = "scripts/run-with-budget.sh";
 
 /**
  * The dialects that must be present for the reader to be believed.
  *
  * A FLOOR, not the population. Every assertion below iterates what the workflow
- * actually declares; this one exists so a reader that silently found nothing
- * cannot satisfy them all by leaving them nothing to iterate.
+ * actually invokes; this one exists so a reader that silently found nothing
+ * cannot satisfy them all by leaving them nothing to iterate. Checked against
+ * the LANE SCRIPTS the steps run, not their display names — a step still named
+ * `(postgres)` that had been changed to run the MySQL lane would otherwise
+ * count as postgres coverage.
  */
 const AT_LEAST = ["postgres", "mysql", "sqlite"];
 
 /**
- * What a job's ceiling must clear beyond the suite's own budget.
- *
- * The suite may use its whole budget, then ignore TERM and take the escalation
- * delay on top, and the job has already spent time on checkout, install and
- * build before any of that. A ceiling only just above the budget cancels the
- * job mid-escalation — which is the cancellation this whole mechanism exists to
- * replace, restored by a number that looks like it has headroom.
+ * Time the job needs beyond the budget and the escalation for checkout,
+ * install and build, which all run before the suite's clock starts.
  */
-const ESCALATION_MINUTES = 2;
 const SETUP_MINUTES = 5;
 
 let workflow = "";
+let script = "";
 
 beforeAll(async () => {
-  workflow = await readFile(WORKFLOW, "utf8");
+  [workflow, script] = await Promise.all([
+    readFile(WORKFLOW, "utf8"),
+    readFile(SCRIPT, "utf8"),
+  ]);
 });
 
 /**
- * Shell lines with their `\` continuations joined, so one command is one line.
+ * Every simple command in a script, one per element.
  *
- * The wrapper invocation spans three physical lines. Read line by line, the
- * line naming the lane script does not name the wrapper, and no assertion about
- * the two together can hold.
+ * Line continuations are joined first, so the wrapper's three physical lines
+ * read as one invocation. Then each line is split at the shell operators, so
+ * `a && b` is two commands — and a lane in `b` cannot borrow a wrapper in `a`.
+ * Quoted operators are not special-cased: nothing in this workflow quotes one,
+ * and a reader that mis-split a quoted `|` would err toward reporting a bare
+ * lane, which is the loud direction.
  */
-function commands(block) {
+function simpleCommands(block) {
   return block
     .replace(/\\\n\s*/g, " ")
     .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"));
+    .flatMap(line => line.split(/\s*(?:&&|\|\||;|\|)\s*/))
+    .map(command => command.trim())
+    .filter(command => command !== "" && !command.startsWith("#"));
 }
 
-/** Every step whose script runs one of the integration lane scripts. */
-function integrationLegs(text) {
-  return [...workflowSteps(text).blocks.entries()].filter(([, block]) =>
-    block.includes(LANE)
-  );
+/** The dialects a script invokes, by lane name. */
+function dialectsInvoked(block) {
+  // `matchAll` requires the global flag, and that flag is what makes `.test()`
+  // stateful — so the global copy lives here, and nowhere else.
+  return [...block.matchAll(new RegExp(LANE.source, "g"))].map(m => m[1]);
 }
 
 /**
- * True when the wrapper is what invokes the lane on this command.
+ * True when the wrapper is the command invoking the lane.
  *
- * The ORDER is the check. A command merely containing both strings is satisfied
- * by a block that calls the wrapper on something else and the lane bare beside
- * it, which is precisely the unbounded state being guarded against.
+ * Within one SIMPLE command, order is enough: there is no operator left for a
+ * wrapper to hide behind, so the wrapper appearing before the lane means the
+ * lane is one of its arguments.
  */
 function wrapsLane(command) {
-  if (!command.includes(WRAPPER)) return false;
-  return command.indexOf(WRAPPER) < command.indexOf(LANE);
+  const wrapper = command.indexOf(WRAPPER);
+  return wrapper !== -1 && wrapper < command.search(LANE);
 }
 
-/** The lane invocations in one block that do NOT go through the wrapper. */
+/** The lane invocations in one script that do NOT go through the wrapper. */
 function bareInvocations(name, block) {
-  return commands(block)
-    .filter((command) => command.includes(LANE) && !wrapsLane(command))
-    .map((command) => `${name}: ${command}`);
+  return simpleCommands(block)
+    .filter(command => LANE.test(command) && !wrapsLane(command))
+    .map(command => `${name ?? "(unnamed step)"}: ${command}`);
+}
+
+/** The escalation delay the SCRIPT enforces, in minutes. */
+function escalationMinutes(text) {
+  const found = /^KILL_AFTER=(\d+)m$/m.exec(text);
+  expect(found, "run-with-budget.sh declares KILL_AFTER in minutes").not.toBeNull();
+  return Number(found[1]);
 }
 
 describe("integration.yml", () => {
-  it("declares a leg for at least every dialect the suite is known to run", () => {
+  it("invokes a lane for at least every dialect the suite is known to run", () => {
     // The floor. Without it, a reader that returned nothing would make every
     // "for each leg" assertion below vacuously true.
-    const found = integrationLegs(workflow)
-      .map(([name]) => name)
-      .join(" ");
+    const invoked = workflowSteps(workflow).flatMap(step =>
+      dialectsInvoked(step.block)
+    );
 
     for (const dialect of AT_LEAST) {
-      expect(found).toContain(dialect);
+      expect(invoked).toContain(dialect);
     }
   });
 
   it("runs EVERY lane it invokes through the budget wrapper", () => {
-    // Derived from the workflow, so a dialect added later is covered without
-    // anybody remembering to edit this file.
-    const bare = integrationLegs(workflow).flatMap(([name, block]) =>
-      bareInvocations(name, block)
+    // Derived from the workflow — named steps and anonymous ones alike — so a
+    // dialect added later is covered without anybody editing this file.
+    const bare = workflowSteps(workflow).flatMap(step =>
+      bareInvocations(step.name, step.block)
     );
 
     expect(bare).toEqual([]);
-  });
-
-  it("names each leg's step only once, so none can hide another", () => {
-    // Two steps may share a name legitimately. The reader keeps the last, so a
-    // wrapped later step would hide an unwrapped earlier one — and this gate
-    // would pass on the strength of the step it did not read.
-    expect(workflowSteps(workflow).duplicated).toEqual([]);
   });
 
   it("gives EVERY job a ceiling, with room for the escalation and the setup", () => {
@@ -165,7 +173,12 @@ describe("integration.yml", () => {
     // means the workflow cannot be merged in that state at all.
     expect(Number(budget[1])).toBeGreaterThan(0);
 
-    const floor = Number(budget[1]) + ESCALATION_MINUTES + SETUP_MINUTES;
+    // The escalation comes from the script that performs it. A copy of the
+    // number here would agree today and drift the first time the script's
+    // changed alone — and the drift would only show as a job cancelled during
+    // an escalation this guard had certified there was room for.
+    const floor =
+      Number(budget[1]) + escalationMinutes(script) + SETUP_MINUTES;
     const ceilings = jobTimeouts(workflow);
     const ids = jobIds(workflow);
 
