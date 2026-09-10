@@ -54,9 +54,9 @@ type TestBudget = { testTimeout?: number; hookTimeout?: number };
  * off `default` has no `test` block at all, and an adequately budgeted project
  * would be reported as having no budget.
  */
-async function bootBudgetOf(
+async function resolvedConfigOf(
   configPath: string
-): Promise<TestBudget | undefined> {
+): Promise<{ test?: TestBudget; plugins?: unknown[] }> {
   const module = (await import(/* @vite-ignore */ configPath)) as {
     default: unknown;
   };
@@ -72,7 +72,32 @@ async function bootBudgetOf(
         )
       : await exported;
 
-  return (resolved as { test?: TestBudget } | undefined)?.test;
+  return (resolved ?? {}) as { test?: TestBudget; plugins?: unknown[] };
+}
+
+/** The budget a config declares, or nothing. */
+async function bootBudgetOf(
+  configPath: string
+): Promise<TestBudget | undefined> {
+  return (await resolvedConfigOf(configPath)).test;
+}
+
+/**
+ * Whether a directory contains any test file at all, ignoring installed
+ * packages and dot directories.
+ */
+async function shipsTests(dir: string): Promise<boolean> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (await shipsTests(full)) return true;
+      continue;
+    }
+    if (/\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name)) return true;
+  }
+  return false;
 }
 
 describe("scaffold --template plugin (D44/D45 smoke test)", () => {
@@ -196,37 +221,69 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
  * says nothing about `base`, `blank`, `blog`, or whatever is added next, and
  * naming the one template that exists today is how the gap reopens.
  *
- * The rule is deliberately broader than "templates whose suite boots": a
- * template ships a vitest config or it does not, and that question has one
- * answer per directory. Deciding instead which suites boot means reading their
- * source for a call, which is the reading this whole check exists to avoid, and
- * a template that boots through a helper would be missed. A generous timeout
- * costs a passing suite nothing.
+ * The rule turns on whether a template SHIPS TESTS, not on whether it ships a
+ * config. Keying on the config leaves the worse case uncovered: a template that
+ * adds a booting suite and no `vitest.config.ts` runs on vitest's 5s default,
+ * which is the exact defect this guard exists for, and a config-keyed filter
+ * would skip that directory silently while the one good template kept the
+ * population non-empty.
+ *
+ * It is deliberately broader than "templates whose suite boots". Deciding which
+ * suites boot means reading their source for a call, and a template that boots
+ * through a helper would be missed. A generous timeout costs a passing suite
+ * nothing, and every scaffold is a real project sooner or later.
  */
 describe("every scaffold template budgets for a boot", () => {
-  it("declares both timeouts in each template that ships a vitest config", async () => {
+  it("requires a budgeted vitest config in each template that ships tests", async () => {
     const entries = await readdir(templatesRoot, { withFileTypes: true });
 
-    const configs: string[] = [];
+    const withTests: string[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const config = path.join(templatesRoot, entry.name, "vitest.config.ts");
-      if (await exists(config)) configs.push(config);
+      const dir = path.join(templatesRoot, entry.name);
+      if (await shipsTests(dir)) withTests.push(dir);
     }
 
     // An empty population would pass every assertion below without running one,
     // so it is refused rather than reported as a clean sweep.
-    expect(configs.length).toBeGreaterThan(0);
+    expect(withTests.length).toBeGreaterThan(0);
 
-    for (const config of configs) {
-      const budget = await bootBudgetOf(config);
+    for (const dir of withTests) {
+      const name = path.basename(dir);
+      const configPath = path.join(dir, "vitest.config.ts");
+
       expect(
-        budget?.testTimeout,
-        `${path.relative(templatesRoot, config)} has no testTimeout`
+        await exists(configPath),
+        `templates/${name} ships tests but no vitest.config.ts, so its suite ` +
+          "runs on vitest's defaults"
+      ).toBe(true);
+
+      const config = await resolvedConfigOf(configPath);
+
+      /*
+       * ⚠️ The precondition that makes the budget above authoritative. A Vite
+       * plugin's `config` hook can contribute or override `test.testTimeout`,
+       * and vitest merges that before running, so with a plugin present the
+       * declared literal is no longer what the suite runs under. Resolving that
+       * properly means vitest's own config loader, and `vite` is not resolvable
+       * anywhere under this workspace's pnpm isolation. So the assertion states
+       * its precondition instead of hoping for it: no plugins, therefore no
+       * hook, therefore the declaration IS the resolved value. A template that
+       * genuinely needs one has to revisit this.
+       */
+      expect(
+        config.plugins ?? [],
+        `templates/${name} declares vitest plugins, and a plugin's config hook ` +
+          "can change the timeouts this asserts"
+      ).toHaveLength(0);
+
+      expect(
+        config.test?.testTimeout,
+        `templates/${name} has no testTimeout`
       ).toBeGreaterThanOrEqual(BOOT_BUDGET_MS);
       expect(
-        budget?.hookTimeout,
-        `${path.relative(templatesRoot, config)} has no hookTimeout`
+        config.test?.hookTimeout,
+        `templates/${name} has no hookTimeout`
       ).toBeGreaterThanOrEqual(BOOT_BUDGET_MS);
     }
   });
