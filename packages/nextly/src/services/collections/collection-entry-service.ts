@@ -750,6 +750,13 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /**
+       * The caller's own grants when they arrived on an API key. Declared here
+       * or a spread carrying it is silently dropped: a spread into an object
+       * literal is exempt from excess-property checking, so the omission
+       * compiles clean and the gate never sees the scope.
+       */
+      authenticatedScope?: AuthenticatedScope;
       /** Who performed the delete, recorded on the outbox event. */
       actor?: RequestActor;
       /** Arbitrary data passed to this operation's hooks via context. */
