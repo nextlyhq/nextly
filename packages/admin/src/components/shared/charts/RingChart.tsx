@@ -25,6 +25,14 @@ interface RingChartProps {
   className?: string;
 }
 
+/**
+ * How far the separator extends past the arc, in pixels, on each side.
+ *
+ * Read by the render and by the test that asserts a gap exists, so the two
+ * cannot disagree about whether one was drawn.
+ */
+export const SEGMENT_SEPARATION = 2;
+
 export const RingChart: React.FC<RingChartProps> = ({
   segments,
   total,
@@ -66,22 +74,60 @@ export const RingChart: React.FC<RingChartProps> = ({
           currentOffset += percentage * circumference;
 
           return (
-            <circle
-              key={index}
-              cx={size / 2}
-              cy={size / 2}
-              r={radius}
-              fill="none"
-              stroke={segment.color}
-              strokeWidth={strokeWidth}
-              strokeDasharray={strokeDasharray}
-              strokeDashoffset={strokeDashoffset}
-              strokeLinecap="round"
-              className="transition-all duration-1000 ease-in-out"
-              style={{
-                strokeDashoffset: total > 0 ? strokeDashoffset : circumference,
-              }}
-            />
+            <g key={index}>
+              {/*
+               * A separator carved in the SURFACE colour, drawn under this
+               * segment and over the previous one.
+               *
+               * 🔴 Two arcs of a ring touch, so each is an "adjacent colour" of
+               * the other and WCAG 1.4.11 asks for 3:1 between them — not only
+               * between each arc and the card behind it. This ring's own pair
+               * measures 2.15:1 in dark mode (white against amber), and no
+               * choice of palette fixes that while one segment is the primary:
+               * a colour 3:1 from both white and the near-black card exists but
+               * would dictate the amber for every other chart to settle one
+               * boundary here.
+               *
+               * So the boundary stops being a colour boundary. Because the
+               * segments are painted in order, this wider under-stroke cuts a
+               * gap into the segment before it, and the reader sees where one
+               * arc ends whatever the two colours are. `strokeLinecap="round"`
+               * means the caps overhang by half the stroke, so the separation
+               * has to clear that on both sides to show at all.
+               */}
+              <circle
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                stroke="var(--nx-card)"
+                strokeWidth={strokeWidth + SEGMENT_SEPARATION * 2}
+                strokeDasharray={strokeDasharray}
+                strokeDashoffset={strokeDashoffset}
+                strokeLinecap="round"
+                className="transition-all duration-1000 ease-in-out"
+                style={{
+                  strokeDashoffset:
+                    total > 0 ? strokeDashoffset : circumference,
+                }}
+              />
+              <circle
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                stroke={segment.color}
+                strokeWidth={strokeWidth}
+                strokeDasharray={strokeDasharray}
+                strokeDashoffset={strokeDashoffset}
+                strokeLinecap="round"
+                className="transition-all duration-1000 ease-in-out"
+                style={{
+                  strokeDashoffset:
+                    total > 0 ? strokeDashoffset : circumference,
+                }}
+              />
+            </g>
           );
         })}
       </svg>
