@@ -128,6 +128,27 @@ describe("the onboarding checklist", () => {
     ).toBeInTheDocument();
   });
 
+  it("drops a step id this build cannot draw, rather than crashing on it", async () => {
+    // 🔴 The presentation map is exhaustive over the ids core owns, and that is
+    // a COMPILE-time guarantee about two packages built together. It says
+    // nothing about the wire: a newer server sending an id this build has no
+    // entry for would have had its row destructured out of `undefined`, taking
+    // the whole dashboard down rather than one row.
+    //
+    // The union is imported from core now, so the two definitions cannot drift.
+    // This covers the case that survives that: the definitions agreeing and the
+    // RUNTIME disagreeing anyway.
+    protectedGet.mockResolvedValue({
+      steps: [...ALL_BUT_ONE, { id: "billing:configured", complete: false }],
+    });
+    draw(client());
+
+    await waitFor(() =>
+      expect(screen.getAllByRole("listitem")).toHaveLength(ALL_BUT_ONE.length)
+    );
+    expect(screen.getByText(/of 3 done/)).toBeInTheDocument();
+  });
+
   it("says progress is unavailable rather than showing it finished", async () => {
     // 🔴 A failed read and a finished checklist both leave zero incomplete
     // steps. Reporting the first as the second tells a reader they are set up

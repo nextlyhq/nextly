@@ -57,7 +57,11 @@ const PRESENTATION: Record<OnboardingStepId, StepPresentation> = {
     label: "Create a collection",
     href: ROUTES.BUILDER_COLLECTIONS_NEW,
   },
-  entry: { label: "Add your first entry", href: ROUTES.BUILDER_COLLECTIONS },
+  // The CONTENT surface, not the schema builder. `BUILDER_COLLECTIONS` edits
+  // what a collection IS; a reader told to add their first entry and sent
+  // there arrives at field definitions, which is the one place the step cannot
+  // be completed.
+  entry: { label: "Add your first entry", href: ROUTES.COLLECTIONS },
 };
 
 function StepRow({ step }: { step: OnboardingStepState }) {

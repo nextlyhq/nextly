@@ -37,37 +37,17 @@
  * elsewhere — the exact disclosure `content:empty` is scoped to avoid. They
  * arrive when a reader-scoped count does.
  *
+ * The vocabulary itself lives in `onboarding-steps.ts`, which imports
+ * nothing: the admin has to name these ids and must not pull this module's
+ * Direct API graph in to do it.
+ *
  * @module domains/widgets/onboarding
  */
 
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
+import type { OnboardingStep } from "./onboarding-steps";
 import { readableCollectionSlugs, readerHasContent } from "./reader-content";
-
-/**
- * The steps this release detects, in the order they are worked through.
- *
- * A closed set rather than a contributed one, for the moment. Nothing outside
- * core declares a step, and a surface with no consumer is one whose shape gets
- * decided by guesswork; this list grows by adding a member and its detection
- * together.
- */
-export const ONBOARDING_STEPS = ["account", "collection", "entry"] as const;
-export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number];
-
-/**
- * One step, as the host answers it.
- *
- * Deliberately no label, description or href. Those are admin concerns: the
- * copy is UI text and the target is an admin route, neither of which core owns
- * or can render. Core answers WHICH steps exist and WHETHER each is done; the
- * admin maps an id to its presentation through an exhaustive record, so a step
- * added here is a compile error there rather than a blank row on the card.
- */
-export interface OnboardingStep {
-  id: OnboardingStepId;
-  complete: boolean;
-}
 
 /**
  * Every step, with the reader's progress through it.

@@ -35,6 +35,15 @@ export {
   type WidgetLifecycle,
   type WidgetCondition,
 } from "./lifecycle";
+// The onboarding step vocabulary, published for the same reason the lifecycle
+// one is: the admin draws a row per id and must name them without restating
+// the union. A leaf with no imports, so naming them costs a consumer nothing.
+export {
+  ONBOARDING_STEPS,
+  isOnboardingStepId,
+  type OnboardingStepId,
+  type OnboardingStep,
+} from "./onboarding-steps";
 export {
   MAX_WIDGET_LIMIT,
   validateWidgetQuery,
