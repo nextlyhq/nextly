@@ -102,6 +102,14 @@ export const BARE_ERROR_ALLOWLIST_PATHS = Object.keys(BARE_ERROR_ALLOWLIST);
  * package from the CWD (`"packages/nextly/"` from the repository root).
  */
 export function bareErrorConfig(prefix = "") {
+  // A thrown bare `Error` reaches the API layer with no code to map, so it becomes a 500
+  // whatever it actually was — a caller-fixable refusal reads as a server fault, and the
+  // message is the only thing left to act on. `NextlyError` carries the code instead.
+  //
+  // Enforced as a syntax restriction rather than a bespoke rule so there is no plugin to
+  // build or version — the same trade this repo made for the keyboard-listener guard in
+  // `packages/admin/eslint.config.js`. The selector matches the throw itself, which is the
+  // thing that must not appear.
   const bareError = {
     selector: BARE_ERROR_SELECTOR,
     message: BARE_ERROR_MESSAGE,
@@ -137,14 +145,6 @@ export function bareErrorConfig(prefix = "") {
   // list is not a configuration ESLint accepts.
   return [
     {
-      // A thrown bare `Error` reaches the API layer with no code to map, so it becomes a 500
-      // whatever it actually was — a caller-fixable refusal reads as a server fault, and the
-      // message is the only thing left to act on. `NextlyError` carries the code instead.
-      //
-      // Enforced as a syntax restriction rather than a bespoke rule so there is no plugin to
-      // build or version — the same trade this repo made for the keyboard-listener guard in
-      // `packages/admin/eslint.config.js`. The selector matches the throw itself, which is the
-      // thing that must not appear.
       // Exempt from neither, which is nearly every file: both selectors apply.
       files: [`${prefix}src/**/*.ts`, `${prefix}src/**/*.tsx`],
       ignores: [...bareErrorAllowed, ...scopeAllowed, ...tests],
