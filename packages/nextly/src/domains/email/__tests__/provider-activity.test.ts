@@ -490,9 +490,12 @@ describe("email provider activity", () => {
     // identity. The kind is on the row now, so each is recorded as itself and a
     // credential change stops being invisible.
     //
-    // A write with NO actor at all still records nothing — there is no identity
-    // to attribute it to, which is a different case from an identity that is
-    // not a person.
+    // An ABSENT actor is still not recorded, and it is not the same thing as a
+    // system one. This seam takes the actor its caller passes and does not
+    // default it, so `undefined` here means the caller named nobody — there is
+    // no identity to attribute the write to. `SYSTEM_ACTOR`, which
+    // `actorForWrite(null, null)` returns on the paths that DO default, is an
+    // identity and is recorded; see the case below.
     await service.createProvider(INPUT);
     expect(logged).toHaveLength(0);
     await service.createProvider(
@@ -514,21 +517,25 @@ describe("email provider activity", () => {
     expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
   });
 
-  it("records nothing for the canonical system actor", async () => {
+  it("records nothing for a system actor, in either shape it arrives in", async () => {
     // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
-    // names no actor, and those run while the schema is being created. This
-    // recorder's failures PROPAGATE, so a trail insert against a table that
-    // does not exist yet would fail the seed that was creating it.
+    // names no actor — imports, jobs, migrations, and any internal call that
+    // simply did not pass one. Requiring an id would drop exactly those.
     //
     // Both spellings, because they arrive by different routes: the canonical
     // actor carries no id at all, and a seed passing SYSTEM_CONTEXT arrives as
-    // a USER actor holding the reserved id.
+    // a USER actor holding the reserved id. Filing the second as a person would
+    // attribute an internal write to an account nobody owns.
     await service.createProvider({ ...INPUT, name: "By a job" }, SYSTEM_ACTOR);
     await service.createProvider(
       { ...INPUT, name: "By a seed" },
       { type: "user", id: SYSTEM_CONTEXT.user?.id ?? "system" }
     );
 
+    // Refused on ORDERING grounds rather than on anything about the actor: a
+    // plugin's `init()` hook writes content BEFORE pending migrations run, so
+    // on an upgraded database the insert would name a column `activity_log`
+    // does not have yet — and this recorder propagates that failure into boot.
     expect(logged).toHaveLength(0);
   });
 

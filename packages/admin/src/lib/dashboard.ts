@@ -14,6 +14,9 @@ const DELETED_ACTOR_INITIALS = "?";
 /** Avatar initials for a key, which has no name to take them from. */
 const API_KEY_ACTOR_INITIALS = "AK";
 
+/** Avatar initials for an internal write, which has no name to take them from. */
+const SYSTEM_ACTOR_INITIALS = "SY";
+
 /**
  * How much of the actor's id is shown beside "deleted user".
  *
@@ -53,10 +56,25 @@ export function describeActivityActor(entry: {
    */
   actorType?: string | null;
 }): ActivityUser {
-  // An API key has no account, so it has no name, no email and no erasure — the
-  // three things every branch below reads. Without this it falls through to the
-  // live-actor case and renders a BLANK name, which is a less attributable feed
-  // than the one before keys were recorded at all.
+  // Neither a key nor an internal write has an account, so neither has a name,
+  // an email or an erasure stamp: the three things every branch below reads.
+  // Without a branch of its own each falls through to the live-actor case and
+  // renders a BLANK name, which is a less attributable feed than the one before
+  // keys were recorded at all.
+  //
+  // Nothing writes a system row today. The column can hold the value, and a
+  // reader that handled only keys would show an empty author for every import
+  // and job the moment something does.
+  if (entry.actorType === "system") {
+    return {
+      id: entry.userId,
+      name: "System",
+      email: null,
+      initials: SYSTEM_ACTOR_INITIALS,
+      deleted: false,
+    };
+  }
+
   if (entry.actorType === "apiKey") {
     return {
       id: entry.userId,

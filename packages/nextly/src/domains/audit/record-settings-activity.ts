@@ -57,20 +57,24 @@ export function recordableActor(
   actor?: RequestActor | null
 ): { type: RequestActorType; id: string } | null {
   if (!actor?.id) return null;
-  // A SYSTEM write is deliberately still refused, and the reason is not the one
-  // that used to refuse a key.
+
+  // A SYSTEM write is refused, and the reason is an ORDERING one rather than
+  // anything about the actor itself.
   //
-  // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
-  // names no actor — seeds, migrations, maintenance, and any internal call that
-  // simply did not pass one. Those run while the schema is being created, and
-  // this recorder's failures PROPAGATE and take the surrounding write with
-  // them: a trail insert against a table that does not exist yet would fail the
-  // seed that was creating it.
+  // `registerServices` awaits `initializePlugins` before `init.ts` reaches
+  // `runProdMigrationsIfEnabled`, so a plugin's `init()` hook writing content
+  // runs BEFORE pending migrations do. On an upgraded database that has not
+  // migrated yet, `activity_log` is still on its old shape, and an insert
+  // naming a column it does not have fails — a failure this recorder
+  // PROPAGATES, so it would take the plugin's init, and the boot, with it.
   //
-  // A key is different. It arrives on a request, over a transport, against a
-  // database that is already up — so admitting it costs nothing that was not
-  // already true of a user's write.
+  // The hazard belongs to any core column added to this table rather than to
+  // this one, so it is recorded here and fixed where the ordering is decided.
+  //
+  // A key is not exposed to it: it arrives on a request, over a transport,
+  // against a database that has finished booting.
   if (actor.type === "system") return null;
+
   // `SYSTEM_CONTEXT` carries the reserved user id `system`, so a seed or a
   // migration with no transport actor to override it arrives as a USER actor.
   // No account owns that id, and it is a system write wearing a user's shape —
