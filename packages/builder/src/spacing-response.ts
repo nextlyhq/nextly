@@ -99,6 +99,40 @@ const COMPUTED = {
   },
 } as const satisfies Record<SpacingBox, Record<SpacingSide, string>>;
 
+/**
+ * What to set `transition-property` to while the probe writes.
+ *
+ * Naming what is RUNNING rather than turning transitions off, because those are
+ * different instructions and only one of them is safe. `transition: none` also
+ * cancels whatever the block is in the middle of: measured in Chromium, a block
+ * 0.28 of the way through an opacity transition jumps straight to 1 and stays
+ * there, and restoring the attribute afterwards cannot resume a timeline that
+ * has ended. A forced-state change starts exactly such a transition and then
+ * mutates a class, which is what asks for a measurement — so the probe would
+ * snap the animation it was prompted by.
+ *
+ * Listing the live transitions minus the probed property keeps each of them and
+ * suppresses only the push about to be made. `transition-property: none` when
+ * nothing is running cancels nothing, since there is nothing to cancel.
+ *
+ * Asked of the ELEMENT rather than of its declared `transition-property`, which
+ * cannot answer it: `all` covers the probed property along with every other,
+ * and no subtraction expresses "all except this one".
+ */
+function transitionsToKeep(block: Element, property: string): string {
+  /* c8 ignore next -- jsdom animates nothing, so it publishes no timelines */
+  if (typeof block.getAnimations !== "function") return "none";
+  const running = block
+    .getAnimations()
+    .map(animation =>
+      "transitionProperty" in animation
+        ? String(animation.transitionProperty)
+        : ""
+    )
+    .filter(name => name !== "" && name !== property);
+  return running.length === 0 ? "none" : [...new Set(running)].join(", ");
+}
+
 /** How far the border edge on `side` moved away from the block's middle. */
 function edgeMovedOut(
   before: DOMRect,
@@ -168,8 +202,8 @@ export function spacingRespondsOutward(
     block,
     () => {
       /*
-       * Transitions off FIRST, and it is the difference between a measurement
-       * and a reading of nothing.
+       * The probed property must not transition, and it is the difference
+       * between a measurement and a reading of nothing.
        *
        * `transition` is a catalog property, so a block may carry one over the
        * very side being probed — and then the push does not land, it begins to
@@ -183,12 +217,15 @@ export function spacingRespondsOutward(
        * An ANIMATION needs nothing here and gets nothing: measured the same
        * way, a running keyframe animation over the same property answers
        * correctly either way, because an author declaration at important
-       * priority outranks an animation in the cascade. Only the transition had
-       * to be turned off.
+       * priority outranks an animation in the cascade.
        *
        * Restored with everything else: the whole attribute goes back verbatim.
        */
-      style.setProperty("transition", "none", "important");
+      style.setProperty(
+        "transition-property",
+        transitionsToKeep(block, property),
+        "important"
+      );
       // `important`, so an author's own `!important` padding cannot win and
       // make every block answer "the outer edge never moves".
       style.setProperty(

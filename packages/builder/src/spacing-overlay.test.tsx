@@ -732,12 +732,14 @@ describe("the probe is asked again on every measurement", () => {
     const real = block.style.setProperty.bind(block.style);
     block.style.setProperty = (...args: Parameters<typeof real>): void => {
       /*
-       * The MEASURED property, not every write. Each probe also turns
-       * transitions off, and counting that too would make this number describe
-       * how the probe is written rather than how often it runs — so it would
-       * move for a change that alters nothing about the caching this asserts.
+       * The MEASURED property, named by what it IS rather than by excluding
+       * what it is not. A probe writes more than the value it is measuring — it
+       * also says which transitions to keep — and a count that listed those by
+       * name would move whenever the probe's mechanics changed, describing how
+       * it is written rather than how often it runs.
        */
-      if (args[0] !== "transition") probes += 1;
+      const measured = /^(?:margin|padding)-/.test(String(args[0]));
+      if (measured) probes += 1;
       real(...args);
     };
     return () => probes;

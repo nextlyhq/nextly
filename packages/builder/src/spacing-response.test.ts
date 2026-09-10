@@ -301,3 +301,62 @@ describe("what can be probed at all", () => {
     expect(svg.getAttribute("style")).toBeNull();
   });
 });
+
+describe("what the probe suppresses while it writes", () => {
+  /*
+   * The probed property must not transition, or the push does not land and the
+   * block reads as unresponsive. Turning transitions OFF would do it and would
+   * also cancel whatever the block is in the middle of — measured in Chromium, a
+   * block part-way through an opacity transition jumps to its end value and
+   * cannot be resumed, and a forced-state change starts exactly such a
+   * transition and then asks for a measurement.
+   *
+   * So the probe names the transitions that are RUNNING, minus its own. jsdom
+   * animates nothing, so the timelines are supplied here.
+   */
+  function suppressionFor(
+    running: readonly string[],
+    side: SpacingSide = "top"
+  ): string | undefined {
+    const element = block();
+    element.getAnimations = () =>
+      running.map(
+        transitionProperty => ({ transitionProperty }) as unknown as Animation
+      );
+    let suppressed: string | undefined;
+    const real = element.style.setProperty.bind(element.style);
+    element.style.setProperty = (...args: Parameters<typeof real>): void => {
+      if (args[0] === "transition-property") suppressed = args[1] ?? undefined;
+      real(...args);
+    };
+    spacingRespondsOutward(element, "margin", side, 1);
+    return suppressed;
+  }
+
+  it("keeps a transition the probe is not about", () => {
+    expect(suppressionFor(["opacity"])).toBe("opacity");
+  });
+
+  it("drops its own property from what it keeps", () => {
+    expect(suppressionFor(["opacity", "margin-top"])).toBe("opacity");
+  });
+
+  it("names each kept transition once", () => {
+    expect(suppressionFor(["opacity", "opacity", "transform"])).toBe(
+      "opacity, transform"
+    );
+  });
+
+  /*
+   * With nothing running there is nothing to preserve, and `none` still stops
+   * the probe's own write from starting one.
+   */
+  it("suppresses everything when nothing is running", () => {
+    expect(suppressionFor([])).toBe("none");
+    expect(suppressionFor(["margin-top"])).toBe("none");
+  });
+
+  it("keeps a transition on the OTHER side of the same box", () => {
+    expect(suppressionFor(["margin-bottom"], "top")).toBe("margin-bottom");
+  });
+});
