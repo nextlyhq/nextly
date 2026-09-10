@@ -113,6 +113,7 @@ describeMaybe("the locked activity write on MySQL", () => {
 
   it("keeps the author's identity while the account still exists", async () => {
     await activity.logActivity({
+      actorType: "user",
       userId: LIVE_ACTOR,
       userName: "Live Actor",
       userEmail: "mysql-live@test.local",
@@ -144,6 +145,7 @@ describeMaybe("the locked activity write on MySQL", () => {
     expect(account).toHaveLength(0);
 
     await activity.logActivity({
+      actorType: "user",
       userId: GONE_ACTOR,
       userName: "Already Gone",
       userEmail: "mysql-gone@test.local",

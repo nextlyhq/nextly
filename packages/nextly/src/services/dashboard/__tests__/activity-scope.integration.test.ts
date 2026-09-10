@@ -41,12 +41,14 @@ describe("activity feed scope (sqlite integration)", () => {
 
     const activityLog = current.getService("activityLogService");
     await activityLog.logActivity({
+      actorType: "user",
       userId: actorId,
       action: "create",
       collection: "posts",
       entryTitle: "Visible Post",
     });
     await activityLog.logActivity({
+      actorType: "user",
       userId: actorId,
       action: "create",
       collection: "pages",
