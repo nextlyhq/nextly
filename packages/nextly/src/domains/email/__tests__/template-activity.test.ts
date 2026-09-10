@@ -189,25 +189,32 @@ describe("email template activity", () => {
     );
   });
 
-  it("records nothing for an API-key actor", async () => {
-    // Reachable in production: an API-key request produces `{ type: "apiKey" }`,
-    // and the two absence cases below cover only a missing actor and the system
-    // one. The trail's actor column is a user reference, so a key's own id finds
-    // no account and would be filed as an already-erased identity.
+  it("records an API-key actor AS a key", async () => {
+    // Reachable in production: an API-key request produces `{ type: "apiKey" }`.
+    // This used to record nothing, because the row's only identity column was
+    // read as a user reference and a key's own id finds no account — so the
+    // write was dropped rather than filed as an already-erased person. The kind
+    // is on the row now, so the key is recorded as what it is.
     await service.createTemplate(INPUT, { type: "apiKey", id: "key-1" });
-    expect(logged).toHaveLength(0);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
   });
 
-  it("records nothing for the system actor", async () => {
+  it("still records nothing for the system actor", async () => {
     // Boot-time seeding resolves to a USER actor carrying the reserved id, and
-    // no account owns it — an entry would be filed as an already-erased
-    // identity, which is a worse record than none.
+    // no account owns it. Recording it as a user would attribute an internal
+    // write to a person who does not exist, so the kind is rewritten rather
+    // than the write refused.
     const system = SYSTEM_CONTEXT.user;
     if (!system) expect.fail("SYSTEM_CONTEXT carries no user to test against");
     await service.createTemplate(INPUT, {
       type: "user" as const,
       id: system.id,
     });
+    // Refused for a NEW reason. A system write runs while the schema is being
+    // created, and this recorder's failures propagate — a trail insert against
+    // a table that does not exist yet would fail the seed creating it. A key,
+    // by contrast, arrives over a transport against a database already up.
     expect(logged).toHaveLength(0);
   });
 });
