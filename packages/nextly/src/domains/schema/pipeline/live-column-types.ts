@@ -22,6 +22,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { PG_RELATION_THE_WRITES_HIT } from "./pg-visible-relation";
+
 interface PgRow {
   table_name: string;
   column_name: string;
@@ -81,11 +83,14 @@ export async function queryLiveColumnTypes(
     // object with a `.rows` array, NOT a flat row array. Verified
     // empirically against real PG - reading `result` directly as an
     // array iterates zero rows even when the query returns matches.
+    // Scoped by `PG_RELATION_THE_WRITES_HIT`. Here a wrong answer is a column's
+    // live type read from a same-named table in another schema — which is the
+    // input the type diff trusts.
     const result = (await dbTyped.execute(
-      sql`SELECT table_name, column_name, udt_name
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name IN (${tableNamesIn})`
+      sql`SELECT c.table_name, c.column_name, c.udt_name
+          FROM information_schema.columns c
+          WHERE ${PG_RELATION_THE_WRITES_HIT}
+            AND c.table_name IN (${tableNamesIn})`
     )) as { rows: PgRow[] };
     for (const row of result.rows) {
       let cols = out.get(row.table_name);
