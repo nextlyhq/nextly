@@ -34,6 +34,7 @@ import { createInterface } from "node:readline";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
+import { sql, type SQL } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { seedAll, type SeederResult } from "../../database/seeders/index";
@@ -41,6 +42,7 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
+import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
@@ -331,6 +333,16 @@ async function dropAllTables(
 export type SqlRunner = Pick<DrizzleAdapter, "executeQuery">;
 
 /**
+ * What `discoverTables` asks of an adapter: a Drizzle statement, executed.
+ *
+ * Separate from `SqlRunner` because the two need different things — the FK
+ * toggles send a bare `SET`, this one composes a catalog query — and a
+ * parameter that demanded both would force every double to provide a surface
+ * its subject never touches.
+ */
+export type StatementRunner = Pick<DrizzleAdapter, "queryStatement">;
+
+/**
  * Discover all user tables in the database.
  *
  * Exported for the same reason `disableForeignKeyChecks` is: what it asks the
@@ -338,10 +350,10 @@ export type SqlRunner = Pick<DrizzleAdapter, "executeQuery">;
  * does not have to drive the whole command to reach it.
  */
 export async function discoverTables(
-  adapter: SqlRunner,
+  adapter: StatementRunner,
   dialect: SupportedDialect
 ): Promise<string[]> {
-  let query: string;
+  let query: SQL;
 
   switch (dialect) {
     case "postgresql":
@@ -352,46 +364,45 @@ export async function discoverTables(
       // in both directions: tables the drop WOULD reach go unlisted and survive
       // a reset, while tables it would never reach are listed and handed to it.
       //
-      // `pg_table_is_visible` is that question asked directly: true for the one
-      // relation of a given name the search path resolves to, and false for the
-      // ones it shadows. Naming a schema cannot express it — not `public`,
-      // which may hold none of these tables, and not `current_schema()`, which
-      // is only the first entry and misses a table the drop still reaches
-      // through a later one.
+      // The predicate is the schema pipeline's, not a second one written here.
+      // Two spellings of "which relation does this name resolve to" can be
+      // corrected apart, and then this destructive command and the schema reads
+      // disagree about which table they mean. It is aliased `t`, which is why
+      // `pg_class` is too.
       //
-      // The system schemas are excluded by name because `pg_catalog` is on
-      // every search path implicitly, so its tables are visible too.
-      query = `
-        SELECT c.relname AS tablename
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r', 'p')
-          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-          AND pg_table_is_visible(c.oid)
-        ORDER BY c.relname
-      `;
+      // System schemas are excluded by name because `pg_catalog` sits on every
+      // search path implicitly, so its tables resolve as visible as well.
+      query = sql`
+        SELECT ${sql.identifier("t")}.${sql.identifier("relname")} AS ${sql.identifier("tablename")}
+        FROM ${sql.identifier("pg_class")} ${sql.identifier("t")}
+        JOIN ${sql.identifier("pg_namespace")} ${sql.identifier("n")}
+          ON ${sql.identifier("n")}.${sql.identifier("oid")} = ${sql.identifier("t")}.${sql.identifier("relnamespace")}
+        WHERE ${sql.identifier("t")}.${sql.identifier("relkind")} IN ('r', 'p')
+          AND ${sql.identifier("n")}.${sql.identifier("nspname")}
+              NOT IN ('pg_catalog', 'information_schema')
+          AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+        ORDER BY ${sql.identifier("t")}.${sql.identifier("relname")}`;
       break;
 
     case "mysql":
-      // Get all tables from current database
-      query = `
-        SELECT TABLE_NAME as tablename
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_TYPE = 'BASE TABLE'
-        ORDER BY TABLE_NAME
-      `;
+      // Scoped to the connected database, which is MySQL's whole namespace —
+      // it has no search path, so there is no resolution question to ask.
+      query = sql`
+        SELECT ${sql.identifier("TABLE_NAME")} AS ${sql.identifier("tablename")}
+        FROM ${sql.identifier("information_schema")}.${sql.identifier("TABLES")}
+        WHERE ${sql.identifier("TABLE_SCHEMA")} = DATABASE()
+          AND ${sql.identifier("TABLE_TYPE")} = 'BASE TABLE'
+        ORDER BY ${sql.identifier("TABLE_NAME")}`;
       break;
 
     case "sqlite":
-      // Get all tables from sqlite_master
-      query = `
-        SELECT name as tablename
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name NOT LIKE 'sqlite_%'
-        ORDER BY name
-      `;
+      // One file, one namespace; `sqlite_%` is the engine's own bookkeeping.
+      query = sql`
+        SELECT ${sql.identifier("name")} AS ${sql.identifier("tablename")}
+        FROM ${sql.identifier("sqlite_master")}
+        WHERE ${sql.identifier("type")} = 'table'
+          AND ${sql.identifier("name")} NOT LIKE 'sqlite_%'
+        ORDER BY ${sql.identifier("name")}`;
       break;
 
     default:
@@ -399,7 +410,7 @@ export async function discoverTables(
   }
 
   try {
-    const results = await adapter.executeQuery<{ tablename: string }>(query);
+    const results = await adapter.queryStatement<{ tablename: string }>(query);
     return results.map(row => row.tablename);
   } catch {
     // Database might be empty or inaccessible

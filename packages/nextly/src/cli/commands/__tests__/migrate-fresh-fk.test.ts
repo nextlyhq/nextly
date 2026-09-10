@@ -6,6 +6,8 @@
 // resolves FK dependencies), so the SET is best-effort: a permission failure
 // must be swallowed, not propagated.
 
+import { type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,6 +15,7 @@ import {
   discoverTables,
   enableForeignKeyChecks,
   type SqlRunner,
+  type StatementRunner,
 } from "../migrate-fresh";
 
 /**
@@ -40,16 +43,24 @@ function permissionDeniedAdapter(): FakeAdapter {
 }
 
 describe("migrate:fresh discovers what it is about to drop", () => {
-  /** Record the SQL the command hands the database, and answer with nothing. */
-  function recordingAdapter(): { adapter: FakeAdapter; seen: string[] } {
+  /**
+   * Record the statement the command composes, RENDERED as the server sees it.
+   *
+   * 🔴 Rendered, not inspected as an object. What decides which tables this
+   * command destroys is the SQL text that reaches PostgreSQL, and a fragment
+   * assembled from the right pieces in the wrong order would satisfy any
+   * assertion made against the pieces.
+   */
+  function recordingAdapter(): { adapter: StatementRunner; seen: string[] } {
     const seen: string[] = [];
+    const rendered = new PgDialect();
     return {
       adapter: {
-        executeQuery: vi.fn(async (sql: string) => {
-          seen.push(sql);
+        queryStatement: vi.fn(async (statement: SQL) => {
+          seen.push(rendered.sqlToQuery(statement).sql);
           return [];
         }),
-      },
+      } as StatementRunner,
       seen,
     };
   }
@@ -63,7 +74,11 @@ describe("migrate:fresh discovers what it is about to drop", () => {
     const { adapter, seen } = recordingAdapter();
     await discoverTables(adapter, "postgresql");
 
-    expect(seen[0]).toContain("pg_table_is_visible");
+    // The schema pipeline's own predicate, not a second spelling of it: two
+    // answers to "which relation does this name resolve to" can be corrected
+    // apart, and then this destructive command and the schema reads disagree.
+    expect(seen[0]).toContain("to_regclass");
+    expect(seen[0]).toContain("quote_ident");
     // Neither way of naming a schema instead: `public` may hold none of these
     // tables, and `current_schema()` is only the first entry of the path, so it
     // misses one the drop still reaches through a later entry.
