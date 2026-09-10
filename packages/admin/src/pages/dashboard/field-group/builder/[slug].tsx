@@ -44,7 +44,7 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
-import { fieldGroupToManifestEntity } from "@admin/lib/builder/to-manifest-entity-field-group";
+import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { fieldGroupApi } from "@admin/services/fieldGroupApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -176,25 +176,23 @@ export default function FieldGroupBuilderEditPage({
     async (fieldDefinitions: FieldDefinition[]) => {
       if (!slug) return;
       pinFields();
-      if (settings) pinSettings(settings);
+
+      // 🔴 No settings, no manifest write — and this is not the same as writing
+      // an empty one. The dev-schema endpoint FULL-REPLACES the entity by slug,
+      // so a projection built from absent settings would replace this field
+      // group's labels and description in ui-schema.json with nothing. The
+      // database write has already succeeded either way; skipping the mirror
+      // leaves the file as it was, which is the recoverable outcome.
+      //
+      // The fields are pinned above regardless: they landed, and the baseline
+      // has to move with them or the page reports unsaved work that is saved.
+      if (!settings) return;
+      pinSettings(settings);
 
       await mirrorSchemaFile(
         () =>
           schemaFileApi.writeFieldGroup(
-            fieldGroupToManifestEntity({
-              slug,
-              settings: {
-                singularName: settings?.singularName,
-                // 🔴 The description travels too, so it reaches a database
-                // the manifest is replayed against. The upsert omits the column
-                // when a manifest carries none, so this supplies the value
-                // rather than protecting it from being nulled.
-                description: settings?.description,
-                // Mirror the Internationalization flag into ui-schema.json.
-                localized: settings?.i18n === true,
-              },
-              fields: fieldDefinitions,
-            })
+            fieldGroupEntityFromSettings(slug, settings, fieldDefinitions)
           ),
         "Field group applied to the database"
       );

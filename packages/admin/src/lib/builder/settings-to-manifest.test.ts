@@ -1,11 +1,119 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MANIFEST_SETTING_KEYS,
   collectionEntityFromSettings,
+  fieldGroupEntityFromSettings,
+  manifestSettingsFrom,
   singleEntityFromSettings,
 } from "./settings-to-manifest";
 
 const FIELDS = [{ name: "headline", type: "text", required: false }];
+
+/**
+ * Every setting a person can answer, each with a value distinguishable from the
+ * default the projection would produce by forgetting it.
+ *
+ * 🔴 Built once and shared, so a test cannot pass by omitting the key it is
+ * about. `revalidate` and `webhooks` are FALSE here for that reason: they
+ * default on, so a projection that dropped them would still emit `true` and an
+ * assertion written against a truthy value could not tell the two apart.
+ */
+const EVERY_SETTING = {
+  singularName: "Post",
+  pluralName: "Posts",
+  slug: "posts",
+  icon: "Database",
+  category: "Content",
+  description: "Long-form writing",
+  status: true,
+  i18n: true,
+  versions: true,
+  versionsMaxPerDoc: 10 as number | false,
+  revalidate: false,
+  webhooks: false,
+  startingFieldType: "text",
+};
+
+describe("the projection carries every setting the manifest declares", () => {
+  it("emits each key the classification says it carries", () => {
+    // 🔴 Against the CLASSIFICATION, not against a second hand-written list.
+    // The point of the map is that a new setting fails to compile until it is
+    // classified; this is the other half — that a key classified as carried is
+    // actually projected, rather than declared and forgotten.
+    const projected = manifestSettingsFrom(EVERY_SETTING);
+    const emitted = Object.entries(projected)
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => (k === "localized" ? "i18n" : k))
+      .sort();
+    expect(emitted).toEqual(MANIFEST_SETTING_KEYS);
+  });
+
+  it("keeps version retention through an EDIT, not only a create", () => {
+    // 🔴 The defect this module was rewritten for. The dev-schema endpoint
+    // full-replaces the entity by slug, and the create path projected
+    // `versionsMaxPerDoc` while both edit paths did not — so choosing "keep 10"
+    // on a new collection wrote it to ui-schema.json and the next edit of that
+    // collection replaced the entity without it. Not a missing feature: a value
+    // the file HAD and lost.
+    const created = collectionEntityFromSettings("posts", EVERY_SETTING, []);
+    const edited = collectionEntityFromSettings("posts", EVERY_SETTING, FIELDS);
+    expect(created.versionsMaxPerDoc).toBe(10);
+    expect(edited.versionsMaxPerDoc).toBe(10);
+  });
+
+  it("carries unlimited retention, which is false and not absent", () => {
+    // `false` means keep everything and `undefined` means the default of 50, so
+    // a projection that treated the two alike would silently cap a history the
+    // author asked to keep whole.
+    const entity = singleEntityFromSettings(
+      "home",
+      { ...EVERY_SETTING, versionsMaxPerDoc: false },
+      []
+    );
+    expect(entity.versionsMaxPerDoc).toBe(false);
+  });
+
+  it("gives a field group the same description projection as the others", () => {
+    // Field groups were the sites that forgot the description most often,
+    // because each wrote its own projection inline.
+    const entity = fieldGroupEntityFromSettings("seo", EVERY_SETTING, FIELDS);
+    expect(entity.description).toBe("Long-form writing");
+    expect(entity.labels).toEqual({ singular: "Post", plural: "Post" });
+  });
+
+  it("maps a blank description to an absent key, in every kind", () => {
+    // 🔴 One normalisation, so the create REQUEST and the manifest cannot
+    // disagree about whether a whitespace-only description exists. Stored as
+    // text in the file while the row holds NULL is two records of one entity
+    // saying different things.
+    for (const blank of ["", "   "]) {
+      const settings = { ...EVERY_SETTING, description: blank };
+      expect(
+        collectionEntityFromSettings("posts", settings, []).description
+      ).toBeUndefined();
+      expect(
+        singleEntityFromSettings("home", settings, []).description
+      ).toBeUndefined();
+      expect(
+        fieldGroupEntityFromSettings("seo", settings, []).description
+      ).toBeUndefined();
+    }
+  });
+
+  it("does not project what the manifest has no place for", () => {
+    // A control for the assertion above: "emits every carried key" also passes
+    // if the projection emits EVERYTHING, which would put keys into the file
+    // that its schema rejects.
+    const projected = manifestSettingsFrom(EVERY_SETTING) as Record<
+      string,
+      unknown
+    >;
+    for (const key of ["icon", "category", "slug", "startingFieldType"]) {
+      expect(projected[key]).toBeUndefined();
+    }
+  });
+});
 
 describe("collectionEntityFromSettings", () => {
   it("forwards status: true into the manifest entity", () => {
