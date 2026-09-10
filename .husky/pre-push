@@ -57,6 +57,7 @@ DIRTY="$(git status --porcelain 2>/dev/null || true)"
 # learn something a local prompt could have said immediately.
 pnpm lint:design
 pnpm lint:workspace
+pnpm lint:scripts
 
 pnpm turbo lint --continue \
   --filter='./packages/*'
