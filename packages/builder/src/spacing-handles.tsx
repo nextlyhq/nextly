@@ -526,12 +526,13 @@ export function SpacingHandles({
    * Not the direction a drag grows the value: `valueOutwardOf` below answers
    * that, unmirrored, and the two disagree for a negative band — which is drawn
    * reflected across the border edge while the edge the layout moves stays
-   * where it was. Reading placement as direction ran those drags backwards.
+   * where it was. Reading placement as direction runs those drags backwards.
    *
-   * MEASURED for both boxes. It was once structural for a margin, on reasoning
-   * the element disagrees with: growing `margin-top` drives the border edge down
-   * while the outer edge stays pinned by whatever precedes it. See
-   * `spacing-response.ts`, which asks rather than assumes.
+   * MEASURED for both boxes, a margin no less than a padding. The reasoning that
+   * makes a margin look structural — that it lies outside the border box and so
+   * cannot move it — is one the element disagrees with: growing `margin-top`
+   * drives the border edge down while the outer edge stays pinned by whatever
+   * precedes it. See `spacing-response.ts`, which asks rather than assumes.
    */
   const drawnOutwardOf = React.useCallback(
     (band: SpacingBand): boolean =>

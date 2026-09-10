@@ -193,10 +193,10 @@ function beforeBatch(
  * An overlay that MEASURES by writing has to write into the subtree it is
  * watching: the spacing probe pushes a value, reads the edge and puts the
  * attribute back, all inside one task. Reacting to that would have every
- * measurement schedule the next one forever, which is why the answers used to
- * be cached across measurements — and a cache is then wrong whenever the
- * applied CSS changes for a reason nothing here reports. Ignoring a batch that
- * changed nothing removes the need for one.
+ * measurement schedule the next one forever. Remembering an answer across
+ * measurements avoids that and buys a staleness of its own, since the applied
+ * CSS changes for reasons nothing here reports. Ignoring a batch that changed
+ * nothing removes the need to choose between the two.
  *
  * Judged across the WHOLE batch rather than per record, because per record the
  * restore looks like a change: its `oldValue` is the value the probe wrote,

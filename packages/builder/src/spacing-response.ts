@@ -323,12 +323,12 @@ export function spacingRespondsOutward(
    */
   if (box === "padding") return moved > expected / 2;
   /*
-   * A margin is asked whether that edge moved AT ALL, and the sign is precisely
-   * what the first attempt at this got wrong. `margin-top` drives the border
-   * edge DOWN — inward, which reads NEGATIVE here — so a signed comparison filed
-   * it under "did not move", concluded the outer edge was the live one, and put
-   * the handle back on the pinned edge this module exists to find. A border edge
-   * that moved means the outer one is pinned, and so the band grows inward.
+   * A margin is asked whether that edge moved AT ALL, and the sign is the trap.
+   * `margin-top` drives the border edge DOWN — inward, which reads NEGATIVE here
+   * — so a SIGNED comparison files it under "did not move", concludes the outer
+   * edge is the live one, and puts the handle on the very edge this module
+   * exists to avoid. A border edge that moved means the outer one is pinned, and
+   * so the band grows inward.
    */
   return Math.abs(moved) <= expected / 2;
 }
