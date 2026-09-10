@@ -201,4 +201,51 @@ describe("reading how much of the index is there", () => {
       whole: false,
     });
   });
+
+  it("reads COMPLETION before probing markers, preserving the writer's order", async () => {
+    // A rebuild writes its markers and THEN records the scope. Read in
+    // parallel, the marker probe can land before a document is processed while
+    // the completion read lands after the row is written — and the two
+    // observations combine into "backfilled, nothing unreadable", the one
+    // answer that presents an incomplete index as exact.
+    //
+    // Asserted on the ORDER rather than on an outcome, because the outcome is a
+    // race: a test that ran both and checked the answer would pass on most runs
+    // with the ordering wrong.
+    const order: string[] = [];
+    const read: GroupedUsageReader = async () => {
+      order.push("markers");
+      return { bucketCount: 0, truncated: false };
+    };
+    const scope = {
+      entity: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    } as const;
+
+    await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => {
+          order.push("scopes");
+          return [scope];
+        },
+        state: {
+          completed: async () => {
+            order.push("completed");
+            return new Set([backfillScopeKey(scope)]);
+          },
+          record: async () => undefined,
+        },
+        unreachable: async () => {
+          order.push("unreachable");
+          return false;
+        },
+      },
+    });
+
+    expect(order[order.length - 1]).toBe("markers");
+  });
 });

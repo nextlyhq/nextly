@@ -110,6 +110,42 @@ describe("paging a collection that changes under the walk", () => {
     expect((restarted.items[0] as { id: string }).id).toBe("a");
   });
 
+  it("REFUSES a listed row whose id cannot be read", async () => {
+    // Skipping it is silent and permanent: no rows are written for that
+    // document, no marker is left, and the scope is recorded complete — so its
+    // references are missing while health reports the count exact, and nothing
+    // later notices, because a document with no rows is indistinguishable from
+    // one that references nothing.
+    //
+    // It also stalls the walk: the cursor advances to the last id SEEN, so a
+    // page ending in an unreadable row leaves it where it was and the next read
+    // returns the same window.
+    //
+    // Reachable rather than theoretical — a collection's own `afterRead` hook
+    // may strip fields from list results, and `id` is not exempt.
+    const nextly = {
+      find: async () => ({
+        items: [{ id: "a" }, { notAnId: true }],
+        meta: { hasNext: false },
+      }),
+      findByID: async () => ({ id: "a", content: {} }),
+    };
+    const store = usageRebuildDocumentStore(
+      nextly as unknown as Parameters<typeof usageRebuildDocumentStore>[0]
+    );
+
+    await expect(
+      store.find({
+        collection: "pages",
+        limit: 10,
+        page: 1,
+        sort: "id",
+        locale: "",
+        variant: "published",
+      })
+    ).rejects.toThrow(/no usable id/);
+  });
+
   it("REFUSES a walk ordered by anything but the id it resumes from", async () => {
     // The cursor is an id, so another ordering resumes at a point in a
     // different sequence. Falling back to offsets quietly is the behaviour this

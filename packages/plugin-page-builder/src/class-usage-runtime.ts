@@ -456,28 +456,83 @@ const PROGRESS_PAGE_SIZE = 200;
  * user answers an empty set — which reads as "no scope has been walked" and
  * sends the backfill round again from the start.
  */
+/**
+ * Sort one page of progress rows into what counts and what must go.
+ *
+ * Its own function because classifying a row is a different job from paging a
+ * collection, and it is the job carrying every branch: which generation a row
+ * belongs to, whether its key is usable, whether it can be addressed for
+ * deletion.
+ *
+ * Writes into the caller's collections rather than returning new ones, because
+ * the caller is accumulating across pages and merging per page would allocate
+ * two objects for every page of a walk that exists to be cheap.
+ */
+function sortProgressRows(
+  items: readonly unknown[],
+  generation: string,
+  keys: Set<string>,
+  stale: string[]
+): void {
+  for (const item of items) {
+    const row = item as {
+      scopeKey?: unknown;
+      generation?: unknown;
+      id?: unknown;
+    };
+    if (row.generation !== generation) {
+      // Another generation's progress, which cannot be reused and must not be
+      // left to be reused later. Collected rather than deleted here, so the
+      // paging is not walking a collection it is mutating.
+      if (typeof row.id === "string") stale.push(row.id);
+      continue;
+    }
+    const key = row.scopeKey;
+    // A row whose key is not a string records nothing this can act on. Skipped
+    // rather than refused: the scope it meant to name is then simply
+    // outstanding, which costs a repeat walk and is the safe direction —
+    // treating it as a completed scope of unknown identity is what would leave
+    // a real scope permanently unwalked.
+    if (typeof key === "string" && key.length > 0) keys.add(key);
+  }
+}
+
 export function usageBackfillStateStore(
-  nextly: Pick<ClassUsageDirectApi, "find" | "create">,
+  nextly: Pick<ClassUsageDirectApi, "find" | "create" | "delete">,
   /** The progress collection's RESOLVED slug, since an integrator may rename it. */
   stateCollection: string,
   /**
    * The derivation the current index is being built under.
    *
-   * Rows from any other generation are read as ABSENT rather than deleted. A
-   * host can move the bounds back — the numbers are configuration, not a
-   * migration — and progress recorded under the bounds they returned to is
-   * still true, so discarding it would make a reverted setting cost a full
-   * re-walk of the site.
+   * Rows from any other generation are DISCARDED, not merely ignored, and the
+   * first version of this got that wrong for a reason worth writing down: it
+   * kept them so that moving the bounds back would not cost a re-walk, on the
+   * grounds that progress recorded under the bounds a host returned to is still
+   * true.
+   *
+   * It is not. Progress is a claim about the INDEX, and the intervening
+   * generation mutated it — lowering `maxNodes` removes references beyond the
+   * new bound, so returning to the old one finds the old progress rows intact
+   * over an index those references are missing from, and reports an undercount
+   * as exact. Reusing them is only sound if the index snapshot is restored with
+   * them, which nothing does.
+   *
+   * So a generation transition costs a re-walk, in both directions. That is the
+   * price of the answer meaning anything.
    */
   generation: string
 ): BackfillStateStore {
   return {
     completed: async () => {
       const keys = new Set<string>();
+      const stale: string[] = [];
       for (let page = 1; ; page += 1) {
         const result = await nextly.find({
           collection: stateCollection,
-          where: { generation: { equals: generation } },
+          // EVERY row, not only this generation's. The rows belonging to other
+          // generations are the ones that have to be removed, and a filtered
+          // read cannot see them — so it would leave them to be reused the next
+          // time a host moved the bounds back.
           limit: PROGRESS_PAGE_SIZE,
           page,
           // Sorted so the pages partition the rows. An unsorted paged read has
@@ -487,17 +542,31 @@ export function usageBackfillStateStore(
           depth: 0,
           ...AS_THE_SYSTEM,
         });
-        for (const item of result.items) {
-          const key = (item as { scopeKey?: unknown }).scopeKey;
-          // A row whose key is not a string records nothing this can act on.
-          // Skipped rather than refused: the scope it meant to name is then
-          // simply outstanding, which costs a repeat walk and is the safe
-          // direction — treating it as a completed scope of unknown identity
-          // is what would leave a real scope permanently unwalked.
-          if (typeof key === "string" && key.length > 0) keys.add(key);
-        }
-        if (!result.meta.hasNext) return keys;
+        sortProgressRows(result.items, generation, keys, stale);
+        if (!result.meta.hasNext) break;
       }
+
+      // AFTER the walk, for the reason the rebuild sweeps after its own: a
+      // delete during an offset-paged read shifts the rows behind it and the
+      // next page skips one.
+      //
+      // Failures are swallowed deliberately. A stale row that survives costs a
+      // repeat of THIS cleanup on the next pass; letting the delete fail the
+      // pass would stop the backfill over bookkeeping, and the keys returned
+      // above are already correct without it.
+      for (const id of stale) {
+        try {
+          await nextly.delete({
+            collection: stateCollection,
+            id,
+            ...AS_THE_SYSTEM,
+          });
+        } catch {
+          // Retried on the next pass; see above.
+        }
+      }
+
+      return keys;
     },
     record: async key => {
       await nextly.create({
@@ -595,11 +664,26 @@ export function usageRebuildDocumentStore(
       const items: unknown[] = [];
       for (const row of listed.items) {
         const id = (row as { id?: unknown }).id;
-        // A listed row with no usable id addresses nothing, so there is no
-        // subject to read it as. Skipped rather than refused: the alternative
-        // is failing a whole scope over one malformed row, and a scope that
-        // never completes is one the backfill retries for ever.
-        if (typeof id !== "string" || id.length === 0) continue;
+        // REFUSED, not skipped, and the first version had this the wrong way
+        // round. Skipping reasoned that failing a whole scope over one
+        // malformed row was worse than losing the row — but losing it is
+        // silent: no rows are written for that document, no marker is left,
+        // and the scope is recorded complete, so its references are missing
+        // while health reports the count exact. Nothing later notices, because
+        // a document with no rows is indistinguishable from one that references
+        // nothing.
+        //
+        // It also stalls the walk. The cursor advances to the last id SEEN, so
+        // a page ending in an unreadable row leaves it where it was and the
+        // next read returns the same window — until the page guard trips.
+        //
+        // Reachable rather than theoretical: a collection's own `afterRead`
+        // hook may strip fields from list results, and `id` is not exempt.
+        if (typeof id !== "string" || id.length === 0) {
+          throw new Error(
+            `[page-builder] the usage backfill listed a row of "${args.collection}" with no usable id, so the document cannot be read or recorded`
+          );
+        }
         // The whole ROW, not one field's value: the rebuild picks the field out
         // itself, and it needs the `id` to record the document as visited. A
         // page of field values would be swept as documents that do not exist.

@@ -109,13 +109,23 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
     unreachable: () => Promise<boolean>;
   };
 }): Promise<UsageIndexHealth> {
-  const [markers, covers] = await Promise.all([
-    args.read({
-      where: args.index.whereUndetermined(),
-      groupBy: "entityKey",
-    }),
-    backfillFinished(args.backfill),
-  ]);
+  // SEQUENTIAL, and the order is the point rather than a missed optimisation.
+  //
+  // A rebuild writes its `unreadable` markers and THEN records the scope as
+  // complete. Read in parallel, the marker probe can land before a document is
+  // processed while the completion read lands after the row is written — so the
+  // two observations come from either side of that write and combine into
+  // "backfilled, nothing unreadable", which is the one answer that presents an
+  // incomplete index as exact.
+  //
+  // Reading completion first preserves the writer's ordering: if completion is
+  // observed, every marker that scope produced was already written, so the
+  // probe that follows sees them.
+  const covers = await backfillFinished(args.backfill);
+  const markers = await args.read({
+    where: args.index.whereUndetermined(),
+    groupBy: "entityKey",
+  });
 
   return {
     coversExistingDocuments: covers,
