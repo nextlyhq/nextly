@@ -42,6 +42,7 @@ import {
   resolveFieldGroupRegistryName,
   resolveFieldGroupRegistryTable,
 } from "../../domains/field-groups/storage/resolve-storage-names";
+import { PG_RELATION_THE_WRITES_HIT_SQL } from "../../domains/schema/pipeline/pg-visible-relation";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -87,11 +88,14 @@ export interface SystemMigrationSQL {
 }
 
 const POSTGRES_SQL = {
+  // Scoped by `PG_RELATION_THE_WRITES_HIT_SQL`, which carries the reason.
+  // Getting this wrong reports an existing table as absent, and the caller
+  // then sets about creating one it already has.
   checkTable: `
     SELECT EXISTS (
-      SELECT FROM information_schema.tables
-      WHERE table_schema = 'public'
-      AND table_name = $1
+      SELECT FROM information_schema.tables c
+      WHERE ${PG_RELATION_THE_WRITES_HIT_SQL}
+      AND c.table_name = $1
     ) AS exists
   `,
 

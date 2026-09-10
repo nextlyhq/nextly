@@ -29,6 +29,7 @@ import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
 import type { Logger } from "../../../shared/types/index";
 import type { SupportedDialect } from "../../../types/database";
+import { PG_RELATION_THE_WRITES_HIT_SQL } from "../pipeline/pg-visible-relation";
 import {
   fieldProducesColumn,
   getColumnDescriptor,
@@ -290,7 +291,10 @@ async function getExistingColumns(
 
   switch (dialect) {
     case "postgresql":
-      sql = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`;
+      // Scoped by `PG_RELATION_THE_WRITES_HIT_SQL`, which carries the reason.
+      // Getting this wrong reports EVERY column as missing, and the caller then
+      // tries to add columns that are already there.
+      sql = `SELECT c.column_name FROM information_schema.columns c WHERE ${PG_RELATION_THE_WRITES_HIT_SQL} AND c.table_name = $1`;
       params.push(tableName);
       break;
     case "mysql":

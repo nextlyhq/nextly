@@ -37,8 +37,9 @@
 import { sql, type SQL } from "drizzle-orm";
 
 /**
- * True for the one `information_schema.columns` row set whose relation an
- * unqualified statement would reach.
+ * True for the one `information_schema` row whose relation an unqualified
+ * statement would reach — of `columns` or of `tables` alike, since both name
+ * the relation with `table_schema` and `table_name`.
  *
  * 🔴 Written against the alias `c`, because a predicate over
  * `information_schema` has to name that view's own columns and they cannot be
@@ -52,7 +53,22 @@ import { sql, type SQL } from "drizzle-orm";
  * and the equality asks whether they are the same relation. The same device the
  * sequence-ownership check in `introspect-live.ts` already uses.
  */
-export const PG_RELATION_THE_WRITES_HIT: SQL = sql`format('%I.%I', c.table_schema, c.table_name)::regclass = to_regclass(quote_ident(c.table_name))`;
+export const PG_RELATION_THE_WRITES_HIT_SQL = `format('%I.%I', c.table_schema, c.table_name)::regclass = to_regclass(quote_ident(c.table_name))`;
+
+/**
+ * The same predicate as a Drizzle fragment, BUILT from the text above rather
+ * than written a second time.
+ *
+ * 🔴 Two spellings of this rule is the defect it exists to prevent, one level
+ * up: some readers here compose Drizzle `sql` templates and others hand raw
+ * text to the driver, and a rule copied between those forms drifts the first
+ * time either is corrected. `sql.raw` over a module constant interpolates
+ * nothing — the text is fixed at build time and names only catalog columns —
+ * so it carries no injection surface.
+ */
+export const PG_RELATION_THE_WRITES_HIT: SQL = sql.raw(
+  PG_RELATION_THE_WRITES_HIT_SQL
+);
 
 /**
  * The same question asked of a `pg_class` row, which carries the OID directly.

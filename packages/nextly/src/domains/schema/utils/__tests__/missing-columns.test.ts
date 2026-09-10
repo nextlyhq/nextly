@@ -89,6 +89,38 @@ describe("addMissingColumnsForFields", () => {
     expect(alter?.sql).toBe(`ALTER TABLE "dc_posts" ADD COLUMN "excerpt" TEXT`);
   });
 
+  it("scopes the column read to the relation an unqualified write reaches", async () => {
+    // 🔴 Not `table_schema = 'public'`. Every statement this package emits is
+    // unqualified, so PostgreSQL resolves it across the whole `search_path`; a
+    // read naming one schema answers about a different table. Here that reports
+    // EVERY column as missing, and the caller then tries to add columns the
+    // table already has.
+    //
+    // Asserted on the SQL the adapter is HANDED, which is what the server sees,
+    // rather than on the source text of the module that built it.
+    const { adapter, calls } = makeAdapter({
+      dialect: "postgresql",
+      existingColumns: ["id"],
+    });
+
+    await addMissingColumnsForFields(
+      adapter as unknown as Parameters<typeof addMissingColumnsForFields>[0],
+      fakeLogger,
+      "dc_posts",
+      [{ name: "id", type: "text" } as FieldConfig],
+      { timestamps: false, builtBy: "codeFirst" }
+    );
+
+    const introspect = calls.find(c =>
+      c.sql.includes("information_schema.columns")
+    );
+    expect(introspect?.sql).toContain("to_regclass");
+    // The name is quoted before it is resolved, or a table whose spelling
+    // carries capitals folds to lower case and resolves to nothing.
+    expect(introspect?.sql).toContain("quote_ident");
+    expect(introspect?.sql).not.toContain("'public'");
+  });
+
   it("never adds a parent column for a component field", async () => {
     const { adapter, calls } = makeAdapter({
       dialect: "postgresql",
