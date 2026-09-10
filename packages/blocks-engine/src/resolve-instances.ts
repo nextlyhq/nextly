@@ -435,7 +435,12 @@ export function resolveComponentInstances(
   // when nothing changed, so removing this line changes no output. What it
   // saves is building the run and walking the tree at all, which is the whole
   // cost this module adds to a page that uses no components.
-  if (!survey.hasInstance) return unchanged;
+  //
+  // `hasStoredProvenance` is the exception, and it is why this is no longer
+  // purely an optimisation. A document with no instances still has to be walked
+  // when one of its nodes carries a stored `instanceOf`, because that claim is
+  // stripped on the way through and returning early would leave it standing.
+  if (!survey.hasInstance && !survey.hasStoredProvenance) return unchanged;
 
   const run: ResolveRun = {
     definitions,
@@ -565,6 +570,15 @@ const ROOT_SCOPE: ComposedScope = { depth: 0, onPath: new Set<string>() };
 /** What the host document holds, read once before anything is rebuilt. */
 interface HostSurvey {
   hasInstance: boolean;
+  /**
+   * Some node arrived already claiming `instanceOf`.
+   *
+   * Stored data wearing this pass's provenance. It has to be walked and cleared
+   * even when the document composes nothing, so this is read beside
+   * `hasInstance` rather than folded into it — the two are different reasons to
+   * walk, and only one of them is about components being present.
+   */
+  hasStoredProvenance: boolean;
   /** The walk stopped at the node cap, so `ids` is a PREFIX of what is there. */
   truncated: boolean;
   /** How many nodes the host already holds, instances included. */
@@ -592,6 +606,7 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
   const ids = new Set<string>();
   const domIds = new Set<string>();
   let hasInstance = false;
+  let hasStoredProvenance = false;
   let truncated = false;
   let count = 0;
   let budget = maxNodes;
@@ -607,9 +622,14 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
     if (typeof node.id === "string") ids.add(node.id);
     collectDomIds(node, domIds);
     if (node.type === COMPONENT_INSTANCE_TYPE) hasInstance = true;
+    // A stored node wearing this pass's provenance. Noted HERE because the walk
+    // is already happening: without it the composition-free fast path below
+    // returns the document untouched, which is exactly the document where a
+    // false claim survives — a page with no components at all.
+    if ("instanceOf" in node) hasStoredProvenance = true;
     return "descend";
   });
-  return { hasInstance, truncated, count, ids, domIds };
+  return { hasInstance, hasStoredProvenance, truncated, count, ids, domIds };
 }
 
 /** Every DOM id one stored node publishes, in either of the two places. */
@@ -700,10 +720,33 @@ function inlineNode(
   // `inlineForest` descends one level per frame: a gated node returns here
   // before its slots are visited, so nothing below it is ever reached.
   if (isConditionGated(node)) return null;
-  const slots = node.slots;
-  if (!isPlainRecord(slots)) return null;
+  // A HOST node carrying `instanceOf` is stored data wearing this pass's
+  // provenance, and it is stripped rather than trusted.
+  //
+  // `instanceOf` means "the resolver inlined this node from a definition", and
+  // the only writer that may say so is this pass. Documents arrive from places
+  // that never ran it — an export replayed, a tree assembled by a host, content
+  // hand-edited in storage — and `sanitizeDocument` preserves unknown node keys
+  // deliberately, so a page node can reach here already claiming to belong to a
+  // component. An editor reading that marker sends a click, an edit or a delete
+  // to an instance the author never placed, and the node they were pointing at
+  // is one of their own.
+  //
+  // Cleared on the way through rather than checked at every reader: this is the
+  // pass that owns the field, so it is the one place that can tell a stored
+  // claim from provenance it created.
+  const host = "instanceOf" in node ? withoutInstanceOf(node) : node;
+  const slots = host.slots;
+  if (!isPlainRecord(slots)) return host === node ? null : [host];
   const next = inlineHostSlots(slots, run, scope, depth);
-  return next === slots ? null : [{ ...node, slots: next }];
+  if (next === slots) return host === node ? null : [host];
+  return [{ ...host, slots: next }];
+}
+
+/** The same node with a stored provenance claim removed. */
+function withoutInstanceOf(node: ResolvedBlockNode): ResolvedBlockNode {
+  const { instanceOf: _stored, ...rest } = node;
+  return rest;
 }
 
 /** Every slot of a host node, with its children resolved in the same scope. */

@@ -29,21 +29,45 @@ import { coreBlocks } from "./blocks";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
-/** A definition whose body is one heading, plus a slot the page fills. */
+/**
+ * A definition with a SLOT: a box the page fills, holding a fallback of its own.
+ *
+ * The slot is the point. Without one, "page-owned content stays unmarked" can
+ * only be asserted about a top-level sibling, which no plausible wrong
+ * implementation would mark anyway — so the assertion passes while the case the
+ * module exists for goes untested.
+ */
 const HERO: BlockDocument = {
   formatVersion: 1,
   kind: "component",
+  slots: { body: { label: "Body", nodeId: "d1", slot: "children" } },
   nodes: [
     {
       id: "d1",
-      type: "core/heading",
+      type: "core/box",
       version: 1,
-      props: { text: "From the definition" },
+      props: {},
+      slots: {
+        children: [
+          {
+            id: "d2",
+            type: "core/heading",
+            version: 1,
+            props: { text: "The definition's fallback" },
+          },
+        ],
+      },
     },
   ],
 } as unknown as BlockDocument;
 
-/** A page placing that component beside a block of its own. */
+/**
+ * A page placing that component, FILLING its slot, beside a block of its own.
+ *
+ * `supplied` is nested inside the inlined tree and belongs to the page;
+ * `own` is an ordinary sibling. Both must stay unmarked, and only the first
+ * discriminates.
+ */
 const PAGE: BlockDocument = {
   formatVersion: 1,
   kind: "page",
@@ -53,6 +77,16 @@ const PAGE: BlockDocument = {
       type: COMPONENT_INSTANCE_TYPE,
       version: 1,
       props: { componentId: "hero" },
+      slots: {
+        body: [
+          {
+            id: "supplied",
+            type: "core/heading",
+            version: 1,
+            props: { text: "The page's own, inside the slot" },
+          },
+        ],
+      },
     },
     {
       id: "own",
@@ -83,10 +117,47 @@ describe("marking the elements a component instance owns", () => {
     expect(markup).toContain(`${INSTANCE_ATTRIBUTE}="i1"`);
   });
 
-  it("leaves the page's OWN block unmarked, so it stays selectable", async () => {
-    // The control that gives the case above its meaning. A marker written for
-    // every node would satisfy that assertion while making the whole page read
-    // as one component.
+  it("leaves SLOT CONTENT the page supplied unmarked, so it stays selectable", async () => {
+    // THE case the marker exists to get right, and the one a sibling cannot
+    // stand in for. This node is nested inside the inlined tree — under the
+    // definition's own box — and belongs to the page. It is exactly what a
+    // marketer opened the editor to change, so marking it would redirect their
+    // click to the component instead.
+    //
+    // An implementation that marked everything under an instance passes the
+    // sibling assertion below and fails this one.
+    const markup = render(true);
+
+    const supplied =
+      /<[^>]*data-nx-node="supplied"[^>]*>/.exec(markup)?.[0] ?? "";
+    // Present first: an absent node is trivially unmarked, which would let a
+    // resolver that dropped the slot content satisfy the real assertion.
+    expect(supplied).not.toBe("");
+    expect(supplied).not.toContain(INSTANCE_ATTRIBUTE);
+  });
+
+  it("marks the definition's own box, whose id the page cannot address", async () => {
+    // The other half of the discrimination, and the reason the marker exists at
+    // all: the resolver RE-MINTS ids for definition-owned nodes, so this box
+    // renders under an id the page's document has never contained. Addressed by
+    // node id alone an editor would resolve a click here to nothing; the
+    // instance is the only thing it can act on.
+    //
+    // Asserted by the definition-owned element rather than by a fixed id, for
+    // exactly that reason — writing `d1` here would be asserting an id the
+    // renderer is free to mint differently, which is how this test first failed.
+    const markup = render(true);
+
+    const box = /<div[^>]*nx-bt-core--box[^>]*>/.exec(markup)?.[0] ?? "";
+    expect(box).not.toBe("");
+    expect(box).toContain(`${INSTANCE_ATTRIBUTE}="i1"`);
+    // The re-minting is the premise, so it is pinned rather than assumed.
+    expect(box).not.toContain('data-nx-node="d1"');
+  });
+
+  it("leaves the page's OWN sibling unmarked", async () => {
+    // The weaker control, kept because it is cheap and it pins the ordinary
+    // case. It does NOT discriminate on its own — see the slot case above.
     const markup = render(true);
 
     const own = /<[^>]*data-nx-node="own"[^>]*>/.exec(markup)?.[0] ?? "";
@@ -109,9 +180,10 @@ describe("marking the elements a component instance owns", () => {
 
     expect(markup).not.toContain(INSTANCE_ATTRIBUTE);
     // The control on the control: the published render really did draw the
-    // component, so the absence above is the marker being withheld rather than
-    // the instance failing to resolve.
-    expect(markup).toContain("From the definition");
+    // component and its slot content, so the absence above is the marker being
+    // withheld rather than the instance failing to resolve.
+    expect(markup).toContain("nx-bt-core--box");
+    expect(markup).toContain("The page&#x27;s own, inside the slot");
     expect(markup).not.toContain(NODE_ID_ATTRIBUTE);
   });
 });

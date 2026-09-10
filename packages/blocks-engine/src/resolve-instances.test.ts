@@ -439,6 +439,38 @@ describe("resolveComponentInstances visibility", () => {
   });
 });
 
+describe("a stored node claiming to belong to a component", () => {
+  it("loses the claim, because only this pass may make it", () => {
+    // `instanceOf` means "the resolver inlined this from a definition", and
+    // documents arrive from places that never ran it: an export replayed, a
+    // tree a host assembled, content hand-edited in storage. `sanitizeDocument`
+    // preserves unknown node keys deliberately, so the claim survives storage.
+    //
+    // Left standing, an editor reads it as provenance and sends a click, an
+    // edit or a delete to an instance the author never placed — while the node
+    // they were pointing at is one of their own.
+    const doc = page([
+      { ...node("mine"), instanceOf: "not-a-real-instance" } as never,
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes[0]).not.toHaveProperty("instanceOf");
+  });
+
+  it("keeps the node itself, and everything else about it", () => {
+    // The control: stripping the claim must not be a licence to drop or reshape
+    // the node. A pass that returned nothing here would satisfy the assertion
+    // above while destroying the author's content.
+    const doc = page([{ ...node("mine"), instanceOf: "stored" } as never]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes.map(n => n.id)).toEqual(["mine"]);
+    expect(result.document.nodes[0]!.type).toBe(node("mine").type);
+  });
+});
+
 describe("resolveComponentInstances slots", () => {
   const definition = component([box("d1", [node("fallback")])], {
     slots: { body: { label: "Body", nodeId: "d1", slot: "children" } },

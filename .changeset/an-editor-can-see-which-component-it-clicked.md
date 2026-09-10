@@ -43,3 +43,15 @@ is exactly what a marketer opened the editor to change.
 
 It rides the editor's node address the way its siblings do, so a published page
 carries none of it.
+
+A node that arrives already claiming `instanceOf` loses the claim. That field
+means "the resolver inlined this from a definition", and only the resolving pass
+may say so — but documents arrive from places that never ran it, and unknown
+node keys are preserved through storage deliberately. Left standing, an editor
+would send a click, an edit or a delete to a component the author never placed,
+while the node they were pointing at is one of their own.
+
+The composition-free fast path now walks a document carrying such a claim. That
+path was previously a pure optimisation; it is not one any more, because the
+document where a false claim survives is precisely the one with no components in
+it.
