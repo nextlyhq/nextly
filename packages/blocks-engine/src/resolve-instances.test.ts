@@ -2714,6 +2714,146 @@ describe("instanceExposure", () => {
     expect(rows.map(r => r.shadowedBy)).toEqual([undefined, undefined]);
   });
 
+  it("skips an exposure whose propPath is not a string, rather than throwing", () => {
+    // The null-member guard is not enough: a RECORD with a string id and a
+    // numeric propPath passes an id-only check, and `readPath` then calls
+    // `.split` on a number. The resolver skips that member; so must this.
+    const malformed = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        headline,
+        { ...headline, id: "broken", propPath: 7 },
+      ] as unknown as ComponentDocument["exposed"],
+    });
+
+    const rows = instanceExposure(malformed, instance("i1", "hero")).properties;
+
+    expect(rows.map(r => r.property.id)).toEqual(["headline"]);
+  });
+
+  it("lets a valid visibility override win over a later STALE one", () => {
+    // Two visibility exposures on one node. The later carries a string, which
+    // the resolver ignores; the earlier carries `false`, which it applies. A
+    // winner chosen by "has an override" would crown the later one and report
+    // the earlier — the one actually deciding the page — as superseded.
+    const gated = component([node("d1")], {
+      exposed: [
+        { ...headline, id: "early", propPath: "", type: "visibility" },
+        { ...headline, id: "late", propPath: "", type: "visibility" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { early: false, late: "not-a-boolean" },
+    });
+
+    const [early, late] = instanceExposure(gated, node1).properties;
+
+    expect(early?.shadowedBy).toBeUndefined();
+    expect(early?.value).toBe(false);
+    // The stale row is the one that is not in force.
+    expect(late?.shadowedBy).toBe("early");
+
+    // The oracle: `false` is applied, so the node is dropped.
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: gated })
+    );
+    expect(rendered.document.nodes).toHaveLength(0);
+  });
+
+  it("reports a parent path as written over when a child inside it is overridden", () => {
+    // `a = "scalar"` then `a.b = "nested"`: the writer descends through `a`,
+    // replacing the scalar with a record. Exact-key comparison calls both rows
+    // independent and reports `a` as still "scalar", which the page does not
+    // hold. Reading back from the final props answers it without a case.
+    const nested = component([node("d1", { props: { a: "base" } })], {
+      exposed: [
+        { ...headline, id: "parent", propPath: "a" },
+        { ...headline, id: "child", propPath: "a.b" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { parent: "scalar", child: "nested" },
+    });
+
+    const [parent, child] = instanceExposure(nested, node1).properties;
+
+    expect(parent?.value).toEqual({ b: "nested" });
+    expect(parent?.shadowedBy).toBe("child");
+    expect(child?.value).toBe("nested");
+    expect(child?.shadowedBy).toBeUndefined();
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: nested })
+    );
+    expect(rendered.document.nodes[0]!.props.a).toEqual({ b: "nested" });
+  });
+
+  it("reports a child path as written over when its parent is overridden after it", () => {
+    // The other direction: `a.b` first, then `a` replaced wholesale. The child
+    // row's path no longer resolves inside a string.
+    const nested = component([node("d1", { props: { a: { b: "base" } } })], {
+      exposed: [
+        { ...headline, id: "child", propPath: "a.b" },
+        { ...headline, id: "parent", propPath: "a" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { child: "nested", parent: "scalar" },
+    });
+
+    const [child, parent] = instanceExposure(nested, node1).properties;
+
+    expect(child?.value).toBeUndefined();
+    expect(child?.shadowedBy).toBe("parent");
+    expect(parent?.value).toBe("scalar");
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: nested })
+    );
+    expect(rendered.document.nodes[0]!.props.a).toBe("scalar");
+  });
+
+  it("does not treat a sibling path as a collision", () => {
+    // `a.b` and `a.c` share a parent and touch different values. Reading
+    // prefixes as collisions would report each as superseded by the other.
+    const siblings = component([node("d1", { props: { a: {} } })], {
+      exposed: [
+        { ...headline, id: "b", propPath: "a.b" },
+        { ...headline, id: "c", propPath: "a.c" },
+      ],
+    });
+    const node1 = instance("i1", "hero", { overrides: { b: "B", c: "C" } });
+
+    const [b, c] = instanceExposure(siblings, node1).properties;
+
+    expect(b?.value).toBe("B");
+    expect(c?.value).toBe("C");
+    expect(b?.shadowedBy).toBeUndefined();
+    expect(c?.shadowedBy).toBeUndefined();
+  });
+
+  it("does not treat a path that merely STARTS WITH another as inside it", () => {
+    // `a` and `ab` share three characters and nothing else. A prefix test on
+    // the raw string would call `ab` a descendant of `a` and report each as
+    // superseded by the other; the writer's grammar is segment-wise.
+    const lookalike = component([node("d1", { props: {} })], {
+      exposed: [
+        { ...headline, id: "a", propPath: "a" },
+        { ...headline, id: "ab", propPath: "ab" },
+      ],
+    });
+    const node1 = instance("i1", "hero", { overrides: { a: "A", ab: "AB" } });
+
+    const [a, ab] = instanceExposure(lookalike, node1).properties;
+
+    expect(a?.value).toBe("A");
+    expect(ab?.value).toBe("AB");
+    expect(a?.shadowedBy).toBeUndefined();
+    expect(ab?.shadowedBy).toBeUndefined();
+  });
+
   it("has no path value for a visibility exposure", () => {
     // `visibility` decides whether the node is served at all; it names no prop,
     // so reading `propPath` off the definition would report an unrelated value.

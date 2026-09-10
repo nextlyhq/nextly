@@ -71,7 +71,7 @@ import { boundedLimit } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
-import { findNode, mintDomId, remapIdReferences } from "./tree";
+import { mintDomId, remapIdReferences } from "./tree";
 import { isConditionGated } from "./visibility";
 
 /**
@@ -1563,10 +1563,13 @@ export interface InstanceExposure {
 /**
  * What one instance of a definition currently shows for each exposed property.
  *
- * Derived from the same precedence the RESOLVER applies, rather than computed
- * beside it. An editor asking "what is in force here" and a renderer asking
- * "what do I draw" are the same question at different widths, and two
- * implementations of it agree until the day a variant rule changes in one.
+ * Derived from the RESOLVER's own result rather than computed beside it. The
+ * overrides in force are applied to the definition's props with the same
+ * writer the renderer uses, in the same order, and every row's value is then
+ * READ BACK from what that produced. Any way two exposures can interact on one
+ * node — the same path, a path inside another's, a parent written over a child
+ * — is therefore answered by the write itself, not by a list of cases here
+ * that would be complete only until the next shape nobody enumerated.
  */
 export function instanceExposure(
   definition: ComponentDocument,
@@ -1574,9 +1577,12 @@ export function instanceExposure(
 ): InstanceExposure {
   const overrides = effectiveOverrides(definition, instance);
   const declared = usableExposures(definition.exposed);
-  const shadows = shadowedExposures(declared, overrides);
+  const nodes = nodeIndex(definition.nodes);
+  const applied = appliedWrites(declared, overrides);
+  const props = finalProps(nodes, applied);
+
   const properties = declared.map(property =>
-    exposedState(definition, property, overrides.get(property.id), shadows)
+    exposedState(property, lastWriteOver(property, applied), props, nodes)
   );
 
   const exposedIds = new Set(declared.map(property => property.id));
@@ -1587,33 +1593,138 @@ export function instanceExposure(
   return { properties, orphanedOverrideIds };
 }
 
-/** One property's state: the override if there is one, the definition if not. */
-function exposedState(
-  definition: ComponentDocument,
-  property: ExposedProperty,
-  stored: SourcedOverride | undefined,
-  shadows: ReadonlyMap<string, string>
-): ExposedPropertyState {
-  const shadow = shadows.get(property.id);
-  const shadowedBy = shadow === undefined ? {} : { shadowedBy: shadow };
-  const override = inForce(property, stored);
-  if (override === undefined) {
-    return {
-      property,
-      source: "definition",
-      value: definitionValue(definition, property),
-      cleared: false,
-      ...shadowedBy,
-    };
+/** One in-force override, together with the exposure that carries it. */
+interface AppliedWrite {
+  property: ExposedProperty;
+  override: SourcedOverride;
+}
+
+/**
+ * The overrides the resolver would actually apply, in declaration order.
+ *
+ * Only these are writes. A stored override the resolver ignores — a
+ * non-boolean on a `visibility` exposure — is not a write, and letting it win
+ * a collision over a valid earlier one would report the earlier row as
+ * superseded by something that never touched the page.
+ */
+function appliedWrites(
+  declared: readonly ExposedProperty[],
+  overrides: ReadonlyMap<string, SourcedOverride>
+): readonly AppliedWrite[] {
+  const applied: AppliedWrite[] = [];
+  for (const property of declared) {
+    const override = inForce(property, overrides.get(property.id));
+    if (override !== undefined) applied.push({ property, override });
   }
-  const cleared = isUnsetOverride(override.value);
+  return applied;
+}
+
+/**
+ * Each node's props with every in-force write applied, keyed by node id.
+ *
+ * Through {@link editedProps}, which is what the resolver itself applies a
+ * plan with. Building the edits any other way would be a second
+ * implementation of how a path lands on a record.
+ */
+function finalProps(
+  nodes: ReadonlyMap<string, BlockNode>,
+  applied: readonly AppliedWrite[]
+): ReadonlyMap<string, Record<string, unknown>> {
+  const edits = new Map<string, PropEdit[]>();
+  for (const { property, override } of applied) {
+    if (property.type === "visibility") continue;
+    const list = edits.get(property.nodeId) ?? [];
+    list.push({
+      path: property.propPath,
+      value: override.value,
+      unset: isUnsetOverride(override.value),
+    });
+    edits.set(property.nodeId, list);
+  }
+
+  const result = new Map<string, Record<string, unknown>>();
+  for (const [nodeId, list] of edits) {
+    const node = nodes.get(nodeId);
+    if (node !== undefined) result.set(nodeId, editedProps(node.props, list));
+  }
+  return result;
+}
+
+/**
+ * The last in-force write that reaches this exposure's target, if any.
+ *
+ * "Reaches" is the writer's notion, not string equality: on one node, a path
+ * and any path inside it land on the same value — writing `a` replaces what
+ * `a.b` sits in, and writing `a.b` changes what `a` holds — and every
+ * `visibility` exposure on a node decides the same thing. The LAST such write
+ * is what the page shows, and it may be this exposure's own.
+ */
+function lastWriteOver(
+  property: ExposedProperty,
+  applied: readonly AppliedWrite[]
+): AppliedWrite | undefined {
+  let last: AppliedWrite | undefined;
+  for (const write of applied) {
+    if (reachesSameTarget(property, write.property)) last = write;
+  }
+  return last;
+}
+
+/** True when a write to `b` changes the value `a` reads, or vice versa. */
+function reachesSameTarget(a: ExposedProperty, b: ExposedProperty): boolean {
+  if (a.nodeId !== b.nodeId) return false;
+  if (a.type === "visibility" || b.type === "visibility") {
+    return a.type === b.type;
+  }
+  return (
+    isPathPrefix(a.propPath, b.propPath) || isPathPrefix(b.propPath, a.propPath)
+  );
+}
+
+/** True when `shorter` names `longer` or one of its ancestors, segment-wise. */
+function isPathPrefix(shorter: string, longer: string): boolean {
+  return longer === shorter || longer.startsWith(`${shorter}.`);
+}
+
+/**
+ * One row: what is in force at its target, and whether that was its own doing.
+ *
+ * The value is read from the final props for a prop exposure, so it reflects
+ * every write that reached it. For a `visibility` exposure there is no prop to
+ * read — the winning write's decision IS the value.
+ */
+function exposedState(
+  property: ExposedProperty,
+  winner: AppliedWrite | undefined,
+  props: ReadonlyMap<string, Record<string, unknown>>,
+  nodes: ReadonlyMap<string, BlockNode>
+): ExposedPropertyState {
+  const value = valueAt(property, winner, props, nodes);
+  if (winner === undefined) {
+    return { property, source: "definition", value, cleared: false };
+  }
+  const cleared = isUnsetOverride(winner.override.value);
+  const own = winner.property.id === property.id;
   return {
     property,
-    source: override.source,
-    value: cleared ? undefined : override.value,
+    source: winner.override.source,
+    value: cleared ? undefined : value,
     cleared,
-    ...shadowedBy,
+    ...(own ? {} : { shadowedBy: winner.property.id }),
   };
+}
+
+/** The value a row shows: the final props at its path, or a visibility decision. */
+function valueAt(
+  property: ExposedProperty,
+  winner: AppliedWrite | undefined,
+  props: ReadonlyMap<string, Record<string, unknown>>,
+  nodes: ReadonlyMap<string, BlockNode>
+): OverrideValue {
+  if (property.type === "visibility") return winner?.override.value;
+  const record =
+    props.get(property.nodeId) ?? nodes.get(property.nodeId)?.props;
+  return readPath(record, property.propPath);
 }
 
 /**
@@ -1635,54 +1746,41 @@ function inForce(
 }
 
 /**
- * What an exposure writes to, as one comparable string.
+ * Every node in a forest by id, in one pass.
  *
- * A `visibility` exposure names no prop — it decides whether the node is served
- * at all — so two of them on one node collide with each other and with nothing
- * else. Keying those on the node alone keeps them apart from the prop paths.
+ * Built once per question rather than searched per row. A definition near the
+ * documented limits — a thousand exposures pointing into a forest of thousands
+ * of nodes — would otherwise cost a full forest walk PER exposure, every time
+ * an inspector asked, which is an editor stall scaling with the product of the
+ * two rather than their sum.
  */
-function targetKey(property: ExposedProperty): string {
-  const target =
-    property.type === "visibility" ? "\u0000visible" : property.propPath;
-  return `${property.nodeId}\u0000${target}`;
-}
-
-/**
- * The exposures whose overrides the resolver writes over, keyed to the winner.
- *
- * `planExposed` walks the declared list in order and each write lands on the
- * same target, so among exposures sharing one the LAST carrying an override is
- * what the page shows. The earlier rows are reported as shadowed rather than
- * silently drawn as live.
- */
-function shadowedExposures(
-  declared: readonly ExposedProperty[],
-  overrides: ReadonlyMap<string, SourcedOverride>
-): ReadonlyMap<string, string> {
-  const winner = new Map<string, string>();
-  for (const property of declared) {
-    if (overrides.has(property.id))
-      winner.set(targetKey(property), property.id);
-  }
-
-  const shadows = new Map<string, string>();
-  for (const property of declared) {
-    const wins = winner.get(targetKey(property));
-    if (wins !== undefined && wins !== property.id) {
-      shadows.set(property.id, wins);
+function nodeIndex(
+  nodes: readonly BlockNode[]
+): ReadonlyMap<string, BlockNode> {
+  const index = new Map<string, BlockNode>();
+  walkForest(nodes, entry => {
+    // Persisted forests reach here unvalidated, so an entry may be `null` or a
+    // primitive and reading `id` off one throws — the same guard `findNode`
+    // carries, for the same reason.
+    if (!isPlainRecord(entry.node)) return "skip";
+    const id = entry.node.id;
+    if (typeof id === "string" && !index.has(id)) {
+      index.set(id, entry.node as unknown as BlockNode);
     }
-  }
-  return shadows;
+    return "descend";
+  });
+  return index;
 }
 
 /**
  * The exposures a caller can act on, from an array that may hold anything.
  *
  * A stored or imported definition reaches here unvalidated — `exposed` may be
- * an array containing `null` — and the resolver tolerates that by skipping the
- * member. An editor asking the same document a question must not crash where
- * the renderer draws the page, so the same members are skipped here, under the
- * same envelope bound.
+ * an array containing `null`, or a record whose `propPath` is a number — and
+ * the renderer tolerates both by skipping the member. An editor asking the same
+ * document a question must not crash where the renderer draws the page, so
+ * every field this code goes on to READ is checked here, under the same
+ * envelope bound the resolver applies.
  */
 function usableExposures(exposed: unknown): readonly ExposedProperty[] {
   if (!Array.isArray(exposed)) return [];
@@ -1690,30 +1788,20 @@ function usableExposures(exposed: unknown): readonly ExposedProperty[] {
   const usable: ExposedProperty[] = [];
   for (let i = 0; i < count; i += 1) {
     const entry: unknown = exposed[i];
-    if (isPlainRecord(entry) && typeof entry.id === "string") {
-      usable.push(entry as unknown as ExposedProperty);
-    }
+    if (isUsableExposure(entry)) usable.push(entry);
   }
   return usable;
 }
 
-/**
- * The value the definition itself holds at an exposure's pointer.
- *
- * Read rather than assumed absent. An exposed property points AT the node where
- * the component author wrote the value, so an instance that overrides nothing
- * still has something to show — and a panel that drew an empty control there
- * would report the definition's own heading as blank, which is the one reading
- * an author cannot distinguish from having cleared it.
- */
-function definitionValue(
-  definition: ComponentDocument,
-  property: ExposedProperty
-): OverrideValue {
-  if (property.type === "visibility") return undefined;
-  const node = findNode(definition.nodes, property.nodeId);
-  if (node === undefined) return undefined;
-  return readPath(node.props, property.propPath);
+/** True when every field the exposure view dereferences is the type it reads. */
+function isUsableExposure(entry: unknown): entry is ExposedProperty {
+  if (!isPlainRecord(entry)) return false;
+  return (
+    typeof entry.id === "string" &&
+    typeof entry.nodeId === "string" &&
+    typeof entry.propPath === "string" &&
+    typeof entry.type === "string"
+  );
 }
 
 /**
