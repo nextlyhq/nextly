@@ -54,3 +54,22 @@ export function runWithCallerScope<T>(
 export function currentCallerScope(): AuthenticatedScope | undefined {
   return callerScope.getStore();
 }
+
+/**
+ * The scope a call operates under: the one it was handed, or the one the
+ * request pinned.
+ *
+ * Published as one function because two callers answering it separately is how
+ * a gate and the check backing it up came to disagree. `getOwnerConstraint`
+ * resolved the ambient scope and the post-fetch owner check read only its
+ * argument, so a request whose scope arrives through the store alone looked
+ * like an API key to the SQL predicate and like a session to the check that
+ * stands in when the predicate is absent — which is exactly when it matters.
+ *
+ * An explicit argument still wins, so a caller may narrow.
+ */
+export function effectiveCallerScope(
+  explicit: AuthenticatedScope | undefined
+): AuthenticatedScope | undefined {
+  return explicit ?? currentCallerScope();
+}

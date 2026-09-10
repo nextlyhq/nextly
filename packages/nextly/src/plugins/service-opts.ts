@@ -1,5 +1,5 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
-import { currentCallerScope, runWithCallerScope } from "../auth/caller-scope";
+import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { NextlyError } from "../errors/nextly-error";
@@ -80,7 +80,7 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   // pinned for this request. A route that omits it is the common case, not the
   // exception, so the ambient value is what makes the key's grants reach the
   // access check at all.
-  const authenticatedScope = opts.authenticatedScope ?? currentCallerScope();
+  const authenticatedScope = effectiveCallerScope(opts.authenticatedScope);
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {

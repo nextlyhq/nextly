@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { apiKeyScope } from "../../../../auth/authenticated-scope";
+import { runWithCallerScope } from "../../../../auth/caller-scope";
 import { ownerSafetyNetApplies } from "../owner-safety-net";
 
 /** An owner-only rule and an ordinary signed-in caller: the net applies. */
@@ -27,7 +29,9 @@ const BASE = {
 } as const;
 
 /** A request arriving on a scoped API key. */
-const KEY = { actorType: "apiKey" } as const;
+const KEY = apiKeyScope([
+  { slug: "read-notes", action: "read", resource: "notes" },
+]);
 
 describe("ownerSafetyNetApplies", () => {
   it("applies to an ordinary caller under an owner-only rule", () => {
@@ -67,6 +71,27 @@ describe("ownerSafetyNetApplies", () => {
         isSuperAdmin: true,
         scope: { actorType: "user" },
       })
+    ).toBe(false);
+  });
+
+  it("reads the scope the REQUEST pinned when the caller named none", () => {
+    // Every API key arriving through the route handler reaches these paths with
+    // its scope in the store rather than in an argument. Reading the argument
+    // alone made such a request look like a session here while the SQL owner
+    // predicate — which resolves the same store — saw a key, so the two
+    // disagreed precisely where this check is the only one left.
+    const applies = runWithCallerScope(KEY, () =>
+      ownerSafetyNetApplies({ ...BASE, isSuperAdmin: true, scope: undefined })
+    );
+    expect(applies).toBe(true);
+  });
+
+  it("is a session again outside that request", () => {
+    // The control for the case above. Without it, an implementation that
+    // ignored the store and always reported a key would pass it — and would
+    // take the bypass away from every super-admin session.
+    expect(
+      ownerSafetyNetApplies({ ...BASE, isSuperAdmin: true, scope: undefined })
     ).toBe(false);
   });
 
@@ -113,6 +138,22 @@ describe("both write paths ask this function", () => {
     // path goes on deciding inline, which is the state this replaced.
     const calls = source.match(/ownerSafetyNetApplies\(/g) ?? [];
     expect(calls).toHaveLength(2);
+  });
+
+  it("resolves the effective scope rather than reading one argument", () => {
+    // The resolution is `effectiveCallerScope`, published once because six
+    // places wrote `explicit ?? currentCallerScope()` by hand and a seventh —
+    // this safety net — forgot to. A copy here would be the eighth.
+    const source2 = readFileSync(
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "owner-safety-net.ts"
+      ),
+      "utf8"
+    );
+    expect(source2).toContain("effectiveCallerScope(input.scope)");
+    expect(source2).not.toMatch(/input\.scope\?\.actorType/);
   });
 
   it("hands both of them the caller's real scope", () => {

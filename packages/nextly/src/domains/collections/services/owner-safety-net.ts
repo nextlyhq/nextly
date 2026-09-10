@@ -17,6 +17,9 @@
  * @module domains/collections/services/owner-safety-net
  */
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { effectiveCallerScope } from "../../../auth/caller-scope";
+
 /** What decides whether the owner comparison runs. */
 export interface OwnerSafetyNetInput {
   /** The stored rule for this operation is `owner-only`. */
@@ -28,14 +31,19 @@ export interface OwnerSafetyNetInput {
   /** The caller's OWNER is a super-admin. */
   readonly isSuperAdmin: boolean;
   /**
-   * The caller's scope, as the request carries it.
+   * The scope the caller NAMED, or `undefined` when it named none.
    *
-   * Taken whole rather than as a `isScopedApiKey` boolean the caller derives:
+   * Taken whole rather than as an `isScopedApiKey` boolean the caller derives:
    * two call sites deriving one predicate is how this rule came to differ
    * between update and delete in the first place, and a boolean parameter puts
-   * that derivation back at each site. What a scoped key IS gets decided here.
+   * that derivation back at each site.
+   *
+   * `undefined` does NOT mean "a session". The request may have pinned a scope
+   * the caller never received as an argument, which is how every API key
+   * arriving through the route handler reaches these paths — so the ambient
+   * scope is resolved here, by the same function the SQL owner predicate asks.
    */
-  readonly scope: { readonly actorType?: string } | undefined;
+  readonly scope: AuthenticatedScope | undefined;
 }
 
 /**
@@ -50,6 +58,13 @@ export function ownerSafetyNetApplies(input: OwnerSafetyNetInput): boolean {
   // A key is judged on its own stamped grants, not its owner's, so it does not
   // inherit the owner's super-admin bypass. Without this, minting a read-only
   // key as a super-admin would hand it every bypass the owner holds.
-  const isScopedApiKey = input.scope?.actorType === "apiKey";
+  //
+  // Resolved through `effectiveCallerScope`, which is what `getOwnerConstraint`
+  // asks. Reading the argument alone made a request whose scope arrives only
+  // through the store look like an API key to the SQL predicate and a session
+  // to this check — a disagreement that surfaces exactly when the predicate is
+  // missing and this is the only guard left.
+  const isScopedApiKey =
+    effectiveCallerScope(input.scope)?.actorType === "apiKey";
   return !(input.isSuperAdmin && !isScopedApiKey);
 }
