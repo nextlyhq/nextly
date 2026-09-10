@@ -14,6 +14,7 @@ import {
   publishState,
   releaseState,
   remedyFor,
+  shouldAssertChannel,
   remoteTagState,
   tagFor,
   verdict,
@@ -926,9 +927,17 @@ describe("a GitHub Release on the wrong side of the Latest badge", () => {
       release: "prerelease-on-stable",
     });
 
+    /*
+     * 🔴 `--latest` alone does not CLEAR a prerelease flag. `gh release edit`
+     * treats the two as separate flags, so a stable release wrongly marked as a
+     * prerelease keeps that mark and stays hidden from the badge it should
+     * hold. The remedy has to say `--prerelease=false` out loud.
+     */
     const text = remedyFor(result, "1.0.0");
+    expect(text).toContain("--prerelease=false");
     expect(text).toContain("--latest");
-    expect(text).not.toContain("--prerelease");
+    // And not the prerelease form, which would be the alpha remedy.
+    expect(text).not.toContain("--latest=false");
   });
 });
 
@@ -968,5 +977,65 @@ describe("a ref that declares no single release", () => {
     };
 
     expect(manifestAtRef("abc123", run)).toHaveLength(2);
+  });
+});
+
+describe("when the channel tag is worth asserting", () => {
+  /*
+   * 🔴 This rule used to live only inside the command-line block, which no test
+   * enters. Two separate mutations of it passed the whole suite: the historical
+   * case and the pre-exit case were both proven on `publishState` directly,
+   * which shows the MECHANISM works and says nothing about whether the caller
+   * chooses correctly.
+   */
+  it("asserts it for the train main declares now", () => {
+    expect(shouldAssertChannel(true, "pre")).toBe(true);
+    expect(shouldAssertChannel(true, null)).toBe(true);
+  });
+
+  it("does not assert it for a historical subject", () => {
+    // Today's channel tag moved past an older release and was never meant to
+    // point at it.
+    expect(shouldAssertChannel(false, "pre")).toBe(false);
+  });
+
+  it("does not assert it while prerelease mode is being exited", () => {
+    // The dangerous one: `readPreState` answers null for `mode: "exit"` just as
+    // it does for "never in pre mode", so the expected tag becomes `latest` and
+    // the remedy says to move `latest` onto the alpha still in the manifests.
+    expect(shouldAssertChannel(true, "exit")).toBe(false);
+  });
+});
+
+describe("a repository part-way out of prerelease mode", () => {
+  it("does not expect a channel tag while pre mode is being exited", async () => {
+    /*
+     * 🔴 `pre.json` says `mode: "exit"` from the exit commit until the Version
+     * PR lands, and the manifests still declare the last alpha for that whole
+     * window. `readPreState` answers null there, exactly as it does when the
+     * repository was never in pre mode, so the expected tag comes out as
+     * `latest`. Asserting it produces `channel-stale` and a remedy that says to
+     * move `latest` onto a prerelease, serving an alpha to every stable
+     * install.
+     */
+    const manifest = [{ name: "nextly", version: VERSION }];
+    const state = {
+      versions: ["0.0.0", "0.0.2-alpha.62", VERSION],
+      distTags: { alpha: VERSION, latest: "0.0.2-alpha.62" },
+    };
+
+    const asserted = await publishState(manifest, async () => state, null, {
+      assertChannel: true,
+    });
+    // What the old behaviour produced: `latest` expected, found on the previous
+    // alpha, and a remedy that would move it onto this one.
+    expect(asserted.channelStale).toHaveLength(1);
+    expect(asserted.channelStale[0]).toContain("latest");
+
+    const skipped = await publishState(manifest, async () => state, null, {
+      assertChannel: false,
+    });
+    expect(skipped.kind).toBe("all");
+    expect(skipped.channelStale ?? []).toEqual([]);
   });
 });

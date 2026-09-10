@@ -50,6 +50,7 @@ import {
   fetchRegistryState,
   getExpectedDistTag,
   isBootstrapPlaceholderOnly,
+  readPreMode,
   readPreState,
   waitForCompleteRelease,
 } from "./lib.mjs";
@@ -599,7 +600,9 @@ const retagSteps = (tag) => [
  * one becomes a regular release and takes Latest the moment it is published.
  */
 const badgeFlags = (tag) =>
-  isPrerelease(tag) ? "--prerelease --latest=false" : "--latest";
+  isPrerelease(tag)
+    ? "--prerelease --latest=false"
+    : "--prerelease=false --latest";
 
 /**
  * One repair step, as the lines a maintainer reads.
@@ -680,6 +683,29 @@ const STEP_TEXT = {
     ...RERUN_STEPS.map((line) => line.trim().padStart(line.trim().length + 4)),
   ],
 };
+
+/**
+ * Whether the channel tag should be asserted for this subject.
+ *
+ * 🔴 Two situations answer "no", and they are easy to collapse into one.
+ *
+ * A HISTORICAL subject is not the release `main` declares now, so today's
+ * channel tag has moved past it and was never meant to point at it.
+ *
+ * A repository EXITING prerelease mode is mid-transition: `pre.json` says
+ * `mode: "exit"` from the exit commit until the Version PR lands, and the
+ * manifests still declare the last alpha for that whole window. `readPreState`
+ * answers null there, exactly as it does when the repository was never in pre
+ * mode, so the expected tag comes out as `latest`. Asserting it yields a remedy
+ * that says to move `latest` onto a prerelease, serving an alpha to every
+ * stable install.
+ *
+ * Exported because the command-line block below has no test, and a rule that
+ * lives only inside it is a rule nothing can exercise.
+ */
+export function shouldAssertChannel(currentTrain, preMode) {
+  return currentTrain && preMode !== "exit";
+}
 
 /**
  * What to tell a reader to do about a verdict, kept beside the rules it follows.
@@ -803,7 +829,7 @@ if (invokedDirectly) {
       manifest,
       (name) => registry.get(name) ?? null,
       readPreState(),
-      { assertChannel: currentTrain }
+      { assertChannel: shouldAssertChannel(currentTrain, readPreMode()) }
     );
   } catch (error) {
     console.error(

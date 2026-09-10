@@ -94,6 +94,22 @@ export function readPreState() {
 }
 
 /**
+ * The mode `.changeset/pre.json` records, or `null` when there is no such file.
+ *
+ * 🔴 Deliberately NOT `readPreState`, which answers `null` for `mode: "exit"`
+ * and for no file at all. Those are different situations. Exiting prerelease
+ * mode is a transition the repository is IN: the manifests still declare the
+ * last alpha until the Version PR lands, so anything that cannot tell the two
+ * apart treats that alpha as a stable release and expects `latest` to resolve
+ * to it. The remedy that follows from believing this says to move `latest` onto
+ * a prerelease, which is a worse outcome than the check not running at all.
+ */
+export function readPreMode() {
+  if (!existsSync(PRE_STATE_PATH)) return null;
+  return readJson(PRE_STATE_PATH).mode ?? null;
+}
+
+/**
  * The workspace as the release tooling sees it, in two lists that are NOT the
  * same and must not be swapped:
  *
