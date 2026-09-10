@@ -19,7 +19,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { ACCEPTED_REGRESSIONS, acceptedFor, roleOf } from "../accepted";
+import {
+  ACCEPTED_REGRESSIONS,
+  acceptedFor,
+  roleOf,
+  type AcceptedRegression,
+} from "../accepted";
 import { compositeOver, contrastRatio, type Rgb } from "../color";
 import { parseThemeScale, parseThemeTokens } from "../parse-theme";
 import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
@@ -545,6 +550,89 @@ function observations(
   return out;
 }
 
+/**
+ * Every way an accepted alpha entry can be wrong, given what the scan measured.
+ *
+ * Exported and pure because a clean tree records no such entry: called only
+ * through the corpus, each rule below is satisfied by having nothing to judge,
+ * and a regression in any of them is invisible. The controls call this with
+ * inputs whose answer is known.
+ *
+ * `ink-utilities.test.ts` holds every accepted entry to being evaluated by
+ * something, and defers exactly this shape — a faded foreground over an opaque
+ * surface — because neither PAIRINGS nor its own full-strength scan composites
+ * one. That deferral moved THREE guarantees here: accepted.ts promises each
+ * entry is still reached, still failing, and still measuring what it records.
+ */
+export function acceptanceProblems(
+  entries: readonly AcceptedRegression[],
+  seen: ReadonlyMap<string, Observation[]>
+): string[] {
+  const problems: string[] = [];
+  for (const entry of entries) {
+    if (
+      entry.fgAlpha === undefined ||
+      entry.bgAlpha !== undefined ||
+      entry.bgOver !== undefined
+    ) {
+      continue;
+    }
+    const where = `${entry.fg} on ${entry.bg} (${entry.mode}, /${entry.fgAlpha})`;
+    const at = seen.get(
+      `${entry.fg}|${entry.bg}|${entry.fgAlpha}|${entry.mode}`
+    );
+    if (!at || at.length === 0) {
+      problems.push(
+        `${where}: this scan never consults it, so nothing holds it to the ` +
+          `ratio it records. Either no utility paints the pairing any more, ` +
+          `or the entry was written for one that never existed.`
+      );
+      continue;
+    }
+
+    // An acceptance is keyed by the role pair, the mode and the alpha — and NOT
+    // by the utility kind, so one entry covers `border-x/50` and `text-x/50`
+    // alike while those are held to 3:1 and 4.5:1. Accepting a decorative
+    // boundary would silently accept body text at the same ratio.
+    const kinds = [...new Set(at.map(o => o.kind))];
+    if (kinds.length > 1) {
+      problems.push(
+        `${where}: reached as ${kinds.join(" and ")} (${at
+          .map(o => o.combo)
+          .join(", ")}), which are held to different thresholds. One entry ` +
+          `cannot accept both — split the pairing, or use a token per kind.`
+      );
+      continue;
+    }
+
+    for (const o of at) {
+      // Still-failing BEFORE the ratio pin, and the order is load-bearing: any
+      // repair moves the ratio too, so pinning first reports every repair as
+      // drift and the stale branch never fires.
+      if (o.ratio >= o.need) {
+        problems.push(
+          `${where}: ${o.combo} now MEETS ${o.need}:1 at ${o.ratio.toFixed(2)}:1, ` +
+            `so the entry is stale. Delete it — leaving it makes the accepted ` +
+            `set read as larger than it is.`
+        );
+        continue;
+      }
+      // Rounded on both sides rather than compared through a tolerance, the way
+      // token-contrast pins its own entries: `toBeCloseTo(x, 2)` admits a drift
+      // the file claims to pin.
+      if (Number(o.ratio.toFixed(2)) !== entry.ratio) {
+        problems.push(
+          `${where}: recorded at ${entry.ratio}:1, ${o.combo} now measures ` +
+            `${o.ratio.toFixed(2)}:1. If the change was intended, update the ` +
+            `record; if not, the token moved under an entry that was never ` +
+            `agreed for this value.`
+        );
+      }
+    }
+  }
+  return problems;
+}
+
 describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   const combos = scanCombos();
 
@@ -730,81 +818,158 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   });
 
   it("vouches for the accepted entries only this scan can reach", () => {
-    // `ink-utilities.test.ts` holds every accepted entry to being evaluated by
-    // something, and defers exactly this shape — a faded foreground over an
-    // opaque surface — because neither PAIRINGS nor its own full-strength scan
-    // composites one. That deferral moved THREE guarantees here, not one:
-    // accepted.ts promises each entry is still reached, still failing, and
-    // still measuring what it records. An entry that only has to be reachable
-    // suppresses this guard forever on a typo.
     const seen = observations(combos);
-    // The population, so a walk that scanned nothing passes nothing.
+    // The population. An empty scan satisfies every assertion below by having
+    // nothing to judge, which is what a broken walk looks like from here.
     expect(seen.size).toBeGreaterThan(0);
+    expect(acceptanceProblems(ACCEPTED_REGRESSIONS, seen)).toEqual([]);
+  });
 
-    const problems: string[] = [];
-    for (const entry of ACCEPTED_REGRESSIONS) {
-      if (
-        entry.fgAlpha === undefined ||
-        entry.bgAlpha !== undefined ||
-        entry.bgOver !== undefined
-      ) {
-        continue;
-      }
-      const where = `${entry.fg} on ${entry.bg} (${entry.mode}, /${entry.fgAlpha})`;
-      const at = seen.get(
-        `${entry.fg}|${entry.bg}|${entry.fgAlpha}|${entry.mode}`
+  describe("what makes an accepted alpha entry wrong", () => {
+    // Every rule below is reached only when such an entry EXISTS, and a clean
+    // tree records none — so through the corpus alone each one is satisfied by
+    // having nothing to judge. These call the rule directly with inputs whose
+    // answer is known.
+    const KEY = "border|background|0.5|light";
+    const at = (over: Partial<Observation> = {}): Map<string, Observation[]> =>
+      new Map([
+        [
+          KEY,
+          [
+            {
+              combo: "border-border/50",
+              kind: "border",
+              need: 3,
+              ratio: 1.11,
+              ...over,
+            },
+          ],
+        ],
+      ]);
+    const record = (
+      over: Partial<AcceptedRegression> = {}
+    ): AcceptedRegression => ({
+      fg: "border",
+      bg: "background",
+      mode: "light",
+      fgAlpha: 0.5,
+      ratio: 1.11,
+      reason: "a pairing the palette ships below its minimum",
+      ...over,
+    });
+
+    it("accepts an entry that still measures what it records", () => {
+      // The positive control. Without it every refusal below is equally
+      // consistent with a rule that rejects everything it is handed.
+      expect(acceptanceProblems([record()], at())).toEqual([]);
+    });
+
+    it("refuses an entry nothing paints", () => {
+      expect(acceptanceProblems([record()], new Map())[0]).toMatch(
+        /never consults it/
       );
-      if (!at) {
-        problems.push(
-          `${where}: this scan never consults it, so nothing holds it to the ` +
-            `ratio it records. Either no utility paints the pairing any more, ` +
-            `or the entry was written for one that never existed.`
-        );
-        continue;
-      }
+    });
 
-      // An acceptance is keyed by the role pair, the mode and the alpha — and
-      // NOT by the utility kind, so one entry covers `border-x/50` and
-      // `text-x/50` alike while those are held to 3:1 and 4.5:1. Accepting a
-      // decorative boundary would silently accept body text at the same ratio.
-      const kinds = [...new Set(at.map(o => o.kind))];
-      if (kinds.length > 1) {
-        problems.push(
-          `${where}: reached as ${kinds.join(" and ")} (${at
-            .map(o => o.combo)
-            .join(", ")}), which are held to different thresholds. One entry ` +
-            `cannot accept both — split the pairing, or use a token per kind.`
-        );
-        continue;
-      }
+    it("refuses an entry whose recorded ratio has drifted", () => {
+      expect(acceptanceProblems([record({ ratio: 1.99 })], at())[0]).toMatch(
+        /recorded at 1.99:1/
+      );
+    });
 
-      for (const o of at) {
-        // Still-failing BEFORE the ratio pin, and the order is load-bearing:
-        // any repair moves the ratio too, so pinning first reports every
-        // repair as drift and the stale branch never fires.
-        if (o.ratio >= o.need) {
-          problems.push(
-            `${where}: ${o.combo} now MEETS ${o.need}:1 at ${o.ratio.toFixed(2)}:1, ` +
-              `so the entry is stale. Delete it — leaving it makes the ` +
-              `accepted set read as larger than it is.`
-          );
-          continue;
-        }
-        // Rounded on both sides rather than compared through a tolerance, the
-        // way token-contrast pins its own entries: `toBeCloseTo(x, 2)` admits
-        // a drift the file claims to pin.
-        if (Number(o.ratio.toFixed(2)) !== entry.ratio) {
-          problems.push(
-            `${where}: recorded at ${entry.ratio}:1, ${o.combo} now measures ` +
-              `${o.ratio.toFixed(2)}:1. If the change was intended, update the ` +
-              `record; if not, the token moved under an entry that was never ` +
-              `agreed for this value.`
-          );
-        }
-      }
+    it("refuses an entry whose pairing now meets its threshold", () => {
+      // A repaired token must be DELETED from the list, not left as a false
+      // confession that makes the accepted set read as larger than it is.
+      expect(
+        acceptanceProblems([record({ ratio: 4.2 })], at({ ratio: 4.2 }))[0]
+      ).toMatch(/now MEETS 3:1/);
+    });
+
+    it("refuses one acceptance covering two utility kinds", () => {
+      // `border-x/50` and `text-x/50` reduce to one identity while being held
+      // to 3:1 and 4.5:1, so accepting the boundary would accept the text.
+      const both = new Map([
+        [
+          KEY,
+          [
+            {
+              combo: "border-border/50",
+              kind: "border" as const,
+              need: 3,
+              ratio: 1.11,
+            },
+            {
+              combo: "text-border/50",
+              kind: "text" as const,
+              need: 4.5,
+              ratio: 1.11,
+            },
+          ],
+        ],
+      ]);
+      const [problem] = acceptanceProblems([record()], both);
+      expect(problem).toMatch(/held to different thresholds/);
+      // Names BOTH utilities, so the reader can see what would have been
+      // suppressed rather than only that something was.
+      expect(problem).toContain("border-border/50");
+      expect(problem).toContain("text-border/50");
+    });
+
+    it("ignores an entry shape another suite vouches for", () => {
+      // A tinted or opaque-pair acceptance is `ink-utilities`' to evaluate.
+      // Claiming it here would report it twice and, worse, hold it to a
+      // measurement this scan never took.
+      expect(
+        acceptanceProblems([record({ fgAlpha: undefined })], at())
+      ).toEqual([]);
+      expect(acceptanceProblems([record({ bgAlpha: 0.1 })], at())).toEqual([]);
+    });
+  });
+
+  it("keeps every kind that reaches one acceptance identity", () => {
+    // The collision is invisible in the real corpus, which paints no pairing as
+    // both a boundary and text — so `observations` is asked here with a scan
+    // that does. Collapsing to one entry per key would hide exactly what the
+    // cross-kind refusal above exists to see.
+    const both = observations(
+      new Map([
+        ["border-border/50", 1],
+        ["text-border/50", 1],
+      ])
+    );
+    const at = both.get("border|background|0.5|light");
+    if (!at) {
+      throw new TypeError("both utilities must reduce to one identity");
     }
+    expect(at.map(o => o.kind).sort()).toEqual(["border", "text"]);
+    expect(at.map(o => o.combo).sort()).toEqual([
+      "border-border/50",
+      "text-border/50",
+    ]);
+  });
 
-    expect(problems).toEqual([]);
+  it("derives its failures rather than re-testing the threshold", () => {
+    // A behavioural mutation cannot reach this: a second copy of
+    // `ratio < need` agrees with the first until the threshold rule changes,
+    // which is the whole reason the duplication is worth refusing. So the
+    // source is what carries it.
+    const source = readFileSync(
+      resolve(here, "alpha-utilities.test.ts"),
+      "utf8"
+    );
+    const body = source.slice(
+      source.indexOf("function unacceptedFailures"),
+      source.indexOf("function observations")
+    );
+    expect(body).toContain("failingModes(r)");
+    expect(body).not.toMatch(/ratio\s*<\s*r\.need/);
+  });
+
+  it("reports a mode exactly at its threshold as passing", () => {
+    // `<` rather than `<=`: a utility that reaches its target is not failing,
+    // and the boundary is where the two spellings differ.
+    const r = worstRatio("border-border/50");
+    const exact = { ...r, modes: [{ ...r.modes[0], ratio: r.need }] };
+    expect(failingModes(exact)).toEqual([]);
   });
 
   it("puts no alpha on the control boundary, in any utility", () => {
