@@ -66,14 +66,30 @@ the scope's arrays are frozen, so editing them is refused:
 
 ```ts
 import { narrowScope } from "@nextlyhq/plugin-sdk";
+import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 
-const readOnly = narrowScope(ctx.authenticatedScope!, g => g.action === "read");
+const route: PluginRoute = {
+  method: "PATCH",
+  path: "/posts/:id",
+  requiredPermission: "update-posts",
+  handler: async (req, ctx) => {
+    const id = ctx.params.id;
+    const data = (await req.json()) as Record<string, unknown>;
 
-await ctx.services.collections.updateEntry("posts", id, data, {
-  as: "user",
-  user: ctx.user ?? undefined,
-  authenticatedScope: readOnly, // refused: the scope no longer holds the write
-});
+    const readOnly = narrowScope(
+      ctx.authenticatedScope!,
+      g => g.action === "read"
+    );
+
+    await ctx.services.collections.updateEntry("posts", id, data, {
+      as: "user",
+      user: ctx.user ?? undefined,
+      authenticatedScope: readOnly, // refused: the scope no longer holds the write
+    });
+
+    return Response.json({ ok: true });
+  },
+};
 ```
 
 The narrowed scope applies for the whole call, so every check underneath sees
@@ -143,6 +159,8 @@ Routes support an ordered, typed middleware chain (onion model). Each middleware
 `next()` to continue or returns a `Response` to short-circuit:
 
 ```ts
+import type { Middleware } from "@nextlyhq/plugin-sdk";
+
 const timing: Middleware = async (req, ctx, next) => {
   const res = await next();
   res.headers.set("x-handler", "reports");

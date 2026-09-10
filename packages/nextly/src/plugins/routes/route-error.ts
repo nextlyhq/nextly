@@ -52,3 +52,24 @@ export function isRouteError(error: unknown): boolean {
       error.code === "NEXTLY_ROUTE_INVALID_PATH")
   );
 }
+
+/**
+ * A root route declared where the request never reaches the root pass.
+ *
+ * Distinct from a collision, which is two plugins wanting one address. This is
+ * one plugin wanting an address nothing will ever ask it about, and the reason
+ * differs per prefix, so it is carried rather than restated.
+ */
+export function routeUnreachableRootError(
+  pluginName: string,
+  path: string,
+  reason: string
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_ROUTE_UNREACHABLE_ROOT",
+    statusCode: 400,
+    publicMessage: "Route configuration is invalid.",
+    logMessage: `Plugin "${pluginName}" declares a root-mounted route at "${path}", which cannot answer: ${reason}`,
+    logContext: { reason: "route-unreachable-root", pluginName, path },
+  });
+}

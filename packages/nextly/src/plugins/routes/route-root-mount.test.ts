@@ -166,6 +166,37 @@ describe("where a plugin route answers", () => {
     expect(reg.match("GET", "/items/42", "root")?.pluginName).toBe("@acme/two");
   });
 
+  it("refuses a root route the request pipeline never reaches", () => {
+    // `/auth` is handed to the auth router, which answers its own 404 rather
+    // than falling through, and `/plugins` belongs to the namespaced pass. A
+    // route declared at either registers and is never asked, so the author has
+    // nothing to look at. Loud at boot beats silent at request time.
+    for (const path of ["/auth/legacy-callback", "/plugins/foo/bar"]) {
+      expect(() =>
+        collectPluginRoutes([
+          {
+            name: "@acme/one",
+            contributes: { routes: [route({ mount: "root", path })] },
+          },
+        ] as never)
+      ).toThrow();
+    }
+  });
+
+  it("allows those same paths when the route is NOT rooted", () => {
+    // The control. A namespaced `/auth/...` resolves to
+    // `/plugins/@acme/one/auth/...`, which the auth router never sees, so
+    // refusing it would reject a legitimate path for the wrong reason.
+    expect(() =>
+      collectPluginRoutes([
+        {
+          name: "@acme/one",
+          contributes: { routes: [route({ path: "/auth/legacy-callback" })] },
+        },
+      ] as never)
+    ).not.toThrow();
+  });
+
   it("lets two plugins keep the same path when neither is rooted", () => {
     // The control for the case above: the namespace is what separates them, so
     // this must NOT throw or the collision check is just refusing all reuse.
