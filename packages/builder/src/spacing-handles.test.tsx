@@ -150,11 +150,14 @@ function subjectWith(overrides: Partial<SpacingSubject> = {}): SpacingSubject {
     scales: UNSCALED,
     orientation: { writingMode: "horizontal-tb", direction: "ltr" },
     /*
-     * The fixed-height answer by default — the content edge moves inward — so
-     * the existing cases keep describing the block they always described. The
-     * auto-height answer has its own cases.
+     * The answers the ordinary cases below were written against: a fixed-height
+     * block, whose padding moves the content edge inward, and margins reading
+     * outward on every side. Cases that care about the other answers say so.
      */
-    paddingOutward: { top: false, right: false, bottom: false, left: false },
+    outward: {
+      margin: { top: true, right: true, bottom: true, left: true },
+      padding: { top: false, right: false, bottom: false, left: false },
+    },
     ...overrides,
   };
 }
@@ -194,8 +197,10 @@ function mount(
   subject: SpacingSubject = subjectWith(),
   initial: BlockDocument = documentWith(),
   context: SpacingScrubContext = BASE
-): void {
-  render(
+) {
+  // The render result is returned so a case can re-render mid-gesture; every
+  // other caller ignores it.
+  return render(
     <Harness
       bands={bands}
       subject={subject}
@@ -1699,7 +1704,10 @@ describe("a padding handle on a block that grows outward", () => {
     mount(
       [bottomPadding],
       subjectWith({
-        paddingOutward: { top: false, right: false, bottom: true, left: false },
+        outward: {
+          margin: { top: true, right: true, bottom: true, left: true },
+          padding: { top: false, right: false, bottom: true, left: false },
+        },
       })
     );
     expect(handle("bottom padding").style.top).toBe("115.5px");
@@ -1719,7 +1727,10 @@ describe("a padding handle on a block that grows outward", () => {
       [bottomPadding],
       subjectWith({
         padding: { top: 4, right: 4, bottom: 20, left: 4 },
-        paddingOutward: { top: false, right: false, bottom: true, left: false },
+        outward: {
+          margin: { top: true, right: true, bottom: true, left: true },
+          padding: { top: false, right: false, bottom: true, left: false },
+        },
       })
     );
     drag(handle("bottom padding"), [{ x: 0, y: 15 }]);
@@ -1733,6 +1744,60 @@ describe("a padding handle on a block that grows outward", () => {
     );
     drag(handle("bottom padding"), [{ x: 0, y: -15 }]);
     expect(stored("padding", "blockEnd")).toBe("35px");
+  });
+});
+
+describe("a negative margin, whose band is drawn mirrored", () => {
+  /*
+   * `spacingBands` lays a negative margin INSIDE the border edge, reflected
+   * across it, so the rectangle's far edge swaps. Where the handle sits and
+   * which way the number grows therefore come apart, and one boolean cannot
+   * answer both.
+   *
+   * Measured in Chromium: raising a `margin-top` from `-20px` to `-10px` moves
+   * the block's border edge DOWN and leaves the outer edge pinned where the
+   * predecessor put it — the same edge that responds for a POSITIVE top
+   * margin, because the sign changes where the band is drawn and not which
+   * edge the layout moves. So the probe reads `false` here exactly as it does
+   * there.
+   */
+  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  const negativeTop: SpacingBand = {
+    box: "margin",
+    side: "top",
+    rect,
+    label: "-20",
+    negative: true,
+  };
+  const borderEdgeResponds = (): SpacingSubject =>
+    subjectWith({
+      margin: { top: -20, right: 10, bottom: 10, left: 10 },
+      outward: {
+        margin: { top: false, right: true, bottom: true, left: true },
+        padding: { top: false, right: false, bottom: false, left: false },
+      },
+    });
+
+  /*
+   * The band spans 100..120, and for a negative one the border edge is the TOP
+   * of that rectangle rather than the bottom. The mirrored answer is what puts
+   * the handle there.
+   */
+  it("puts the handle on the mirrored rectangle's moving edge", () => {
+    mount([negativeTop], borderEdgeResponds());
+    expect(handle("top margin").style.top).toBe("95.5px");
+  });
+
+  /*
+   * And the drag does NOT take the mirrored answer. Dragging the handle down
+   * follows the border edge down, which is the direction that raises the value
+   * toward zero. Mirroring here committed `-30px` and ran the block away from
+   * the pointer.
+   */
+  it("raises the value toward zero dragging DOWN", () => {
+    mount([negativeTop], borderEdgeResponds());
+    drag(handle("top margin"), [{ x: 0, y: 10 }]);
+    expect(stored("margin", "blockStart")).toBe("-10px");
   });
 });
 
@@ -1861,5 +1926,84 @@ describe("what the handle exposes", () => {
     for (const attribute of ["aria-valuemin", "aria-valuemax"]) {
       expect(element.getAttribute(attribute), attribute).toBeNull();
     }
+  });
+});
+
+describe("a drag keeps the direction it began with", () => {
+  /*
+   * Which way the value grows is MEASURED, so it can change while the pointer is
+   * down: the drag's own preview resizes the block, and a block that gains a
+   * settled width answers the opposite way. Read fresh mid-stroke, the pointer
+   * goes one way and the number the other.
+   */
+  const rect = { x: 0, y: 100, width: 50, height: 20 };
+  const topMargin: SpacingBand = {
+    box: "margin",
+    side: "top",
+    rect,
+    label: "20",
+    negative: false,
+  };
+  const answering = (outward: boolean): SpacingSubject =>
+    subjectWith({
+      margin: { top: 20, right: 10, bottom: 10, left: 10 },
+      outward: {
+        margin: { top: outward, right: true, bottom: true, left: true },
+        padding: { top: false, right: false, bottom: false, left: false },
+      },
+    });
+
+  it("commits the direction measured at the press, not a later one", () => {
+    const initial = documentWith();
+    const view = mount([topMargin], answering(true), initial);
+    const control = handle("top margin");
+    act(() => {
+      fireEvent.pointerDown(control, {
+        button: 0,
+        pointerId: 1,
+        clientX: 0,
+        clientY: 0,
+      });
+    });
+    act(() => {
+      fireEvent.pointerMove(control, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -10,
+      });
+    });
+    // The block settles a width mid-drag and now answers the other way.
+    view.rerender(
+      <Harness
+        bands={[topMargin]}
+        subject={answering(false)}
+        context={BASE}
+        initial={initial}
+      />
+    );
+    /*
+     * The band spans 100..120 and the handle sits on the edge that moves: the
+     * top of it for a band thickening away from the block, the bottom for one
+     * thickening into it. Following the NEW answer would carry the control from
+     * one end of its own band to the other under the hand, while the arithmetic
+     * — frozen at the press — went on counting the other way.
+     */
+    expect(handle("top margin").style.top).toBe("95.5px");
+    act(() => {
+      fireEvent.pointerMove(control, {
+        pointerId: 1,
+        clientX: 0,
+        clientY: -20,
+      });
+    });
+    act(() => {
+      fireEvent.pointerUp(control, { pointerId: 1, clientX: 0, clientY: -20 });
+    });
+    /*
+     * Twenty pixels UP grows a band measured as thickening away from the block,
+     * which is what it was measured as when the hand went down. Taking the later
+     * answer would subtract instead and commit `0px`.
+     */
+    expect(stored("margin", "blockStart")).toBe("40px");
   });
 });

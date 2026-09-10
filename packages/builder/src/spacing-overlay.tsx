@@ -87,7 +87,6 @@ import {
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
-import { paddingRespondsOutward } from "./padding-response";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
@@ -98,6 +97,7 @@ import {
   type EdgeApplicability,
   type EdgeLengths,
   type SpacingBand,
+  type SpacingBox,
   type SpacingSide,
 } from "./spacing-bands";
 import {
@@ -105,6 +105,7 @@ import {
   type SpacingScrubContext,
   type SpacingSubject,
 } from "./spacing-handles";
+import { spacingRespondsOutward, styleCapable } from "./spacing-response";
 
 export interface SpacingOverlayProps {
   /** The editor whose primary selection is measured. */
@@ -491,7 +492,7 @@ function sameSubject(
      * margin or scale change happens to force a replacement.
      *
      * NOT covered by a test of its own, and said here rather than left to be
-     * discovered. What `paddingOutward` DOES once it reaches the handles is
+     * discovered. What `outward` DOES once it reaches the handles is
      * covered — `spacing-handles.test.tsx` asserts both the edge it places the
      * control on and the direction it drags in. What is untested is this
      * propagation step: reaching it needs a measurement whose probe answers
@@ -499,7 +500,44 @@ function sameSubject(
      * stage that in jsdom broke the measurement chain it was standing on. A
      * test that fights its harness is worth less than a note that does not.
      */
-    SIDES.every(side => one.paddingOutward[side] === other.paddingOutward[side])
+    (["margin", "padding"] as const).every(box =>
+      SIDES.every(side => one.outward[box][side] === other.outward[box][side])
+    )
+  );
+}
+
+/**
+ * The scale the probe's movement will be SEEN at, for one box on one side.
+ *
+ * A margin takes the ANCESTOR scale and a padding the composed one, and what
+ * separates them is the element's OWN transform: a padding renders inside that
+ * transform and scales with it, while a margin displaces the box in the
+ * PARENT's coordinates, which the element's own transform never touches.
+ * Measured in Chromium — under `scale(0.5)` on the block itself, a ten-pixel
+ * margin probe still moves the edge ten pixels while a ten-pixel padding probe
+ * moves it five.
+ *
+ * `renderedScale` already separates the two and says why, and `spacingDelta`
+ * already divides by the matching one of the pair. Reading the composed scale
+ * for both asks a question this package has answered and takes the wrong half
+ * of the answer: on a transformed block the margin threshold then wants twice
+ * the movement there is, reads a moving edge as pinned, and inverts the
+ * handle.
+ *
+ * The root's own painted scale composes either way, because it is above the
+ * element and applies to both boxes alike.
+ */
+export function probeScale(
+  box: SpacingBox,
+  side: SpacingSide,
+  scale: RenderedScale,
+  rootPainted: Scale
+): number {
+  const vertical = side === "top" || side === "bottom";
+  const laidOutIn = box === "margin" ? scale.ancestor : scale;
+  return (
+    (vertical ? laidOutIn.y : laidOutIn.x) *
+    (vertical ? rootPainted.y : rootPainted.x)
   );
 }
 
@@ -531,21 +569,6 @@ export function SpacingOverlay({
    * is holding stays until it is let go.
    */
   const gestureLive = React.useRef(false);
-  /**
-   * Which padding edge responds, remembered per node and side.
-   *
-   * The probe writes to the rendered element, and the canvas watches its
-   * subtree for exactly that — so an unmemoised probe would answer, be observed,
-   * re-measure, and probe again forever. A cache HIT performs no mutation at
-   * all, which is what makes the loop terminate: the first pass probes, the
-   * observation it causes re-measures once, and that pass reads the cache and
-   * mutates nothing.
-   *
-   * Dropped whenever the document changes, because an edit is the thing that can
-   * turn an auto height into a fixed one. It is not keyed on geometry: a block
-   * can gain a definite size without changing size at all.
-   */
-  const responds = React.useRef(new Map<string, boolean>());
   /*
    * How far the layer may paint outside itself, in pixels.
    *
@@ -555,15 +578,6 @@ export function SpacingOverlay({
   const [escape, setEscape] = React.useState(0);
 
   const { document, selectedId } = editor;
-
-  /*
-   * The probe cache is dropped on every edit, because an edit is the thing that
-   * can turn an auto height into a fixed one. Not keyed on geometry: a block can
-   * gain a definite size without changing size at all.
-   */
-  React.useEffect(() => {
-    responds.current.clear();
-  }, [document]);
 
   /*
    * Handles are drawn only for a SINGLE selection.
@@ -687,35 +701,34 @@ export function SpacingOverlay({
      */
     const rootPainted = canvasPaintedScale(root);
 
-    /** This node's answer for one side, probed once and then remembered. */
-    const outwardFor = (side: SpacingSide): boolean => {
-      const key = `${selectedId}\u0000${side}`;
-      const known = responds.current.get(key);
-      if (known !== undefined) return known;
-      const realm = block.ownerDocument.defaultView;
-      const answer =
-        realm !== null && block instanceof realm.HTMLElement
-          ? paddingRespondsOutward(
-              block,
-              side,
-              /*
-               * The scale the probe's movement will be SEEN at. `boxAcross`
-               * answers in viewport pixels and the canvas is painted through a
-               * transform, so ten CSS pixels of padding move the edge by ten
-               * times this on screen. Composed with the root's own painted
-               * scale, which `renderedScale` stops below on purpose: that
-               * exclusion is right for a band drawn inside the root and wrong
-               * for a rectangle read off the viewport.
-               */
-              (side === "top" || side === "bottom" ? scale.y : scale.x) *
-                (side === "top" || side === "bottom"
-                  ? rootPainted.y
-                  : rootPainted.x)
-            )
-          : false;
-      responds.current.set(key, answer);
-      return answer;
-    };
+    /**
+     * This node's answer for one box and side, asked fresh on every measurement.
+     *
+     * NOT remembered between passes. The answer describes how the block responds
+     * under the CSS applying to it right now, and what changes that CSS is
+     * open-ended: an edit, a breakpoint re-resolving at a new canvas width, a
+     * container query answering to a sibling's size, a forced state, a pointer
+     * arriving and matching `:hover`. A remembered answer has to be dropped for
+     * each of those in turn, which is a list that stays complete until the next
+     * one — the same reasoning `spacing-response.ts` gives for asking the element
+     * rather than reading the CSS. Measured at 0.8ms for all eight sides on a
+     * fifteen-hundred-node page, which is the whole of what remembering saved.
+     *
+     * Asking every pass is only safe because the canvas ignores a batch of
+     * mutations that changed nothing. The probe writes to a node this overlay's
+     * own subscription watches and puts it back inside one task, so without that
+     * filter each measurement would schedule the next forever. See
+     * `changedNothing` in `canvas-geometry-watch.ts`.
+     */
+    const outwardFor = (box: SpacingBox, side: SpacingSide): boolean =>
+      styleCapable(block)
+        ? spacingRespondsOutward(
+            block,
+            box,
+            side,
+            probeScale(box, side, scale, rootPainted)
+          )
+        : false;
 
     const layerBox = canvasContentRect(root, root);
     apply(
@@ -754,19 +767,31 @@ export function SpacingOverlay({
          */
         orientation: orientationOfElement(block),
         /*
-         * ASKED of the element, once per node and side. Which edge of a padding
-         * band moves depends on whether the block's size along that axis is
-         * decided by its content, and that is not something the stored styles
-         * can answer — see `padding-response.ts`.
+         * ASKED of the element, once per node and side, for BOTH boxes. Which
+         * edge of a band moves depends on how the block's size and position are
+         * settled along that axis, and no stored style answers that — a margin
+         * no more than a padding. See `spacing-response.ts`.
          */
-        paddingOutward: {
-          top: outwardFor("top"),
-          right: outwardFor("right"),
-          bottom: outwardFor("bottom"),
-          left: outwardFor("left"),
+        outward: {
+          margin: {
+            top: outwardFor("margin", "top"),
+            right: outwardFor("margin", "right"),
+            bottom: outwardFor("margin", "bottom"),
+            left: outwardFor("margin", "left"),
+          },
+          padding: {
+            top: outwardFor("padding", "top"),
+            right: outwardFor("padding", "right"),
+            bottom: outwardFor("padding", "bottom"),
+            left: outwardFor("padding", "left"),
+          },
         },
       }
     );
+    // The document is NOT one of these. Nothing here is remembered across a
+    // measurement any more, so this reads the tree as it stands whenever it is
+    // called; what makes it run again after an edit is the effect below, which
+    // does depend on the document.
   }, [selectedId]);
 
   React.useLayoutEffect(() => {
@@ -778,9 +803,11 @@ export function SpacingOverlay({
       return;
     }
     measure();
-    // `document` is not read by `measure` and is listed anyway: an edit resizes
-    // the selected block, which is most of what the inspector does, and bands
-    // keyed on the selection alone would keep describing the layout it had.
+    // `document` is NOT one of `measure`'s own dependencies — it reads the tree
+    // as it stands — and is listed here because this effect is what has to run
+    // again after an edit: an edit resizes the selected block, which is most of
+    // what the inspector does, and an effect keyed on the selection alone would
+    // leave the bands describing the layout it had.
   }, [measure, hidden, document]);
 
   /*

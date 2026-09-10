@@ -141,6 +141,83 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   };
 }
 
+/** A node this can read an attribute off, asked without naming a realm. */
+function isElement(node: Node): node is Element {
+  return node.nodeType === 1 && "getAttribute" in node;
+}
+
+/**
+ * What each attribute held BEFORE this batch, or `undefined` if the batch
+ * carries anything that is not an attribute change.
+ *
+ * The FIRST record for an attribute is the one holding its pre-batch value; a
+ * later record for the same attribute reports an intermediate one.
+ */
+interface AttributeBefore {
+  /**
+   * Kept because `attributeName` is the LOCAL name.
+   *
+   * A namespaced attribute — `xlink:href` on an SVG `<use>`, say — is reported
+   * as `href`, and `getAttribute("href")` answers `null` for it however it was
+   * set. Reading it back by local name alone therefore asks about a DIFFERENT
+   * attribute, one that is usually absent, so `null` matches `null` and every
+   * namespaced change passes as no change at all.
+   */
+  readonly namespace: string | null;
+  readonly name: string;
+  readonly was: string | null;
+}
+
+function beforeBatch(
+  records: readonly MutationRecord[]
+): Map<Element, Map<string, AttributeBefore>> | undefined {
+  const before = new Map<Element, Map<string, AttributeBefore>>();
+  for (const record of records) {
+    const name = record.attributeName;
+    if (record.type !== "attributes" || name === null) return undefined;
+    if (!isElement(record.target)) return undefined;
+    const namespace = record.attributeNamespace;
+    const byName =
+      before.get(record.target) ?? new Map<string, AttributeBefore>();
+    const key = `${namespace ?? ""}\u0000${name}`;
+    if (!byName.has(key))
+      byName.set(key, { namespace, name, was: record.oldValue });
+    before.set(record.target, byName);
+  }
+  return before;
+}
+
+/**
+ * Whether this batch left the subtree exactly as it found it.
+ *
+ * An overlay that MEASURES by writing has to write into the subtree it is
+ * watching: the spacing probe pushes a value, reads the edge and puts the
+ * attribute back, all inside one task. Reacting to that would have every
+ * measurement schedule the next one forever. Remembering an answer across
+ * measurements avoids that and buys a staleness of its own, since the applied
+ * CSS changes for reasons nothing here reports. Ignoring a batch that changed
+ * nothing removes the need to choose between the two.
+ *
+ * Judged across the WHOLE batch rather than per record, because per record the
+ * restore looks like a change: its `oldValue` is the value the probe wrote,
+ * while the attribute now holds the original. Only the first `oldValue` for an
+ * attribute describes what it held before any of this, and comparing THAT with
+ * what it holds now is the net question.
+ *
+ * A batch carrying a `childList` or `characterData` record changed something by
+ * construction, and is never filtered.
+ */
+function changedNothing(records: readonly MutationRecord[]): boolean {
+  const before = beforeBatch(records);
+  if (before === undefined) return false;
+  for (const [target, byName] of before) {
+    for (const [, { namespace, name, was }] of byName) {
+      if (target.getAttributeNS(namespace, name) !== was) return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Call `moved` when a mutation OUTSIDE the caller's own output lands in the
  * canvas.
@@ -191,10 +268,17 @@ function watchCanvasStyleMutations(
      * silently drop a real site-style change in any window where the reference
      * were momentarily unset.
      */
-    const outside = records.some(
+    /*
+     * The foreign records are separated rather than counted, because the net
+     * question below has to be asked of THOSE alone. One batch can carry both:
+     * the overlay redraws its own layer in the same task as a probe writes to a
+     * block and puts it back, and judging the whole batch then finds the
+     * layer's `childList` records and reports a change the caller caused.
+     */
+    const foreign = records.filter(
       record => own === null || !own.contains(record.target)
     );
-    if (outside) moved();
+    if (foreign.length > 0 && !changedNothing(foreign)) moved();
   });
   /*
    * Every kind of record, because every kind can carry a new rule: a sheet
@@ -207,6 +291,9 @@ function watchCanvasStyleMutations(
     childList: true,
     subtree: true,
     attributes: true,
+    // What each attribute held before, which is what makes a net-zero batch
+    // recognisable. See {@link changedNothing}.
+    attributeOldValue: true,
     characterData: true,
   });
   return () => styles.disconnect();
