@@ -50,7 +50,9 @@ import {
   fetchRegistryState,
   getExpectedDistTag,
   isBootstrapPlaceholderOnly,
-  readPreMode,
+  firstPrereleaseId,
+  isPrereleaseOfTag,
+  readPreConfig,
   readPreState,
   waitForCompleteRelease,
 } from "./lib.mjs";
@@ -58,6 +60,20 @@ import {
 /** The package whose version names the release; every other one is in lockstep. */
 export const ANCHOR_PACKAGE = "nextly";
 const ANCHOR_MANIFEST = "packages/nextly/package.json";
+
+/**
+ * A manifest field that can be used to ask a question, rather than merely a
+ * field of the right type.
+ *
+ * 🔴 `typeof value === "string"` is not that test. `""` and `"   "` satisfy it
+ * and then fail downstream in silence, where a name is a registry request for
+ * a package that cannot exist and a version can match nothing the registry
+ * serves. Validation exists to stop the question being quietly shrunk, so the
+ * shapes that shrink it have to be rejected here.
+ */
+function isUsableString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
 
 /**
  * The version `main` declares, read out of git rather than off the disk.
@@ -72,7 +88,7 @@ export function versionAtRef(ref, run = execFileSync) {
     maxBuffer: 8 * 1024 * 1024,
   });
   const version = JSON.parse(source).version;
-  if (typeof version !== "string" || version === "") {
+  if (!isUsableString(version)) {
     throw new Error(`${ANCHOR_MANIFEST} at ${ref} declares no version`);
   }
   return version;
@@ -138,8 +154,13 @@ export function manifestAtRef(ref, run = execFileSync) {
      * registry about it, and a release could be reported finished while that
      * package was never published. An unreadable manifest is a question that
      * cannot be asked, not a package that is not there.
+     *
+     * An EMPTY name is the same defect wearing the right type. For the anchor
+     * it also defeats the lockstep check below, which finds no `nextly` and so
+     * compares nothing; for any other package the registry is asked about a
+     * name that cannot exist, and that answer reads as never-published.
      */
-    if (typeof pkg.name !== "string" || typeof pkg.version !== "string") {
+    if (!isUsableString(pkg.name) || !isUsableString(pkg.version)) {
       throw new Error(
         `${path} at ${ref} is publishable but declares no usable name and ` +
           "version, so the release it belongs to cannot be graded."
@@ -653,24 +674,120 @@ const STEP_TEXT = {
 /**
  * Whether the channel tag should be asserted for this subject.
  *
- * 🔴 Two situations answer "no", and they are easy to collapse into one.
+ * 🔴 Two separate questions, and only one of them is about prerelease mode.
  *
  * A HISTORICAL subject is not the release `main` declares now, so today's
  * channel tag has moved past it and was never meant to point at it.
  *
- * A repository EXITING prerelease mode is mid-transition: `pre.json` says
- * `mode: "exit"` from the exit commit until the Version PR lands, and the
- * manifests still declare the last alpha for that whole window. `readPreState`
- * answers null there, exactly as it does when the repository was never in pre
- * mode, so the expected tag comes out as `latest`. Asserting it yields a remedy
- * that says to move `latest` onto a prerelease, serving an alpha to every
- * stable install.
+ * Everything else turns on whether `pre.json` and the manifests AGREE about
+ * which kind of release this is. Changesets moves those two in separate
+ * commits, so each prerelease transition opens a window where the repository
+ * says both things at once, and in that window the expected tag is derived from
+ * one claim and compared against the other:
+ *
+ *     no file,     manifests stable       outside         -> assert
+ *     mode "exit", manifests -alpha.N     leaving         -> skip
+ *     tag "alpha", manifests STABLE       entering        -> skip
+ *     tag "alpha", manifests -alpha.N     in pre mode     -> assert
+ *     tag "beta",  manifests -alpha.N     re-entered      -> skip
+ *     tag "next",  manifests -next.1.N    nested cycle    -> skip
+ *     tag missing, any manifests          malformed       -> UNANSWERABLE
+ *     mode unknown, any manifests         malformed       -> UNANSWERABLE
+ *
+ * Three outcomes, not two. Six findings arrived on this rule one corner at a
+ * time, and every one of them was a state that fell through to "do not assert",
+ * which switches the check off and reads exactly like a check that ran and
+ * found nothing wrong. So the modes are named and anything else is refused:
+ * `channelDecision` carries the refusal out as exit 2, which is what every
+ * other unestablished answer here does.
+ *
+ * Agreement is about the prerelease IDENTIFIER, not merely about whether there
+ * is one. Changesets allows pre mode to be exited and re-entered under a
+ * different tag before the Version PR lands, and in that window the manifests
+ * carry `-alpha.N` while the active tag is `beta`: both claims say "this is a
+ * prerelease" and they still disagree about which one, so `beta` would be
+ * expected to resolve to the old alpha build.
+ *
+ * Each window was reported on its own, and a rule shaped to one of them answers
+ * only that one. Leaving: `readPreState` gives null for `"exit"` and for no
+ * file alike, so `latest` is expected and the remedy says to move it onto a
+ * prerelease, serving an alpha to every stable install. Entering: the new
+ * prerelease tag is expected of the last stable build. Comparing what the two
+ * files actually CLAIM answers the whole space rather than the corners of it
+ * that have been noticed so far.
  *
  * Exported because the command-line block below has no test, and a rule that
  * lives only inside it is a rule nothing can exercise.
  */
-export function shouldAssertChannel(currentTrain, preMode) {
-  return currentTrain && preMode !== "exit";
+export function shouldAssertChannel(currentTrain, pre, version) {
+  if (!currentTrain) return false;
+
+  // No file at all: the repository is not in prerelease mode and never said
+  // otherwise, so the only agreeable version is a stable one.
+  if (pre === null) return firstPrereleaseId(version) === undefined;
+
+  /*
+   * 🔴 Everything below is a TOTAL reading of a file that exists. Six review
+   * findings arrived on this rule one shape at a time, and every one of them
+   * was a corner of the state space answered by falling through to "do not
+   * assert" — which switches the check off and reads exactly like a check that
+   * ran and found nothing wrong. So the three modes are named, and anything
+   * else is refused rather than assumed.
+   */
+  if (pre.mode === "exit") {
+    // Mid-exit: the manifests still carry the last prerelease until the Version
+    // PR lands, and `readPreState` answers null here, so `latest` is expected.
+    return firstPrereleaseId(version) === undefined;
+  }
+
+  if (pre.mode !== "pre") {
+    // A missing mode, or one this checker does not know, is a file whose
+    // meaning cannot be established. `channelDecision` turns it into exit 2.
+    throw new Error(
+      `.changeset/pre.json declares mode ${JSON.stringify(pre.mode)}, which ` +
+        "this check does not know how to read, so the channel this release " +
+        "belongs to cannot be established."
+    );
+  }
+
+  if (typeof pre.tag !== "string" || pre.tag.trim() === "") {
+    // Prerelease mode with no tag. A null tag compares unequal to every
+    // version, so answering "do not assert" would be the silent switch-off
+    // again. A merge or a hand edit is enough to produce it.
+    throw new Error(
+      ".changeset/pre.json declares prerelease mode with no usable tag, so " +
+        "the channel this release belongs to cannot be established."
+    );
+  }
+
+  return isPrereleaseOfTag(version, pre.tag);
+}
+
+/**
+ * The channel decision the command-line block acts on, INCLUDING what to do
+ * when it cannot be made.
+ *
+ * 🔴 An unreadable or malformed `.changeset/pre.json` is not a release that is
+ * unfinished, it is a question that could not be asked, and the two leave by
+ * different doors: `.github/workflows/release-health.yml` treats exit 1 as a
+ * confirmed defect and files an issue for it, so a JSON parse error escaping
+ * from here would become an issue whose headline is a stack trace.
+ *
+ * Exported, and taking its reader as an argument, for the same reason
+ * `shouldAssertChannel` is: the block below is entered by no test, so a rule
+ * that lives only inside it can be broken without anything noticing.
+ */
+export function channelDecision(currentTrain, version, readPre = readPreConfig) {
+  try {
+    return { ok: true, assertChannel: shouldAssertChannel(currentTrain, readPre(), version) };
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        "check-finalized: .changeset/pre.json could not be read, so which " +
+        `channel this release belongs to is unknown rather than wrong: ${error.message}`,
+    };
+  }
 }
 
 /**
@@ -755,6 +872,16 @@ if (invokedDirectly) {
     currentTrain = false;
   }
 
+  // Decided before the registry is reached, so that a failure to decide it is
+  // not reported as npm being unreachable. `channelDecision` carries the
+  // unanswerable case with it rather than leaving it to this block.
+  const channel = channelDecision(currentTrain, version);
+  if (!channel.ok) {
+    console.error(channel.message);
+    process.exit(2);
+  }
+  const assertChannel = channel.assertChannel;
+
   let publish;
   try {
     /*
@@ -796,7 +923,7 @@ if (invokedDirectly) {
       manifest,
       (name) => registry.get(name) ?? null,
       readPreState(),
-      { assertChannel: shouldAssertChannel(currentTrain, readPreMode()) }
+      { assertChannel }
     );
   } catch (error) {
     console.error(
