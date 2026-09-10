@@ -17,6 +17,12 @@
  * "read the right table" from "read any table" passes on a predicate that names
  * `public` outright.
  *
+ * The fixture tables are SYNTHETIC: a decoy and a subject that exist only to be
+ * resolved, with no production counterpart. Written out here rather than derived
+ * from a table the product also defines, because deriving them would tie this
+ * file to that table's shape — and what it measures is which relation a name
+ * resolves to, which any two columns can demonstrate.
+ *
  * 🔴 ONE SESSION, held open for the whole file. `PostgresAdapter.getDrizzle()`
  * wraps a `pg.Pool`, so `SET search_path` binds to whichever client served that
  * statement and the next `execute()` may run on another — which would make this
@@ -57,7 +63,11 @@ describePg("introspection follows the search path (postgres)", () => {
     await client.connect();
     db = drizzle({ client });
 
-    const run = (text: string) => client!.query(text);
+    // 🔴 Sent through Drizzle rather than through the driver, because these
+    // statements establish the session state the assertions depend on: the
+    // `SET search_path` below has to land on the connection the reads use, and
+    // the only way to be sure of that is to send it the way the reads are sent.
+    const run = (text: string) => db.execute(sql.raw(text));
 
     await run(`DROP TABLE IF EXISTS public."${TABLE}"`);
     await run(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`);
@@ -78,9 +88,11 @@ describePg("introspection follows the search path (postgres)", () => {
 
   afterAll(async () => {
     if (client === undefined) return;
-    await client.query(`SET search_path TO public`);
-    await client.query(`DROP TABLE IF EXISTS public."${TABLE}"`);
-    await client.query(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`);
+    await db.execute(sql.raw(`SET search_path TO public`));
+    await db.execute(sql.raw(`DROP TABLE IF EXISTS public."${TABLE}"`));
+    await db.execute(sql.raw(`DROP SCHEMA IF EXISTS ${TENANT} CASCADE`));
+    // The connection itself is still the client's to close: it is what pins the
+    // session, so nothing above can release it.
     await client.end();
   });
 
