@@ -72,8 +72,8 @@ describe("what a finished release consists of", () => {
     expect(result.code).toBe(1);
     expect(result.missing).toEqual([`the git tag ${tagFor(VERSION)}`]);
     // Re-running does not repair this one, so it must not be prescribed.
-    expect(result.remedy).toBe("tag-only");
-    expect(remedyFor(result, VERSION)).toContain("does NOT repair this");
+    expect(result.steps).toEqual(["push-tag"]);
+    expect(remedyFor(result, VERSION)).toContain("does NOT restore it");
     expect(remedyFor(result, VERSION)).toContain(`git push origin refs/tags/${tagFor(VERSION)}`);
   });
 
@@ -89,7 +89,7 @@ describe("what a finished release consists of", () => {
     expect(result.code).toBe(1);
     expect(result.missing).toEqual([`the GitHub Release ${tagFor(VERSION)}`]);
     // Here a re-run DOES repair it, because the finalize branch runs.
-    expect(result.remedy).toBe("rerun");
+    expect(result.steps).toEqual(["rerun"]);
     expect(remedyFor(result, VERSION)).toContain("gh run rerun");
   });
 });
@@ -416,7 +416,7 @@ describe("a release that is not marked as a prerelease", () => {
     });
 
     expect(result.code).toBe(1);
-    expect(result.remedy).toBe("mark-prerelease");
+    expect(result.steps).toEqual(["fix-release-flag"]);
     expect(remedyFor(result, VERSION)).toContain("--prerelease --latest=false");
   });
 });
@@ -435,13 +435,13 @@ describe("a mistagged release, by what its GitHub Release is", () => {
     // `release.yml` gates finalization on `gh release view` succeeding, and a
     // draft satisfies it, so retag-then-rerun leaves the draft where it was.
     const result = mistagged("draft");
-    expect(result.remedy).toBe("retag-then-publish-draft");
+    expect(result.steps).toEqual(["retag", "publish-draft"]);
     expect(remedyFor(result, VERSION)).toContain("--draft=false");
   });
 
   it("marks the prerelease after the retag when the badge is wrong", () => {
     const result = mistagged("not-prerelease");
-    expect(result.remedy).toBe("retag-then-mark-prerelease");
+    expect(result.steps).toEqual(["retag", "fix-release-flag"]);
     expect(remedyFor(result, VERSION)).toContain("--prerelease --latest=false");
   });
 
@@ -537,7 +537,7 @@ describe("a release that was saved but never published", () => {
 
     expect(result.code).toBe(1);
     expect(result.state).toBe("unfinalized");
-    expect(result.remedy).toBe("publish-draft");
+    expect(result.steps).toEqual(["publish-draft"]);
     const text = remedyFor(result, VERSION);
     expect(text).toContain("re-running repairs nothing");
     expect(text).toContain("--draft=false");
@@ -633,7 +633,12 @@ describe("an answer that was never established", () => {
     });
 
     expect(result.code).toBe(1);
-    expect(result.remedy).toBe("check-release-first");
+    /*
+     * BOTH, because both were established: the tag is definitely gone, and the
+     * release could not be read. An earlier shape returned whichever defect it
+     * reached first, so the maintainer restored one and came back for the next.
+     */
+    expect(result.steps).toEqual(["push-tag", "check-release"]);
     const text = remedyFor(result, VERSION);
     expect(text).toContain(`gh release view ${tagFor(VERSION)}`);
     expect(text).toContain("re-running repairs nothing");
@@ -655,7 +660,7 @@ describe("a tag that does not identify this release", () => {
 
     expect(result.code).toBe(1);
     expect(result.state).toBe("mistagged");
-    expect(result.remedy).toBe("retag");
+    expect(result.steps).toEqual(["retag"]);
   });
 
   it("does not claim the release is missing when it could not be read", () => {
@@ -670,10 +675,12 @@ describe("a tag that does not identify this release", () => {
       release: "unknown",
     });
 
-    expect(result.remedy).toBe("retag-then-check-release");
+    // The retag is established; the release is not. Both are reported, and the
+    // remedy for the unknown one is to find out rather than to act.
+    expect(result.steps).toEqual(["retag", "check-release"]);
     const text = remedyFor(result, VERSION);
     expect(text).toContain(`gh release view ${tagFor(VERSION)}`);
-    expect(text).toContain("could not be established");
+    expect(text).toContain("could not be read");
   });
 
   it("also re-runs when the release is missing as well as mistagged", () => {
@@ -688,7 +695,7 @@ describe("a tag that does not identify this release", () => {
       release: "absent",
     });
 
-    expect(result.remedy).toBe("retag-then-rerun");
+    expect(result.steps).toEqual(["retag", "rerun"]);
     const text = remedyFor(result, VERSION);
     expect(text).toContain(`git push origin refs/tags/${tagFor(VERSION)}`);
     expect(text).toContain("gh run rerun");
@@ -793,5 +800,173 @@ describe("deriving the train from git", () => {
     expect(manifestAtRef("abc123", run)).toEqual([
       { name: "nextly", version: VERSION },
     ]);
+  });
+});
+
+describe("a release with more than one thing wrong", () => {
+  /*
+   * 🔴 The reason this block exists. The remedy used to be chosen by a chain of
+   * early returns and a lookup keyed on the GitHub Release alone, with names
+   * like `retag-then-publish-draft` written for the pairs someone thought of.
+   * The states are a PRODUCT of three axes, so ten names covered forty cells,
+   * and each round of review found another pair that fell through: the
+   * maintainer followed the one fix it named, saw the check still failing, and
+   * came back for the next.
+   */
+
+  it("moves the channel tag AND finishes the release", () => {
+    // The channel-stale case used to return before it looked at the tag or the
+    // release at all, so a train that needed both was told only to move a tag.
+    const result = verdict({
+      version: VERSION,
+      publish: { ...ALL, channelStale: ["nextly", "@nextlyhq/admin"] },
+      tag: NO_TAG,
+      release: "absent",
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.state).toBe("channel-stale");
+    expect(result.steps).toEqual(["move-dist-tag", "push-tag", "rerun"]);
+
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain("npm dist-tag add");
+    expect(text).toContain("gh run rerun");
+  });
+
+  it("restores a missing tag AND corrects the badge", () => {
+    // `mark-prerelease` alone edits the release and leaves the tag absent, and
+    // `gh release edit` has no operation that recreates a deleted git ref.
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: NO_TAG,
+      release: "not-prerelease",
+    });
+
+    expect(result.steps).toEqual(["push-tag", "fix-release-flag"]);
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain(`git push origin refs/tags/${tagFor(VERSION)}`);
+    expect(text).toContain("--prerelease --latest=false");
+  });
+
+  it("publishes a draft with the badge stated, not left as it was", () => {
+    /*
+     * `--draft=false` alone publishes the draft and leaves its prerelease flag
+     * exactly as it was, so an alpha saved without one becomes a regular
+     * release and takes Latest the moment it is published.
+     */
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "draft",
+    });
+
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain("--draft=false --prerelease --latest=false");
+  });
+
+  it("refuses to publish a draft while the tag's target is unknown", () => {
+    /*
+     * 🔴 Publishing makes the release public. A tag whose target nobody could
+     * read may be announcing a commit that was never shipped, so establishing
+     * it is a precondition rather than a parallel repair.
+     */
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "unknown" },
+      release: "draft",
+    });
+
+    expect(result.steps).toEqual(["establish-tag-target"]);
+    expect(result.steps).not.toContain("publish-draft");
+    expect(remedyFor(result, VERSION)).toContain("below should be acted on yet");
+  });
+
+  it("still reports one step when only one thing is wrong", () => {
+    // The control. A rule that always emitted several steps would satisfy every
+    // case above while telling a maintainer to repair things that are fine.
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: NO_TAG,
+      release: "present",
+    });
+
+    expect(result.steps).toEqual(["push-tag"]);
+  });
+});
+
+describe("a GitHub Release on the wrong side of the Latest badge", () => {
+  it("reports a STABLE release that is marked as a prerelease", () => {
+    // 🔴 The other direction. Checking only that an alpha carries the flag reads
+    // the wrong half as correct: a stable release hidden behind it leaves an
+    // older version holding Latest.
+    expect(
+      releaseState("v1.0.0", () => '{"tagName":"v1.0.0","isPrerelease":true}')
+    ).toBe("prerelease-on-stable");
+  });
+
+  it("leaves a correctly flagged stable release alone", () => {
+    // The control for the rule above.
+    expect(
+      releaseState("v1.0.0", () => '{"tagName":"v1.0.0","isPrerelease":false}')
+    ).toBe("present");
+  });
+
+  it("prescribes --latest for a stable release, not --prerelease", () => {
+    const result = verdict({
+      version: "1.0.0",
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: "1.0.0" },
+      release: "prerelease-on-stable",
+    });
+
+    const text = remedyFor(result, "1.0.0");
+    expect(text).toContain("--latest");
+    expect(text).not.toContain("--prerelease");
+  });
+});
+
+describe("a ref that declares no single release", () => {
+  it("refuses a manifest whose packages are not in lockstep", () => {
+    /*
+     * 🔴 Changesets bumps every publishable package through its `fixed` group,
+     * so a package left behind means the ref declares no release at all.
+     * Without this the drifted package is simply asked about at its own
+     * version: if that version happens to exist on npm, every check passes and
+     * a repository that never cut this release reads as finalized.
+     */
+    const files = {
+      "packages/nextly/package.json": { name: "nextly", version: VERSION },
+      "packages/admin/package.json": {
+        name: "@nextlyhq/admin",
+        version: "0.0.2-alpha.63",
+      },
+    };
+    const run = (_cmd, args) => {
+      if (args[0] === "ls-tree") return Object.keys(files).join("\n");
+      return JSON.stringify(files[args[1].split(":")[1]]);
+    };
+
+    expect(() => manifestAtRef("abc123", run)).toThrow(/no single release/);
+  });
+
+  it("accepts a manifest that is in lockstep", () => {
+    // The control: refusing every manifest would refuse every real release.
+    const files = {
+      "packages/nextly/package.json": { name: "nextly", version: VERSION },
+      "packages/admin/package.json": { name: "@nextlyhq/admin", version: VERSION },
+    };
+    const run = (_cmd, args) => {
+      if (args[0] === "ls-tree") return Object.keys(files).join("\n");
+      return JSON.stringify(files[args[1].split(":")[1]]);
+    };
+
+    expect(manifestAtRef("abc123", run)).toHaveLength(2);
   });
 });
