@@ -1,123 +1,133 @@
 // @vitest-environment jsdom
 
 /**
- * Which KIND of change a subscriber is told about.
+ * A batch of mutations that changed nothing is not a change.
  *
- * The distinction is load-bearing rather than cosmetic: an overlay that caches
- * something derived from the applied CSS — which width model a block is in,
- * which spacing edge responds — has to drop that cache when a media query can
- * have re-resolved, and must NOT drop it when the change might be its own
- * writing. Only the canvas frame resizing can re-resolve one, and a resize is
- * the one mechanism here that a caller's own probe cannot provoke.
+ * An overlay that MEASURES by writing has to write into the subtree it watches:
+ * the spacing probe pushes a value, reads the edge and puts the attribute back,
+ * all inside one task. Reacting to that would have every measurement schedule
+ * the next one forever — which is why those answers used to be cached across
+ * measurements, and a cache is then stale whenever the applied CSS changes for
+ * a reason nothing reports. Ignoring a net-zero batch removes the need for one.
  *
  * @module canvas-geometry-watch.test
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { type CanvasChange, watchCanvasFor } from "./canvas-geometry-watch";
+import { watchCanvasFor } from "./canvas-geometry-watch";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
-class FakeResizeObserver {
-  static instances: FakeResizeObserver[] = [];
-  readonly callback: ResizeObserverCallback;
-  constructor(callback: ResizeObserverCallback) {
-    this.callback = callback;
-    FakeResizeObserver.instances.push(this);
-  }
-  observe(): void {}
-  unobserve(): void {}
-  disconnect(): void {}
-}
-
-function canvas(): { root: HTMLElement; layer: HTMLElement } {
+function canvas(): {
+  root: HTMLElement;
+  layer: HTMLElement;
+  block: HTMLElement;
+} {
   const root = document.createElement("div");
   root.className = CANVAS_ROOT_CLASS;
   const layer = document.createElement("div");
-  root.append(layer);
+  const block = document.createElement("div");
+  root.append(block, layer);
   document.body.append(root);
-  return { root, layer };
+  return { root, layer, block };
 }
 
-/** Deliver one `ResizeObserver` batch to the subscription just installed. */
-function resized(targets: readonly Element[]): void {
-  const observer = FakeResizeObserver.instances.at(-1);
-  observer?.callback(
-    targets.map(target => ({ target }) as ResizeObserverEntry),
-    observer as unknown as ResizeObserver
-  );
+/** Let the `MutationObserver` deliver, which it does as a microtask. */
+async function delivered(): Promise<void> {
+  await new Promise(resolve => {
+    setTimeout(resolve, 0);
+  });
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
-  FakeResizeObserver.instances = [];
   document.body.replaceChildren();
 });
 
-describe("which kind of change a subscriber is told about", () => {
-  it("calls the canvas frame resizing a resize", () => {
-    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    const { root, layer } = canvas();
-    const seen: CanvasChange[] = [];
+describe("a batch that changed nothing", () => {
+  it("does not re-measure for a probe that put the attribute back", async () => {
+    const { layer, block } = canvas();
+    let moves = 0;
     const stop = watchCanvasFor(
       () => layer,
-      change => seen.push(change)
+      () => {
+        moves += 1;
+      }
     );
-    resized([root]);
-    expect(seen).toEqual(["resized"]);
+    // Exactly what the spacing probe does: write, read, restore, in one task.
+    const had = block.getAttribute("style");
+    block.style.setProperty("margin-bottom", "30px", "important");
+    block.getBoundingClientRect();
+    if (had === null) block.removeAttribute("style");
+    else block.setAttribute("style", had);
+
+    await delivered();
+    expect(moves).toBe(0);
     stop?.();
   });
 
   /*
-   * A NODE resizing is not one. An image finishing its load moves rectangles
-   * without altering a single declaration, so an answer derived from the
-   * applied CSS is still good — and re-deriving it costs a forced layout per
-   * edge on a change that happens in bursts.
+   * The control, and the half that makes the assertion above mean anything: a
+   * real change to the same attribute on the same element still arrives. Without
+   * it, a filter that dropped everything would pass.
    */
-  it("does not call a node resizing one", () => {
-    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    const { root, layer } = canvas();
-    const node = document.createElement("div");
-    root.append(node);
-    const seen: CanvasChange[] = [];
+  it("still re-measures for a change that stuck", async () => {
+    const { layer, block } = canvas();
+    let moves = 0;
     const stop = watchCanvasFor(
       () => layer,
-      change => seen.push(change)
+      () => {
+        moves += 1;
+      }
     );
-    resized([node]);
-    expect(seen).toEqual(["moved"]);
-    stop?.();
-  });
+    block.style.setProperty("margin-bottom", "30px");
 
-  it("still calls it a resize when the frame is one of several", () => {
-    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    const { root, layer } = canvas();
-    const node = document.createElement("div");
-    root.append(node);
-    const seen: CanvasChange[] = [];
-    const stop = watchCanvasFor(
-      () => layer,
-      change => seen.push(change)
-    );
-    resized([node, root]);
-    expect(seen).toEqual(["resized"]);
+    await delivered();
+    expect(moves).toBe(1);
     stop?.();
   });
 
   /*
-   * A SCROLL is a move with no size change at all, and nothing about the
-   * cascade can have changed under it.
+   * A node arriving is a change by construction, whatever the attributes in the
+   * same batch did — a recompiled site sheet is a `childList` record, and
+   * dropping it would leave every overlay drawn at the old rule's coordinates.
    */
-  it("does not call a scroll a resize", () => {
-    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-    const { root, layer } = canvas();
-    const seen: CanvasChange[] = [];
+  it("re-measures for a node arriving even beside a restored attribute", async () => {
+    const { root, layer, block } = canvas();
+    let moves = 0;
     const stop = watchCanvasFor(
       () => layer,
-      change => seen.push(change)
+      () => {
+        moves += 1;
+      }
     );
-    root.dispatchEvent(new Event("scroll", { bubbles: false }));
-    expect(seen).toEqual(["moved"]);
+    const had = block.getAttribute("style");
+    block.style.setProperty("margin-bottom", "30px", "important");
+    if (had === null) block.removeAttribute("style");
+    else block.setAttribute("style", had);
+    root.append(document.createElement("style"));
+
+    await delivered();
+    expect(moves).toBe(1);
+    stop?.();
+  });
+
+  /*
+   * And the caller's OWN output is still its own. A net-zero test would let a
+   * layer's real redraw through if ownership stopped being checked.
+   */
+  it("still ignores the caller's own output", async () => {
+    const { layer } = canvas();
+    let moves = 0;
+    const stop = watchCanvasFor(
+      () => layer,
+      () => {
+        moves += 1;
+      }
+    );
+    layer.append(document.createElement("div"));
+
+    await delivered();
+    expect(moves).toBe(0);
     stop?.();
   });
 });

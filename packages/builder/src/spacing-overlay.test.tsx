@@ -716,17 +716,16 @@ describe("the scale a probe's movement is seen at", () => {
   });
 });
 
-describe("the probe's answers belong to the state they were measured in", () => {
+describe("the probe is asked again on every measurement", () => {
   /*
-   * The answers describe how a block responds under the CSS APPLYING to it, and
-   * forcing a state changes that CSS without an edit and without a resize: the
-   * canvas writes a marker class on the selected block, and a rule arriving with
-   * it can settle an axis that was auto-sized. Neither the document nor the
-   * canvas frame moves, so nothing else here would drop the answers.
+   * The answer describes how a block responds under the CSS applying to it, and
+   * what changes that CSS is open-ended: an edit, a breakpoint re-resolving at a
+   * new canvas width, a container query answering to a sibling, a forced state,
+   * a pointer matching `:hover`. Remembering it means dropping it for each of
+   * those in turn, which is a list that stays complete until the next one.
    *
-   * Counted by the WRITES the probe makes, because that is what a cache hit
-   * avoids: a hit mutates nothing at all, which is also what stops the probe
-   * from observing itself forever.
+   * Counted by the WRITES the probe makes, since that is what asking costs and
+   * what a remembered answer would have avoided.
    */
   function countProbeWrites(block: HTMLElement): () => number {
     let writes = 0;
@@ -744,23 +743,55 @@ describe("the probe's answers belong to the state they were measured in", () => 
     return block;
   }
 
-  it("re-probes when the canvas forces a different state", () => {
+  /*
+   * Mounting marks the selection on the block, which is a real attribute change
+   * and earns a measurement of its own. Counting from AFTER that settles is what
+   * separates the probe's own cost from the canvas's.
+   */
+  async function settled(): Promise<void> {
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  it("re-probes on a measurement that changed nothing else", async () => {
     withFakeResizeObserver();
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
+    await settled();
     const writes = countProbeWrites(selectedBlock(container));
 
-    /*
-     * The control, and it is the half that makes the assertion below mean
-     * something: with nothing changed the answers are reused and the probe
-     * writes nothing. Without it, a test that only saw writes AFTER the class
-     * change would pass against a cache that never hit.
-     */
     remeasure();
-    expect(writes()).toBe(0);
+    await settled();
+    // One per side of each box, with nothing carried over from the earlier pass.
+    expect(writes()).toBe(8);
 
-    selectedBlock(container).classList.add(previewStateClass("hover"));
     remeasure();
-    expect(writes()).toBeGreaterThan(0);
+    await settled();
+    expect(writes()).toBe(16);
+  });
+
+  /*
+   * And asking every pass does not become a loop, which is the property that
+   * makes it safe rather than merely correct. The probe writes to a node this
+   * overlay's own subscription watches; what stops it is the canvas ignoring a
+   * batch of mutations whose net effect is nothing.
+   */
+  it("does not schedule another measurement by probing", async () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    await settled();
+    const writes = countProbeWrites(selectedBlock(container));
+
+    remeasure();
+    await settled();
+    const afterOnePass = writes();
+    expect(afterOnePass).toBe(8);
+
+    // Nothing further, however long the observer is given to deliver.
+    await settled();
+    await settled();
+    expect(writes()).toBe(afterOnePass);
   });
 });

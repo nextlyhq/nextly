@@ -42,18 +42,6 @@ import { canvasRootFrom } from "./geometry-dom";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
- * Which kind of change a subscriber is being told about.
- *
- * `resized` is the CANVAS FRAME changing size, and it is separated from the
- * rest for one reason: it is the only change here that can re-resolve a media
- * query, so it is the only one after which an answer derived from the applied
- * CSS — which of two width models a block is in, say — may have gone stale. A
- * caller that only re-measures rectangles can ignore the distinction; one that
- * caches something about the computed style cannot.
- */
-export type CanvasChange = "resized" | "moved";
-
-/**
  * Everything an overlay drawn over this canvas has to re-measure for.
  *
  * ONE call rather than a list a caller assembles: which changes can move a
@@ -69,14 +57,13 @@ export type CanvasChange = "resized" | "moved";
  * @param ownLayer - reads the caller's own layer element, and is read rather
  *   than passed because the layer does not exist until after the first render;
  *   it locates the canvas AND says which mutations are the caller's own
- * @param moved - re-measure; called once per change, never per frame, and told
- *   which KIND of change it was — see {@link CanvasChange}
+ * @param moved - re-measure; called once per change, never per frame
  * @returns unsubscribes everything this installed, or `undefined` when there
  *   was no canvas root to install anything on
  */
 export function watchCanvasFor(
   ownLayer: () => HTMLElement | null,
-  moved: (change: CanvasChange) => void
+  moved: () => void
 ): (() => void) | undefined {
   const element = ownLayer();
   const root =
@@ -97,10 +84,7 @@ export function watchCanvasFor(
  * @param moved - re-measure; called once per change, never per frame
  * @returns unsubscribes everything this installed
  */
-function watchCanvasGeometry(
-  root: HTMLElement,
-  moved: (change: CanvasChange) => void
-): () => void {
+function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   /*
    * EVERY rendered node is observed, not only the ones a caller draws over:
    * what moves a node is often a SIBLING changing size rather than the node
@@ -121,19 +105,7 @@ function watchCanvasGeometry(
   const sizes =
     typeof ResizeObserver === "undefined"
       ? null
-      : new ResizeObserver(entries => {
-          /*
-           * The ROOT resizing is reported apart from a node resizing, because
-           * the canvas FRAME changing width is what re-resolves a media query —
-           * and a caller holding an answer that depends on which rules applied
-           * has no other way to hear that they may have changed. A node
-           * resizing cannot do it: an image finishing its load moves
-           * rectangles without altering a single declaration.
-           */
-          moved(
-            entries.some(entry => entry.target === root) ? "resized" : "moved"
-          );
-        });
+      : new ResizeObserver(() => moved());
   if (sizes !== null) {
     sizes.observe(root);
     for (const node of nodeElements(root)) sizes.observe(node);
@@ -156,7 +128,7 @@ function watchCanvasGeometry(
    * would mean measuring on every one, which costs more than an overlay being
    * briefly behind a transition the author is watching.
    */
-  const settled = (): void => moved("moved");
+  const settled = (): void => moved();
   root.addEventListener("transitionend", settled);
   root.addEventListener("transitioncancel", settled);
   root.addEventListener("scroll", settled, true);
@@ -167,6 +139,65 @@ function watchCanvasGeometry(
     root.removeEventListener("transitioncancel", settled);
     root.removeEventListener("scroll", settled, true);
   };
+}
+
+/** A node this can read an attribute off, asked without naming a realm. */
+function isElement(node: Node): node is Element {
+  return node.nodeType === 1 && "getAttribute" in node;
+}
+
+/**
+ * What each attribute held BEFORE this batch, or `undefined` if the batch
+ * carries anything that is not an attribute change.
+ *
+ * The FIRST record for an attribute is the one holding its pre-batch value; a
+ * later record for the same attribute reports an intermediate one.
+ */
+function beforeBatch(
+  records: readonly MutationRecord[]
+): Map<Element, Map<string, string | null>> | undefined {
+  const before = new Map<Element, Map<string, string | null>>();
+  for (const record of records) {
+    const name = record.attributeName;
+    if (record.type !== "attributes" || name === null) return undefined;
+    if (!isElement(record.target)) return undefined;
+    const byName =
+      before.get(record.target) ?? new Map<string, string | null>();
+    if (!byName.has(name)) byName.set(name, record.oldValue);
+    before.set(record.target, byName);
+  }
+  return before;
+}
+
+/**
+ * Whether this batch left the subtree exactly as it found it.
+ *
+ * An overlay that MEASURES by writing has to write into the subtree it is
+ * watching: the spacing probe pushes a value, reads the edge and puts the
+ * attribute back, all inside one task. Reacting to that would have every
+ * measurement schedule the next one forever, which is why the answers used to
+ * be cached across measurements — and a cache is then wrong whenever the
+ * applied CSS changes for a reason nothing here reports. Ignoring a batch that
+ * changed nothing removes the need for one.
+ *
+ * Judged across the WHOLE batch rather than per record, because per record the
+ * restore looks like a change: its `oldValue` is the value the probe wrote,
+ * while the attribute now holds the original. Only the first `oldValue` for an
+ * attribute describes what it held before any of this, and comparing THAT with
+ * what it holds now is the net question.
+ *
+ * A batch carrying a `childList` or `characterData` record changed something by
+ * construction, and is never filtered.
+ */
+function changedNothing(records: readonly MutationRecord[]): boolean {
+  const before = beforeBatch(records);
+  if (before === undefined) return false;
+  for (const [target, byName] of before) {
+    for (const [name, was] of byName) {
+      if (target.getAttribute(name) !== was) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -204,7 +235,7 @@ function watchCanvasGeometry(
 function watchCanvasStyleMutations(
   root: HTMLElement,
   ownOutput: () => HTMLElement | null,
-  moved: (change: CanvasChange) => void
+  moved: () => void
 ): () => void {
   // Absent in jsdom unless a test supplies one, and absent in older browsers.
   // A missing observer costs a re-measure rather than correctness: every caller
@@ -219,10 +250,17 @@ function watchCanvasStyleMutations(
      * silently drop a real site-style change in any window where the reference
      * were momentarily unset.
      */
-    const outside = records.some(
+    /*
+     * The foreign records are separated rather than counted, because the net
+     * question below has to be asked of THOSE alone. One batch can carry both:
+     * the overlay redraws its own layer in the same task as a probe writes to a
+     * block and puts it back, and judging the whole batch then finds the
+     * layer's `childList` records and reports a change the caller caused.
+     */
+    const foreign = records.filter(
       record => own === null || !own.contains(record.target)
     );
-    if (outside) moved("moved");
+    if (foreign.length > 0 && !changedNothing(foreign)) moved();
   });
   /*
    * Every kind of record, because every kind can carry a new rule: a sheet
@@ -235,6 +273,9 @@ function watchCanvasStyleMutations(
     childList: true,
     subtree: true,
     attributes: true,
+    // What each attribute held before, which is what makes a net-zero batch
+    // recognisable. See {@link changedNothing}.
+    attributeOldValue: true,
     characterData: true,
   });
   return () => styles.disconnect();

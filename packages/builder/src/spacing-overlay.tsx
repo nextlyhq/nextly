@@ -62,7 +62,6 @@
  * @module spacing-overlay
  */
 
-import { previewStateClass, STYLE_STATES } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import {
@@ -535,20 +534,6 @@ function sameSubject(
  * The root's own painted scale composes either way, because it is above the
  * element and applies to both boxes alike.
  */
-/**
- * The forced-state marker the canvas has put on this element, or `""` for none.
- *
- * Derived from the engine's own `previewStateClass`, which is published as a
- * contract precisely so the marker is not spelled twice.
- */
-function appliedStateOf(block: Element): string {
-  for (const state of STYLE_STATES) {
-    const marker = previewStateClass(state);
-    if (block.classList.contains(marker)) return marker;
-  }
-  return "";
-}
-
 export function probeScale(
   box: SpacingBox,
   side: SpacingSide,
@@ -561,17 +546,6 @@ export function probeScale(
     (vertical ? laidOutIn.y : laidOutIn.x) *
     (vertical ? rootPainted.y : rootPainted.x)
   );
-}
-
-function answersFor(
-  probed: WeakMap<EditorState["document"], Map<string, boolean>>,
-  document: EditorState["document"]
-): Map<string, boolean> {
-  const known = probed.get(document);
-  if (known !== undefined) return known;
-  const fresh = new Map<string, boolean>();
-  probed.set(document, fresh);
-  return fresh;
 }
 
 export function SpacingOverlay({
@@ -602,32 +576,6 @@ export function SpacingOverlay({
    * is holding stays until it is let go.
    */
   const gestureLive = React.useRef(false);
-  /**
-   * Which spacing edge responds, remembered per document, node and side.
-   *
-   * The probe writes to the rendered element, and the canvas watches its
-   * subtree for exactly that — so an unmemoised probe would answer, be observed,
-   * re-measure, and probe again forever. A cache HIT performs no mutation at
-   * all, which is what makes the loop terminate: the first pass probes, the
-   * observation it causes re-measures once, and that pass reads the cache and
-   * mutates nothing.
-   *
-   * Reached THROUGH the document rather than emptied when it changes, because an
-   * edit is the thing that can turn an auto height into a fixed one and no
-   * answer may outlive it. It is not keyed on geometry: a block can gain a
-   * definite size without changing size at all.
-   *
-   * That key is also what makes it safe to read while React renders
-   * concurrently. Emptying the map meant writing to a ref DURING render, and a
-   * render React then abandons — suspended, or dropped for a higher-priority
-   * update — leaves that write standing with no measurement taken, while the
-   * canvas still mounted refills the map from its own observer. Answers reached
-   * through the document they were measured from cannot be crossed that way: an
-   * abandoned document's map is never looked up again, and is collected with it.
-   */
-  const responds = React.useRef(
-    new WeakMap<EditorState["document"], Map<string, boolean>>()
-  );
   /*
    * How far the layer may paint outside itself, in pixels.
    *
@@ -760,30 +708,27 @@ export function SpacingOverlay({
      */
     const rootPainted = canvasPaintedScale(root);
 
-    /*
-     * THIS document's answers. The measurement runs in a layout effect, so the
-     * entry is made where the measuring happens rather than during render.
-     */
-    const answers = answersFor(responds.current, document);
-
-    /*
-     * Which forced state the canvas has applied, as part of what was measured.
+    /**
+     * This node's answer for one box and side, asked fresh on every measurement.
      *
-     * The answers describe how the block responds under the CSS applying to it,
-     * and forcing a state changes that CSS with no edit and no resize: the
-     * canvas writes a marker class on the selected block, and a rule arriving
-     * with it can settle an axis that was auto-sized. Read off the ELEMENT
-     * rather than from whatever asked for the state, so it cannot name one the
-     * canvas has not applied yet.
+     * NOT remembered between passes. The answer describes how the block responds
+     * under the CSS applying to it right now, and what changes that CSS is
+     * open-ended: an edit, a breakpoint re-resolving at a new canvas width, a
+     * container query answering to a sibling's size, a forced state, a pointer
+     * arriving and matching `:hover`. A remembered answer has to be dropped for
+     * each of those in turn, which is a list that stays complete until the next
+     * one — the same reasoning `spacing-response.ts` gives for asking the element
+     * rather than reading the CSS. Measured at 0.8ms for all eight sides on a
+     * fifteen-hundred-node page, which is the whole of what remembering saved.
+     *
+     * Asking every pass is only safe because the canvas ignores a batch of
+     * mutations that changed nothing. The probe writes to a node this overlay's
+     * own subscription watches and puts it back inside one task, so without that
+     * filter each measurement would schedule the next forever. See
+     * `changedNothing` in `canvas-geometry-watch.ts`.
      */
-    const appliedState = appliedStateOf(block);
-
-    /** This node's answer for one box and side, probed once and remembered. */
-    const outwardFor = (box: SpacingBox, side: SpacingSide): boolean => {
-      const key = `${appliedState}\u0000${selectedId}\u0000${box}\u0000${side}`;
-      const known = answers.get(key);
-      if (known !== undefined) return known;
-      const answer = styleCapable(block)
+    const outwardFor = (box: SpacingBox, side: SpacingSide): boolean =>
+      styleCapable(block)
         ? spacingRespondsOutward(
             block,
             box,
@@ -791,9 +736,6 @@ export function SpacingOverlay({
             probeScale(box, side, scale, rootPainted)
           )
         : false;
-      answers.set(key, answer);
-      return answer;
-    };
 
     const layerBox = canvasContentRect(root, root);
     apply(
@@ -853,10 +795,11 @@ export function SpacingOverlay({
         },
       }
     );
-    // `document` reaches this document's probe answers, and a measurement that
-    // closed over an earlier one would file today's answers under yesterday's
-    // key — and read yesterday's back.
-  }, [selectedId, document]);
+    // The document is NOT one of these. Nothing here is remembered across a
+    // measurement any more, so this reads the tree as it stands whenever it is
+    // called; what makes it run again after an edit is the effect below, which
+    // does depend on the document.
+  }, [selectedId]);
 
   React.useLayoutEffect(() => {
     if (hidden) {
@@ -891,26 +834,7 @@ export function SpacingOverlay({
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
-    return watchCanvasFor(
-      () => layer.current,
-      change => {
-        /*
-         * A resized CANVAS can have re-resolved the breakpoint, and which width
-         * model a block is in is exactly what these answers depend on: a
-         * `margin-right` is pinned by the container on an auto width and pushes
-         * outward on a fixed one, so the same block answers oppositely on either
-         * side of a media query with no edit and no new document.
-         *
-         * Only on a resize, and that is what makes it safe rather than a loop.
-         * The probe writes to a node this same subscription watches, so clearing
-         * on a MUTATION would have each probe schedule the next forever. It
-         * cannot cause a resize: it restores the element inside one task, so the
-         * observer never sees a size differing from the one it last delivered.
-         */
-        if (change === "resized") responds.current.delete(document);
-        measure();
-      }
-    );
+    return watchCanvasFor(() => layer.current, measure);
     /*
      * `document` re-subscribes, and dropping it strands the observer on a
      * DETACHED element. An edit replaces the rendered tree while the selection
