@@ -1,5 +1,7 @@
 import type { ReactElement } from "react";
 
+import { editorMarkers, type EditorAddress } from "./editor-markers";
+
 /** Why a node rendered a placeholder instead of itself. */
 export type PlaceholderReason =
   /** No definition is registered for the node's `type`. */
@@ -39,7 +41,34 @@ export interface BlockPlaceholderProps {
   id?: string;
   /** What went wrong, when there is a message worth showing. */
   detail?: string;
+  /**
+   * Emit the editor's own markers on the placeholder's box.
+   *
+   * A placeholder is drawn INSTEAD of the block, so it never passes through
+   * the boundary's marking step — which left the one element an author can
+   * actually see and click carrying no address at all. In an editor that is
+   * the difference between a broken block being selectable and being inert.
+   */
+  editor?: EditorMarkers;
 }
+
+/**
+ * The editor's address for the node a placeholder stands in for.
+ *
+ * PICKED from `EditorAddress` rather than declared, so it cannot drift from the
+ * shape the markers are actually built from. Re-declaring the same two fields
+ * compiles for as long as the two happen to agree — structural typing does not
+ * notice a divergence, it accepts one — and the day the shared address gains or
+ * renames a field, this path keeps compiling against a contract that no longer
+ * describes what an ordinary root carries. That is the same duplication the
+ * marker construction itself had, one level up in the types.
+ *
+ * `declaresSlots` is deliberately not picked: a placeholder is drawn INSTEAD of
+ * the block, so it has no definition to declare slots and nothing would consume
+ * the marker. Narrowing by `Pick` states that as a choice, and a field added to
+ * the address has to be considered here rather than silently omitted.
+ */
+export type EditorMarkers = Pick<EditorAddress, "nodeId" | "instanceOf">;
 
 /** Human wording per reason, kept out of the component so it reads as data. */
 const REASON_TEXT: Readonly<Record<PlaceholderReason, string>> = {
@@ -78,6 +107,7 @@ export function BlockPlaceholder({
   type,
   id,
   detail,
+  editor,
 }: BlockPlaceholderProps): ReactElement {
   // Read at render rather than module scope so a consumer's bundler can inline
   // it per build, and so a test can exercise both modes in one process.
@@ -88,13 +118,30 @@ export function BlockPlaceholder({
   const isProduction =
     typeof process !== "undefined" && process.env?.NODE_ENV === "production";
 
-  if (isProduction) {
+  const markers = editorMarkerProps(editor);
+
+  // HIDDEN only on a page nobody is editing, and the `editor` clause is the
+  // load-bearing half rather than a refinement.
+  //
+  // The first version hid it whenever the build was production and spread the
+  // markers into both branches, reasoning that hiding a box does not put it
+  // beyond the editor's own hit-testing. That is false: `hidden` is
+  // `display: none`, so the element generates no box — it has no geometry to
+  // read, `elementFromPoint` never returns it, and a click cannot land on it.
+  // Marking an element nobody can reach addresses nothing, so an editor served
+  // from a production build still could not select the host instance from the
+  // one thing an author can see when a block inside a component breaks.
+  //
+  // The reason the branch exists is that a PUBLISHED page must not show a debug
+  // box. An editor render is not a published page, whatever `NODE_ENV` says.
+  if (isProduction && editor === undefined) {
     return (
       <div
         hidden
         data-nx-block-placeholder={reason}
         data-nx-block-type={type}
         data-nx-block-id={id}
+        {...markers}
       />
     );
   }
@@ -104,6 +151,7 @@ export function BlockPlaceholder({
       data-nx-block-placeholder={reason}
       data-nx-block-type={type}
       data-nx-block-id={id}
+      {...markers}
       style={{
         border: "1px dashed currentColor",
         borderRadius: "4px",
@@ -120,4 +168,30 @@ export function BlockPlaceholder({
       {detail ? <div>{detail}</div> : null}
     </div>
   );
+}
+
+/**
+ * The editor attributes a placeholder carries, or none at all.
+ *
+ * DERIVED from `editorMarkers`, which is what an ordinary block root is marked
+ * from too. Spelling the names here was the first version, pinned to the
+ * boundary's constants by a test — and that test checks the NAMES and nothing
+ * else: it stays green when a marker is added to one path, and green when the
+ * two disagree about whether an absent value is omitted or removed. A
+ * placeholder would then carry a different editor address from the root it
+ * stands in for, which nothing observes.
+ *
+ * `editor-markers` is a leaf precisely so this can ask it: `block-boundary`
+ * renders this module, so importing the marking from there would be a cycle.
+ *
+ * The bag may carry `undefined` values. React omits those on a fresh element,
+ * which is exactly the "the page owns this node, so do not claim otherwise"
+ * outcome the literal version spelled by hand — and the same value REMOVES a
+ * forged attribute where the boundary clones a block's own root.
+ */
+function editorMarkerProps(
+  editor: EditorMarkers | undefined
+): Record<string, string | undefined> {
+  if (editor === undefined) return {};
+  return editorMarkers(editor);
 }

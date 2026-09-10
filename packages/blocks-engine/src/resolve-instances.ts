@@ -435,7 +435,12 @@ export function resolveComponentInstances(
   // when nothing changed, so removing this line changes no output. What it
   // saves is building the run and walking the tree at all, which is the whole
   // cost this module adds to a page that uses no components.
-  if (!survey.hasInstance) return unchanged;
+  //
+  // `hasStoredProvenance` is the exception, and it is why this is no longer
+  // purely an optimisation. A document with no instances still has to be walked
+  // when one of its nodes carries a stored `instanceOf`, because that claim is
+  // stripped on the way through and returning early would leave it standing.
+  if (!survey.hasInstance && !survey.hasStoredProvenance) return unchanged;
 
   const run: ResolveRun = {
     definitions,
@@ -565,6 +570,15 @@ const ROOT_SCOPE: ComposedScope = { depth: 0, onPath: new Set<string>() };
 /** What the host document holds, read once before anything is rebuilt. */
 interface HostSurvey {
   hasInstance: boolean;
+  /**
+   * Some node arrived already claiming `instanceOf`.
+   *
+   * Stored data wearing this pass's provenance. It has to be walked and cleared
+   * even when the document composes nothing, so this is read beside
+   * `hasInstance` rather than folded into it — the two are different reasons to
+   * walk, and only one of them is about components being present.
+   */
+  hasStoredProvenance: boolean;
   /** The walk stopped at the node cap, so `ids` is a PREFIX of what is there. */
   truncated: boolean;
   /** How many nodes the host already holds, instances included. */
@@ -592,6 +606,7 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
   const ids = new Set<string>();
   const domIds = new Set<string>();
   let hasInstance = false;
+  let hasStoredProvenance = false;
   let truncated = false;
   let count = 0;
   let budget = maxNodes;
@@ -607,9 +622,14 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
     if (typeof node.id === "string") ids.add(node.id);
     collectDomIds(node, domIds);
     if (node.type === COMPONENT_INSTANCE_TYPE) hasInstance = true;
+    // A stored node wearing this pass's provenance. Noted HERE because the walk
+    // is already happening: without it the composition-free fast path below
+    // returns the document untouched, which is exactly the document where a
+    // false claim survives — a page with no components at all.
+    if ("instanceOf" in node) hasStoredProvenance = true;
     return "descend";
   });
-  return { hasInstance, truncated, count, ids, domIds };
+  return { hasInstance, hasStoredProvenance, truncated, count, ids, domIds };
 }
 
 /** Every DOM id one stored node publishes, in either of the two places. */
@@ -682,8 +702,16 @@ function inlineNode(
   depth: number
 ): ResolvedBlockNode[] | null {
   if (!isPlainRecord(node)) return null;
-  if (node.type === COMPONENT_INSTANCE_TYPE) {
-    return expandInstance(node, run, scope, depth);
+  // Stripped HERE, before the instance branch, because both kinds of node on
+  // this walk are the page's own and neither may arrive already wearing this
+  // pass's provenance. The instance case is the one that bites: it returns
+  // below without reaching the host cleanup, and a refusal SPREADS the node it
+  // was given — so a hand-edited instance whose component is missing, cyclic or
+  // budget-refused kept its forged claim precisely when a placeholder is drawn
+  // for it, which is the element an author can see and click.
+  const own = "instanceOf" in node ? withoutInstanceOf(node) : node;
+  if (own.type === COMPONENT_INSTANCE_TYPE) {
+    return expandInstance(own, run, scope, depth);
   }
   // The same rule `expandInstance` applies to an instance's OWN gate, applied
   // to the node holding one. Gating is inherited — `pruneHiddenNodes` drops a
@@ -699,11 +727,51 @@ function inlineNode(
   // Asked of the node ITSELF rather than tracked down the walk, because
   // `inlineForest` descends one level per frame: a gated node returns here
   // before its slots are visited, so nothing below it is ever reached.
-  if (isConditionGated(node)) return null;
-  const slots = node.slots;
-  if (!isPlainRecord(slots)) return null;
+  // A gated node is dropped with its whole subtree by `pruneHiddenNodes`, so a
+  // stored claim on one reaches no reader whether or not it was cleared here.
+  // Reported as unchanged rather than as a stripped node, which keeps the
+  // identity signal below meaning what it says.
+  if (isConditionGated(own)) return null;
+  const slots = own.slots;
+  if (!isPlainRecord(slots)) return own === node ? null : [own];
   const next = inlineHostSlots(slots, run, scope, depth);
-  return next === slots ? null : [{ ...node, slots: next }];
+  if (next === slots) return own === node ? null : [own];
+  return [{ ...own, slots: next }];
+}
+
+/**
+ * The same node with a stored provenance claim removed.
+ *
+ * `instanceOf` means "the resolver inlined this node from a definition", and
+ * the only writer that may say so is this pass. Documents arrive from places
+ * that never ran it — an export replayed, a tree a host assembled, content
+ * hand-edited in storage — and `sanitizeDocument` preserves unknown node keys
+ * deliberately, so a page node can reach the resolver already claiming to
+ * belong to a component. An editor reading that marker sends a click, an edit
+ * or a delete to an instance the author never placed, and the node they were
+ * pointing at is one of their own.
+ *
+ * Cleared on the way through rather than checked at every reader: this is the
+ * pass that OWNS the field, so it is the one place that can tell a stored claim
+ * from provenance it created. Applied only on the page walk, which is why
+ * `cloneDefinitionNode` is untouched — provenance on a definition-owned node is
+ * this pass's own and must survive.
+ */
+function withoutInstanceOf(node: ResolvedBlockNode): ResolvedBlockNode {
+  // Copied by DESCRIPTOR, so the property is removed without ever being read.
+  // Destructuring and spreading both INVOKE a getter, and this runs on trees a
+  // host assembled in memory rather than only on JSON from the database — so a
+  // node carrying an enumerable `instanceOf` accessor that throws would take
+  // the whole resolution down from here, before any per-block boundary could
+  // contain it and draw a placeholder. Measured: it aborted `PageRenderer`
+  // outright.
+  //
+  // Other properties keep whatever descriptors they had, which is deliberate:
+  // this changes only when `instanceOf` is read, not how the rest of the node
+  // behaves.
+  const descriptors = Object.getOwnPropertyDescriptors(node);
+  delete descriptors.instanceOf;
+  return Object.defineProperties({}, descriptors) as ResolvedBlockNode;
 }
 
 /** Every slot of a host node, with its children resolved in the same scope. */

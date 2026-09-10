@@ -111,6 +111,61 @@ const byInstanceOf = (
   flatten(doc.nodes).filter(entry => entry.instanceOf === instanceId);
 
 describe("resolveComponentInstances", () => {
+  it("strips a stored claim without INVOKING it, so a hostile accessor cannot abort the page", () => {
+    // `resolveComponentInstances` is public and takes a tree, so it is handed
+    // objects a host assembled in memory as well as JSON from the database.
+    // Destructuring or spreading to drop a property READS it, so an enumerable
+    // `instanceOf` accessor that throws took the whole resolution down from the
+    // strip — before any per-block boundary could contain the failure and draw
+    // a placeholder. Measured: it aborted the render outright.
+    const hostile = { id: "a", type: "core/box", version: 1, props: {} };
+    Object.defineProperty(hostile, "instanceOf", {
+      enumerable: true,
+      get() {
+        throw new Error("provenance getter invoked");
+      },
+    });
+
+    const doc = page([hostile as unknown as BlockNode]);
+
+    // The control on the control: this must not throw, and the node must
+    // survive — a resolver that dropped the node entirely would also not throw.
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes).toHaveLength(1);
+    expect(result.document.nodes[0]?.id).toBe("a");
+    expect(result.document.nodes[0]?.instanceOf).toBeUndefined();
+  });
+
+  it("strips a STORED provenance claim from an instance it cannot resolve", () => {
+    // The refusal path is the one route a stored claim survives. A host node
+    // carrying `instanceOf` is stripped on the way through, but an INSTANCE
+    // node branches to expansion before that, and a refusal spreads the
+    // original node — so a page node hand-edited to claim membership of a
+    // component keeps the claim exactly when the component is missing.
+    //
+    // `sanitizeDocument` preserves unknown node keys deliberately, so this
+    // arrives from an export replayed, a tree a host assembled, or content
+    // edited in storage. An editor reading the marker sends a click, an edit
+    // or a delete to an instance the author never placed.
+    const doc = page([
+      instance("i1", "missing", {}, {
+        instanceOf: "forged",
+      } as Partial<BlockNode>),
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    const refused = flatten(result.document.nodes).find(
+      entry => entry.id === "i1"
+    );
+    // Present first: an absent node is trivially unmarked, which would let a
+    // resolver that dropped the refused instance satisfy the real assertion.
+    expect(refused).toBeDefined();
+    expect(refused?.unresolvedComponent).toBeDefined();
+    expect(refused?.instanceOf).toBeUndefined();
+  });
+
   it("returns the same document object when the page holds no instance", () => {
     const doc = page([node("a"), box("b", [node("c")])]);
 
@@ -436,6 +491,38 @@ describe("resolveComponentInstances visibility", () => {
 
     expect(truthy.document.nodes[0]!.visibility).toEqual(own);
     expect(flatten(falsy.document.nodes)).toHaveLength(3);
+  });
+});
+
+describe("a stored node claiming to belong to a component", () => {
+  it("loses the claim, because only this pass may make it", () => {
+    // `instanceOf` means "the resolver inlined this from a definition", and
+    // documents arrive from places that never ran it: an export replayed, a
+    // tree a host assembled, content hand-edited in storage. `sanitizeDocument`
+    // preserves unknown node keys deliberately, so the claim survives storage.
+    //
+    // Left standing, an editor reads it as provenance and sends a click, an
+    // edit or a delete to an instance the author never placed — while the node
+    // they were pointing at is one of their own.
+    const doc = page([
+      { ...node("mine"), instanceOf: "not-a-real-instance" } as never,
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes[0]).not.toHaveProperty("instanceOf");
+  });
+
+  it("keeps the node itself, and everything else about it", () => {
+    // The control: stripping the claim must not be a licence to drop or reshape
+    // the node. A pass that returned nothing here would satisfy the assertion
+    // above while destroying the author's content.
+    const doc = page([{ ...node("mine"), instanceOf: "stored" } as never]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes.map(n => n.id)).toEqual(["mine"]);
+    expect(result.document.nodes[0]!.type).toBe(node("mine").type);
   });
 });
 
