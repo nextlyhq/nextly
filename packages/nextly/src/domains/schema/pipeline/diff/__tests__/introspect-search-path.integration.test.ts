@@ -17,13 +17,11 @@
  * "read the right table" from "read any table" passes on a predicate that names
  * `public` outright.
  *
- * The fixture tables are SYNTHETIC — a decoy and a subject that exist only to be
- * resolved, with no production counterpart. So they are written here rather than
- * derived from a DDL helper: the hazard that rule guards, a fixture copying a
- * real table's definition and then drifting from it, has nothing to drift from,
- * and deriving them from a real table would couple this file to that table's
- * shape and change what it measures. Their DDL still travels through Drizzle,
- * like every other statement here.
+ * The fixture tables are SYNTHETIC: a decoy and a subject that exist only to be
+ * resolved, with no production counterpart. Written out here rather than derived
+ * from a table the product also defines, because deriving them would tie this
+ * file to that table's shape — and what it measures is which relation a name
+ * resolves to, which any two columns can demonstrate.
  *
  * 🔴 ONE SESSION, held open for the whole file. `PostgresAdapter.getDrizzle()`
  * wraps a `pg.Pool`, so `SET search_path` binds to whichever client served that
@@ -65,12 +63,10 @@ describePg("introspection follows the search path (postgres)", () => {
     await client.connect();
     db = drizzle({ client });
 
-    // 🔴 Through Drizzle, not `client.query`. Database access in this repository
-    // is Drizzle-only, and the exemption a test might claim — that a fixture is
-    // not product code — does not apply to the thing under test here: these
-    // statements ESTABLISH the session state the assertions depend on, so they
-    // have to travel the same path the reads do. Sent on the client-bound
-    // instance, so `SET search_path` below lands on the connection that reads.
+    // 🔴 Sent through Drizzle rather than through the driver, because these
+    // statements establish the session state the assertions depend on: the
+    // `SET search_path` below has to land on the connection the reads use, and
+    // the only way to be sure of that is to send it the way the reads are sent.
     const run = (text: string) => db.execute(sql.raw(text));
 
     await run(`DROP TABLE IF EXISTS public."${TABLE}"`);
