@@ -750,6 +750,13 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
     "g"
   );
 
+  // Counted, because everything above is a search for a WRONG shape and a
+  // search finds nothing in two different situations. Renaming the namespace
+  // makes every correct reference stop matching and every stale one invisible,
+  // so the run goes green by having asked about nothing at all. At least one
+  // reference has to be found saying the right thing.
+  let correct = 0;
+
   const isDoc = rel =>
     (rel.startsWith("docs/") || rel.endsWith("/README.md")) &&
     (rel.endsWith(".mdx") || rel.endsWith(".md")) &&
@@ -777,7 +784,10 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
       let match;
       while ((match = mountedPath.exec(lines[i])) !== null) {
         const found = `${match[1]}/${namespace}/`;
-        if (found === expected) continue;
+        if (found === expected) {
+          correct += 1;
+          continue;
+        }
         // A page teaching that the OLD address 404s has to be able to write it
         // down. That is one line of prose rather than a pattern this can
         // recognise, so it goes through the same per-line allowlist every other
@@ -791,6 +801,13 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
         });
       }
     }
+  }
+
+  if (correct === 0) {
+    refuse(
+      NAMESPACE_SOURCE,
+      `nothing documents a plugin route at ${expected}, so this check compared the docs against a shape none of them use. Either the namespace or the mount moved and every reference is now stale, or the pages that named one are gone`
+    );
   }
 }
 
