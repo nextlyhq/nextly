@@ -292,6 +292,7 @@ export type {
   PluginRouteMethod,
   PluginRouteWrite,
   PluginRouteWriter,
+  PluginRouteInvalidation,
 } from "@admin/hooks/queries/usePluginRouteMutation";
 
 // Field-UI kit — controlled, form-library-agnostic field-building components

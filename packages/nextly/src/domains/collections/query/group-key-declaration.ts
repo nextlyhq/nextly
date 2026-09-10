@@ -20,6 +20,8 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import { isJsonFieldType } from "../services/collection-utils";
 
+import { localizedGroupKeyProblem } from "./localized-group-key";
+
 /**
  * Why a field's KIND cannot be grouped, if it cannot.
  *
@@ -76,8 +78,12 @@ export function groupKeyDeclarationProblem(
   // this table, so the column lookup finds nothing. Refusing it as "not a
   // column on this collection" reads as a typo for a field that is declared and
   // spelled correctly, which sends the reader looking in the wrong place.
-  if (declared.localized === true) {
-    return `"${groupBy}" is a localized field, so its values are stored per locale rather than on this collection. Grouping over a localized field is not supported yet.`;
+  //
+  // Asked of the shared leaf rather than tested here, because the widget
+  // validator needs the same answer and cannot import this module.
+  const localized = localizedGroupKeyProblem(declared);
+  if (localized !== undefined) {
+    return `"${groupBy}" ${localized}.`;
   }
   const ungroupable = ungroupableKind(declared);
   if (ungroupable !== undefined) {

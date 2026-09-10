@@ -17,6 +17,7 @@
  * @module api/singles-detail
  */
 
+import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import { actorFromAuthContext } from "../auth/request-actor";
 import { getService } from "../di";
 import type { SingleResult } from "../domains/singles/types";
@@ -250,10 +251,14 @@ export const PATCH = withErrorHandler(
       // Build the scope from the auth context so a publish transition (and the
       // super-admin gate) judges an API key on its OWN stamped grants, not the
       // owner's — the route only authorized `update`. Mirrors the dispatcher.
-      authenticatedScope: {
-        actorType: auth.authMethod === "api-key" ? "apiKey" : "user",
-        permissions: auth.permissions,
-      },
+      //
+      // Through `apiKeyScopeFrom`, which carries the caller's roles and the
+      // permission ROWS every rule-facing spelling derives from. The literal
+      // this replaces named `actorType` and `permissions` only, so a documented
+      // `permissions.includes("site:publish")` was handed the stored slugs and
+      // denied a key that held the grant.
+      authenticatedScope:
+        auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined,
     });
 
     if (!result.success) {

@@ -65,15 +65,37 @@ A route may give up part of its own authority for one call. Use `narrowScope`;
 the scope's arrays are frozen, so editing them is refused:
 
 ```ts
-import { narrowScope } from "@nextlyhq/plugin-sdk";
+import { narrowScope, type PluginRoute } from "@nextlyhq/plugin-sdk";
 
-const readOnly = narrowScope(ctx.authenticatedScope!, g => g.action === "read");
+const route: PluginRoute = {
+  method: "PATCH",
+  path: "/posts/:id",
+  handler: async (req, ctx) => {
+    // A SESSION caller carries no scope, so there is nothing to narrow. That is
+    // safe to pass on — `narrowScope` answers `undefined` for `undefined`, and a
+    // call with no scope resolves by the caller's own RBAC exactly as it would
+    // have. Refused here anyway, because THIS route is for API keys: a session
+    // reaching it would run unnarrowed, and the point of the narrowing is that
+    // this call is restricted whoever makes it.
+    const scope = ctx.authenticatedScope;
+    if (scope === undefined) {
+      return Response.json({ error: "this route requires an API key" }, {
+        status: 403,
+      });
+    }
 
-await ctx.services.collections.updateEntry("posts", id, data, {
-  as: "user",
-  user: ctx.user ?? undefined,
-  authenticatedScope: readOnly, // refused: the scope no longer holds the write
-});
+    const id = ctx.params.id;
+    const data = (await req.json()) as Record<string, unknown>;
+    const readOnly = narrowScope(scope, g => g.action === "read");
+
+    await ctx.services.collections.updateEntry("posts", id, data, {
+      as: "user",
+      user: ctx.user ?? undefined,
+      authenticatedScope: readOnly, // refused: the scope no longer holds the write
+    });
+    return Response.json({ ok: true });
+  },
+};
 ```
 
 The narrowed scope applies for the whole call, so every check underneath sees
@@ -92,6 +114,43 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
   enforce a permission (see [Permissions](/docs/plugins/permissions)).
 - **Opt out:** set `public: true` to make a route callable without a session (e.g. a
   public sitemap or a webhook receiver). `ctx.user` will be `null`.
+
+### Gating on one of your OWN collections
+
+A permission slug spells a collection — and a host can rename your plugin's
+collections. So a fixed `"create-patterns"` demands a grant that was seeded under
+a different name on any install that renamed it, leaving a route nobody there can
+call.
+
+Give a function instead. It receives your plugin's resolved names and returns the
+slug to require:
+
+```ts
+{
+  method: "POST",
+  path: "/patterns",
+  // `collection()` resolves the rename AND composes the slug, so you never
+  // spell one yourself.
+  requiredPermission: ({ collection }) => collection("patterns", "create"),
+  handler: savePattern,
+}
+```
+
+`collection(declaredSlug, action)` takes the slug **you declared**, not the one
+the host ended up with. `single(declaredSlug, action)` does the same for a
+Single.
+
+Keep the plain string for a permission that cannot move — one your plugin
+declared itself, like `"export-submissions"`.
+
+Two rules for the function:
+
+- **It must be pure and synchronous.** It runs on every request to the route,
+  before anything about the caller is known — so it is given your names and
+  nothing about the request. Deciding on the caller is the access rule's job, and
+  it runs after authentication rather than before it.
+- **If it throws, the request is refused.** A gate that cannot be worked out
+  never falls back to "no permission required".
 
 ```ts
 {
@@ -143,6 +202,8 @@ Routes support an ordered, typed middleware chain (onion model). Each middleware
 `next()` to continue or returns a `Response` to short-circuit:
 
 ```ts
+import type { Middleware } from "@nextlyhq/plugin-sdk";
+
 const timing: Middleware = async (req, ctx, next) => {
   const res = await next();
   res.headers.set("x-handler", "reports");

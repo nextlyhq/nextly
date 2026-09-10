@@ -55,6 +55,7 @@ import {
   countNodes,
   DEFAULT_LIMITS,
   ForestTooLargeError,
+  MAX_VALUE_PARTS,
   treeDepth,
   type DocumentLimits,
 } from "./limits";
@@ -351,33 +352,6 @@ function describe(value: unknown): string {
 const MAX_VALUE_DEPTH = 512;
 
 /**
- * How many parts a value may have before it is refused unexamined.
- *
- * A machine limit like {@link MAX_WALKABLE_DEPTH}, not a product one. The domain
- * walks below visit every key and every element, so a shallow object with
- * millions of enumerable properties costs a full traversal — and an in-process
- * or agent-written op can carry one. The byte cap would refuse such a value, but
- * only after these walks have already paid for it, which is the wrong order for
- * a guard whose job is to reject.
- *
- * Set well above `DEFAULT_LIMITS.maxBytes`, which is 2 MiB: every part
- * contributes at least one byte to serialized JSON, so a value with more parts
- * than this has more bytes than any default-configured document may hold, and
- * refusing it unexamined agrees with the answer a full walk would have reached.
- * A site that raises `maxBytes` past this is choosing a document larger than the
- * editor will edit, which the machine caps already say elsewhere.
- *
- * What this bounds, precisely: the descriptor lookups, the nested traversal and
- * the value reads, which are the costs that grow with what the value CONTAINS.
- * It does not bound `Reflect.ownKeys` itself, which materialises the key list in
- * one call before any loop can stop — and it cannot, because there is no way to
- * enumerate own keys including non-enumerable and symbol ones without building
- * that list. The op is already in memory by then, so this doubles a cost the
- * caller has paid rather than admitting an unbounded new one.
- */
-const MAX_VALUE_PARTS = 4 * 1024 * 1024;
-
-/**
  * How deep a node TREE may nest before the engine's helpers cannot walk it.
  *
  * A machine limit, not a product one: `limits.maxDepth` is a rule a site may
@@ -439,7 +413,7 @@ function assertUsableLimits(limits: DocumentLimits): void {
  * Measure a forest, reporting a refusal to measure as an `OpError`.
  *
  * `countNodes` and `treeDepth` refuse a forest whose entries outrun
- * {@link MAX_WALKABLE_ENTRIES} rather than answering from a partial walk, and
+ * {@link MAX_VALUE_PARTS} rather than answering from a partial walk, and
  * that refusal has to arrive here wearing this module's error type. Six
  * `...Refusal` helpers in this file are written as
  * `catch (error) { if (error instanceof OpError) return error.message; throw error; }`

@@ -482,6 +482,7 @@ export {
   type PluginRouteCaller,
   type PluginRouteContext,
   type PluginRouteHandler,
+  type PluginRouteMount,
   type Middleware,
   type RouteMethod,
   type ComponentPath,
@@ -633,6 +634,10 @@ export type {
 // frozen, and editing one in place would leave the spelling the field gate
 // reads still holding the surrendered grant.
 export { narrowScope } from "./auth/authenticated-scope";
+export type {
+  PluginRoutePermissionResolver,
+  PluginRoutePermissionScope,
+} from "./plugins/routes/route-permission";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).

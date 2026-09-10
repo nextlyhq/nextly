@@ -6,7 +6,7 @@ export default [
   ...config,
   // Globs are relative to packages/nextly/ because the lint command runs `eslint .` from this
   // directory. The repository-root config mounts the same builder with a path prefix.
-  bareErrorConfig(),
+  ...bareErrorConfig(),
   // F1 PR 1 + F11 PR 5: bans on imports from the deployed app's
   // runtime code (the request graph + boot path).
   //
@@ -97,6 +97,7 @@ export default [
       // config files: outside the TS project service, so linting it as typed source
       // fails to parse.
       "eslint-bare-error-rule.js",
+      "eslint-api-key-scope-rule.js",
       "vitest.config.ts",
       "vitest.*.config.ts",
       "scripts/*.cjs",

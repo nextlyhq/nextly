@@ -17,10 +17,12 @@ import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
+import type { PluginSelf } from "../self";
 
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import { buildPluginRouteCaller } from "./route-caller";
+import { resolveRoutePermission } from "./route-permission";
 import type { RouteMatch } from "./route-registry";
 import type {
   PluginRoute,
@@ -70,7 +72,8 @@ function toErrorResponse(req: Request, err: unknown): Response {
  */
 async function resolvePluginRouteAuth(
   req: Request,
-  route: PluginRoute
+  route: PluginRoute,
+  self: PluginSelf
 ): Promise<
   | {
       user: AuthUser | null;
@@ -81,10 +84,33 @@ async function resolvePluginRouteAuth(
 > {
   if (route.public === true) return { user: null, caller: null };
 
+  // The permission this route requires ON THIS INSTALL. A route gating on one
+  // of the plugin's own collections gives a function, because the host may have
+  // renamed it and a fixed slug would name a grant nobody was seeded.
+  let required: string | undefined;
+  try {
+    required = resolveRoutePermission(route.requiredPermission, self);
+  } catch (cause) {
+    // A gate that cannot be computed refuses. Falling through to
+    // `requireAuthentication` would drop the permission check entirely and
+    // admit any signed-in caller — a thrown resolver silently OPENING the route
+    // it was written to close.
+    return {
+      error: NextlyError.forbidden({
+        ...(cause instanceof Error ? { cause } : {}),
+        logContext: {
+          reason: "plugin-route-permission-unresolved",
+          plugin: self.name,
+          path: route.path,
+        },
+      }),
+    };
+  }
+
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
-  const authResult = route.requiredPermission
-    ? await requirePermission(req, ...permissionArgs(route.requiredPermission))
+  const authResult = required
+    ? await requirePermission(req, ...permissionArgs(required))
     : await requireAuthentication(req);
 
   if (isErrorResponse(authResult)) {
@@ -168,6 +194,42 @@ function markPluginResponse(response: Response, route: PluginRoute): Response {
 }
 
 /**
+ * The refusal a secure route owes a caller that presented no credential.
+ *
+ * Reached only before the registry is filled. A cold worker decides from the
+ * DECLARATION that this request is going to be refused, and declines to run
+ * database and plugin startup on its behalf; without this the request instead
+ * falls through to the built-in router's invalid-route 400, so the same call is
+ * answered 400 cold and 401 warm and a client debugging a missing token is told
+ * its URL is wrong.
+ *
+ * Built here beside {@link runPluginRoute} so a plugin route's error body still
+ * has one author. `authRequired` rather than a hand-written body for the same
+ * reason: it is the error `toNextlyAuthError` produces from a 401, which is
+ * what this request meets once the app is warm.
+ */
+export function pluginRouteAuthRequired(
+  req: Request,
+  route: PluginRoute
+): Response {
+  return markPluginResponse(
+    buildErrorResponse(
+      NextlyError.authRequired({
+        logContext: {
+          reason: "plugin-route-auth-required-before-boot",
+          path: route.path,
+        },
+      }),
+      {
+        requestId: readOrGenerateRequestId(req),
+        flattened: currentFlattenedErrors(),
+      }
+    ),
+    route
+  );
+}
+
+/**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error
@@ -177,7 +239,11 @@ export async function runPluginRoute(
   req: Request,
   matched: RouteMatch
 ): Promise<Response> {
-  const auth = await resolvePluginRouteAuth(req, matched.route);
+  const auth = await resolvePluginRouteAuth(
+    req,
+    matched.route,
+    matched.baseCtx.self
+  );
   if ("error" in auth) {
     return markPluginResponse(
       buildErrorResponse(auth.error, {

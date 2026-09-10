@@ -18,6 +18,12 @@
  * no longer owns the row must change nothing, and that is a property of the
  * WHERE clause reaching a real row.
  *
+ * Fourth, that a request to edit lapses. It is held on a lease of its own in a
+ * nullable column, judged by a SQL comparison against a clock this code never
+ * reads — and a comparison that is `NULL` rather than false on one dialect
+ * would report somebody waiting on every document, forever, while every unit
+ * test passed.
+ *
  * Runs against whichever dialect the integration run configures; CI covers
  * SQLite, Postgres and MySQL.
  *
@@ -110,6 +116,27 @@ async function setRemaining(app: TestNextly, seconds: number): Promise<void> {
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
           SET ${sql.identifier("expires_at")} = ${futureExpression(dialect, seconds)}
+          WHERE ${sql.identifier("id")} = ${key}`
+    );
+  });
+}
+
+/**
+ * Push a standing request's own lease into the past.
+ *
+ * The requester going away is the case that matters and it cannot be staged any
+ * other way: it is the ABSENCE of the beat that would have refreshed this, and a
+ * test cannot wait 150 seconds for one not to arrive. Written with the same
+ * clock expression the repository stamps it with, given a negative offset, for
+ * the reason `expireClaim` gives.
+ */
+async function expireRequest(app: TestNextly): Promise<void> {
+  const dialect = app.adapter.getCapabilities().dialect;
+  const key = documentLockKey(DOC.scopeKind, DOC.slug, DOC.entryId);
+  await app.adapter.transaction(async ctx => {
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
+          SET ${sql.identifier("waiting_until")} = ${futureExpression(dialect, -600)}
           WHERE ${sql.identifier("id")} = ${key}`
     );
   });
@@ -332,6 +359,120 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
     expect(await readDocumentLock(app.adapter, DOC)).toBeUndefined();
     const next = await acquireDocumentLock(app.adapter, DOC, GRACE);
     expect(next.status).toBe("acquired");
+  });
+
+  it("tells the holder somebody is waiting, once somebody asks", async () => {
+    const app = await boot(d);
+    const ada = await claim(app, ADA);
+
+    // The control, and the reason it is the first assertion: a column whose
+    // comparison came back NULL rather than false would report a waiting
+    // colleague here, on a document nobody has asked for.
+    const quiet = await renewDocumentLock(app.adapter, DOC, ada.token);
+    expect(quiet).toMatchObject({ status: "renewed", waiting: false });
+
+    // A refused poll on its own is NOT an ask. Every locked-out editor sends one
+    // every beat, so a stamp on this path would mean the holder is nudged by
+    // anybody who merely opened the document to read it.
+    await acquireDocumentLock(app.adapter, DOC, GRACE);
+    const still = await renewDocumentLock(app.adapter, DOC, ada.token);
+    expect(still).toMatchObject({ status: "renewed", waiting: false });
+
+    const asked = await acquireDocumentLock(app.adapter, DOC, GRACE, {
+      requestAccess: true,
+    });
+    // Held, still. The whole point is that asking moves nothing.
+    expect(asked).toMatchObject({ status: "held", waiting: true });
+    expect((await readDocumentLock(app.adapter, DOC))?.ownerId).toBe(
+      "user-ada"
+    );
+
+    const beat = await renewDocumentLock(app.adapter, DOC, ada.token);
+    expect(beat).toMatchObject({ status: "renewed", waiting: true });
+  });
+
+  it("stops telling the holder once the waiting editor has gone", async () => {
+    const app = await boot(d);
+    const ada = await claim(app, ADA);
+    await acquireDocumentLock(app.adapter, DOC, GRACE, { requestAccess: true });
+
+    // Grace closes the tab, so nothing refreshes the request. Without a lease of
+    // its own the mark would outlive her by as long as Ada keeps working, and
+    // Ada would be nudged indefinitely on behalf of somebody who left.
+    await expireRequest(app);
+
+    const beat = await renewDocumentLock(app.adapter, DOC, ada.token);
+    expect(beat).toMatchObject({ status: "renewed", waiting: false });
+  });
+
+  it("carries a still-waiting editor forward rather than refusing the repeat", async () => {
+    const app = await boot(d);
+    const ada = await claim(app, ADA);
+    await acquireDocumentLock(app.adapter, DOC, GRACE, { requestAccess: true });
+    await expireRequest(app);
+
+    // The same beat that would have kept it alive, arriving after it lapsed.
+    // A second ask has to be accepted for the mark to be refreshable at all --
+    // and "still waiting" is what every beat after the first one says.
+    const again = await acquireDocumentLock(app.adapter, DOC, GRACE, {
+      requestAccess: true,
+    });
+    expect(again).toMatchObject({ status: "held", waiting: true });
+
+    const beat = await renewDocumentLock(app.adapter, DOC, ada.token);
+    expect(beat).toMatchObject({ status: "renewed", waiting: true });
+  });
+
+  it("records no request against the editor that WINS the document", async () => {
+    const app = await boot(d);
+
+    // Nobody holds it, so this ask is answered by the document itself. Stamping
+    // the row on the way past would leave a fresh claim carrying a request
+    // against itself, and its holder told on the next beat that they are
+    // waiting for a document they are editing.
+    const got = await acquireDocumentLock(app.adapter, DOC, ADA, {
+      requestAccess: true,
+    });
+    expect(got.status).toBe("acquired");
+    if (got.status !== "acquired") throw new Error("unreachable");
+
+    const beat = await renewDocumentLock(app.adapter, DOC, got.claimToken);
+    expect(beat).toMatchObject({ status: "renewed", waiting: false });
+  });
+
+  it("clears a request when the document changes hands", async () => {
+    const app = await boot(d);
+    await claim(app, ADA);
+    await acquireDocumentLock(app.adapter, DOC, GRACE, { requestAccess: true });
+
+    // Grace stops waiting by taking it. A request is about the claim it was made
+    // against, so it must not survive into the next one -- otherwise the new
+    // holder is told on their first beat that somebody wants the document they
+    // just took, naming a queue that does not exist.
+    const stolen = await acquireDocumentLock(app.adapter, DOC, GRACE, {
+      takeover: true,
+    });
+    expect(stolen.status).toBe("acquired");
+    if (stolen.status !== "acquired") throw new Error("unreachable");
+
+    const beat = await renewDocumentLock(app.adapter, DOC, stolen.claimToken);
+    expect(beat).toMatchObject({ status: "renewed", waiting: false });
+  });
+
+  it("leaves no request behind on a document whose claim was swept", async () => {
+    const app = await boot(d);
+    await claim(app, ADA);
+    await acquireDocumentLock(app.adapter, DOC, GRACE, { requestAccess: true });
+    await expireClaim(app);
+    await sweepExpiredDocumentLocks(app.adapter);
+
+    // The row is gone, so the request went with it. Grace now takes the document
+    // outright, and her own beat must not report her as somebody waiting for it.
+    const got = await acquireDocumentLock(app.adapter, DOC, GRACE);
+    expect(got.status).toBe("acquired");
+    if (got.status !== "acquired") throw new Error("unreachable");
+    const beat = await renewDocumentLock(app.adapter, DOC, got.claimToken);
+    expect(beat).toMatchObject({ status: "renewed", waiting: false });
   });
 
   it("gives the document to exactly one of two simultaneous first claims", async () => {

@@ -30,6 +30,17 @@
  * forever would mean a closed laptop locking a document until its lease runs
  * out with no way to ask for it back.
  *
+ * ## A request to edit is a lease too
+ *
+ * A second author locked out of a document may say they are waiting, and the
+ * holder is told so on their next heartbeat. It is a COURTESY and not a consent
+ * gate: it moves nothing, answers nothing and cannot be refused, and the lease
+ * expiring stays the only thing that transfers the document. It is held on a
+ * lease of its own for the same reason the claim is — so that "somebody is
+ * waiting" is a fact about right now rather than about the past, and a
+ * requester who closed the tab stops nudging a holder they are no longer
+ * waiting on.
+ *
  * ## No flush on takeover
  *
  * Taking a claim over does not move the ousted author's unsaved work anywhere.
@@ -86,6 +97,10 @@ export interface DocumentLockClaimant {
  * before its holder asks again", which is what a claimant needs before it starts
  * editing: a claim shorter than that is live now and gone before anything
  * re-checks it.
+ *
+ * `waiting` is the third time question, asked of the request rather than of the
+ * claim, and decided in the same statement on the same clock so it cannot
+ * disagree with them about what time it is.
  */
 interface LockRow {
   readonly ownerId: string;
@@ -94,6 +109,7 @@ interface LockRow {
   readonly expiresInSeconds: number;
   readonly live: boolean;
   readonly usable: boolean;
+  readonly waiting: boolean;
 }
 
 interface RawLockRow {
@@ -103,6 +119,7 @@ interface RawLockRow {
   readonly expires_in: unknown;
   readonly live: unknown;
   readonly usable: unknown;
+  readonly waiting: unknown;
 }
 
 /**
@@ -127,7 +144,9 @@ function lockRowQuery(dialect: SupportedDialect, key: string): SQL {
       CASE WHEN ${sql.identifier("expires_at")} > ${nowExpression(dialect)}
            THEN 1 ELSE 0 END AS ${sql.identifier("live")},
       CASE WHEN ${sql.identifier("expires_at")} > ${futureExpression(dialect, DOCUMENT_LOCK_RENEW_MARGIN_SECONDS)}
-           THEN 1 ELSE 0 END AS ${sql.identifier("usable")}
+           THEN 1 ELSE 0 END AS ${sql.identifier("usable")},
+      CASE WHEN ${sql.identifier("waiting_until")} > ${nowExpression(dialect)}
+           THEN 1 ELSE 0 END AS ${sql.identifier("waiting")}
       FROM ${sql.identifier(DOCUMENT_LOCK_TABLE)}
       WHERE ${sql.identifier("id")} = ${key}`;
 }
@@ -145,6 +164,10 @@ function toLockRow(row: RawLockRow | undefined): LockRow | undefined {
     expiresInSeconds: Math.trunc(Number(row.expires_in)),
     live: Number(row.live) === 1,
     usable: Number(row.usable) === 1,
+    // A NULL column takes the CASE's ELSE branch on every dialect, so "nobody
+    // has asked" and "the ask has lapsed" arrive here as the same 0 — which is
+    // right, because neither is somebody waiting.
+    waiting: Number(row.waiting) === 1,
   };
 }
 
@@ -265,7 +288,15 @@ function isTakeable(
   );
 }
 
-/** Replace whatever claim the row carries with this one. */
+/**
+ * Replace whatever claim the row carries with this one.
+ *
+ * Clears any standing request, because a request is about the claim it was made
+ * against and this is a different claim. Nothing is lost by that: an editor
+ * still waiting re-states it on its next beat, and a holder who reopens their
+ * own document in a second tab does not inherit a nudge aimed at the claim they
+ * just replaced.
+ */
 function writeClaim(
   dialect: SupportedDialect,
   key: string,
@@ -277,8 +308,58 @@ function writeClaim(
           ${sql.identifier("claim_token")} = ${claimToken},
           ${sql.identifier("owner_label")} = ${claimant.ownerLabel ?? null},
           ${sql.identifier("acquired_at")} = ${nowExpression(dialect)},
-          ${sql.identifier("expires_at")} = ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)}
+          ${sql.identifier("expires_at")} = ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)},
+          ${sql.identifier("waiting_until")} = NULL
       WHERE ${sql.identifier("id")} = ${key}`;
+}
+
+/**
+ * Record that somebody is waiting for this document, on a lease of its own.
+ *
+ * Written as a FUTURE instant rather than as "when they asked", so the question
+ * the holder's heartbeat asks has the same shape as the one a claim answers: is
+ * this still true right now. The locked-out editor re-states it on every beat of
+ * its own, so a requester who closed the tab stops refreshing it and the mark
+ * lapses instead of nudging the holder forever on behalf of somebody who left.
+ *
+ * The SAME TTL as a claim, deliberately, and not a number chosen here. Both
+ * answer "has this party confirmed itself recently" and both are refreshed on
+ * the same beat, so two figures picked side by side for one question would only
+ * drift apart the first time either was tuned.
+ *
+ * Unconditional beyond the key: a request that is already on record is pushed
+ * forward rather than refused, which is what "still waiting" means. It does not
+ * restart a queue or displace an earlier asker, because there is no queue —
+ * nothing here decides who gets the document next.
+ */
+function markWaiting(dialect: SupportedDialect, key: string): SQL {
+  return sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
+      SET ${sql.identifier("waiting_until")} = ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)}
+      WHERE ${sql.identifier("id")} = ${key}`;
+}
+
+/**
+ * Report that somebody else has the document — and, when this caller asked,
+ * leave the fact that they are waiting on the row first.
+ *
+ * The stamp is not read back, unlike the claim above it. That read-back exists
+ * because a claim's outcome is a statement about WHO WON, which only the row can
+ * settle. This UPDATE matches on `id` alone, on a row this transaction has
+ * already locked and read, so it has no condition that can fail to match and no
+ * other writer that can intervene.
+ */
+async function refuse(
+  ctx: Pick<TransactionContext, "runStatement">,
+  dialect: SupportedDialect,
+  key: string,
+  row: LockRow,
+  requestAccess: boolean
+): Promise<AcquireDocumentLockOutcome> {
+  if (!requestAccess) {
+    return { status: "held", holder: toHolder(row), waiting: row.waiting };
+  }
+  await ctx.runStatement(markWaiting(dialect, key));
+  return { status: "held", holder: toHolder(row), waiting: true };
 }
 
 /**
@@ -293,16 +374,33 @@ function writeClaim(
  * that no caller can take a document over by accident: an editor opening a
  * document and a person pressing "take over anyway" are different intents and
  * the server can tell them apart.
+ *
+ * `requestAccess` is the opposite intent, and the weakest one here: leave word
+ * that this caller would like the document, and change nothing else. It rides
+ * the claim rather than travelling on a call of its own because the editor that
+ * is locked out is ALREADY asking for the document on every beat — that poll is
+ * how it learns the holder has left — so the standing "still waiting" is carried
+ * by the request that was going to be sent anyway. A separate endpoint would add
+ * a second request per beat to say something the first one is in a position to
+ * say.
+ *
+ * 🔴 It is recorded only where the answer is `held`. A caller that WINS the
+ * document is not waiting for it, and stamping the row on the way past would
+ * leave every fresh claim carrying a request against itself.
  */
 export async function acquireDocumentLock(
   adapter: DrizzleAdapter,
   ref: DocumentRef,
   claimant: DocumentLockClaimant,
-  options?: { readonly takeover?: boolean }
+  options?: {
+    readonly takeover?: boolean;
+    readonly requestAccess?: boolean;
+  }
 ): Promise<AcquireDocumentLockOutcome> {
   const dialect = adapter.getCapabilities().dialect;
   const key = keyFor(ref);
   const claimToken = randomUUID();
+  const requestAccess = options?.requestAccess === true;
 
   return adapter.transaction(async ctx => {
     // 🔴 INSERT FIRST, then lock. `lockRow` issues `SELECT ... FOR UPDATE`, and
@@ -326,7 +424,7 @@ export async function acquireDocumentLock(
 
     if (existing === undefined) lockRowVanished(key);
     if (!isTakeable(existing, claimant, options?.takeover === true)) {
-      return { status: "held", holder: toHolder(existing) };
+      return await refuse(ctx, dialect, key, existing, requestAccess);
     }
 
     await ctx.runStatement(writeClaim(dialect, key, claimant, claimToken));
@@ -341,7 +439,7 @@ export async function acquireDocumentLock(
     // author writes a different token, so comparing owners would report both
     // callers as holders of one claim and let either release the other's.
     if (after.claimToken !== claimToken || !after.usable) {
-      return { status: "held", holder: toHolder(after) };
+      return await refuse(ctx, dialect, key, after, requestAccess);
     }
     return { status: "acquired", holder: toHolder(after), claimToken };
   });
@@ -386,7 +484,14 @@ export async function renewDocumentLock(
     if (after.claimToken !== claimToken || !after.usable) {
       return { status: "lost", holder: toHolder(after) };
     }
-    return { status: "renewed", holder: toHolder(after) };
+    // The courtesy notice rides the answer the holder was already waiting for.
+    // Nothing here acts on it: a request does not shorten this lease, cannot
+    // refuse this renewal, and is not a step in any handover.
+    return {
+      status: "renewed",
+      holder: toHolder(after),
+      waiting: after.waiting,
+    };
   });
 }
 
