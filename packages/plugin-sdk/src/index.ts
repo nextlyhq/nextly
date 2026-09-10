@@ -288,8 +288,11 @@ export type {
  *   already booted and waits for the migration gate rather than refusing while
  *   it is open.
  *
- *   Re-exported here so a plugin depends on the surface that carries a
- *   compatibility guarantee rather than on core's root entry.
+ *   Re-exported here so a plugin depends on the surface its compatibility is
+ *   governed on rather than on core's root entry. `@experimental` means no
+ *   promise yet, per the ladder above; the point is that the promise is made
+ *   about THIS path once it graduates, while an import of core's root would
+ *   still be reaching past the boundary that makes one possible.
  */
 export { getCachedNextly } from "nextly";
 

@@ -444,8 +444,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * still open. Nextly's own API handlers under `src/api/*` use it, and so does
  * plugin code doing server work outside a route, where there is no
  * `ctx.services` to reach through. A plugin should import it from
- * `@nextlyhq/plugin-sdk`, which is the surface that carries a compatibility
- * guarantee.
+ * `@nextlyhq/plugin-sdk`, which is the surface plugin compatibility is governed
+ * on. It is `@experimental` there today, so it carries no promise yet; what the
+ * SDK gives is that the promise, when it comes, is made about that import path
+ * and not about core's internal layout.
  *
  * `requireNextly()` from `nextly/runtime` also reads, but SYNCHRONOUSLY, so it
  * cannot wait and asserts instead: it throws when the migration gate has not
