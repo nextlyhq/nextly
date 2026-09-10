@@ -55,6 +55,24 @@
 import { boxAcross } from "./geometry-dom";
 import type { SpacingBox, SpacingSide } from "./spacing-bands";
 
+/** An element whose inline `style` this can write and put back. */
+export type StyleCapableElement = Element & ElementCSSInlineStyle;
+
+/**
+ * Whether this element can be probed at all.
+ *
+ * Asked as a CAPABILITY rather than as `instanceof HTMLElement`, because the
+ * blocks needing an answer are not all HTML: `isReplaced` counts `<svg>` among
+ * the replaced boxes and `drawableBoxes` draws its margins, so an HTML-only
+ * test answered every SVG-rooted block with a fallback instead of a
+ * measurement — and a fallback is a direction supplied without measuring, which
+ * is the thing this module exists to stop. An inline `style` is the whole
+ * requirement, and HTML, SVG and MathML elements all carry one.
+ */
+export function styleCapable(element: Element): element is StyleCapableElement {
+  return "style" in element;
+}
+
 /** How far the probe pushes the padding, in CSS pixels. */
 const PROBE_PX = 10;
 
@@ -116,7 +134,7 @@ function edgeMovedOut(
  * @returns whether the OUTER edge is the one that moves
  */
 export function spacingRespondsOutward(
-  block: HTMLElement,
+  block: StyleCapableElement,
   box: SpacingBox,
   side: SpacingSide,
   scale: number

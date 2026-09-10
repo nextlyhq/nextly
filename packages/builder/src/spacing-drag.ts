@@ -510,9 +510,9 @@ export function spacingKeyDelta(
  * `spacingBands` lays a negative margin INSIDE the border edge, reflected
  * across it, so the rectangle's two edges swap which of them is the far one.
  *
- * THIS IS NOT THE DRAG DIRECTION, and conflating the two was a defect review
- * caught. Where the handle sits and which way the NUMBER grows are separate
- * questions that a negative band answers differently: the value of a
+ * THIS IS NOT THE DRAG DIRECTION. Where the handle sits and which way the
+ * NUMBER grows are separate questions, and a negative band answers them
+ * differently: the value of a
  * `margin-top` rising from `-20px` to `-10px` moves the border edge DOWN, the
  * same direction it moves for a positive one, because the physical edge that
  * responds does not care about the sign. Only the rectangle is mirrored, so

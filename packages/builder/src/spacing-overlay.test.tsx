@@ -20,6 +20,7 @@ import {
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import { previewStateClass } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
@@ -712,5 +713,54 @@ describe("the scale a probe's movement is seen at", () => {
     expect(probeScale("padding", "top", halfItself, { x: 0.5, y: 0.5 })).toBe(
       0.25
     );
+  });
+});
+
+describe("the probe's answers belong to the state they were measured in", () => {
+  /*
+   * The answers describe how a block responds under the CSS APPLYING to it, and
+   * forcing a state changes that CSS without an edit and without a resize: the
+   * canvas writes a marker class on the selected block, and a rule arriving with
+   * it can settle an axis that was auto-sized. Neither the document nor the
+   * canvas frame moves, so nothing else here would drop the answers.
+   *
+   * Counted by the WRITES the probe makes, because that is what a cache hit
+   * avoids: a hit mutates nothing at all, which is also what stops the probe
+   * from observing itself forever.
+   */
+  function countProbeWrites(block: HTMLElement): () => number {
+    let writes = 0;
+    const real = block.style.setProperty.bind(block.style);
+    block.style.setProperty = (...args: Parameters<typeof real>): void => {
+      writes += 1;
+      real(...args);
+    };
+    return () => writes;
+  }
+
+  function selectedBlock(container: HTMLElement): HTMLElement {
+    const block = container.querySelector(`[${NODE_ID_ATTRIBUTE}="a"]`);
+    if (!(block instanceof HTMLElement)) throw new Error("no block to probe");
+    return block;
+  }
+
+  it("re-probes when the canvas forces a different state", () => {
+    withFakeResizeObserver();
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    const { container } = mount(editorOf("a"));
+    const writes = countProbeWrites(selectedBlock(container));
+
+    /*
+     * The control, and it is the half that makes the assertion below mean
+     * something: with nothing changed the answers are reused and the probe
+     * writes nothing. Without it, a test that only saw writes AFTER the class
+     * change would pass against a cache that never hit.
+     */
+    remeasure();
+    expect(writes()).toBe(0);
+
+    selectedBlock(container).classList.add(previewStateClass("hover"));
+    remeasure();
+    expect(writes()).toBeGreaterThan(0);
   });
 });

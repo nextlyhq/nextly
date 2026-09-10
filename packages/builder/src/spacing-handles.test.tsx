@@ -1749,8 +1749,8 @@ describe("a negative margin, whose band is drawn mirrored", () => {
   /*
    * `spacingBands` lays a negative margin INSIDE the border edge, reflected
    * across it, so the rectangle's far edge swaps. Where the handle sits and
-   * which way the number grows therefore come apart, and one boolean answered
-   * both until review caught it.
+   * which way the number grows therefore come apart, and one boolean cannot
+   * answer both.
    *
    * Measured in Chromium: raising a `margin-top` from `-20px` to `-10px` moves
    * the block's border edge DOWN and leaves the outer edge pinned where the

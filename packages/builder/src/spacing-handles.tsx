@@ -519,8 +519,8 @@ export function SpacingHandles({
   );
 
   /**
-   * Which way the VALUE grows, which is a different question and was the same
-   * boolean until review caught it.
+   * Which way the VALUE grows, which is a different question from where the
+   * handle sits.
    *
    * The measured answer, taken unmirrored. A negative band is drawn reflected
    * across the border edge, so its rectangle's far edge swaps — but the

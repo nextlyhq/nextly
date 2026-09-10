@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SpacingBox, SpacingSide } from "./spacing-bands";
-import { spacingRespondsOutward } from "./spacing-response";
+import { spacingRespondsOutward, styleCapable } from "./spacing-response";
 
 function block(css?: string): HTMLElement {
   const element = document.createElement("div");
@@ -258,5 +258,46 @@ describe("the probe leaves the element as it found it", () => {
       spacingRespondsOutward(element, "padding", side, 1);
       expect(element.getAttribute("style"), side).toBeNull();
     }
+  });
+});
+
+describe("what can be probed at all", () => {
+  /*
+   * Not every block root is HTML. `isReplaced` counts `<svg>` among the
+   * replaced boxes and `drawableBoxes` will draw its margins, so an HTML-only
+   * test answered every SVG-rooted block with a fallback — a direction supplied
+   * without measuring, which is the one thing this module exists to stop.
+   */
+  it("accepts an SVG root, whose margins the bands already draw", () => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    expect(styleCapable(svg)).toBe(true);
+  });
+
+  it("accepts an ordinary HTML element", () => {
+    expect(styleCapable(document.createElement("div"))).toBe(true);
+  });
+
+  /*
+   * And an element from a namespace carrying no inline style is refused rather
+   * than probed, because the probe writes one and puts it back.
+   */
+  it("refuses an element with no inline style to write", () => {
+    const foreign = document.createElementNS("urn:example:ns", "thing");
+    expect(styleCapable(foreign)).toBe(false);
+  });
+
+  /*
+   * And the probe really runs on one, leaving it as it found it. Accepting the
+   * element without being able to restore it would be worse than refusing it:
+   * the canvas watches this subtree, so a leftover attribute is an edit nobody
+   * made.
+   */
+  it("probes an SVG root and puts its attribute back", () => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    document.body.append(svg);
+    expect(styleCapable(svg)).toBe(true);
+    if (!styleCapable(svg)) return;
+    spacingRespondsOutward(svg, "margin", "bottom", 1);
+    expect(svg.getAttribute("style")).toBeNull();
   });
 });

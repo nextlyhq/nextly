@@ -62,6 +62,7 @@
  * @module spacing-overlay
  */
 
+import { previewStateClass, STYLE_STATES } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import {
@@ -105,7 +106,7 @@ import {
   type SpacingScrubContext,
   type SpacingSubject,
 } from "./spacing-handles";
-import { spacingRespondsOutward } from "./spacing-response";
+import { spacingRespondsOutward, styleCapable } from "./spacing-response";
 
 export interface SpacingOverlayProps {
   /** The editor whose primary selection is measured. */
@@ -534,6 +535,20 @@ function sameSubject(
  * The root's own painted scale composes either way, because it is above the
  * element and applies to both boxes alike.
  */
+/**
+ * The forced-state marker the canvas has put on this element, or `""` for none.
+ *
+ * Derived from the engine's own `previewStateClass`, which is published as a
+ * contract precisely so the marker is not spelled twice.
+ */
+function appliedStateOf(block: Element): string {
+  for (const state of STYLE_STATES) {
+    const marker = previewStateClass(state);
+    if (block.classList.contains(marker)) return marker;
+  }
+  return "";
+}
+
 export function probeScale(
   box: SpacingBox,
   side: SpacingSide,
@@ -751,21 +766,31 @@ export function SpacingOverlay({
      */
     const answers = answersFor(responds.current, document);
 
+    /*
+     * Which forced state the canvas has applied, as part of what was measured.
+     *
+     * The answers describe how the block responds under the CSS applying to it,
+     * and forcing a state changes that CSS with no edit and no resize: the
+     * canvas writes a marker class on the selected block, and a rule arriving
+     * with it can settle an axis that was auto-sized. Read off the ELEMENT
+     * rather than from whatever asked for the state, so it cannot name one the
+     * canvas has not applied yet.
+     */
+    const appliedState = appliedStateOf(block);
+
     /** This node's answer for one box and side, probed once and remembered. */
     const outwardFor = (box: SpacingBox, side: SpacingSide): boolean => {
-      const key = `${selectedId}\u0000${box}\u0000${side}`;
+      const key = `${appliedState}\u0000${selectedId}\u0000${box}\u0000${side}`;
       const known = answers.get(key);
       if (known !== undefined) return known;
-      const realm = block.ownerDocument.defaultView;
-      const answer =
-        realm !== null && block instanceof realm.HTMLElement
-          ? spacingRespondsOutward(
-              block,
-              box,
-              side,
-              probeScale(box, side, scale, rootPainted)
-            )
-          : false;
+      const answer = styleCapable(block)
+        ? spacingRespondsOutward(
+            block,
+            box,
+            side,
+            probeScale(box, side, scale, rootPainted)
+          )
+        : false;
       answers.set(key, answer);
       return answer;
     };
