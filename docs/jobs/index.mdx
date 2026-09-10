@@ -71,13 +71,36 @@ so the URL is:
 POST /admin/api/jobs/run
 ```
 
-Point a cron job, a platform scheduler, or an operator at it. If you mounted the handlers
-somewhere else, use that path instead.
+If you mounted the handlers somewhere else, use that path instead.
+
+### Authenticating the caller
+
+The route is not open. A scheduler has no session, so it authenticates with a shared
+secret: set `NEXTLY_DRAIN_SECRET` (or `CRON_SECRET`) to a value of **at least 32
+characters**, and send it as a bearer token.
+
+```
+POST /admin/api/jobs/run
+Authorization: Bearer $NEXTLY_DRAIN_SECRET
+```
+
+A secret shorter than 32 characters is ignored rather than accepted, so a value that looks
+configured can still be refused.
+
+A signed-in human can pull the trigger instead, with the `manage-background-jobs`
+permission and a POST. `GET` always requires the secret, because a permission check alone
+would let a browser be steered into firing it.
 
 <Callout type="warn">
-There is no general `/api` handler in a scaffolded app, so a scheduler pointed at
-`/api/jobs/run` gets a 404 and nothing ever runs. Nothing reports this: the queue simply
-grows.
+Two ways to get a queue that grows and never drains, both silent:
+
+- a scheduler pointed at `/api/jobs/run`, which 404s because a scaffolded app has no
+  general `/api` handler
+- a call with no `Authorization` header, or a secret under 32 characters, which is
+  refused with a 403
+
+Neither reports anything from the application's side. Check your scheduler's own log for
+the response code the first time you wire it up.
 </Callout>
 
 A pass is bounded. It claims at most 10 queued jobs, and it stops **starting** new ones
