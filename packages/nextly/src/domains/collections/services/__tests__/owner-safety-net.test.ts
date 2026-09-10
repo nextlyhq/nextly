@@ -69,7 +69,12 @@ describe("ownerSafetyNetApplies", () => {
       ownerSafetyNetApplies({
         ...BASE,
         isSuperAdmin: true,
-        scope: { actorType: "user" },
+        // `permissions` is required on the scope, and empty is what a SESSION
+        // caller carries: it resolves its grants the normal way rather than
+        // from the scope. Spelled out because the field is what every coarse
+        // check compares against, so omitting it is not the same as passing
+        // none.
+        scope: { actorType: "user", permissions: [] },
       })
     ).toBe(false);
   });
