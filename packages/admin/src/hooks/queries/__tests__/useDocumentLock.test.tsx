@@ -415,6 +415,54 @@ describe("useDocumentLock", () => {
     );
   });
 
+  it("does not let an older renewal reverse a newer one's answer", async () => {
+    // 🔴 Renewals overlap, and their replies can arrive out of order — the
+    // lease is already advanced with `Math.max` for exactly this reason. The
+    // waiting answer needs the same fence: a slow beat that left BEFORE anybody
+    // asked still says "nobody is waiting", and landing after a later beat that
+    // said otherwise would take the notice away from the holder until some
+    // subsequent renewal happened to put it back.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    // The older beat leaves first and is still in flight, carrying the answer
+    // from before the ask.
+    let settleOlder: (value: unknown) => void = () => {};
+    patch.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleOlder = resolve;
+      })
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    // The newer beat leaves afterwards and answers first.
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: true,
+      })
+    );
+
+    await act(async () => {
+      settleOlder({ message: "", item: { status: "renewed", waiting: false } });
+    });
+
+    // Still told. The stale reply describes a moment that has passed.
+    expect(result.current.state).toEqual({
+      status: "held-by-me",
+      someoneWaiting: true,
+    });
+  });
+
   it("says it once, not once per beat", async () => {
     // 🔴 The notice lives in a live region, so re-rendering it on an unchanged
     // answer would read the same sentence to somebody every fifteen seconds.
