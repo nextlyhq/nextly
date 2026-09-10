@@ -148,8 +148,20 @@ export function ChartFrame({
               </tr>
             </thead>
             <tbody>
+              {/* The separator token at full strength, matching the shared table
+                  primitive every other table already uses. Drawn at half alpha
+                  it was a call-site variant the contrast suite flags: faint
+                  alpha borders are what that guard polices, and this one
+                  measured 1.11:1 against the page surface.
+
+                  Full strength is NOT a claim that the line clears 3:1 —
+                  `theme.css` records `--nx-border` as deliberately below that
+                  minimum to keep the palette's light border weight, and
+                  `contrast/accepted.ts` is where those pairings are held. What
+                  this fixes is a one-off that was both fainter than the token
+                  and inconsistent with every other table in the product. */}
               {rows.map(row => (
-                <tr key={row.key} className="border-b border-border/50">
+                <tr key={row.key} className="border-b border-border">
                   {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
                   <th
