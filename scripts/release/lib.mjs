@@ -94,6 +94,22 @@ export function readPreState() {
 }
 
 /**
+ * The mode `.changeset/pre.json` records, or `null` when there is no such file.
+ *
+ * 🔴 Deliberately NOT `readPreState`, which answers `null` for `mode: "exit"`
+ * and for no file at all. Those are different situations. Exiting prerelease
+ * mode is a transition the repository is IN: the manifests still declare the
+ * last alpha until the Version PR lands, so anything that cannot tell the two
+ * apart treats that alpha as a stable release and expects `latest` to resolve
+ * to it. The remedy that follows from believing this says to move `latest` onto
+ * a prerelease, which is a worse outcome than the check not running at all.
+ */
+export function readPreMode() {
+  if (!existsSync(PRE_STATE_PATH)) return null;
+  return readJson(PRE_STATE_PATH).mode ?? null;
+}
+
+/**
  * The workspace as the release tooling sees it, in two lists that are NOT the
  * same and must not be swapped:
  *
@@ -488,6 +504,19 @@ export async function waitForCompleteRelease({
   budgetMs = SETTLE_BUDGET_MS,
   firstDelayMs = FIRST_DELAY_MS,
   maxDelayMs = MAX_DELAY_MS,
+  /*
+   * What "not settled yet" means, so a caller can ask a narrower question than
+   * the release gate does. The default is the full predicate, which is right
+   * for `verify`: it decides whether to finalize, so anything short of a whole
+   * release is worth waiting on.
+   *
+   * 🔴 A caller that only reports must not wait on conditions that can never
+   * clear. A dist-tag that was never moved is a real defect, not a delay, and a
+   * package awaiting its first publish will not appear however long anyone
+   * waits; waiting on either turns the budget into a guaranteed stall before
+   * the same verdict.
+   */
+  problemsFor = collectProblems,
 }) {
   const deadline = now() + budgetMs;
   let delay = firstDelayMs;
@@ -497,7 +526,7 @@ export async function waitForCompleteRelease({
 
   for (;;) {
     registry = await fetchStates(manifest);
-    problems = collectProblems(manifest, registry, preState);
+    problems = problemsFor(manifest, registry, preState);
     attempts += 1;
     if (problems.length === 0) break;
 

@@ -30,7 +30,6 @@ import {
   dispatchEmailProviders,
   dispatchEmailTemplates,
 } from "./handlers/email-dispatcher";
-import { dispatchForms } from "./handlers/form-dispatcher";
 import { dispatchSingles } from "./handlers/single-dispatcher";
 import { dispatchUser } from "./handlers/user-dispatcher";
 import { dispatchUserFields } from "./handlers/user-field-dispatcher";
@@ -68,7 +67,6 @@ export class ServiceDispatcher {
     "auth",
     "collections",
     "singles",
-    "forms",
     "field-groups",
     "userFields",
     "emailProviders",
@@ -269,8 +267,6 @@ export class ServiceDispatcher {
         return dispatchRbac(this.container, method, p, body);
       case "singles":
         return dispatchSingles(method, p, body, request.request);
-      case "forms":
-        return dispatchForms(this.container, method, p, body, request.request);
       case "field-groups":
         return dispatchComponents(method, p, body);
       case "userFields":

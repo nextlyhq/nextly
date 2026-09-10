@@ -36,6 +36,8 @@ function buildAccessService() {
     accessControlService as never,
     {
       checkAccess: vi.fn().mockResolvedValue(true),
+      // Answers `undefined`: no code-defined rule, so the stored rules decide.
+      checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       getRegisteredAccess: vi.fn().mockReturnValue(undefined),
     } as never
   );

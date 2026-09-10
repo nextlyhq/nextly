@@ -107,6 +107,9 @@
 - name: "ci-metadata-failure"
   color: "b60205"
   description: "Filed automatically when the scheduled repository-metadata check fails"
+- name: "ci-release-health-failure"
+  color: "b60205"
+  description: "Filed automatically when a published release is missing its tag or GitHub Release"
 
 # ── GitHub-native labels ── platform treats these specially in the UI
 - name: "good first issue"

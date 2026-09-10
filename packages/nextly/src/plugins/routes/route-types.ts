@@ -162,6 +162,19 @@ export interface PluginRoute {
   requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
+  /**
+   * Convert stored timestamps to the installation's configured timezone, the
+   * way every built-in collection read does.
+   *
+   * Off by default, and that default is the safe one: the response boundary
+   * rewrites date-LOOKING strings by value, so a route returning descriptors,
+   * identifiers or free text could have a field mangled that was never a
+   * timestamp. A route answering with collection documents wants it on, and
+   * before this flag existed such a route could not ask: a plugin taking over
+   * an endpoint that used to be core's silently changed its timestamps on
+   * every install with a non-UTC timezone.
+   */
+  formatTimestamps?: boolean;
   /** Ordered, typed route-level middleware chain. */
   middleware?: Middleware[];
   /**

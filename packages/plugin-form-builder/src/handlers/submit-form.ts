@@ -18,6 +18,7 @@ import type {
   ResolvedFormBuilderConfig,
 } from "../types";
 import { normalizeFormSettings } from "../utils/form-settings";
+import type { ValidationIssue } from "../utils/generate-schema";
 import {
   applyRedirectPattern,
   documentReachability,
@@ -66,7 +67,49 @@ export interface SubmitFormOptions {
    * it fills and the wrong shape for deciding who to throttle.
    */
   request?: Request;
+
+  /**
+   * Whose permissions the reads and the write are judged against.
+   *
+   * Defaults to `system`, so every existing caller behaves as before.
+   */
+  access?: SubmissionAccess;
 }
+
+/**
+ * How this submission reaches the collections it touches.
+ *
+ * `system` is the default and is right for host code: the caller already
+ * decided, and there is no visitor whose permissions could be consulted.
+ *
+ * `public` is for a route serving an anonymous visitor. It keeps the
+ * collection's configured `access` rules in force, so a host that closed
+ * submissions or restricted reading forms is obeyed rather than bypassed. The
+ * former core endpoint ran this way, and elevating a public route to `system`
+ * silently overrode that configuration.
+ */
+export type SubmissionAccess = { as: "system" } | { as: "public" };
+
+/**
+ * Why a submission ended the way it did.
+ *
+ * `success` alone cannot carry this. An HTTP route has to answer 404 for a slug
+ * nobody used, 409 for a form its author closed and 400 for data that did not
+ * validate, and a boolean plus a human sentence cannot tell those apart without
+ * matching on the sentence.
+ *
+ * `accepted` covers every ending a visitor is told succeeded, INCLUDING the two
+ * that are deliberately indistinguishable from success: a submission the
+ * honeypot flagged, and one the rate limiter refused. A caller must not try to
+ * separate them, which is why they do not appear here as their own names.
+ */
+export type SubmitFormOutcome =
+  | "accepted"
+  | "no-such-form"
+  | "closed"
+  | "invalid"
+  | "duplicate"
+  | "failed";
 
 /**
  * Result of form submission.
@@ -74,6 +117,14 @@ export interface SubmitFormOptions {
 export interface SubmitFormResult {
   /** Whether the submission was successful */
   success: boolean;
+
+  /**
+   * Which ending this was, for a caller that has to map it to a status code.
+   *
+   * Required rather than optional, so a return path added later cannot omit it
+   * and leave the HTTP route guessing from the message text.
+   */
+  outcome: SubmitFormOutcome;
 
   /** The created submission document (on success) */
   submission?: SubmissionDocument;
@@ -84,8 +135,39 @@ export interface SubmitFormResult {
   /** Field-level validation errors */
   validationErrors?: Record<string, string>;
 
+  /**
+   * The same failures with their machine codes, for a caller building an HTTP
+   * error. `validationErrors` above cannot carry one, so a route reading only
+   * that has to invent a code and reports every blank answer as `INVALID`.
+   */
+  validationIssues?: ValidationIssue[];
+
   /** Redirect URL (if form configured for redirect on success) */
   redirect?: string;
+
+  /**
+   * The error that ended a `failed` submission, kept rather than flattened.
+   *
+   * A collection can refuse a write for reasons its host chose: a
+   * `beforeValidate` hook throwing `NextlyError.validation`, a uniqueness
+   * conflict. Those carry their own status and field detail, and reporting them
+   * all as one internal error tells a visitor the server broke when in fact
+   * their submission was answered deliberately.
+   */
+  cause?: unknown;
+
+  /**
+   * The toast the form's author wrote for a successful submission.
+   *
+   * Carried on the result rather than read from the form again by whoever
+   * presents it: the HTTP route would otherwise have to fetch the form a second
+   * time purely to learn a string this function already had in hand, and a
+   * second read is a second chance to disagree about which form was submitted.
+   *
+   * Present on every `accepted` ending, including the ones a bot caused, so the
+   * message cannot be used to tell an accepted submission from a flagged one.
+   */
+  successMessage?: string;
 }
 
 /**
@@ -149,19 +231,25 @@ export async function submitForm(
   context: SubmitFormContext
 ): Promise<SubmitFormResult> {
   const { formSlug, data, metadata, request } = options;
+  const access: SubmissionAccess = options.access ?? { as: "system" };
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
   const { logger } = pluginContext;
 
   try {
     // 1. Fetch form configuration
-    const form = await fetchFormBySlug(formSlug, pluginConfig, pluginContext);
+    const form = await fetchFormBySlug(
+      formSlug,
+      pluginConfig,
+      pluginContext,
+      access
+    );
 
     if (!form) {
       logger.warn?.("Form submission attempted for non-existent form", {
         formSlug,
       });
-      return { success: false, error: NO_SUCH_FORM };
+      return { success: false, outcome: "no-such-form", error: NO_SUCH_FORM };
     }
 
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
@@ -181,6 +269,7 @@ export async function submitForm(
       // four came to give four different answers in the first place.
       return {
         success: false,
+        outcome: availability.kind === "closed" ? "closed" : "no-such-form",
         error:
           availability.kind === "closed" ? availability.message : NO_SUCH_FORM,
       };
@@ -216,6 +305,10 @@ export async function submitForm(
             status: { not_equals: "spam" },
           },
         },
+        // Deliberately elevated, unlike the write below. This counts rows the
+        // visitor is not entitled to see in order to refuse their second
+        // submission; judged as the public it would count zero on any install
+        // that hides submissions and the restriction would never apply.
         { as: "system" }
       );
       if (existing > 0) {
@@ -225,6 +318,7 @@ export async function submitForm(
         });
         return {
           success: false,
+          outcome: "duplicate",
           error: "You have already submitted this form.",
         };
       }
@@ -282,8 +376,10 @@ export async function submitForm(
       });
       return {
         success: false,
+        outcome: "invalid",
         error: "Validation failed",
         validationErrors: prepared.validationErrors,
+        validationIssues: prepared.validationIssues,
       };
     }
 
@@ -324,24 +420,41 @@ export async function submitForm(
         // same facts as one arriving through a Nextly route. Omitted by a caller
         // that has none, and then the seam correctly reads the write as
         // server-side work.
-        { as: "system", ...(request ? { request } : {}) }
+        //
+        // `access` rather than a fixed `system`, so a route serving an anonymous
+        // visitor is still judged against the collection's own create rule. A
+        // host that closed public submissions configured that on the
+        // collection, and a write elevated past it reports a 201 for a
+        // submission they had refused.
+        { ...access, ...(request ? { request } : {}) }
       );
     } catch (error) {
       // The seam refuses a submission over the limit, and refuses it the same
-      // way at every door. This helper answers its own caller with a success
-      // anyway: a host route calls it to serve a browser, and a bot told it was
-      // limited learns the rate to sit under.
+      // way at every door. This answers its own caller with a success anyway: a
+      // browser is on the other end of it, and a bot told it was limited learns
+      // the rate to sit under.
       //
-      // This is NOT the built-in `POST /api/forms/:slug/submit`, which core's
-      // form dispatcher serves without calling this at all. That endpoint
-      // returns the refusal as a 429.
+      // `POST /api/forms/:slug/submit` reaches this. The route is contributed
+      // by this plugin and calls this function, so the refusal a visitor sees
+      // is decided here rather than being reconstructed as a 429 by an endpoint
+      // that never consulted the seam.
       //
       // Nothing is stored. A limiter that wrote a row per refusal would hand an
       // attacker a way to fill the database with the very volume it exists to
       // refuse.
       if (NextlyError.isRateLimited(error)) {
         logger.info?.("Form submission refused (rate limit)", { formSlug });
-        return { success: true };
+        return {
+          success: true,
+          outcome: "accepted",
+          successMessage: settings.successMessage,
+          // The same destination an accepted submission gets. Returning early
+          // without it left a throttled visitor on the form instead of the
+          // page its author sends people to, and made the one response this
+          // whole branch exists to disguise the only accepted one carrying no
+          // redirect.
+          redirect: await resolveRedirectUrl(form, pluginConfig, pluginContext),
+        };
       }
       throw error;
     }
@@ -378,11 +491,18 @@ export async function submitForm(
     );
 
     if (isContentSpam) {
-      return { success: true, redirect };
+      return {
+        success: true,
+        outcome: "accepted",
+        successMessage: settings.successMessage,
+        redirect,
+      };
     }
 
     return {
       success: true,
+      outcome: "accepted",
+      successMessage: settings.successMessage,
       // The created ROW, not the envelope around it. Through the shared
       // conversion, which is where the unchecked step lives and says so; the
       // integration test reads `submission.id` off the result because nothing
@@ -398,7 +518,9 @@ export async function submitForm(
 
     return {
       success: false,
+      outcome: "failed",
       error: "An error occurred processing your submission. Please try again.",
+      cause: error,
     };
   }
 }
@@ -418,25 +540,28 @@ export async function submitForm(
 export async function fetchFormBySlug(
   slug: string,
   pluginConfig: ResolvedFormBuilderConfig,
-  pluginContext: PluginContext
+  pluginContext: PluginContext,
+  access: SubmissionAccess = { as: "system" }
 ): Promise<FormDocument | null> {
-  try {
-    const { collections } = pluginContext.services;
+  const { collections } = pluginContext.services;
 
-    // D56: resolve the form by slug via a service-level `where` query
-    // instead of fetching every form and filtering client-side. Forms are
-    // public config the plugin owns, so the read runs as system.
-    const result = await collections.listEntries(
-      pluginConfig.formOverrides.slug,
-      { where: { slug: { equals: slug } }, pagination: { limit: 1 } },
-      { as: "system" }
-    );
+  // D56: resolve the form by slug via a service-level `where` query instead of
+  // fetching every form and filtering client-side.
+  //
+  // Nothing is caught here. A read that THREW did not establish that the form
+  // is absent, and answering `null` made a database outage or a broken schema
+  // indistinguishable from a slug nobody has ever used: the caller was told
+  // "no such form", which is a 404 a client may cache and a person may act on
+  // by deleting the link. A failure now propagates and is answered as the
+  // server error it is.
+  const result = await collections.listEntries(
+    pluginConfig.formOverrides.slug,
+    { where: { slug: { equals: slug } }, pagination: { limit: 1 } },
+    access
+  );
 
-    const form = result.data?.[0];
-    return form ? asFormDocument(form) : null;
-  } catch {
-    return null;
-  }
+  const form = result.data?.[0];
+  return form ? asFormDocument(form) : null;
 }
 
 /**

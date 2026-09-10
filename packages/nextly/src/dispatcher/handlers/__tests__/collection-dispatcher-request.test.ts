@@ -19,7 +19,6 @@ vi.mock("../../helpers/di", () => ({
 import type { ServiceContainer } from "../../../services";
 import { getCollectionsHandlerFromDI } from "../../helpers/di";
 import { dispatchCollections } from "../collection-dispatcher";
-import { dispatchForms } from "../form-dispatcher";
 
 const request = new Request("https://example.test/api/collections/notes", {
   method: "POST",
@@ -69,38 +68,5 @@ describe("the generic collection door", () => {
     );
     const passed = createEntry.mock.calls[0]![0] as { request?: unknown };
     expect(passed.request).toBeUndefined();
-  });
-});
-
-describe("the form door", () => {
-  it("hands the request to the submission it writes", async () => {
-    const handler = {
-      listEntries: vi.fn().mockResolvedValue({
-        ...ok,
-        data: {
-          docs: [
-            {
-              id: "f1",
-              slug: "contact",
-              status: "published",
-              fields: [{ name: "email", label: "Email", type: "text" }],
-              settings: {},
-            },
-          ],
-        },
-      }),
-      createEntry: vi.fn().mockResolvedValue({ ...ok, statusCode: 201 }),
-    };
-    await dispatchForms(
-      wire(handler),
-      "submitForm",
-      { slug: "contact" },
-      { data: { email: "a@b.test" } },
-      request
-    );
-    const passed = handler.createEntry.mock.calls[0]![0] as {
-      request?: unknown;
-    };
-    expect(passed.request).toBe(request);
   });
 });
