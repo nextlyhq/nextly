@@ -26,18 +26,25 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A write records what kind of caller made it.
+An API key's write appears in the activity trail.
 
-An API-key write, an import, a job write and a bulk edit recorded nothing in
-the activity trail — not mislabelled, absent. The recorder refused any actor
-that was not a signed-in person, because a row's identity column is joined to
-the accounts table and a key's own id would find no account and be filed as an
-already-erased person.
+It recorded nothing before — not mislabelled, absent. The recorder refused any
+actor that was not a signed-in person, because a row's identity column is
+joined to the accounts table and a key's own id would find no account and be
+filed as an already-erased person. So every write made with an API key was
+invisible, and nothing about it is recoverable after the fact.
 
-The row now carries the KIND of caller that column refers to, so each is
-recorded as itself. `user_id` is unchanged and still required: it is already
-documented as the actor's opaque reference, so one nullable `actor_type` is the
-whole schema change and no dialect needs a nullability rebuild.
+The row now carries the KIND of caller its identity column refers to, and the
+admin's Recent Activity names the key rather than showing a blank actor.
+`user_id` is unchanged and still required: it is already documented as the
+actor's opaque reference, so one nullable `actor_type` is the whole schema
+change and no dialect needs a nullability rebuild.
 
 A NULL kind means a row written before this existed. Those are all user writes,
 because no other kind was recordable.
+
+Writes with NO initiating actor — seeds, migrations, imports and jobs — are
+still not recorded, and the reason has changed rather than gone away. They run
+while the schema is being created, and a failure to write the trail fails the
+surrounding write: a trail insert against a table that does not exist yet would
+fail the seed that was creating it. That needs its own answer.
