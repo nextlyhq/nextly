@@ -96,7 +96,19 @@ export function manifestAtRef(ref, run = execFileSync) {
       run("git", ["show", `${ref}:${path}`], { encoding: "utf8" })
     );
     if (pkg.private === true) continue;
-    if (typeof pkg.name !== "string" || typeof pkg.version !== "string") continue;
+    /*
+     * 🔴 Skipping a malformed PUBLIC manifest would shrink the question. The
+     * package would drop out of the train, this check would never ask the
+     * registry about it, and a release could be reported finished while that
+     * package was never published. An unreadable manifest is a question that
+     * cannot be asked, not a package that is not there.
+     */
+    if (typeof pkg.name !== "string" || typeof pkg.version !== "string") {
+      throw new Error(
+        `${path} at ${ref} is publishable but declares no usable name and ` +
+          "version, so the release it belongs to cannot be graded."
+      );
+    }
     manifest.push({ name: pkg.name, version: pkg.version });
   }
   return manifest;
@@ -282,11 +294,17 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
   if (tag.kind === "absent") missing.push(`the git tag ${tagFor(version)}`);
   if (release === "absent") missing.push(`the GitHub Release ${tagFor(version)}`);
 
-  if (
-    tag.kind === "present" &&
-    tagVersion?.kind === "known" &&
-    tagVersion.version !== version
-  ) {
+  /*
+   * 🔴 Anything that is not explicitly a known version is unknown. `verdict` is
+   * exported and untyped, so a caller that omits `tagVersion`, or passes the
+   * bare string an earlier shape used, must not fall through to `finalized`:
+   * that is a tag whose target was never established being reported as one
+   * that was.
+   */
+  const tagVersionKnown =
+    tagVersion?.kind === "known" && typeof tagVersion.version === "string";
+
+  if (tag.kind === "present" && tagVersionKnown && tagVersion.version !== version) {
     return {
       code: 1,
       state: "mistagged",
@@ -294,7 +312,13 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
         `${tagFor(version)} points at a commit that declares ` +
         `${tagVersion.version}, not ${version}, so the tag does not identify ` +
         "this release.",
-      remedy: "retag",
+      /*
+       * 🔴 Moving a tag does not create a GitHub Release. `release.yml` writes
+       * one only on a run of its own, so when the release is missing as well,
+       * retagging alone leaves this failing and the next scheduled check
+       * reports the same state again.
+       */
+      remedy: release === "present" ? "retag" : "retag-then-rerun",
     };
   }
 
@@ -309,7 +333,7 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
     const unknowns = [];
     if (tag.kind === "unknown") unknowns.push("whether the git tag exists");
     if (release === "unknown") unknowns.push("whether the GitHub Release exists");
-    if (tag.kind === "present" && tagVersion?.kind === "unknown") {
+    if (tag.kind === "present" && !tagVersionKnown) {
       unknowns.push(`which version ${tagFor(version)} points at`);
     }
 
@@ -348,7 +372,12 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
      * exists and only the tag is gone: it prints "already exists; nothing to
      * finalize" and goes green while this keeps failing.
      */
-    remedy: release === "present" ? "tag-only" : "rerun",
+    remedy:
+      release === "present"
+        ? "tag-only"
+        : release === "unknown"
+          ? "check-release-first"
+          : "rerun",
   };
 }
 
@@ -367,6 +396,47 @@ export function remedyFor(result, version) {
       "",
       `      git tag -a ${tag} <commit> -m "${tag}"`,
       `      git push origin refs/tags/${tag}`,
+      "",
+    ].join("\n");
+  }
+
+  if (result.remedy === "check-release-first") {
+    return [
+      "  The GitHub Release could not be read, and the two possible answers",
+      "  need opposite remedies, so establish which one is true first:",
+      "",
+      `      gh release view ${tag} --repo nextlyhq/nextly`,
+      "",
+      "  If it EXISTS, re-running repairs nothing: the release workflow finds",
+      "  the release, reports nothing to finalize, and skips the branch that",
+      "  pushes the tag. Push the tag at the commit that introduced this",
+      "  version instead:",
+      "",
+      `      git tag -a ${tag} <commit> -m "${tag}"`,
+      `      git push origin refs/tags/${tag}`,
+      "",
+      "  If it does NOT exist, re-run the release run that published this",
+      "  version and both artifacts are created together:",
+      "",
+      "      gh run rerun <id> --failed",
+      "",
+    ].join("\n");
+  }
+
+  if (result.remedy === "retag-then-rerun") {
+    return [
+      "  Two things are wrong: the tag names a different release, and the",
+      "  GitHub Release is missing. Move the tag first, deliberately, after",
+      "  checking which commit the packages were built from:",
+      "",
+      `      git push origin :refs/tags/${tag}`,
+      `      git tag -a ${tag} <commit> -m "${tag}"`,
+      `      git push origin refs/tags/${tag}`,
+      "",
+      "  Then re-run the release, because moving a tag does not create a",
+      "  GitHub Release and nothing else will:",
+      "",
+      "      gh run rerun <id> --failed",
       "",
     ].join("\n");
   }

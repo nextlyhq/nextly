@@ -43,6 +43,11 @@ concurrency:
 jobs:
   finalized:
     name: The release main declares is finalized
+    # Same guard as `release.yml`. A fork's Release run completes with its only
+    # job skipped and still fires `workflow_run`, and this check reads the
+    # upstream registry and the upstream GitHub Release, so on a fork it would
+    # file an issue about a release the fork does not own.
+    if: github.repository == 'nextlyhq/nextly'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -53,7 +58,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # Dropped deliberately: the check reaches the remote with
+          # `git ls-remote origin`, and this repository is public, so that read
+          # is anonymous. Making it private would turn every tag lookup into
+          # "unknown" and this job into a daily exit 2, so restore the
+          # credential in the same change.
           persist-credentials: false
+          # The commit the finished release actually ran on. For a
+          # `workflow_run` event `github.sha` is the default branch tip, so if
+          # `main` moved between the release finishing and this starting, the
+          # question would be about a version that release never published.
+          # Empty on the schedule and on a manual run, where the branch tip is
+          # the right subject.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           # Full history, because a tag is judged by the version its target
           # commit declares. A shallow clone cannot read a commit older than its
           # depth, which would turn every tag into an unreadable one.
@@ -90,9 +107,14 @@ jobs:
 
           if [ "$code" -eq 1 ]; then
             echo "unfinalized=true" >> "$GITHUB_OUTPUT"
-            # The first line of the diagnosis, for the issue title. `head -1`
-            # on the whole report would pick the "FAILED" banner instead.
-            headline=$(printf '%s\n' "$report" | sed -n '3p' | sed 's/^ *//')
+            # The first non-empty line AFTER the banner. A fixed line number
+            # takes whatever a runtime warning pushed into that position, and
+            # the headline becomes an issue title nobody can act on. `exit`
+            # after the first match keeps it to one line, so the value can
+            # never carry a newline into $GITHUB_OUTPUT.
+            headline=$(printf '%s\n' "$report" \
+              | awk '/check-finalized: FAILED/{seen=1; next} seen && NF {print; exit}' \
+              | sed 's/^ *//')
             echo "headline=${headline}" >> "$GITHUB_OUTPUT"
             {
               echo "## The release main declares is not finished"
@@ -110,7 +132,9 @@ jobs:
   report-failure:
     name: File an issue on failure
     needs: [finalized]
-    if: always() && needs.finalized.outputs.unfinalized == 'true'
+    if: >-
+      always() && github.repository == 'nextlyhq/nextly'
+      && needs.finalized.outputs.unfinalized == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

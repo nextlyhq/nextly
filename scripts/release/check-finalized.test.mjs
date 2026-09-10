@@ -82,7 +82,7 @@ describe("what a finished release consists of", () => {
       version: VERSION,
       publish: ALL,
       tag: TAG(SHA),
-      tagVersion: VERSION,
+      tagVersion: { kind: "known", version: VERSION },
       release: "absent",
     });
 
@@ -343,6 +343,64 @@ describe("a train that stranded halfway", () => {
   });
 });
 
+describe("an answer that was never established", () => {
+  it("treats a tag version in any other shape as unknown", () => {
+    /*
+     * 🔴 `verdict` is exported and untyped. A caller that omits `tagVersion`,
+     * or passes the bare string an earlier shape used, must not fall through
+     * to `finalized`: nothing established what the tag points at, and a tag on
+     * an unrelated commit is the corruption this rule exists to catch.
+     */
+    for (const shape of [undefined, VERSION, {}, { kind: "known" }]) {
+      const result = verdict({
+        version: VERSION,
+        publish: ALL,
+        tag: TAG(SHA),
+        tagVersion: shape,
+        release: "present",
+      });
+
+      expect(result.code, `shape ${JSON.stringify(shape)}`).toBe(2);
+      expect(result.state).toBe("unknown");
+    }
+  });
+
+  it("still reports a finished release when the tag version IS known", () => {
+    // The control: the loop above would pass on a rule that called every tag
+    // unknown.
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "present",
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.state).toBe("finalized");
+  });
+
+  it("does not prescribe a re-run when the release could not be read", () => {
+    // A re-run repairs a missing tag only when the release is missing too. If
+    // the release exists after all, `release.yml` reports nothing to finalize
+    // and skips the branch that pushes the tag, so the advice would succeed
+    // while repairing nothing.
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: NO_TAG,
+      release: "unknown",
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.remedy).toBe("check-release-first");
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain(`gh release view ${tagFor(VERSION)}`);
+    expect(text).toContain("re-running repairs nothing");
+    expect(text).toContain("gh run rerun");
+  });
+});
+
 describe("a tag that does not identify this release", () => {
   it("fails when the tagged commit declares a different version", () => {
     // A tag by the right name is not the same as a tag on this release. This is
@@ -358,6 +416,24 @@ describe("a tag that does not identify this release", () => {
     expect(result.code).toBe(1);
     expect(result.state).toBe("mistagged");
     expect(result.remedy).toBe("retag");
+  });
+
+  it("also re-runs when the release is missing as well as mistagged", () => {
+    // Moving a tag does not create a GitHub Release; `release.yml` writes one
+    // only on a run of its own. Advising the retag alone leaves this failing
+    // and the next scheduled check reports the same state again.
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: "0.0.2-alpha.62" },
+      release: "absent",
+    });
+
+    expect(result.remedy).toBe("retag-then-rerun");
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain(`git push origin refs/tags/${tagFor(VERSION)}`);
+    expect(text).toContain("gh run rerun");
   });
 
   it("passes when the tagged commit declares this version", () => {
@@ -410,6 +486,43 @@ describe("deriving the train from git", () => {
     expect(manifestAtRef("abc123", run)).toEqual([
       { name: "nextly", version: VERSION },
       { name: "@nextlyhq/admin", version: VERSION },
+    ]);
+  });
+
+  it("refuses a publishable manifest it cannot read, rather than dropping it", () => {
+    /*
+     * 🔴 Dropping it shrinks the question. The package would leave the train,
+     * the registry would never be asked about it, and the release could be
+     * reported finished while that package was never published. Only an
+     * entirely empty manifest was refused before, so one malformed package
+     * among valid ones passed silently.
+     */
+    const files = {
+      "packages/nextly/package.json": { name: "nextly", version: VERSION },
+      "packages/broken/package.json": { name: "@nextlyhq/broken" },
+    };
+    const run = (_cmd, args) => {
+      if (args[0] === "ls-tree") return Object.keys(files).join("\n");
+      return JSON.stringify(files[args[1].split(":")[1]]);
+    };
+
+    expect(() => manifestAtRef("abc123", run)).toThrow(/packages\/broken/);
+  });
+
+  it("still skips a PRIVATE manifest that declares no version", () => {
+    // The control: refusing every unreadable manifest would refuse the private
+    // ones this deliberately ignores, and no release would ever be gradable.
+    const files = {
+      "packages/nextly/package.json": { name: "nextly", version: VERSION },
+      "packages/playground/package.json": { private: true },
+    };
+    const run = (_cmd, args) => {
+      if (args[0] === "ls-tree") return Object.keys(files).join("\n");
+      return JSON.stringify(files[args[1].split(":")[1]]);
+    };
+
+    expect(manifestAtRef("abc123", run)).toEqual([
+      { name: "nextly", version: VERSION },
     ]);
   });
 
