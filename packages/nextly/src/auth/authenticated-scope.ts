@@ -161,6 +161,19 @@ export function apiKeyScopeFrom(caller: {
  * is frozen.
  */
 export function narrowScope(
+  scope: AuthenticatedScope,
+  keep: (grant: GrantedPermission) => boolean
+): AuthenticatedScope;
+export function narrowScope(
+  scope: AuthenticatedScope | undefined,
+  keep: (grant: GrantedPermission) => boolean
+): AuthenticatedScope | undefined;
+// Overloaded rather than widened: a caller that HAS a scope gets one back, and
+// only a caller that might not have one has to handle not getting one. Widening
+// the single signature made every existing call site — which had already proved
+// it held a scope — start compiling against `| undefined`, so accommodating
+// session callers would have broken the callers that were never the problem.
+export function narrowScope(
   scope: AuthenticatedScope | undefined,
   keep: (grant: GrantedPermission) => boolean
 ): AuthenticatedScope | undefined {

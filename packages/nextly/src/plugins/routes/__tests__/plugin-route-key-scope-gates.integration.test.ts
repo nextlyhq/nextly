@@ -226,6 +226,47 @@ const gatePlugin = definePlugin({
       },
       {
         method: "POST",
+        path: "/tx-delete-narrowed",
+        /**
+         * The DELETE transaction entry point, which review found untested while
+         * create and update were covered — and which reaches its gate through a
+         * different branch (`rowGate: "access-service"`), so the create test
+         * says nothing about it.
+         */
+        handler: async (_req, ctx) => {
+          const narrowed = narrowScope(
+            ctx.authenticatedScope,
+            grant => grant.slug !== "delete-notes"
+          );
+          try {
+            const collections = ctx.services.collections as unknown as {
+              withTransaction: <T>(
+                fn: (tx: unknown) => Promise<T>
+              ) => Promise<T>;
+              deleteEntryInTransaction: (
+                tx: unknown,
+                slug: string,
+                entryId: string,
+                context: Record<string, unknown>
+              ) => Promise<unknown>;
+            };
+            await collections.withTransaction(async tx =>
+              collections.deleteEntryInTransaction(tx, "notes", seededNoteId, {
+                user: ctx.user ?? undefined,
+                authenticatedScope: narrowed,
+              })
+            );
+            return Response.json({ deleted: true });
+          } catch (error) {
+            return Response.json(
+              { deleted: false, reason: String(error) },
+              { status: 403 }
+            );
+          }
+        },
+      },
+      {
+        method: "POST",
         path: "/read-one",
         // Reads a row back so the gated field's presence can be inspected.
         // Composes `{ as: "user", user }` and nothing else, as every shipped
@@ -352,6 +393,7 @@ function post(
     | "narrow-then-read"
     | "tx-plain"
     | "tx-narrowed"
+    | "tx-delete-narrowed"
     | "can-read-notes"
     | "mutate-scope",
   headers: Record<string, string>
@@ -394,6 +436,7 @@ let handle: TestNextly | undefined;
 let ownerId = "";
 let keyId = "";
 let viewerRoleId = "";
+let seededNoteId = "";
 
 beforeEach(async () => {
   handle = await createTestNextly({
@@ -439,7 +482,12 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
   const permissions = await nextly.permissions.find({ limit: 300 });
   // `create-notes` included deliberately: a narrowing test whose key never held
   // the write grant is refused whether or not the narrowing worked.
-  const granted = ["read-posts", "read-notes", "create-notes"].map(slug => {
+  const granted = [
+    "read-posts",
+    "read-notes",
+    "create-notes",
+    "delete-notes",
+  ].map(slug => {
     const found = permissions.items.find(p => p.slug === slug);
     expect(
       found,
@@ -493,7 +541,7 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
     [...scope].sort(),
     "the key must hold exactly these, or a narrowing test below is refused for " +
       "a reason other than the grant it surrendered"
-  ).toEqual(["create-notes", "read-notes", "read-posts"]);
+  ).toEqual(["create-notes", "delete-notes", "read-notes", "read-posts"]);
 
   ownerId = owner.item.id;
   keyId = meta.id;
@@ -521,17 +569,23 @@ function forgetResolvedGrants(): void {
 
 /** Seed a `notes` row as the trusted server. */
 async function seedNote(): Promise<void> {
-  await (
+  const created = (await (
     handle!.nextly as unknown as {
       create: (a: {
         collection: string;
         data: Record<string, unknown>;
-      }) => Promise<unknown>;
+      }) => Promise<{ item?: { id?: string } } | undefined>;
     }
   ).create({
     collection: "notes",
     data: { title: "n", gatedByPermission: "secret" },
-  });
+  })) as { item?: { id?: string } } | undefined;
+  seededNoteId = created?.item?.id ?? "";
+  expect(
+    seededNoteId,
+    "the seeded row must have an id, or the delete test targets nothing and " +
+      "its refusal says nothing about the scope"
+  ).not.toBe("");
 }
 
 /** Seed a row as the trusted server, so the read tests have something to read. */
@@ -695,7 +749,7 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
       first.map(g => g.slug).sort(),
       "the resolver must return the key's grants, or the assertions below are " +
         "about an empty array"
-    ).toEqual(["create-notes", "read-notes", "read-posts"]);
+    ).toEqual(["create-notes", "delete-notes", "read-notes", "read-posts"]);
 
     expect(() =>
       (first as { slug: string }[]).push({ slug: "delete-posts" })
@@ -710,7 +764,7 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
     expect(
       second.map(g => g.slug).sort(),
       "a second resolve returned grants a caller had added to the first"
-    ).toEqual(["create-notes", "read-notes", "read-posts"]);
+    ).toEqual(["create-notes", "delete-notes", "read-notes", "read-posts"]);
   });
 
   it("answers `caller.can()` the way the write would answer", async () => {
@@ -753,9 +807,10 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
   });
 
   it("carries a narrowing into a TRANSACTION write", async () => {
-    // The key holds `read-notes`; the route gives it up and then writes through
-    // the transaction entry point. The `notes` collection's own rule asks for
-    // `notes:read`, so surrendering that grant must refuse the write.
+    // The key holds `create-notes`; the route gives THAT up and then writes
+    // through the transaction entry point. `notes` declares no `access.create`
+    // rule, so the coarse grant check is what judges the write — which is the
+    // gate the narrowing has to reach.
     const key = await viewerKeyOwnedBySuperAdmin();
 
     const res = await post("tx-narrowed", { authorization: `Bearer ${key}` });
@@ -767,6 +822,25 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
         "through anyway. The transaction methods bypass the facade wrapper " +
         "that re-pins an explicit scope, so the narrowing reached the argument " +
         `and never a gate. ${body.reason ?? ""}`
+    ).toBe(false);
+  });
+
+  it("carries a narrowing into a transaction DELETE", async () => {
+    // Covered separately from the create because delete reaches its gate
+    // through a different branch — `rowGate: "access-service"` — so a green
+    // create test says nothing about this one.
+    const key = await viewerKeyOwnedBySuperAdmin();
+    await seedNote();
+
+    const res = await post("tx-delete-narrowed", {
+      authorization: `Bearer ${key}`,
+    });
+    const body = (await res.json()) as { deleted: boolean; reason?: string };
+
+    expect(
+      body.deleted,
+      "the route surrendered `delete-notes` and the transactional delete went " +
+        `through anyway. ${body.reason ?? ""}`
     ).toBe(false);
   });
 
@@ -809,11 +883,11 @@ describe("every gate behind the plugin route judges the key, not its owner", () 
       expect(
         [...body.after].sort(),
         "the scope must be unchanged after the refused edits"
-      ).toEqual(["create-notes", "read-notes", "read-posts"]);
+      ).toEqual(["create-notes", "delete-notes", "read-notes", "read-posts"]);
       return [...body.before].sort();
     };
 
-    const HELD = ["create-notes", "read-notes", "read-posts"];
+    const HELD = ["create-notes", "delete-notes", "read-notes", "read-posts"];
 
     expect(
       await grantsSeenBy(),

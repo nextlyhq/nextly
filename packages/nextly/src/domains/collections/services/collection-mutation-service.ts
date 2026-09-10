@@ -26,6 +26,7 @@ import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -8262,12 +8263,24 @@ export class CollectionMutationService extends BaseService {
     params: CreateEntryWriteParams,
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.createEntryWrite(tx, params, body, {
-      enforceCollectionAccess: true,
-      runHooks: true,
-      shapeCallerObject: true,
-      failureMessage: "Failed to create entry in transaction",
-    });
+    // The scope this write runs under becomes the ambient one for the whole
+    // operation, not an argument handed to its first gate.
+    //
+    // A write passes several: the coarse collection check, the owner predicate,
+    // and the field-level write and redaction passes. Only the first took an
+    // `authenticatedScope` argument, so a caller that NARROWED its scope was
+    // held to it once and judged on the request's original scope everywhere
+    // after — a key that kept its write grant but surrendered a field grant
+    // still wrote that field. Pinning covers every gate below, including the
+    // ones added next.
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.createEntryWrite(tx, params, body, {
+        enforceCollectionAccess: true,
+        runHooks: true,
+        shapeCallerObject: true,
+        failureMessage: "Failed to create entry in transaction",
+      })
+    );
   }
 
   /**
@@ -8770,12 +8783,24 @@ export class CollectionMutationService extends BaseService {
     params: UpdateEntryWriteParams & { entryId: string },
     body: Record<string, unknown>
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.updateEntryWrite(tx, params, params.entryId, body, {
-      rowGate: "access-service",
-      runHooks: true,
-      identifyMissingEntry: false,
-      failureMessage: "Failed to update entry in transaction",
-    });
+    // The scope this write runs under becomes the ambient one for the whole
+    // operation, not an argument handed to its first gate.
+    //
+    // A write passes several: the coarse collection check, the owner predicate,
+    // and the field-level write and redaction passes. Only the first took an
+    // `authenticatedScope` argument, so a caller that NARROWED its scope was
+    // held to it once and judged on the request's original scope everywhere
+    // after — a key that kept its write grant but surrendered a field grant
+    // still wrote that field. Pinning covers every gate below, including the
+    // ones added next.
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.updateEntryWrite(tx, params, params.entryId, body, {
+        rowGate: "access-service",
+        runHooks: true,
+        identifyMissingEntry: false,
+        failureMessage: "Failed to update entry in transaction",
+      })
+    );
   }
 
   // Replaces updateEntryInTransaction (cyclomatic 43) and
@@ -9542,12 +9567,24 @@ export class CollectionMutationService extends BaseService {
       actor?: RequestActor;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    return this.deleteEntryWrite(tx, params, params.entryId, {
-      rowGate: "access-service",
-      runHooks: true,
-      identifyMissingEntry: false,
-      failureMessage: "Failed to delete entry in transaction",
-    });
+    // The scope this write runs under becomes the ambient one for the whole
+    // operation, not an argument handed to its first gate.
+    //
+    // A write passes several: the coarse collection check, the owner predicate,
+    // and the field-level write and redaction passes. Only the first took an
+    // `authenticatedScope` argument, so a caller that NARROWED its scope was
+    // held to it once and judged on the request's original scope everywhere
+    // after — a key that kept its write grant but surrendered a field grant
+    // still wrote that field. Pinning covers every gate below, including the
+    // ones added next.
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.deleteEntryWrite(tx, params, params.entryId, {
+        rowGate: "access-service",
+        runHooks: true,
+        identifyMissingEntry: false,
+        failureMessage: "Failed to delete entry in transaction",
+      })
+    );
   }
 
   /**
@@ -9994,12 +10031,14 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.createEntryWrite(tx, params, body, {
-      enforceCollectionAccess: false,
-      runHooks: !skipHooks,
-      shapeCallerObject: false,
-      failureMessage: "Failed to create entry",
-    });
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.createEntryWrite(tx, params, body, {
+        enforceCollectionAccess: false,
+        runHooks: !skipHooks,
+        shapeCallerObject: false,
+        failureMessage: "Failed to create entry",
+      })
+    );
   }
 
   /**
@@ -10019,12 +10058,14 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<unknown>> {
-    return this.updateEntryWrite(tx, params, entryId, body, {
-      rowGate: "owner-predicate",
-      runHooks: !skipHooks,
-      identifyMissingEntry: true,
-      failureMessage: "Failed to update entry",
-    });
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.updateEntryWrite(tx, params, entryId, body, {
+        rowGate: "owner-predicate",
+        runHooks: !skipHooks,
+        identifyMissingEntry: true,
+        failureMessage: "Failed to update entry",
+      })
+    );
   }
 
   /**
@@ -10043,11 +10084,13 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     skipHooks: boolean
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
-    return this.deleteEntryWrite(tx, params, entryId, {
-      rowGate: "owner-predicate",
-      runHooks: !skipHooks,
-      identifyMissingEntry: true,
-      failureMessage: "Failed to delete entry",
-    });
+    return runWithCallerScope(params.authenticatedScope, () =>
+      this.deleteEntryWrite(tx, params, entryId, {
+        rowGate: "owner-predicate",
+        runHooks: !skipHooks,
+        identifyMissingEntry: true,
+        failureMessage: "Failed to delete entry",
+      })
+    );
   }
 }
