@@ -68,7 +68,12 @@ async function cookie(roleIds: string[] = []): Promise<string> {
   return `nextly_session=${token}`;
 }
 
-/** Call the real catch-all for GET /api/plugins/<PLUGIN>/<sub>. */
+/**
+ * Call the real catch-all for a GET in the plugin namespace.
+ *
+ * The prefix below is this test's own: the dispatcher is addressed directly
+ * here, so it says nothing about where a mounted handler serves from.
+ */
 function get(
   sub: string,
   headers: Record<string, string> = {}

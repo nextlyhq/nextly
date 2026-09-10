@@ -25,8 +25,8 @@ export function routeCollisionError(
 
 /**
  * Fail-fast boot error when a contributed route's `path` does not start with
- * "/". Paths are mounted under `/api/plugins/<name>` and must be absolute
- * within the plugin namespace.
+ * "/". Paths are namespaced under `/plugins/<name>` beneath wherever the app
+ * mounts the handler, and must be absolute within the plugin namespace.
  */
 export function routeInvalidPathError(
   pluginName: string,

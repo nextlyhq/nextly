@@ -21,16 +21,17 @@ The plugin declares these peer dependencies:
 |---|---|
 | `nextly` | the matching lockstep version, pinned exactly |
 | `@nextlyhq/admin` | the matching lockstep version, pinned exactly |
-| `@nextlyhq/plugin-sdk` | the matching lockstep version |
-| `@nextlyhq/ui` | the matching lockstep version |
+| `@nextlyhq/plugin-sdk` | the matching lockstep version, pinned exactly |
+| `@nextlyhq/ui` | a caret range on the matching lockstep version |
 | `@tanstack/react-query` | >= 5 |
 | `lucide-react` | >= 0.400.0 |
 | `react` | ^18 or ^19 |
 | `next` | ^14, ^15 or ^16 |
 
-While Nextly is in alpha every publishable package ships on one train, so the four Nextly
-peers are pinned to the exact version the plugin was built against: install the plugin and
-your core at the same version rather than a range. `@tanstack/react-query` and
+While Nextly is in alpha every publishable package ships on one train, so three of the four
+Nextly peers are pinned to the exact version the plugin was built against, and `@nextlyhq/ui`
+publishes as a caret range on it. Either way, install the plugin and your core at the same
+version rather than reaching for a range of your own. `@tanstack/react-query` and
 `lucide-react` are the two most likely to be missing from a project that has not needed
 them yet, and their absence shows up as a broken admin screen rather than an install
 error.
