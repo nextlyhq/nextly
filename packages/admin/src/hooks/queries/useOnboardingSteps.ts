@@ -113,6 +113,24 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
     queryFn: () =>
       protectedApi.get<OnboardingResponse>("/dashboard/onboarding"),
     retry: false,
+    /*
+     * 🔴 Overrides the provider's five-minute default, and the card does not
+     * work without it. This answer changes when the reader creates a collection
+     * or writes their first entry -- things they do elsewhere in the admin,
+     * often seconds before returning here -- and the provider also disables
+     * focus refetching, so an answer held fresh is not refreshed by coming back
+     * to the tab either.
+     *
+     * The case that makes it sharp: the card is unmounted whenever it is not
+     * offered, and the cached answer outlives that by ten minutes. A reader who
+     * finishes onboarding and then deletes their last collection is offered the
+     * card again -- and a cached answer still counted fresh means it draws
+     * every row ticked, while the host is offering it precisely because a row
+     * is not.
+     *
+     * Cheap: this query only mounts while onboarding is outstanding.
+     */
+    staleTime: 0,
   });
 
   // Guarded at the boundary rather than trusted. The response is JSON, so the
@@ -144,9 +162,10 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
   // include it. One spurious round trip, and a card that flickers away from a
   // reader who needs it.
   //
-  // Compared against the mount rather than trusting `isStale`: the query sets no
-  // `staleTime`, so its data is stale the instant it arrives and that flag
-  // cannot separate "not yet refetched" from "just fetched".
+  // Compared against the MOUNT rather than trusting `isStale`. With
+  // `staleTime: 0` above, data is stale the instant it arrives, so that flag
+  // cannot separate "not yet refetched" from "just fetched" -- and it is the
+  // refetch this has to wait for, not the staleness.
   const mountedAt = useRef(Date.now());
   useEffect(() => {
     if (!finished || dropped.current) return;

@@ -39,10 +39,25 @@ const ALL_BUT_ONE = [
 
 const EVERY_STEP = ALL_BUT_ONE.map(step => ({ ...step, complete: true }));
 
+/**
+ * A client carrying the defaults PRODUCTION uses.
+ *
+ * 🔴 `gcTime: 0` and an absent `staleTime` are what a test client reaches for,
+ * and both hide real defects here. The admin's `QueryProvider` holds data fresh
+ * for five minutes, keeps it for ten, and does not refetch on focus — so a
+ * cached answer genuinely survives an unmount and genuinely is not refreshed by
+ * returning to the tab. A client that collects the entry immediately, or treats
+ * it as stale on arrival, can never meet either case.
+ */
 function client() {
   return new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
+      queries: {
+        retry: false,
+        staleTime: 5 * 60 * 1000,
+        gcTime: 10 * 60 * 1000,
+        refetchOnWindowFocus: false,
+      },
       mutations: { retry: false },
     },
   });
@@ -190,12 +205,7 @@ describe("the onboarding checklist", () => {
     // layout consumer has to stay mounted for the SECOND mount too, or the
     // invalidation has no observer and its refetch count cannot move either way.
     protectedGet.mockResolvedValue({ steps: EVERY_STEP });
-    const qc = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false, gcTime: 60_000 },
-        mutations: { retry: false },
-      },
-    });
+    const qc = client();
     const readLayout = vi.fn().mockResolvedValue({ placements: [] });
     const LayoutConsumer = () => {
       useQuery({ queryKey: DASHBOARD_LAYOUT_KEY, queryFn: readLayout });
@@ -221,9 +231,15 @@ describe("the onboarding checklist", () => {
     protectedGet.mockResolvedValue({ steps: ALL_BUT_ONE });
     view.rerender(withCard(true));
 
+    // 🔴 Asserted on the PROGRESS, not the row count. Both answers hold three
+    // rows -- the cached one has them all ticked -- so counting rows cannot
+    // separate the obsolete answer from the fresh one, and a test that counts
+    // them passes with the refetch removed entirely. "2 of 3" is true only of
+    // the answer this mount fetched.
     await waitFor(() =>
-      expect(screen.getAllByRole("listitem")).toHaveLength(ALL_BUT_ONE.length)
+      expect(screen.getByText(/2 of 3 done/)).toBeInTheDocument()
     );
+    expect(screen.getAllByRole("listitem")).toHaveLength(ALL_BUT_ONE.length);
     expect(readLayout).toHaveBeenCalledTimes(afterDrop);
   });
 
