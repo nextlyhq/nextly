@@ -24,10 +24,10 @@
  * that runs backwards for a reason nobody can see. Asking the element is
  * complete by construction.
  *
- * MARGINS were once excluded from this on the reasoning that one lies outside
- * the border box and never moves it. That was wrong, and wrong the same way the
- * padding table was: by reasoning about layout rather than asking it. Measured
- * in Chromium on a block in normal flow, and again in a flex column:
+ * MARGINS look exempt, on the reasoning that one lies outside the border box
+ * and never moves it. That reasoning fails the way any table of layout cases
+ * fails — by arguing about layout instead of asking it. Measured in Chromium on
+ * a block in normal flow, and again in a flex column:
  *
  * | band | border edge | outer margin edge |
  * | --- | --- | --- |

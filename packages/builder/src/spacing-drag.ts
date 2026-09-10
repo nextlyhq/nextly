@@ -500,11 +500,11 @@ export function spacingKeyDelta(
  * Whether the drawn BAND thickens away from the block, which is where its
  * handle goes.
  *
- * The box does not decide this, and it used to: a margin was called structural
- * on the reasoning that it lies outside the border box and cannot move it.
- * Measured, that is false for `margin-top`, for `margin-left`, and for
+ * The box does not decide this, though a margin can look as though it settles
+ * the question: lying outside the border box, growing one seems unable to move
+ * it. Measured, that is false for `margin-top`, for `margin-left`, and for
  * `margin-right` on an auto-width block — `spacing-response.ts` carries the
- * table and answers for both boxes now.
+ * table and answers for both boxes.
  *
  * A NEGATIVE band mirrors it, and this is the only question it mirrors.
  * `spacingBands` lays a negative margin INSIDE the border edge, reflected

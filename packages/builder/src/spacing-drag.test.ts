@@ -384,13 +384,13 @@ describe("spacingValue", () => {
 
 describe("which way a band thickens", () => {
   /*
-   * Neither box decides it, and the margin half of this used to. A margin was
-   * called structural because it lies outside the border box, so growing one was
-   * said to push the neighbour and never the block. Measured in Chromium that is
-   * false on three sides of four: `margin-top`, `margin-left` and `margin-right`
-   * on an auto-width block each drive the BORDER edge inward while the outer
-   * edge stays pinned by the container or by what precedes it. So both boxes
-   * carry the measured answer and nothing is read off the box's name.
+   * Neither box decides it, though a margin can look as though it does: lying
+   * outside the border box, growing one seems to push the neighbour and never
+   * the block. Measured in Chromium that is false on three sides of four:
+   * `margin-top`, `margin-left` and `margin-right` on an auto-width block each
+   * drive the BORDER edge inward while the outer edge stays pinned by the
+   * container or by what precedes it. So both boxes carry the measured answer
+   * and nothing is read off the box's name.
    */
   it("takes the measured answer, for either box", () => {
     for (const measured of [true, false]) {

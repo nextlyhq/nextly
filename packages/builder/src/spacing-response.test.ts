@@ -84,8 +84,9 @@ describe("every side, against what Chromium actually does", () => {
   /*
    * The rows below were MEASURED, in Chromium, one case at a time: a block in
    * normal flow, its band's two edges read before and after the value grew by
-   * ten. They are here rather than in a comment because two rounds of this
-   * module shipped a table reasoned out instead, and both were wrong.
+   * ten. They are assertions rather than prose because a table of layout cases
+   * reasoned out instead of measured reads exactly as convincing and cannot
+   * fail when it is wrong.
    *
    * `signed` is what `edgeMovedOut` sees — the border edge's movement AWAY from
    * the block's middle — and it is negative wherever the border edge came

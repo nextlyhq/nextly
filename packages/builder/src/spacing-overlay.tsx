@@ -519,9 +519,10 @@ function sameSubject(
  *
  * `renderedScale` already separates the two and says why, and `spacingDelta`
  * already divides by the matching one of the pair. Reading the composed scale
- * for both was asking a question this package had answered, and getting it
- * wrong: on a transformed block the margin threshold wanted twice the movement
- * there was, read a moving edge as pinned, and inverted the handle.
+ * for both asks a question this package has answered and takes the wrong half
+ * of the answer: on a transformed block the margin threshold then wants twice
+ * the movement there is, reads a moving edge as pinned, and inverts the
+ * handle.
  *
  * The root's own painted scale composes either way, because it is above the
  * element and applies to both boxes alike.

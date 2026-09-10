@@ -6,9 +6,9 @@
  * An overlay that MEASURES by writing has to write into the subtree it watches:
  * the spacing probe pushes a value, reads the edge and puts the attribute back,
  * all inside one task. Reacting to that would have every measurement schedule
- * the next one forever — which is why those answers used to be cached across
- * measurements, and a cache is then stale whenever the applied CSS changes for
- * a reason nothing reports. Ignoring a net-zero batch removes the need for one.
+ * the next one forever. Remembering the answers instead avoids that and buys a
+ * staleness of its own, since the applied CSS changes for reasons nothing here
+ * reports. Ignoring a net-zero batch removes the need to choose between them.
  *
  * @module canvas-geometry-watch.test
  */
