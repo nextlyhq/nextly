@@ -42,10 +42,15 @@
  * paused, or loses its connection stops renewing while its side effects may
  * still be in flight.
  *
- * So: **handlers must be idempotent**, and `leaseMs` must be sized to the work.
- * This is the same contract SQS, BullMQ and pg-boss give, for the same reason —
- * exactly-once across a process boundary and an external side effect is not
- * something a queue can offer.
+ * So: **handlers must be idempotent**. This is the same contract SQS, BullMQ
+ * and pg-boss give, for the same reason — exactly-once across a process
+ * boundary and an external side effect is not something a queue can offer.
+ *
+ * `leaseMs` is NOT the lever it looks like. Renewal already covers work that
+ * merely takes a long time, so raising it buys tolerance for a stalled process
+ * and nothing else. The lever a handler actually has is `jobId`, handed to it
+ * on every attempt so it can key whatever it does outside this database on
+ * something that does not change when the job runs again.
  *
  * What IS guaranteed: a job's outcome is recorded once, by whoever holds the
  * lease when it finishes.
@@ -326,6 +331,13 @@ async function runOne(
     // makes the lease track the work instead of predicting it.
     await withLeaseRenewal(deps, job, runnerId, now, () =>
       definition.handler(job.input as never, {
+        // Handed over so a handler can be idempotent about what it does
+        // OUTSIDE this database, which is the only half the fence cannot
+        // protect. The row id is stable across attempts; the attempt number is
+        // deliberately not offered as the dedupe signal, for the reason its
+        // own documentation gives.
+        jobId: job.id,
+        attempt,
         user: identity.user,
         now: now(),
         content: createJobContentApi(identity.user, deps.contentApi),

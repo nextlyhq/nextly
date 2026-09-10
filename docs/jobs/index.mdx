@@ -21,8 +21,9 @@ import { defineJob } from "nextly";
 
 export const sendDigest = defineJob({
   slug: "send-digest",
-  handler: async ctx => {
-    // ctx carries the payload the job was enqueued with.
+  handler: async (input, context) => {
+    // `input` is the payload the job was enqueued with. `context` is what the
+    // runner tells the handler about the run it is in.
   },
 });
 ```
@@ -131,9 +132,52 @@ lease: a process that stalls, is paused, or loses its connection stops renewing 
 side effects are still in flight, and a later pass can reclaim and run the same job.
 
 The fence can refuse the first runner's database write. It cannot undo an email it already
-sent. Size `leaseMs` to the work, and write handlers that can run twice without harm. This
-is the same contract SQS, BullMQ and pg-boss give, for the same reason.
+sent. This is the same contract SQS, BullMQ and pg-boss give, for the same reason.
 </Callout>
+
+### Writing a handler that can run twice
+
+Every handler is told the id of the job it is running, and that id is the same on every
+attempt at it. It is the key to hand anything the database cannot take back:
+
+```ts
+import { defineJob } from "nextly";
+
+export const chargeInvoice = defineJob<{ invoiceId: string; cents: number }>({
+  slug: "charge-invoice",
+  async handler({ invoiceId, cents }, { jobId }) {
+    // The provider de-duplicates on this header, so a second run of the same
+    // job returns the first charge instead of making a second one.
+    await fetch("https://api.payments.example/charges", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": jobId,
+      },
+      body: JSON.stringify({ invoiceId, amountCents: cents }),
+    });
+  },
+});
+```
+
+`Idempotency-Key` is the header Stripe, Square and Adyen all read, so most providers
+already have somewhere to put this. Where the side effect is a row rather than a call, the
+same idea is an upsert against a unique column holding `jobId`, so the second attempt
+collides instead of inserting.
+
+Deriving the key from the input works only while the input is unique, and that is a
+property of whoever queued the job rather than of the queue. The same payload queued twice
+is two jobs with two ids, and both are meant to happen.
+
+The context also carries `attempt`, counting from 1. Use it for behaviour that should
+change on a retry, such as logging more loudly. Do not use it to decide whether a side
+effect already happened: it counts the attempts the runner managed to record, so a run
+whose process died before writing anything back leaves the count where it was and the next
+attempt is numbered as if it were the first.
+
+The lease itself is not a dial you need. It is renewed for you while a handler is alive,
+so ordinary long work does not expire it, and the fixed 30 seconds is a stall tolerance
+rather than a budget for the work.
 
 ## Retention
 

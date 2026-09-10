@@ -48,6 +48,32 @@ export { SWEEP_KEY_PREFIX, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 /** What a handler is told about the run it is in. */
 export interface JobContext {
   /**
+   * This job's row id, the same on every attempt at it.
+   *
+   * The idempotency key to hand anything OUTSIDE the database. Delivery is
+   * at-least-once, so one queued job can reach a handler more than once, and
+   * the fence that protects the jobs table cannot reach an email already sent
+   * or a charge already made. Passing this id to something that de-duplicates
+   * on a key of its own (a payment provider's idempotency header, a unique
+   * column an upsert targets) is what turns "ran twice" into "happened once".
+   *
+   * Deriving a key from `input` instead works only for as long as the input is
+   * unique, which is a property of the caller rather than of the queue: the
+   * same payload queued twice is two jobs and two ids.
+   */
+  jobId: string;
+  /**
+   * Which attempt this is, counting from 1.
+   *
+   * 🔴 NOT a substitute for `jobId` when deciding whether work already
+   * happened. It counts attempts the runner managed to RECORD, so a run whose
+   * process died before writing anything back leaves the count where it was
+   * and the next attempt is numbered as if it were the first. It is a signal
+   * for behaviour that should change on a retry, such as logging louder or
+   * skipping an optimisation, not for whether a side effect is already out.
+   */
+  attempt: number;
+  /**
    * The identity this job runs AS, or `null` when it genuinely acts as nobody.
    *
    * `null` does NOT mean "as the system". A job whose stored identity no longer
