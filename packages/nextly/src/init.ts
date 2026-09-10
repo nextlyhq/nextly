@@ -442,8 +442,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * so it is what to use where the config is not in scope, and it is async, so it
  * can await the boot migration gate rather than refusing while that gate is
  * still open. Nextly's own API handlers under `src/api/*` use it, and so does
- * PLUGIN code doing server work outside a route, where there is no
- * `ctx.services` to reach through.
+ * plugin code doing server work outside a route, where there is no
+ * `ctx.services` to reach through. A plugin should import it from
+ * `@nextlyhq/plugin-sdk`, which is the surface that carries a compatibility
+ * guarantee.
  *
  * `requireNextly()` from `nextly/runtime` also reads, but SYNCHRONOUSLY, so it
  * cannot wait and asserts instead: it throws when the migration gate has not
@@ -453,19 +455,17 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * that calls `createRegister(config)`, so init runs once per worker before the
  * first request.
  *
- * ## Why this lives on the Node-safe root
+ * ## Why this is published from the Node-safe root
  *
- * It has no Next.js coupling, and its audience includes plugin authors. The
- * `nextly/runtime` entry, where `requireNextly` sits, is the one allowed to
- * import `next/*`, and its own contract says plugin authors should import from
- * the root so their consumers are not forced into a `next` peer dependency.
- * Moving this beside `requireNextly` would put the pair together and charge
- * every plugin that reads a document a Next.js dependency for the privilege.
+ * Importing `nextly/runtime` pulls `next/*` into the module graph, because that
+ * is the entry allowed to reach for it. This function needs none of it, and its
+ * callers include a plugin whose code is bundled for the browser and a CLI that
+ * runs outside a request. Publishing it there would drag Next.js into both.
  *
- * An earlier version of this block said "do NOT use this in user code". That
- * was never true of plugins, which are exactly the callers with no config in
- * scope, and `plugin-page-builder` has been following the other half of the
- * sentence while the docblock forbade it.
+ * What that does NOT buy is avoiding the dependency: `next` is the one peer
+ * this package does not mark optional, so a consumer installs it whichever
+ * subpath they import. The boundary is about what a module GRAPH pulls in, not
+ * about what a package manager resolves.
  */
 export async function getCachedNextly(): Promise<Nextly> {
   // Before ANY return, including the cached one. This is the surface that could
