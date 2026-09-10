@@ -9,7 +9,7 @@
  * alternative and a real table.
  */
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   DashboardWidget,
@@ -65,6 +65,87 @@ describe("the bars archetype", () => {
     // an empty label would read as a rendering fault rather than as a group.
     draw(grouped([{ value: null, count: 4 }]));
     expect(screen.getAllByText("(none)").length).toBeGreaterThan(0);
+  });
+
+  it("tells an EMPTY value apart from a missing one, in BOTH mediums", () => {
+    // Two different answers: the column holds nothing, and the column holds a
+    // blank string. `??` catches only the first, so an empty string rendered as
+    // an empty label -- a bar and a table row with no name at all.
+    draw(
+      grouped([
+        { value: null, count: 4 },
+        { value: "", count: 2 },
+      ])
+    );
+    const table = screen.getByRole("table");
+    // Addressed by ACCESSIBLE NAME, which is what a screen reader announces.
+    // Asserting the drawn text would pass while both rows spoke the same words.
+    expect(
+      within(table).getByRole("row", { name: /no value stored/ })
+    ).toBeInTheDocument();
+    expect(
+      within(table).getByRole("row", { name: /an empty value/ })
+    ).toBeInTheDocument();
+  });
+
+  it("does not SPEAK a placeholder the same way as a value spelled like it", () => {
+    // 🔴 The distinction was carried by italic and muted colour, which a screen
+    // reader does not announce -- so an empty bucket and a stored "(empty)"
+    // were two rows with one spoken name, and the readers who most need the
+    // difference were the ones not given it.
+    //
+    // Exact separation is not achievable: no string can be reserved from a
+    // column of arbitrary text, so a value spelled like the description would
+    // still coincide. What is asserted is that the placeholder now SAYS what it
+    // is rather than relying on a colour.
+    draw(
+      grouped([
+        { value: "", count: 5 },
+        { value: "(empty)", count: 8 },
+      ])
+    );
+    const table = screen.getByRole("table");
+    const placeholder = within(table).getByRole("row", {
+      name: /an empty value/,
+    });
+    const literal = within(table).getByRole("row", { name: /\(empty\)/ });
+    expect(placeholder).not.toBe(literal);
+    expect(within(placeholder).getByText("5")).toBeInTheDocument();
+    expect(within(literal).getByText("8")).toBeInTheDocument();
+  });
+
+  it("keeps a stored value that READS like a placeholder as its own row", () => {
+    // A grouped column holds arbitrary text, so a row whose value is literally
+    // "(none)" is a real group that happens to share the null bucket's wording.
+    //
+    // Keyed by that wording the two shared a React key. A single render cannot
+    // see it -- React renders duplicate-keyed siblings and only WARNS -- so the
+    // warning is the observable, and asserting the rows exist would pass either
+    // way. The defect it prevents is across re-renders, where React keeps one
+    // child per key and a count is left drawn beside a group it does not
+    // belong to.
+    const warnings: unknown[][] = [];
+    const spy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => {
+        warnings.push(args);
+      });
+    try {
+      draw(
+        grouped([
+          { value: "(none)", count: 7 },
+          { value: null, count: 3 },
+        ])
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByRole("row")).toHaveLength(3); // header + 2
+    expect(warnings.some(args => String(args[0]).includes("same key"))).toBe(
+      false
+    );
   });
 
   it("carries a text alternative naming the largest bucket", () => {

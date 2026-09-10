@@ -17,10 +17,12 @@ import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
+import type { PluginSelf } from "../self";
 
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import { buildPluginRouteCaller } from "./route-caller";
+import { resolveRoutePermission } from "./route-permission";
 import type { RouteMatch } from "./route-registry";
 import type {
   PluginRoute,
@@ -70,7 +72,8 @@ function toErrorResponse(req: Request, err: unknown): Response {
  */
 async function resolvePluginRouteAuth(
   req: Request,
-  route: PluginRoute
+  route: PluginRoute,
+  self: PluginSelf
 ): Promise<
   | {
       user: AuthUser | null;
@@ -81,10 +84,33 @@ async function resolvePluginRouteAuth(
 > {
   if (route.public === true) return { user: null, caller: null };
 
+  // The permission this route requires ON THIS INSTALL. A route gating on one
+  // of the plugin's own collections gives a function, because the host may have
+  // renamed it and a fixed slug would name a grant nobody was seeded.
+  let required: string | undefined;
+  try {
+    required = resolveRoutePermission(route.requiredPermission, self);
+  } catch (cause) {
+    // A gate that cannot be computed refuses. Falling through to
+    // `requireAuthentication` would drop the permission check entirely and
+    // admit any signed-in caller — a thrown resolver silently OPENING the route
+    // it was written to close.
+    return {
+      error: NextlyError.forbidden({
+        ...(cause instanceof Error ? { cause } : {}),
+        logContext: {
+          reason: "plugin-route-permission-unresolved",
+          plugin: self.name,
+          path: route.path,
+        },
+      }),
+    };
+  }
+
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
-  const authResult = route.requiredPermission
-    ? await requirePermission(req, ...permissionArgs(route.requiredPermission))
+  const authResult = required
+    ? await requirePermission(req, ...permissionArgs(required))
     : await requireAuthentication(req);
 
   if (isErrorResponse(authResult)) {
@@ -177,7 +203,11 @@ export async function runPluginRoute(
   req: Request,
   matched: RouteMatch
 ): Promise<Response> {
-  const auth = await resolvePluginRouteAuth(req, matched.route);
+  const auth = await resolvePluginRouteAuth(
+    req,
+    matched.route,
+    matched.baseCtx.self
+  );
   if ("error" in auth) {
     return markPluginResponse(
       buildErrorResponse(auth.error, {

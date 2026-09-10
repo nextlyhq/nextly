@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOOT_BUDGET_MS,
+  SCAN_ROOTS,
   BOOT_BINDING,
   isTemplate,
   statesBootBudget,
@@ -300,13 +301,36 @@ describe("the population it judges", () => {
       "packages/a/README.md",
     ].join("\0");
 
-    expect(testFiles(".", () => listed)).toEqual([
+    expect(testFiles(".", () => listed, "packages")).toEqual([
       "packages/a/src/x.test.ts",
       "packages/a/src/y.test.tsx",
       "packages/a/src/s.spec.ts",
       "packages/a/src/s2.spec.tsx",
       `packages/a/src/z${INTEGRATION_SUFFIX}`,
     ]);
+  });
+
+  it("asks git for the root it was given, which is what a control can check", () => {
+    // The pathspec was previously baked in and never asserted, so a misspelled
+    // root returned nothing, the package files kept the run non-empty, and the
+    // check reported success on a root it had not read.
+    const calls = [];
+    const runner = (_cmd, args) => {
+      calls.push(args);
+      return "";
+    };
+
+    testFiles(".", runner, "templates");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("templates");
+    expect(calls[0][calls[0].length - 1]).toBe("templates");
+  });
+
+  it("scans the package root and the template root, each on its own", () => {
+    // Listed separately so an empty one is its own answer. Combined, a missing
+    // root hides behind the other root's files.
+    expect(SCAN_ROOTS).toEqual(["packages", "templates"]);
   });
 
   it("collects the suffixes the unit configs name", () => {
@@ -394,6 +418,114 @@ export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`,
     expect(statesBootBudget(budget(30_000, 30_000))).toBe(true);
     expect(statesBootBudget(budget(30_000, 5_000))).toBe(false);
     expect(statesBootBudget(budget(1_000, 30_000))).toBe(false);
+  });
+
+  it("does not accept budgets from an object vitest is never handed", () => {
+    // The decoy that passed before the exported config was traced: the numbers
+    // are in the file, in an object nobody passes anywhere, while the config
+    // actually exported omits them and the suite runs on the defaults.
+    expect(
+      statesBootBudget(`import { defineConfig } from "vitest/config";
+const NOTES = { testTimeout: 30000, hookTimeout: 30000 };
+export default defineConfig({ test: { include: ["src/**/*.test.ts"] } });`)
+    ).toBe(false);
+  });
+
+  it("does NOT unwrap a call it cannot reason about, such as mergeConfig", () => {
+    // `defineConfig(x)` returns `x`, so its argument is the config. `mergeConfig`
+    // returns a composition where the SECOND argument wins, so reading the first
+    // reports budgets the exported config does not have.
+    expect(
+      statesBootBudget(`import { mergeConfig } from "vitest/config";
+export default mergeConfig(
+  { test: { testTimeout: 30000, hookTimeout: 30000 } },
+  { test: { testTimeout: 1000, hookTimeout: 1000 } }
+);`)
+    ).toBe(false);
+  });
+
+  it("still accepts the wrapper it does understand", () => {
+    // The control for the case above: it would pass on a predicate that had
+    // stopped unwrapping anything at all.
+    expect(
+      statesBootBudget(`import { defineConfig } from "vitest/config";
+export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
+    ).toBe(true);
+  });
+
+  it("does NOT accept the TypeScript `export =` form", () => {
+    // `isExportAssignment` matches both, and `export =` is the CommonJS form
+    // rather than the default export vitest loads.
+    expect(
+      statesBootBudget(
+        `export = { test: { testTimeout: 30000, hookTimeout: 30000 } };`
+      )
+    ).toBe(false);
+  });
+
+  it("does NOT accept a local function that merely shares the name", () => {
+    // A helper called `defineConfig` is not vitest's. One returning one-second
+    // timeouts while receiving a literal with thirty would read as adequate.
+    expect(
+      statesBootBudget(`const defineConfig = () => ({
+  test: { testTimeout: 1000, hookTimeout: 1000 },
+});
+export default defineConfig({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
+    ).toBe(false);
+  });
+
+  it("accepts the vitest binding under an alias, which is the same function", () => {
+    // The control: the case above would pass on a rule that had stopped
+    // unwrapping any call at all.
+    expect(
+      statesBootBudget(`import { defineConfig as define } from "vitest/config";
+export default define({ test: { testTimeout: 30000, hookTimeout: 30000 } });`)
+    ).toBe(true);
+  });
+
+  it("does NOT accept a wrapper reached through a property access", () => {
+    // A property access says nothing about what the object is, so this is a
+    // function that has not been established to return its argument.
+    expect(
+      statesBootBudget(`export default anything.defineConfig({
+  test: { testTimeout: 30000, hookTimeout: 30000 },
+});`)
+    ).toBe(false);
+  });
+
+  it("does NOT accept a spread that can replace the test object", () => {
+    // `{ test: {...}, ...other }` hands vitest `other.test`, so the budgets
+    // read from the literal may not be the ones the suite runs under.
+    expect(
+      statesBootBudget(`export default defineConfig({
+  test: { testTimeout: 30000, hookTimeout: 30000 },
+  ...lowBudgetConfig,
+});`)
+    ).toBe(false);
+  });
+
+  it("does NOT accept a spread that can replace the budgets themselves", () => {
+    expect(
+      statesBootBudget(`export default defineConfig({
+  test: { testTimeout: 30000, hookTimeout: 30000, ...lowBudgetConfig },
+});`)
+    ).toBe(false);
+  });
+
+  it("reads a config exported without the defineConfig wrapper", () => {
+    // The positive control for the decoy case: it would pass on a predicate
+    // that had simply stopped finding budgets anywhere.
+    expect(
+      statesBootBudget(
+        `export default { test: { testTimeout: 30000, hookTimeout: 30000 } };`
+      )
+    ).toBe(true);
+  });
+
+  it("does not accept a file with no default export at all", () => {
+    expect(
+      statesBootBudget(`export const config = { test: { testTimeout: 30000, hookTimeout: 30000 } };`)
+    ).toBe(false);
   });
 
   it("does not accept a budget that only appears in a comment", () => {
