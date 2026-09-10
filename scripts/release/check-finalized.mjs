@@ -21,11 +21,18 @@
  * found at HEAD would tag a commit that was never released, which is the
  * failure the release workflow already refuses.
  *
- * ⚠️ THE VERSION COMES FROM A GIT REF, NEVER FROM THE WORKING TREE. On the
- * version-PR path the changesets action switches the checkout to
- * `changeset-release/main` and bumps every manifest in it, so a working-tree
- * read there returns the NEXT version, which is deliberately unpublished. Pass
- * the pushed commit and the answer is about what `main` declares.
+ * 🔴 It reports; it never gates. `release-health.yml` runs it on a schedule and
+ * after every release run, and files what it finds as an issue. A detector on
+ * the release path itself can only fail closed, and closed here means nobody
+ * can ship: it would report a stranded train and then block the
+ * `gh run rerun --failed` that repairs it, because the re-run replays this same
+ * check against the same state it just refused.
+ *
+ * ⚠️ THE VERSION COMES FROM A GIT REF, NEVER FROM THE WORKING TREE. `git show
+ * <ref>:<path>` answers about a commit; reading the disk answers about whatever
+ * the checkout currently holds, and the two agree only while nothing has
+ * rewritten it. A ref keeps the answer pinned to what `main` declares even when
+ * this runs beside something that bumps manifests.
  *
  * Exit codes: 0 = finalized, or not published yet and so not this check's
  * business. 1 = published and unfinalized. 2 = the question could not be asked.
@@ -37,7 +44,7 @@
 
 import { execFileSync } from "node:child_process";
 
-import { REGISTRY, fetchRegistryState } from "./lib.mjs";
+import { PLACEHOLDER_VERSION, REGISTRY, fetchRegistryState } from "./lib.mjs";
 
 /** The package whose version names the release; every other one is in lockstep. */
 export const ANCHOR_PACKAGE = "nextly";
@@ -102,21 +109,50 @@ export function manifestAtRef(ref, run = execFileSync) {
  * needs a different response: nothing to do yet, finish the release, or repair
  * a partial one.
  */
+/**
+ * Whether a package has never shipped a real version, only the name-claiming
+ * placeholder. Absent from the registry counts: an unclaimed name is further
+ * from released, not closer.
+ */
+function neverReleased(state) {
+  if (state === null) return true;
+  return state.versions.every(version => version === PLACEHOLDER_VERSION);
+}
+
+/*
+ * 🔴 A package awaiting its first publish is not a stranded one, and at the
+ * registry the two look identical. `bootstrap-package.mjs` claims a name with a
+ * `0.0.0` placeholder, and the PR that adds the package sets its manifest to
+ * the CURRENT lockstep version rather than to `0.0.0`: `@nextlyhq/eslint-plugin`
+ * was added declaring `0.0.2-alpha.58` and first published at `0.0.2-alpha.60`.
+ * Every release in that window had one package `main` declared and npm did not
+ * hold, which reads as a train stranded halfway. Counting it as missing reports
+ * a healthy repository as broken for as long as it takes to ship the package.
+ */
 export async function publishState(manifest, fetchState = fetchRegistryState) {
-  const live = await Promise.all(
-    manifest.map(async entry => {
-      const state = await fetchState(entry.name);
-      return state !== null && state.versions.includes(entry.version);
-    })
-  );
+  const states = await Promise.all(manifest.map(entry => fetchState(entry.name)));
 
-  const missing = manifest.filter((_, index) => !live[index]).map(e => e.name);
-  const published = manifest.length - missing.length;
+  const missing = [];
+  const pending = [];
+  let published = 0;
 
-  if (published === 0) return { kind: "none", published, total: manifest.length };
-  if (missing.length > 0)
-    return { kind: "partial", published, total: manifest.length, missing };
-  return { kind: "all", published, total: manifest.length };
+  manifest.forEach((entry, index) => {
+    const state = states[index];
+    if (state !== null && state.versions.includes(entry.version)) {
+      published += 1;
+      return;
+    }
+    (neverReleased(state) ? pending : missing).push(entry.name);
+  });
+
+  // The train is the packages that have shipped before. One still waiting for
+  // its first publish was not in the release being judged, so counting it in
+  // the total would make a complete release read as incomplete.
+  const total = manifest.length - pending.length;
+
+  if (published === 0) return { kind: "none", published, total, pending };
+  if (missing.length > 0) return { kind: "partial", published, total, missing, pending };
+  return { kind: "all", published, total, pending };
 }
 
 /**
@@ -178,20 +214,33 @@ export function releaseState(tag, run = execFileSync) {
   }
 }
 
-/** Whether the registry has the version at all. */
-export async function isPublished(version, fetchState = fetchRegistryState) {
-  const state = await fetchState(ANCHOR_PACKAGE);
-  if (state === null) return false;
-  return state.versions.includes(version);
+/**
+ * A sentence naming the packages this verdict could not speak for, or nothing.
+ *
+ * Said out loud rather than left implicit: a reader who is told a release is
+ * finished should know it was graded over nineteen packages and not twenty.
+ */
+function pendingNote(pending) {
+  if (!pending || pending.length === 0) return "";
+  const names = pending.join(", ");
+  return (
+    ` ${names} ${pending.length === 1 ? "is" : "are"} not counted: ` +
+    `${pending.length === 1 ? "it has" : "they have"} never published a real ` +
+    "version, so no earlier release contained " +
+    `${pending.length === 1 ? "it" : "them"}.`
+  );
 }
 
 /**
  * The verdict, as data, so the reporting and the exit code are decided in one
  * place and the rules can be exercised without a registry or a remote.
  *
- * `tagVersion` is the version the TAGGED COMMIT declares. It is what turns "a
- * tag by that name exists" into something about the release: a tag pushed at an
- * unrelated commit declares a different version and is reported.
+ * `tagVersion` describes the version the TAGGED COMMIT declares, and has the
+ * same three-way shape as `tag` and `release` for the same reason: `{ kind:
+ * "known", version }` when the tagged commit could be read, `{ kind: "unknown" }`
+ * when it could not, and absent when there is no tag to ask about. A known
+ * mismatch means a tag pushed at an unrelated commit and is reported; an
+ * unknown one is reported as unknown rather than waved through.
  *
  * ⚠️ The boundary, stated rather than covered badly. Several commits declare one
  * version - every commit between a version bump and the next - so this proves
@@ -208,7 +257,8 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
       message:
         `${ANCHOR_PACKAGE}@${version} is not on the registry, so there is no ` +
         "finished release to describe yet. A publish in flight looks like this, " +
-        "and so does a commit that precedes one.",
+        "and so does a commit that precedes one." +
+        pendingNote(publish.pending),
     };
   }
 
@@ -221,7 +271,8 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
         `Only ${publish.published} of ${publish.total} packages reached the ` +
         `registry at ${version}. Publishing is not atomic, so a run can strand ` +
         `a train halfway: ${publish.missing.join(", ")} ` +
-        `${publish.missing.length === 1 ? "is" : "are"} still missing.`,
+        `${publish.missing.length === 1 ? "is" : "are"} still missing.` +
+        pendingNote(publish.pending),
       remedy: "rerun",
     };
   }
@@ -231,31 +282,54 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
   if (tag.kind === "absent") missing.push(`the git tag ${tagFor(version)}`);
   if (release === "absent") missing.push(`the GitHub Release ${tagFor(version)}`);
 
-  if (tag.kind === "present" && tagVersion && tagVersion !== version) {
+  if (
+    tag.kind === "present" &&
+    tagVersion?.kind === "known" &&
+    tagVersion.version !== version
+  ) {
     return {
       code: 1,
       state: "mistagged",
       message:
-        `${tagFor(version)} points at a commit that declares ${tagVersion}, ` +
-        `not ${version}, so the tag does not identify this release.`,
+        `${tagFor(version)} points at a commit that declares ` +
+        `${tagVersion.version}, not ${version}, so the tag does not identify ` +
+        "this release.",
       remedy: "retag",
     };
   }
 
   if (missing.length === 0) {
+    /*
+     * 🔴 An unanswered question is not a clean bill of health. Reporting one as
+     * `finalized` is how a network blip, an expired token or a tag whose target
+     * cannot be read would each close this check with the release still broken.
+     * Exit 2 is what this file reserves for a question it could not ask, and
+     * that is what these are.
+     */
     const unknowns = [];
-    if (tag.kind === "unknown") unknowns.push("the git tag");
-    if (release === "unknown") unknowns.push("the GitHub Release");
+    if (tag.kind === "unknown") unknowns.push("whether the git tag exists");
+    if (release === "unknown") unknowns.push("whether the GitHub Release exists");
+    if (tag.kind === "present" && tagVersion?.kind === "unknown") {
+      unknowns.push(`which version ${tagFor(version)} points at`);
+    }
+
+    if (unknowns.length > 0) {
+      return {
+        code: 2,
+        state: "unknown",
+        message:
+          `${ANCHOR_PACKAGE}@${version} is published, but ` +
+          `${unknowns.join(" and ")} could not be established, so whether the ` +
+          "release is finished is unknown rather than confirmed.",
+      };
+    }
 
     return {
       code: 0,
-      state: unknowns.length > 0 ? "partly-unknown" : "finalized",
+      state: "finalized",
       message:
-        unknowns.length > 0
-          ? `${ANCHOR_PACKAGE}@${version} is published. Whether ` +
-            `${unknowns.join(" and ")} exists could not be established, so it ` +
-            "is not reported either way."
-          : `${ANCHOR_PACKAGE}@${version} is published, tagged and released.`,
+        `${ANCHOR_PACKAGE}@${version} is published, tagged and released.` +
+        pendingNote(publish.pending),
     };
   }
 
@@ -265,7 +339,8 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
     missing,
     message:
       `${ANCHOR_PACKAGE}@${version} is on the registry and is missing ` +
-      `${missing.join(" and ")}.`,
+      `${missing.join(" and ")}.` +
+      pendingNote(publish.pending),
     /*
      * 🔴 The remedy depends on WHICH artifact is missing, because re-running is
      * not always one. `release.yml` skips its whole tag-and-release branch when
@@ -362,15 +437,15 @@ if (invokedDirectly) {
 
   const tag = publish.kind === "all" ? remoteTagState(tagFor(version)) : { kind: "absent" };
 
-  // Only asked when there is a tag to ask about, and failure to read it leaves
-  // the version undefined rather than wrong, which `verdict` treats as nothing
-  // to report rather than as a mismatch.
+  // Only asked when there is a tag to ask about. A target that cannot be read
+  // is an unanswered question rather than a matching version, and the three-way
+  // shape is what carries that distinction to `verdict` instead of losing it.
   let tagVersion;
   if (tag.kind === "present") {
     try {
-      tagVersion = versionAtRef(tag.sha);
+      tagVersion = { kind: "known", version: versionAtRef(tag.sha) };
     } catch {
-      tagVersion = undefined;
+      tagVersion = { kind: "unknown" };
     }
   }
 
@@ -385,6 +460,14 @@ if (invokedDirectly) {
   if (result.code === 0) {
     console.log(`check-finalized: ok - ${result.message}`);
     process.exit(0);
+  }
+
+  // Kept apart from a failure so a caller can act on the difference. An
+  // unreachable registry or remote should not file a release-integrity report
+  // that a human then has to close by hand.
+  if (result.code === 2) {
+    console.error(`check-finalized: UNKNOWN\n\n  ${result.message}\n`);
+    process.exit(2);
   }
 
   console.error(`check-finalized: FAILED\n\n  ${result.message}\n`);

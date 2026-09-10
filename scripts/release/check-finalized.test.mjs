@@ -34,7 +34,7 @@ describe("what a finished release consists of", () => {
       version: VERSION,
       publish: ALL,
       tag: TAG(SHA),
-      tagVersion: VERSION,
+      tagVersion: { kind: "known", version: VERSION },
       release: "present",
     });
 
@@ -118,12 +118,12 @@ describe("states that are not this check's business", () => {
       version: VERSION,
       publish: ALL,
       tag: TAG(SHA),
-      tagVersion: VERSION,
+      tagVersion: { kind: "known", version: VERSION },
       release: "unknown",
     });
 
-    expect(result.code).toBe(0);
-    expect(result.state).toBe("partly-unknown");
+    expect(result.code).toBe(2);
+    expect(result.state).toBe("unknown");
     expect(result.message).toContain("could not be established");
   });
 
@@ -235,8 +235,15 @@ describe("grading how much of the train shipped", () => {
     { name: "@nextlyhq/admin", version: VERSION },
     { name: "@nextlyhq/ui", version: VERSION },
   ];
-  const live = names => async name =>
-    names.includes(name) ? { versions: ["0.0.0", VERSION], distTags: {} } : { versions: ["0.0.0"], distTags: {} };
+  // A package missing THIS version has still shipped before it, and the
+  // fixture has to say so: a version list holding nothing but the `0.0.0`
+  // placeholder means a package awaiting its first publish, which is a
+  // different state and is graded differently.
+  const PRIOR = "0.0.2-alpha.62";
+  const shipped = { versions: ["0.0.0", PRIOR, VERSION], distTags: {} };
+  const notYet = { versions: ["0.0.0", PRIOR], distTags: {} };
+  const placeholderOnly = { versions: ["0.0.0"], distTags: {} };
+  const live = names => async name => (names.includes(name) ? shipped : notYet);
 
   it("is `all` when every package reached the registry", async () => {
     const state = await publishState(manifest, live(manifest.map(e => e.name)));
@@ -258,9 +265,66 @@ describe("grading how much of the train shipped", () => {
     expect(state.missing).toEqual(["nextly"]);
   });
 
-  it("treats a package the registry has never heard of as not published", async () => {
+  it("does not count a package awaiting its first publish as missing", async () => {
+    // 🔴 `@nextlyhq/eslint-plugin` was added to the repository declaring
+    // `0.0.2-alpha.58` while npm held only its `0.0.0` placeholder, and first
+    // published at `0.0.2-alpha.60`. Grading it as missing calls every release
+    // in that window a stranded train, which is a healthy repository reported
+    // as broken for as long as it takes to ship the new package.
+    const withNewcomer = [
+      ...manifest,
+      { name: "@nextlyhq/eslint-plugin", version: VERSION },
+    ];
+    const state = await publishState(withNewcomer, async name =>
+      name === "@nextlyhq/eslint-plugin" ? placeholderOnly : shipped
+    );
+
+    expect(state.kind).toBe("all");
+    expect(state.pending).toEqual(["@nextlyhq/eslint-plugin"]);
+    // Graded over the three that have shipped, not over all four.
+    expect(state.total).toBe(3);
+  });
+
+  it("still counts a package that HAS shipped before as missing", async () => {
+    // The control for the rule above. Exempting a newcomer must not exempt a
+    // package that stranded, or `partial` stops meaning anything at all.
+    const state = await publishState(manifest, async name =>
+      name === "nextly" ? notYet : shipped
+    );
+
+    expect(state.kind).toBe("partial");
+    expect(state.missing).toEqual(["nextly"]);
+    expect(state.pending).toEqual([]);
+  });
+
+  it("treats a package the registry has never heard of as awaiting its first publish", async () => {
     const state = await publishState(manifest, async () => null);
     expect(state.kind).toBe("none");
+    expect(state.pending).toEqual(manifest.map(entry => entry.name));
+  });
+});
+
+describe("what a verdict could not speak for", () => {
+  it("names the packages it left out of a finished release", () => {
+    // A reader told a release is finished should know it was graded over
+    // nineteen packages and not twenty.
+    const result = verdict({
+      version: VERSION,
+      publish: {
+        kind: "all",
+        published: 19,
+        total: 19,
+        pending: ["@nextlyhq/eslint-plugin"],
+      },
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "present",
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.state).toBe("finalized");
+    expect(result.message).toContain("@nextlyhq/eslint-plugin");
+    expect(result.message).toContain("never published a real version");
   });
 });
 
@@ -287,7 +351,7 @@ describe("a tag that does not identify this release", () => {
       version: VERSION,
       publish: ALL,
       tag: TAG(SHA),
-      tagVersion: "0.0.2-alpha.62",
+      tagVersion: { kind: "known", version: "0.0.2-alpha.62" },
       release: "present",
     });
 
@@ -303,7 +367,7 @@ describe("a tag that does not identify this release", () => {
       version: VERSION,
       publish: ALL,
       tag: TAG(SHA),
-      tagVersion: VERSION,
+      tagVersion: { kind: "known", version: VERSION },
       release: "present",
     });
 
@@ -311,16 +375,22 @@ describe("a tag that does not identify this release", () => {
     expect(result.state).toBe("finalized");
   });
 
-  it("does not claim a mismatch when the tagged version could not be read", () => {
+  it("reports an unreadable tagged commit as unknown, not as finalized", () => {
+    // 🔴 The tag exists and the release exists, so nothing is absent - but what
+    // the tag POINTS AT could not be read, and a tag on an unrelated commit is
+    // exactly the corruption this rule is here to catch. Reporting it as
+    // finalized would close the check over a release nobody has verified.
     const result = verdict({
       version: VERSION,
       publish: ALL,
       tag: TAG(SHA),
-      tagVersion: undefined,
+      tagVersion: { kind: "unknown" },
       release: "present",
     });
 
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(2);
+    expect(result.state).toBe("unknown");
+    expect(result.message).toContain(`which version ${tagFor(VERSION)} points at`);
   });
 });
 
