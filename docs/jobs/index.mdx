@@ -59,6 +59,36 @@ A job is not run with the authority of whoever enqueued it. It resolves a **run-
 and that identity is what access control sees while the job runs, so a job cannot quietly
 do more than the user it runs as is allowed to do.
 
+## Running the queue
+
+Queuing a job records it. Nothing runs it until something calls the jobs route, so a
+Nextly installation with no scheduler has a queue that fills and never drains.
+
+The scaffolded apps mount Nextly's handlers at `src/app/admin/api/[[...params]]/route.ts`,
+so the URL is:
+
+```
+POST /admin/api/jobs/run
+```
+
+Point a cron job, a platform scheduler, or an operator at it. If you mounted the handlers
+somewhere else, use that path instead.
+
+<Callout type="warn">
+There is no general `/api` handler in a scaffolded app, so a scheduler pointed at
+`/api/jobs/run` gets a 404 and nothing ever runs. Nothing reports this: the queue simply
+grows.
+</Callout>
+
+A pass is bounded. It claims at most 10 queued jobs, and it stops **starting** new ones
+after 20 seconds. That 20 seconds is a budget for starting work, not a ceiling on the
+request: the check happens before each claim, so a handler already running is awaited to
+completion and the call can overrun. Size any serverless timeout for your slowest handler,
+not for 20 seconds.
+
+The queue is durable, so a pass that stops early loses nothing. The next call continues
+from the same table.
+
 ## Retention
 
 Finished jobs are pruned on a schedule, so the table holds recent history rather than
@@ -67,4 +97,5 @@ everything that has ever run.
 ## Related
 
 - [Webhooks](/docs/webhooks) — telling another system that something changed
+- [Releases](/docs/releases) — scheduling one depends on this queue draining
 - [Audit log](/docs/audit-log)
