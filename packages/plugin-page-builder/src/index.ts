@@ -151,9 +151,24 @@ export type { ClassUsageVariant } from "./collections/class-usage-index";
 // It is the DECLARED slug. An integrator who renamed the collection passes the
 // name they chose; the plugin's own wiring resolves a rename the same way, from
 // the declared name as the key.
-export { componentUsageCount } from "./component-usage";
+//
+// The HEALTH reader is public for the same reason the count is: the count
+// requires it, so without this a consumer of the published package could only
+// obtain a trustworthy answer by reproducing private queries and identifiers,
+// or by hard-coding the health object — which is exactly the confident
+// `complete: true` the flag exists to prevent, written by hand.
+//
+// `componentUsageIndexDescriptor` travels with it because the reader is generic
+// over the indexes and a caller outside this package has no other way to name
+// the component one.
+export {
+  componentUsageCount,
+  componentUsageIndex as componentUsageIndexDescriptor,
+} from "./component-usage";
 export { usageCountReader } from "./class-usage-runtime";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
+export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
+export type { UsageIndexHealth } from "./usage-index-health";
 export type { UsageCount } from "./usage-count";
 export type { GroupedUsageReader } from "./usage-index";
 /*

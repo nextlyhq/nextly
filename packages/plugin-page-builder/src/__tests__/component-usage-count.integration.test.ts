@@ -61,7 +61,10 @@ const row = (over: {
  * would stop being about the count at all. What is under test here is the
  * predicate, the group key and the trusted read.
  */
-const WHOLE: UsageIndexHealth = { backfilled: true, anyUndetermined: false };
+const WHOLE: UsageIndexHealth = {
+  coversExistingDocuments: true,
+  anyUndetermined: false,
+};
 
 describe.each(getConfiguredTestDialects())(
   "counting the pages that use a component (%s)",

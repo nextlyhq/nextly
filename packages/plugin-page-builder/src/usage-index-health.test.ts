@@ -1,5 +1,5 @@
 /**
- * The two index-wide facts a screen resolves once, and what they cost.
+ * The index-wide facts a screen resolves once, and what they cost.
  *
  * Both are the same answer for every component in a library, so the thing being
  * protected here is that they are asked ONCE — a per-component version issues
@@ -10,20 +10,8 @@
 import { describe, expect, it } from "vitest";
 
 import { componentUsageIndex } from "./component-usage";
-import { backfillScopeKey, type BackfillScope } from "./usage-backfill-scope";
 import type { GroupedUsageReader } from "./usage-index";
-import {
-  indexIsWhole,
-  readUsageIndexHealth,
-  UNKNOWN_INDEX_HEALTH,
-} from "./usage-index-health";
-
-const SCOPE: BackfillScope = {
-  entity: "pages",
-  field: "content",
-  locale: "",
-  variant: "published",
-};
+import { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
 
 function reader(markers: { bucketCount: number; truncated: boolean }) {
   const asked: {
@@ -37,42 +25,14 @@ function reader(markers: { bucketCount: number; truncated: boolean }) {
   return { read, asked };
 }
 
-function state(done: string[]) {
-  return {
-    completed: async () => new Set(done),
-    record: async () => undefined,
-  };
-}
-
 describe("reading how much of the index is there", () => {
-  it("reports a backfilled index with no markers as WHOLE", async () => {
-    const { read } = reader({ bucketCount: 0, truncated: false });
-
-    const health = await readUsageIndexHealth({
-      index: componentUsageIndex,
-      read,
-      scopes: [SCOPE],
-      state: state([backfillScopeKey(SCOPE)]),
-    });
-
-    expect({ health, whole: indexIsWhole(health) }).toEqual({
-      health: { backfilled: true, anyUndetermined: false },
-      whole: true,
-    });
-  });
-
   it("asks the marker question of the WHOLE index, naming no component", async () => {
     // A marker names no component, so "which unreadable documents reference
     // this one" has no answer — narrowing this by a reference would ask it
     // anyway and get a confident empty.
     const { read, asked } = reader({ bucketCount: 1, truncated: false });
 
-    await readUsageIndexHealth({
-      index: componentUsageIndex,
-      read,
-      scopes: [],
-      state: state([]),
-    });
+    await readUsageIndexHealth({ index: componentUsageIndex, read });
 
     expect(asked).toEqual([
       {
@@ -90,53 +50,61 @@ describe("reading how much of the index is there", () => {
     // to every tile, rather than re-derived inside each count.
     const { read, asked } = reader({ bucketCount: 0, truncated: false });
 
-    await readUsageIndexHealth({
-      index: componentUsageIndex,
-      read,
-      scopes: [SCOPE],
-      state: state([backfillScopeKey(SCOPE)]),
-    });
+    await readUsageIndexHealth({ index: componentUsageIndex, read });
 
     expect(asked.length).toBe(1);
   });
 
-  it("is not whole while a scope is unwalked, even with no markers", async () => {
-    const { read } = reader({ bucketCount: 0, truncated: false });
-
-    const health = await readUsageIndexHealth({
-      index: componentUsageIndex,
-      read,
-      scopes: [SCOPE],
-      state: state([]),
-    });
-
-    expect({ health, whole: indexIsWhole(health) }).toEqual({
-      health: { backfilled: false, anyUndetermined: false },
-      whole: false,
-    });
-  });
-
-  it("is not whole while a document is unreadable, even fully backfilled", async () => {
+  it("reports an unreadable document, so every count becomes a floor", async () => {
     const { read } = reader({ bucketCount: 2, truncated: false });
 
     const health = await readUsageIndexHealth({
       index: componentUsageIndex,
       read,
-      scopes: [SCOPE],
-      state: state([backfillScopeKey(SCOPE)]),
     });
 
-    expect({ health, whole: indexIsWhole(health) }).toEqual({
-      health: { backfilled: true, anyUndetermined: true },
-      whole: false,
-    });
+    expect(health.anyUndetermined).toBe(true);
   });
-});
 
-describe("the answer an installation with no backfill wiring assumes", () => {
-  it("caveats every count rather than claiming the index is whole", async () => {
-    // The safe direction, and the one a default has to pick. Claiming whole
-    // would tell an author a component with no rows yet is used nowhere.
-    expect(indexIsWhole(UNKNOWN_INDEX_HEALTH)).toBe(false);
+  it("says the index does NOT cover existing documents, because nothing fills it", async () => {
+    // Not a reading of any database: no mechanism backfills the index yet, so
+    // there is no site on which this could honestly be true. A site that
+    // installed the plugin before creating content IS fully covered and still
+    // answers false — the plugin cannot tell the two apart, and the
+    // conservative reading is the one that does not invite a delete.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+    });
+
+    expect(health.coversExistingDocuments).toBe(false);
+  });
+
+  it("is therefore never WHOLE today, even with no markers at all", async () => {
+    // The consequence, asserted so it cannot be read as an oversight. Until a
+    // backfill exists, every count is a floor — which is the honest answer and
+    // the one this flag was added to be able to give.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+    });
+
+    expect(indexIsWhole(health)).toBe(false);
+  });
+
+  it("would be whole once both halves are true", async () => {
+    // The control on the rule itself, stated against values rather than a
+    // read: without it, `indexIsWhole` returning false for every input would
+    // satisfy every case above.
+    expect(
+      indexIsWhole({ coversExistingDocuments: true, anyUndetermined: false })
+    ).toBe(true);
+    expect(
+      indexIsWhole({ coversExistingDocuments: true, anyUndetermined: true })
+    ).toBe(false);
   });
 });

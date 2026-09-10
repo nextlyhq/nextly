@@ -44,18 +44,13 @@ there would otherwise read as used by nothing at all. Either way
 `complete: false` says the number is a floor, and the surface decides how to
 say so.
 
-The index is now BACKFILLED, which is what makes the count trustworthy on a
-site that existed before it. The write hooks only maintain the index going
-forward, so every document that already existed was absent from it — and an
-absent document is indistinguishable from a component nothing uses. A sweep job
-walks one (collection, field, locale, variant) per tick, recording each as it
-finishes, so an interrupted run resumes instead of restarting and a large site
-cannot starve the queue. Completion is recomputed against the scopes that exist
-NOW rather than latched, so adding a collection, a locale or drafts correctly
-returns the count to a floor until the new work is done.
-
-Until that is finished `complete` is false, so the number is never presented as
-whole while the population behind it is still being assembled.
+One reason it is a floor today is worth stating plainly, because it applies to
+every site: the write hooks maintain the index going FORWARD, and nothing yet
+fills it for documents that already existed. So `complete` is false until a
+backfill exists, and a surface shows "at least N" rather than a total. That is
+the honest reading — a component with no rows is indistinguishable from one
+nothing uses, and the flag exists precisely so that difference is not papered
+over. The backfill itself is a separate change.
 
 `usageCountReader` binds the count to the Direct API. It reads as the system
 because the index denies every access rule it declares, and an untrusted read
@@ -64,3 +59,9 @@ takes the index collection's slug, so `COMPONENT_USAGE_INDEX_SLUG` is exported
 beside it: the plugin resolves that name from its own context, which
 application code cannot reach, and without the export the only way to call the
 reader would be to spell the collection name as a literal.
+
+`readUsageIndexHealth` is exported for the same reason. The count REQUIRES the
+health, so publishing one without the other would leave a consumer able to get
+a trustworthy answer only by reproducing private queries or hard-coding the
+object — which is the confident `complete: true` the flag exists to prevent,
+written by hand.

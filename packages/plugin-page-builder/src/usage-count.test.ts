@@ -24,7 +24,10 @@ import type { GroupedUsageReader } from "./usage-index";
 import type { UsageIndexHealth } from "./usage-index-health";
 
 /** An index with nothing wrong with it: whole, and known to be. */
-const WHOLE: UsageIndexHealth = { backfilled: true, anyUndetermined: false };
+const WHOLE: UsageIndexHealth = {
+  coversExistingDocuments: true,
+  anyUndetermined: false,
+};
 
 /** A grouped reader answering a fixed result, and recording what it was asked. */
 function reader(answer: { bucketCount: number; truncated: boolean }) {
@@ -103,12 +106,12 @@ describe("counting the documents that use something", () => {
         index: componentUsageIndex,
         read,
         referenceId: "header",
-        health: { backfilled: true, anyUndetermined: true },
+        health: { coversExistingDocuments: true, anyUndetermined: true },
       })
     ).toEqual({ documents: 0, complete: false });
   });
 
-  it("refuses while any scope has never been backfilled", async () => {
+  it("refuses while the index does not cover documents that predate it", async () => {
     // The upgrade path. Write hooks fill the index going forward, so a site
     // that existed before this index has no rows for its existing pages — and
     // every component then reads as used by nothing, which is what an author
@@ -120,7 +123,7 @@ describe("counting the documents that use something", () => {
         index: componentUsageIndex,
         read,
         referenceId: "header",
-        health: { backfilled: false, anyUndetermined: false },
+        health: { coversExistingDocuments: false, anyUndetermined: false },
       })
     ).toEqual({ documents: 0, complete: false });
   });
