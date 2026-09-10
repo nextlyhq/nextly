@@ -8910,7 +8910,7 @@ export class CollectionMutationService extends BaseService {
             hasUser: true,
             overrideAccess: Boolean(params.overrideAccess),
             isSuperAdmin: this.accessService.isSuperAdmin(params.user),
-            isScopedApiKey: params.authenticatedScope?.actorType === "apiKey",
+            scope: params.authenticatedScope,
           })
         ) {
           // Default to the auto-stamped system owner column (snake_case, matching
@@ -9703,7 +9703,7 @@ export class CollectionMutationService extends BaseService {
             hasUser: true,
             overrideAccess: Boolean(params.overrideAccess),
             isSuperAdmin: this.accessService.isSuperAdmin(params.user),
-            isScopedApiKey: params.authenticatedScope?.actorType === "apiKey",
+            scope: params.authenticatedScope,
           })
         ) {
           // Default to the auto-stamped system owner column (snake_case, matching

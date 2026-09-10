@@ -28,13 +28,14 @@ export interface OwnerSafetyNetInput {
   /** The caller's OWNER is a super-admin. */
   readonly isSuperAdmin: boolean;
   /**
-   * The request arrived on a scoped API key.
+   * The caller's scope, as the request carries it.
    *
-   * A key is judged on its own stamped grants, not its owner's, so it does not
-   * inherit the owner's super-admin bypass. Without this, minting a read-only
-   * key as a super-admin would hand it every bypass the owner holds.
+   * Taken whole rather than as a `isScopedApiKey` boolean the caller derives:
+   * two call sites deriving one predicate is how this rule came to differ
+   * between update and delete in the first place, and a boolean parameter puts
+   * that derivation back at each site. What a scoped key IS gets decided here.
    */
-  readonly isScopedApiKey: boolean;
+  readonly scope: { readonly actorType?: string } | undefined;
 }
 
 /**
@@ -46,5 +47,9 @@ export interface OwnerSafetyNetInput {
 export function ownerSafetyNetApplies(input: OwnerSafetyNetInput): boolean {
   if (!input.ruleIsOwnerOnly || !input.hasUser) return false;
   if (input.overrideAccess) return false;
-  return !(input.isSuperAdmin && !input.isScopedApiKey);
+  // A key is judged on its own stamped grants, not its owner's, so it does not
+  // inherit the owner's super-admin bypass. Without this, minting a read-only
+  // key as a super-admin would hand it every bypass the owner holds.
+  const isScopedApiKey = input.scope?.actorType === "apiKey";
+  return !(input.isSuperAdmin && !isScopedApiKey);
 }
