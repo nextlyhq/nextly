@@ -64,13 +64,6 @@ jobs:
           # "unknown" and this job into a daily exit 2, so restore the
           # credential in the same change.
           persist-credentials: false
-          # The commit the finished release actually ran on. For a
-          # `workflow_run` event `github.sha` is the default branch tip, so if
-          # `main` moved between the release finishing and this starting, the
-          # question would be about a version that release never published.
-          # Empty on the schedule and on a manual run, where the branch tip is
-          # the right subject.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           # Full history, because a tag is judged by the version its target
           # commit declares. A shallow clone cannot read a commit older than its
           # depth, which would turn every tag into an unreadable one.
@@ -97,9 +90,17 @@ jobs:
         id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # 🔴 The CHECKER comes from the default branch; the SUBJECT is passed
+          # as an argument. Checking out the triggering commit would have run
+          # whatever checker that commit carried, and commits older than this
+          # feature carry none at all: `MODULE_NOT_FOUND` exits 1, which this
+          # workflow reads as an unfinalized release and files an issue about.
+          # Separating the two is what the script's ref argument is for, and it
+          # is why the checkout above fetches full history.
+          SUBJECT: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set +e
-          report=$(node scripts/release/check-finalized.mjs 2>&1)
+          report=$(node scripts/release/check-finalized.mjs "$SUBJECT" 2>&1)
           code=$?
           set -e
 

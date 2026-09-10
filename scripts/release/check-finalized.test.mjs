@@ -208,6 +208,23 @@ describe("asking GitHub about a release", () => {
     expect(releaseState("v1", () => "{}")).toBe("present");
   });
 
+  it("is a draft when the release exists but was never published", () => {
+    // 🔴 A draft is visible to anyone with write access and to nobody else, so
+    // a train whose release was left in draft reads as described while the
+    // page describing it does not exist for a reader.
+    expect(releaseState("v1", () => '{"tagName":"v1","isDraft":true}')).toBe(
+      "draft"
+    );
+  });
+
+  it("is present when the release is published", () => {
+    // The control: a rule that called every release a draft would satisfy the
+    // case above on its own.
+    expect(releaseState("v1", () => '{"tagName":"v1","isDraft":false}')).toBe(
+      "present"
+    );
+  });
+
   it("is absent when the query says there is no such release", () => {
     const run = () => {
       const error = new Error("exit 1");
@@ -301,6 +318,28 @@ describe("grading how much of the train shipped", () => {
     const state = await publishState(manifest, async () => null);
     expect(state.kind).toBe("none");
     expect(state.pending).toEqual(manifest.map(entry => entry.name));
+  });
+});
+
+describe("a release that was saved but never published", () => {
+  it("reports a draft as unfinalized, and does not prescribe a re-run", () => {
+    // `release.yml` gates its whole finalize branch on `gh release view`
+    // succeeding, and that succeeds for a draft, so a re-run reports "already
+    // exists; nothing to finalize" and goes green while this keeps failing.
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "draft",
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.state).toBe("unfinalized");
+    expect(result.remedy).toBe("publish-draft");
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain("re-running repairs nothing");
+    expect(text).toContain("--draft=false");
   });
 });
 
@@ -416,6 +455,24 @@ describe("a tag that does not identify this release", () => {
     expect(result.code).toBe(1);
     expect(result.state).toBe("mistagged");
     expect(result.remedy).toBe("retag");
+  });
+
+  it("does not claim the release is missing when it could not be read", () => {
+    // Saying "and the GitHub Release is missing" when it may well exist sends
+    // the maintainer to a re-run that repairs nothing, because `release.yml`
+    // finds the release and skips finalization.
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: "0.0.2-alpha.62" },
+      release: "unknown",
+    });
+
+    expect(result.remedy).toBe("retag-then-check-release");
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain(`gh release view ${tagFor(VERSION)}`);
+    expect(text).toContain("could not be established");
   });
 
   it("also re-runs when the release is missing as well as mistagged", () => {

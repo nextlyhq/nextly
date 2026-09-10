@@ -212,11 +212,19 @@ export function remoteTagState(tag, run = execFileSync) {
  */
 export function releaseState(tag, run = execFileSync) {
   try {
-    run("gh", ["release", "view", tag, "--repo", "nextlyhq/nextly", "--json", "tagName"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return "present";
+    /*
+     * 🔴 `isDraft`, not just existence. A draft is saved and not published:
+     * `gh release view` finds it for anyone with write access and nobody else
+     * can see it, so a train whose release was left in draft would be reported
+     * as described when the page it is described on does not exist for a
+     * reader. That is the same invisibility this check was written for.
+     */
+    const out = run(
+      "gh",
+      ["release", "view", tag, "--repo", "nextlyhq/nextly", "--json", "tagName,isDraft"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+    );
+    return JSON.parse(out).isDraft === true ? "draft" : "present";
   } catch (error) {
     // `gh` exits non-zero both for "no such release" and for "cannot ask".
     // Only the first is an answer about the release.
@@ -292,7 +300,19 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
   // Everything below is about a train that is fully live.
   const missing = [];
   if (tag.kind === "absent") missing.push(`the git tag ${tagFor(version)}`);
-  if (release === "absent") missing.push(`the GitHub Release ${tagFor(version)}`);
+  /*
+   * A draft counts as missing. It exists for anyone with write access and for
+   * nobody else, so the release is described on a page a reader cannot open,
+   * which is the invisibility this check exists for rather than an exception
+   * to it.
+   */
+  if (release === "absent" || release === "draft") {
+    missing.push(
+      release === "draft"
+        ? `a published GitHub Release ${tagFor(version)} (it exists as a draft)`
+        : `the GitHub Release ${tagFor(version)}`
+    );
+  }
 
   /*
    * 🔴 Anything that is not explicitly a known version is unknown. `verdict` is
@@ -318,7 +338,12 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
        * retagging alone leaves this failing and the next scheduled check
        * reports the same state again.
        */
-      remedy: release === "present" ? "retag" : "retag-then-rerun",
+      remedy:
+        release === "present"
+          ? "retag"
+          : release === "unknown"
+            ? "retag-then-check-release"
+            : "retag-then-rerun",
     };
   }
 
@@ -372,12 +397,22 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
      * exists and only the tag is gone: it prints "already exists; nothing to
      * finalize" and goes green while this keeps failing.
      */
+    /*
+     * 🔴 The remedy depends on WHICH artifact is missing, because re-running is
+     * not always one. `release.yml` skips its whole tag-and-release branch when
+     * `gh release view` succeeds, and a DRAFT satisfies that too, so a re-run
+     * repairs neither a present release with a missing tag nor a draft: it
+     * prints "already exists; nothing to finalize" and goes green while this
+     * keeps failing.
+     */
     remedy:
       release === "present"
         ? "tag-only"
-        : release === "unknown"
-          ? "check-release-first"
-          : "rerun",
+        : release === "draft"
+          ? "publish-draft"
+          : release === "unknown"
+            ? "check-release-first"
+            : "rerun",
   };
 }
 
@@ -417,6 +452,37 @@ export function remedyFor(result, version) {
       "",
       "  If it does NOT exist, re-run the release run that published this",
       "  version and both artifacts are created together:",
+      "",
+      "      gh run rerun <id> --failed",
+      "",
+    ].join("\n");
+  }
+
+  if (result.remedy === "publish-draft") {
+    return [
+      "  The GitHub Release exists as a DRAFT, so re-running repairs nothing:",
+      "  `gh release view` finds a draft, and the release workflow then reports",
+      "  nothing to finalize. Publish it:",
+      "",
+      `      gh release edit ${tag} --repo nextlyhq/nextly --draft=false`,
+      "",
+    ].join("\n");
+  }
+
+  if (result.remedy === "retag-then-check-release") {
+    return [
+      "  The tag names a different release, and whether the GitHub Release",
+      "  exists could not be established, so fix the tag first and then find",
+      "  out which of the two remaining cases you are in:",
+      "",
+      `      git push origin :refs/tags/${tag}`,
+      `      git tag -a ${tag} <commit> -m "${tag}"`,
+      `      git push origin refs/tags/${tag}`,
+      `      gh release view ${tag} --repo nextlyhq/nextly`,
+      "",
+      "  If the release EXISTS, the tag was the only thing wrong and you are",
+      "  done. If it does not, re-run the release run that published this",
+      "  version so CI creates it:",
       "",
       "      gh run rerun <id> --failed",
       "",
