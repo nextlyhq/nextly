@@ -493,7 +493,45 @@ const BOUNDARIES: Pairing[] = [
   },
 ];
 
+/**
+ * The marks a chart paints, against the surface it paints them on.
+ *
+ * A chart mark is a graphical object required to read the chart, which is the
+ * scope WCAG 1.4.11 sets, so each is held to 3:1. The surface is `--nx-card`
+ * throughout: a widget draws inside a card, and that is the only surface these
+ * marks meet. Deliberately not asserted against the page or the container tint
+ * — a pairing that never renders is noise, and the light ramp is close enough
+ * to the minimum that a surface nobody draws on would fail for no one.
+ *
+ * The whole slot range is asserted rather than only the slots something reads
+ * today. A palette is a menu: the next chart takes slot 3 without touching this
+ * file, and a slot that fails the day it is first used is a defect shipped by
+ * whoever adds the chart rather than by whoever chose the colour.
+ *
+ * Slot 1 is `var(--nx-primary)` and is asserted through "chart series 1"
+ * rather than separately, so a rebrand moving primary is caught here too.
+ */
+const CHART_MARKS: Pairing[] = [
+  ...[1, 2, 3, 4, 5].map(
+    (n): Pairing => ({
+      fg: `--nx-chart-${n}`,
+      bg: "--nx-card",
+      kind: "ui",
+      label: `chart series ${n} on card`,
+    })
+  ),
+  {
+    // The bars archetype paints the fill over its own track, not over the card,
+    // so the track is the surface that decides whether the bar is visible.
+    fg: "--nx-primary",
+    bg: "--nx-muted",
+    kind: "ui",
+    label: "bar fill on its track",
+  },
+];
+
 export const PAIRINGS: Pairing[] = [
+  ...CHART_MARKS,
   ...BASE_TEXT,
   ...CODE_TEXT,
   ...STATUS_TEXT,
@@ -547,9 +585,14 @@ export const EXCLUSIONS: Exclusion[] = [
       "The solid gap between a focus ring and the content it surrounds, not a foreground/background pair; its job is separation, which the ring's own contrast already covers.",
   },
   {
-    token: "--nx-chart-1..5",
+    token: "--nx-chart-1..5 against any surface other than --nx-card",
     reason:
-      "A categorical data-visualization palette. Meaningful chart contrast is adjacent-series and against-plot-background, not a single token pair; assert it where charts are actually rendered.",
+      "The slots themselves ARE asserted, against --nx-card, which is the only surface a widget's chart draws on. This entry covers the rest: the page, the page container tint and the muted container. Asserting those would hold the palette to a surface no chart is painted on, and the light ramp clears the minimum by little enough that it would fail for nobody's benefit.",
+  },
+  {
+    token: "adjacent-series contrast (one chart series against its neighbour)",
+    reason:
+      "Not a foreground/surface pair, and no published minimum exists to assert against: WCAG 1.4.11 sets a figure only against adjacent colours generally, and neither Carbon, Spectrum nor Material states a series-to-series ratio. Carbon reviews it by colourblindness simulation instead. Separation between series is carried here by the legend's text label, count and percentage, which is a 1.4.1 concern rather than a 1.4.11 one.",
   },
   {
     token:
