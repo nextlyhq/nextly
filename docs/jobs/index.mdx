@@ -100,15 +100,18 @@ permission and a POST. `GET` always requires the secret, because a permission ch
 would let a browser be steered into firing it.
 
 <Callout type="warn">
-Two ways to get a queue that grows and never drains, both silent:
+Three ways to get a queue that grows and never drains, and the status code tells them
+apart:
 
-- a scheduler pointed at `/api/jobs/run`, which 404s because a scaffolded app has no
-  general `/api` handler
-- a call with no `Authorization` header, or a short `CRON_SECRET`, which is refused
-  with a 403
+| Response | What happened |
+|---|---|
+| 404 | Pointed at `/api/jobs/run`; a scaffolded app has no general `/api` handler |
+| 401 | No `Authorization` header, or a bearer the route does not accept, on a `POST`. It falls through to ordinary authentication and finds no caller |
+| 403 | A `GET` with no usable secret. That route never falls back to a permission check |
 
-Neither reports anything from the application's side. Check your scheduler's own log for
-the response code the first time you wire it up.
+Only the short-`CRON_SECRET` case announces itself, and it does so at boot rather than at
+request time. Check your scheduler's own log for the response code the first time you wire
+it up.
 </Callout>
 
 A pass is bounded. It claims at most 10 queued jobs, and it stops **starting** new ones
@@ -117,8 +120,20 @@ request: the check happens before each claim, so a handler already running is aw
 completion and the call can overrun. Size any serverless timeout for your slowest handler,
 not for 20 seconds.
 
-The queue is durable, so a pass that stops early loses nothing. The next call continues
+The queue is durable, so a pass that stops early loses no work: the next call continues
 from the same table.
+
+<Callout type="warn">
+**Delivery is at-least-once, so handlers must be idempotent.** A lease stops two runners
+claiming a job at the same instant, and a fence stops a runner that lost its lease
+recording an outcome over its successor's. Neither stops a handler that OUTLIVES its
+lease: a process that stalls, is paused, or loses its connection stops renewing while its
+side effects are still in flight, and a later pass can reclaim and run the same job.
+
+The fence can refuse the first runner's database write. It cannot undo an email it already
+sent. Size `leaseMs` to the work, and write handlers that can run twice without harm. This
+is the same contract SQS, BullMQ and pg-boss give, for the same reason.
+</Callout>
 
 ## Retention
 

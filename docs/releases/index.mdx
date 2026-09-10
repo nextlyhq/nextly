@@ -53,14 +53,22 @@ path or a missing secret, leaves you in the same place.
 </Callout>
 
 What that does **not** mean is that the content change is invisible. A read consults the
-same due-release rule the sweep does, so a scheduled draft is revealed and a scheduled
-takedown hidden the moment their instant passes, whether or not anything ran. As
-`apply-due-releases.ts` puts it, the read path can only make a due release LOOK applied.
+same due-release rule the sweep does, so a scheduled draft can be revealed, and a takedown
+hidden, before anything has run. On a multi-instance deployment an instance other than the
+one that scheduled it can be up to 30 seconds behind, so treat this as "within seconds of
+the instant" rather than exactly at it.
 
-The sweep is what applies it for real, writing as the member's own author, and marks the
-release `published` once every action has succeeded. Until then the release stays open, and
-anything reading the stored rows rather than going through the read path still sees the
-unapplied state.
+As `apply-due-releases.ts` puts it, the read path can only make a due release LOOK applied.
+The sweep is what applies it for real, writing as the member's own author, and it is the
+only thing that advances the release's own state.
+
+<Callout type="warn">
+What a reader sees and what the stored rows hold are therefore two different questions
+while a release is waiting for the sweep, and the second one has more cases than the first:
+overlapping releases, a member whose author is gone, and a pass that applied some members
+before failing on another. If you integrate against the database directly rather than
+through Nextly, read `apply-due-releases.ts` before relying on release state.
+</Callout>
 
 A pass is bounded, which is why a due release is not always applied by the next tick: it
 claims at most 10 queued jobs and stops starting new ones after 20 seconds. The bounds and
