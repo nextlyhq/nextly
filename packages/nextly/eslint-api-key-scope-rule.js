@@ -1,10 +1,11 @@
 /**
- * The guard against building an API-key scope by hand, defined once and mounted from more than
- * one ESLint configuration.
+ * The guard against building an API-key scope by hand.
  *
- * Same reason as `eslint-bare-error-rule.js`: ESLint resolves a flat config from the CWD rather
- * than from the linted file, so a rule written into only one config governs only the invocation
- * that happens to read it. Both mount this builder.
+ * Exported as a selector rather than as its own config block, and mounted inside
+ * `eslint-bare-error-rule.js`'s single `no-restricted-syntax` entry. ESLint's flat config merges
+ * that rule by NAME, so a second block declaring it REPLACES the first instead of adding to it —
+ * mounted separately, this guard silently took the bare-Error selector out of service, and
+ * `bare-error-allowlist.test` is what caught it.
  *
  * ## Why a lint rule and not the source scan this replaces
  *
@@ -69,30 +70,3 @@ export const API_KEY_SCOPE_ALLOWLIST_PATHS = [
   "src/auth/authenticated-scope.ts",
   "src/dispatcher/helpers/authenticated-actor.ts",
 ];
-
-/**
- * Build the config block.
- *
- * `prefix` is empty when lint runs inside `packages/nextly`, and `"packages/nextly/"` when it runs
- * from the repository root — the same convention `bareErrorConfig` uses.
- */
-export function apiKeyScopeConfig(prefix = "") {
-  return {
-    files: [`${prefix}src/**/*.ts`, `${prefix}src/**/*.tsx`],
-    ignores: [
-      ...API_KEY_SCOPE_ALLOWLIST_PATHS.map(entry => `${prefix}${entry}`),
-      // Tests model shapes on purpose, including the broken one — the scope seam's own control
-      // asserts that a hand-built literal is what the guard rejects, and a rule that rejected the
-      // control would make the guard unable to demonstrate itself.
-      `${prefix}src/**/*.test.ts`,
-      `${prefix}src/**/*.test-d.ts`,
-      `${prefix}src/**/__tests__/**`,
-    ],
-    rules: {
-      "no-restricted-syntax": [
-        "error",
-        { selector: API_KEY_SCOPE_SELECTOR, message: API_KEY_SCOPE_MESSAGE },
-      ],
-    },
-  };
-}

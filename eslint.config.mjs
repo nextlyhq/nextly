@@ -3,7 +3,6 @@ import { designTokensConfig } from "@nextlyhq/eslint-config/design-tokens";
 import { reactRules } from "@nextlyhq/eslint-config/react-internal";
 
 import { bareErrorConfig } from "./packages/nextly/eslint-bare-error-rule.js";
-import { apiKeyScopeConfig } from "./packages/nextly/eslint-api-key-scope-rule.js";
 
 // Every surface that paints admin chrome is held to the token contract: the
 // first-party plugins, the admin itself, and the kit they both draw from.
@@ -49,7 +48,6 @@ export default [
   // includes lint-staged, the hook that runs before a commit is written. Same reason as the
   // React block above.
   bareErrorConfig("packages/nextly/"),
-  apiKeyScopeConfig("packages/nextly/"),
   ...designTokensConfig(ADMIN_UI_FILES),
   {
     ignores: [

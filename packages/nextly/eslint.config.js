@@ -1,14 +1,12 @@
 import { config } from "@nextlyhq/eslint-config/base";
 
 import { bareErrorConfig } from "./eslint-bare-error-rule.js";
-import { apiKeyScopeConfig } from "./eslint-api-key-scope-rule.js";
 
 export default [
   ...config,
   // Globs are relative to packages/nextly/ because the lint command runs `eslint .` from this
   // directory. The repository-root config mounts the same builder with a path prefix.
   bareErrorConfig(),
-  apiKeyScopeConfig(),
   // F1 PR 1 + F11 PR 5: bans on imports from the deployed app's
   // runtime code (the request graph + boot path).
   //

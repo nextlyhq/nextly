@@ -1,3 +1,9 @@
+import {
+  API_KEY_SCOPE_ALLOWLIST_PATHS,
+  API_KEY_SCOPE_MESSAGE,
+  API_KEY_SCOPE_SELECTOR,
+} from "./eslint-api-key-scope-rule.js";
+
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,11 +119,24 @@ export function bareErrorConfig(prefix = "") {
       // scope readable rather than what enforces it.
       `${prefix}src/**/*.test.ts`,
       `${prefix}src/**/*.spec.ts`,
+      `${prefix}src/**/*.test-d.ts`,
+      `${prefix}src/**/__tests__/**`,
+      // Where an API-key scope literal IS the definition, or where there is
+      // nothing better to build one from. Neither file throws, so sharing this
+      // block's ignores costs the bare-Error selector no coverage.
+      ...API_KEY_SCOPE_ALLOWLIST_PATHS.map(entry => `${prefix}${entry}`),
     ],
     rules: {
+      // Both selectors in ONE entry, deliberately. ESLint's flat config merges
+      // `no-restricted-syntax` by rule NAME, not by selector, so a second config
+      // block declaring the same rule REPLACES this one rather than adding to
+      // it — the API-key scope guard was mounted that way first and silently
+      // took the bare-Error selector out of service. `bare-error-allowlist.test`
+      // is what caught it.
       "no-restricted-syntax": [
         "error",
         { selector: BARE_ERROR_SELECTOR, message: BARE_ERROR_MESSAGE },
+        { selector: API_KEY_SCOPE_SELECTOR, message: API_KEY_SCOPE_MESSAGE },
       ],
     },
   };
