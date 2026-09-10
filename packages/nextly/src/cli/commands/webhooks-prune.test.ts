@@ -19,14 +19,14 @@ vi.mock("../utils/adapter", () => ({
     dialect: "sqlite",
     databaseUrl: "memory",
   })),
-  createAdapter: vi.fn(),
+  createCliAdapter: vi.fn(),
 }));
 
 vi.mock("../utils/config-loader", () => ({
   loadConfig: vi.fn(async () => ({ config: { webhookRetention: null } })),
 }));
 
-import { createAdapter } from "../utils/adapter";
+import { createCliAdapter } from "../utils/adapter";
 
 function fakeContext(): CommandContext {
   const logger = {
@@ -47,7 +47,7 @@ describe("runWebhooksPruneCommand", () => {
 
     await runWebhooksPruneCommand({}, context);
 
-    expect(createAdapter).not.toHaveBeenCalled();
+    expect(createCliAdapter).not.toHaveBeenCalled();
     expect(context.logger.info).toHaveBeenCalledWith(
       expect.stringContaining("disabled")
     );

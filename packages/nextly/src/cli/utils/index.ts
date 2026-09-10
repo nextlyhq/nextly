@@ -32,13 +32,13 @@ export {
 } from "./logger";
 
 export {
-  createAdapter,
+  createCliAdapter,
   withAdapter,
   validateDatabaseEnv,
   detectDialectFromUrl,
   getDialectDisplayName,
   dialectSupports,
-  type CreateAdapterOptions,
+  type CreateCliAdapterOptions,
   type DatabaseEnvValidation,
   type CLIDatabaseAdapter,
   type SupportedDialect,

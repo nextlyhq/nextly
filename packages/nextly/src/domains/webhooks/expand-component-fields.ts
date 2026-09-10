@@ -16,7 +16,7 @@
 
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../field-groups/storage/field-group-field-type";
 
 import type { SensitiveFieldSource } from "./sensitive-fields";
@@ -37,7 +37,7 @@ export type ComponentFieldResolver = (
  * reaches the deny list.
  */
 function referencedSlugs(field: SensitiveFieldSource): string[] {
-  if (!isFieldGroupType(field.type)) return [];
+  if (!isFieldGroupFieldType(field.type)) return [];
   const { single, many } = extractFieldGroupReferences(field);
   const slugs: string[] = [];
   if (single) slugs.push(single);

@@ -16,7 +16,7 @@
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
-import { isFieldGroupType } from "../field-groups/storage/field-group-field-type";
+import { isFieldGroupFieldType } from "../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 import type { UserContext } from "../singles/types";
 
@@ -161,7 +161,7 @@ function walk(
     // instance's type, not in `fields`, so resolve them per instance. Everything
     // below a component is walked with `inComponent`, so the read-rule skip
     // above applies to its whole subtree.
-    if (isFieldGroupType(field.type)) {
+    if (isFieldGroupFieldType(field.type)) {
       const instances = Array.isArray(raw) ? raw : [raw];
       for (const instance of instances) {
         walk(instance, componentChildFieldsFor(field, instance), visit, true);

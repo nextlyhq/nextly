@@ -267,6 +267,16 @@ export {
   type WidgetLifecycle,
   type WidgetCondition,
 } from "./domains/widgets/lifecycle";
+// The onboarding step ids the dashboard checklist draws. Published here rather
+// than only from the root because the admin reads this entry point, and a
+// union it restates instead of importing is a contract with nothing holding
+// the two halves together.
+export {
+  ONBOARDING_STEPS,
+  isOnboardingStepId,
+  type OnboardingStepId,
+  type OnboardingStep,
+} from "./domains/widgets/onboarding-steps";
 export type { WidgetQuery } from "./domains/widgets/query";
 // A VALUE, and for the same reason as the batch limit below: the admin resolves
 // a contributed widget's deprecated `size` alias into the enum, and so does the

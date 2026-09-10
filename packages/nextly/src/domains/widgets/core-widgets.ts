@@ -87,23 +87,51 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     defaultOrder: 0,
     component: "core#SeedDemoContentCard",
     /*
-     * Transient, and now declared as such. The card already hid ITSELF once
+     * Transient, and declared as such. The card used to hide ITSELF once
      * seeding was done or declined -- it was placed in the grid, given an
      * order, and then rendered nothing -- so the arrangement reserved a slot
      * for a card drawing nothing and the reason lived in a component.
      *
-     * The host answers one half: while this reader can see no content, the
-     * card is offered; once they can, it is not. The other half is a DECLINE,
-     * which `nextly_meta` records and this condition does not read -- so a
-     * reader who declined on an empty install still holds the slot, exactly as
-     * before. That residual is not folded into `content:empty`, and the reason
-     * is that conditions are evaluated once per NAME and shared by every widget
-     * asking: a plugin's card declaring `content:empty` would then vanish
-     * because someone dismissed a core onboarding offer. Ending a card early is
-     * a per-reader decision and belongs to dismissal, which nothing reads yet.
+     * 🔴 TWO conditions, and the pair is the point. This card asks something
+     * neither one answers alone: is there nothing to look at, AND is the offer
+     * of demo content still open. `content:empty` alone left a reader who
+     * DECLINED still holding the slot, because declining does not create
+     * content. Folding the decline into `content:empty` was refused instead:
+     * conditions are evaluated once per NAME and shared by every widget asking,
+     * so a plugin's card declaring `content:empty` would have vanished because
+     * someone dismissed a core offer.
+     *
+     * The two are scoped differently on purpose. `content:empty` is about this
+     * READER; `seed:unanswered` is about the INSTALL, since whether a project
+     * took the demo data is recorded once and a second admin should not be
+     * offered it again after the first declined.
      */
     lifecycle: "conditional",
-    visibleWhen: "content:empty",
+    visibleWhen: ["content:empty", "seed:unanswered"],
+  },
+  {
+    id: "core/onboarding-checklist",
+    title: "Set up your project",
+    description:
+      "The setup steps still outstanding, detected from the install rather than ticked by hand.",
+    archetype: "custom",
+    chrome: "none",
+    defaultSize: "full",
+    // Between the seed offer and the first content card. Both are transient and
+    // both address a reader who has just arrived, so they sit together rather
+    // than with the cards that stay.
+    defaultOrder: 5,
+    component: "core#OnboardingChecklist",
+    /*
+     * Offered only while there is something left to do, and dropped by the host
+     * the moment there is not. The card used to decide that for itself from
+     * `localStorage`, which made it a per-BROWSER answer to a per-reader
+     * question: the same person on a second machine met a checklist they had
+     * already finished, and a colleague met one reporting someone else's
+     * progress.
+     */
+    lifecycle: "conditional",
+    visibleWhen: "onboarding:incomplete",
   },
   {
     id: "core/collections",

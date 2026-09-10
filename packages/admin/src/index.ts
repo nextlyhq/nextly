@@ -688,11 +688,6 @@ export type {
   RecentEntriesResponse,
 } from "./types/dashboard/recent-entries";
 export type { ProjectStatItem } from "./types/dashboard/project-stats";
-export type {
-  OnboardingStepId,
-  OnboardingStep,
-  OnboardingProgress,
-} from "./types/dashboard/onboarding";
 
 // Constants
 export {

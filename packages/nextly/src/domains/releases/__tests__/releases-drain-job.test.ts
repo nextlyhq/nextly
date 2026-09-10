@@ -75,6 +75,8 @@ async function runHandler(
   });
 
   await job.handler(null as never, {
+    jobId: "releases-drain-1",
+    attempt: 1,
     user: null,
     now: CONTEXT_NOW,
     content: {} as never,

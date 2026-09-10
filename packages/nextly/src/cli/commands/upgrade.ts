@@ -32,7 +32,7 @@ import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError, describeError } from "../../errors";
 import { createContext } from "../program";
-import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 
 import { maybeForceUnlock } from "./migrate";
 
@@ -400,7 +400,7 @@ export function registerUpgradeCommand(program: Command): void {
 
       let adapter: { disconnect?: () => Promise<void> } & UpgradeAdapter;
       try {
-        adapter = (await createAdapter({
+        adapter = (await createCliAdapter({
           dialect: dbValidation.dialect,
           databaseUrl: dbValidation.databaseUrl,
           logger: globalOpts.verbose ? context.logger : undefined,
