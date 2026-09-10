@@ -129,4 +129,56 @@ describe("the attempt number a handler is given", () => {
 
     expect(context?.attempt).toBe(4);
   });
+
+  it("is PERSISTED before the handler starts, not after it finishes", async () => {
+    /*
+     * 🔴 What makes `attempt` mean anything after a crash, and the reason the
+     * documentation can say a handler that dies part-way still leaves the count
+     * advanced. Recorded afterwards, a process that died mid-handler would
+     * leave the row untouched and the next run would be numbered as if it were
+     * the first, so a reader could not use it to tell a retry from a first run
+     * at all.
+     */
+    const order: string[] = [];
+    const rows = [row("job-a", 0)];
+    let handed = false;
+    const store: JobsStore = {
+      findDue: async () => {
+        if (handed) return [];
+        handed = true;
+        return rows;
+      },
+      claim: async id => rows.find(r => r.id === id) ?? null,
+      markAttempt: async (_id, _runner, attemptCount) => {
+        order.push(`markAttempt(${String(attemptCount)})`);
+        return true;
+      },
+      renewLease: async () => true,
+      finalize: async () => true,
+    };
+
+    const registry = new JobRegistry();
+    registry.register(
+      defineJob({
+        slug: "test:capture",
+        handler: async () => {
+          order.push("handler");
+        },
+      })
+    );
+
+    await runJobs({
+      store,
+      registry,
+      runAs: {
+        findUser: async () => ({ id: "u1", isActive: true }),
+        listRoleSlugs: async () => ["editor"],
+      },
+      now: () => NOW,
+      maxDurationMs: 20_000,
+      contentApi: noContentApi,
+    });
+
+    expect(order).toEqual(["markAttempt(1)", "handler"]);
+  });
 });

@@ -46,11 +46,16 @@
  * and pg-boss give, for the same reason — exactly-once across a process
  * boundary and an external side effect is not something a queue can offer.
  *
- * `leaseMs` is NOT the lever it looks like. Renewal already covers work that
- * merely takes a long time, so raising it buys tolerance for a stalled process
- * and nothing else. The lever a handler actually has is `jobId`, handed to it
- * on every attempt so it can key whatever it does outside this database on
- * something that does not change when the job runs again.
+ * `leaseMs` is not the lever it looks like. Renewal already covers work that
+ * merely takes a long time, so raising it buys tolerance for a runner that
+ * STOPS renewing, which is worth doing where an event loop pause or a slow
+ * database can plausibly outlast the default: the renewal timer cannot fire
+ * during a stall either. The built-in `/admin/api/jobs/run` route takes the
+ * default and offers no configuration; a caller of `runJobsPass` sets it.
+ *
+ * The lever a HANDLER has is `jobId`, handed to it on every attempt so it can
+ * key whatever it does outside this database on something that does not change
+ * when the job runs again.
  *
  * What IS guaranteed: a job's outcome is recorded once, by whoever holds the
  * lease when it finishes.

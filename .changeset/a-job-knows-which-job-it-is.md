@@ -36,10 +36,10 @@ nothing stable to key an external side effect on.
 
 It now receives `jobId`, the same on every attempt, which is the key to hand a
 payment provider's idempotency header or the unique column an upsert targets.
-It also receives `attempt`, counting from 1, for behaviour that should change
-on a retry. `attempt` is deliberately not the deduplication signal: it counts
-attempts the runner managed to record, so a run whose process died before
-writing anything back leaves the count where it was.
+It also receives `attempt`, counting from 1, which is written to the row before
+the handler starts, so a handler that dies part-way still leaves the count
+advanced. It is not the deduplication signal: `attempt > 1` says an earlier run
+began, not what it finished.
 
 The same page told operators to size `leaseMs` to the work. Nobody could:
 the built-in route passes only a batch size and a duration, and the public

@@ -60,17 +60,26 @@ export interface JobContext {
    * Deriving a key from `input` instead works only for as long as the input is
    * unique, which is a property of the caller rather than of the queue: the
    * same payload queued twice is two jobs and two ids.
+   *
+   * One key per SIDE EFFECT, not one per job. A handler that charges a card and
+   * then writes a ledger row must not send this same value to both where they
+   * share a uniqueness namespace, or the second is refused as a duplicate of
+   * the first. Derive one per operation, `${jobId}:charge` and so on.
    */
   jobId: string;
   /**
    * Which attempt this is, counting from 1.
    *
-   * 🔴 NOT a substitute for `jobId` when deciding whether work already
-   * happened. It counts attempts the runner managed to RECORD, so a run whose
-   * process died before writing anything back leaves the count where it was
-   * and the next attempt is numbered as if it were the first. It is a signal
-   * for behaviour that should change on a retry, such as logging louder or
-   * skipping an optimisation, not for whether a side effect is already out.
+   * Written to the row BEFORE the handler starts, so a handler that dies
+   * part-way still leaves the count advanced and the next run is numbered
+   * higher. Reliable for behaviour that should change on a retry: logging
+   * louder, or abandoning an optimisation that failed last time.
+   *
+   * 🔴 Still not a substitute for `jobId` when deciding whether work already
+   * happened. `attempt > 1` says an earlier run BEGAN, not what it finished,
+   * and nothing in this process can know what a provider did with a request it
+   * never answered. That question is answered by asking the provider, which is
+   * what handing it `jobId` does.
    */
   attempt: number;
   /**
