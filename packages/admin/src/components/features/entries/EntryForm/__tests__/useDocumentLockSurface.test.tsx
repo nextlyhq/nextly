@@ -14,6 +14,7 @@ const bob: DocumentLockHolder = {
   expiresInSeconds: 90,
 };
 const takeOver = vi.fn();
+const requestAccess = vi.fn();
 const options = {
   scopeKind: "collection" as const,
   slug: "posts",
@@ -30,8 +31,9 @@ describe("remembering who held the document", () => {
     // was reported. Forgetting them hands the document to a second editor while
     // the last confirmed fact is that somebody holds an unexpired lease.
     useDocumentLock.mockReturnValue({
-      state: { status: "held-by-other", holder: bob },
+      state: { status: "held-by-other", holder: bob, requestSent: false },
       takeOver,
+      requestAccess,
     });
     const { result, rerender } = renderHook(() =>
       useDocumentLockSurface(options)
@@ -41,6 +43,7 @@ describe("remembering who held the document", () => {
     useDocumentLock.mockReturnValue({
       state: { status: "unavailable" },
       takeOver,
+      requestAccess,
     });
     rerender();
 
@@ -53,8 +56,9 @@ describe("remembering who held the document", () => {
     // document announces itself as `acquiring`. Carrying the last one's holder
     // into it renders a document read-only over a colleague who was never in it.
     useDocumentLock.mockReturnValue({
-      state: { status: "held-by-other", holder: bob },
+      state: { status: "held-by-other", holder: bob, requestSent: false },
       takeOver,
+      requestAccess,
     });
     const { result, rerender } = renderHook(() =>
       useDocumentLockSurface(options)
@@ -64,11 +68,13 @@ describe("remembering who held the document", () => {
     useDocumentLock.mockReturnValue({
       state: { status: "acquiring" },
       takeOver,
+      requestAccess,
     });
     rerender();
     useDocumentLock.mockReturnValue({
       state: { status: "unavailable" },
       takeOver,
+      requestAccess,
     });
     rerender();
 
@@ -78,24 +84,44 @@ describe("remembering who held the document", () => {
 
   it("forgets them once this editor holds it", () => {
     useDocumentLock.mockReturnValue({
-      state: { status: "held-by-other", holder: bob },
+      state: { status: "held-by-other", holder: bob, requestSent: false },
       takeOver,
+      requestAccess,
     });
     const { result, rerender } = renderHook(() =>
       useDocumentLockSurface(options)
     );
 
     useDocumentLock.mockReturnValue({
-      state: { status: "held-by-me" },
+      state: { status: "held-by-me", someoneWaiting: false },
       takeOver,
+      requestAccess,
     });
     rerender();
     useDocumentLock.mockReturnValue({
       state: { status: "unavailable" },
       takeOver,
+      requestAccess,
     });
     rerender();
 
     expect(result.current.readOnly).toBe(false);
+  });
+
+  it("republishes the polite ask, so an editor is not left with only the steal", () => {
+    // The surface is what both editors render from. Publishing `takeOver` and
+    // not this would leave a locked-out author one option -- displacing a
+    // colleague -- which is the dead end this whole change exists to remove.
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      takeOver,
+      requestAccess,
+    });
+    const { result } = renderHook(() => useDocumentLockSurface(options));
+
+    result.current.requestAccess();
+
+    expect(requestAccess).toHaveBeenCalledTimes(1);
+    expect(takeOver).not.toHaveBeenCalled();
   });
 });

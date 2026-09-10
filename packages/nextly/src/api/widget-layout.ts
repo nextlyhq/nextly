@@ -45,6 +45,7 @@ import {
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
 import { refreshCollectionWidgets } from "../domains/widgets/collection-widgets";
+import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
@@ -310,12 +311,22 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   const service = await getLayoutService();
-  const caller = readAccessCaller(await readCaller(auth));
+  // BOTH shapes are kept. The entity-level caller is derived from the read
+  // caller, and a condition reads through the ordinary counted path, which
+  // needs the read caller itself -- so discarding it here and rebuilding it
+  // later would be two answers to "who is asking".
+  const reader = await readCaller(auth);
+  const caller = readAccessCaller(reader);
 
-  const [stored, widgets] = await Promise.all([
+  const [stored, permitted] = await Promise.all([
     service.getLayout(SCOPE_KIND, caller.userId),
     visibleWidgets(caller),
   ]);
+  // A SECOND pass, after the permission gate and never folded into it. The gate
+  // decides what this reader may be told exists; this decides which transient
+  // cards are worth showing right now, and a lapsed onboarding card is not a
+  // refusal.
+  const widgets = await widgetsWhoseConditionHolds(permitted, reader);
 
   const source: LayoutSource = stored.layout ? "own" : "default";
   const placements = visibleArrangement(stored.layout, widgets);
@@ -519,8 +530,17 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   }
 
   const service = await getLayoutService();
-  const caller = readAccessCaller(await readCaller(auth));
-  const widgets = await visibleWidgets(caller);
+  const reader = await readCaller(auth);
+  const caller = readAccessCaller(reader);
+  // 🔴 The SAME two passes the GET makes, in the same order. The token below is
+  // a hash of the set the client was shown, so a write that derived it from a
+  // different set can never match: with a transient card filtered out of the
+  // GET and left in here, every save on an install that has any content would
+  // answer 409 and no reader could rearrange their dashboard at all.
+  const widgets = await widgetsWhoseConditionHolds(
+    await visibleWidgets(caller),
+    reader
+  );
   const visibleIds = new Set(widgets.map(widget => widget.id));
 
   // 🔴 BEFORE the per-placement checks below, and before the write. The row's

@@ -558,6 +558,20 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     ...(typeof defaultOrder === "number" && Number.isFinite(defaultOrder)
       ? { defaultOrder }
       : {}),
+    /*
+     * Carried so a contributed card can be transient too. Dropped here, the
+     * layout server reads no lifecycle and treats the card as PERMANENT --
+     * silently, because a widget that never lapses looks exactly like one that
+     * was declared permanent. `widgetValueProblem` has already refused an
+     * unknown condition or a lifecycle these two do not agree on, so what
+     * reaches here is a pair this host can act on.
+     */
+    ...(typeof declaration.lifecycle === "string"
+      ? { lifecycle: declaration.lifecycle }
+      : {}),
+    ...(typeof declaration.visibleWhen === "string"
+      ? { visibleWhen: declaration.visibleWhen }
+      : {}),
   };
 }
 

@@ -12,6 +12,11 @@
 import { NextlyError } from "../../errors/nextly-error";
 
 import { requiredPermissionSlugs } from "./gate";
+import {
+  lifecycleProblem,
+  type WidgetCondition,
+  type WidgetLifecycle,
+} from "./lifecycle";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
 import { validateWidgetSettings, type WidgetSetting } from "./settings";
 import type { WidgetOp } from "./sources";
@@ -295,6 +300,23 @@ export interface WidgetDefinition {
    */
   defaultOrder?: number;
   /**
+   * How long this widget stays on the dashboard. Defaults to `"always"`.
+   *
+   * A `conditional` widget is transient: it shows only while `visibleWhen`
+   * holds, and is neither placed nor offered otherwise. Declaring it here
+   * rather than deciding in the component is what stops the grid reserving a
+   * slot, and an order, for a card that renders nothing.
+   */
+  lifecycle?: WidgetLifecycle;
+  /**
+   * The named condition this widget shows under. Required when conditional.
+   *
+   * A NAME the host evaluates, never a predicate the widget supplies. The
+   * closed set lives in `lifecycle.ts` with the reasoning; the short version is
+   * that a vocabulary cannot be spammed and an arbitrary hook can.
+   */
+  visibleWhen?: WidgetCondition;
+  /**
    * Whether the host frames this widget. Defaults to `"card"`.
    *
    * Only a `custom` widget may decline the frame, because only a `custom`
@@ -500,6 +522,15 @@ export function widgetValueProblem(
 
   const geometry = geometryShapeProblem(widget);
   if (geometry !== undefined) return geometry;
+
+  // Asked HERE rather than in the registration validator, because both channels
+  // must answer it the same way. Left on the registration side, a plugin using
+  // the contributed channel could declare a lifecycle nothing validated: the
+  // summary carried the fields through and the layout server treated the card
+  // as permanent, so a transient card shipped by the documented route would
+  // simply never lapse -- and the author would have no refusal to read.
+  const lifecycle = lifecycleProblem(widget);
+  if (lifecycle !== undefined) return lifecycle;
 
   // A permission slug is a STRING in every version -- a newer core may mint new
   // slugs, but it cannot make a slug stop being a string -- so this is shape

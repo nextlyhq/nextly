@@ -80,12 +80,30 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     id: "core/seed-demo-content",
     title: "Get started",
     description:
-      "Offers to seed demo content, and hides itself once that is done or declined.",
+      "Offers to seed demo content while there is nothing to look at yet.",
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
     defaultOrder: 0,
     component: "core#SeedDemoContentCard",
+    /*
+     * Transient, and now declared as such. The card already hid ITSELF once
+     * seeding was done or declined -- it was placed in the grid, given an
+     * order, and then rendered nothing -- so the arrangement reserved a slot
+     * for a card drawing nothing and the reason lived in a component.
+     *
+     * The host answers one half: while this reader can see no content, the
+     * card is offered; once they can, it is not. The other half is a DECLINE,
+     * which `nextly_meta` records and this condition does not read -- so a
+     * reader who declined on an empty install still holds the slot, exactly as
+     * before. That residual is not folded into `content:empty`, and the reason
+     * is that conditions are evaluated once per NAME and shared by every widget
+     * asking: a plugin's card declaring `content:empty` would then vanish
+     * because someone dismissed a core onboarding offer. Ending a card early is
+     * a per-reader decision and belongs to dismissal, which nothing reads yet.
+     */
+    lifecycle: "conditional",
+    visibleWhen: "content:empty",
   },
   {
     id: "core/collections",
