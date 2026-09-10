@@ -97,8 +97,18 @@ export async function readableCollectionSlugs(
  * and not published it is not looking at an empty install, and telling them
  * they are is the onboarding equivalent of losing their work.
  */
-export async function readerHasContent(caller: ReadCaller): Promise<boolean> {
-  const slugs = await readableCollectionSlugs(caller);
+export async function readerHasContent(
+  caller: ReadCaller,
+  /**
+   * The reader's collections, when the caller already has them.
+   *
+   * Optional rather than required so this stays usable on its own, and passed
+   * by the condition probe so one layout read resolves the reader's
+   * permissions against every collection ONCE rather than per condition.
+   */
+  resolved?: readonly string[]
+): Promise<boolean> {
+  const slugs = resolved ?? (await readableCollectionSlugs(caller));
 
   for (const slug of slugs) {
     const { total } = await requireNextly().count({

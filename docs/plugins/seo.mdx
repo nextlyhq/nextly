@@ -1,0 +1,308 @@
+---
+title: SEO
+description: An SEO field group on the collections you name, and a sitemap of published content served over plain HTTP.
+---
+
+> **Alpha (`0.x`): pin your versions.**
+>
+> The stability boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)). This package's own exports, `seoPlugin`, its option types and the sitemap generators below, are **not** covered by that guarantee and are alpha. Pin your versions and read the release notes before upgrading.
+
+The SEO plugin adds one field group to the collections you name, and serves a sitemap of
+their published entries.
+
+It is framework-agnostic and has no `next` dependency, so it works the same in an
+integrated site, a headless project and an admin-only install.
+
+**It does not render `<meta>` tags.** Turning the stored fields into Next.js `Metadata` is
+core work, done by `buildMetadata` from `nextly/runtime`. The split is deliberate: the
+plugin owns the data, and delivery belongs to whatever is serving the pages. See
+[Routing and SEO](/docs/guides/routing-and-seo) for that half.
+
+## Installation
+
+```bash
+npm install @nextlyhq/plugin-seo
+```
+
+Its peer dependencies are `nextly` and `@nextlyhq/plugin-sdk`, and while Nextly is in
+alpha the manifest pins `nextly` at the **matching lockstep version**: every publishable
+package ships on one train, so install the plugin and the core at the same version.
+
+The plugin also declares a compatibility range of `>=0.0.2-alpha.55` for the runtime
+check. That is a floor, not an invitation: it records the oldest core that exported
+everything the plugin imported at the time, and the import graph has moved since, so a
+deliberately older pairing can be refused by npm or fail to resolve at module load.
+
+## Basic setup
+
+```ts
+import { defineConfig } from "nextly";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  plugins: [seoPlugin({ collections: ["pages", "posts"] })],
+});
+```
+
+`collections` is the whole of the required configuration. Collections you do not name are
+untouched.
+
+## What lands on an entry
+
+Every field goes inside a single group named `seo`, so entries always expose their SEO data
+in one predictable place:
+
+```ts
+entry.seo?.metaTitle;
+entry.seo?.metaDescription;
+entry.seo?.ogImage;
+entry.seo?.canonical;
+entry.seo?.noindex;
+```
+
+**Read the group defensively.** Adding the plugin to a collection that already has rows
+adds a nullable column, and those existing rows carry `null` until they are next saved. A
+bulk insert can omit it too, because that path does not apply nested defaults. So
+`entry.seo` is optional even though every field inside it is. Core's own
+`MetadataEntry` type declares it as `seo?: SeoMetaInput | null` for this reason.
+
+### The default fields
+
+| Field             | Type     | Notes                                                                           |
+| ----------------- | -------- | ------------------------------------------------------------------------------- |
+| `metaTitle`       | text     | Capped at 60 characters, which is roughly where search engines truncate a title |
+| `metaDescription` | textarea | Capped at 160 characters, for the same reason                                   |
+| `ogImage`         | upload   | Relates to `media`. The social preview image                                    |
+| `canonical`       | text     | A per-page canonical URL                                                        |
+| `noindex`         | checkbox | Defaults to `false`. Keeps a single entry out of search results                 |
+
+All five are optional. `canonical` and `noindex` ship by default rather than being left for
+you to add, because a canonical URL and a search opt-out are baseline controls rather than
+advanced ones.
+
+### Custom fields
+
+Replace the whole set when a project needs a different shape:
+
+```ts
+import { defineConfig } from "nextly";
+import { text } from "@nextlyhq/plugin-sdk";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  plugins: [
+    seoPlugin({
+      collections: ["posts"],
+      fields: [
+        text({ name: "metaTitle", label: "Meta Title", maxLength: 60 }),
+        text({ name: "focusKeyword", label: "Focus Keyword" }),
+      ],
+    }),
+  ],
+});
+```
+
+The field factories come from `@nextlyhq/plugin-sdk`, which is the stable
+plugin-authoring surface and the type `fields` is declared against.
+
+`fields` replaces the defaults rather than adding to them, so list everything you want.
+Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKeyword`.
+
+## Configuration
+
+| Option        | Type                                    | Default                | What it does                                                                |
+| ------------- | --------------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
+| `collections` | `string[]`                              | required               | The collections that get the `seo` group                                    |
+| `fields`      | `FieldConfig[]`                         | the five above         | The fields placed inside the group                                          |
+| `baseUrl`     | `string`                                | the request origin     | Absolute origin for `<loc>` in the sitemap                                  |
+| `basePath`    | `string`, or a function, or absent      | `/<collection>`        | Where each collection's route is mounted                                    |
+| `urlFor`      | `(entry, collection) => string \| null` | `/<collection>/<slug>` | Builds a whole entry path. Returning `null` or `undefined` drops that entry |
+| `sitemap`     | `boolean` or `{ collections }`          | `true`                 | Controls the public sitemap route                                           |
+
+## The sitemap
+
+The plugin mounts one public route. Plugin routes are namespaced under
+`/plugins/<plugin-name>` **relative to wherever the dynamic handler is mounted**, and the
+scaffolded app mounts it at `src/app/admin/api/[[...params]]/route.ts`, so in a default
+project the sitemap is served at:
+
+```
+GET /admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
+```
+
+`/api/plugins/...` returns 404 unless the project has deliberately added a second
+catch-all there. Check where your own `createDynamicHandlers` route file sits if the URL
+above does not resolve.
+
+It lists entries from the configured collections, generated per request. There is no
+`next` dependency involved, which is what lets a headless consumer with no
+`app/sitemap.ts` read it.
+
+**"Published" means the built-in lifecycle, and only that.** The `status: published`
+filter is applied to a collection that declares `status: true`, read from the collection
+itself. A collection without that lifecycle has no unpublished state as far as the
+platform is concerned, so **every row is listed**, including rows you consider drafts via
+an ordinary field you happen to have named `status`. Filtering on a same-named custom
+field would be the plugin guessing at your semantics. If you keep drafts that way, exclude
+that collection from the sitemap.
+
+<Callout type="warn">
+**The route is not rate limited by default.** Nextly's limiter skips `/admin/api/` through
+`defaultSkipAdminApi`, which is where the scaffold mounts plugin routes, so this public
+endpoint is exempt out of the box. Each anonymous request can page and serialize up to
+50,000 rows, and with no `baseUrl` configured the response is `no-store`, so an
+intermediary will not absorb the repeats either.
+
+Set `baseUrl` so the document is cacheable, put a CDN or your host's cache in front of
+`/sitemap.xml`, or pass a `skip` to the rate limiter that does not exempt this path.
+
+</Callout>
+
+**One document, and the protocol bounds it.** Collection stops at **50,000 URLs**, or
+sooner if the serialized document would pass **50 MB**, because a single `<urlset>` past
+either is invalid. It stops rather than failing, so a site above those limits gets a
+sitemap that is quietly short, with no error to say so.
+
+<Callout type="warn">
+**These exports cannot shard, so do not reach for them from `generateSitemaps()`.**
+`SitemapOptions` takes `collections`, `baseUrl`, `urlFor`, `basePath`, `pageSize` and
+`maxBytes`. There is no offset, cursor or predicate, and `buildSitemapUrls` always starts
+at the first page and returns at the global cap, so calling it once per shard yields the
+same first 50,000 URLs every time.
+
+Until a shard-aware option exists, a corpus past the cap needs a sitemap index built from
+your own queries, splitting the work by something you control: one document per
+collection, per locale, or per date range, each within the cap.
+
+</Callout>
+
+<Callout type="warn">
+**The sitemap is public and reads as the system.** It enumerates every published entry's
+URL in the collections it covers, bypassing per-collection read access, because that is
+what a sitemap is for. Any collection whose entries should not be publicly enumerable
+(owner-scoped, role-gated, or internal) must be kept out of it. Narrow the list with
+`sitemap: { collections: [...] }`, or turn the route off with `sitemap: false`.
+
+A collection can carry SEO fields without appearing in the sitemap. The two lists are
+separate for exactly this reason.
+
+</Callout>
+
+### Getting the URLs right
+
+The one part of an entry's URL the plugin cannot work out is where the route is mounted:
+that is decided by where the route file sits in your app directory, which is invisible from
+here. Everything after the prefix is derived from the route's own slug handling.
+
+So declare the mount, and let the rest be derived:
+
+```ts
+import { defineConfig } from "nextly";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  plugins: [
+    seoPlugin({
+      collections: ["pages", "posts"],
+      baseUrl: "https://example.com",
+      // Pages render at /about, not /pages/about. Posts are mounted at /blog.
+      basePath: collection => (collection === "pages" ? "" : "/blog"),
+    }),
+  ],
+});
+```
+
+Returning `null` from `basePath` excludes that whole collection from the sitemap.
+`urlFor` has the same escape one level down: it receives the entry and its collection, and
+returning `null` or `undefined` drops that single entry, which is how an entry with no
+stable public URL stays out.
+
+`urlFor` builds the whole path instead, and takes precedence over `basePath`:
+
+```ts
+import { defineConfig } from "nextly";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  plugins: [
+    seoPlugin({
+      collections: ["posts"],
+      baseUrl: "https://example.com",
+      urlFor: entry => `/blog/${String(entry.slug)}`,
+    }),
+  ],
+});
+```
+
+Prefer `basePath` where only the prefix differs. A hand-built path has to reproduce
+correctly what the route already answers for nested, encoded and unservable slugs, and
+`basePath` keeps that half derived.
+
+**`seo.canonical` has the last word, after `urlFor` has run.** A stored canonical is
+resolved against the site origin, and then:
+
+| The canonical is                                      | What the sitemap does              |
+| ----------------------------------------------------- | ---------------------------------- |
+| Same origin (`/about` or `https://example.com/about`) | **Replaces** the generated `<loc>` |
+| A different origin                                    | **Drops the entry** entirely       |
+| A non-http scheme, or carrying credentials            | Ignored, generated URL kept        |
+| Unparseable                                           | Ignored, generated URL kept        |
+
+So an entry can vanish from the sitemap, or appear at a path your `urlFor` never returned,
+because of a value an editor typed into a field. That is the intended meaning of a
+canonical, and it is worth knowing before debugging the callback.
+
+Two things `basePath` does not do. It does not claim the mount's own root is served: an
+entry with an empty slug is skipped whatever the prefix says, because whether that root
+routes depends on the route file rather than on the prefix. List a homepage with `urlFor`.
+And it is ignored entirely when `urlFor` is supplied, which already owns the whole path.
+
+### baseUrl, and why it affects caching
+
+`baseUrl` must be an absolute `http(s)` origin: no path, query, fragment or credentials. An
+invalid value throws when the plugin is constructed rather than when the route is first
+called, so a typo fails at boot.
+
+Leaving it out is correct for a single-origin deployment: the route derives the origin from
+the incoming request. Behind a proxy that rewrites the host it is wrong, and the URLs point
+at the internal host.
+
+Because a request-derived origin comes from a spoofable `Host` header, a sitemap built that
+way is served with `cache-control: no-store`, so an intermediary cannot cache one host's
+document and serve it for another. **Configure `baseUrl` if you want a cacheable sitemap.**
+
+### Advertising it to crawlers
+
+The mounted path is not where a crawler looks. Serve or redirect `/sitemap.xml` to it, and
+name it in `robots.txt`. Core ships `nextlySitemap` and `nextlyRobots` for a Next.js app;
+see [Routing and SEO](/docs/guides/routing-and-seo#nextlysitemap-and-nextlyrobots).
+
+### Building a sitemap yourself
+
+The generator is exported, so a project that wants its own route can use the same code
+rather than a second implementation: `generateSitemap`, `buildSitemapUrls`,
+`serializeSitemap`, `defaultUrlForEntry` and `escapeXml`, with the `SitemapUrl`,
+`SitemapOptions`, `SitemapServices` and `UrlForEntry` types.
+
+## Turning the fields into tags
+
+The plugin stores; core renders. `buildMetadata` reads the `seo` group and returns a Next.js
+`Metadata` object, and Open Graph, robots and hreflang come from there rather than from the
+plugin.
+
+<Callout type="warn">
+  **Populate `ogImage`, or the social image is silently dropped.** It is an
+  upload relation, so at `depth: 0` (the default for `createPublicContentRoute`)
+  it is an unresolved id rather than an object. `buildMetadata` only emits an
+  image when `seo.ogImage` is a populated record carrying a `url`, so the page
+  gets a title and a description, no image, and no error. Fetch the entry at a
+  depth that resolves the relation, or pass `fallback.image`.
+</Callout>
+The `buildMetadata` section of [Routing and SEO](/docs/guides/routing-and-seo)
+covers it, including what happens when a field is empty.
+
+## Next steps
+
+- [Routing and SEO](/docs/guides/routing-and-seo) for rendering the tags and serving the sitemap
+- [Plugins](/docs/plugins) for the other plugins that ship
+- [API stability](/docs/plugins/stability) for what is semver-protected

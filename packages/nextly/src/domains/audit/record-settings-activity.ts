@@ -25,7 +25,7 @@
  * @module domains/audit/record-settings-activity
  */
 
-import type { RequestActor } from "../../auth/request-actor";
+import type { RequestActor, RequestActorType } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import type {
   ActivityLogAction,
@@ -34,27 +34,50 @@ import type {
 import { SYSTEM_CONTEXT } from "../../shared/types";
 
 /**
- * Whether this actor produces an entry.
+ * The actor a trail row records, or `null` when this actor produces no entry.
  *
- * Only a signed-in person. An API key and an internal write carry no account,
- * and the trail's actor column is a user reference whose erasure state is
- * answered against the accounts table — a key's own id finds no account there
- * and would be filed as an already-erased identity, which is a worse record
- * than none.
+ * Answers both halves of the question at once — whether to record, and as WHAT
+ * — because they are decided by the same facts and a caller that asked them
+ * separately could record a row whose kind disagreed with the gate that let it
+ * through.
+ *
+ * Every actor that can name itself belongs in the trail. The rule used to admit
+ * a signed-in person alone, because a row's only identity column was a user
+ * reference joined to the accounts table: a key's own id there found no account
+ * and was filed as an already-erased identity, so a key write was dropped
+ * rather than recorded badly. `actor_type` carries the kind now and `user_id`
+ * is set only for a `user`, so a key, an import or a job records what it is.
  *
  * Exported and shared rather than restated per resource. The rule is one
- * question — "does this actor belong in the trail" — and every place that
- * answers it separately is a place it can drift.
+ * question, and every place that answers it separately is a place it can drift
+ * — which it did: the content trail carried its own copy and the two had to be
+ * widened together.
  */
-export function isRecordableActor(
+export function recordableActor(
   actor?: RequestActor | null
-): actor is RequestActor & { type: "user"; id: string } {
-  if (actor?.type !== "user" || !actor.id) return false;
+): { type: RequestActorType; id: string } | null {
+  if (!actor?.id) return null;
+  // A SYSTEM write is deliberately still refused, and the reason is not the one
+  // that used to refuse a key.
+  //
+  // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
+  // names no actor — seeds, migrations, maintenance, and any internal call that
+  // simply did not pass one. Those run while the schema is being created, and
+  // this recorder's failures PROPAGATE and take the surrounding write with
+  // them: a trail insert against a table that does not exist yet would fail the
+  // seed that was creating it.
+  //
+  // A key is different. It arrives on a request, over a transport, against a
+  // database that is already up — so admitting it costs nothing that was not
+  // already true of a user's write.
+  if (actor.type === "system") return null;
   // `SYSTEM_CONTEXT` carries the reserved user id `system`, so a seed or a
-  // migration with no transport actor to override it resolves to a USER actor.
-  // No account owns that id. Compared against the sentinel itself so the two
-  // cannot drift apart.
-  return actor.id !== SYSTEM_CONTEXT.user?.id;
+  // migration with no transport actor to override it arrives as a USER actor.
+  // No account owns that id, and it is a system write wearing a user's shape —
+  // so it is refused for the reason above rather than filed as a person.
+  // Compared against the sentinel itself so the two cannot drift apart.
+  if (actor.id === SYSTEM_CONTEXT.user?.id) return null;
+  return { type: actor.type, id: actor.id };
 }
 
 /** One recorded settings mutation. */
@@ -115,7 +138,8 @@ function worthRecording(input: SettingsActivityInput): boolean {
 export async function recordSettingsActivity(
   input: SettingsActivityInput
 ): Promise<void> {
-  if (!isRecordableActor(input.actor)) return;
+  const actor = recordableActor(input.actor);
+  if (!actor) return;
   if (!worthRecording(input)) return;
 
   let service: ActivityLogService;
@@ -133,7 +157,8 @@ export async function recordSettingsActivity(
   // invisible, which is worse than the failure it hides. Callers own the
   // never-throw guarantee and the log line that goes with it.
   await service.logActivity({
-    userId: input.actor.id,
+    actorType: actor.type,
+    userId: actor.id,
     action: input.action,
     collection: input.collection,
     entryId: input.entityId,

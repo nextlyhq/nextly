@@ -24,6 +24,7 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
 import { refreshCollectionSources } from "../domains/widgets/collection-sources";
+import { conditionProbe } from "../domains/widgets/condition-probe";
 import { onboardingSteps } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
@@ -175,7 +176,10 @@ export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
 
   await refreshCollectionSources();
   const caller = await readCaller(auth);
-  const steps = await onboardingSteps(caller);
+  // The same probe the layout read builds, so this endpoint and the condition
+  // that decides whether the card is offered resolve the reader's collections
+  // by one path rather than two.
+  const steps = await onboardingSteps(conditionProbe(caller));
 
   return respondData({ steps }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
