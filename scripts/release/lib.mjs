@@ -87,6 +87,32 @@ export function firstPrereleaseId(version) {
 }
 
 /**
+ * Whether a version is a prerelease OF a given active tag.
+ *
+ * 🔴 Deliberately not `firstPrereleaseId(version) === tag`, and deliberately
+ * different from the comparison inside `getExpectedDistTag`. That one mirrors
+ * Changesets, which classifies with `semver.parse(v).prerelease[0] === tag`
+ * and so reads `1.2.3-next.1.0` as belonging to `next` rather than to
+ * `next.1`. It has to keep that quirk: its job is to predict what
+ * `changeset publish` will do, and predicting something better than the tool
+ * does is still predicting wrong.
+ *
+ * This answers a different question, which is whether `pre.json` and the
+ * manifests describe the same release. A dotted tag is where the two answers
+ * part company, and borrowing the mirror here would switch the channel check
+ * off for the whole of a `next.1` cycle rather than answer it incorrectly.
+ * Both spellings are correct, for their own question, which is why they are
+ * two functions with this note between them.
+ */
+export function isPrereleaseOfTag(version, tag) {
+  const withoutBuildMetadata = version.split("+")[0];
+  const separator = withoutBuildMetadata.indexOf("-");
+  if (separator === -1) return false;
+  const identifiers = withoutBuildMetadata.slice(separator + 1);
+  return identifiers === tag || identifiers.startsWith(`${tag}.`);
+}
+
+/**
  * The Changesets prerelease state, or `null` outside prerelease mode. The active
  * tag decides which dist-tag consumers install from, so verification has to read
  * it rather than assume `latest`.
@@ -116,6 +142,9 @@ export function readPreState() {
 export function readPreConfig() {
   if (!existsSync(PRE_STATE_PATH)) return null;
   const state = readJson(PRE_STATE_PATH);
+  // A plain reader. Whether a mode and a tag make SENSE together is a question
+  // for whoever is asking, and it is asked in `shouldAssertChannel`, where a
+  // test can reach it.
   return { mode: state.mode ?? null, tag: state.tag ?? null };
 }
 

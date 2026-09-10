@@ -972,6 +972,26 @@ describe("when the channel tag is worth asserting", () => {
     expect(new Set(answers).size).toBe(2);
   });
 
+  it("refuses prerelease mode with no usable tag, rather than answering no", () => {
+    /*
+     * 🔴 `{ "mode": "pre" }` survives a merge or a hand edit, and a null tag
+     * compares unequal to every version there is. Answering "do not assert"
+     * there switches the channel check off and reports nothing, which reads
+     * exactly like a check that ran and found nothing wrong. The question
+     * cannot be asked, so it leaves by the unanswerable door.
+     */
+    for (const tag of [null, undefined, "", "   "]) {
+      expect(() => shouldAssertChannel(true, { mode: "pre", tag }, VERSION)).toThrow(
+        /no usable tag/
+      );
+    }
+
+    // And it reaches the caller as exit-2 material rather than as a crash.
+    const decision = channelDecision(true, VERSION, () => ({ mode: "pre", tag: null }));
+    expect(decision.ok).toBe(false);
+    expect(decision.message).toContain("no usable tag");
+  });
+
   it("reports an unreadable pre.json as unanswerable, not as a defect", () => {
     /*
      * 🔴 The exit code carries this distinction and nothing else does.
@@ -997,6 +1017,29 @@ describe("when the channel tag is worth asserting", () => {
     const decision = channelDecision(true, VERSION, () => IN_ALPHA);
 
     expect(decision).toEqual({ ok: true, assertChannel: true });
+  });
+
+  it("recognises a DOTTED tag, whose versions carry more than one identifier", () => {
+    /*
+     * 🔴 `pnpm changeset pre enter next.1` produces `1.2.3-next.1.0`, whose
+     * first prerelease identifier is `next`. Comparing that against the tag
+     * `next.1` is false for every version the cycle will ever produce, so the
+     * channel check would report nothing for the whole cycle while looking
+     * exactly like a check that ran and found nothing wrong.
+     *
+     * `getExpectedDistTag` keeps the first-identifier comparison, because it
+     * exists to mirror what Changesets does and Changesets classifies that way.
+     * These are two questions, not one rule spelled twice.
+     */
+    const DOTTED = { mode: "pre", tag: "next.1" };
+
+    expect(shouldAssertChannel(true, DOTTED, "1.2.3-next.1.0")).toBe(true);
+    // Still discriminating: a different cycle's build does not pass.
+    expect(shouldAssertChannel(true, DOTTED, "1.2.3-next.2.0")).toBe(false);
+    // And a tag is not a prefix of an unrelated identifier that starts the same.
+    expect(shouldAssertChannel(true, { mode: "pre", tag: "next" }, "1.2.3-nextly.1")).toBe(
+      false
+    );
   });
 
   it("reads build metadata as part of the version, not as a prerelease", () => {

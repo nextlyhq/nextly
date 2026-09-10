@@ -51,6 +51,7 @@ import {
   getExpectedDistTag,
   isBootstrapPlaceholderOnly,
   firstPrereleaseId,
+  isPrereleaseOfTag,
   readPreConfig,
   readPreState,
   waitForCompleteRelease,
@@ -710,11 +711,24 @@ const STEP_TEXT = {
  */
 export function shouldAssertChannel(currentTrain, pre, version) {
   if (!currentTrain) return false;
-  const declared = firstPrereleaseId(version);
   // Outside prerelease mode, and mid-exit, the only agreeable version is a
   // stable one: `getExpectedDistTag` answers `latest` for both.
-  if (pre?.mode !== "pre") return declared === undefined;
-  return declared === pre.tag;
+  if (pre?.mode !== "pre") return firstPrereleaseId(version) === undefined;
+  /*
+   * 🔴 Prerelease mode with no usable tag is UNANSWERABLE, not "no". A merge or
+   * a hand edit is enough to leave `{ "mode": "pre" }` behind, and a null tag
+   * compares unequal to every version, so returning false there would switch
+   * the channel check off and look exactly like a check that ran and found
+   * nothing wrong. `channelDecision` turns this into exit 2, which is what
+   * every other unestablished answer here does.
+   */
+  if (typeof pre.tag !== "string" || pre.tag.trim() === "") {
+    throw new Error(
+      ".changeset/pre.json declares prerelease mode with no usable tag, so " +
+        "the channel this release belongs to cannot be established."
+    );
+  }
+  return isPrereleaseOfTag(version, pre.tag);
 }
 
 /**
