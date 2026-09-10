@@ -51,7 +51,7 @@ import {
   getExpectedDistTag,
   isBootstrapPlaceholderOnly,
   firstPrereleaseId,
-  readPreMode,
+  readPreConfig,
   readPreState,
   waitForCompleteRelease,
 } from "./lib.mjs";
@@ -684,26 +684,64 @@ const STEP_TEXT = {
  * says both things at once, and in that window the expected tag is derived from
  * one claim and compared against the other:
  *
- *     mode "pre",  manifests STABLE      entering    -> skip
- *     mode "pre",  manifests prerelease  in pre mode -> assert
- *     mode "exit", manifests PRERELEASE  leaving     -> skip
- *     mode null,   manifests stable      outside     -> assert
+ *     tag "alpha", manifests STABLE       entering        -> skip
+ *     tag "alpha", manifests -alpha.N     in pre mode     -> assert
+ *     tag "beta",  manifests -alpha.N     re-entered      -> skip
+ *     mode "exit", manifests -alpha.N     leaving         -> skip
+ *     no file,     manifests stable       outside         -> assert
  *
- * Both windows were reported one at a time, and a mode test answers only the
- * one it was written for. Leaving: `readPreState` gives null for `"exit"` and
- * for no file alike, so `latest` is expected and the remedy says to move it
- * onto a prerelease, serving an alpha to every stable install. Entering: the
- * new prerelease tag is expected and the remedy says to move it onto the last
- * stable build. Comparing the two claims answers the window itself rather than
- * naming its ends, which is why this is not a second special case beside the
- * exit one.
+ * Agreement is about the prerelease IDENTIFIER, not merely about whether there
+ * is one. Changesets allows pre mode to be exited and re-entered under a
+ * different tag before the Version PR lands, and in that window the manifests
+ * carry `-alpha.N` while the active tag is `beta`: both claims say "this is a
+ * prerelease" and they still disagree about which one, so `beta` would be
+ * expected to resolve to the old alpha build.
+ *
+ * Each window was reported on its own, and a rule shaped to one of them answers
+ * only that one. Leaving: `readPreState` gives null for `"exit"` and for no
+ * file alike, so `latest` is expected and the remedy says to move it onto a
+ * prerelease, serving an alpha to every stable install. Entering: the new
+ * prerelease tag is expected of the last stable build. Comparing what the two
+ * files actually CLAIM answers the whole space rather than the corners of it
+ * that have been noticed so far.
  *
  * Exported because the command-line block below has no test, and a rule that
  * lives only inside it is a rule nothing can exercise.
  */
-export function shouldAssertChannel(currentTrain, preMode, version) {
+export function shouldAssertChannel(currentTrain, pre, version) {
   if (!currentTrain) return false;
-  return (preMode === "pre") === (firstPrereleaseId(version) !== undefined);
+  const declared = firstPrereleaseId(version);
+  // Outside prerelease mode, and mid-exit, the only agreeable version is a
+  // stable one: `getExpectedDistTag` answers `latest` for both.
+  if (pre?.mode !== "pre") return declared === undefined;
+  return declared === pre.tag;
+}
+
+/**
+ * The channel decision the command-line block acts on, INCLUDING what to do
+ * when it cannot be made.
+ *
+ * 🔴 An unreadable or malformed `.changeset/pre.json` is not a release that is
+ * unfinished, it is a question that could not be asked, and the two leave by
+ * different doors: `.github/workflows/release-health.yml` treats exit 1 as a
+ * confirmed defect and files an issue for it, so a JSON parse error escaping
+ * from here would become an issue whose headline is a stack trace.
+ *
+ * Exported, and taking its reader as an argument, for the same reason
+ * `shouldAssertChannel` is: the block below is entered by no test, so a rule
+ * that lives only inside it can be broken without anything noticing.
+ */
+export function channelDecision(currentTrain, version, readPre = readPreConfig) {
+  try {
+    return { ok: true, assertChannel: shouldAssertChannel(currentTrain, readPre(), version) };
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        "check-finalized: .changeset/pre.json could not be read, so which " +
+        `channel this release belongs to is unknown rather than wrong: ${error.message}`,
+    };
+  }
 }
 
 /**
@@ -788,9 +826,15 @@ if (invokedDirectly) {
     currentTrain = false;
   }
 
-  // Decided here rather than beside the `publishState` call, so that a failure
-  // to decide it is not reported as the registry being unreachable.
-  const assertChannel = shouldAssertChannel(currentTrain, readPreMode(), version);
+  // Decided before the registry is reached, so that a failure to decide it is
+  // not reported as npm being unreachable. `channelDecision` carries the
+  // unanswerable case with it rather than leaving it to this block.
+  const channel = channelDecision(currentTrain, version);
+  if (!channel.ok) {
+    console.error(channel.message);
+    process.exit(2);
+  }
+  const assertChannel = channel.assertChannel;
 
   let publish;
   try {

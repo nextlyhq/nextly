@@ -6,10 +6,14 @@
  * include that exact combination, because a check written after an incident
  * should be able to fail on the incident.
  */
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
   ANCHOR_PACKAGE,
+  channelDecision,
   manifestAtRef,
   publishState,
   releaseState,
@@ -902,38 +906,54 @@ describe("when the channel tag is worth asserting", () => {
    * chooses correctly.
    */
   const STABLE = "0.0.2";
+  const IN_ALPHA = { mode: "pre", tag: "alpha" };
+  const IN_BETA = { mode: "pre", tag: "beta" };
+  const LEAVING = { mode: "exit", tag: "alpha" };
+  const OUTSIDE = null;
 
-  it("asserts it when the mode and the declared version agree", () => {
-    // The two settled states. Both claims say the same thing about this
-    // release, so the tag derived from one can be held against the other.
-    expect(shouldAssertChannel(true, "pre", VERSION)).toBe(true);
-    expect(shouldAssertChannel(true, null, STABLE)).toBe(true);
+  it("asserts it when pre.json and the manifests agree", () => {
+    // The two settled states. Both files say the same thing about this release,
+    // so the tag derived from one can be held against the other.
+    expect(shouldAssertChannel(true, IN_ALPHA, VERSION)).toBe(true);
+    expect(shouldAssertChannel(true, OUTSIDE, STABLE)).toBe(true);
   });
 
   it("does not assert it for a historical subject", () => {
     // Today's channel tag moved past an older release and was never meant to
     // point at it. Independent of the mode, so both settled states are shown.
-    expect(shouldAssertChannel(false, "pre", VERSION)).toBe(false);
-    expect(shouldAssertChannel(false, null, STABLE)).toBe(false);
+    expect(shouldAssertChannel(false, IN_ALPHA, VERSION)).toBe(false);
+    expect(shouldAssertChannel(false, OUTSIDE, STABLE)).toBe(false);
   });
 
   it("does not assert it while prerelease mode is being EXITED", () => {
     // `readPreState` answers null for `mode: "exit"` just as it does for "never
     // in pre mode", so the expected tag becomes `latest` and the remedy says to
     // move `latest` onto the alpha still in the manifests.
-    expect(shouldAssertChannel(true, "exit", VERSION)).toBe(false);
+    expect(shouldAssertChannel(true, LEAVING, VERSION)).toBe(false);
   });
 
   it("does not assert it while prerelease mode is being ENTERED", () => {
     /*
-     * 🔴 The mirror, and the reason this asks about agreement rather than about
-     * the mode. `pnpm changeset pre enter alpha` writes `mode: "pre"` in its own
-     * commit, and `release.yml` runs on it while every manifest still declares
-     * the preceding STABLE release. A mode test alone answers "assert" here,
-     * the new prerelease dist-tag is expected of a stable version, and the
-     * remedy prescribes moving `alpha` onto the last stable build.
+     * 🔴 The mirror of the exit. `pnpm changeset pre enter alpha` writes
+     * `mode: "pre"` in its own commit, and `release.yml` runs on it while every
+     * manifest still declares the preceding STABLE release. A mode test alone
+     * answers "assert" here, the new prerelease dist-tag is expected of a
+     * stable version, and the remedy prescribes moving `alpha` onto the last
+     * stable build.
      */
-    expect(shouldAssertChannel(true, "pre", STABLE)).toBe(false);
+    expect(shouldAssertChannel(true, IN_ALPHA, STABLE)).toBe(false);
+  });
+
+  it("does not assert it when pre mode was RE-ENTERED under a different tag", () => {
+    /*
+     * 🔴 Why this compares identifiers rather than asking "is it a prerelease".
+     * Changesets allows an exit and a re-entry under a new tag before the
+     * Version PR lands, so `pre.json` can say `beta` while the manifests still
+     * carry `-alpha.N`. Both claims agree that this is a prerelease and still
+     * disagree about which one, and asserting there expects `beta` to resolve
+     * to the old alpha build.
+     */
+    expect(shouldAssertChannel(true, IN_BETA, VERSION)).toBe(false);
   });
 
   it("does not answer the same way for every input", () => {
@@ -943,19 +963,47 @@ describe("when the channel tag is worth asserting", () => {
      * true, so neither group proves anything on its own.
      */
     const answers = [
-      shouldAssertChannel(true, "pre", VERSION),
-      shouldAssertChannel(true, "pre", STABLE),
-      shouldAssertChannel(true, "exit", VERSION),
-      shouldAssertChannel(true, null, STABLE),
+      shouldAssertChannel(true, IN_ALPHA, VERSION),
+      shouldAssertChannel(true, IN_ALPHA, STABLE),
+      shouldAssertChannel(true, IN_BETA, VERSION),
+      shouldAssertChannel(true, LEAVING, VERSION),
+      shouldAssertChannel(true, OUTSIDE, STABLE),
     ];
     expect(new Set(answers).size).toBe(2);
+  });
+
+  it("reports an unreadable pre.json as unanswerable, not as a defect", () => {
+    /*
+     * 🔴 The exit code carries this distinction and nothing else does.
+     * `release-health.yml` treats exit 1 as a CONFIRMED unfinished release and
+     * opens an issue from the report, so a parse error escaping here becomes an
+     * issue whose headline is a stack trace and whose remedy is nonsense. The
+     * question could not be asked; that is exit 2.
+     */
+    const unreadable = () => {
+      throw new SyntaxError("Unexpected token } in JSON at position 4");
+    };
+
+    const decision = channelDecision(true, VERSION, unreadable);
+
+    expect(decision.ok).toBe(false);
+    expect(decision.message).toContain("pre.json");
+    expect(decision.message).toContain("unknown rather than wrong");
+  });
+
+  it("passes the decision through when pre.json can be read", () => {
+    // The control. A decision that reported every read as unanswerable would
+    // satisfy the case above and switch the channel check off permanently.
+    const decision = channelDecision(true, VERSION, () => IN_ALPHA);
+
+    expect(decision).toEqual({ ok: true, assertChannel: true });
   });
 
   it("reads build metadata as part of the version, not as a prerelease", () => {
     // Shares `firstPrereleaseId` with the tag rule rather than re-deciding what
     // a prerelease looks like, so `+build` cannot be mistaken for `-alpha`.
-    expect(shouldAssertChannel(true, null, "0.0.2+build.7")).toBe(true);
-    expect(shouldAssertChannel(true, "pre", "0.0.2+build.7")).toBe(false);
+    expect(shouldAssertChannel(true, OUTSIDE, "0.0.2+build.7")).toBe(true);
+    expect(shouldAssertChannel(true, IN_ALPHA, "0.0.2+build.7")).toBe(false);
   });
 });
 
@@ -1137,5 +1185,41 @@ describe("what the settle actually waits for", () => {
     ]);
 
     expect(unsettledPackages(manifest, registry)).toEqual([]);
+  });
+});
+
+describe("the command-line path, run as a program", () => {
+  /*
+   * 🔴 The first test that enters `if (invokedDirectly)` at all. Importing the
+   * module never does, which is how a rewrite deleted a constant the block
+   * still referenced while 1200 unit tests passed, and how two mutations of the
+   * channel rule passed the entire suite.
+   *
+   * This covers the exit-code contract rather than the whole block, because the
+   * rest of it reaches the registry. It is the half that matters most to a
+   * reader: `.github/workflows/release-health.yml` treats exit 1 as a CONFIRMED
+   * unfinished release and files an issue for it, so any question that could
+   * not be asked has to leave by a different door.
+   */
+  const SCRIPT = fileURLToPath(new URL("./check-finalized.mjs", import.meta.url));
+
+  const runProgram = ref =>
+    spawnSync(process.execPath, [SCRIPT, ref], { encoding: "utf8" });
+
+  it("exits 2, not 1, when the ref it was given cannot be read", () => {
+    // A ref this shape resolves to nothing, so the run ends before any network
+    // call: `versionAtRef` throws and the block has to classify that.
+    const result = runProgram("0000000000000000000000000000000000000000");
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("nothing");
+  });
+
+  it("says which ref it could not read", () => {
+    // The workflow prints this report into an issue body. A diagnosis that does
+    // not name its subject is one a reader cannot act on.
+    const result = runProgram("refs/heads/no-such-branch-here");
+
+    expect(result.stderr).toContain("refs/heads/no-such-branch-here");
   });
 });

@@ -98,7 +98,7 @@ export function readPreState() {
 }
 
 /**
- * The mode `.changeset/pre.json` records, or `null` when there is no such file.
+ * `.changeset/pre.json` as it stands, or `null` when there is no such file.
  *
  * 🔴 Deliberately NOT `readPreState`, which answers `null` for `mode: "exit"`
  * and for no file at all. Those are different situations. Exiting prerelease
@@ -107,10 +107,16 @@ export function readPreState() {
  * apart treats that alpha as a stable release and expects `latest` to resolve
  * to it. The remedy that follows from believing this says to move `latest` onto
  * a prerelease, which is a worse outcome than the check not running at all.
+ *
+ * The whole record rather than the mode alone, because the ACTIVE TAG is half
+ * of what makes a mode and a version agree: prerelease mode re-entered under a
+ * new tag leaves manifests declaring the old one, and a reader holding only
+ * `mode` cannot see the difference.
  */
-export function readPreMode() {
+export function readPreConfig() {
   if (!existsSync(PRE_STATE_PATH)) return null;
-  return readJson(PRE_STATE_PATH).mode ?? null;
+  const state = readJson(PRE_STATE_PATH);
+  return { mode: state.mode ?? null, tag: state.tag ?? null };
 }
 
 /**
