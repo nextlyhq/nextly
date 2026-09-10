@@ -582,6 +582,22 @@ function unacceptedFailures(
  * Separate from the per-mode rules because these three refuse the entry
  * OUTRIGHT: there is nothing to compare a recorded ratio against.
  */
+/**
+ * Utilities classified in BOTH exception ledgers.
+ *
+ * ALLOWED_DECORATIVE says the criterion does not scope the pairing;
+ * ACCEPTED_ALPHA_UTILITIES says it does and the shortfall is shipped anyway.
+ * An entry in both is documented as simultaneously out of scope and
+ * in-scope-failing, and the scan stays green either way because the decorative
+ * allowlist's early `continue` means the accepted entry is never reached.
+ */
+export function bothLedgers(
+  decorative: ReadonlySet<string>,
+  accepted: Readonly<Record<string, AcceptedAlphaUtility>>
+): string[] {
+  return [...decorative].filter(combo => Object.hasOwn(accepted, combo)).sort();
+}
+
 function entryProblem(
   combo: string,
   r: UtilityReading,
@@ -879,19 +895,59 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     expect(unacceptedFailures("constructor", r, {})).toEqual(failingModes(r));
   });
 
+  it("reads a variant off the source, not off a list of variants", () => {
+    // The input is what `grep -oE` emits, which is the utility with at most the
+    // single colon the pattern captures — the variant's NAME never reaches
+    // here, which is the whole point: `dark:`, `hover:` and
+    // `data-[state=open]:` all end in the same character, so this is complete
+    // where a list of variants would be wrong about the next one.
+    expect(splitVariant(":border-x/50")).toEqual({
+      combo: "border-x/50",
+      variantScoped: true,
+    });
+    // Both arms, so a split that answered `true` to everything — or `false` to
+    // everything — fails here rather than silently making every acceptance
+    // reachable, or none.
+    expect(splitVariant("border-x/50")).toEqual({
+      combo: "border-x/50",
+      variantScoped: false,
+    });
+  });
+
+  it("marks the variant-scoped utilities the source actually carries", () => {
+    // Membership rather than a count. `dark:border-success-900/50` is in the
+    // admin source, so the scan must report the stripped utility as variant
+    // scoped — and a pattern that stopped capturing the colon would leave this
+    // set empty while every other assertion stayed green.
+    expect(variantScoped.has("border-success-900/50")).toBe(true);
+    // And a utility written with no variant must NOT be marked, or the rule
+    // that refuses them would refuse everything.
+    expect(variantScoped.has("ring-primary/20")).toBe(false);
+    expect(combos.has("ring-primary/20")).toBe(true);
+  });
+
   it("classifies a utility in one ledger, never both", () => {
     // ALLOWED_DECORATIVE says the criterion does not scope the pairing;
     // ACCEPTED_ALPHA_UTILITIES says it does and the shortfall is shipped
     // anyway. A combo in both is documented as simultaneously out of scope and
     // in-scope-failing, and the scan stays green because the decorative
     // allowlist's early `continue` means the accepted entry is never reached.
-    const both = [...ALLOWED_DECORATIVE].filter(c =>
-      Object.hasOwn(ACCEPTED_ALPHA_UTILITIES, c)
-    );
     // The population: an empty allowlist would satisfy this by having nothing
     // to compare.
     expect(ALLOWED_DECORATIVE.size).toBeGreaterThan(0);
-    expect(both).toEqual([]);
+    expect(bothLedgers(ALLOWED_DECORATIVE, ACCEPTED_ALPHA_UTILITIES)).toEqual(
+      []
+    );
+  });
+
+  it("finds an overlap when there is one", () => {
+    // The control. No combo is in both ledgers today, so the assertion above
+    // is satisfied by absence and a rule that returned `[]` unconditionally
+    // would pass it forever.
+    const combo = "border-border/50";
+    expect(
+      bothLedgers(new Set([combo, "text-primary/20"]), { [combo]: RECORD })
+    ).toEqual([combo]);
   });
 
   it("holds every recorded utility to what it records", () => {
