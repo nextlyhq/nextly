@@ -5,9 +5,22 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { slugToStaticParam } from "../content-route";
+import { slugToStaticParam } from "../slug-param";
+// The two spellings the package publishes, imported so a move that quietly
+// dropped either is a failing test rather than a consumer's build error.
+import { slugToStaticParam as viaRoute } from "../content-route";
+import { slugToStaticParam as viaBarrel } from "../index";
 
 describe("slugToStaticParam", () => {
+  it("is the SAME function through every published spelling", () => {
+    // 🔴 Identity, not behaviour. Two copies of this rule would agree on every
+    // case listed below and still be two copies — which is the defect the move
+    // had to avoid, since a sitemap and a route disagreeing about which paths
+    // exist is exactly what re-deriving it produces.
+    expect(viaRoute).toBe(slugToStaticParam);
+    expect(viaBarrel).toBe(slugToStaticParam);
+  });
+
   it("emits the no-segment root param for an empty slug", () => {
     expect(slugToStaticParam("")).toEqual({ slug: [] });
   });

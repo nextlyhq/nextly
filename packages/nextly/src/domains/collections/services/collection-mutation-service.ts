@@ -198,6 +198,7 @@ import {
   getTableName,
   generateSlug,
 } from "./collection-utils";
+import { ownerSafetyNetApplies } from "./owner-safety-net";
 
 /** The Drizzle executor shape the companion-join readers accept (a transaction
  * handle's `getDrizzle()` result, or the pooled `this.db`). */
@@ -8898,26 +8899,23 @@ export class CollectionMutationService extends BaseService {
           collection as Record<string, unknown>
         );
 
-        // A super-admin bypasses stored rules on every transport — EXCEPT via a
-        // scoped API key, which is judged on its own grant (mirrors the owner
-        // predicate + checkCollectionAccess). So the safety net still fires for a
-        // scoped key even when the key owner is a super-admin.
-        const isScopedApiKey =
-          params.authenticatedScope?.actorType === "apiKey";
+        // Captured so the branch body reads the SAME rule the decision was made
+        // about, rather than resolving it a second time.
+        const ownerRule = accessRules?.update;
         if (
-          accessRules?.update?.type === "owner-only" &&
+          ownerRule &&
           params.user &&
-          // A trusted override (overrideAccess) and a super-admin SESSION bypass
-          // stored rules on every transport, including the batch transaction
-          // path — mirror the SQL owner-predicate bypass so this safety net does
-          // not re-impose owner-only on them. A scoped API key is not covered by
-          // the super-admin bypass.
-          !params.overrideAccess &&
-          !(this.accessService.isSuperAdmin(params.user) && !isScopedApiKey)
+          ownerSafetyNetApplies({
+            ruleIsOwnerOnly: ownerRule.type === "owner-only",
+            hasUser: true,
+            overrideAccess: Boolean(params.overrideAccess),
+            isSuperAdmin: this.accessService.isSuperAdmin(params.user),
+            scope: params.authenticatedScope,
+          })
         ) {
           // Default to the auto-stamped system owner column (snake_case, matching
           // the runtime schema and raw rows) so zero-config owner-only works.
-          const ownerField = accessRules.update.ownerField ?? "created_by";
+          const ownerField = ownerRule.ownerField ?? "created_by";
           const ownerId = existingEntry[ownerField];
           if (ownerId !== params.user.id) {
             return {
@@ -9694,19 +9692,23 @@ export class CollectionMutationService extends BaseService {
       );
 
       if (options.rowGate === "owner-predicate") {
+        // Captured so the branch body reads the SAME rule the decision was made
+        // about, rather than resolving it a second time.
+        const ownerRule = accessRules?.delete;
         if (
-          accessRules?.delete?.type === "owner-only" &&
+          ownerRule &&
           params.user &&
-          // A trusted override (overrideAccess) and super-admins both bypass
-          // stored rules on every transport, including the batch transaction
-          // path — mirror the SQL owner-predicate bypass so this safety net does
-          // not re-impose owner-only on them.
-          !params.overrideAccess &&
-          !this.accessService.isSuperAdmin(params.user)
+          ownerSafetyNetApplies({
+            ruleIsOwnerOnly: ownerRule.type === "owner-only",
+            hasUser: true,
+            overrideAccess: Boolean(params.overrideAccess),
+            isSuperAdmin: this.accessService.isSuperAdmin(params.user),
+            scope: params.authenticatedScope,
+          })
         ) {
           // Default to the auto-stamped system owner column (snake_case, matching
           // the runtime schema and raw rows) so zero-config owner-only works.
-          const ownerField = accessRules.delete.ownerField ?? "created_by";
+          const ownerField = ownerRule.ownerField ?? "created_by";
           const ownerId = entry[ownerField];
           if (ownerId !== params.user.id) {
             return {
