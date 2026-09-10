@@ -132,14 +132,25 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-/** Whether a resolution is an outcome this panel can report, or something else. */
+/**
+ * Whether a resolution is an outcome this panel can report, or something else.
+ *
+ * A refusal is checked all the way down to its `reason`, because the answer is
+ * `unknown` and plenty of unrelated results are shaped like a failure — a
+ * mutation helper resolving `{ ok: false, error: "locked" }` is the ordinary
+ * one. Narrowing on `ok` alone accepted those as {@link ClassRenameOutcome},
+ * which promises `reason: string`, so the reported reason was `undefined`; the
+ * alert below renders on `refused !== null`, and `undefined` is not `null`, so
+ * the author got an error box with nothing written in it and a screen reader
+ * announced an alert with no text. A shape this cannot vouch for is silence.
+ */
 function isRenameOutcome(value: unknown): value is ClassRenameOutcome {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "ok" in value &&
-    typeof value.ok === "boolean"
-  );
+  if (typeof value !== "object" || value === null || !("ok" in value)) {
+    return false;
+  }
+  if (value.ok === true) return true;
+  if (value.ok !== false) return false;
+  return "reason" in value && typeof value.reason === "string";
 }
 
 export interface ClassManagerPanelProps {
