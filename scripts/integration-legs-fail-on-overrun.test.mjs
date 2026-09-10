@@ -3,8 +3,9 @@
  *
  * GitHub enforces a job's `timeout-minutes` by cancelling it, so a leg killed
  * for running too long is recorded as `conclusion: cancelled`. Nothing reads a
- * cancellation as a verdict — branch protection ignores it and the PR rollup
- * shows no red — so the leg silently stops contributing an answer while looking
+ * cancellation as a verdict — branch protection ignores it and the checks
+ * rollup shows no red — so the leg silently stops contributing an answer while
+ * looking
  * like somebody pressed the button.
  *
  * It has happened twice. At the 25-minute ceiling the MySQL leg stopped

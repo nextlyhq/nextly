@@ -4,8 +4,9 @@
 #
 # GitHub enforces `timeout-minutes` by CANCELLING the job, so a job killed for
 # running too long carries `conclusion: cancelled` — not `failure`. Nothing
-# reads a cancellation as a verdict: branch protection ignores it, the PR rollup
-# shows no red, and a reviewer sees a leg that looks like somebody pressed the
+# reads a cancellation as a verdict: branch protection ignores it, the checks
+# rollup shows no red, and a reviewer sees a leg that looks like somebody pressed
+# the
 # button. The coverage is gone and the signal that it is gone is gone with it.
 #
 # That is not hypothetical here. The MySQL integration leg hit its 25-minute
