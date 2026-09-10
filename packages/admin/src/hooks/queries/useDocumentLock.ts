@@ -248,6 +248,15 @@ export function useDocumentLock({
     // unchanged answer on every beat does not re-render the editor, and does not
     // re-announce a sentence the reader has already heard.
     let awaited = false;
+    // 🔴 The dispatch time of the renewal that last spoke for `awaited`.
+    //
+    // Renewals overlap and their replies can arrive out of order, which is why
+    // the lease below is advanced with `Math.max` rather than assigned. What
+    // they say about somebody waiting needs the same fence for the same reason:
+    // an older reply landing after a newer one answers a question that has
+    // already moved on, and the holder is left with the PREVIOUS beat's answer
+    // until another renewal happens to correct it. Only the newest may speak.
+    let awaitedAt = 0;
     // Set when this editor stops being a contender: displaced by the server, or
     // past its own deadline. The beat then waits for the person rather than
     // re-taking a claim they were just told they had lost.
@@ -306,6 +315,10 @@ export function useDocumentLock({
       requesting = false;
       requestSent = false;
       awaited = false;
+      // A new claim is a new conversation: renewals of the claim just replaced
+      // carry a different token and are already refused, so this only has to
+      // stop an EARLIER dispatch time from outranking this claim's own beats.
+      awaitedAt = 0;
       setState({ status: "held-by-me", someoneWaiting: false });
     };
 
@@ -544,9 +557,15 @@ export function useDocumentLock({
             // the heartbeat's granularity instead of ticking at a reader.
             // Rendered only on a CHANGE, so an unchanged answer every 15 seconds
             // is not a live region repeating itself.
-            if (item.waiting !== awaited) {
-              awaited = item.waiting;
-              setState({ status: "held-by-me", someoneWaiting: item.waiting });
+            if (renewSentAt > awaitedAt) {
+              awaitedAt = renewSentAt;
+              if (item.waiting !== awaited) {
+                awaited = item.waiting;
+                setState({
+                  status: "held-by-me",
+                  someoneWaiting: item.waiting,
+                });
+              }
             }
             return;
           }
