@@ -28,12 +28,20 @@ import {
 export interface DocumentLockSurface extends DocumentLockAffordances {
   /** Claim the document, displacing whoever holds it. */
   readonly takeOver: () => void;
+  /**
+   * Leave word with the holder that this editor is waiting.
+   *
+   * The opposite intent to `takeOver` and the weakest thing here: it displaces
+   * nobody, is answered by nobody, and moves no claim. A standing ask — every
+   * beat re-states it until this editor has the document or leaves.
+   */
+  readonly requestAccess: () => void;
 }
 
 export function useDocumentLockSurface(
   options: UseDocumentLockOptions
 ): DocumentLockSurface {
-  const { state, takeOver } = useDocumentLock(options);
+  const { state, takeOver, requestAccess } = useDocumentLock(options);
 
   // 🔴 The colleague outlives a failed refresh. Every beat re-asks, so a
   // transient rejection arrives as `unavailable` long after a holder was
@@ -59,5 +67,6 @@ export function useDocumentLockSurface(
   return {
     ...documentLockAffordances(state, lastKnownHolder.current),
     takeOver,
+    requestAccess,
   };
 }

@@ -53,6 +53,20 @@
  * slot is re-asked as a take-over. Losing it turns the decision into a poll that
  * politely declines to displace anyone.
  *
+ * ## A request to edit rides the beat that was already going
+ *
+ * 🔴 An editor that is locked out polls for the document on every beat -- that
+ * poll is how it learns the holder has left -- so a person asking for the
+ * document is carried as a flag on the claim that was going to be sent anyway,
+ * not on a call of its own. That is also what makes the ask a STANDING one:
+ * every beat re-states it, the server holds it on a lease, and closing the tab
+ * stops refreshing it. A colleague is therefore never told that somebody is
+ * waiting when nobody is still there.
+ *
+ * 🔴 The intent is remembered in the effect, like the claim, and cleared by
+ * WINNING the document rather than by the request that carried it. A person
+ * presses once; the beat says it again until they have it or they leave.
+ *
  * ## The beat outlives the claim
  *
  * 🔴 The interval is cleared by cleanup and by nothing else. An editor who takes
@@ -97,10 +111,29 @@ export type DocumentLockState =
   | { status: "idle" }
   /** Asked for, no answer yet. */
   | { status: "acquiring" }
-  /** This editor holds it. */
-  | { status: "held-by-me" }
-  /** Someone else holds it, and can be named. */
-  | { status: "held-by-other"; holder: DocumentLockHolder }
+  /**
+   * This editor holds it.
+   *
+   * `someoneWaiting` is the courtesy notice, and the server's answer rather
+   * than this editor's guess: a colleague has asked for the document and has
+   * not stopped asking. It withholds nothing and demands nothing -- the lease
+   * expiring stays the only thing that transfers a document.
+   */
+  | { status: "held-by-me"; someoneWaiting: boolean }
+  /**
+   * Someone else holds it, and can be named.
+   *
+   * `requestSent` is true once THIS editor has asked for the document and the
+   * server has confirmed the ask is on record. Both halves are required: the
+   * click alone would let the interface promise a colleague was told by a
+   * request that never landed, and the server's answer alone names any waiting
+   * editor rather than this one.
+   */
+  | {
+      status: "held-by-other";
+      holder: DocumentLockHolder;
+      requestSent: boolean;
+    }
   /**
    * This editor held it and the server said someone took over. The holder is
    * absent when the claim simply lapsed and nobody took it, which is what
@@ -162,6 +195,11 @@ export function useDocumentLock({
   const takeOverRef = useRef<() => void>(() => {});
   const takeOver = useCallback(() => takeOverRef.current(), []);
 
+  // Published the same way and for the same reason: the intent belongs to the
+  // effect that owns the claim, and the consumer gets a stable reference.
+  const requestAccessRef = useRef<() => void>(() => {});
+  const requestAccess = useCallback(() => requestAccessRef.current(), []);
+
   // 🔴 The cross-RUN half of the fencing, which the token fence cannot cover. A
   // run whose cleanup has already happened can still have a request in flight,
   // and the server treats a claim from the same owner as takeable, so that late
@@ -201,6 +239,15 @@ export function useDocumentLock({
     // because the very thing it reports is that the token just installed may
     // already be dead. Collapsing them lets a win swallow the repair.
     let repairNeeded = false;
+    // 🔴 A STANDING ask, not a one-shot request. `requesting` is what the person
+    // decided and every beat re-states it; `requestSent` is what the server has
+    // confirmed is on record, and only the pair may be shown as "they know".
+    let requesting = false;
+    let requestSent = false;
+    // What the holder was last told about a colleague waiting. Kept so an
+    // unchanged answer on every beat does not re-render the editor, and does not
+    // re-announce a sentence the reader has already heard.
+    let awaited = false;
     // Set when this editor stops being a contender: displaced by the server, or
     // past its own deadline. The beat then waits for the person rather than
     // re-taking a claim they were just told they had lost.
@@ -253,18 +300,27 @@ export function useDocumentLock({
       // very token may already be dead and the following plain claim would come
       // back `held`, losing the click for good.
       if (!repairNeeded) pending = null;
-      setState({ status: "held-by-me" });
+      // Winning the document ends the ask: nobody waits for what they hold. The
+      // server clears its own mark on the same event, so neither side is left
+      // telling somebody that this editor is queueing for its own claim.
+      requesting = false;
+      requestSent = false;
+      awaited = false;
+      setState({ status: "held-by-me", someoneWaiting: false });
     };
 
-    /** Store a refusal, quietly when the holder has not changed. */
-    const installHeld = (current: DocumentLockHolder) => {
+    /** Store a refusal, quietly when neither the holder nor the ask has moved. */
+    const installHeld = (current: DocumentLockHolder, sent: boolean) => {
       token = null;
-      // This runs every beat while a colleague holds the document, and a fresh
-      // object each time re-renders the editor for no news.
-      if (holder === null || !sameHolder(holder, current)) {
-        holder = current;
-        setState({ status: "held-by-other", holder: current });
-      }
+      // 🔴 The ask is part of what this state SAYS, so it is part of what decides
+      // whether to re-render. Comparing holders alone would leave the button on
+      // screen after the request that replaced it landed -- the holder does not
+      // change when somebody asks for their document.
+      const news = holder === null || !sameHolder(holder, current);
+      if (!news && sent === requestSent) return;
+      holder = current;
+      requestSent = sent;
+      setState({ status: "held-by-other", holder: current, requestSent: sent });
     };
 
     /** Report that the server could not be asked, and forget what it last said. */
@@ -275,6 +331,10 @@ export function useDocumentLock({
       // editor stays on `unavailable` while the server is answering perfectly
       // well — which is plausible whenever the holder renews on this cadence.
       holder = null;
+      // The ask itself is NOT forgotten -- `requesting` is the person's decision
+      // and outlives a failed beat -- but its confirmation is, because what the
+      // server has on record is exactly what this beat failed to learn.
+      requestSent = false;
       setState({ status: "unavailable" });
     };
 
@@ -325,6 +385,45 @@ export function useDocumentLock({
       reacquireRef.current(key);
     };
 
+    /**
+     * Decide what one acquisition's answer means for this editor.
+     *
+     * Separate from sending it because the two halves answer different
+     * questions. `acquire` owns the SLOT — who has a request outstanding, and
+     * what is queued behind it — while this owns the CLAIM the answer carries.
+     * The slot question has to be settled first and independently: a reply the
+     * slot has moved on from is a duplicate whatever it says, including when it
+     * says this editor won the document.
+     *
+     * `asked` is what THIS request carried, not what the person has since
+     * pressed, which is why it is passed in rather than read here.
+     */
+    const settle = (
+      item: AcquireDocumentLockOutcome,
+      seq: number,
+      sentAt: number,
+      asked: boolean
+    ) => {
+      // The slot moved on without this request, so whatever it won is a
+      // duplicate: a later acquisition has already replaced it server-side, or
+      // is about to.
+      const superseded = inFlight !== seq;
+      if (!superseded) inFlight = null;
+
+      if (cancelled || superseded) {
+        discardDuplicate(item);
+        if (superseded) drain();
+        return;
+      }
+
+      if (item.status === "acquired") installAcquired(item.claimToken, sentAt);
+      // 🔴 Both halves. `item.waiting` says somebody is waiting, which is also
+      // true when the person in front of this editor has asked for nothing and a
+      // THIRD colleague has. Only the conjunction says "we told them, for you".
+      else installHeld(item.holder, asked && item.waiting);
+      drain();
+    };
+
     async function acquire(takeover: boolean): Promise<void> {
       const intent: ClaimIntent = takeover ? "takeover" : "claim";
       if (inFlight !== null) {
@@ -341,32 +440,22 @@ export function useDocumentLock({
       );
 
       let item: AcquireDocumentLockOutcome;
+      // Read once, here, so the answer is judged against what THIS request
+      // carried. Read again at the reply, a request sent before the person
+      // pressed would report their ask as landed on the strength of a beat that
+      // never mentioned it.
+      const asked = requesting;
       try {
         ({ item } = await protectedApi.post<
           MutationResponse<AcquireDocumentLockOutcome>
-        >("/document-lock", { ...ref, takeover }));
+        >("/document-lock", { ...ref, takeover, requestAccess: asked }));
       } catch {
         clearTimeout(slotExpiry);
         failClaim(seq, intent);
         return;
       }
       clearTimeout(slotExpiry);
-
-      // The slot moved on without this request, so whatever it won is a
-      // duplicate: a later acquisition has already replaced it server-side, or
-      // is about to.
-      const superseded = inFlight !== seq;
-      if (!superseded) inFlight = null;
-
-      if (cancelled || superseded) {
-        discardDuplicate(item);
-        if (superseded) drain();
-        return;
-      }
-
-      if (item.status === "acquired") installAcquired(item.claimToken, sentAt);
-      else installHeld(item.holder);
-      drain();
+      settle(item, seq, sentAt, asked);
     }
 
     /** Give the claim up, and hand back whatever the server may still be holding. */
@@ -383,6 +472,14 @@ export function useDocumentLock({
     };
 
     takeOverRef.current = () => void acquire(true);
+    requestAccessRef.current = () => {
+      // Set first, then ask NOW rather than at the next beat, so the person sees
+      // their press answered. A claim already in flight is not overtaken: the
+      // flag is read where a request is BUILT, so whatever the slot admits next
+      // carries it, and every beat after that re-states it.
+      requesting = true;
+      void acquire(false);
+    };
     reacquireRef.current = (forDocument: string) => {
       if (cancelled || forDocument !== key) return;
       // Queued rather than asked directly: the live run may have a claim of its
@@ -441,6 +538,16 @@ export function useDocumentLock({
             // renewal landing after a newer one would shorten a lease the newer
             // one already extended — firing the deadline several beats early.
             confirmedAt = Math.max(confirmedAt, renewSentAt);
+            // 🔴 Coarse by construction, and that is the accessibility
+            // requirement rather than a happy accident: the beat is the only
+            // thing that can move this, so the notice appears and disappears at
+            // the heartbeat's granularity instead of ticking at a reader.
+            // Rendered only on a CHANGE, so an unchanged answer every 15 seconds
+            // is not a live region repeating itself.
+            if (item.waiting !== awaited) {
+              awaited = item.waiting;
+              setState({ status: "held-by-me", someoneWaiting: item.waiting });
+            }
             return;
           }
           surrender({ status: "taken-over", holder: item.holder });
@@ -453,6 +560,7 @@ export function useDocumentLock({
     return () => {
       cancelled = true;
       takeOverRef.current = () => {};
+      requestAccessRef.current = () => {};
       // `reacquireRef` is left for the run that replaces this one to overwrite,
       // and refuses a document it does not own, so a late reply cannot wake an
       // editor that has gone or one looking at something else.
@@ -461,5 +569,5 @@ export function useDocumentLock({
     };
   }, [active, ref]);
 
-  return { state, takeOver };
+  return { state, takeOver, requestAccess };
 }

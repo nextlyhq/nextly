@@ -14,6 +14,16 @@
  * equally as a document this account lacks permission to change. So the sentence
  * names who has it and what can be done about it.
  *
+ * ## It also speaks to the HOLDER
+ *
+ * One strip, both sides of the same claim. A colleague who is locked out may
+ * leave word that they are waiting, and the holder is told here — passively,
+ * with nothing withheld and no answer required. Deliberately NOT a modal or an
+ * `alertdialog`: there is no APG basis for one, that pattern being for urgent
+ * interruptions a person must answer, and WCAG 2.2.4 asks that an interruption
+ * be postponable. The lease expiring stays the only thing that transfers a
+ * document, so there is nothing here to answer.
+ *
  * @module components/features/entries/EntryForm/DocumentLockBanner
  */
 
@@ -29,6 +39,8 @@ export interface DocumentLockBannerProps {
   notice: DocumentLockNotice | null;
   /** Claim the document, displacing whoever holds it. */
   onTakeOver: () => void;
+  /** Leave word with the holder that this editor is waiting. Displaces nobody. */
+  onRequestAccess: () => void;
   className?: string;
 }
 
@@ -43,11 +55,16 @@ const TONE_SURFACE: Record<DocumentLockNotice["tone"], string> = {
   held: "border-border bg-muted/50",
   surrendered: "border-primary bg-primary/5",
   unchecked: "border-border bg-muted/50",
+  // The reader has lost nothing and is being asked for nothing, so it is the
+  // quietest surface of the four. Dressed as a warning it would read as a
+  // demand, which is the one thing a courtesy notice must not do.
+  awaited: "border-border bg-muted/50",
 };
 
 export function DocumentLockBanner({
   notice,
   onTakeOver,
+  onRequestAccess,
   className,
 }: DocumentLockBannerProps) {
   // Answered here rather than at each call site: two editors mount this, and a
@@ -76,6 +93,27 @@ export function DocumentLockBanner({
     >
       <Lock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
       <p className="flex-1 text-foreground">{notice.message}</p>
+      {/*
+        The confirmation is TEXT and not a disabled button. A control that stays
+        on screen having stopped doing anything is the thing a reader cannot
+        tell from one that is broken, and a disabled button announces itself as
+        unavailable rather than as done. It sits inside the same `status`
+        region, so replacing the button with it is announced -- which is the
+        whole answer the person gets, since nothing else about the page changes.
+      */}
+      {notice.accessRequest?.kind === "sent" ? (
+        <p className="text-muted-foreground">{notice.accessRequest.message}</p>
+      ) : null}
+      {notice.accessRequest?.kind === "offer" ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onRequestAccess}
+        >
+          {notice.accessRequest.label}
+        </Button>
+      ) : null}
       {notice.takeOverLabel ? (
         <Button type="button" size="sm" variant="outline" onClick={onTakeOver}>
           {notice.takeOverLabel}
