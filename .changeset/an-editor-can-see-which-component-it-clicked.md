@@ -55,3 +55,27 @@ The composition-free fast path now walks a document carrying such a claim. That
 path was previously a pure optimisation; it is not one any more, because the
 document where a false claim survives is precisely the one with no components in
 it.
+
+The marker is the renderer's to write, and the renderer takes that back from
+the two other parties who could reach it.
+
+A BLOCK builds the element the marker lands on, so it can return a root that
+already carries one — hardcoded, or spread from a stored attribute bag. The
+marker is now ASSIGNED in both directions rather than merely added, so a root
+whose node carries no resolver provenance has the attribute removed rather than
+left as the block wrote it. The stored document's route into the same namespace
+was already closed; this is the same rule for the route a block controls.
+
+A block is also handed the node object itself, and everything read back after
+it runs is whatever it left behind. The editor's address — both the instance
+and the node id — is now snapshotted at the boundary before any of a block's
+code runs, including `rendersNothing` and the `slots` read, and carried down
+the synchronous and awaited paths. The awaited one matters most: "after the
+render" is a window there rather than an instant, and the same node object
+re-enters the output check on the far side of it.
+
+Placeholders carry the markers too. A placeholder is drawn INSTEAD of the
+block, so it never reached the marking step — which left the one element an
+author can see and click, when a block inside a component fails, addressing
+nothing. Definition node ids are re-minted during composition, so for those the
+host instance is the only thing an editor can act on.

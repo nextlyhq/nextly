@@ -9,7 +9,7 @@ import {
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
-import { BlockPlaceholder } from "./placeholder";
+import { BlockPlaceholder, type EditorMarkers } from "./placeholder";
 // The SAME predicate the pipeline uses. Asking the question twice is how the
 // renderer came to hide a node the exported reader returns: the pipeline kept
 // a block carrying a stored `unresolvedComponent` key and this boundary drew a
@@ -296,6 +296,53 @@ function propMarker(
 }
 
 /**
+ * The editor's address for one node, read BEFORE any block code runs.
+ *
+ * A snapshot rather than the live node, and the reason is already argued in
+ * this file for `rendersNothing`: the same mutable `node` object is handed to
+ * `definition.render`, so anything read back afterwards is whatever the render
+ * left behind. That argument was made about a block judging its own emptiness;
+ * it applies with more force here, because these two values decide which node
+ * an editor click selects, edits and deletes.
+ *
+ * The window is not only synchronous. A block may mutate `node` after an
+ * `await`, and the awaited path re-enters the output check with the same
+ * object — so the snapshot is taken once, at the boundary, and carried down
+ * both paths rather than re-read at either end of them.
+ */
+type EditorIdentity = EditorMarkers;
+
+/**
+ * That snapshot, taken from a node before it is handed to a block.
+ *
+ * Total: a node carrying no provenance, or provenance that is not a string,
+ * yields `undefined` rather than a value nothing can address.
+ */
+function editorIdentityOf(node: ResolvedBlockNode): EditorIdentity {
+  return {
+    nodeId: node.id,
+    instanceOf:
+      typeof node.instanceOf === "string" ? node.instanceOf : undefined,
+  };
+}
+
+/**
+ * The markers a PLACEHOLDER carries, or none outside an editor.
+ *
+ * A placeholder is drawn instead of the block, so it never reaches
+ * `applyEditorMarkers` — this is the same decision made at the other end of
+ * the same render, and it is deliberately the only other place that decides
+ * it. Without it the one element an author can see and click, when a block
+ * inside a component fails, carries no address at all.
+ */
+function placeholderEditor(
+  nodeAttribute: boolean | undefined,
+  identity: EditorIdentity
+): EditorMarkers | undefined {
+  return nodeAttribute === true ? identity : undefined;
+}
+
+/**
  * Applies the two editor-only markers to an element's attribute bag, in the
  * order that keeps the node address last.
  *
@@ -306,8 +353,8 @@ function propMarker(
  * is where that function's complexity actually comes from.
  */
 function applyEditorMarkers(
-  extra: Record<string, string>,
-  node: ResolvedBlockNode,
+  extra: Record<string, string | undefined>,
+  identity: EditorIdentity,
   nodeAttribute: boolean,
   declaresSlots: boolean
 ): void {
@@ -315,13 +362,27 @@ function applyEditorMarkers(
   // together and the "LAST, so it cannot be overwritten" reasoning below still
   // describes the line it is attached to.
   if (nodeAttribute && declaresSlots) extra[SLOTS_ATTRIBUTE] = "";
-  // Only where the resolver marked the node as the definition's own. An
-  // unmarked node is the page's own content — either an ordinary block or an
-  // instance's slot content — and marking it would tell the editor to select a
-  // component when the author clicked something they can edit directly.
-  if (nodeAttribute && typeof node.instanceOf === "string") {
-    extra[INSTANCE_ATTRIBUTE] = node.instanceOf;
-  }
+  /*
+   * ASSIGNED in both directions, never merely added.
+   *
+   * Where the resolver marked the node as the definition's own, this names the
+   * host instance. Where it did not, the attribute is assigned `undefined`,
+   * which React omits — and that is the load-bearing half rather than a
+   * tidy-up. `cloneElement` merges this bag OVER the element the block
+   * returned, so a key absent here leaves whatever the block put there: a
+   * page-owned block that hardcodes `data-nx-instance`, or spreads a stored
+   * attribute bag onto its root, would keep a value it wrote itself. The
+   * editor gives this marker precedence over the node address when deciding
+   * what a click selects, so that value redirects selection and editing to an
+   * unrelated component.
+   *
+   * The document's own route into these attributes is already closed — the
+   * loop in `withNodeAttributes` skips any key in `EDITOR_NAMESPACE` — and
+   * this is the same rule for the route a BLOCK controls. Both say the same
+   * thing: the editor's namespace is the renderer's to write and nobody
+   * else's.
+   */
+  if (nodeAttribute) extra[INSTANCE_ATTRIBUTE] = identity.instanceOf;
   /*
    * LAST, so it cannot be overwritten. This was written first, with a
    * comment saying that made it safe — the opposite of what the code did:
@@ -334,7 +395,7 @@ function applyEditorMarkers(
    * set, so the position enforces that rather than a note asking the loop
    * above to.
    */
-  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
+  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = identity.nodeId;
 }
 
 function withNodeAttributes(
@@ -343,7 +404,11 @@ function withNodeAttributes(
   nodeAttribute = false,
   // Whether the block's definition declares at least one slot, decided once by
   // the caller and carried down rather than re-read from the definition here.
-  declaresSlots = false
+  declaresSlots = false,
+  // The editor address, snapshotted before the block ran. Defaulted from the
+  // node for the callers that never hand a node to plugin code, so those keep
+  // reading the value they always did.
+  identity: EditorIdentity = editorIdentityOf(node)
 ): ReactNode {
   const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
   // A stored envelope is whatever the database returned: `attributes: null`
@@ -370,7 +435,10 @@ function withNodeAttributes(
   // the invariant restated rather than a second policy.
   if (typeof output.type !== "string") return output;
 
-  const extra: Record<string, string> = {};
+  // Values may be `undefined`, which is how an editor marker is REMOVED from
+  // an element a block built: React omits an attribute whose value is
+  // undefined, and `cloneElement` merges this bag over the block's own props.
+  const extra: Record<string, string | undefined> = {};
   if (attributes) {
     for (const [name, value] of Object.entries(attributes)) {
       if (!isAllowedAttribute(name)) continue;
@@ -441,7 +509,7 @@ function withNodeAttributes(
    */
   const renderedId = renderedDomId(node);
   if (renderedId !== undefined) extra.id = renderedId;
-  applyEditorMarkers(extra, node, nodeAttribute, declaresSlots);
+  applyEditorMarkers(extra, identity, nodeAttribute, declaresSlots);
 
   return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
 }
@@ -861,7 +929,14 @@ function checkedOutput(
   /** Whether the block's definition declares at least one slot, decided once by the caller. */
   declaresSlots: boolean,
   /** Whether the editor asked for a per-node DOM address. */
-  nodeAttribute = false
+  nodeAttribute = false,
+  /**
+   * The editor address, snapshotted before the block rendered.
+   *
+   * Carried rather than re-derived here, because this function runs AFTER the
+   * block — and, on the awaited path, after an `await` inside it.
+   */
+  identity: EditorIdentity = editorIdentityOf(node)
 ): ReactNode {
   const result = normalizeRenderable(value, {
     // A promise the block returned inside a list is awaited under the same
@@ -878,6 +953,7 @@ function checkedOutput(
           isBlockRoot={false}
           declaresNothing={declaresNothing}
           declaresSlots={declaresSlots}
+          identity={identity}
           nodeAttribute={nodeAttribute}
         />
       </Suspense>
@@ -890,6 +966,7 @@ function checkedOutput(
         reason="invalid-output"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
         detail={`Expected a React node, received ${result.reason}`}
       />
     );
@@ -918,6 +995,7 @@ function checkedOutput(
         reason="invalid-output"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
         detail="Expected a React node, received output whose own element type could not be read"
       />
     );
@@ -933,6 +1011,7 @@ function checkedOutput(
         reason="invalid-output"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
         detail={rootReason}
       />
     );
@@ -942,7 +1021,13 @@ function checkedOutput(
   // nothing can be substituted into an element that already exists. React
   // suspends on them, so they still need a boundary above.
   const withAttributes = isBlockRoot
-    ? withNodeAttributes(result.node, node, nodeAttribute, declaresSlots)
+    ? withNodeAttributes(
+        result.node,
+        node,
+        nodeAttribute,
+        declaresSlots,
+        identity
+      )
     : result.node;
   if (!result.hasUnwrappedThenable) return withAttributes;
   return <Suspense fallback={fallback}>{withAttributes}</Suspense>;
@@ -966,6 +1051,7 @@ async function AsyncBlockOutput({
   declaresNothing,
   declaresSlots,
   nodeAttribute,
+  identity,
 }: {
   pending: PromiseLike<unknown>;
   node: BlockNode;
@@ -977,6 +1063,8 @@ async function AsyncBlockOutput({
   declaresSlots: boolean;
   /** Whether the editor asked for a per-node DOM address. */
   nodeAttribute?: boolean;
+  /** The editor address, snapshotted before the block rendered. */
+  identity: EditorIdentity;
 }): Promise<ReactNode> {
   try {
     return checkedOutput(
@@ -986,7 +1074,8 @@ async function AsyncBlockOutput({
       isBlockRoot,
       declaresNothing,
       declaresSlots,
-      nodeAttribute
+      nodeAttribute,
+      identity
     );
   } catch (error) {
     return (
@@ -994,6 +1083,7 @@ async function AsyncBlockOutput({
         reason="render-error"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
         detail={describeThrown(error)}
       />
     );
@@ -1032,6 +1122,18 @@ export function BlockBoundary({
   hostPolicy,
   nodeAttribute,
 }: BlockBoundaryProps): ReactNode {
+  /*
+   * FIRST, before anything on this path can run author code.
+   *
+   * The obvious place is beside the render call, and it is too late by three
+   * guards: `definition.rendersNothing`, the `definition.slots` read and the
+   * render itself are all plugin code, and each is handed — or can reach — the
+   * same mutable `node`. A getter on `slots` is enough. Taking the reading
+   * here makes the window empty rather than small, which is the only size that
+   * does not need arguing about again the next time a guard moves.
+   */
+  const identity = editorIdentityOf(node);
+
   // A node the migration pass could not bring to its block's current version
   // keeps its last-good props, which the current render would misread. The
   // placeholder is the honest answer and it comes before resolution, since a
@@ -1049,6 +1151,7 @@ export function BlockBoundary({
         reason="unresolved-component"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
         detail={unresolvedDetail(node.unresolvedComponent)}
       />
     );
@@ -1060,6 +1163,7 @@ export function BlockBoundary({
         reason="migration-failed"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
       />
     );
   }
@@ -1067,7 +1171,12 @@ export function BlockBoundary({
   const definition = blocks.get(node.type);
   if (!definition) {
     return (
-      <BlockPlaceholder reason="unknown-block" type={node.type} id={node.id} />
+      <BlockPlaceholder
+        reason="unknown-block"
+        type={node.type}
+        id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
+      />
     );
   }
 
@@ -1082,6 +1191,7 @@ export function BlockBoundary({
         reason="version-ahead"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
         detail={`Stored at version ${node.version}, but this app has version ${definition.version}`}
       />
     );
@@ -1176,6 +1286,7 @@ export function BlockBoundary({
         reason="render-error"
         type={node.type}
         id={node.id}
+        editor={placeholderEditor(nodeAttribute, identity)}
         detail={describeThrown(error)}
       />
     );
@@ -1193,7 +1304,8 @@ export function BlockBoundary({
       true,
       declaresNothing,
       declaresSlots,
-      nodeAttribute
+      nodeAttribute,
+      identity
     );
   }
 
@@ -1207,6 +1319,7 @@ export function BlockBoundary({
         declaresNothing={declaresNothing}
         declaresSlots={declaresSlots}
         nodeAttribute={nodeAttribute}
+        identity={identity}
       />
     </Suspense>
   );

@@ -39,6 +39,31 @@ export interface BlockPlaceholderProps {
   id?: string;
   /** What went wrong, when there is a message worth showing. */
   detail?: string;
+  /**
+   * Emit the editor's own markers on the placeholder's box.
+   *
+   * A placeholder is drawn INSTEAD of the block, so it never passes through
+   * the boundary's marking step — which left the one element an author can
+   * actually see and click carrying no address at all. In an editor that is
+   * the difference between a broken block being selectable and being inert.
+   */
+  editor?: EditorMarkers;
+}
+
+/** The editor's address for the node a placeholder stands in for. */
+export interface EditorMarkers {
+  /** The node's own id, as every other marked element carries it. */
+  nodeId: string;
+  /**
+   * The instance this node was inlined from, when it is definition-owned.
+   *
+   * The load-bearing one here. A definition's node ids are RE-MINTED during
+   * composition, so a placeholder standing in for a node inside a component
+   * carries an id the stored page does not contain — and the host instance is
+   * then the only thing an editor can act on. Without it, clicking the error
+   * box for a broken block inside a component does nothing at all.
+   */
+  instanceOf: string | undefined;
 }
 
 /** Human wording per reason, kept out of the component so it reads as data. */
@@ -78,6 +103,7 @@ export function BlockPlaceholder({
   type,
   id,
   detail,
+  editor,
 }: BlockPlaceholderProps): ReactElement {
   // Read at render rather than module scope so a consumer's bundler can inline
   // it per build, and so a test can exercise both modes in one process.
@@ -88,6 +114,13 @@ export function BlockPlaceholder({
   const isProduction =
     typeof process !== "undefined" && process.env?.NODE_ENV === "production";
 
+  // Spread into BOTH branches below rather than only the visible one. A
+  // published page passes no `editor`, so this is empty there and the markup is
+  // unchanged; an editor render that happens to run with NODE_ENV=production
+  // still needs the box to be addressable, and hiding it does not make it
+  // unreachable to the editor's own hit-testing.
+  const markers = editorMarkerProps(editor);
+
   if (isProduction) {
     return (
       <div
@@ -95,6 +128,7 @@ export function BlockPlaceholder({
         data-nx-block-placeholder={reason}
         data-nx-block-type={type}
         data-nx-block-id={id}
+        {...markers}
       />
     );
   }
@@ -104,6 +138,7 @@ export function BlockPlaceholder({
       data-nx-block-placeholder={reason}
       data-nx-block-type={type}
       data-nx-block-id={id}
+      {...markers}
       style={{
         border: "1px dashed currentColor",
         borderRadius: "4px",
@@ -120,4 +155,27 @@ export function BlockPlaceholder({
       {detail ? <div>{detail}</div> : null}
     </div>
   );
+}
+
+/**
+ * The editor attributes a placeholder carries, or none at all.
+ *
+ * Spelled literally rather than importing the boundary's constants, which would
+ * make this module depend on the one that renders it. The two are pinned
+ * together by a test asserting these keys ARE those constants, so the
+ * duplication is checked rather than trusted.
+ */
+function editorMarkerProps(
+  editor: EditorMarkers | undefined
+): Record<string, string> {
+  if (editor === undefined) return {};
+  return {
+    "data-nx-node": editor.nodeId,
+    // Omitted rather than emitted empty when the node is the page's own: an
+    // editor tests for the attribute's PRESENCE to decide whether an element
+    // belongs to a component, so an empty one would claim it does.
+    ...(editor.instanceOf === undefined
+      ? {}
+      : { "data-nx-instance": editor.instanceOf }),
+  };
 }
