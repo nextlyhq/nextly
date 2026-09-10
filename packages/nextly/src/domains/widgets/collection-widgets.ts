@@ -405,10 +405,23 @@ function timelineWidget(source: WidgetSource): WidgetDefinition | undefined {
 /**
  * The breakdown card for a source: how the entries divide by status.
  *
- * Only for a collection that HAS a status column. Grouping by a column the
- * table does not carry is refused by the read, so offering the card would be
- * offering a card that cannot draw — and `status` is present on the source
- * exactly when the collection enabled the lifecycle that creates it.
+ * Gated on the LIFECYCLE CAPABILITY, not on a field called `status`. The two
+ * are not the same question: a collection may declare an ordinary field of that
+ * name with the lifecycle disabled, and the schema permits it. Read by name,
+ * this card was generated for such a collection and titled "by status",
+ * described as the split "between draft and published", over a column holding
+ * whatever that author's field holds — a card whose copy asserts a meaning its
+ * own data does not have.
+ *
+ * `lifecycleStatus` is what `statsWidget` beside it already reads, so the two
+ * cards that depend on the lifecycle now agree about when it is on. They
+ * disagreed while this asked a different question, which is the drift a second
+ * implementation of one question always produces.
+ *
+ * The column is still confirmed groupable afterwards. The capability says the
+ * lifecycle is enabled; whether the read can bucket that column is a separate
+ * fact, and offering a card whose query is then refused draws an error on every
+ * load rather than simply not being there.
  *
  * Status rather than an arbitrary field: it is the one column every
  * status-enabled collection shares, so the card means the same thing on each,
@@ -417,6 +430,7 @@ function timelineWidget(source: WidgetSource): WidgetDefinition | undefined {
  */
 function breakdownWidget(source: WidgetSource): WidgetDefinition | undefined {
   if (!source.supports.includes("groupBy")) return undefined;
+  if (source.lifecycleStatus !== true) return undefined;
   const status = source.fields.find(field => field.name === "status");
   if (status === undefined || status.bucketable === false) return undefined;
   const id = widgetId(source, "breakdown");

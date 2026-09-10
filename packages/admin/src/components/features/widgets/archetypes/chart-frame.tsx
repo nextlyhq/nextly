@@ -45,14 +45,22 @@ export interface ChartRow {
   label: string;
   count: number;
   /**
-   * Whether the label STANDS IN for a value rather than being one.
+   * What a placeholder row is ANNOUNCED as, when it stands in for a value.
    *
-   * Rendered differently for that reason. No string can be reserved from a
-   * column of arbitrary text, so a row whose stored value happens to read
-   * "(none)" cannot be told apart from the null bucket BY ITS TEXT — the
-   * distinction has to be carried visually and structurally instead.
+   * Present only for a row whose label names the absence of a value rather than
+   * a value. Styling alone was not enough and reads as if it were: italic and
+   * muted separate the null bucket from a stored `(none)` on screen, and a
+   * screen reader announces both as "(none)" — so the readers who most need the
+   * distinction were the ones not given it.
+   *
+   * Spoken as a description instead — "no value stored" — which is a different
+   * utterance from any label a column is likely to hold. Not a guarantee: no
+   * string can be reserved from a column of arbitrary text, so a stored value
+   * spelled exactly like this description would still coincide. That case is
+   * accepted rather than papered over; what is fixed is that the placeholder
+   * now says what it is instead of relying on a colour.
    */
-  placeholder?: boolean;
+  announce?: string;
 }
 
 export interface ChartFrameProps {
@@ -140,26 +148,41 @@ export function ChartFrame({
               </tr>
             </thead>
             <tbody>
+              {/* The separator token at full strength, matching the shared table
+                  primitive every other table already uses. Drawn at half alpha
+                  it was a call-site variant the contrast suite flags: faint
+                  alpha borders are what that guard polices, and this one
+                  measured 1.11:1 against the page surface.
+
+                  Full strength is NOT a claim that the line clears 3:1 —
+                  `theme.css` records `--nx-border` as deliberately below that
+                  minimum to keep the palette's light border weight, and
+                  `contrast/accepted.ts` is where those pairings are held. What
+                  this fixes is a one-off that was both fainter than the token
+                  and inconsistent with every other table in the product. */}
               {rows.map(row => (
-                // The house divider token at full strength, which is what
-                // the other 83 dividers in this admin use. Deliberately NOT a
-                // 3:1 claim: `--nx-border` measures 1.23:1 on the card, and
-                // 1.4.11 does not reach a table rule — the row structure is
-                // carried by the markup (`<th scope="row">` below), so the line
-                // is a visual aid rather than information. It was `/50`, which
-                // is fainter still at 1.11:1 and the only faded divider here.
                 <tr key={row.key} className="border-b border-border">
                   {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
                   <th
                     scope="row"
                     className={
-                      row.placeholder
+                      row.announce
                         ? "py-1 pr-2 text-left font-normal italic text-muted-foreground"
                         : "py-1 pr-2 text-left font-normal text-foreground"
                     }
                   >
-                    {row.label}
+                    {row.announce ? (
+                      <>
+                        {/* The drawn text is hidden from the reader and the
+                            spoken one from the screen, so the row has ONE name
+                            in each medium rather than both read in sequence. */}
+                        <span aria-hidden="true">{row.label}</span>
+                        <span className="sr-only">{row.announce}</span>
+                      </>
+                    ) : (
+                      row.label
+                    )}
                   </th>
                   <td className="py-1 text-right tabular-nums text-foreground">
                     {row.count.toLocaleString()}
