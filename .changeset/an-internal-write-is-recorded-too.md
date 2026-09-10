@@ -26,20 +26,18 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-An import, a job and a migration appear in the activity trail.
+A missing dashboard service no longer fails a content write.
 
-They recorded nothing, and the reason turned out to be a defect rather than a
-constraint. A container reports an absent registration two ways — by throwing,
-and by answering `undefined` — and only the first was handled, so the second
-failed on a property access. That turned "no dashboard service registered" into
-a FAILED CONTENT WRITE, which is the outcome the surrounding catch exists to
-prevent.
+The audit recorder asks the container for that service, and a container reports
+an absent registration two ways: by throwing, and by answering `undefined`. Only
+the throw was handled, so the second walked past the catch that exists to keep an
+audit failure from failing the write, and died on a property access instead. "No
+dashboard service registered" became a FAILED CONTENT WRITE.
 
-With the guard complete, a write that names no initiating user is recorded as a
-system write. It takes the reserved identifier the rest of the codebase already
-uses for itself, and a seed arriving as a user holding that same reserved id is
-the same write in a different shape, so both are filed as system rather than one
-being attributed to an account nobody owns.
-
-An ABSENT actor is still not recorded, and it is a different thing: it means
-the caller named nobody, so there is no identity to attribute the write to.
+The activity feed also names a system actor as "System" instead of rendering a
+blank author. Nothing writes those rows yet, and this release does not start:
+a write that names no initiating user is still not recorded, because a plugin's
+`init()` hook runs before pending migrations do, and an insert against a table
+that has not been migrated yet would take the boot down with it. The column can
+already hold the value, so the reader handles it rather than showing an empty
+author for every import and job the moment something does.

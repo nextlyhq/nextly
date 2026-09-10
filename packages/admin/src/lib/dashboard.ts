@@ -56,15 +56,15 @@ export function describeActivityActor(entry: {
    */
   actorType?: string | null;
 }): ActivityUser {
-  // An API key has no account, so it has no name, no email and no erasure — the
-  // three things every branch below reads. Without this it falls through to the
-  // live-actor case and renders a BLANK name, which is a less attributable feed
-  // than the one before keys were recorded at all.
-  // A system actor has no account either — no name, no email, no erasure — so
-  // it falls through to the live-actor case and renders BLANK for the same
-  // reason a key did. Nothing writes these rows today, but the column can hold
-  // the value and a reader that only handled keys would show an empty author
-  // for every import and job the moment one does.
+  // Neither a key nor an internal write has an account, so neither has a name,
+  // an email or an erasure stamp: the three things every branch below reads.
+  // Without a branch of its own each falls through to the live-actor case and
+  // renders a BLANK name, which is a less attributable feed than the one before
+  // keys were recorded at all.
+  //
+  // Nothing writes a system row today. The column can hold the value, and a
+  // reader that handled only keys would show an empty author for every import
+  // and job the moment something does.
   if (entry.actorType === "system") {
     return {
       id: entry.userId,
