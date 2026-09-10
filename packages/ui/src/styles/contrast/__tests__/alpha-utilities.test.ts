@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { acceptedFor } from "../accepted";
 import { compositeOver, contrastRatio, type Rgb } from "../color";
 import { parseThemeScale, parseThemeTokens } from "../parse-theme";
 import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
@@ -293,23 +294,47 @@ function scanCombos(): Map<string, number> {
 }
 
 /**
+ * One utility's measured contrast, and the keys the reading is identified by.
+ *
+ * The kind is parsed ONCE, here, because two things depend on it and they must
+ * not disagree: the threshold this utility is held to, and the token the remedy
+ * suggests when the current one cannot reach that threshold. A second parse
+ * elsewhere agrees for today's three prefixes and is free to drift the moment a
+ * fourth is added.
+ */
+interface UtilityReading {
+  /** Which prefix the utility carries, and so which threshold applies. */
+  kind: "text" | "border" | "ring";
+  /** 4.5:1 for text (WCAG 1.4.3), 3:1 for a UI boundary (1.4.11). */
+  need: number;
+  /** Worst faded ratio across both modes — what this utility actually paints. */
+  ratio: number;
+  /** The same token with no opacity — the best this utility could ever measure. */
+  fullStrength: number;
+  /** Foreground token name, as `accepted.ts` keys the foreground of a pairing. */
+  fgToken: string;
+  /** The surface custom property it is painted on, keyed the same way. */
+  bgToken: string;
+  /** The call site's opacity, which separates a tint from its opaque pair. */
+  alpha: number;
+  /** Per mode, because an accepted regression is recorded for one mode at a time. */
+  modes: readonly { mode: "light" | "dark"; ratio: number }[];
+}
+
+/**
  * Worst-case contrast of a `token/NN` utility across both modes, painted on the
  * surface it renders on (surfaceFor). A token that fails to resolve throws
  * (naming the utility) rather than skipping, so a mistyped or removed token
  * cannot silently bypass the assertion; the scan only admits names that map to
  * a real `--color-*`, so a throw here means the theme dropped a used token.
  */
-function worstRatio(combo: string): {
-  ratio: number;
-  need: number;
-  /** The same token with no opacity — the best this utility could ever measure. */
-  fullStrength: number;
-} {
+function worstRatio(combo: string): UtilityReading {
   const m = /^(text|border|ring)-(.+)\/(\[[0-9.]+%?\]|\d+)$/.exec(combo);
   if (!m) {
     throw new Error(`unparseable alpha utility: ${combo}`);
   }
-  const [, kind, name, alphaStr] = m;
+  const [, rawKind, name, alphaStr] = m;
+  const kind = rawKind as UtilityReading["kind"];
   // A bare number is a percentage (`/20` -> 0.2). A bracket value is a fraction
   // (`[0.08]`) unless it carries a `%` (`[60%]` -> 0.6).
   const alpha = alphaStr.startsWith("[")
@@ -320,7 +345,11 @@ function worstRatio(combo: string): {
   const surface = surfaceFor(name);
   let worst = Infinity;
   let worstFull = Infinity;
-  for (const tokens of [light, dark]) {
+  const modes: { mode: "light" | "dark"; ratio: number }[] = [];
+  for (const [mode, tokens] of [
+    ["light", light],
+    ["dark", dark],
+  ] as const) {
     const ctx: ResolveContext = { tokens, scale };
     let base: Rgb;
     try {
@@ -345,6 +374,7 @@ function worstRatio(combo: string): {
     // composite over the surface, then measure the painted pixel's contrast.
     const ratio = contrastRatio(opaque(applyOpacity(base, alpha), bg), bg);
     worst = Math.min(worst, ratio);
+    modes.push({ mode, ratio });
     // The same token at FULL strength. Whether the token can reach `need` at all
     // decides what the failure means, and the two readings are different advice:
     // a token that clears it was faded too far and should be un-faded; a token
@@ -355,40 +385,46 @@ function worstRatio(combo: string): {
       contrastRatio(opaque(applyOpacity(base, 1), bg), bg)
     );
   }
-  return { ratio: worst, need, fullStrength: worstFull };
+  return {
+    kind,
+    need,
+    ratio: worst,
+    fullStrength: worstFull,
+    fgToken: name,
+    bgToken: surface,
+    alpha,
+    modes,
+  };
 }
 
 /**
  * What to tell the reader about one failing utility.
  *
- * Two failures wear one shape here and have opposite remedies, and saying the
- * wrong one is not a cosmetic mistake: the previous message advised "replace
- * with a semantic token (border-border/…)" on findings where those tokens are
- * themselves below the target, so following it removed the utility from a scan
- * that only reads FADED utilities and changed no pixel. That advice was taken
- * once and shipped as a contrast fix.
+ * Two failures wear one shape here and have opposite remedies, so the reading
+ * decides which is named rather than the reader. A faded utility whose token
+ * clears the target at full strength was faded too far, and un-fading it repairs
+ * the painted pixel. A faded utility whose token does NOT clear the target
+ * cannot be repaired by any opacity at all: un-fading only takes it out of a
+ * scan that reads faded utilities, so the finding disappears and the contrast
+ * stays exactly as it was. Naming the first remedy for the second case turns
+ * this message into an instruction to hide the finding.
  *
  * The suggested token depends on the KIND, because the thresholds differ.
  * `control-border` clears 1.4.11's 3:1 and is the right answer for a border or
- * ring; it measures about 3.5:1, so recommending it for TEXT — held to 4.5 —
- * would be a second remediation that still fails, which is the same defect one
- * turn later.
+ * ring; it measures about 3.5:1, so naming it for TEXT — held to 4.5 — would
+ * be a second remediation that still fails. The kind comes from the reading,
+ * which already parsed it to choose the threshold.
  *
- * Exported because the scanned corpus has no offender: with the tree clean both
- * arms are unreachable from the scan, so a regression here would be invisible to
- * it. The controls below call this directly.
+ * Exported because a clean tree gives the scan no offender to reach, leaving
+ * both arms unreachable from it. The controls below call this directly.
  */
-export function remediation(
-  combo: string,
-  r: { ratio: number; need: number; fullStrength: number }
-): string {
+export function remediation(combo: string, r: UtilityReading): string {
   const head = `${combo} = ${r.ratio.toFixed(2)}:1 (needs ${r.need}:1)`;
   if (r.fullStrength >= r.need) {
     return `${head} — the token clears ${r.need}:1 at full strength, so use it un-faded.`;
   }
-  const kind = /^text-/.test(combo) ? "text" : "border";
   const suggestion =
-    kind === "text"
+    r.kind === "text"
       ? "a text token that clears 4.5:1 (muted-foreground, foreground)"
       : "a token that holds 3:1 (control-border)";
   return (
@@ -397,6 +433,31 @@ export function remediation(
     `hides it from this scan. Use ${suggestion}, or record it: an exclusion if ` +
     `1.4.11 does not scope the pairing, or contrast/accepted.ts if it does and ` +
     `the shortfall is a deliberate product decision.`
+  );
+}
+
+/**
+ * The failing modes this scan must report — those NOT recorded in accepted.ts.
+ *
+ * A pairing the palette knowingly ships below its minimum is recorded once, in
+ * accepted.ts, and read from there. {@link remediation} offers that file as an
+ * exit, so the scan has to honour it: advice naming a remedy the guard ignores
+ * leaves the reader with the same red, and pushes the entry into
+ * ALLOWED_DECORATIVE instead — the list a reviewer reads to learn where 1.4.11
+ * genuinely stops scoping a pairing, and so the one list that must not absorb
+ * failures that ARE in scope.
+ *
+ * Keyed WITH the call site's opacity. An acceptance of the opaque pair says
+ * nothing about a faded one: they are different colours and they measure
+ * differently.
+ */
+function unacceptedFailures(
+  r: UtilityReading
+): readonly { mode: "light" | "dark"; ratio: number }[] {
+  return r.modes.filter(
+    m =>
+      m.ratio < r.need &&
+      !acceptedFor(r.fgToken, r.bgToken, m.mode, { fgAlpha: r.alpha })
   );
 }
 
@@ -454,7 +515,10 @@ describe("alpha-opacity color utilities", () => {
     for (const combo of combos.keys()) {
       if (ALLOWED_DECORATIVE.has(combo)) continue;
       const r = worstRatio(combo);
-      if (r.ratio < r.need) {
+      if (unacceptedFailures(r).length > 0) {
+        // Reported at the worst reading across both modes, which is what the
+        // utility can paint; the accepted check decides only WHETHER a reading
+        // is reported, not which number describes it.
         offenders.push(remediation(combo, r));
       }
     }
@@ -467,43 +531,74 @@ describe("alpha-opacity color utilities", () => {
     ).toEqual([]);
   });
 
-  // Both arms of the remediation, called directly. The scanned corpus has no
-  // offender, so with the tree clean neither arm runs during the scan — and a
-  // regression in the advice would be invisible to a suite that never reaches it.
+  // Both arms of the remediation, and the reading each one turns on. The
+  // scanned corpus has no offender, so with the tree clean neither arm runs
+  // during the scan — a regression in the advice would be invisible to a suite
+  // that never reaches it. The readings come from `worstRatio` rather than from
+  // literals, so a reading that stopped telling the two cases apart fails here
+  // instead of leaving these agreeing with a message it no longer produces.
+
+  it("measures full strength from the un-faded token, not the painted pixel", () => {
+    // The distinction rests on measuring the SAME token twice: once at the call
+    // site's opacity, once with none. A reading that took both from the faded
+    // paint would report one number under two names, every failure would land
+    // in the second arm, and each message control below would still pass.
+    const r = worstRatio("text-foreground/30");
+    expect(r.fullStrength).toBeGreaterThan(r.ratio);
+  });
+
   it("tells a caller to un-fade a token that clears the target", () => {
-    const msg = remediation("border-input/50", {
-      ratio: 1.9,
-      need: 3,
-      fullStrength: 3.4,
-    });
+    // Body text on the page surface clears 4.5:1 with room to spare, and at 30%
+    // it does not — so the fade is the fault and un-fading repairs the pixel.
+    const combo = "text-foreground/30";
+    const r = worstRatio(combo);
+    expect(r.ratio).toBeLessThan(r.need);
+    expect(r.fullStrength).toBeGreaterThanOrEqual(r.need);
+    const msg = remediation(combo, r);
     expect(msg).toContain("use it un-faded");
     expect(msg).not.toContain("only hides it from this scan");
   });
 
   it("tells a caller that no opacity reaches a target the token misses", () => {
-    const msg = remediation("border-border/50", {
-      ratio: 1.11,
-      need: 3,
-      fullStrength: 1.23,
-    });
+    // `theme.css` records `--nx-border` as deliberately below 3:1 to keep the
+    // palette's light border weight, so no opacity reaches the target and
+    // un-fading would only take the utility out of this scan.
+    const combo = "border-border/50";
+    const r = worstRatio(combo);
+    expect(r.ratio).toBeLessThan(r.need);
+    expect(r.fullStrength).toBeLessThan(r.need);
+    const msg = remediation(combo, r);
     expect(msg).toContain("only hides it from this scan");
     expect(msg).toContain("control-border");
-    // The two places a sub-threshold pairing is legitimately recorded, so the
-    // reader is not left with "allowlist it somewhere" as the only exit.
+    // Both places a sub-threshold pairing is legitimately recorded, and the
+    // assertion above honours both, so following either one clears the finding.
     expect(msg).toContain("accepted.ts");
   });
 
   it("does not recommend a border token for a TEXT failure", () => {
     // `control-border` measures about 3.5:1 and text is held to 4.5, so naming
     // it here would be a second remediation that still fails the threshold --
-    // the exact defect this remediation exists to stop.
-    const msg = remediation("text-border/50", {
-      ratio: 1.1,
-      need: 4.5,
-      fullStrength: 1.23,
-    });
+    // the exact defect this remediation exists to stop. The kind comes from the
+    // reading that chose the threshold, so a suggestion decided by a second
+    // parse of the same name fails here rather than diverging quietly.
+    const combo = "text-border/50";
+    const r = worstRatio(combo);
+    expect(r.kind).toBe("text");
+    expect(r.need).toBe(4.5);
+    const msg = remediation(combo, r);
     expect(msg).not.toContain("control-border");
     expect(msg).toContain("4.5:1");
+  });
+
+  it("does not treat an unrecorded pairing as accepted", () => {
+    // The accepted.ts exit is the one way a failing reading is NOT reported, so
+    // a consult that matched everything would empty this scan silently and each
+    // message control above would still pass on its own text.
+    const r = worstRatio("border-border/50");
+    expect(r.modes.some(m => m.ratio < r.need)).toBe(true);
+    expect(unacceptedFailures(r)).toHaveLength(
+      r.modes.filter(m => m.ratio < r.need).length
+    );
   });
 
   it("puts no alpha on the control boundary, in any utility", () => {
