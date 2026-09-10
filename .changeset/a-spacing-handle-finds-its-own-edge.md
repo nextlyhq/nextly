@@ -44,6 +44,11 @@ container query answering to a sibling, a state being previewed, or the pointer
 arriving and matching a hover rule. None of those has to be anticipated for the
 handle to be right.
 
+The measurement also leaves the page alone properly now. It works by pushing a
+value onto the block and putting it back, and on a block with no inline style of
+its own the attribute was left behind empty — invisible on screen, and visible to
+everything in the editor that watches the page for edits. Nothing is left behind.
+
 Two smaller corrections come with it. A handle on a negative margin now grows
 the value in the direction the edge actually travels, instead of committing a
 larger negative number and running the block away from the pointer. And a

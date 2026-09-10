@@ -175,8 +175,31 @@ export function spacingRespondsOutward(
         "important"
       ),
     () => {
-      if (had === null) block.removeAttribute("style");
-      else block.setAttribute("style", had);
+      if (had !== null) {
+        block.setAttribute("style", had);
+        return;
+      }
+      block.removeAttribute("style");
+      /*
+       * Removed TWICE, with a read between, and only the read makes the second
+       * one work.
+       *
+       * Measured in Chromium: an element that had no `style` attribute is left
+       * carrying `style=""` after one removal, because the declaration this
+       * probe dirtied is re-serialised back into the attribute. Calling
+       * `removeAttribute` twice in a row does not help — nothing between them
+       * forces that pending write to happen — while asking whether the
+       * attribute is there does, so the removal after it clears the attribute
+       * for real.
+       *
+       * It matters because the canvas watches this subtree: an empty `style`
+       * attribute is invisible to rendering and perfectly visible to a
+       * `MutationObserver`, which is the difference between a probe and an edit
+       * nobody made. jsdom removes the attribute on the first call, so no test
+       * in this package can tell the two apart — the browser run in the pull
+       * request is the evidence.
+       */
+      if (block.hasAttribute("style")) block.removeAttribute("style");
     }
   );
 
