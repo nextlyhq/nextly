@@ -26,6 +26,15 @@ export {
   type QuerylessWidgetArchetype,
   type CellWidgetArchetype,
 } from "./definition";
+// The lifecycle vocabulary travels with the two fields that name it. A closed
+// set an author cannot import is one they must retype as a literal, and a
+// retyped set is a copy that stops matching the day a condition is added.
+export {
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
+  type WidgetLifecycle,
+  type WidgetCondition,
+} from "./lifecycle";
 export {
   MAX_WIDGET_LIMIT,
   validateWidgetQuery,

@@ -1,11 +1,36 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { seedApi } from "@admin/services/seedApi";
+import { seedApi, type SeedResult } from "@admin/services/seedApi";
 
+import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import { useSeedStatus } from "./useSeedStatus";
+
+/** One successful seed, shared by every case that needs the mutation to land. */
+function seedResult(): SeedResult {
+  return {
+    message: "Demo content seeded.",
+    summary: {
+      rolesCreated: 3,
+      usersCreated: 3,
+      categoriesCreated: 5,
+      tagsCreated: 8,
+      postsCreated: 12,
+      mediaUploaded: 14,
+      mediaSkipped: 0,
+      collectionsRegistered: 0,
+      singlesRegistered: 0,
+      permissionsSynced: 0,
+    },
+    warnings: [],
+  };
+}
 
 vi.mock("@admin/services/seedApi", () => ({
   seedApi: {
@@ -109,22 +134,7 @@ describe("useSeedStatus", () => {
       completedAt: null,
       skippedAt: null,
     });
-    vi.mocked(seedApi.runSeed).mockResolvedValue({
-      message: "Demo content seeded.",
-      summary: {
-        rolesCreated: 3,
-        usersCreated: 3,
-        categoriesCreated: 5,
-        tagsCreated: 8,
-        postsCreated: 12,
-        mediaUploaded: 14,
-        mediaSkipped: 0,
-        collectionsRegistered: 0,
-        singlesRegistered: 0,
-        permissionsSynced: 0,
-      },
-      warnings: [],
-    });
+    vi.mocked(seedApi.runSeed).mockResolvedValue(seedResult());
 
     const { result } = renderHook(() => useSeedStatus(), { wrapper });
     await waitFor(() => expect(result.current.status.kind).toBe("idle"));
@@ -163,6 +173,59 @@ describe("useSeedStatus", () => {
     if (result.current.status.kind === "error") {
       expect(result.current.status.message).toContain("Permission sync failed");
     }
+  });
+
+  it("refetches the dashboard layout once seeding succeeds", async () => {
+    // 🔴 Seeding is the moment the get-started card's condition stops holding,
+    // so the widget set the server offers -- and the scope token guarding a
+    // save of it -- both change. The layout query does not poll, so the open
+    // dashboard kept the stale arrangement and the next save was refused with a
+    // scope conflict the reader did nothing to cause.
+    //
+    // Asserted as a REFETCH by a live consumer of the key rather than as a call
+    // on `invalidateQueries`: a spy is satisfied by any key at all, including
+    // one no query is mounted under.
+    vi.mocked(seedApi.probe).mockResolvedValue({
+      available: true,
+      template: { slug: "blog", label: "Blog" },
+    });
+    vi.mocked(seedApi.getStatus).mockResolvedValue({
+      completedAt: null,
+      skippedAt: null,
+    });
+    vi.mocked(seedApi.runSeed).mockResolvedValue(seedResult());
+
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    const readLayout = vi.fn().mockResolvedValue({ placements: [] });
+
+    const { result } = renderHook(
+      () => ({
+        seed: useSeedStatus(),
+        layout: useQuery({
+          queryKey: DASHBOARD_LAYOUT_KEY,
+          queryFn: readLayout,
+        }),
+      }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      }
+    );
+
+    await waitFor(() => expect(result.current.seed.status.kind).toBe("idle"));
+    await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      result.current.seed.startSeed();
+    });
+
+    await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
   });
 
   it("skip writes skippedAt and transitions to hidden", async () => {

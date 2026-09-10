@@ -248,15 +248,27 @@ export function useDocumentLock({
     // unchanged answer on every beat does not re-render the editor, and does not
     // re-announce a sentence the reader has already heard.
     let awaited = false;
-    // 🔴 The dispatch time of the renewal that last spoke for `awaited`.
+    // Which renewal last spoke for `awaited`, counted rather than clocked.
     //
-    // Renewals overlap and their replies can arrive out of order, which is why
-    // the lease below is advanced with `Math.max` rather than assigned. What
-    // they say about somebody waiting needs the same fence for the same reason:
-    // an older reply landing after a newer one answers a question that has
-    // already moved on, and the holder is left with the PREVIOUS beat's answer
-    // until another renewal happens to correct it. Only the newest may speak.
-    let awaitedAt = 0;
+    // Renewals overlap and their replies can arrive out of order, so the newest
+    // answer has to win: an older reply landing after a newer one describes a
+    // moment that has passed, and would leave the holder on the PREVIOUS beat's
+    // answer until some later renewal happened to correct it.
+    //
+    // 🔴 A COUNTER, not a timestamp, and the difference is not pedantry.
+    // `Date.now()` is wall time and can move BACKWARDS — an NTP correction, a
+    // VM resuming, someone changing the clock. A later renewal would then carry
+    // a smaller number than an earlier one, and a fence built on that would
+    // ignore every subsequent answer until wall time caught up, which after a
+    // large correction is minutes or never. A counter cannot go backwards
+    // because nothing outside this closure can touch it.
+    //
+    // The lease below still uses wall time, and that is not an inconsistency:
+    // it measures HOW MUCH TIME HAS PASSED, which is a duration only a clock can
+    // answer, while this asks WHICH REPLY IS NEWER, which is an ordering only a
+    // counter can answer honestly.
+    let renewSeq = 0;
+    let awaitedBeat = 0;
     // Set when this editor stops being a contender: displaced by the server, or
     // past its own deadline. The beat then waits for the person rather than
     // re-taking a claim they were just told they had lost.
@@ -315,10 +327,11 @@ export function useDocumentLock({
       requesting = false;
       requestSent = false;
       awaited = false;
-      // A new claim is a new conversation: renewals of the claim just replaced
-      // carry a different token and are already refused, so this only has to
-      // stop an EARLIER dispatch time from outranking this claim's own beats.
-      awaitedAt = 0;
+      // A new claim is a new conversation. Renewals of the claim just replaced
+      // carry a different token and are already refused upstream, so this only
+      // has to let this claim's own first beat speak. `renewSeq` is deliberately
+      // NOT reset: it only ever has to increase.
+      awaitedBeat = 0;
       setState({ status: "held-by-me", someoneWaiting: false });
     };
 
@@ -539,6 +552,9 @@ export function useDocumentLock({
       // Timed from dispatch for the same reason a claim is: the lease the server
       // grants starts when it processes this, not when the answer gets back.
       const renewSentAt = Date.now();
+      // Ordered from dispatch too, but counted rather than clocked. See
+      // `renewSeq` above for why these are two different instruments.
+      const beat = (renewSeq += 1);
       void protectedApi
         .patch<MutationResponse<RenewDocumentLockOutcome>>("/document-lock", {
           ...ref,
@@ -557,8 +573,8 @@ export function useDocumentLock({
             // the heartbeat's granularity instead of ticking at a reader.
             // Rendered only on a CHANGE, so an unchanged answer every 15 seconds
             // is not a live region repeating itself.
-            if (renewSentAt > awaitedAt) {
-              awaitedAt = renewSentAt;
+            if (beat > awaitedBeat) {
+              awaitedBeat = beat;
               if (item.waiting !== awaited) {
                 awaited = item.waiting;
                 setState({
