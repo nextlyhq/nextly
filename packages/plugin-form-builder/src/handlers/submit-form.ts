@@ -448,6 +448,12 @@ export async function submitForm(
           success: true,
           outcome: "accepted",
           successMessage: settings.successMessage,
+          // The same destination an accepted submission gets. Returning early
+          // without it left a throttled visitor on the form instead of the
+          // page its author sends people to, and made the one response this
+          // whole branch exists to disguise the only accepted one carrying no
+          // redirect.
+          redirect: await resolveRedirectUrl(form, pluginConfig, pluginContext),
         };
       }
       throw error;

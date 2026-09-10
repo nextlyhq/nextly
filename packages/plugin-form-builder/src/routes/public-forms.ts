@@ -26,6 +26,7 @@
 
 import {
   buildPaginatedResponse,
+  clampLimit,
   formAvailability,
   NextlyError,
   NO_SUCH_FORM,
@@ -156,7 +157,14 @@ async function listPublishedForms(
     {
       where: { status: { equals: "published" } },
       pagination: {
-        limit: positiveInt(url.searchParams.get("limit")) ?? DEFAULT_LIST_LIMIT,
+        // Clamped HERE, with the canonical bound, so the limit that computes
+        // the offset is the limit that comes back. The query service clamps to
+        // 500 internally and reports the clamped value, while the offset is
+        // built from what was asked for, so `?limit=1000&page=2` returned the
+        // second 500-row slice and dividing the two reported page 3.
+        limit: clampLimit(
+          positiveInt(url.searchParams.get("limit")) ?? DEFAULT_LIST_LIMIT
+        ),
         page: positiveInt(url.searchParams.get("page")) ?? 1,
       },
     },

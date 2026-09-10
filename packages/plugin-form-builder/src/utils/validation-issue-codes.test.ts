@@ -70,6 +70,27 @@ describe("validation issue codes", () => {
     ]);
   });
 
+  it("reads the RAW value, not the value after transformation", () => {
+    // A required multi-select sent a scalar normalises to `[]` before the
+    // schema sees it, so classifying from the transformed payload calls a
+    // supplied answer blank and tells the visitor to fill in a field they
+    // already answered. `prepare-submission` passes the raw submission for
+    // exactly this reason; this pins the property at the level that decides it.
+    const choices: FormFieldConfig = {
+      name: "choices",
+      label: "Choices",
+      type: "select",
+      required: true,
+      options: [{ label: "One", value: "one" }],
+    };
+
+    const supplied = issuesFor([choices], { choices: 0 });
+    const blank = issuesFor([choices], {});
+
+    expect(supplied[0]?.code).toBe("INVALID");
+    expect(blank[0]?.code).toBe("REQUIRED");
+  });
+
   it("separates the two when one submission carries both", () => {
     // The control. A rule that answered one code for everything would satisfy
     // some of the assertions above while telling a visitor with a half-filled

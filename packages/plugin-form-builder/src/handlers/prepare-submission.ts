@@ -231,7 +231,11 @@ export function prepareSubmission({
     return {
       data: transformed,
       validationErrors: getValidationErrors(result),
-      validationIssues: getValidationIssues(result, transformed),
+      // The RAW submission, not the transformed payload. Transformation
+      // normalises a value before the schema sees it, so a required
+      // multi-select sent a scalar `0` arrives here as `[]` and would read as
+      // blank: the visitor answered, and would be told they had not.
+      validationIssues: getValidationIssues(result, data),
     };
   }
 
