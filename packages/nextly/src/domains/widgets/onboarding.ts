@@ -55,21 +55,19 @@ import { readableCollectionSlugs, readerHasContent } from "./reader-content";
 export const ONBOARDING_STEPS = ["account", "collection", "entry"] as const;
 export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number];
 
-/** One step, as the host answers it. */
+/**
+ * One step, as the host answers it.
+ *
+ * Deliberately no label, description or href. Those are admin concerns: the
+ * copy is UI text and the target is an admin route, neither of which core owns
+ * or can render. Core answers WHICH steps exist and WHETHER each is done; the
+ * admin maps an id to its presentation through an exhaustive record, so a step
+ * added here is a compile error there rather than a blank row on the card.
+ */
 export interface OnboardingStep {
   id: OnboardingStepId;
   complete: boolean;
 }
-
-/**
- * Deliberately no label, description or href.
- *
- * Those are admin concerns: the copy is UI text and the target is an admin
- * route, neither of which core owns or can render. Core answers WHICH steps
- * exist and WHETHER each is done; the admin maps an id to its presentation
- * through an exhaustive record, so a step added here is a compile error there
- * rather than a blank row on the card.
- */
 
 /**
  * Every step, with the reader's progress through it.
