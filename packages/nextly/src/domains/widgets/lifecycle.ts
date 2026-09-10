@@ -82,49 +82,87 @@ export function isWidgetCondition(value: unknown): value is WidgetCondition {
  * wherever they dragged it, and have nothing to tell them the field was never
  * read. A refusal at registration says so once, to the person who wrote it.
  */
+/** Whether the lifecycle names one of the two dispositions there are. */
+function kindProblem(lifecycle: unknown): string | undefined {
+  if (lifecycle === undefined) return undefined;
+  if (lifecycle === "always" || lifecycle === "conditional") return undefined;
+  return `lifecycle, when given, must be ${WIDGET_LIFECYCLES.map(l => `"${l}"`).join(" or ")}`;
+}
+
+/**
+ * Whether the condition and the lifecycle agree, and whether the host knows it.
+ *
+ * The two directions are one rule: a conditional widget without a condition has
+ * nothing to evaluate, and a condition without the lifecycle is a field nobody
+ * reads. Separating them would let a declaration satisfy one and fail the other
+ * silently.
+ */
+function conditionProblem(
+  conditional: boolean,
+  visibleWhen: unknown
+): string | undefined {
+  if (!conditional) {
+    return visibleWhen === undefined
+      ? undefined
+      : 'visibleWhen is only meaningful on a widget declaring lifecycle: "conditional"';
+  }
+  if (visibleWhen === undefined) {
+    return "a conditional widget must name the condition it shows under, as `visibleWhen`";
+  }
+  if (isWidgetCondition(visibleWhen)) return undefined;
+  // The known set is NAMED in the refusal. An author who mistyped a condition,
+  // and one who reached for a condition this release does not have, need
+  // different next steps and the message cannot tell them apart -- so it shows
+  // what is available and lets them see which of the two they are.
+  return `visibleWhen must be one of ${WIDGET_CONDITIONS.map(c => `"${c}"`).join(", ")}; received ${JSON.stringify(visibleWhen)}`;
+}
+
+/** Whether a field that only a transient card may carry was carried legally. */
+function transientOnlyProblem(
+  conditional: boolean,
+  field: "pin" | "dismissible",
+  value: unknown,
+  legal: (value: unknown) => boolean,
+  shape: string
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (!conditional) {
+    return `${field} is only meaningful on a widget declaring lifecycle: "conditional"`;
+  }
+  return legal(value) ? undefined : `${field}, when given, must be ${shape}`;
+}
+
+/**
+ * What a conditional widget may declare, and what a permanent one may not.
+ *
+ * Composed from the rules above rather than written as one chain, and each is
+ * named for the question it answers. `pin` and `dismissible` are refused on a
+ * permanent widget rather than ignored: both are meaningless there and both
+ * LOOK like they work -- a reader would see `pin: "top"` in a declaration,
+ * place the card, watch it sit wherever they dragged it, and have nothing to
+ * tell them the field was never read.
+ */
 export function lifecycleProblem(
   widget: Record<string, unknown>
 ): string | undefined {
   const { lifecycle, visibleWhen, pin, dismissible } = widget;
-
-  if (lifecycle !== undefined && lifecycle !== "always") {
-    if (lifecycle !== "conditional") {
-      return `lifecycle, when given, must be ${WIDGET_LIFECYCLES.map(l => `"${l}"`).join(" or ")}`;
-    }
-  }
   const conditional = lifecycle === "conditional";
-
-  if (conditional) {
-    if (visibleWhen === undefined) {
-      return "a conditional widget must name the condition it shows under, as `visibleWhen`";
-    }
-    if (!isWidgetCondition(visibleWhen)) {
-      // The known set is NAMED in the refusal. An author who mistyped a
-      // condition, and one who reached for a condition this release does not
-      // have, need different next steps and the message cannot tell them
-      // apart -- so it shows what is available and lets them see which of the
-      // two they are.
-      return `visibleWhen must be one of ${WIDGET_CONDITIONS.map(c => `"${c}"`).join(", ")}; received ${JSON.stringify(visibleWhen)}`;
-    }
-  } else if (visibleWhen !== undefined) {
-    return 'visibleWhen is only meaningful on a widget declaring lifecycle: "conditional"';
-  }
-
-  if (pin !== undefined) {
-    if (!conditional) {
-      return 'pin is only meaningful on a widget declaring lifecycle: "conditional"';
-    }
-    if (pin !== "top") return 'pin, when given, must be "top"';
-  }
-
-  if (dismissible !== undefined) {
-    if (!conditional) {
-      return 'dismissible is only meaningful on a widget declaring lifecycle: "conditional"';
-    }
-    if (typeof dismissible !== "boolean") {
-      return "dismissible, when given, must be a boolean";
-    }
-  }
-
-  return undefined;
+  return (
+    kindProblem(lifecycle) ??
+    conditionProblem(conditional, visibleWhen) ??
+    transientOnlyProblem(
+      conditional,
+      "pin",
+      pin,
+      value => value === "top",
+      '"top"'
+    ) ??
+    transientOnlyProblem(
+      conditional,
+      "dismissible",
+      dismissible,
+      value => typeof value === "boolean",
+      "a boolean"
+    )
+  );
 }

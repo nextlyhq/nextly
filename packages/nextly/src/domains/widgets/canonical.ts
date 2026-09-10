@@ -78,6 +78,19 @@ export interface CanonicalWidget {
   defaultSize?: string;
   defaultHeight?: string;
   defaultOrder?: number;
+  /**
+   * How long the widget stays, and the condition it stays under.
+   *
+   * Carried through because the LAYOUT endpoint is where a transient card is
+   * filtered out, and it holds canonical widgets rather than declarations. Left
+   * off, the filter reads `undefined` for every card and treats the whole
+   * dashboard as permanent -- inert, and silently so, because a filter that
+   * removes nothing looks exactly like one with nothing to remove.
+   */
+  lifecycle?: string;
+  visibleWhen?: string;
+  pin?: string;
+  dismissible?: boolean;
 }
 
 /** The summary of one registered widget. */
@@ -96,6 +109,16 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ...(definition.defaultOrder === undefined
       ? {}
       : { defaultOrder: definition.defaultOrder }),
+    ...(definition.lifecycle === undefined
+      ? {}
+      : { lifecycle: definition.lifecycle }),
+    ...(definition.visibleWhen === undefined
+      ? {}
+      : { visibleWhen: definition.visibleWhen }),
+    ...(definition.pin === undefined ? {} : { pin: definition.pin }),
+    ...(definition.dismissible === undefined
+      ? {}
+      : { dismissible: definition.dismissible }),
   };
 }
 

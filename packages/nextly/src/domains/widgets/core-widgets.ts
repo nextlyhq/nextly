@@ -80,12 +80,31 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     id: "core/seed-demo-content",
     title: "Get started",
     description:
-      "Offers to seed demo content, and hides itself once that is done or declined.",
+      "Offers to seed demo content while there is nothing to look at yet.",
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
     defaultOrder: 0,
     component: "core#SeedDemoContentCard",
+    /*
+     * Transient, and now declared as such. The card already hid ITSELF once
+     * seeding was done or declined -- it was placed in the grid, given an
+     * order, and then rendered nothing -- so the arrangement reserved a slot
+     * for a card drawing nothing and the reason lived in a component.
+     *
+     * The host now answers the part it can: while this reader can see no
+     * content, the card is offered; once they can, it is not. The component
+     * keeps the finer state it alone knows -- whether seeding is available,
+     * running, or already finished -- which is a different question rather
+     * than a second answer to this one.
+     */
+    lifecycle: "conditional",
+    visibleWhen: "content:empty",
+    // Above the ordinary order while it lasts. A transient card has no
+    // position worth persisting: a reader who dragged it somewhere would lose
+    // that arrangement the moment it stopped applying.
+    pin: "top",
+    dismissible: true,
   },
   {
     id: "core/collections",
