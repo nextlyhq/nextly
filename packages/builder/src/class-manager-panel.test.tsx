@@ -436,6 +436,86 @@ describe("a host with no way to carry out a delete", () => {
 });
 
 describe("a rename the host refuses", () => {
+  it("shows a refusal the host answers with STRAIGHT AWAY", async () => {
+    /*
+     * 🔴 The contract is "returning a ClassRenameOutcome is how a refusal
+     * reaches the author", and it says nothing about WHEN. A host that checks
+     * something it already knows — a locked site style, a slug it holds in
+     * memory — answers inside the call, and that answer was being dropped: the
+     * row cleared and the author was told nothing, which is the exact silence
+     * the outcome exists to remove.
+     *
+     * Deliberately NOT async. The asynchronous case is covered below, and it
+     * passed throughout; only the synchronous one was lost.
+     */
+    const onRename = vi.fn(() => ({
+      ok: false as const,
+      reason: "The site style is locked.",
+    }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    expect(await screen.findByText("The site style is locked.")).toBeTruthy();
+  });
+
+  it("says nothing when a synchronous host answers that it worked", async () => {
+    /*
+     * The control for the case above. Reporting whatever a host returns would
+     * also satisfy it — and would put a refusal notice beside every successful
+     * rename by a host that answers `{ ok: true }`.
+     */
+    const onRename = vi.fn(() => ({ ok: true as const }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    await Promise.resolve();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("still says nothing when a host answers with void, as most do", async () => {
+    /*
+     * The second control. The contract this replaced was `=> void`, so the
+     * common host returns nothing at all — and treating an un-outcome as a
+     * refusal would report a failure for every rename those hosts perform.
+     */
+    const onRename = vi.fn(() => undefined);
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    await Promise.resolve();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows the reason rather than clearing as though it landed", async () => {
     const onRename = vi.fn(async () => ({
       ok: false as const,

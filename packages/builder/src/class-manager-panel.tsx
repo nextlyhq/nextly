@@ -998,9 +998,27 @@ function NameField({
      */
     setDraft(null);
     setRefused(null);
-    // A host that answered with something un-awaitable is one that does not
-    // report. Reaching for `.then` on it threw out of this event handler.
-    if (!isPromiseLike(answered)) return;
+    if (!isPromiseLike(answered)) {
+      /*
+       * 🔴 A refusal does not have to arrive later. The contract says an
+       * outcome "is how a refusal reaches the author" and says nothing about
+       * WHEN — a host that checks a permission it already holds, or a slug it
+       * already knows is taken, answers straight away. Dropping that answer
+       * left the row cleared and the author told nothing, which is the exact
+       * silence the outcome was added to remove.
+       *
+       * Everything else un-awaitable is a host that does not report: the
+       * contract this replaced was `=> void`, so most callers answer with
+       * nothing at all, and reaching for `.then` on that threw out of this
+       * event handler.
+       *
+       * No supersession check, unlike the promise path below. A synchronous
+       * answer is delivered inside the same commit that asked for it, so no
+       * newer attempt can have started in between.
+       */
+      if (isRenameOutcome(answered) && !answered.ok) report(answered.reason);
+      return;
+    }
     void Promise.resolve(answered)
       .then(result => {
         // Superseded: a newer rename on this row is the one being awaited, and
