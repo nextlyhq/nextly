@@ -56,27 +56,31 @@ import { SYSTEM_CONTEXT } from "../../shared/types";
 export function recordableActor(
   actor?: RequestActor | null
 ): { type: RequestActorType; id: string } | null {
-  if (!actor) return null;
+  if (!actor?.id) return null;
 
-  // A system write names no id of its own: `actorForWrite(null, null)` returns
-  // `SYSTEM_ACTOR`, which carries a type and nothing else, and that is what
-  // every import, job, migration and internal call arrives as. The row's actor
-  // reference is NOT NULL, so it takes the reserved id the rest of the codebase
-  // already uses for itself.
+  // A SYSTEM write is refused, and the reason is an ORDERING one rather than
+  // anything about the actor itself.
   //
-  // A seed arriving as a USER actor holding that same reserved id is the same
-  // write wearing a different shape — no account owns it — so both land here
-  // rather than one being filed as a person. Compared against the sentinel
-  // itself so the two cannot drift apart.
-  const reserved = SYSTEM_CONTEXT.user?.id ?? "system";
-  if (actor.type === "system" || actor.id === reserved) {
-    return { type: "system", id: actor.id ?? reserved };
-  }
+  // `registerServices` awaits `initializePlugins` before `init.ts` reaches
+  // `runProdMigrationsIfEnabled`, so a plugin's `init()` hook writing content
+  // runs BEFORE pending migrations do. On an upgraded database that has not
+  // migrated yet, `activity_log` is still on its old shape, and an insert
+  // naming a column it does not have fails — a failure this recorder
+  // PROPAGATES, so it would take the plugin's init, and the boot, with it.
+  //
+  // The hazard belongs to any core column added to this table rather than to
+  // this one, so it is recorded here and fixed where the ordering is decided.
+  //
+  // A key is not exposed to it: it arrives on a request, over a transport,
+  // against a database that has finished booting.
+  if (actor.type === "system") return null;
 
-  // Every other kind has to name itself. A `user` or `apiKey` without an id is
-  // an actor this cannot attribute, which is a different case from one that is
-  // not a person.
-  if (!actor.id) return null;
+  // `SYSTEM_CONTEXT` carries the reserved user id `system`, so a seed or a
+  // migration with no transport actor to override it arrives as a USER actor.
+  // No account owns that id, and it is a system write wearing a user's shape —
+  // so it is refused for the reason above rather than filed as a person.
+  // Compared against the sentinel itself so the two cannot drift apart.
+  if (actor.id === SYSTEM_CONTEXT.user?.id) return null;
   return { type: actor.type, id: actor.id };
 }
 

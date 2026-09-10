@@ -513,13 +513,11 @@ describe("email provider activity", () => {
       }
     );
 
-    expect(logged).toHaveLength(2);
+    expect(logged).toHaveLength(1);
     expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
-    // The reserved id arrives as a USER actor and must not be filed as one.
-    expect(logged[1]).toMatchObject({ actorType: "system" });
   });
 
-  it("records the canonical system actor, which carries NO id", async () => {
+  it("records nothing for a system actor, in either shape it arrives in", async () => {
     // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
     // names no actor — imports, jobs, migrations, and any internal call that
     // simply did not pass one. Requiring an id would drop exactly those.
@@ -534,12 +532,11 @@ describe("email provider activity", () => {
       { type: "user", id: SYSTEM_CONTEXT.user?.id ?? "system" }
     );
 
-    expect(logged).toHaveLength(2);
-    expect(logged[0]).toMatchObject({ actorType: "system" });
-    expect(logged[1]).toMatchObject({ actorType: "system" });
-    // Still names an actor: the row's reference is NOT NULL, and two erased
-    // actors have to stay distinguishable.
-    expect(logged[0]?.userId).toBeTruthy();
+    // Refused on ORDERING grounds rather than on anything about the actor: a
+    // plugin's `init()` hook writes content BEFORE pending migrations run, so
+    // on an upgraded database the insert would name a column `activity_log`
+    // does not have yet — and this recorder propagates that failure into boot.
+    expect(logged).toHaveLength(0);
   });
 
   it("does not fail the mutation when the trail cannot be written", async () => {

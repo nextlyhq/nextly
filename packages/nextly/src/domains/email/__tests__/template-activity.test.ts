@@ -200,7 +200,7 @@ describe("email template activity", () => {
     expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
   });
 
-  it("records the system actor AS system, not as a person", async () => {
+  it("records nothing for the system actor", async () => {
     // Boot-time seeding resolves to a USER actor carrying the reserved id, and
     // no account owns it. Recording it as a user would attribute an internal
     // write to a person who does not exist, so the kind is rewritten rather
@@ -211,10 +211,9 @@ describe("email template activity", () => {
       type: "user" as const,
       id: system.id,
     });
-    expect(logged).toHaveLength(1);
-    expect(logged[0]).toMatchObject({ actorType: "system" });
-    // NOT a user: no account owns the reserved id, so filing it as a person
-    // would have the erasure read it as an already-deleted account.
-    expect(logged[0]).not.toMatchObject({ actorType: "user" });
+    // Refused on ordering grounds: a plugin `init()` hook writes before
+    // pending migrations run, so on an upgraded database the insert would name
+    // a column `activity_log` does not have yet and fail the boot.
+    expect(logged).toHaveLength(0);
   });
 });
