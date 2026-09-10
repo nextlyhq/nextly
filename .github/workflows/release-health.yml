@@ -53,6 +53,7 @@ jobs:
     outputs:
       unfinalized: ${{ steps.check.outputs.unfinalized }}
       headline: ${{ steps.check.outputs.headline }}
+      state: ${{ steps.check.outputs.state }}
 
     steps:
       - name: Checkout
@@ -63,6 +64,13 @@ jobs:
           # is anonymous. Making it private would turn every tag lookup into
           # "unknown" and this job into a daily exit 2, so restore the
           # credential in the same change.
+          # 🔴 Always the default branch, on every trigger. A `workflow_dispatch`
+          # from another branch or a tag would otherwise check that ref out, and
+          # `github.sha` would name it too, so the job would grade an unreleased
+          # branch manifest and file an upstream issue about a release `main`
+          # never declared. This workflow says it checks main; this is what
+          # makes that true.
+          ref: ${{ github.event.repository.default_branch || 'main' }}
           persist-credentials: false
           # Full history, because a tag is judged by the version its target
           # commit declares. A shallow clone cannot read a commit older than its
@@ -97,7 +105,10 @@ jobs:
           # workflow reads as an unfinalized release and files an issue about.
           # Separating the two is what the script's ref argument is for, and it
           # is why the checkout above fetches full history.
-          SUBJECT: ${{ github.event.workflow_run.head_sha || github.sha }}
+          SUBJECT: >-
+            ${{ github.event.workflow_run.head_sha
+                || github.event.repository.default_branch
+                || 'main' }}
         run: |
           set +e
           report=$(node scripts/release/check-finalized.mjs "$SUBJECT" 2>&1)
@@ -117,6 +128,11 @@ jobs:
               | awk '/check-finalized: FAILED/{seen=1; next} seen && NF {print; exit}' \
               | sed 's/^ *//')
             echo "headline=${headline}" >> "$GITHUB_OUTPUT"
+            # Which defect, not just that there is one. The checker prints this
+            # as its last line so it cannot displace the diagnosis above.
+            state=$(printf '%s\n' "$report" \
+              | awk -F= '/^check-finalized: state=/{print $2; exit}')
+            echo "state=${state:-unfinalized}" >> "$GITHUB_OUTPUT"
             {
               echo "## The release main declares is not finished"
               echo
@@ -147,7 +163,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEADLINE: ${{ needs.finalized.outputs.headline }}
+          STATE: ${{ needs.finalized.outputs.state }}
         run: |
+          # 🔴 The title names the defect the checker actually found. A single
+          # hard-coded sentence about a missing tag or release states a fact the
+          # check never established when the defect is an incomplete npm train
+          # or a channel tag left behind, and sends whoever reads it to the
+          # wrong layer.
+          case "$STATE" in
+            partial)
+              title="A release published only some of its packages" ;;
+            channel-stale)
+              title="A published release is not what the channel tag resolves to" ;;
+            mistagged)
+              title="A release tag names a different version" ;;
+            unfinalized)
+              title="A published release is missing its tag or GitHub Release" ;;
+            *)
+              title="A release main declares is not finished" ;;
+          esac
+
           # `// empty` keeps the empty-result case a genuinely empty string
           # rather than depending on gh suppressing a null for us, so the
           # branch below turns on the presence of an issue number alone.
@@ -155,13 +190,13 @@ jobs:
             --label ci-release-health-failure --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "${{ github.repository }}" \
-              --body "$(printf 'Still unfinished: %s\n\nRun: %s' "$HEADLINE" "$RUN_URL")"
+              --body "$(printf 'Still unfinished (%s): %s\n\nRun: %s' "$STATE" "$HEADLINE" "$RUN_URL")"
           else
             # printf keeps the multi-line body inside this YAML block scalar;
             # a raw multi-line string here would dedent and break the file.
             body=$(printf '%s\n\nA release is three facts: the packages are on the registry, a git tag points at the commit they were built from, and a GitHub Release describes it. Publishing writes the first; a later step writes the other two, and it is skipped when verification fails. A release left that way is invisible - npm serves it, git does not know it happened.\n\nThe run prints which artifact is missing and the remedy for that specific case, because re-running does not repair every one of them: %s' "$HEADLINE" "$RUN_URL")
             gh issue create --repo "${{ github.repository }}" \
-              --title "A published release is missing its tag or GitHub Release" \
+              --title "$title" \
               --label ci-release-health-failure \
               --body "$body"
           fi

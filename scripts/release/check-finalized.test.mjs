@@ -225,6 +225,28 @@ describe("asking GitHub about a release", () => {
     );
   });
 
+  it("is not-prerelease when an alpha release was never marked as one", () => {
+    /*
+     * 🔴 A prerelease that is not marked as one takes the Latest badge, which
+     * `release.yml` routes on the version string precisely to prevent. A
+     * release repaired by hand is where that flag goes missing.
+     */
+    expect(
+      releaseState(
+        "v0.0.2-alpha.65",
+        () => '{"tagName":"v0.0.2-alpha.65","isDraft":false,"isPrerelease":false}'
+      )
+    ).toBe("not-prerelease");
+  });
+
+  it("is present when a STABLE release is not marked prerelease", () => {
+    // The control: a stable version is supposed to be Latest, so the rule must
+    // turn on the version rather than on the flag alone.
+    expect(
+      releaseState("v1.0.0", () => '{"tagName":"v1.0.0","isDraft":false,"isPrerelease":false}')
+    ).toBe("present");
+  });
+
   it("is absent when the query says there is no such release", () => {
     const run = () => {
       const error = new Error("exit 1");
@@ -321,6 +343,24 @@ describe("grading how much of the train shipped", () => {
     expect(state.channelStale[0]).toContain(PRIOR);
   });
 
+  it("does not judge a historical release by today's channel tag", async () => {
+    /*
+     * 🔴 `alpha` legitimately advances, so an older release fails a
+     * present-time comparison for the reason it is supposed to. Judging one
+     * anyway produced a remedy telling the maintainer to move consumers BACK to
+     * the old version, which is worse than saying nothing at all.
+     */
+    const state = await publishState(
+      manifest,
+      async () => staleTag,
+      PRE,
+      { assertChannel: false }
+    );
+
+    expect(state.kind).toBe("all");
+    expect(state.channelStale).toEqual([]);
+  });
+
   it("does not count a package awaiting its first publish as missing", async () => {
     // 🔴 `@nextlyhq/eslint-plugin` was added to the repository declaring
     // `0.0.2-alpha.58` while npm held only its `0.0.0` placeholder, and first
@@ -362,6 +402,60 @@ describe("grading how much of the train shipped", () => {
     const state = await publishState(manifest, async () => null, PRE);
     expect(state.kind).toBe("none");
     expect(state.pending).toEqual(manifest.map(entry => entry.name));
+  });
+});
+
+describe("a release that is not marked as a prerelease", () => {
+  it("fails, and prescribes taking the Latest badge off it", () => {
+    const result = verdict({
+      version: VERSION,
+      publish: { kind: "all", published: 20, total: 20, pending: [], channelStale: [] },
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "not-prerelease",
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.remedy).toBe("mark-prerelease");
+    expect(remedyFor(result, VERSION)).toContain("--prerelease --latest=false");
+  });
+});
+
+describe("a mistagged release, by what its GitHub Release is", () => {
+  const mistagged = (release) =>
+    verdict({
+      version: VERSION,
+      publish: { kind: "all", published: 20, total: 20, pending: [], channelStale: [] },
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: "0.0.2-alpha.62" },
+      release,
+    });
+
+  it("publishes the draft after the retag, because a re-run will not", () => {
+    // `release.yml` gates finalization on `gh release view` succeeding, and a
+    // draft satisfies it, so retag-then-rerun leaves the draft where it was.
+    const result = mistagged("draft");
+    expect(result.remedy).toBe("retag-then-publish-draft");
+    expect(remedyFor(result, VERSION)).toContain("--draft=false");
+  });
+
+  it("marks the prerelease after the retag when the badge is wrong", () => {
+    const result = mistagged("not-prerelease");
+    expect(result.remedy).toBe("retag-then-mark-prerelease");
+    expect(remedyFor(result, VERSION)).toContain("--prerelease --latest=false");
+  });
+
+  it("uses a forced local tag in every retag, whatever the release state", () => {
+    /*
+     * 🔴 Plain `git tag -a` ABORTS with "tag already exists" when the clone has
+     * it, which is the normal state after fetching the bad tag. Reproduced. It
+     * fails AFTER the remote tag has been deleted, leaving no tag at all.
+     */
+    for (const release of ["present", "draft", "not-prerelease", "absent", "unknown"]) {
+      const text = remedyFor(mistagged(release), VERSION);
+      expect(text, release).toContain(`git tag -f -a ${tagFor(VERSION)}`);
+      expect(text, release).not.toMatch(/git tag -a /);
+    }
   });
 });
 
