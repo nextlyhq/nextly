@@ -69,7 +69,11 @@ describe("ownerSafetyNetApplies", () => {
       ownerSafetyNetApplies({
         ...BASE,
         isSuperAdmin: true,
-        scope: { actorType: "user" },
+        // `permissions` is required on the scope and empty is what a session
+        // carries: grants are an API key's, and this case exists to assert a
+        // session is not read as one. Spelled as the other session fixtures in
+        // this package spell it.
+        scope: { actorType: "user", permissions: [] },
       })
     ).toBe(false);
   });
