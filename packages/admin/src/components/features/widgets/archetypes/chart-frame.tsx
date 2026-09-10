@@ -140,8 +140,14 @@ export function ChartFrame({
               </tr>
             </thead>
             <tbody>
+              {/* Row separators at FULL strength, matching the shared table
+                  primitive. A separator in a data table is structural rather
+                  than decorative — it is what tells a reader which number
+                  belongs to which row — so it carries the contrast a reader
+                  needs. Drawn at half alpha it measured 1.11:1 against the page
+                  surface, where 3:1 is required. */}
               {rows.map(row => (
-                <tr key={row.key} className="border-b border-border/50">
+                <tr key={row.key} className="border-b border-border">
                   {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
                   <th

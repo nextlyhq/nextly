@@ -65,14 +65,36 @@ A route may give up part of its own authority for one call. Use `narrowScope`;
 the scope's arrays are frozen, so editing them is refused:
 
 ```ts
-import { narrowScope } from "@nextlyhq/plugin-sdk";
+import { definePlugin, narrowScope } from "@nextlyhq/plugin-sdk";
 
-const readOnly = narrowScope(ctx.authenticatedScope!, g => g.action === "read");
+definePlugin({
+  name: "@acme/nextly-plugin-reports",
+  version: "0.1.0",
+  nextly: ">=0.0.2",
+  contributes: {
+    routes: [
+      {
+        method: "PATCH",
+        path: "/posts/:id",
+        handler: async (req, ctx) => {
+          const id = ctx.params.id;
+          const data = (await req.json()) as Record<string, unknown>;
 
-await ctx.services.collections.updateEntry("posts", id, data, {
-  as: "user",
-  user: ctx.user ?? undefined,
-  authenticatedScope: readOnly, // refused: the scope no longer holds the write
+          const readOnly = narrowScope(
+            ctx.authenticatedScope!,
+            g => g.action === "read"
+          );
+
+          await ctx.services.collections.updateEntry("posts", id, data, {
+            as: "user",
+            user: ctx.user ?? undefined,
+            authenticatedScope: readOnly, // refused: the scope no longer holds the write
+          });
+          return Response.json({ ok: true });
+        },
+      },
+    ],
+  },
 });
 ```
 
