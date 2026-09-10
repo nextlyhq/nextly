@@ -44,10 +44,8 @@
  * @module domains/widgets/onboarding
  */
 
-import type { ReadCaller } from "../../services/dashboard/readable-resources";
-
+import type { ConditionProbe } from "./condition-probe";
 import type { OnboardingStep } from "./onboarding-steps";
-import { readableCollectionSlugs, readerHasContent } from "./reader-content";
 
 /**
  * Every step, with the reader's progress through it.
@@ -62,13 +60,13 @@ import { readableCollectionSlugs, readerHasContent } from "./reader-content";
  * the first-entry step is outstanding.
  */
 export async function onboardingSteps(
-  caller: ReadCaller
+  probe: ConditionProbe
 ): Promise<OnboardingStep[]> {
-  const slugs = await readableCollectionSlugs(caller);
+  const slugs = await probe.readableSlugs();
   // Short-circuits inside, and skipped entirely where no collection exists:
   // with nothing to read there is no row to find, and the walk would be a
   // guaranteed-empty pass over an empty list.
-  const hasContent = slugs.length > 0 && (await readerHasContent(caller));
+  const hasContent = slugs.length > 0 && (await probe.hasContent());
 
   return [
     // True by construction: an unauthenticated caller never reaches this.
@@ -93,8 +91,8 @@ export async function onboardingSteps(
  * request that is about to make the same one.
  */
 export async function onboardingIsIncomplete(
-  caller: ReadCaller
+  probe: ConditionProbe
 ): Promise<boolean> {
-  const steps = await onboardingSteps(caller);
+  const steps = await onboardingSteps(probe);
   return steps.some(step => !step.complete);
 }

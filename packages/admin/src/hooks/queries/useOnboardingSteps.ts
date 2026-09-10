@@ -20,6 +20,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isOnboardingStepId, type OnboardingStepId } from "nextly/config";
 import { useEffect, useRef } from "react";
 
+import { useSchemaUpdateInvalidation } from "@admin/hooks/useSchemaUpdateInvalidation";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 
 import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
@@ -63,19 +64,50 @@ export interface UseOnboardingStepsResult {
   isUnavailable: boolean;
 }
 
-/** The steps this build can draw, in the order the host sent them. */
-function readSteps(value: unknown): OnboardingStepState[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((raw): OnboardingStepState[] => {
-    if (typeof raw !== "object" || raw === null) return [];
-    const { id, complete } = raw as { id?: unknown; complete?: unknown };
-    if (!isOnboardingStepId(id) || typeof complete !== "boolean") return [];
-    return [{ id, complete }];
-  });
+/**
+ * The steps this build can draw, and whether anything was left out.
+ *
+ * 🔴 The count matters as much as the rows. Dropping an unreadable row keeps
+ * the card from crashing, and on its own it introduces a worse failure: a newer
+ * server sending an INCOMPLETE step this build cannot name would leave every
+ * remaining row complete, so the card would report 100%, announce itself
+ * finished, and ask the host to drop it -- while the host went on offering it
+ * for the step that was dropped. A checklist claiming completion it cannot see
+ * is the one thing worse than one that cannot draw.
+ */
+function readSteps(value: unknown): {
+  steps: OnboardingStepState[];
+  rejected: boolean;
+} {
+  if (!Array.isArray(value)) return { steps: [], rejected: false };
+  const steps: OnboardingStepState[] = [];
+  let rejected = false;
+  for (const raw of value) {
+    const row = readStep(raw);
+    if (row) steps.push(row);
+    else rejected = true;
+  }
+  return { steps, rejected };
+}
+
+/** One row, or nothing when this build cannot describe it. */
+function readStep(raw: unknown): OnboardingStepState | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const { id, complete } = raw as { id?: unknown; complete?: unknown };
+  if (!isOnboardingStepId(id) || typeof complete !== "boolean")
+    return undefined;
+  return { id, complete };
 }
 
 export function useOnboardingSteps(): UseOnboardingStepsResult {
   const queryClient = useQueryClient();
+  // Two of the three steps are answered from the collection registry, so a
+  // schema change moves them. The layout query already subscribes to this; this
+  // one did not, so creating a collection in another tab -- or through a
+  // code-first reload -- left the card still saying "Create a collection" until
+  // the window regained focus.
+  useSchemaUpdateInvalidation(ONBOARDING_STEPS_KEY);
+
   const query = useQuery<OnboardingResponse>({
     queryKey: ONBOARDING_STEPS_KEY,
     queryFn: () =>
@@ -88,10 +120,12 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
   // lockstep only until someone runs a newer server against an older admin. An
   // id this build cannot draw is DROPPED rather than rendered, because the
   // alternative is a row built from an absent presentation entry.
-  const steps = readSteps(query.data?.steps);
+  const { steps, rejected } = readSteps(query.data?.steps);
   const completedCount = steps.filter(step => step.complete).length;
   const totalCount = steps.length;
-  const finished = totalCount > 0 && completedCount === totalCount;
+  // A rejected row means the checklist this build can see is not the checklist
+  // the host has, so completeness cannot be concluded from what is left.
+  const finished = !rejected && totalCount > 0 && completedCount === totalCount;
 
   // Finishing the last step is the moment the card stops being offered, and
   // the layout query neither polls nor refetches except on focus -- so without
@@ -111,6 +145,9 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
     completedCount,
     totalCount,
     isPending: query.isPending,
-    isUnavailable: query.isError,
+    // A row this build could not read leaves the card unable to describe the
+    // reader's progress, which is the same position a failed request leaves it
+    // in -- and both are better said than guessed at.
+    isUnavailable: query.isError || rejected,
   };
 }
