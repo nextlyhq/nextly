@@ -592,12 +592,13 @@ describe("the cards that draw a picture", () => {
     expect(widgets.map(w => w.archetype)).not.toContain("timeseries");
   });
 
-  it("breaks down by status ONLY where the collection has one", () => {
+  it("breaks down by status ONLY where the LIFECYCLE is enabled", () => {
     const without = collectionWidgets([charting()]).map(w => w.archetype);
     expect(without).not.toContain("bars");
 
     const breakdown = collectionWidgets([
       charting({
+        lifecycleStatus: true,
         fields: [
           { name: "id", type: "string" },
           { name: "status", type: "string" },
@@ -611,6 +612,28 @@ describe("the cards that draw a picture", () => {
       groupBy: "status",
       status: "all",
     });
+  });
+
+  it("gives NO breakdown for an ordinary field that happens to be called status", () => {
+    // 🔴 The schema permits a user field named `status` with the lifecycle
+    // disabled. Read by NAME, this card was generated for it and titled "by
+    // status", described as the split "between draft and published", over a
+    // column holding whatever that author's field holds -- copy asserting a
+    // meaning the data does not have.
+    //
+    // The capability is the question; the field name is a proxy for it, and the
+    // cases that motivate the check are the ones that violate the proxy.
+    const widgets = collectionWidgets([
+      charting({
+        lifecycleStatus: false,
+        fields: [
+          { name: "id", type: "string" },
+          { name: "status", type: "string" },
+          { name: "createdAt", type: "date" },
+        ],
+      }),
+    ]);
+    expect(widgets.map(w => w.archetype)).not.toContain("bars");
   });
 
   it("gives NO breakdown to a source that does not answer groupBy", () => {

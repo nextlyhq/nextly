@@ -67,7 +67,7 @@ describe("the bars archetype", () => {
     expect(screen.getAllByText("(none)").length).toBeGreaterThan(0);
   });
 
-  it("tells an EMPTY value apart from a missing one", () => {
+  it("tells an EMPTY value apart from a missing one, in BOTH mediums", () => {
     // Two different answers: the column holds nothing, and the column holds a
     // blank string. `??` catches only the first, so an empty string rendered as
     // an empty label -- a bar and a table row with no name at all.
@@ -78,12 +78,40 @@ describe("the bars archetype", () => {
       ])
     );
     const table = screen.getByRole("table");
+    // Addressed by ACCESSIBLE NAME, which is what a screen reader announces.
+    // Asserting the drawn text would pass while both rows spoke the same words.
     expect(
-      within(table).getByRole("row", { name: /\(none\)/ })
+      within(table).getByRole("row", { name: /no value stored/ })
     ).toBeInTheDocument();
     expect(
-      within(table).getByRole("row", { name: /\(empty\)/ })
+      within(table).getByRole("row", { name: /an empty value/ })
     ).toBeInTheDocument();
+  });
+
+  it("does not SPEAK a placeholder the same way as a value spelled like it", () => {
+    // 🔴 The distinction was carried by italic and muted colour, which a screen
+    // reader does not announce -- so an empty bucket and a stored "(empty)"
+    // were two rows with one spoken name, and the readers who most need the
+    // difference were the ones not given it.
+    //
+    // Exact separation is not achievable: no string can be reserved from a
+    // column of arbitrary text, so a value spelled like the description would
+    // still coincide. What is asserted is that the placeholder now SAYS what it
+    // is rather than relying on a colour.
+    draw(
+      grouped([
+        { value: "", count: 5 },
+        { value: "(empty)", count: 8 },
+      ])
+    );
+    const table = screen.getByRole("table");
+    const placeholder = within(table).getByRole("row", {
+      name: /an empty value/,
+    });
+    const literal = within(table).getByRole("row", { name: /\(empty\)/ });
+    expect(placeholder).not.toBe(literal);
+    expect(within(placeholder).getByText("5")).toBeInTheDocument();
+    expect(within(literal).getByText("8")).toBeInTheDocument();
   });
 
   it("keeps a stored value that READS like a placeholder as its own row", () => {

@@ -65,28 +65,32 @@ A route may give up part of its own authority for one call. Use `narrowScope`;
 the scope's arrays are frozen, so editing them is refused:
 
 ```ts
-import { narrowScope } from "@nextlyhq/plugin-sdk";
-import type { PluginRoute } from "@nextlyhq/plugin-sdk";
+import { narrowScope, type PluginRoute } from "@nextlyhq/plugin-sdk";
 
 const route: PluginRoute = {
   method: "PATCH",
   path: "/posts/:id",
-  requiredPermission: "update-posts",
   handler: async (req, ctx) => {
+    // A SESSION caller carries no scope at all, so there is nothing to narrow
+    // and nothing to give up. Guard before narrowing: `narrowScope` reads the
+    // grants off the scope, so handing it `undefined` is a crash rather than a
+    // refusal — and the refusal is what you meant.
+    const scope = ctx.authenticatedScope;
+    if (scope === undefined) {
+      return Response.json({ error: "this route requires an API key" }, {
+        status: 403,
+      });
+    }
+
     const id = ctx.params.id;
     const data = (await req.json()) as Record<string, unknown>;
-
-    const readOnly = narrowScope(
-      ctx.authenticatedScope!,
-      g => g.action === "read"
-    );
+    const readOnly = narrowScope(scope, g => g.action === "read");
 
     await ctx.services.collections.updateEntry("posts", id, data, {
       as: "user",
       user: ctx.user ?? undefined,
       authenticatedScope: readOnly, // refused: the scope no longer holds the write
     });
-
     return Response.json({ ok: true });
   },
 };
