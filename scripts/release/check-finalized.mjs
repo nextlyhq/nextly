@@ -685,11 +685,21 @@ const STEP_TEXT = {
  * says both things at once, and in that window the expected tag is derived from
  * one claim and compared against the other:
  *
+ *     no file,     manifests stable       outside         -> assert
+ *     mode "exit", manifests -alpha.N     leaving         -> skip
  *     tag "alpha", manifests STABLE       entering        -> skip
  *     tag "alpha", manifests -alpha.N     in pre mode     -> assert
  *     tag "beta",  manifests -alpha.N     re-entered      -> skip
- *     mode "exit", manifests -alpha.N     leaving         -> skip
- *     no file,     manifests stable       outside         -> assert
+ *     tag "next",  manifests -next.1.N    nested cycle    -> skip
+ *     tag missing, any manifests          malformed       -> UNANSWERABLE
+ *     mode unknown, any manifests         malformed       -> UNANSWERABLE
+ *
+ * Three outcomes, not two. Six findings arrived on this rule one corner at a
+ * time, and every one of them was a state that fell through to "do not assert",
+ * which switches the check off and reads exactly like a check that ran and
+ * found nothing wrong. So the modes are named and anything else is refused:
+ * `channelDecision` carries the refusal out as exit 2, which is what every
+ * other unestablished answer here does.
  *
  * Agreement is about the prerelease IDENTIFIER, not merely about whether there
  * is one. Changesets allows pre mode to be exited and re-entered under a
@@ -711,23 +721,45 @@ const STEP_TEXT = {
  */
 export function shouldAssertChannel(currentTrain, pre, version) {
   if (!currentTrain) return false;
-  // Outside prerelease mode, and mid-exit, the only agreeable version is a
-  // stable one: `getExpectedDistTag` answers `latest` for both.
-  if (pre?.mode !== "pre") return firstPrereleaseId(version) === undefined;
+
+  // No file at all: the repository is not in prerelease mode and never said
+  // otherwise, so the only agreeable version is a stable one.
+  if (pre === null) return firstPrereleaseId(version) === undefined;
+
   /*
-   * 🔴 Prerelease mode with no usable tag is UNANSWERABLE, not "no". A merge or
-   * a hand edit is enough to leave `{ "mode": "pre" }` behind, and a null tag
-   * compares unequal to every version, so returning false there would switch
-   * the channel check off and look exactly like a check that ran and found
-   * nothing wrong. `channelDecision` turns this into exit 2, which is what
-   * every other unestablished answer here does.
+   * 🔴 Everything below is a TOTAL reading of a file that exists. Six review
+   * findings arrived on this rule one shape at a time, and every one of them
+   * was a corner of the state space answered by falling through to "do not
+   * assert" — which switches the check off and reads exactly like a check that
+   * ran and found nothing wrong. So the three modes are named, and anything
+   * else is refused rather than assumed.
    */
+  if (pre.mode === "exit") {
+    // Mid-exit: the manifests still carry the last prerelease until the Version
+    // PR lands, and `readPreState` answers null here, so `latest` is expected.
+    return firstPrereleaseId(version) === undefined;
+  }
+
+  if (pre.mode !== "pre") {
+    // A missing mode, or one this checker does not know, is a file whose
+    // meaning cannot be established. `channelDecision` turns it into exit 2.
+    throw new Error(
+      `.changeset/pre.json declares mode ${JSON.stringify(pre.mode)}, which ` +
+        "this check does not know how to read, so the channel this release " +
+        "belongs to cannot be established."
+    );
+  }
+
   if (typeof pre.tag !== "string" || pre.tag.trim() === "") {
+    // Prerelease mode with no tag. A null tag compares unequal to every
+    // version, so answering "do not assert" would be the silent switch-off
+    // again. A merge or a hand edit is enough to produce it.
     throw new Error(
       ".changeset/pre.json declares prerelease mode with no usable tag, so " +
         "the channel this release belongs to cannot be established."
     );
   }
+
   return isPrereleaseOfTag(version, pre.tag);
 }
 

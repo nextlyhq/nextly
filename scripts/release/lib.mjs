@@ -109,7 +109,16 @@ export function isPrereleaseOfTag(version, tag) {
   const separator = withoutBuildMetadata.indexOf("-");
   if (separator === -1) return false;
   const identifiers = withoutBuildMetadata.slice(separator + 1);
-  return identifiers === tag || identifiers.startsWith(`${tag}.`);
+  if (!identifiers.startsWith(`${tag}.`)) return false;
+  /*
+   * 🔴 Exactly ONE counter after the tag, not merely the tag as a prefix.
+   * `changeset version` in pre mode writes `<version>-<tag>.<n>`, so a `next`
+   * cycle produces `-next.0` and a `next.1` cycle produces `-next.1.0`. A
+   * prefix test alone reads that second one as an artifact of `next` too, and
+   * a cycle exited under `next.1` and re-entered under `next` would then have
+   * its old builds accepted as the new channel's.
+   */
+  return /^\d+$/.test(identifiers.slice(tag.length + 1));
 }
 
 /**

@@ -972,6 +972,41 @@ describe("when the channel tag is worth asserting", () => {
     expect(new Set(answers).size).toBe(2);
   });
 
+  it("refuses a mode it does not recognise, rather than reading it as exit", () => {
+    /*
+     * 🔴 The last corner. A `pre.json` with no `mode`, or one this checker has
+     * never heard of, used to fall through to the not-pre branch and be read as
+     * a repository outside prerelease mode. With prerelease manifests that
+     * answers "do not assert", and the check switches itself off in the state
+     * where it is most likely to be needed.
+     */
+    for (const mode of [null, undefined, "exiting", "", 3]) {
+      expect(() =>
+        shouldAssertChannel(true, { mode, tag: "alpha" }, VERSION)
+      ).toThrow(/does not know how to read/);
+    }
+
+    // The control: the two modes it DOES know are still read, not refused.
+    expect(shouldAssertChannel(true, IN_ALPHA, VERSION)).toBe(true);
+    expect(shouldAssertChannel(true, LEAVING, VERSION)).toBe(false);
+  });
+
+  it("does not accept a NESTED cycle's build for the shorter tag", () => {
+    /*
+     * 🔴 `changeset version` writes `<version>-<tag>.<n>`, so `next` produces
+     * `-next.0` and `next.1` produces `-next.1.0`. A prefix test alone reads
+     * the second as an artifact of `next` as well, and a cycle exited under
+     * `next.1` and re-entered under `next` would have its old builds accepted
+     * as the new channel's.
+     */
+    const NEXT = { mode: "pre", tag: "next" };
+
+    expect(shouldAssertChannel(true, NEXT, "1.2.3-next.0")).toBe(true);
+    expect(shouldAssertChannel(true, NEXT, "1.2.3-next.1.0")).toBe(false);
+    // And a counter has to BE a counter.
+    expect(shouldAssertChannel(true, NEXT, "1.2.3-next.rc")).toBe(false);
+  });
+
   it("refuses prerelease mode with no usable tag, rather than answering no", () => {
     /*
      * 🔴 `{ "mode": "pre" }` survives a merge or a hand edit, and a null tag
