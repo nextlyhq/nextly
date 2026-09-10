@@ -1106,7 +1106,10 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const body = source.slice(from, source.indexOf("\n}\n", from));
     expect(body).toContain("function unacceptedFailures");
     expect(body).toContain("failingModes(r)");
-    expect(body).not.toMatch(/ratio\s*<\s*r\.need/);
+    // Any comparison against the threshold, not the one spelling that was
+    // there when this was written. Rejecting `<` alone let `<=` through, which
+    // is a different predicate reported by the same body.
+    expect(body).not.toMatch(/r\.need/);
   });
 
   it("reports a mode exactly at its threshold as passing", () => {
@@ -1115,6 +1118,21 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio("border-border/50");
     const exact = { ...r, modes: [{ ...r.modes[0], ratio: r.need }] };
     expect(failingModes(exact)).toEqual([]);
+  });
+
+  it("reports nothing at the threshold through the SCAN's own path too", () => {
+    // The control above calls `failingModes` directly, so it says nothing
+    // about the function the scan actually asks. `unacceptedFailures` reading
+    // `<=` against its own copy of the threshold passes every source check and
+    // every message control, and reports an exact-threshold mode as a
+    // violation — a red on a utility that meets its target.
+    const combo = "border-border/50";
+    const r = worstRatio(combo);
+    const exact = { ...r, modes: [{ ...r.modes[0], ratio: r.need }] };
+    expect(unacceptedFailures(combo, exact)).toEqual([]);
+    // The other arm, so this cannot be satisfied by a function that reports
+    // nothing whatever it is handed.
+    expect(unacceptedFailures(combo, r)).toEqual(failingModes(r));
   });
 
   it("puts no alpha on the control boundary, in any utility", () => {
