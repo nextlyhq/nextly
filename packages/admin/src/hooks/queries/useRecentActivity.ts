@@ -23,6 +23,14 @@ import type {
 
 interface ActivityLogEntry {
   id: string;
+  /**
+   * What KIND of caller `userId` refers to.
+   *
+   * Optional because a server older than this admin does not send it. The
+   * display helper decides what an absent value means, so this surface and any
+   * other reading the feed cannot disagree about it.
+   */
+  actorType?: "user" | "apiKey" | "system";
   userId: string;
   /** Null once the actor's account was deleted and their identity erased. */
   userName: string | null;

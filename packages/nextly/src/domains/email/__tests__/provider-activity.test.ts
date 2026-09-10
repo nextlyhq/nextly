@@ -16,6 +16,7 @@ import { container } from "../../../di/container";
 import { getCoreSchema } from "../../../schemas";
 import type { LogActivityInput } from "../../../services/dashboard/activity-log-service";
 import type { Logger } from "../../../services/shared";
+import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import { SYSTEM_CONTEXT } from "../../../shared/types";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../provider-activity";
@@ -482,12 +483,18 @@ describe("email provider activity", () => {
     expect(logged).toHaveLength(0);
   });
 
-  it("records nothing for a write with no signed-in actor", async () => {
-    // A seed, a migration or an API key carries no account. The actor column is
-    // a user reference whose erasure state is answered against the accounts
-    // table, so an id with no account behind it files as an already-erased
-    // identity — a worse record than none.
+  it("records every actor that can name itself, as what it is", async () => {
+    // A seed, a migration or an API key carries no account, and each used to
+    // record NOTHING: the row's only identity column was read as a user
+    // reference, so an id with no account behind it filed as an already-erased
+    // identity. The kind is on the row now, so each is recorded as itself and a
+    // credential change stops being invisible.
+    //
+    // A write with NO actor at all still records nothing — there is no identity
+    // to attribute it to, which is a different case from an identity that is
+    // not a person.
     await service.createProvider(INPUT);
+    expect(logged).toHaveLength(0);
     await service.createProvider(
       { ...INPUT, name: "By key" },
       {
@@ -501,6 +508,25 @@ describe("email provider activity", () => {
         type: "user",
         id: SYSTEM_CONTEXT.user?.id ?? "system",
       }
+    );
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
+  });
+
+  it("records nothing for the canonical system actor", async () => {
+    // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
+    // names no actor, and those run while the schema is being created. This
+    // recorder's failures PROPAGATE, so a trail insert against a table that
+    // does not exist yet would fail the seed that was creating it.
+    //
+    // Both spellings, because they arrive by different routes: the canonical
+    // actor carries no id at all, and a seed passing SYSTEM_CONTEXT arrives as
+    // a USER actor holding the reserved id.
+    await service.createProvider({ ...INPUT, name: "By a job" }, SYSTEM_ACTOR);
+    await service.createProvider(
+      { ...INPUT, name: "By a seed" },
+      { type: "user", id: SYSTEM_CONTEXT.user?.id ?? "system" }
     );
 
     expect(logged).toHaveLength(0);
