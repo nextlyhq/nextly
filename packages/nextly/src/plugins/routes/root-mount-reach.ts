@@ -25,13 +25,11 @@
  * @module plugins/routes/root-mount-reach
  */
 
+import { PLUGIN_NAMESPACE_SEGMENT } from "./route-path";
 import { splitPath } from "./route-pattern";
 
 /** The first segment the auth router claims, as its own dispatcher reads it. */
 const AUTH_SEGMENT = "auth";
-
-/** The prefix the namespaced mount owns, as `pluginRouteFullPath` builds it. */
-const PLUGIN_NAMESPACE_SEGMENT = "plugins";
 
 /**
  * Why a root path is unreachable, or `null` when it is reachable.

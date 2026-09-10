@@ -8,7 +8,7 @@ import {
 } from "./route-error";
 import { pluginRouteFullPath } from "./route-path";
 import { literalCount, patternsOverlap, splitPath } from "./route-pattern";
-import type { PluginRoute } from "./route-types";
+import type { PluginRoute, PluginRouteMount } from "./route-types";
 
 /** A route collected from a plugin, namespaced and ready to register. */
 export interface CollectedRoute {
@@ -32,6 +32,8 @@ export interface CollectedRoute {
 /** A pattern already claimed, kept whole so overlap can be asked of the pair. */
 interface ClaimedPattern {
   method: PluginRoute["method"];
+  /** Which pass would match it. Two mounts are never matched together. */
+  mount: PluginRouteMount;
   segments: string[];
   literals: number;
   owner: string;
@@ -66,6 +68,13 @@ function assertPathUsable(pluginName: string, route: PluginRoute): void {
  * with more literals. It is a collision when they overlap AND carry the same
  * number of literals, which is exactly when that tie-break has nothing to
  * choose on and registration order decides.
+ *
+ * Asked WITHIN one mount, because that is the only place the ambiguity can
+ * arise: the registry matches each pass separately, so two patterns under
+ * different mounts never compete for one request even when they overlap.
+ * `/plugins/foo/bar/:id` and a root `/:scope/foo/bar/baz` do overlap, and
+ * refusing that pair at boot would reject a root route that answers
+ * `/custom/foo/bar/baz` perfectly well and never contests the namespaced pass.
  */
 function assertUnclaimed(
   seen: readonly ClaimedPattern[],
@@ -75,6 +84,7 @@ function assertUnclaimed(
   const clash = seen.find(
     other =>
       other.method === claim.method &&
+      other.mount === claim.mount &&
       other.literals === claim.literals &&
       patternsOverlap(other.segments, claim.segments)
   );
@@ -96,14 +106,14 @@ export function collectPluginRoutes(
     if (plugin.enabled === false) continue;
     for (const route of plugin.contributes?.routes ?? []) {
       assertPathUsable(plugin.name, route);
-      const fullPath = pluginRouteFullPath(
-        plugin.name,
-        route.path,
-        route.mount
-      );
+      // Resolved once, so the claim is checked against the same mount the
+      // registry will file it under.
+      const mount = route.mount ?? "plugin";
+      const fullPath = pluginRouteFullPath(plugin.name, route.path, mount);
       const segments = splitPath(fullPath);
       const claim: ClaimedPattern = {
         method: route.method,
+        mount,
         segments,
         literals: literalCount(segments),
         owner: plugin.name,

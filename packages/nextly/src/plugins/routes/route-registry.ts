@@ -1,7 +1,7 @@
 import type { PluginContext } from "../plugin-context";
 
 import { pluginRouteFullPath } from "./route-path";
-import { literalCount, matchPattern, splitPath } from "./route-pattern";
+import { selectMostSpecific, splitPath } from "./route-pattern";
 import type { PluginRoute, RouteMethod } from "./route-types";
 
 /**
@@ -64,39 +64,32 @@ export class PluginRouteRegistry {
    * before the built-in router, root routes only after it has declined. Matching
    * both at once would put a plugin's root route ahead of the core route it
    * shares a path with, which is the one thing this must not allow.
+   *
+   * Which of several matches wins is {@link selectMostSpecific}'s to say, not
+   * this method's: the boot predicate has to reach the same route from the
+   * declarations alone, and it can only do that if the rule is somewhere both
+   * can read.
    */
   match(
     method: string,
     path: string,
     mount: "plugin" | "root"
   ): RouteMatch | null {
-    const pathSegments = splitPath(path);
-    let best: { match: RouteMatch; literals: number } | null = null;
-    for (const entry of this.routes) {
-      if (entry.mount !== mount) continue;
-      if (entry.method !== method) continue;
-      const params = matchPattern(entry.segments, pathSegments);
-      if (params === null) continue;
-      // The tie-break when more than one pattern matches: the most literal
-      // wins. `/items/count` and `/items/:id` both answer `/items/count`, and
-      // without a rule the winner is whichever plugin registered first, which
-      // is registration order dressed up as routing.
-      const literals = literalCount(entry.segments);
-      // Kept rather than returned: a later pattern may be more specific, and
-      // returning the first match is what made registration order the rule.
-      if (best === null || literals > best.literals) {
-        best = {
-          literals,
-          match: {
-            pluginName: entry.pluginName,
-            route: entry.route,
-            baseCtx: entry.baseCtx,
-            params,
-          },
-        };
-      }
-    }
-    return best?.match ?? null;
+    const selected = selectMostSpecific(
+      this.routes.filter(
+        entry => entry.mount === mount && entry.method === method
+      ),
+      entry => entry.segments,
+      splitPath(path)
+    );
+    if (selected === null) return null;
+    const { candidate, params } = selected;
+    return {
+      pluginName: candidate.pluginName,
+      route: candidate.route,
+      baseCtx: candidate.baseCtx,
+      params,
+    };
   }
 
   list(): RegisteredRoute[] {

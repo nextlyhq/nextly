@@ -128,9 +128,13 @@ import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
-import { runPluginRoute } from "./plugins/routes/dispatch";
+import {
+  pluginRouteAuthRequired,
+  runPluginRoute,
+} from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
-import { shouldRegisterPluginRoutes } from "./plugins/routes/should-register";
+import type { PluginRouteMount } from "./plugins/routes/route-types";
+import { pluginRouteBootDecision } from "./plugins/routes/should-register";
 import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
@@ -1032,7 +1036,8 @@ async function resolveAuthorization(
  * Handle service requests with authentication and authorization
  */
 /**
- * Register plugin routes before asking whether one matches, when there are any.
+ * One mount's pass: the answer a plugin route gives this request, or `null`
+ * when none of that mount's routes claims it.
  *
  * Plugin routes are registered during service initialisation, and that is lazy:
  * an app wired through `createDynamicHandlers({ config })` has an empty registry
@@ -1040,38 +1045,45 @@ async function resolveAuthorization(
  * else happened to boot the app, and on a serverless worker that repeats for
  * every cold start.
  *
- * Gated on the config actually declaring a route, so an app with none never
- * boots on an unknown path. That is what the initialisation further down is
- * careful about: booting for traffic that is about to be refused hands an
+ * Gated on the config actually declaring a matching route, so an app with none
+ * never boots on an unknown path. That is what the initialisation further down
+ * is careful about: booting for traffic that is about to be refused hands an
  * unauthenticated caller a cold start it could not otherwise cause. An app that
- * DOES contribute routes has to boot to serve them, and a public one has to
- * boot for an unauthenticated caller by definition.
+ * DOES contribute a matching route has to boot to serve it, and a public one has
+ * to boot for an unauthenticated caller by definition.
+ *
+ * Called once per mount, at the point that mount is consulted, so the decision
+ * to boot is never made on behalf of a pass whose turn has not come.
  */
-async function ensurePluginRoutesRegistered(
+async function reachPluginRoute(
   req: Request,
   httpMethod: string,
-  requestPath: string
-): Promise<void> {
-  const registry = getPluginRouteRegistry();
-  if (
-    !shouldRegisterPluginRoutes(
-      registry.list().length,
-      getHandlerConfig()?.plugins,
-      {
-        method: httpMethod,
-        path: requestPath,
-        // Both reads are free of the container: a header read and a cookie parse.
-        // A request carrying neither is refused by the route's own auth without
-        // resolving a service, so booting for it would be work nobody asked for.
-        hasCredential:
-          req.headers.get("authorization") !== null ||
-          readAccessTokenCookie(req) !== null,
-      }
-    )
-  ) {
-    return;
+  requestPath: string,
+  mount: PluginRouteMount
+): Promise<Response | null> {
+  const decision = pluginRouteBootDecision(
+    getPluginRouteRegistry().list().length,
+    getHandlerConfig()?.plugins,
+    {
+      method: httpMethod,
+      path: requestPath,
+      // Both reads are free of the container: a header read and a cookie parse.
+      // A request carrying neither is refused by the route's own auth without
+      // resolving a service, so booting for it would be work nobody asked for.
+      hasCredential:
+        req.headers.get("authorization") !== null ||
+        readAccessTokenCookie(req) !== null,
+    },
+    mount
+  );
+
+  if (decision.kind === "authRequired") {
+    return pluginRouteAuthRequired(req, decision.route);
   }
-  await ensureServicesInitialized();
+  if (decision.kind === "boot") await ensureServicesInitialized();
+
+  const match = getPluginRouteRegistry().match(httpMethod, requestPath, mount);
+  return match === null ? null : runPluginRoute(req, match);
 }
 
 async function handleServiceRequest(
@@ -1088,15 +1100,13 @@ async function handleServiceRequest(
   // router (which would 400 on these paths). The verb wrappers' withSecurity()
   // already applies CORS/rate-limit/headers around this.
   const requestPath = "/" + params.join("/");
-  await ensurePluginRoutesRegistered(req, httpMethod, requestPath);
-  const pluginRouteMatch = getPluginRouteRegistry().match(
+  const namespacedAnswer = await reachPluginRoute(
+    req,
     httpMethod,
     requestPath,
     "plugin"
   );
-  if (pluginRouteMatch) {
-    return runPluginRoute(req, pluginRouteMatch);
-  }
+  if (namespacedAnswer) return namespacedAnswer;
 
   const { service, operation, method, routeParams } = parseRestRoute(
     params,
@@ -1111,14 +1121,18 @@ async function handleServiceRequest(
     // declaring the path first, so the ordering IS the guard: there is no list
     // of reserved prefixes to keep in step with the routes core adds later,
     // because core's own answer always comes first.
-    const rootRouteMatch = getPluginRouteRegistry().match(
+    // Root routes are consulted for boot HERE too, not alongside the namespaced
+    // pass above. Asked earlier, a plugin declaring `/collections/:id` would run
+    // database and plugin startup for every anonymous request to core's own
+    // `/collections` -- a path it never gets to answer, since this branch is
+    // reached only once the built-in router has said it serves nothing.
+    const rootAnswer = await reachPluginRoute(
+      req,
       httpMethod,
       requestPath,
       "root"
     );
-    if (rootRouteMatch) {
-      return runPluginRoute(req, rootRouteMatch);
-    }
+    if (rootAnswer) return rootAnswer;
 
     return new Response(
       JSON.stringify({

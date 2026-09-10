@@ -39,7 +39,12 @@ would have to be updated every time the core gained a route and would fail
 silently when it was not.
 
 Two plugins still cannot claim one address: rooting a route keeps the collision
-check that the namespace used to make unnecessary.
+check that the namespace used to make unnecessary. That check asks within a
+mount, because the two are matched in separate passes and a root route that
+merely resembles a namespaced one never competes with it for a request.
+
+A route is also refused at boot when it is rooted somewhere the request never
+arrives, rather than registering and silently answering nothing.
 
 Nothing changes for a route that does not ask. The default is unchanged, so
 every existing plugin route stays where it is.
