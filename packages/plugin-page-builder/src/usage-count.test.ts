@@ -6,65 +6,37 @@
  * it has to say when it is a FLOOR, because a short answer is short in the
  * direction that reads as reassuring.
  *
- * It is a floor for two different reasons, and the second is the one a reader
- * is likely to miss. A capped read stops early and says so. A document that
- * could not be walked whole never enters the population at all: its references
- * are discarded and one marker is stored, so it is absent from every count
- * rather than wrong in one of them — and a component embedded only there reads
- * as used by nothing.
+ * It is a floor for three reasons and only ONE of them is about the component
+ * being counted: this read reached its cap. The other two are properties of the
+ * index — a document nothing could read whole, and a scope nothing has walked —
+ * and they are resolved once for a whole screen and handed in. Those live in
+ * `usage-index-health`; what is tested here is that a count refuses to be
+ * called complete when they say the index is not.
  *
  * @module usage-count.test
  */
 import { describe, expect, it } from "vitest";
 
+import { classUsageIndex } from "./class-usage-reconcile";
 import { componentUsageIndex } from "./component-usage";
-import {
-  classUsageIndex,
-  UNDETERMINED_CLASS_ID,
-} from "./class-usage-reconcile";
-import { countDocumentsUsing, type GroupedUsageReader } from "./usage-count";
+import { countDocumentsUsing } from "./usage-count";
+import type { GroupedUsageReader } from "./usage-index";
+import type { UsageIndexHealth } from "./usage-index-health";
 
-/**
- * A grouped reader answering per QUESTION, and recording what it was asked.
- *
- * Two questions reach it — which rows reference the subject, and whether any
- * document is unreadable — and a helper answering both with one fixed result
- * cannot tell them apart. It would report markers wherever it reported
- * references, which is the state that makes every count incomplete and would
- * have let the reference cases below pass while asserting nothing about the
- * marker read.
- *
- * `undetermined` therefore defaults to ABSENT: the ordinary index, where the
- * count is whole. A case that wants the other state says so.
- */
-function reader(
-  answer: { bucketCount: number; truncated: boolean },
-  undetermined: { bucketCount: number; truncated: boolean } = {
-    bucketCount: 0,
-    truncated: false,
-  }
-) {
+/** An index with nothing wrong with it: whole, and known to be. */
+const WHOLE: UsageIndexHealth = { backfilled: true, anyUndetermined: false };
+
+/** A grouped reader answering a fixed result, and recording what it was asked. */
+function reader(answer: { bucketCount: number; truncated: boolean }) {
   const asked: {
     where: Record<string, { equals: string }>;
     groupBy: string;
   }[] = [];
   const read: GroupedUsageReader = async args => {
     asked.push(args);
-    // Discriminated by the QUESTION rather than by call order, so a change to
-    // the order of the two reads cannot silently swap the answers.
-    return isUndeterminedQuestion(args.where) ? undetermined : answer;
+    return answer;
   };
   return { read, asked };
-}
-
-/** Whether a recorded question is the marker one, for either index. */
-function isUndeterminedQuestion(
-  where: Record<string, { equals: string }>
-): boolean {
-  return (
-    where.kind?.equals === "unreadable" ||
-    where.classId?.equals === UNDETERMINED_CLASS_ID
-  );
 }
 
 describe("counting the documents that use something", () => {
@@ -79,16 +51,29 @@ describe("counting the documents that use something", () => {
       index: componentUsageIndex,
       read,
       referenceId: "header",
+      health: WHOLE,
     });
 
-    // BOTH reads group by the document, and the assertion names both rather
-    // than the first: the marker read exists to decide completeness, and one
-    // grouped by anything else would count marker ROWS instead of the
-    // documents that wrote them.
     expect({ count, groupedBy: asked.map(a => a.groupBy) }).toEqual({
       count: { documents: 2, complete: true },
-      groupedBy: ["entityKey", "entityKey"],
+      groupedBy: ["entityKey"],
     });
+  });
+
+  it("spends exactly ONE query, because the rest was resolved for the screen", async () => {
+    // The index-wide half of `complete` is the same answer for every component
+    // in a library, so asking it here would issue one duplicate query per tile.
+    // A hundred-component screen paid a hundred of them to learn one fact.
+    const { read, asked } = reader({ bucketCount: 1, truncated: false });
+
+    await countDocumentsUsing({
+      index: componentUsageIndex,
+      read,
+      referenceId: "header",
+      health: WHOLE,
+    });
+
+    expect(asked.length).toBe(1);
   });
 
   it("reports a capped answer as INCOMPLETE rather than as the total", async () => {
@@ -102,8 +87,42 @@ describe("counting the documents that use something", () => {
         index: componentUsageIndex,
         read,
         referenceId: "header",
+        health: WHOLE,
       })
     ).toEqual({ documents: 50, complete: false });
+  });
+
+  it("refuses to call an uncapped answer complete while a document is unreadable", async () => {
+    // A document that exceeded its walk bound had its references DISCARDED and
+    // only a marker stored, so it is missing from the reference read entirely —
+    // this 0 is genuine and uncapped, drawn from a population that is short.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+
+    expect(
+      await countDocumentsUsing({
+        index: componentUsageIndex,
+        read,
+        referenceId: "header",
+        health: { backfilled: true, anyUndetermined: true },
+      })
+    ).toEqual({ documents: 0, complete: false });
+  });
+
+  it("refuses while any scope has never been backfilled", async () => {
+    // The upgrade path. Write hooks fill the index going forward, so a site
+    // that existed before this index has no rows for its existing pages — and
+    // every component then reads as used by nothing, which is what an author
+    // deletes on.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+
+    expect(
+      await countDocumentsUsing({
+        index: componentUsageIndex,
+        read,
+        referenceId: "header",
+        health: { backfilled: false, anyUndetermined: false },
+      })
+    ).toEqual({ documents: 0, complete: false });
   });
 
   it("asks only for rows that ARE references, not for the unreadable marker", async () => {
@@ -117,6 +136,7 @@ describe("counting the documents that use something", () => {
       index: componentUsageIndex,
       read,
       referenceId: "header",
+      health: WHOLE,
     });
 
     expect(asked[0]?.where).toEqual({
@@ -135,6 +155,7 @@ describe("counting the documents that use something", () => {
       index: classUsageIndex,
       read,
       referenceId: "hero",
+      health: WHOLE,
     });
 
     expect({ count, where: asked[0]?.where }).toEqual({
@@ -153,89 +174,9 @@ describe("counting the documents that use something", () => {
         index: componentUsageIndex,
         read,
         referenceId: "",
+        health: WHOLE,
       }),
       asked: asked.length,
     }).toEqual({ count: { documents: 0, complete: true }, asked: 0 });
-  });
-  it("reports a floor when a document in the index could not be read whole", async () => {
-    // THE case this module's completeness flag exists for, and the one a cap
-    // cannot stand in for. A document that exceeded its walk bound had its
-    // references DISCARDED and only a marker stored, so it is missing from the
-    // reference read entirely — the count below is a genuine, uncapped 0 drawn
-    // from a population that is itself short.
-    //
-    // Answered `{ documents: 0, complete: true }` before this, which is the
-    // reading that tells an author a component embedded in that document is
-    // used nowhere. That is what a delete acts on.
-    const { read } = reader(
-      { bucketCount: 0, truncated: false },
-      { bucketCount: 1, truncated: false }
-    );
-
-    expect(
-      await countDocumentsUsing({
-        index: componentUsageIndex,
-        read,
-        referenceId: "header",
-      })
-    ).toEqual({ documents: 0, complete: false });
-  });
-
-  it("asks about unreadable documents ANYWHERE, not ones referencing this", async () => {
-    // The discrimination, and the reason the predicate takes no reference. A
-    // marker names no component, so "which unreadable documents reference this"
-    // has no answer — narrowing the marker question by `componentId` would ask
-    // it anyway and get a confident empty, which is the original defect wearing
-    // a second read.
-    const { read, asked } = reader({ bucketCount: 2, truncated: false });
-
-    await countDocumentsUsing({
-      index: componentUsageIndex,
-      read,
-      referenceId: "header",
-    });
-
-    expect(asked[1]?.where).toEqual({
-      kind: { equals: "unreadable" },
-      componentId: { equals: "" },
-    });
-  });
-
-  it("asks the CLASS index for ITS marker, which is a class id nothing may wear", async () => {
-    // The control on the marker predicate, matching the one on the reference
-    // predicate above: the two indexes make the row disjoint by different
-    // means — a `kind` column here, an over-long id there — and a hardcoded
-    // component clause would satisfy the component case alone.
-    const { read, asked } = reader({ bucketCount: 1, truncated: false });
-
-    await countDocumentsUsing({
-      index: classUsageIndex,
-      read,
-      referenceId: "hero",
-    });
-
-    expect(asked[1]?.where).toEqual({
-      classId: { equals: UNDETERMINED_CLASS_ID },
-    });
-  });
-
-  it("does not spend the marker read when the answer is ALREADY a floor", async () => {
-    // A capped answer is incomplete whatever the markers say, so the second
-    // read cannot change it and is not made. Asserted because the count is
-    // rendered beside every tile in the library, where an unnecessary query is
-    // paid once per component per render.
-    const { read, asked } = reader(
-      { bucketCount: 50, truncated: true },
-      { bucketCount: 3, truncated: false }
-    );
-
-    expect({
-      count: await countDocumentsUsing({
-        index: componentUsageIndex,
-        read,
-        referenceId: "header",
-      }),
-      reads: asked.length,
-    }).toEqual({ count: { documents: 50, complete: false }, reads: 1 });
   });
 });

@@ -38,7 +38,12 @@
  *
  * @module usage-count
  */
-import type { UsageIndex, UsageSubject } from "./usage-index";
+import type {
+  GroupedUsageReader,
+  UsageIndex,
+  UsageSubject,
+} from "./usage-index";
+import { indexIsWhole, type UsageIndexHealth } from "./usage-index-health";
 
 /** What a count of the documents using something answered. */
 export interface UsageCount {
@@ -63,21 +68,6 @@ export interface UsageCount {
 }
 
 /**
- * How the index is grouped, injected so this module needs no Direct API.
- *
- * The shape is the Direct API's own grouped answer, narrowed to what a count
- * reads. Injected for the reason the Layout scan injects its reader: it keeps
- * the counting rule testable against values, and it keeps the decision about
- * WHICH collection is grouped with the caller that knows the slug.
- */
-export interface GroupedUsageReader {
-  (args: {
-    where: Record<string, { equals: string }>;
-    groupBy: string;
-  }): Promise<{ bucketCount: number; truncated: boolean }>;
-}
-
-/**
  * The column a document is identified by in every usage index.
  *
  * `entityKey` holds the document's id, and it is the same column in each index
@@ -96,6 +86,17 @@ export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
   index: UsageIndex<TRow>;
   read: GroupedUsageReader;
   referenceId: string;
+  /**
+   * What is known about the index as a whole, resolved ONCE by the caller.
+   *
+   * Required rather than defaulted, and that is the API decision worth
+   * defending. A default would have to be either "whole", which is the
+   * confident wrong answer this module exists to stop, or "a floor", which
+   * quietly caveats every count on a healthy site. Neither is a fact, so the
+   * caller supplies one — and being made to says out loud that this half of
+   * the answer is a property of the SCREEN rather than of the component.
+   */
+  health: UsageIndexHealth;
 }): Promise<UsageCount> {
   // An empty id references nothing and is not an id. Answered as COMPLETE
   // because it genuinely is — nothing can reference what is not a reference —
@@ -109,41 +110,12 @@ export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
   });
   const documents = grouped.bucketCount;
 
-  // One expression rather than an early return, so the cheap case is a
-  // CONSEQUENCE of the rule instead of a branch beside it. `&&` does not
-  // evaluate its right side once the left is false, so a capped answer still
-  // costs one read — and an edit that reorders these cannot drop the
-  // truncation, which an early return placed before the second read can.
-  const complete = !grouped.truncated && !(await anyDocumentUnreadable(args));
-
-  return { documents, complete };
-}
-
-/**
- * Whether the index holds a document whose references were never determined.
- *
- * Asked of the WHOLE index rather than of this reference, and that is the
- * point. A document that exceeded its walk bound has its discovered references
- * discarded and only a marker stored, so it does not appear under any
- * component — including this one. Filtering the markers by `referenceId` would
- * ask which unreadable documents reference it, a question the marker exists
- * precisely because nothing can answer.
- *
- * So the answer is the same for every reference in the library, and it is
- * "unknown" rather than "no". Reporting `complete: true` here is the reading
- * that says a component embedded in a document too large to walk is used
- * nowhere, which is what an author deletes on.
- */
-async function anyDocumentUnreadable<TRow extends UsageSubject>(args: {
-  index: UsageIndex<TRow>;
-  read: GroupedUsageReader;
-}): Promise<boolean> {
-  const markers = await args.read({
-    where: args.index.whereUndetermined(),
-    groupBy: DOCUMENT_COLUMN,
-  });
-  // Existence, not how many: one unreadable document is enough to make every
-  // count a floor, and `truncated` on this read only means there are more of
-  // them than the cap — which does not change the answer.
-  return markers.bucketCount > 0;
+  // Three conditions in one expression, and no ordering between them can drop
+  // one: this read reached its cap, some document in the index was never
+  // readable, or some scope was never walked. Only the first is about this
+  // component; the other two were resolved once for the whole screen.
+  return {
+    documents,
+    complete: !grouped.truncated && indexIsWhole(args.health),
+  };
 }

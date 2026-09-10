@@ -154,7 +154,8 @@ export type { ClassUsageVariant } from "./collections/class-usage-index";
 export { componentUsageCount } from "./component-usage";
 export { usageCountReader } from "./class-usage-runtime";
 export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
-export type { UsageCount, GroupedUsageReader } from "./usage-count";
+export type { UsageCount } from "./usage-count";
+export type { GroupedUsageReader } from "./usage-index";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
  *

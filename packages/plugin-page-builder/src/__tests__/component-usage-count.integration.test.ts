@@ -31,6 +31,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { usageCountReader } from "../class-usage-runtime";
 import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
 import { componentUsageCount } from "../component-usage";
+import type { UsageIndexHealth } from "../usage-index-health";
 import { pageBuilder } from "../plugin";
 
 /** One stored reference, in the shape the maintenance path writes. */
@@ -49,6 +50,18 @@ const row = (over: {
   entityKey: over.entityKey,
   componentId: over.componentId,
 });
+
+/**
+ * The index-wide facts, STATED rather than read, because this fixture seeds the
+ * rows itself.
+ *
+ * Reading them would test the health module's own queries a second time and,
+ * worse, would make these cases depend on a backfill that never ran for a table
+ * written by hand — every count would come back a floor and the numbers below
+ * would stop being about the count at all. What is under test here is the
+ * predicate, the group key and the trusted read.
+ */
+const WHOLE: UsageIndexHealth = { backfilled: true, anyUndetermined: false };
 
 describe.each(getConfiguredTestDialects())(
   "counting the pages that use a component (%s)",
@@ -93,6 +106,7 @@ describe.each(getConfiguredTestDialects())(
       const count = await componentUsageCount({
         read: usageCountReader(nextly, COMPONENT_USAGE_INDEX_SLUG),
         componentId: "header",
+        health: WHOLE,
       });
 
       expect(count).toEqual({ documents: 2, complete: true });
@@ -114,6 +128,7 @@ describe.each(getConfiguredTestDialects())(
       const count = await componentUsageCount({
         read: usageCountReader(nextly, COMPONENT_USAGE_INDEX_SLUG),
         componentId: "never-placed",
+        health: WHOLE,
       });
 
       expect(count).toEqual({ documents: 0, complete: true });

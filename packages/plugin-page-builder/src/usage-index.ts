@@ -229,3 +229,18 @@ export interface UsageIndex<TRow extends UsageSubject> {
   /** What the stored document references, under the bounds it is drawn with. */
   derive(document: unknown, limits: DocumentLimits): UsageDerivation;
 }
+
+/**
+ * How the index is grouped, injected so this module needs no Direct API.
+ *
+ * The shape is the Direct API's own grouped answer, narrowed to what a count
+ * reads. Injected for the reason the Layout scan injects its reader: it keeps
+ * the counting rule testable against values, and it keeps the decision about
+ * WHICH collection is grouped with the caller that knows the slug.
+ */
+export interface GroupedUsageReader {
+  (args: {
+    where: Record<string, { equals: string }>;
+    groupBy: string;
+  }): Promise<{ bucketCount: number; truncated: boolean }>;
+}

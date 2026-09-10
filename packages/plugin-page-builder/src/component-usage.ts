@@ -30,12 +30,13 @@ import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import type { ComponentUsageRow } from "./collections/component-usage-index";
 import { readStoredJson } from "./stored-json";
-import {
-  countDocumentsUsing,
-  type GroupedUsageReader,
-  type UsageCount,
-} from "./usage-count";
-import type { UsageDerivation, UsageIndex } from "./usage-index";
+import { countDocumentsUsing, type UsageCount } from "./usage-count";
+import type {
+  GroupedUsageReader,
+  UsageDerivation,
+  UsageIndex,
+} from "./usage-index";
+import type { UsageIndexHealth } from "./usage-index-health";
 
 /**
  * The components a stored document references, and whether it could all be read.
@@ -160,10 +161,21 @@ export const componentUsageIndex: UsageIndex<ComponentUsageRow> = {
 export async function componentUsageCount(args: {
   read: GroupedUsageReader;
   componentId: string;
+  /**
+   * What is known about the index as a whole, read ONCE for the screen.
+   *
+   * A library renders a tile per component and asks each for a number. The two
+   * facts behind `complete` that are not about this component — whether any
+   * document was unreadable, and whether every scope has been walked — are the
+   * same answer every time, so resolving them here would spend one duplicate
+   * index-wide query per tile to learn one thing.
+   */
+  health: UsageIndexHealth;
 }): Promise<UsageCount> {
   return countDocumentsUsing({
     index: componentUsageIndex,
     read: args.read,
     referenceId: args.componentId,
+    health: args.health,
   });
 }
