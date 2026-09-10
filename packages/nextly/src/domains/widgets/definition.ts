@@ -12,6 +12,11 @@
 import { NextlyError } from "../../errors/nextly-error";
 
 import { requiredPermissionSlugs } from "./gate";
+import {
+  lifecycleProblem,
+  type WidgetCondition,
+  type WidgetLifecycle,
+} from "./lifecycle";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
 import { validateWidgetSettings, type WidgetSetting } from "./settings";
 import type { WidgetOp } from "./sources";
@@ -294,6 +299,33 @@ export interface WidgetDefinition {
    * renumber them. Any finite value is legal, negatives and fractions included.
    */
   defaultOrder?: number;
+  /**
+   * How long this widget stays on the dashboard. Defaults to `"always"`.
+   *
+   * A `conditional` widget is transient: it shows only while `visibleWhen`
+   * holds, and is neither placed nor offered otherwise. Declaring it here
+   * rather than deciding in the component is what stops the grid reserving a
+   * slot, and an order, for a card that renders nothing.
+   */
+  lifecycle?: WidgetLifecycle;
+  /**
+   * The named condition this widget shows under. Required when conditional.
+   *
+   * A NAME the host evaluates, never a predicate the widget supplies. The
+   * closed set lives in `lifecycle.ts` with the reasoning; the short version is
+   * that a vocabulary cannot be spammed and an arbitrary hook can.
+   */
+  visibleWhen?: WidgetCondition;
+  /**
+   * Placed above the ordinary grid while visible, ignoring reader order.
+   *
+   * Only meaningful on a conditional widget, because only a transient card has
+   * no position worth persisting -- a reader who dragged it somewhere would
+   * lose that arrangement the moment its condition stopped holding.
+   */
+  pin?: "top";
+  /** Whether a reader may dismiss this widget before its condition lapses. */
+  dismissible?: boolean;
   /**
    * Whether the host frames this widget. Defaults to `"card"`.
    *
@@ -977,6 +1009,19 @@ export function chromeProblem(
   return undefined;
 }
 
+/**
+ * The lifecycle fields, judged together.
+ *
+ * Delegated to `lifecycle.ts` rather than restated here, so the vocabulary and
+ * the rules that read it stay in one module: a condition added there is
+ * accepted here with no second edit, and cannot be accepted by one and refused
+ * by the other.
+ */
+function validateLifecycle(d: Partial<WidgetDefinition>): void {
+  const problem = lifecycleProblem(d);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
+}
+
 function validateChrome(d: Partial<WidgetDefinition>): void {
   // Registry-only vocabulary, for the reason `chromeProblem` gives.
   if (d.chrome !== undefined && !WIDGET_CHROME.includes(d.chrome)) {
@@ -1217,5 +1262,6 @@ export function validateWidgetDefinition(
   validateCells(d);
   validateDefaultOrder(d);
   validateChrome(d);
+  validateLifecycle(d);
   validateWidgetSettings(d.settings, d.id ?? "widget");
 }
