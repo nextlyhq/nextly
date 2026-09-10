@@ -485,10 +485,12 @@ function failingModes(r: UtilityReading): readonly ModeReading[] {
 }
 
 function unacceptedFailures(r: UtilityReading): readonly ModeReading[] {
-  return r.modes.filter(
-    m =>
-      m.ratio < r.need &&
-      !acceptedFor(r.fgToken, r.bgToken, m.mode, { fgAlpha: r.alpha })
+  // Filtered from `failingModes` rather than re-testing `ratio < need`. What
+  // counts as a failure is one question, and a second copy here agrees today
+  // and drifts the moment the threshold rule changes — leaving the message
+  // controls green against a predicate the scan no longer uses.
+  return failingModes(r).filter(
+    m => !acceptedFor(r.fgToken, r.bgToken, m.mode, { fgAlpha: r.alpha })
   );
 }
 
@@ -507,6 +509,42 @@ function unacceptedFailures(r: UtilityReading): readonly ModeReading[] {
  * read it. The budget is stated on the block so a case added here inherits it,
  * and it is sized for contention rather than for the measured time.
  */
+/** What this scan measured at one acceptance identity. */
+interface Observation {
+  /** The utility that produced it, so a failure names something greppable. */
+  combo: string;
+  /** Which threshold applies — the field an acceptance identity does NOT carry. */
+  kind: UtilityReading["kind"];
+  need: number;
+  ratio: number;
+}
+
+/**
+ * Every pairing this scan asks `acceptedFor` about, keyed the way it asks.
+ *
+ * A LIST per key rather than one entry, because the identity omits the utility
+ * kind: `border-x/50` and `text-x/50` reduce to the same key while being held
+ * to 3:1 and 4.5:1. Collapsing them here would hide exactly the collision the
+ * assertion below exists to refuse.
+ */
+function observations(
+  scanned: ReadonlyMap<string, number>
+): Map<string, Observation[]> {
+  const out = new Map<string, Observation[]>();
+  for (const combo of scanned.keys()) {
+    if (ALLOWED_DECORATIVE.has(combo)) continue;
+    const r = worstRatio(combo);
+    for (const m of r.modes) {
+      const key = `${roleOf(r.fgToken)}|${roleOf(r.bgToken)}|${r.alpha}|${m.mode}`;
+      out.set(key, [
+        ...(out.get(key) ?? []),
+        { combo, kind: r.kind, need: r.need, ratio: m.ratio },
+      ]);
+    }
+  }
+  return out;
+}
+
 describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   const combos = scanCombos();
 
@@ -695,33 +733,78 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     // `ink-utilities.test.ts` holds every accepted entry to being evaluated by
     // something, and defers exactly this shape — a faded foreground over an
     // opaque surface — because neither PAIRINGS nor its own full-strength scan
-    // composites one. Without this half, recording such an entry would satisfy
-    // the message's advice and then be reported there as accepted by nothing.
-    const consulted = new Set<string>();
-    for (const combo of combos.keys()) {
-      if (ALLOWED_DECORATIVE.has(combo)) continue;
-      const r = worstRatio(combo);
-      for (const { mode } of r.modes) {
-        consulted.add(
-          `${roleOf(r.fgToken)}|${roleOf(r.bgToken)}|${r.alpha}|${mode}`
+    // composites one. That deferral moved THREE guarantees here, not one:
+    // accepted.ts promises each entry is still reached, still failing, and
+    // still measuring what it records. An entry that only has to be reachable
+    // suppresses this guard forever on a typo.
+    const seen = observations(combos);
+    // The population, so a walk that scanned nothing passes nothing.
+    expect(seen.size).toBeGreaterThan(0);
+
+    const problems: string[] = [];
+    for (const entry of ACCEPTED_REGRESSIONS) {
+      if (
+        entry.fgAlpha === undefined ||
+        entry.bgAlpha !== undefined ||
+        entry.bgOver !== undefined
+      ) {
+        continue;
+      }
+      const where = `${entry.fg} on ${entry.bg} (${entry.mode}, /${entry.fgAlpha})`;
+      const at = seen.get(
+        `${entry.fg}|${entry.bg}|${entry.fgAlpha}|${entry.mode}`
+      );
+      if (!at) {
+        problems.push(
+          `${where}: this scan never consults it, so nothing holds it to the ` +
+            `ratio it records. Either no utility paints the pairing any more, ` +
+            `or the entry was written for one that never existed.`
         );
+        continue;
+      }
+
+      // An acceptance is keyed by the role pair, the mode and the alpha — and
+      // NOT by the utility kind, so one entry covers `border-x/50` and
+      // `text-x/50` alike while those are held to 3:1 and 4.5:1. Accepting a
+      // decorative boundary would silently accept body text at the same ratio.
+      const kinds = [...new Set(at.map(o => o.kind))];
+      if (kinds.length > 1) {
+        problems.push(
+          `${where}: reached as ${kinds.join(" and ")} (${at
+            .map(o => o.combo)
+            .join(", ")}), which are held to different thresholds. One entry ` +
+            `cannot accept both — split the pairing, or use a token per kind.`
+        );
+        continue;
+      }
+
+      for (const o of at) {
+        // Still-failing BEFORE the ratio pin, and the order is load-bearing:
+        // any repair moves the ratio too, so pinning first reports every
+        // repair as drift and the stale branch never fires.
+        if (o.ratio >= o.need) {
+          problems.push(
+            `${where}: ${o.combo} now MEETS ${o.need}:1 at ${o.ratio.toFixed(2)}:1, ` +
+              `so the entry is stale. Delete it — leaving it makes the ` +
+              `accepted set read as larger than it is.`
+          );
+          continue;
+        }
+        // Rounded on both sides rather than compared through a tolerance, the
+        // way token-contrast pins its own entries: `toBeCloseTo(x, 2)` admits
+        // a drift the file claims to pin.
+        if (Number(o.ratio.toFixed(2)) !== entry.ratio) {
+          problems.push(
+            `${where}: recorded at ${entry.ratio}:1, ${o.combo} now measures ` +
+              `${o.ratio.toFixed(2)}:1. If the change was intended, update the ` +
+              `record; if not, the token moved under an entry that was never ` +
+              `agreed for this value.`
+          );
+        }
       }
     }
-    const unreached = ACCEPTED_REGRESSIONS.filter(
-      entry =>
-        entry.fgAlpha !== undefined &&
-        entry.bgAlpha === undefined &&
-        entry.bgOver === undefined &&
-        !consulted.has(`${entry.fg}|${entry.bg}|${entry.fgAlpha}|${entry.mode}`)
-    ).map(entry => `${entry.fg} on ${entry.bg} (${entry.mode})`);
 
-    expect(
-      unreached,
-      "these accepted-regression entries name a faded foreground this scan " +
-        "never consults, so nothing holds them to the ratio they record. " +
-        "Either a utility that paints the pairing is no longer in the source, " +
-        "or the entry was written for a pairing that never existed"
-    ).toEqual([]);
+    expect(problems).toEqual([]);
   });
 
   it("puts no alpha on the control boundary, in any utility", () => {
