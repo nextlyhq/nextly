@@ -141,7 +141,7 @@ export function ChartFrame({
             </thead>
             <tbody>
               {rows.map(row => (
-                <tr key={row.key} className="border-b border-border/50">
+                <tr key={row.key} className="border-b border-border">
                   {/* A row header, so a screen reader announces which row a
                       number belongs to when reading the count cell. */}
                   <th
