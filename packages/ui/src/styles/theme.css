@@ -1121,8 +1121,16 @@
    * retuned -- overriding it resolves the whole ramp to that hue. */
   --nx-shadow-color: oklch(0 0 0);
 
-  /* Chart colors for data visualization (same as light mode) */
+  /* Chart colors for data visualization.
+   *
+   * NOT the same as light mode, and slots 2 and 4 are where they differ: the
+   * light ramp sits on near-white and needs the deeper steps to stay legible,
+   * while here the lighter ones do that job. Slots 3 and 5 already differed or
+   * already cleared the minimum in both, so they carry one value each. */
   --nx-chart-1: var(--nx-primary);
+  /* A cyan of its own rather than a step of the Tailwind ramp -- deliberately
+     unnamed here, because naming a step it is not is the annotation this
+     file's own comment guard exists to refuse. */
   --nx-chart-2: oklch(0.7399 0.1277 209.34);
   --nx-chart-3: oklch(0.7229 0.1921 149.58);
   /* green-500 */

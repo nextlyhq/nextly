@@ -41,3 +41,15 @@ The palette is now asserted rather than exempt. Every slot is held to the
 minimum against the card surface, in both modes, so a slot that fails is caught
 when the colour changes rather than when someone first draws a chart with it.
 The bar fill a widget paints over its track is asserted the same way.
+
+The lifecycle ring drew its two arcs touching, with nothing between them but
+their own colours — 2.15:1 apart in dark mode, where one arc is white. A
+separator in the surface colour is now carved under each segment, so where one
+arc ends is visible whatever the two colours are. No palette choice could have
+fixed that boundary: one of the two segments is the primary, and a colour far
+enough from both white and a near-black card would have dictated the amber for
+every other chart to settle one ring.
+
+The builder's style inspector paints its provenance dots in the same two slots,
+on a surface that aliases the muted container rather than the card. Those two
+pairings are asserted as well.
