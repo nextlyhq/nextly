@@ -257,19 +257,34 @@ describe("grading how much of the train shipped", () => {
   // placeholder means a package awaiting its first publish, which is a
   // different state and is graded differently.
   const PRIOR = "0.0.2-alpha.62";
-  const shipped = { versions: ["0.0.0", PRIOR, VERSION], distTags: {} };
-  const notYet = { versions: ["0.0.0", PRIOR], distTags: {} };
+  const PRE = { tag: "alpha" };
+  /*
+   * 🔴 The dist-tag is part of the fixture because it is part of the question.
+   * A version sitting on the registry that `nextly@alpha` does not resolve to
+   * has not reached anyone, and `collectProblems` (which `verify.mjs` gates the
+   * release on) says so; grading it published here would report a release
+   * healthy that verification would refuse.
+   */
+  const shipped = {
+    versions: ["0.0.0", PRIOR, VERSION],
+    distTags: { alpha: VERSION },
+  };
+  const notYet = { versions: ["0.0.0", PRIOR], distTags: { alpha: PRIOR } };
+  const staleTag = {
+    versions: ["0.0.0", PRIOR, VERSION],
+    distTags: { alpha: PRIOR },
+  };
   const placeholderOnly = { versions: ["0.0.0"], distTags: {} };
   const live = names => async name => (names.includes(name) ? shipped : notYet);
 
   it("is `all` when every package reached the registry", async () => {
-    const state = await publishState(manifest, live(manifest.map(e => e.name)));
+    const state = await publishState(manifest, live(manifest.map(e => e.name)), PRE);
     expect(state.kind).toBe("all");
     expect(state.published).toBe(3);
   });
 
   it("is `none` when none did", async () => {
-    const state = await publishState(manifest, live([]));
+    const state = await publishState(manifest, live([]), PRE);
     expect(state.kind).toBe("none");
   });
 
@@ -277,9 +292,33 @@ describe("grading how much of the train shipped", () => {
     // 🔴 `changeset publish` is not atomic. Asking only about `nextly` reported
     // "nothing published yet" for a train that stranded halfway, which is the
     // same lingering state this check exists to surface.
-    const state = await publishState(manifest, live(["@nextlyhq/admin", "@nextlyhq/ui"]));
+    const state = await publishState(manifest, live(["@nextlyhq/admin", "@nextlyhq/ui"]), PRE);
     expect(state.kind).toBe("partial");
     expect(state.missing).toEqual(["nextly"]);
+  });
+
+  it("separates a stale channel tag from a version that never published", async () => {
+    /*
+     * 🔴 Two facts, not one. A version is on the registry forever; a channel
+     * tag legitimately moves on to the next release. Folding them together
+     * made a superseded release read as "not on the registry", which is false,
+     * and pointed the reader at a re-run when the fix is one `npm dist-tag
+     * add`. `verify.mjs` refuses a stale tag too, so ignoring it would call a
+     * release healthy that verification rejects.
+     */
+    const state = await publishState(
+      manifest,
+      async name => (name === "nextly" ? staleTag : shipped),
+      PRE
+    );
+
+    // Published: the version IS on the registry.
+    expect(state.kind).toBe("all");
+    expect(state.published).toBe(3);
+    // But not installable, and said separately.
+    expect(state.channelStale).toHaveLength(1);
+    expect(state.channelStale[0]).toContain("nextly");
+    expect(state.channelStale[0]).toContain(PRIOR);
   });
 
   it("does not count a package awaiting its first publish as missing", async () => {
@@ -292,8 +331,11 @@ describe("grading how much of the train shipped", () => {
       ...manifest,
       { name: "@nextlyhq/eslint-plugin", version: VERSION },
     ];
-    const state = await publishState(withNewcomer, async name =>
-      name === "@nextlyhq/eslint-plugin" ? placeholderOnly : shipped
+    const state = await publishState(
+      withNewcomer,
+      async name =>
+        name === "@nextlyhq/eslint-plugin" ? placeholderOnly : shipped,
+      PRE
     );
 
     expect(state.kind).toBe("all");
@@ -305,8 +347,10 @@ describe("grading how much of the train shipped", () => {
   it("still counts a package that HAS shipped before as missing", async () => {
     // The control for the rule above. Exempting a newcomer must not exempt a
     // package that stranded, or `partial` stops meaning anything at all.
-    const state = await publishState(manifest, async name =>
-      name === "nextly" ? notYet : shipped
+    const state = await publishState(
+      manifest,
+      async name => (name === "nextly" ? notYet : shipped),
+      PRE
     );
 
     expect(state.kind).toBe("partial");
@@ -315,9 +359,72 @@ describe("grading how much of the train shipped", () => {
   });
 
   it("treats a package the registry has never heard of as awaiting its first publish", async () => {
-    const state = await publishState(manifest, async () => null);
+    const state = await publishState(manifest, async () => null, PRE);
     expect(state.kind).toBe("none");
     expect(state.pending).toEqual(manifest.map(entry => entry.name));
+  });
+});
+
+describe("a release the channel tag never reached", () => {
+  it("fails, and prescribes moving the tag rather than re-running", () => {
+    // Re-running does not fix this and fails the same check, because
+    // publishing skips versions the registry already has.
+    const result = verdict({
+      version: VERSION,
+      publish: {
+        kind: "all",
+        published: 20,
+        total: 20,
+        pending: [],
+        channelStale: [`nextly (alpha resolves to 0.0.2-alpha.62)`],
+      },
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "present",
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.state).toBe("channel-stale");
+    expect(result.message).toContain("an install still serves the previous");
+    expect(remedyFor(result, VERSION)).toContain("npm dist-tag add");
+  });
+
+  it("still reports a finished release when the channel does resolve", () => {
+    // The control: the case above would pass on a rule that failed whenever
+    // channelStale was merely present as a field.
+    const result = verdict({
+      version: VERSION,
+      publish: { kind: "all", published: 20, total: 20, pending: [], channelStale: [] },
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "present",
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.state).toBe("finalized");
+  });
+});
+
+describe("how to re-run a release", () => {
+  it("gives both forms, because --failed re-runs nothing on a green run", () => {
+    /*
+     * 🔴 `--failed` re-runs only the jobs that failed. A release run that went
+     * green and had its GitHub Release deleted afterwards has none, so the
+     * command re-runs nothing and reports success while the release stays
+     * missing. Finalization is idempotent, so the whole-job form is the one
+     * that works in that case.
+     */
+    const result = verdict({
+      version: VERSION,
+      publish: ALL,
+      tag: TAG(SHA),
+      tagVersion: { kind: "known", version: VERSION },
+      release: "absent",
+    });
+
+    const text = remedyFor(result, VERSION);
+    expect(text).toContain("gh run rerun <id> --failed");
+    expect(text).toMatch(/gh run rerun <id> +# if it went green/);
   });
 });
 

@@ -44,7 +44,13 @@
 
 import { execFileSync } from "node:child_process";
 
-import { PLACEHOLDER_VERSION, REGISTRY, fetchRegistryState } from "./lib.mjs";
+import {
+  PLACEHOLDER_VERSION,
+  REGISTRY,
+  fetchRegistryState,
+  getExpectedDistTag,
+  readPreState,
+} from "./lib.mjs";
 
 /** The package whose version names the release; every other one is in lockstep. */
 export const ANCHOR_PACKAGE = "nextly";
@@ -141,30 +147,60 @@ function neverReleased(state) {
  * hold, which reads as a train stranded halfway. Counting it as missing reports
  * a healthy repository as broken for as long as it takes to ship the package.
  */
-export async function publishState(manifest, fetchState = fetchRegistryState) {
+export async function publishState(
+  manifest,
+  fetchState = fetchRegistryState,
+  preState = readPreState()
+) {
   const states = await Promise.all(manifest.map(entry => fetchState(entry.name)));
 
-  const missing = [];
   const pending = [];
+  const missing = [];
+  const channelStale = [];
   let published = 0;
+  let total = 0;
 
   manifest.forEach((entry, index) => {
-    const state = states[index];
-    if (state !== null && state.versions.includes(entry.version)) {
-      published += 1;
+    const state = states[index] ?? null;
+    if (neverReleased(state)) {
+      pending.push(entry.name);
       return;
     }
-    (neverReleased(state) ? pending : missing).push(entry.name);
+    total += 1;
+
+    if (!state.versions.includes(entry.version)) {
+      missing.push(entry.name);
+      return;
+    }
+    published += 1;
+
+    /*
+     * 🔴 Being on the registry is not the same as being installable. The
+     * channel tag is what `npm install <pkg>@alpha` resolves, and `verify.mjs`
+     * withholds finalization when it does not point at the release, so a check
+     * that ignored it would call a release healthy that verification refuses.
+     * `getExpectedDistTag` is the shared rule rather than a second one.
+     *
+     * ⚠️ Kept SEPARATE from `missing` rather than folded into it, because the
+     * two are different facts with different remedies and different lifetimes.
+     * A version is on the registry forever; a channel tag legitimately moves on
+     * to the next release. Folding them together made a superseded release read
+     * as "not on the registry", which is false, and sent the reader to a
+     * re-run when the fix is one `npm dist-tag add`.
+     */
+    const tag = getExpectedDistTag(state, preState);
+    const actual = state.distTags?.[tag];
+    if (actual !== entry.version) {
+      channelStale.push(
+        `${entry.name} (${tag} resolves to ${actual ?? "nothing"})`
+      );
+    }
   });
 
-  // The train is the packages that have shipped before. One still waiting for
-  // its first publish was not in the release being judged, so counting it in
-  // the total would make a complete release read as incomplete.
-  const total = manifest.length - pending.length;
-
-  if (published === 0) return { kind: "none", published, total, pending };
-  if (missing.length > 0) return { kind: "partial", published, total, missing, pending };
-  return { kind: "all", published, total, pending };
+  const shape = { published, total, pending, channelStale };
+  if (published === 0) return { kind: "none", ...shape };
+  if (missing.length > 0) return { kind: "partial", missing, ...shape };
+  return { kind: "all", ...shape };
 }
 
 /**
@@ -297,6 +333,25 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
     };
   }
 
+  /*
+   * Reported before the tag and the release, because a channel that does not
+   * resolve to this version means the release reaches nobody, and the remedy is
+   * neither a re-run nor a tag push. `verify.mjs` refuses the same state, so a
+   * re-run prescribed here would fail on the same reading.
+   */
+  if ((publish.channelStale ?? []).length > 0) {
+    return {
+      code: 1,
+      state: "channel-stale",
+      message:
+        `${ANCHOR_PACKAGE}@${version} is on the registry, but the channel tag ` +
+        `does not resolve to it, so an install still serves the previous ` +
+        `release: ${publish.channelStale.join(", ")}.` +
+        pendingNote(publish.pending),
+      remedy: "move-dist-tag",
+    };
+  }
+
   // Everything below is about a train that is fully live.
   const missing = [];
   if (tag.kind === "absent") missing.push(`the git tag ${tagFor(version)}`);
@@ -416,6 +471,21 @@ export function verdict({ version, publish, tag, tagVersion, release }) {
   };
 }
 
+/**
+ * How to re-run a release run, and which form to use.
+ *
+ * 🔴 `--failed` re-runs only the jobs that FAILED. When a release run went
+ * green and its GitHub Release was deleted afterwards, there are none, so
+ * `--failed` re-runs nothing at all and reports success. The finalization steps
+ * are idempotent, so the whole-job form is always safe and is the one to reach
+ * for whenever the run is not red.
+ */
+const RERUN_STEPS = [
+  "      gh run list --workflow=release.yml --branch main",
+  "      gh run rerun <id> --failed      # if that run went red",
+  "      gh run rerun <id>               # if it went green (nothing failed to re-run)",
+];
+
 /** What to tell a reader to do about a verdict, kept beside the rules it follows. */
 export function remedyFor(result, version) {
   const tag = tagFor(version);
@@ -431,6 +501,21 @@ export function remedyFor(result, version) {
       "",
       `      git tag -a ${tag} <commit> -m "${tag}"`,
       `      git push origin refs/tags/${tag}`,
+      "",
+    ].join("\n");
+  }
+
+  if (result.remedy === "move-dist-tag") {
+    return [
+      "  The packages are published; the channel tag was never moved to them.",
+      "  Re-running the release does not fix this and fails the same check,",
+      "  because publishing skips versions the registry already has. Move the",
+      "  tag on each package the message names:",
+      "",
+      `      npm dist-tag add <package>@${version} <tag>`,
+      "",
+      "  `scripts/release/manifest.mjs` lists every publishable package if you",
+      "  need the full set.",
       "",
     ].join("\n");
   }
@@ -453,7 +538,7 @@ export function remedyFor(result, version) {
       "  If it does NOT exist, re-run the release run that published this",
       "  version and both artifacts are created together:",
       "",
-      "      gh run rerun <id> --failed",
+      ...RERUN_STEPS,
       "",
     ].join("\n");
   }
@@ -484,7 +569,7 @@ export function remedyFor(result, version) {
       "  done. If it does not, re-run the release run that published this",
       "  version so CI creates it:",
       "",
-      "      gh run rerun <id> --failed",
+      ...RERUN_STEPS,
       "",
     ].join("\n");
   }
@@ -502,7 +587,7 @@ export function remedyFor(result, version) {
       "  Then re-run the release, because moving a tag does not create a",
       "  GitHub Release and nothing else will:",
       "",
-      "      gh run rerun <id> --failed",
+      ...RERUN_STEPS,
       "",
     ].join("\n");
   }
@@ -523,8 +608,7 @@ export function remedyFor(result, version) {
   return [
     "  Re-run the release run that published this version:",
     "",
-    "      gh run list --workflow=release.yml --branch main",
-    "      gh run rerun <id> --failed",
+    ...RERUN_STEPS,
     "",
     "  A re-run checks out the commit that was published, so the tag lands on",
     "  the right one. Publishing is resumable, so versions already on the",
