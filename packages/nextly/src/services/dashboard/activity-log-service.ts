@@ -17,6 +17,7 @@ import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 import { type Column, type Table } from "drizzle-orm";
 
 import { authorizationGroups } from "../../auth/entity-read-access";
+import type { RequestActorType } from "../../auth/request-actor";
 import { toDbError } from "../../database/errors";
 // PR 4 migration: switched from ServiceError.fromDatabaseError to
 // NextlyError.fromDatabaseError. Public message stays generic per §13.8;
@@ -80,6 +81,15 @@ export interface ActivityLogEntry {
 
 /** Input for recording a new activity. */
 export interface LogActivityInput {
+  /**
+   * What KIND of caller `userId` refers to.
+   *
+   * `userId` is the actor's opaque reference whatever the kind: a user's id, an
+   * API key's own id, or a system caller's name. This says which, so the
+   * identity erasure and the feed can tell an account from a credential — the
+   * distinction that made a non-user write unrecordable before.
+   */
+  actorType: RequestActorType;
   userId: string;
   /**
    * Display name to denormalize onto the row. Omit to take it from the account
@@ -495,6 +505,7 @@ export class ActivityLogService extends BaseService {
   ): Record<string, unknown> {
     return {
       id: randomUUID(),
+      actorType: input.actorType,
       userId: input.userId,
       action: input.action,
       collection: input.collection,

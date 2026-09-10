@@ -56,8 +56,21 @@
  * PAIR is what a scope is.
  */
 export const API_KEY_SCOPE_SELECTOR =
+  // The PAIR, in either order, whatever the values: this is what all nine
+  // hand-built scopes looked like.
   'ObjectExpression:has(> Property[key.name="actorType"])' +
-  ':has(> Property[key.name="permissions"], > SpreadElement)';
+  ':has(> Property[key.name="permissions"]), ' +
+  // Or the pair with the second half hidden behind a spread —
+  // `{ actorType: "apiKey", ...auth }` — which the shape above cannot see.
+  //
+  // Narrowed to the LITERAL `"apiKey"` on purpose. `actorType` plus any spread
+  // matched every object that merely carries a field of that name and spreads
+  // anything, and an activity-log row does exactly that while being no kind of
+  // scope. A guard that fires on correct code is the one people work around,
+  // and the workarounds — renaming the field, disabling the rule — cost its
+  // true positives too.
+  'ObjectExpression:has(> Property[key.name="actorType"][value.value="apiKey"])' +
+  ":has(> SpreadElement)";
 
 export const API_KEY_SCOPE_MESSAGE =
   "Build an API-key scope with `apiKeyScopeFrom(caller)`, or narrow one you hold with " +
