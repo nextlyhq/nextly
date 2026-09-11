@@ -728,7 +728,17 @@ export async function applyFieldReadAccess(
  * the common shape), after which the store's object keys point at rows nothing
  * references and the evidence in them is unreachable.
  */
-export type ReadAccessEvidence = Map<string, Record<string, unknown>>;
+export interface ReadAccessEvidence {
+  /** Removed values by path. */
+  byPath: Map<string, Record<string, unknown>>;
+  /**
+   * The path each row object sat at when captured. A hook that reorders or
+   * removes rows keeps the objects it kept, so a row this recognises is
+   * restored from where it came rather than from where it now sits; only a
+   * row a hook rebuilt falls back to the path its current position yields.
+   */
+  pathOf: WeakMap<Record<string, unknown>, string>;
+}
 
 /**
  * Path segments for the rows of one container: `name#<id>` for a row with a
@@ -754,8 +764,13 @@ function captureEvidenceRec(
   path: string,
   out: ReadAccessEvidence
 ): void {
+  out.pathOf.set(entry, path);
   const removed = redactions.get(entry);
-  if (removed && Object.keys(removed).length > 0) out.set(path, { ...removed });
+  if (removed && Object.keys(removed).length > 0) {
+    // Detached: a removed value may be an object, and it is about to be handed
+    // to rules and hooks that are free to write to what they are given.
+    out.byPath.set(path, detachData({ ...removed }));
+  }
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!fieldFns.fields) continue;
     // A container the pass removed still holds its rows, and those rows'
@@ -788,7 +803,7 @@ export function captureReadAccessEvidence(
   opts: { kind: EntityKind; slug: string; entry: Record<string, unknown> },
   redactions: ReadAccessRedactions
 ): ReadAccessEvidence {
-  const out: ReadAccessEvidence = new Map();
+  const out: ReadAccessEvidence = { byPath: new Map(), pathOf: new WeakMap() };
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (fns) captureEvidenceRec(opts.entry, fns, redactions, "", out);
   return out;
@@ -801,12 +816,14 @@ function restoreEvidenceRec(
   path: string,
   restored: RestoredEvidence[]
 ): void {
-  const removed = evidence.get(path);
+  const removed = evidence.byPath.get(path);
   if (removed) {
     for (const [name, value] of Object.entries(removed)) {
-      // A hook's own value stands; only an absent key takes the evidence.
+      // A hook's own value stands; only an absent key takes the evidence. A
+      // fresh copy each time: the rule this feeds may write to it, and the
+      // pass after the rule must see the evidence as captured.
       if (!(name in entry)) {
-        entry[name] = value;
+        entry[name] = detachData(value);
         restored.push({ row: entry, name });
       }
     }
@@ -821,7 +838,7 @@ function restoreEvidenceRec(
         row,
         fieldFns.fields as Record<string, FieldFunctions>,
         evidence,
-        `${path}/${segments[index]}`,
+        evidence.pathOf.get(row) ?? `${path}/${segments[index]}`,
         restored
       );
     });
@@ -830,28 +847,38 @@ function restoreEvidenceRec(
 }
 
 /**
- * Put captured evidence back onto a DETACHED copy of a document, for a rule
- * that judges the document rather than a field.
+ * A detached copy of a document with the captured evidence put back, for a
+ * rule that judges the document rather than a field.
  *
  * The Single read redacts fields before its hooks, so a hook cannot read a
  * denied sibling, and then judges the assembled document against its own
  * access rules. That rule may be written to inspect a denied field, and a copy
- * taken after redaction would show it absent, which reads as allowed. Restored
- * by path onto the copy, so a container a hook rebuilt gets its evidence back
- * where a rebuilt container keyed by object identity would not; the response
- * object is never touched. The one thing this cannot follow is a hook that
- * reorders id-less repeater rows between the pass and the judge: their
- * evidence lands by index.
+ * taken after redaction would show it absent, which reads as allowed. The
+ * evidence is restored onto the LIVE document for the length of the copy and
+ * removed again before this returns, because only the live rows are the
+ * objects the capture recognises: a row a hook reordered is restored from the
+ * path it had when captured, and a container a hook rebuilt from the path its
+ * position yields, where a rebuilt container keyed by object identity alone
+ * would get nothing back. The response object carries none of it afterwards.
+ * What is left to position is a repeater a hook both rebuilt row by row and
+ * reordered, with no ids to tell the rows apart.
  */
-export function withReadAccessEvidence<T extends Record<string, unknown>>(
-  copy: T,
-  opts: { kind: EntityKind; slug: string },
-  evidence: ReadAccessEvidence
+export function snapshotWithReadAccessEvidence<
+  T extends Record<string, unknown>,
+>(
+  opts: { kind: EntityKind; slug: string; entry: T },
+  evidence: ReadAccessEvidence,
+  detach: <V>(value: V) => V
 ): T {
-  if (evidence.size === 0) return copy;
   const fns = getFieldFunctions(opts.kind, opts.slug);
-  if (fns) restoreEvidenceRec(copy, fns, evidence, "", []);
-  return copy;
+  if (!fns || evidence.byPath.size === 0) return detach(opts.entry);
+  const restored: RestoredEvidence[] = [];
+  restoreEvidenceRec(opts.entry, fns, evidence, "", restored);
+  try {
+    return detach(opts.entry);
+  } finally {
+    for (const { row, name } of restored) delete row[name];
+  }
 }
 
 /**
@@ -874,7 +901,7 @@ export async function applyFieldReadAccessWithEvidence(
 ): Promise<void> {
   const fns = getFieldFunctions(opts.kind, opts.slug);
   const restored: RestoredEvidence[] = [];
-  if (fns && !opts.overrideAccess && evidence.size > 0) {
+  if (fns && !opts.overrideAccess && evidence.byPath.size > 0) {
     restoreEvidenceRec(opts.entry, fns, evidence, "", restored);
   }
   try {

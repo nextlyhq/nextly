@@ -93,6 +93,22 @@ export default function singleReadRule({
           row => row.visibility === "private"
         )
       );
+    // Refuses a flagged document whose FIRST repeater row is private, and
+    // writes into a denied policy object on the way. The first tests that a
+    // row a hook reordered is judged as the row it is; the second that what a
+    // rule writes into its argument does not reach the pass after it.
+    case "first-row-aware":
+      return !(
+        (data as { flagged?: boolean })?.flagged === true &&
+        (data as { entries?: { visibility?: string }[] })?.entries?.[0]
+          ?.visibility === "private"
+      );
+    case "policy-mutating": {
+      const policy = (data as { settings?: { policy?: { mode?: string } } })
+        ?.settings?.policy;
+      if (policy) policy.mode = "public";
+      return true;
+    }
     // Refuses on a value that exists only in the document a first read would
     // create, so the rule can decide correctly only if those defaults are judged
     // before the write that materializes them.

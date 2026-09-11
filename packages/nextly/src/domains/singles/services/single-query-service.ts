@@ -80,7 +80,7 @@ import {
   runFieldHooks,
   captureReadAccessEvidence,
   type ReadAccessRedactions,
-  withReadAccessEvidence,
+  snapshotWithReadAccessEvidence,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -2101,10 +2101,10 @@ export class SingleQueryService extends BaseService {
           // to inspect a denied field, and a copy without it would show the
           // field absent, the "missing means allowed" reading that admits a
           // caller the rule exists to refuse.
-          document: withReadAccessEvidence(
-            detachData(doc),
-            { kind: "single", slug },
-            readAccessEvidence
+          document: snapshotWithReadAccessEvidence(
+            { kind: "single", slug, entry: doc },
+            readAccessEvidence,
+            detachData
           ),
         });
         if (finalDenial) return finalDenial;

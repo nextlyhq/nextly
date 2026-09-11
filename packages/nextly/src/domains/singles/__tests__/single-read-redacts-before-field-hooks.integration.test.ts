@@ -380,4 +380,133 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     expect(denied.success).toBe(false);
     expect(denied.statusCode).toBe(403);
   });
+
+  it("restores a reordered id-less row's evidence to the row it came from", async () => {
+    // The hook on `entries` reverses the rows. The rows are the same objects
+    // the capture saw, so each is restored from its own path, not from the
+    // path its new position yields. The rule reads the FIRST row after the
+    // reversal, which is the private one.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({
+              name: "siteName",
+              hooks: {
+                afterRead: [
+                  ({ value, data }) => {
+                    (data as Record<string, unknown>).flagged = true;
+                    return value;
+                  },
+                ],
+              },
+            }),
+            repeater({
+              name: "entries",
+              fields: [
+                text({ name: "label" }),
+                text({ name: "visibility", access: { read: () => false } }),
+              ],
+              hooks: {
+                afterRead: [({ value }) => [...(value as unknown[])].reverse()],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        entries: [
+          { label: "A", visibility: "public" },
+          { label: "B", visibility: "private" },
+        ],
+      },
+      { overrideAccess: true }
+    );
+
+    const denied = await entry.get("branding", {
+      user: { id: "first-row-aware" },
+      routeAuthorized: true,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it("keeps what a rule writes into restored evidence out of the second pass", async () => {
+    // `policy` is denied and restored as evidence for the rule, which writes
+    // `mode: "public"` into it. `openTag` may be read only while the policy
+    // is not private, and the hook on `settings` carries it back. The second
+    // pass must judge against the policy as captured, not as the rule left
+    // it, and strip `openTag`.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "settings",
+              fields: [
+                group({
+                  name: "policy",
+                  access: { read: () => false },
+                  fields: [text({ name: "mode" })],
+                }),
+                text({
+                  name: "openTag",
+                  access: {
+                    read: ({ data }) =>
+                      (data as { policy?: { mode?: string } })?.policy?.mode !==
+                      "private",
+                  },
+                }),
+              ],
+              hooks: {
+                afterRead: [
+                  ({ value }) => ({
+                    ...(value as object),
+                    openTag: "reintroduced",
+                  }),
+                ],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        settings: { policy: { mode: "private" }, openTag: "x" },
+      },
+      { overrideAccess: true }
+    );
+
+    const result = await entry.get("branding", {
+      user: { id: "policy-mutating" },
+      routeAuthorized: true,
+    });
+    expect(result.success).toBe(true);
+    const settings = (result.data as { settings?: Record<string, unknown> })
+      ?.settings;
+    expect(settings).not.toHaveProperty("openTag");
+    expect(settings).not.toHaveProperty("policy");
+  });
 });
