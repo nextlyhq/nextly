@@ -16,6 +16,7 @@ import {
   integer,
   jsonb,
   PgDialect,
+  pgSchema,
   pgTable,
   text,
   timestamp,
@@ -105,6 +106,44 @@ describe("buildUpdateStatement — which columns are written", () => {
     expect(js.sql).toBe(sqlName.sql);
     expect(js.sql).toContain('"updated_at" = $1');
     expect(js.params).toEqual(sqlName.params);
+  });
+
+  it("assigns a column named under both spellings once, the later value winning", () => {
+    // One SET target per column is what the database accepts; the query
+    // builder's key normalization collapsed the pair the same way.
+    const { sql, params } = compile({
+      data: {
+        updatedAt: new Date("2026-09-11T10:00:00.000Z"),
+        slug: "s",
+        updated_at: new Date("2026-09-12T10:00:00.000Z"),
+      },
+    });
+    expect(sql).toBe(
+      'UPDATE "dc_pages" SET "updated_at" = $1, "slug" = $2 WHERE "dc_pages"."id" = $3'
+    );
+    expect(params[0]).toBe(
+      pages.updatedAt.mapToDriverValue(new Date("2026-09-12T10:00:00.000Z"))
+    );
+  });
+
+  it("targets a table by its schema when it declares one, as the WHERE does", () => {
+    const tenant = pgSchema("tenant");
+    const posts = tenant.table("posts", {
+      id: text("id").primaryKey(),
+      slug: text("slug"),
+    });
+    const { sql } = new PgDialect().sqlToQuery(
+      buildUpdateStatement({
+        table: "posts",
+        tableObj: posts,
+        data: { slug: "a" },
+        where: byId("p1"),
+        bindUnmodeled: tagged,
+      })!
+    );
+    expect(sql).toBe(
+      'UPDATE "tenant"."posts" SET "slug" = $1 WHERE "tenant"."posts"."id" = $2'
+    );
   });
 });
 

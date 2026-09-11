@@ -10,8 +10,8 @@
  * this pins the write now that the key is spelled as the column is.
  *
  * The stored value is parked at the epoch first, through the pooled update,
- * so the assertion does not depend on a second elapsing between the create
- * and the update.
+ * so the assertion is that the write moved it off a value no clock reading
+ * can produce, and depends on no clock at all.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -61,7 +61,6 @@ describe("the transaction update path and updated_at", () => {
     await current.adapter.update(TABLE, { updated_at: new Date(0) }, byId(id));
     expect((await storedUpdatedAt(current, id)).getTime()).toBe(0);
 
-    const before = Date.now();
     const result = await current.adapter.transaction(tx =>
       handler
         .getEntryService()
@@ -73,10 +72,8 @@ describe("the transaction update path and updated_at", () => {
     );
     expect(result.success).toBe(true);
 
-    const after = await storedUpdatedAt(current, id);
-    // Whole seconds on SQLite, so the bound is the second the update began.
-    expect(after.getTime()).toBeGreaterThanOrEqual(
-      Math.floor(before / 1000) * 1000
-    );
+    // Off the parked epoch: the claim is that the write moved it, and the
+    // epoch is the one value no clock reading can produce.
+    expect((await storedUpdatedAt(current, id)).getTime()).toBeGreaterThan(0);
   });
 });

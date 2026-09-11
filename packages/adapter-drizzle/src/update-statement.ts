@@ -66,9 +66,12 @@ interface BindableColumn {
 
 /** The arguments the adapters hand this builder. */
 export interface UpdateStatementInput {
-  /** The physical table, quoted by the dialect. */
+  /** The physical table's name, as the caller addressed it. */
   table: string;
-  /** The runtime table object; its columns decide how each value binds. */
+  /**
+   * The runtime table object: the statement's target, rendered with its
+   * schema when it has one, and the columns that decide how each value binds.
+   */
   tableObj: Record<string, unknown>;
   /**
    * Values by column. SQL names and Drizzle property names are both accepted,
@@ -167,29 +170,38 @@ function boundValue(
  */
 export function buildUpdateStatement(input: UpdateStatementInput): SQL | null {
   const { byName, declared } = columnsOf(input.tableObj);
-  const assignments: SQL[] = [];
-  const assigned = new Set<string>();
+  // Keyed by the SQL column name, so a payload naming one column under both
+  // spellings assigns it once, the later value winning — the same collapse
+  // the query builder's key normalization performed, and one SET target per
+  // column is what the database accepts.
+  const assignments = new Map<string, SQL>();
 
   for (const [key, value] of Object.entries(input.data)) {
     if (value === undefined) continue;
     const column = byName.get(key);
     const name = column?.name ?? key;
-    assigned.add(name);
-    assignments.push(
+    assignments.set(
+      name,
       sql`${sql.identifier(name)} = ${boundValue(value, column, input.bindUnmodeled)}`
     );
   }
   // The columns the caller left unnamed that update themselves.
   for (const column of declared) {
-    if (assigned.has(column.name) || column.onUpdateFn === undefined) continue;
+    if (assignments.has(column.name) || column.onUpdateFn === undefined) {
+      continue;
+    }
     const value = column.onUpdateFn();
-    assignments.push(
+    assignments.set(
+      column.name,
       sql`${sql.identifier(column.name)} = ${boundValue(value, column, input.bindUnmodeled)}`
     );
   }
-  if (assignments.length === 0) return null;
+  if (assignments.size === 0) return null;
 
-  const statement = sql`UPDATE ${sql.identifier(input.table)} SET ${sql.join(assignments, sql`, `)}`;
+  // The target is the table object, not the caller's string: a table declared
+  // in a schema renders as `"schema"."table"`, which is how the WHERE below
+  // already refers to it, and how the query builder targeted it.
+  const statement = sql`UPDATE ${input.tableObj} SET ${sql.join([...assignments.values()], sql`, `)}`;
   const condition = buildDrizzleWhere(input.tableObj, input.where);
   if (condition) statement.append(sql` WHERE ${condition}`);
   return statement;
