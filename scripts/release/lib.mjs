@@ -74,12 +74,51 @@ function getPath(object, path) {
  * stable version: `1.0.0-alpha.4` -> `"alpha"`, `1.0.0` -> `undefined`. Mirrors
  * `semver.parse(v).prerelease[0]` for the shapes npm accepts, without pulling in
  * a dependency for one field.
+ *
+ * Exported so that "is this a prerelease" is asked in ONE place. A second
+ * spelling of it, however obvious, is a second answer waiting to disagree with
+ * this one about a build-metadata suffix.
  */
-function firstPrereleaseId(version) {
+export function firstPrereleaseId(version) {
   const withoutBuildMetadata = version.split("+")[0];
   const separator = withoutBuildMetadata.indexOf("-");
   if (separator === -1) return undefined;
   return withoutBuildMetadata.slice(separator + 1).split(".")[0];
+}
+
+/**
+ * Whether a version is a prerelease OF a given active tag.
+ *
+ * 🔴 Deliberately not `firstPrereleaseId(version) === tag`, and deliberately
+ * different from the comparison inside `getExpectedDistTag`. That one mirrors
+ * Changesets, which classifies with `semver.parse(v).prerelease[0] === tag`
+ * and so reads `1.2.3-next.1.0` as belonging to `next` rather than to
+ * `next.1`. It has to keep that quirk: its job is to predict what
+ * `changeset publish` will do, and predicting something better than the tool
+ * does is still predicting wrong.
+ *
+ * This answers a different question, which is whether `pre.json` and the
+ * manifests describe the same release. A dotted tag is where the two answers
+ * part company, and borrowing the mirror here would switch the channel check
+ * off for the whole of a `next.1` cycle rather than answer it incorrectly.
+ * Both spellings are correct, for their own question, which is why they are
+ * two functions with this note between them.
+ */
+export function isPrereleaseOfTag(version, tag) {
+  const withoutBuildMetadata = version.split("+")[0];
+  const separator = withoutBuildMetadata.indexOf("-");
+  if (separator === -1) return false;
+  const identifiers = withoutBuildMetadata.slice(separator + 1);
+  if (!identifiers.startsWith(`${tag}.`)) return false;
+  /*
+   * 🔴 Exactly ONE counter after the tag, not merely the tag as a prefix.
+   * `changeset version` in pre mode writes `<version>-<tag>.<n>`, so a `next`
+   * cycle produces `-next.0` and a `next.1` cycle produces `-next.1.0`. A
+   * prefix test alone reads that second one as an artifact of `next` too, and
+   * a cycle exited under `next.1` and re-entered under `next` would then have
+   * its old builds accepted as the new channel's.
+   */
+  return /^\d+$/.test(identifiers.slice(tag.length + 1));
 }
 
 /**
@@ -91,6 +130,31 @@ export function readPreState() {
   if (!existsSync(PRE_STATE_PATH)) return null;
   const state = readJson(PRE_STATE_PATH);
   return state.mode === "pre" ? state : null;
+}
+
+/**
+ * `.changeset/pre.json` as it stands, or `null` when there is no such file.
+ *
+ * 🔴 Deliberately NOT `readPreState`, which answers `null` for `mode: "exit"`
+ * and for no file at all. Those are different situations. Exiting prerelease
+ * mode is a transition the repository is IN: the manifests still declare the
+ * last alpha until the Version PR lands, so anything that cannot tell the two
+ * apart treats that alpha as a stable release and expects `latest` to resolve
+ * to it. The remedy that follows from believing this says to move `latest` onto
+ * a prerelease, which is a worse outcome than the check not running at all.
+ *
+ * The whole record rather than the mode alone, because the ACTIVE TAG is half
+ * of what makes a mode and a version agree: prerelease mode re-entered under a
+ * new tag leaves manifests declaring the old one, and a reader holding only
+ * `mode` cannot see the difference.
+ */
+export function readPreConfig() {
+  if (!existsSync(PRE_STATE_PATH)) return null;
+  const state = readJson(PRE_STATE_PATH);
+  // A plain reader. Whether a mode and a tag make SENSE together is a question
+  // for whoever is asking, and it is asked in `shouldAssertChannel`, where a
+  // test can reach it.
+  return { mode: state.mode ?? null, tag: state.tag ?? null };
 }
 
 /**
@@ -488,6 +552,19 @@ export async function waitForCompleteRelease({
   budgetMs = SETTLE_BUDGET_MS,
   firstDelayMs = FIRST_DELAY_MS,
   maxDelayMs = MAX_DELAY_MS,
+  /*
+   * What "not settled yet" means, so a caller can ask a narrower question than
+   * the release gate does. The default is the full predicate, which is right
+   * for `verify`: it decides whether to finalize, so anything short of a whole
+   * release is worth waiting on.
+   *
+   * 🔴 A caller that only reports must not wait on conditions that can never
+   * clear. A dist-tag that was never moved is a real defect, not a delay, and a
+   * package awaiting its first publish will not appear however long anyone
+   * waits; waiting on either turns the budget into a guaranteed stall before
+   * the same verdict.
+   */
+  problemsFor = collectProblems,
 }) {
   const deadline = now() + budgetMs;
   let delay = firstDelayMs;
@@ -497,7 +574,7 @@ export async function waitForCompleteRelease({
 
   for (;;) {
     registry = await fetchStates(manifest);
-    problems = collectProblems(manifest, registry, preState);
+    problems = problemsFor(manifest, registry, preState);
     attempts += 1;
     if (problems.length === 0) break;
 

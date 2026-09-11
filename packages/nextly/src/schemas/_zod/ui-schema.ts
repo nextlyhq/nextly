@@ -15,7 +15,7 @@
 
 import { z } from "zod";
 
-import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
+import { isFieldGroupFieldType } from "../../domains/field-groups/storage/field-group-field-type";
 import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
   isPluginOptionContainer,
@@ -360,7 +360,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // counted BEFORE any value is read: coalescing the two spellings of one shape
       // first would silently prefer the legacy value and accept an ambiguous field
       // the code-first validator rejects.
-      if (isFieldGroupType(f.type)) {
+      if (isFieldGroupFieldType(f.type)) {
         // Both spellings are declared on the object above, so they survive
         // parsing and are readable off the node without a cast.
         const singleKeys = ["component", "fieldGroup"] as const;

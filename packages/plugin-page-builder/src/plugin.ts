@@ -112,7 +112,7 @@ function pagePreviewBreakpoints(
        * in, which has no use for it and cannot run it.
        */
       reader: async () => {
-        const { getCachedNextly } = await import("nextly");
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
         const nextly = await getCachedNextly();
         return { findSingle: args => nextly.findSingle(args) };
       },

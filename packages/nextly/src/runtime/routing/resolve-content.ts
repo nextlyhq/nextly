@@ -135,12 +135,14 @@ interface ResolveContentOptionsBase {
    * rule is hidden from an unauthenticated request (resolves to `null` →
    * `notFound()`). Pass `true` for a fully trusted read. NOTE on anonymous
    * scope: an anonymous read enforces stored rules that DENY outright
-   * (public/authenticated/role-based). A row-level CONSTRAINT rule (owner-only,
-   * or a custom rule returning a query predicate) and inline
-   * `defineCollection({ access })` code rules require a `user` context to
-   * evaluate, so they are not applied for an anonymous read — gate such content
-   * behind an authenticated read (pass a `user`) rather than relying on the
-   * anonymous default. CACHING: only a trusted (`overrideAccess: true`) read
+   * (public/authenticated/role-based), and it enforces inline
+   * `defineCollection({ access })` code rules, which are handed a real
+   * anonymous context (`user: null`, no roles) and decide on it. What an
+   * anonymous read still cannot apply is a row-level CONSTRAINT rule
+   * (owner-only, or a custom rule returning a query predicate): those compare
+   * the row against somebody, and there is nobody to compare it to. Gate
+   * content that depends on a CONSTRAINT rule behind an authenticated read
+   * (pass a `user`) rather than relying on the anonymous default. CACHING: only a trusted (`overrideAccess: true`) read
    * with no `user` is F1-cached — an enforced read is never cached (its access
    * decision can't be invalidated on a policy change). A public site that wants
    * cached pages should read its public content with `overrideAccess: true`.

@@ -315,7 +315,7 @@ export interface WidgetDefinition {
    * closed set lives in `lifecycle.ts` with the reasoning; the short version is
    * that a vocabulary cannot be spammed and an arbitrary hook can.
    */
-  visibleWhen?: WidgetCondition;
+  visibleWhen?: WidgetCondition | readonly WidgetCondition[];
   /**
    * Whether the host frames this widget. Defaults to `"card"`.
    *

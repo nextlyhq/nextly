@@ -278,6 +278,25 @@ export type {
 // block on commas without stripping comments, so an inline note is recorded as
 // an export name and the real one is not.
 /**
+ * @experimental The already-booted Nextly instance, for plugin server work with
+ *   no route context to reach through.
+ *
+ *   `ctx.services` covers a plugin handling its own route. It does not cover
+ *   work that runs outside one: a field reader resolved at mint time, a
+ *   scheduled task, anything given no `ctx`. Those callers have no config in
+ *   scope either, so the initialiser is not an option, and this reads what has
+ *   already booted and waits for the migration gate rather than refusing while
+ *   it is open.
+ *
+ *   Re-exported here so a plugin depends on the surface its compatibility is
+ *   governed on rather than on core's root entry. `@experimental` means no
+ *   promise yet, per the ladder above; the point is that the promise is made
+ *   about THIS path once it graduates, while an import of core's root would
+ *   still be reaching past the boundary that makes one possible.
+ */
+export { getCachedNextly } from "nextly";
+
+/**
  * @experimental The canonical response envelopes, and the trusted-client-IP
  *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
  *   ship in a release.

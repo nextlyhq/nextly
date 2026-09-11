@@ -430,17 +430,44 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
 }
 
 /**
- * Return the already-initialised Nextly instance from the singleton cache.
+ * The already-initialised Nextly instance, waiting for boot to settle first.
  *
- * Use this inside Nextly's own internal API handlers (anywhere under
- * `packages/nextly/src/api/*`) where the user-provided config is not in
- * scope. Throws a clear error if the singleton has not been initialised
- * yet — the typical fix is to ensure the project ships an
- * `instrumentation.ts` that calls `createRegister(config)` so init runs
- * once per worker before the first request.
+ * ## Which of the three to reach for
  *
- * Do NOT use this in user code. User code should always call
- * `getNextly({ config })` directly.
+ * `getNextly({ config })` from `nextly` INITIALISES. It takes the config, is
+ * idempotent and cached, and is correct whether or not anything has booted. An
+ * application reaches for this one.
+ *
+ * This function READS what has already booted, and waits. It takes no config,
+ * so it is what to use where the config is not in scope, and it is async, so it
+ * can await the boot migration gate rather than refusing while that gate is
+ * still open. Nextly's own API handlers under `src/api/*` use it, and so does
+ * plugin code doing server work outside a route, where there is no
+ * `ctx.services` to reach through. A plugin should import it from
+ * `@nextlyhq/plugin-sdk`, which is the surface plugin compatibility is governed
+ * on. It is `@experimental` there today, so it carries no promise yet; what the
+ * SDK gives is that the promise, when it comes, is made about that import path
+ * and not about core's internal layout.
+ *
+ * `requireNextly()` from `nextly/runtime` also reads, but SYNCHRONOUSLY, so it
+ * cannot wait and asserts instead: it throws when the migration gate has not
+ * settled. Correct inside a request lifecycle, where boot is already proven.
+ *
+ * Throws when nothing has registered. The usual fix is an `instrumentation.ts`
+ * that calls `createRegister(config)`, so init runs once per worker before the
+ * first request.
+ *
+ * ## Why this is published from the Node-safe root
+ *
+ * Importing `nextly/runtime` pulls `next/*` into the module graph, because that
+ * is the entry allowed to reach for it. This function needs none of it, and its
+ * callers include a plugin whose code is bundled for the browser and a CLI that
+ * runs outside a request. Publishing it there would drag Next.js into both.
+ *
+ * What that does NOT buy is avoiding the dependency: `next` is the one peer
+ * this package does not mark optional, so a consumer installs it whichever
+ * subpath they import. The boundary is about what a module GRAPH pulls in, not
+ * about what a package manager resolves.
  */
 export async function getCachedNextly(): Promise<Nextly> {
   // Before ANY return, including the cached one. This is the surface that could

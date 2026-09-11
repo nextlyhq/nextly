@@ -14,96 +14,59 @@
  * @module domains/widgets/conditions
  */
 
-import {
-  readableEntities,
-  readAccessCaller,
-} from "../../auth/entity-read-access";
-import { requireNextly } from "../../direct-api/nextly";
-import type { FindArgs } from "../../direct-api/types/collections";
+import { getService } from "../../di";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
-import { isWidgetCondition, type WidgetCondition } from "./lifecycle";
-import { listSources, sourceKindFromId, sourceTarget } from "./sources";
-
-/**
- * The access arguments every condition reads through.
- *
- * The SAME shape a widget query uses, so a condition and the cards it governs
- * cannot disagree about who the reader is. `overrideAccess: false` is the whole
- * point: a condition answered with the guard off would describe an install
- * rather than a reader, and `content:empty` is deliberately about the reader.
- */
-function readArgs(caller: ReadCaller) {
-  return {
-    overrideAccess: false as const,
-    user: caller.user,
-    ...(caller.authenticatedScope
-      ? ({ actor: caller.authenticatedScope } satisfies Pick<
-          FindArgs<string>,
-          "actor"
-        >)
-      : {}),
-  };
-}
+import { conditionProbe, type ConditionProbe } from "./condition-probe";
+import {
+  declaredConditions,
+  isWidgetCondition,
+  type WidgetCondition,
+} from "./lifecycle";
+import { onboardingIsIncomplete } from "./onboarding";
 
 /**
  * Whether this reader can see any content at all.
  *
- * SHORT-CIRCUITS on the first collection holding a row, so the expensive shape
- * — many collections — is the one that returns soonest, and the exhaustive walk
- * happens only on an install that is genuinely empty, where every count is
- * against an empty table.
+ * DERIVED from {@link readerHasContent} rather than counting here, because the
+ * onboarding steps ask the same question of the same rows. Counted in both
+ * places the two would agree on the day they were written and drift after:
+ * one counting drafts and the other not, or one reading the source registry
+ * and the other the collections registry, produces a dashboard that offers an
+ * onboarding card while telling the reader their install has content.
  *
- * Asked per collection through the ordinary counted read rather than through
- * one unscoped total, because "any content" has to mean "any content THIS
- * reader may read": a total taken with the guard off would answer from rows the
- * reader is not allowed to know exist.
- *
- * `status: "all"` because a draft is content. A reader who has written one
- * post and not published it is not looking at an empty install, and telling
- * them they are is the onboarding equivalent of losing their work.
- *
- * The collections come from the WIDGET SOURCE registry, which `visibleWidgets`
- * has just refreshed, rather than from the collections registry directly. That
- * registry excludes a collection whose stored metadata is known to be ahead of
- * its table — a transient reload state — so such a collection's rows are not
- * counted and an install holding only those would read as empty.
- *
- * Accepted, because the alternative is worse in the case this exists for.
- * Counting straight from the collections registry would query tables that may
- * not exist yet; that count throws, the condition goes unanswered, and an
- * unanswered condition HIDES its widget — so the onboarding card would
- * disappear on exactly the fresh install it is meant to greet. A card that
- * lingers briefly during a reload is the cheaper error than one that never
- * appears.
- *
- * Note what is NOT a gap here: a `pending` migration status does not drop a
- * collection. The source builder treats that label as a fast path only and
- * asks the database whether the table exists when the label declines.
+ * The scoping, the short-circuit and the `status: "all"` reasoning now live
+ * with the counting, in `reader-content.ts`.
  */
-async function contentIsEmpty(caller: ReadCaller): Promise<boolean> {
-  const slugs = listSources()
-    .filter(source => sourceKindFromId(source.id) === "collection")
-    .map(source => sourceTarget(source.id));
+async function contentIsEmpty(probe: ConditionProbe): Promise<boolean> {
+  return !(await probe.hasContent());
+}
 
-  // Asked once for the whole set rather than per collection: a permission
-  // decision resolves a session caller through a per-user TTL cache, so asking
-  // separately is one database read per collection for one answer.
-  // Converted rather than taken as a second parameter: the entity-level shape
-  // is DERIVED from this one, and asking a caller to pass both invites the two
-  // describing different readers.
-  const readable = await readableEntities(slugs, readAccessCaller(caller));
-
-  for (const slug of slugs) {
-    if (!readable.has(slug)) continue;
-    const { total } = await requireNextly().count({
-      collection: slug,
-      status: "all",
-      ...readArgs(caller),
-    });
-    if (total > 0) return false;
-  }
-  return true;
+/**
+ * Whether the offer of demo content is still open.
+ *
+ * Reads the two flags the seed card already writes, and takes NO caller: the
+ * answer is a property of the install rather than of the reader. That is the
+ * one place this file departs from `content:empty`'s reader-scoping, and it is
+ * deliberate — whether a project accepted demo data is recorded once, and a
+ * second admin arriving after the first declined should not be offered it
+ * again. Nothing about rows is disclosed by it, only that a setup question was
+ * answered.
+ *
+ * Either flag settles it. `completedAt` and `skippedAt` are the two ways the
+ * offer stops being open, and a card asking this wants to know whether to make
+ * the offer, not which way it went.
+ */
+async function seedIsUnanswered(): Promise<boolean> {
+  // Reached through the container rather than the Direct API: `meta` lives on
+  // the INSTANCE, and `requireNextly()` answers with the Direct API's own
+  // `Nextly` -- a different type of the same name, which has no meta accessor.
+  const meta = getService("metaService");
+  const [completedAt, skippedAt] = await Promise.all([
+    meta.get<string>("seed.completedAt"),
+    meta.get<string>("seed.skippedAt"),
+  ]);
+  return !completedAt && !skippedAt;
 }
 
 /**
@@ -116,9 +79,11 @@ async function contentIsEmpty(caller: ReadCaller): Promise<boolean> {
  */
 const EVALUATORS: Record<
   WidgetCondition,
-  (caller: ReadCaller) => Promise<boolean>
+  (probe: ConditionProbe) => Promise<boolean>
 > = {
   "content:empty": contentIsEmpty,
+  "onboarding:incomplete": onboardingIsIncomplete,
+  "seed:unanswered": seedIsUnanswered,
 };
 
 /**
@@ -140,8 +105,14 @@ export async function evaluateConditions(
   // on one collection, would answer the whole request as an error and take
   // every PERMANENT card down with the optional one it was asked about. The
   // blast radius of a condition has to be the widget that named it.
+  // ONE probe for the whole request, so two conditions asking overlapping
+  // questions of the same rows resolve them once between them rather than once
+  // each. Built here rather than per evaluator, which is what made the sharing
+  // accidental before: a helper calling another helper re-resolved what its
+  // caller had just resolved.
+  const probe = conditionProbe(caller);
   const settled = await Promise.allSettled(
-    wanted.map(condition => EVALUATORS[condition](caller))
+    wanted.map(condition => EVALUATORS[condition](probe))
   );
   const verdicts = new Map<WidgetCondition, boolean>();
   wanted.forEach((condition, index) => {
@@ -185,7 +156,11 @@ export function conditionsNeeded<T extends ConditionalDeclaration>(
   const needed = new Set<WidgetCondition>();
   for (const widget of widgets) {
     if (widget.lifecycle !== "conditional") continue;
-    if (isWidgetCondition(widget.visibleWhen)) needed.add(widget.visibleWhen);
+    for (const condition of declaredConditions(widget.visibleWhen)) {
+      // A Set, so two cards naming the same condition -- or one card naming it
+      // twice -- still cost one evaluation.
+      if (isWidgetCondition(condition)) needed.add(condition);
+    }
   }
   return needed;
 }
@@ -208,8 +183,18 @@ export function widgetsHeldByVerdict<T extends ConditionalDeclaration>(
 ): T[] {
   return widgets.filter(widget => {
     if (widget.lifecycle !== "conditional") return true;
-    if (!isWidgetCondition(widget.visibleWhen)) return false;
-    return verdicts.get(widget.visibleWhen) === true;
+    const named = declaredConditions(widget.visibleWhen);
+    // Nothing named is not "no rule to fail": registration refuses it, so
+    // reaching here means a declaration that got past validation some other
+    // way, and a conditional card with no rule is one that shows always.
+    if (named.length === 0) return false;
+    // EVERY condition, not any. A card naming several is offered only while all
+    // of them hold, so declining one offer removes the card even while another
+    // condition still holds.
+    return named.every(
+      condition =>
+        isWidgetCondition(condition) && verdicts.get(condition) === true
+    );
   });
 }
 

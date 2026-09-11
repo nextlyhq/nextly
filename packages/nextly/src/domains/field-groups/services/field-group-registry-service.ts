@@ -29,7 +29,7 @@ import {
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../storage/field-group-field-type";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
@@ -1023,7 +1023,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
       // The slugs come from the shared reader so a definition referencing its
       // field group through either key spelling is collected the same way.
-      if (isFieldGroupType(fieldType)) {
+      if (isFieldGroupFieldType(fieldType)) {
         const { single, many } = extractFieldGroupReferences(field);
         if (single) {
           slugs.add(single);
@@ -1098,7 +1098,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       const fieldType = field.type as string;
       const enrichedField: EnrichedFieldConfig = { ...field };
 
-      if (isFieldGroupType(fieldType)) {
+      if (isFieldGroupFieldType(fieldType)) {
         const { single: componentSlug, many: componentsArray } =
           extractFieldGroupReferences(field);
         if (componentSlug) {
@@ -1235,7 +1235,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       const fieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
       const fieldType = field.type as string;
 
-      if (isFieldGroupType(fieldType)) {
+      if (isFieldGroupFieldType(fieldType)) {
         const { single, many } = extractFieldGroupReferences(field);
         if (single === targetSlug) {
           references.push({ entityType, entitySlug, fieldName, fieldPath });

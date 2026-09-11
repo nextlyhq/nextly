@@ -25,7 +25,7 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 
@@ -255,7 +255,7 @@ function targetKey(target: RelationTarget): string {
 // ---- classification ---------------------------------------------------------
 
 function isComponentField(field: FieldConfig): boolean {
-  return isFieldGroupType(field.type);
+  return isFieldGroupFieldType(field.type);
 }
 /** Cardinality is decided by `repeatable`; a non-repeatable field holds one value. */
 function isComponentList(field: FieldConfig): boolean {

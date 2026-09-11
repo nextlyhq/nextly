@@ -17,6 +17,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import {
+  PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT,
+  PG_RELATION_THE_WRITES_HIT,
+} from "../pg-visible-relation";
+
 import { sizeFromDeclaration } from "./declared-size";
 import type {
   ColumnSpec,
@@ -229,6 +234,10 @@ export async function introspectLiveSnapshot(
     // that is not exactly a `nextval()` call yields NULL from the substring
     // and so falls to false, which is the safe direction: a default the diff
     // does not recognise is reported, never swallowed.
+    // Scoped by `PG_RELATION_THE_WRITES_HIT`, which carries the reasoning: the
+    // read has to resolve the same relation an unqualified statement does, and
+    // neither a schema name nor `current_schema()` does that.
+    //
     // `is_primary_key` comes from `pg_index.indisprimary` rather than
     // `information_schema.table_constraints`, so it needs no second round trip
     // and reports the same key the index query deliberately excludes. A live
@@ -262,7 +271,7 @@ export async function introspectLiveSnapshot(
                    false
                  ) AS owned_sequence_default
           FROM information_schema.columns c
-          WHERE c.table_schema = 'public'
+          WHERE ${PG_RELATION_THE_WRITES_HIT}
             AND c.table_name IN (${tableNamesIn})
           ORDER BY c.table_name, c.ordinal_position`
     )) as { rows: PgRow[] };
@@ -271,21 +280,20 @@ export async function introspectLiveSnapshot(
     // (indisprimary) and partial indexes (indpred). Expression indexes yield no
     // pg_attribute row and are naturally excluded.
     //
-    // Scoped to `public` like the column query above. `pg_class.relname` is
-    // unique per schema, not per database, so without the namespace join a
-    // same-named table in another schema contributes its indexes to these rows
-    // and `attachIndexes` groups them under the same name — reporting indexes
-    // that are not on the table being introspected, and masking the absence of
-    // ones that should be.
+    // Scoped through the relation like the column query above. `pg_class.relname`
+    // is unique per schema, not per database, so without a scope a same-named
+    // table in another schema contributes its indexes to these rows and
+    // `attachIndexes` groups them under the same name — reporting indexes that
+    // are not on the table being introspected, and masking the absence of ones
+    // that should be.
     const idxResult = (await dbTyped.execute(
       sql`SELECT t.relname AS table, i.relname AS index, ix.indisunique AS unique,
                  a.attname AS column, array_position(ix.indkey, a.attnum) AS ord
           FROM pg_class t
-          JOIN pg_namespace n ON n.oid = t.relnamespace
           JOIN pg_index ix ON ix.indrelid = t.oid
           JOIN pg_class i ON i.oid = ix.indexrelid
           JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
-          WHERE n.nspname = 'public'
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
             AND t.relname IN (${tableNamesIn})
             AND ix.indisprimary = false
             AND ix.indpred IS NULL

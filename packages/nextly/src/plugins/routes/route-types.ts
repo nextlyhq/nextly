@@ -126,15 +126,18 @@ export type Middleware = (
 export type PluginRouteMount = "plugin" | "root";
 
 /**
- * @public A single HTTP route contributed by a plugin. Mounted at
- * `/api/plugins/<plugin-name><path>` under the existing catch-all and secure by
- * default (auth + RBAC) unless `public: true`.
+ * @public A single HTTP route contributed by a plugin. Answers at
+ * `/plugins/<plugin-name><path>` under the existing catch-all, so its full URL
+ * depends on where the app mounts that handler: a scaffolded project serves it
+ * from `/admin/api`. Secure by default (auth + RBAC) unless `public: true`.
  */
 export interface PluginRoute {
   method: RouteMethod;
   /**
    * Path within the plugin namespace; MUST start with `"/"`. Supports `:param`
-   * segments (e.g. `"/items/:id"`). Final URL: `/api/plugins/<plugin-name><path>`.
+   * segments (e.g. `"/items/:id"`). Answers at
+   * `<handler mount>/plugins/<plugin-name><path>`, which is
+   * `/admin/api/plugins/...` in a scaffolded project.
    */
   path: string;
   handler: PluginRouteHandler;

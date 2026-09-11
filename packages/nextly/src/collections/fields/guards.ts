@@ -8,7 +8,7 @@
  * @since 1.0.0
  */
 
-import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
+import { isFieldGroupFieldType } from "../../domains/field-groups/storage/field-group-field-type";
 
 import type {
   // Text field types
@@ -310,10 +310,10 @@ export const isJSONField = createTypeGuard<JSONFieldConfig>("json");
  * }
  * ```
  */
-export function isFieldGroupField(
-  field: { type: string }
-): field is FieldGroupFieldConfig {
-  return isFieldGroupType(field.type);
+export function isFieldGroupField(field: {
+  type: string;
+}): field is FieldGroupFieldConfig {
+  return isFieldGroupFieldType(field.type);
 }
 
 // ============================================================

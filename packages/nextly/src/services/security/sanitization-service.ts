@@ -12,7 +12,7 @@
 import { typeHasNestedFields } from "../../collections/fields/guards";
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -193,7 +193,7 @@ export function sanitizeEntryData(
     // A field group's values are nested documents carrying the group's own
     // fields, so the descent must follow either type spelling — skipping the
     // migrated one would leave its text values unsanitized.
-    if (isFieldGroupType(field.type)) {
+    if (isFieldGroupFieldType(field.type)) {
       sanitizeFieldGroupValue(value, field, config);
       continue;
     }
@@ -384,7 +384,7 @@ export async function attachFieldGroupChildren(
   if (depth > MAX_FIELD_GROUP_RESOLVE_DEPTH) return fields;
 
   for (const field of fields) {
-    if (isFieldGroupType(field.type)) {
+    if (isFieldGroupFieldType(field.type)) {
       await attachFieldGroupReferences(
         field,
         resolveChildren,

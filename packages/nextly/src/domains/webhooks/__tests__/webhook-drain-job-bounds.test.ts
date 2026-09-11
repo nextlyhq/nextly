@@ -89,6 +89,8 @@ describe("the drain job's bounds", () => {
     const now = new Date();
     const job = create({} as never, {} as never);
     await job.handler(null, {
+      jobId: "webhook-drain-1",
+      attempt: 1,
       user: null,
       now,
       content: {} as never,

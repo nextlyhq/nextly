@@ -14,7 +14,7 @@ import { serializeCollection } from "../../domains/schema/services/code-generato
 import { describeError } from "../../errors/index";
 import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { CommandContext } from "../program";
-import { createAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 // F1 PR 4: switched from the deleted wrapper/config-loader (jiti-based,
 // took a positional cwd arg) to the canonical cli/utils/config-loader
 // (bundle-require-based, takes an options object). The wrapper helper
@@ -64,7 +64,7 @@ export async function runDemote(
     logger.error(env.errors.join("; "));
     process.exit(1);
   }
-  const adapter = await createAdapter({ logger });
+  const adapter = await createCliAdapter({ logger });
   const registry = new CollectionRegistryService(
     adapter as unknown as DrizzleAdapter,
     {

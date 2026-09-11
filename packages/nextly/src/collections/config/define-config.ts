@@ -34,7 +34,7 @@
 
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
@@ -89,7 +89,7 @@ function collectComponentRefs(
   refs: string[]
 ): void {
   for (const field of fields) {
-    if (isFieldGroupType(field.type)) {
+    if (isFieldGroupFieldType(field.type)) {
       const { single, many } = extractFieldGroupReferences(field);
       if (single) refs.push(single);
       if (many) {

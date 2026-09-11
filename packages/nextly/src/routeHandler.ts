@@ -38,6 +38,7 @@ import {
 } from "./api/api-keys";
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import {
+  getDashboardOnboarding,
   getDashboardStats,
   getDashboardRecentEntries,
   getDashboardActivity,
@@ -546,6 +547,8 @@ async function handleDashboardRequest(
   switch (method) {
     case "getDashboardStats":
       return getDashboardStats(req);
+    case "getDashboardOnboarding":
+      return getDashboardOnboarding(req);
     case "getDashboardRecentEntries":
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":

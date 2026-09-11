@@ -1657,7 +1657,7 @@ interface InlineContext {
    * Asked once per distinct ORIGINAL, so a definition whose two nodes carry
    * one DOM id maps both to a single replacement — the pair pointed at one
    * target before and still reaches one target after. The same memo
-   * `reidSubtreeWithMap` keeps, for the same reason.
+   * `reidForestWithMap` keeps, for the same reason.
    */
   domIds: Map<string, string>;
   /** The scope INSIDE this component, for instances the definition itself holds. */

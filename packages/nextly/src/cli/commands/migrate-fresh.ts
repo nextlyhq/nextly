@@ -34,6 +34,7 @@ import { createInterface } from "node:readline";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
+import { sql, type SQL } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { seedAll, type SeederResult } from "../../database/seeders/index";
@@ -41,10 +42,11 @@ import { seedAll, type SeederResult } from "../../database/seeders/index";
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
+import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
@@ -185,7 +187,7 @@ export async function runMigrateFresh(
 
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createAdapter({
+    adapter = await createCliAdapter({
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
       logger: options.verbose ? logger : undefined,
@@ -319,45 +321,88 @@ async function dropAllTables(
 }
 
 /**
- * Discover all user tables in the database
+ * The only thing these three helpers ask of an adapter.
+ *
+ * Narrower than `DrizzleAdapter` on purpose: a parameter that demands the whole
+ * adapter forces every caller — a test most of all — to produce one, and the
+ * usual way to do that is a cast that switches type checking off for the
+ * argument. Naming the surface instead lets a double be checked against exactly
+ * what the function uses, so a change to that surface breaks the double rather
+ * than slipping past a cast.
  */
-async function discoverTables(
-  adapter: DrizzleAdapter,
+export type SqlRunner = Pick<DrizzleAdapter, "executeQuery">;
+
+/**
+ * What `discoverTables` asks of an adapter: a Drizzle statement, executed.
+ *
+ * Separate from `SqlRunner` because the two need different things — the FK
+ * toggles send a bare `SET`, this one composes a catalog query — and a
+ * parameter that demanded both would force every double to provide a surface
+ * its subject never touches.
+ */
+export type StatementRunner = Pick<DrizzleAdapter, "queryStatement">;
+
+/**
+ * Discover all user tables in the database.
+ *
+ * Exported for the same reason `disableForeignKeyChecks` is: what it asks the
+ * database decides what this command destroys, and that is worth a test that
+ * does not have to drive the whole command to reach it.
+ */
+export async function discoverTables(
+  adapter: StatementRunner,
   dialect: SupportedDialect
 ): Promise<string[]> {
-  let query: string;
+  let query: SQL;
 
   switch (dialect) {
     case "postgresql":
-      // Get all tables from public schema, excluding system tables
-      query = `
-        SELECT tablename
-        FROM pg_tables
-        WHERE schemaname = 'public'
-        ORDER BY tablename
-      `;
+      // 🔴 Exactly the relations an UNQUALIFIED name resolves to, because that
+      // is what `dropTable` below emits — `DROP TABLE "name"` with no schema on
+      // it. Any other predicate asks a different question from the one the drop
+      // answers, and on a `search_path` of `tenant, public` the two come apart
+      // in both directions: tables the drop WOULD reach go unlisted and survive
+      // a reset, while tables it would never reach are listed and handed to it.
+      //
+      // The predicate is the schema pipeline's, not a second one written here.
+      // Two spellings of "which relation does this name resolve to" can be
+      // corrected apart, and then this destructive command and the schema reads
+      // disagree about which table they mean. It is aliased `t`, which is why
+      // `pg_class` is too.
+      //
+      // System schemas are excluded by name because `pg_catalog` sits on every
+      // search path implicitly, so its tables resolve as visible as well.
+      query = sql`
+        SELECT ${sql.identifier("t")}.${sql.identifier("relname")} AS ${sql.identifier("tablename")}
+        FROM ${sql.identifier("pg_class")} ${sql.identifier("t")}
+        JOIN ${sql.identifier("pg_namespace")} ${sql.identifier("n")}
+          ON ${sql.identifier("n")}.${sql.identifier("oid")} = ${sql.identifier("t")}.${sql.identifier("relnamespace")}
+        WHERE ${sql.identifier("t")}.${sql.identifier("relkind")} IN ('r', 'p')
+          AND ${sql.identifier("n")}.${sql.identifier("nspname")}
+              NOT IN ('pg_catalog', 'information_schema')
+          AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+        ORDER BY ${sql.identifier("t")}.${sql.identifier("relname")}`;
       break;
 
     case "mysql":
-      // Get all tables from current database
-      query = `
-        SELECT TABLE_NAME as tablename
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_TYPE = 'BASE TABLE'
-        ORDER BY TABLE_NAME
-      `;
+      // Scoped to the connected database, which is MySQL's whole namespace —
+      // it has no search path, so there is no resolution question to ask.
+      query = sql`
+        SELECT ${sql.identifier("TABLE_NAME")} AS ${sql.identifier("tablename")}
+        FROM ${sql.identifier("information_schema")}.${sql.identifier("TABLES")}
+        WHERE ${sql.identifier("TABLE_SCHEMA")} = DATABASE()
+          AND ${sql.identifier("TABLE_TYPE")} = 'BASE TABLE'
+        ORDER BY ${sql.identifier("TABLE_NAME")}`;
       break;
 
     case "sqlite":
-      // Get all tables from sqlite_master
-      query = `
-        SELECT name as tablename
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name NOT LIKE 'sqlite_%'
-        ORDER BY name
-      `;
+      // One file, one namespace; `sqlite_%` is the engine's own bookkeeping.
+      query = sql`
+        SELECT ${sql.identifier("name")} AS ${sql.identifier("tablename")}
+        FROM ${sql.identifier("sqlite_master")}
+        WHERE ${sql.identifier("type")} = 'table'
+          AND ${sql.identifier("name")} NOT LIKE 'sqlite_%'
+        ORDER BY ${sql.identifier("name")}`;
       break;
 
     default:
@@ -365,7 +410,7 @@ async function discoverTables(
   }
 
   try {
-    const results = await adapter.executeQuery<{ tablename: string }>(query);
+    const results = await adapter.queryStatement<{ tablename: string }>(query);
     return results.map(row => row.tablename);
   } catch {
     // Database might be empty or inaccessible
@@ -392,7 +437,7 @@ function isReplicationRolePermissionError(err: unknown): boolean {
  * propagated so real failures still surface.
  */
 async function bestEffortReplicationRole(
-  adapter: DrizzleAdapter,
+  adapter: SqlRunner,
   value: "replica" | "origin"
 ): Promise<void> {
   try {
@@ -408,7 +453,7 @@ async function bestEffortReplicationRole(
  * Exported for unit testing the managed-Postgres best-effort path.
  */
 export async function disableForeignKeyChecks(
-  adapter: DrizzleAdapter,
+  adapter: SqlRunner,
   dialect: SupportedDialect
 ): Promise<void> {
   switch (dialect) {
@@ -437,7 +482,7 @@ export async function disableForeignKeyChecks(
  * Exported for unit testing the managed-Postgres best-effort path.
  */
 export async function enableForeignKeyChecks(
-  adapter: DrizzleAdapter,
+  adapter: SqlRunner,
   dialect: SupportedDialect
 ): Promise<void> {
   switch (dialect) {

@@ -11,6 +11,12 @@ import type { ActivityUser } from "@admin/types/dashboard/activity";
 /** Avatar fallback for an actor whose identity was erased. */
 const DELETED_ACTOR_INITIALS = "?";
 
+/** Avatar initials for a key, which has no name to take them from. */
+const API_KEY_ACTOR_INITIALS = "AK";
+
+/** Avatar initials for an internal write, which has no name to take them from. */
+const SYSTEM_ACTOR_INITIALS = "SY";
+
 /**
  * How much of the actor's id is shown beside "deleted user".
  *
@@ -41,7 +47,46 @@ export function describeActivityActor(entry: {
   userName: string | null;
   userEmail: string | null;
   identityErasedAt: string | null;
+  /**
+   * What KIND of caller `userId` refers to.
+   *
+   * Optional because it arrives over HTTP: a server older than this admin does
+   * not send it, and an absent field must read as the kind that was the only
+   * recordable one before it existed rather than as an unknown.
+   */
+  actorType?: string | null;
 }): ActivityUser {
+  // Neither a key nor an internal write has an account, so neither has a name,
+  // an email or an erasure stamp: the three things every branch below reads.
+  // Without a branch of its own each falls through to the live-actor case and
+  // renders a BLANK name, which is a less attributable feed than the one before
+  // keys were recorded at all.
+  //
+  // Nothing writes a system row today. The column can hold the value, and a
+  // reader that handled only keys would show an empty author for every import
+  // and job the moment something does.
+  if (entry.actorType === "system") {
+    return {
+      id: entry.userId,
+      name: "System",
+      email: null,
+      initials: SYSTEM_ACTOR_INITIALS,
+      deleted: false,
+    };
+  }
+
+  if (entry.actorType === "apiKey") {
+    return {
+      id: entry.userId,
+      // The key's own id, shortened the way a deleted actor's is, so two keys
+      // are told apart rather than both reading "API key".
+      name: `API key · ${entry.userId.slice(0, DELETED_ACTOR_ID_LENGTH)}`,
+      email: null,
+      initials: API_KEY_ACTOR_INITIALS,
+      deleted: false,
+    };
+  }
+
   // The stamp is the authority: a live actor can legitimately have no name
   // (the writer falls back through name → firstName → email), and calling
   // that person deleted would be worse than showing an empty label.

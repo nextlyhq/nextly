@@ -137,7 +137,6 @@ export {
   removeNode,
   moveNode,
   reidSubtree,
-  reidSubtreeWithMap,
   // The forest form, which is the shape a saved selection actually has: a
   // pattern is a run of siblings, and re-identifying its roots one at a time
   // leaves a reference that crosses between them pointing at the original.
@@ -175,7 +174,6 @@ export {
 export type {
   NodeLocation,
   ReidentifiedForest,
-  ReidentifiedSubtree,
   SlotDefaultSource,
   TreePosition,
   // Beside `walkNodes`, because a caller BOUNDING a walk has to hold its

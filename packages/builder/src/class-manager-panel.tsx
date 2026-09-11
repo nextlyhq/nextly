@@ -132,14 +132,25 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-/** Whether a resolution is an outcome this panel can report, or something else. */
+/**
+ * Whether a resolution is an outcome this panel can report, or something else.
+ *
+ * A refusal is checked all the way down to its `reason`, because the answer is
+ * `unknown` and plenty of unrelated results are shaped like a failure — a
+ * mutation helper resolving `{ ok: false, error: "locked" }` is the ordinary
+ * one. Narrowing on `ok` alone accepted those as {@link ClassRenameOutcome},
+ * which promises `reason: string`, so the reported reason was `undefined`; the
+ * alert below renders on `refused !== null`, and `undefined` is not `null`, so
+ * the author got an error box with nothing written in it and a screen reader
+ * announced an alert with no text. A shape this cannot vouch for is silence.
+ */
 function isRenameOutcome(value: unknown): value is ClassRenameOutcome {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "ok" in value &&
-    typeof value.ok === "boolean"
-  );
+  if (typeof value !== "object" || value === null || !("ok" in value)) {
+    return false;
+  }
+  if (value.ok === true) return true;
+  if (value.ok !== false) return false;
+  return "reason" in value && typeof value.reason === "string";
 }
 
 export interface ClassManagerPanelProps {
@@ -998,9 +1009,27 @@ function NameField({
      */
     setDraft(null);
     setRefused(null);
-    // A host that answered with something un-awaitable is one that does not
-    // report. Reaching for `.then` on it threw out of this event handler.
-    if (!isPromiseLike(answered)) return;
+    if (!isPromiseLike(answered)) {
+      /*
+       * 🔴 A refusal does not have to arrive later. The contract says an
+       * outcome "is how a refusal reaches the author" and says nothing about
+       * WHEN — a host that checks a permission it already holds, or a slug it
+       * already knows is taken, answers straight away. Dropping that answer
+       * left the row cleared and the author told nothing, which is the exact
+       * silence the outcome was added to remove.
+       *
+       * Everything else un-awaitable is a host that does not report: the
+       * contract this replaced was `=> void`, so most callers answer with
+       * nothing at all, and reaching for `.then` on that threw out of this
+       * event handler.
+       *
+       * No supersession check, unlike the promise path below. A synchronous
+       * answer is delivered inside the same commit that asked for it, so no
+       * newer attempt can have started in between.
+       */
+      if (isRenameOutcome(answered) && !answered.ok) report(answered.reason);
+      return;
+    }
     void Promise.resolve(answered)
       .then(result => {
         // Superseded: a newer rename on this row is the one being awaited, and
