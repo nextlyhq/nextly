@@ -41,6 +41,72 @@ const initSource = readFileSync(
   "utf8"
 );
 
+/**
+ * Whether a sentence forbids using the function it documents.
+ *
+ * A prohibition is a MODAL or IMPERATIVE negation attached to a usage verb, in
+ * either voice, or one of the stock phrasings that forbid without a verb. The
+ * modal is what separates a ban from a description: "must not be used by
+ * plugins" forbids, "is not used until boot completes" describes what happens
+ * at runtime and forbids nobody. So a bare `not` is not in the list, and
+ * `cannot` is, disarmed by the verb requirement rather than by its absence:
+ * "it cannot wait" describes the synchronous sibling, "callers cannot use
+ * this" is exactly the sentence this docblock must never carry.
+ *
+ * Module-scoped and exercised directly below, because the docblock it guards
+ * is clean and therefore exercises none of its branches. A predicate tested
+ * only against a passing input would let every alternative in it be misspelled
+ * without anything going red.
+ */
+function prohibits(line: string): boolean {
+  return (
+    /\b(do not|don't|must not|should not|cannot|can't|may not|never)\s+(be\s+)?(use|used|call|called|invoke|invoked|reach for|reached for|rely on|relied on)\b/i.test(
+      line
+    ) ||
+    /\b(internal use only|not for (user|plugin|application|external)|not intended for)\b/i.test(
+      line
+    )
+  );
+}
+
+describe("what counts as forbidding a caller", () => {
+  it("catches a prohibition in either voice and any modal", () => {
+    // The positive control the docblock check cannot provide, since the real
+    // docblock is clean. Each of these must be caught, or the alternative it
+    // exercises could be misspelled with nothing going red.
+    for (const sentence of [
+      "Plugins should not call this.",
+      "Plugin callers cannot use this function.",
+      "This function cannot be used by plugin callers.",
+      "It must not be called from a plugin.",
+      "Never rely on this from a plugin.",
+      "User code may not invoke this.",
+      "Do not use this in user code.",
+      "Internal use only.",
+      "Not intended for application code.",
+      "This is not for plugin code.",
+    ]) {
+      expect(prohibits(sentence), sentence).toBe(true);
+    }
+  });
+
+  it("lets a factual negation through", () => {
+    // A description of runtime behaviour is not a ban, and a check that
+    // rejected these would refuse ordinary documentation. The difference is
+    // the modal: none of these tells anyone what they may do.
+    for (const sentence of [
+      "It cannot wait, so it asserts instead.",
+      "The cached instance is not used until boot completes.",
+      "This is not called on the request path.",
+      "The fallback is not invoked when a config is supplied.",
+      "The result is not relied on for caching.",
+      "Plugins reach for this when there is no ctx.",
+    ]) {
+      expect(prohibits(sentence), sentence).toBe(false);
+    }
+  });
+});
+
 describe("instance accessors are published where their callers can reach them", () => {
   it("publishes the async accessor from the root and NOT from runtime", async () => {
     const root = (await import("../index")) as Record<string, unknown>;
@@ -111,23 +177,6 @@ describe("instance accessors are published where their callers can reach them", 
     // contradict, and would stay green through a docblock that never says who
     // this is for.
     expect(namesAudience.length).toBeGreaterThan(0);
-
-    // A prohibition is a negation attached to USING this function, or one of
-    // the stock phrasings that forbid without a verb. The verb is what
-    // matters, not the negation: "it cannot wait" describes the synchronous
-    // sibling and forbids nothing, while "callers cannot use this" forbids
-    // exactly what this docblock promises. So `cannot` stays in the list and
-    // is disarmed by the verb requirement, not by its absence. The verb is
-    // matched in both voices, since "cannot be used by plugins" forbids the
-    // same thing as "plugins cannot use" and a word boundary after `use`
-    // rejects `used`.
-    const prohibits = (line: string) =>
-      /\b(do not|don't|must not|should not|cannot|can't|never|not)\s+(be\s+)?(use|used|call|called|invoke|invoked|reach for|reached for|rely on|relied on)\b/i.test(
-        line
-      ) ||
-      /\b(internal use only|not for (user|plugin|application|external)|not intended for)\b/i.test(
-        line
-      );
 
     expect(sentences.filter(prohibits)).toEqual([]);
   });
