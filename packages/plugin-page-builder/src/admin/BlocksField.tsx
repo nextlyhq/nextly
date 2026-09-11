@@ -47,13 +47,12 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
+  componentIdsIn,
   isComponentDocument,
   newId,
-  resolveComponentInstances,
   type BlockDocument,
   type ComponentLookup,
   type DocumentKind,
-  type DocumentLimits,
   type BreakpointSet,
   type NamedClass,
   type SiteTokenSet,
@@ -351,14 +350,15 @@ export function documentFrom(
  * holds an instance of this one, placed here, closes the loop one step out;
  * one that holds THAT closes it two steps out. None is visible against the
  * saved map until this row is saved, and then every page placing any of them
- * draws a placeholder. So a candidate is judged by what DRAWING it reads:
- * resolved through the canvas's own lookup under the canvas's own caps, the
- * resolver reports every definition it reached, and a candidate that reached
- * this row is left out. The resolver's walk rather than one written here,
- * so the offer and the canvas agree on what a definition reaches — and what
- * the walk stops short of, a candidate past the node cap or nested past the
- * composition cap, the insert's own preflight refuses at the click for the
- * reason the walk stopped.
+ * draws a placeholder. So a candidate is judged by its STORED graph: which
+ * components its definition names, and which those name, followed through
+ * the canvas's own lookup until this row is met or nothing is left. A walk
+ * over the graph rather than a composition of every row, for two reasons.
+ * A loop is a loop whatever one render happens to skip — an instance under
+ * an entry-field gate is served when its condition holds, and a chain past
+ * the composition cap is refused at render, not absent — so what a render
+ * READS under-answers the question. And composing three thousand rows to
+ * ask it clones every definition each row reaches, once per row.
  *
  * Judged by BOTH facts: the document being edited is a component, and the
  * form names the row. Either alone is not enough — a page's field is never
@@ -371,34 +371,45 @@ export function withoutSelf(
   components: readonly SavedComponent[],
   editing: BlockDocument,
   identity: { documentId?: string | undefined } | null,
-  definitions: ComponentLookup,
-  limits?: DocumentLimits
+  definitions: ComponentLookup
 ): readonly SavedComponent[] {
   const self = identity?.documentId;
   if (self === undefined || !isComponentDocument(editing)) return components;
   const kept = components.filter(
-    component =>
-      component.id !== self && !reaches(component, self, definitions, limits)
+    component => component.id !== self && !reaches(component, self, definitions)
   );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
   return kept.length === components.length ? components : kept;
 }
 
-/** Whether drawing a component's definition reads the definition named. */
+/**
+ * Whether a component's stored graph names the definition given, at any
+ * depth, through the lookup.
+ *
+ * Each definition is read once per question — a loop among other rows ends
+ * where it began rather than running on — and one the lookup does not hold
+ * names nothing further, which is the honest answer for a reference nothing
+ * here can follow.
+ */
 function reaches(
   component: SavedComponent,
   id: string,
-  definitions: ComponentLookup,
-  limits: DocumentLimits | undefined
+  definitions: ComponentLookup
 ): boolean {
   const document = component.document;
   if (document === undefined || document === null) return false;
-  return resolveComponentInstances(
-    document,
-    definitions,
-    limits === undefined ? {} : { limits }
-  ).referenced.includes(id);
+  const pending = componentIdsIn(document.nodes);
+  const followed = new Set<string>();
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    if (next === id) return true;
+    if (followed.has(next)) continue;
+    followed.add(next);
+    const definition = definitions.get(next);
+    if (definition !== undefined)
+      pending.push(...componentIdsIn(definition.nodes));
+  }
+  return false;
 }
 
 /**
@@ -2381,16 +2392,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const componentLibrary = useComponentLibrary();
 
-  // After the library read and the caps, which it takes: the SAME map and
-  // caps the canvas draws with, so a moved instance is judged by the roots it
-  // draws there rather than by its own, unrestricted type.
+  // After the library read, which it takes: the SAME map the canvas draws
+  // with, so a moved instance is judged by the roots it draws there rather
+  // than by its own, unrestricted type.
   const drag = useCanvasDrag({
     editor,
     slots,
     nesting,
     canvasRoot,
     definitions: componentLibrary.definitions,
-    limits: documentLimits,
   });
   /*
    * Is a drag happening — of EITHER kind.
@@ -2421,13 +2431,12 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       componentLibrary.components,
       initialDocument,
       identity,
-      componentLibrary.definitions,
-      documentLimits
+      componentLibrary.definitions
     );
     return components === componentLibrary.components
       ? componentLibrary
       : { ...componentLibrary, components };
-  }, [componentLibrary, initialDocument, identity, documentLimits]);
+  }, [componentLibrary, initialDocument, identity]);
 
   const canvasRender = useMemo(
     () =>

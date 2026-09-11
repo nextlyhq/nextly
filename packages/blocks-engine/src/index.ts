@@ -280,6 +280,11 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 export {
   componentIdsIn,
   componentUsageIn,
+  // The roots a document composes to, read without composing it. Published
+  // because the palette judges every definition's placement by its roots and
+  // composing three thousand of them to read their roots is the cost this
+  // avoids.
+  composedRootTypes,
   // What ONE instance currently shows for each property its definition exposes.
   // Published because the editor draws that panel and the resolver applies the
   // same precedence to render it: definition, then variant, then the instance's

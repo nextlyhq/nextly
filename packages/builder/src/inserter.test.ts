@@ -1514,13 +1514,13 @@ describe("the component tier", () => {
     expect(componentEntriesFrom([wrapper], lookupOf(hollow))).toEqual([]);
   });
 
-  it("resolves under the caps it is handed, so the tile agrees with the canvas", () => {
-    // A site that lowered its node cap sees the canvas leave a large
-    // definition unresolved; the palette has to withhold that tile rather
-    // than offer one the canvas then draws as could-not-be-loaded. Resolved
-    // under a cap of one node, a wrapper whose header has two cannot be
-    // composed, so its root stays an instance and the tile is withheld;
-    // under the default caps it is offered.
+  it("offers a component on its roots whatever the caps, and leaves room to the click", () => {
+    // Room is a property of the page, asked at the click with the page in
+    // hand: the tile is judged by what its roots ARE, not by whether they fit
+    // a cap. A wrapper whose header has two nodes is offered under a cap of
+    // one, and placing it on any page under that cap is refused for budget
+    // with the sentence — never drawn as could-not-be-loaded, because the
+    // preflight runs before the apply.
     catalog([{ ...base, name: "acme/text" }]);
     const header = stored({
       id: "header",
@@ -1533,14 +1533,76 @@ describe("the component tier", () => {
       id: "wrapper",
       document: componentOf([instanceOf("header")]),
     });
+    const lookup = lookupOf(header, wrapper);
     const tight = { ...DEFAULT_LIMITS, maxNodes: 1 };
 
-    expect(componentEntriesFrom([wrapper], lookupOf(header), tight)).toEqual(
-      []
-    );
+    const [offered] = componentEntriesFrom([wrapper], lookup);
+    expect(offered?.componentId).toBe("wrapper");
     expect(
-      componentEntriesFrom([wrapper], lookupOf(header)).map(e => e.componentId)
-    ).toEqual(["wrapper"]);
+      compositionRefusal(
+        documentOf([]),
+        {
+          kind: "insert",
+          node: nodeForComponentEntry(offered!),
+          at: { index: 0 },
+        },
+        lookup,
+        tight
+      )?.reason
+    ).toBe("budget");
+  });
+
+  it("reads a root's types without composing the definition, so a library of wrappers costs its roots", () => {
+    // Three thousand one-node wrappers around one large definition composed
+    // whole, once per wrapper, was fifteen million nodes on opening the
+    // panel. The roots are read through the lookup instead: the large
+    // definition is asked for once per wrapper, never cloned.
+    catalog([
+      { ...base, name: "acme/box", slots: { children: {} } },
+      { ...base, name: "acme/text" },
+    ]);
+    // The large definition's root is a box whose children are behind a
+    // counting accessor: reading the roots never opens it, composing does.
+    let descents = 0;
+    const children = Array.from({ length: 500 }, (_, i) => ({
+      id: `t${String(i)}`,
+      type: "acme/text",
+      version: 1,
+      props: {},
+    }));
+    const box: BlockNode = {
+      id: "b1",
+      type: "acme/box",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(box, "slots", {
+      enumerable: true,
+      get: () => {
+        descents += 1;
+        return { children };
+      },
+    });
+    const big = stored({ id: "big", document: componentOf([box]) });
+    const wrappers = Array.from({ length: 50 }, (_, i) =>
+      stored({
+        id: `w${String(i)}`,
+        document: componentOf([instanceOf("big")]),
+      })
+    );
+
+    const offered = componentEntriesFrom(wrappers, lookupOf(big, ...wrappers));
+
+    expect(offered).toHaveLength(50);
+    expect(offered.every(entry => entry.roots.join() === "acme/box")).toBe(
+      true
+    );
+    expect(descents).toBe(0);
+    // And what each entry carries is the stored one-node wrapper, not a
+    // composed forest.
+    expect(offered.every(entry => entry.document.nodes.length === 1)).toBe(
+      true
+    );
   });
 
   it("still offers a component with an unresolvable instance BELOW its root", () => {
@@ -1567,21 +1629,20 @@ describe("the component tier", () => {
     const [offered] = componentEntriesFrom([boxed], NONE);
 
     expect(offered?.componentId).toBe("boxed");
-    expect(offered?.document.nodes.map(root => root.type)).toEqual([
-      "acme/box",
-    ]);
+    expect(offered?.roots).toEqual(["acme/box"]);
   });
 
-  it("hands over the STORED document, by identity, when it holds no instance", () => {
+  it("hands over the STORED document, by identity, beside the roots it draws", () => {
     // The catalogue and everything keyed on it would otherwise rebuild for a
-    // document that did not change: the resolver returns its input when there
-    // was nothing to inline, and that identity is kept rather than re-wrapped.
+    // document that did not change. The roots are what placement is judged
+    // by; the document is what a preview of the tile would draw.
     catalog([{ ...base, name: "acme/text" }]);
     const row = stored();
 
     const [offered] = componentEntriesFrom([row], NONE);
 
     expect(offered?.document).toBe(row.document);
+    expect(offered?.roots).toEqual(["acme/text"]);
   });
 
   describe("whether the page has room for it", () => {

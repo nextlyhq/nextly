@@ -6,10 +6,17 @@
  * without one takes the whole editor down at the moment an author opens it,
  * leaving them no way to repair the field.
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+  type BlockDocument,
+  type BlockNode,
+  type ComponentDocument,
+} from "@nextlyhq/blocks-engine";
+import type { SavedComponent } from "@nextlyhq/builder";
 import { describe, expect, it } from "vitest";
 
-import { canEditBlocks, documentFrom } from "./BlocksField";
+import { canEditBlocks, documentFrom, withoutSelf } from "./BlocksField";
 
 describe("documentFrom", () => {
   it("keeps a document that already has nodes", () => {
@@ -86,5 +93,129 @@ describe("canEditBlocks", () => {
 
   it("refuses when both are set", () => {
     expect(canEditBlocks({ readOnly: true, disabled: true })).toBe(false);
+  });
+});
+
+describe("withoutSelf", () => {
+  const instanceOf = (componentId: string, id: string): BlockNode => ({
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId },
+  });
+  const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes,
+  });
+  const text = (id: string): BlockNode => ({
+    id,
+    type: "core/text",
+    version: 1,
+    props: {},
+  });
+  const row = (id: string, document: ComponentDocument): SavedComponent => ({
+    id,
+    title: id,
+    document,
+  });
+  const editing: BlockDocument = componentOf([text("own")]);
+  const identity = { documentId: "a" };
+
+  it("leaves out the row being edited and every row that reaches it, at any depth", () => {
+    const a = row("a", componentOf([text("t")]));
+    const b = row("b", componentOf([instanceOf("a", "b-a")]));
+    const c = row("c", componentOf([text("c1"), instanceOf("b", "c-b")]));
+    const d = row("d", componentOf([instanceOf("footer", "d-f")]));
+    const footer = row("footer", componentOf([text("f")]));
+    const library = [a, b, c, d, footer];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(
+      withoutSelf(library, editing, identity, lookup).map(r => r.id)
+    ).toEqual(["d", "footer"]);
+  });
+
+  it("follows the graph, not a composition: a reference under a gate or past the composition cap still counts", () => {
+    // What is excluded is any row whose stored graph reaches the row being
+    // edited, because a loop is a loop whatever a render happens to skip:
+    // a gated instance is served when its condition holds, and a chain
+    // deeper than the composition cap is refused at render, not absent.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const a = row("a", componentOf([text("t")]));
+    const gated = row(
+      "gated",
+      componentOf([
+        { ...instanceOf("a", "g-a"), visibility: gate } as BlockNode,
+      ])
+    );
+    const chain: SavedComponent[] = [];
+    for (let level = 0; level < 8; level += 1) {
+      chain.push(
+        row(
+          `c${String(level)}`,
+          componentOf([
+            instanceOf(
+              level === 7 ? "a" : `c${String(level + 1)}`,
+              `i${String(level)}`
+            ),
+          ])
+        )
+      );
+    }
+    const library = [a, gated, ...chain];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(withoutSelf(library, editing, identity, lookup)).toEqual([]);
+  });
+
+  it("ends a loop among other rows where it began, and follows nothing from a row the lookup does not hold", () => {
+    // Each definition is read once per question, which is what makes a loop
+    // finite: x names y, y names x, and the second visit to either is the
+    // end of the walk rather than another round of it.
+    const a = row("a", componentOf([text("t")]));
+    const x = row("x", componentOf([instanceOf("y", "x-y")]));
+    const y = row("y", componentOf([instanceOf("x", "y-x")]));
+    const stranger = row("s", componentOf([instanceOf("nobody", "s-n")]));
+    const library = [a, x, y, stranger];
+    const base = new Map(library.map(r => [r.id, r.document!]));
+    let reads = 0;
+    const lookup = {
+      has: (id: string) => base.has(id),
+      get: (id: string) => {
+        reads += 1;
+        return base.get(id);
+      },
+    };
+
+    expect(
+      withoutSelf(library, editing, identity, lookup).map(r => r.id)
+    ).toEqual(["x", "y", "s"]);
+    // x's question reads y then x; y's reads x then y; s's reads nobody.
+    expect(reads).toBe(5);
+  });
+
+  it("reads each definition's references once per row, never its subtree", () => {
+    // The question is reachability over the stored graph, answered by a walk
+    // over which components each definition names. Composing every row to ask
+    // it cloned every definition a row reached, once per row.
+    let descents = 0;
+    const box: BlockNode = { id: "b", type: "core/box", version: 1, props: {} };
+    Object.defineProperty(box, "slots", {
+      enumerable: true,
+      get: () => {
+        descents += 1;
+        return { children: [instanceOf("a", "deep-a")] };
+      },
+    });
+    const a = row("a", componentOf([text("t")]));
+    const holder = row("holder", componentOf([box]));
+    const library = [a, holder];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(withoutSelf(library, editing, identity, lookup)).toEqual([]);
+    // One walk of the holder's own forest reads its slots once; a
+    // composition would clone them.
+    expect(descents).toBe(1);
   });
 });

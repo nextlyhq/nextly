@@ -706,18 +706,10 @@ export function InsertPanel({
       ...patternEntriesFrom(patterns ?? [], source),
       ...componentEntriesFrom(
         components ?? [],
-        componentDefinitions ?? NO_DEFINITIONS,
-        documentLimits
+        componentDefinitions ?? NO_DEFINITIONS
       ),
     ],
-    [
-      palette,
-      patterns,
-      components,
-      componentDefinitions,
-      documentLimits,
-      source,
-    ]
+    [palette, patterns, components, componentDefinitions, source]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather

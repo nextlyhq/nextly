@@ -33,6 +33,7 @@ import {
   locateNode,
   makeNode,
   placementVerdict,
+  composedRootTypes,
   resolveComponentInstances,
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
@@ -280,19 +281,24 @@ export interface ComponentInsertEntry {
   readonly category: string;
   readonly keywords: readonly string[];
   readonly icon?: string;
+  /** The definition as stored, by identity: what a preview of the tile draws. */
+  readonly document: ComponentDocument;
   /**
-   * The definition AS THE CANVAS WILL DRAW IT: its own component instances
-   * inlined through the same lookup the canvas resolves against.
+   * The block types at the roots of the definition AS THE CANVAS WILL DRAW
+   * IT: a root that is itself an instance is followed into the definition it
+   * names, through the same lookup the canvas resolves against.
    *
    * A definition may hold instances of other components, at its root included,
    * and an instance node's type is not a registered block — the nesting rule
    * answers "no restriction" for a type it cannot resolve. Judging placement
    * from the STORED roots would therefore offer a component whose real root is
    * confined to one parent at any destination, and the canvas would then draw
-   * that root where it does not belong. Resolving first makes the roots here
-   * the block types that actually land.
+   * that root where it does not belong. The roots here are the block types
+   * that actually land. Read without composing the definition, because a
+   * library of small wrappers around one large definition would otherwise be
+   * cloned whole, once per wrapper, every time the panel opened.
    */
-  readonly document: ComponentDocument;
+  readonly roots: readonly string[];
   readonly usedOn?: number;
 }
 
@@ -526,17 +532,12 @@ export const COMPONENT_ENTRY_PREFIX = "component:";
  */
 export function componentEntriesFrom(
   components: readonly SavedComponent[],
-  definitions: ComponentLookup,
-  limits?: DocumentLimits
+  definitions: ComponentLookup
 ): ComponentInsertEntry[] {
   const entries: ComponentInsertEntry[] = [];
   for (const component of components) {
-    const document = offerableDefinition(
-      component.document,
-      definitions,
-      limits
-    );
-    if (document === undefined) continue;
+    const offered = offerableDefinition(component.document, definitions);
+    if (offered === undefined) continue;
     entries.push({
       kind: "component",
       id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
@@ -545,7 +546,7 @@ export function componentEntriesFrom(
       description: component.description ?? "",
       category: component.category ?? UNCATEGORISED,
       keywords: keywordsOf(component.keywords),
-      document,
+      ...offered,
       ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
     });
   }
@@ -553,8 +554,8 @@ export function componentEntriesFrom(
 }
 
 /**
- * The definition a stored row offers, AS THE CANVAS WILL DRAW IT — or nothing,
- * when the palette has nothing to offer for the row.
+ * What a stored row offers — the definition and the roots it draws — or
+ * nothing, when the palette has nothing to offer for the row.
  *
  * Nothing for a row with no document, one whose document is not a component
  * definition, or one with no roots: each is a legal stored row and none can be
@@ -562,52 +563,40 @@ export function componentEntriesFrom(
  * when the definition was saved, and it is the definition's own concern rather
  * than the page's.
  *
- * The rest is resolved through `definitions` — the lookup the canvas resolves
+ * The roots are read through `definitions` — the lookup the canvas resolves
  * against, handed in rather than rebuilt from the list so the tile and the
- * canvas cannot read two different maps — and one whose ROOT the resolver had
- * to leave standing is withheld. That is a root the canvas would draw as a
- * placeholder and the nesting rule cannot judge: the component it points at is
- * missing from the lookup, is this definition itself, or nests past the
- * composition cap. The resolver already bounds that descent and detects the
- * cycle, so nothing here recurses. An unresolvable instance BELOW the root is
- * the definition's own concern, exactly as its internal nesting is, and does
- * not withhold the tile.
+ * canvas cannot read two different maps — by the engine's own roots query,
+ * which follows a root instance into the definition it names without
+ * composing anything, and answers nothing where the resolver would leave a
+ * root STANDING. That is a root the canvas would draw as a placeholder and
+ * the nesting rule cannot judge: the component it points at is missing from
+ * the lookup, is this definition itself, or nests past the composition cap.
+ * A row whose roots compose to nothing is withheld too: a tile for it would
+ * be placed vacuously — no root type to refuse — and render nothing. An
+ * unresolvable instance BELOW the root is the definition's own concern,
+ * exactly as its internal nesting is, and does not withhold the tile.
  *
- * Resolved under the SAME caps the canvas resolves under, handed in by the
- * host that knows them: a site that lowered its node cap would otherwise see
- * the palette offer a definition the canvas leaves unresolved, and one that
- * raised it would see a tile withheld for a definition the canvas draws.
+ * Room is NOT asked here. Whether a definition fits the page's caps is a
+ * property of the page that moves with every edit, and the click asks the
+ * resolver about it with the page in hand ({@link compositionRefusal}); a
+ * definition too large for the site's cap under any page is a tile whose
+ * every click says so.
  *
- * Resolved ONCE per row here rather than per placement inside
+ * Read ONCE per row here rather than per placement inside
  * {@link entryAllowedAt}, for the reason a pattern's preflight is: per target
  * it would re-walk every definition on each keystroke of a filter.
  */
 function offerableDefinition(
   stored: BlockDocument | null | undefined,
-  definitions: ComponentLookup,
-  limits: DocumentLimits | undefined
-): ComponentDocument | undefined {
+  definitions: ComponentLookup
+): Pick<ComponentInsertEntry, "document" | "roots"> | undefined {
   if (stored === undefined || stored === null) return undefined;
   if (!isComponentDocument(stored) || stored.nodes.length === 0) {
     return undefined;
   }
-  const resolved = resolveComponentInstances(
-    stored,
-    definitions,
-    limits === undefined ? {} : { limits }
-  ).document;
-  // Asked of the RESOLVED forest, not only the stored one: a root that was an
-  // instance of a component with no roots resolves to nothing at all, and a
-  // tile for that would be placed vacuously — no root type to refuse — and
-  // render nothing.
-  if (resolved.nodes.length === 0) return undefined;
-  if (resolved.nodes.some(root => root.type === COMPONENT_INSTANCE_TYPE)) {
-    return undefined;
-  }
-  // The stored envelope over the resolved forest. The resolver hands the
-  // document back UNCHANGED when it held no instance, and that identity is
-  // kept: a fresh object per row would rebuild what every consumer keys on.
-  return resolved === stored ? stored : { ...stored, nodes: resolved.nodes };
+  const roots = composedRootTypes(stored, definitions);
+  if (roots === undefined || roots.length === 0) return undefined;
+  return { document: stored, roots };
 }
 
 /**
@@ -821,9 +810,14 @@ export function entryAllowedAt(
   // node's own type is not a registered block, and the nesting source answers
   // "no restriction" for a type it cannot resolve — so judging the instance by
   // its type would let a component whose root is a section be placed inside a
-  // paragraph. The definition's roots are what will actually render there.
-  if (entry.kind === "pattern" || entry.kind === "component") {
+  // paragraph. The definition's roots are what will actually render there,
+  // and a component's were read through the canvas's lookup when it was
+  // offered.
+  if (entry.kind === "pattern") {
     return rootsAllowedAt(entry.document, target, source);
+  }
+  if (entry.kind === "component") {
+    return placementVerdict(entry.roots, target, source);
   }
   return blockAllowedAt(entry.blockName, target, source);
 }
@@ -865,8 +859,8 @@ function rootsAllowedAt(
  *
  * The rule {@link entryAllowedAt} applies at the insert, asked of a node
  * instead of an entry: a block by its own type, an instance by the ROOTS of
- * the definition it draws — resolved through `definitions` exactly as its
- * tile was, under the same caps. The instance node's own type is not a
+ * the definition it draws — read through `definitions` exactly as its tile's
+ * were. The instance node's own type is not a
  * registered block and the nesting source answers "no restriction" for it, so
  * a move judged by the node's type would let a component whose root belongs
  * only inside a Columns be dragged into a paragraph after its insert was
@@ -879,8 +873,7 @@ function rootsAllowedAt(
  */
 export function placementTypesOf(
   node: BlockNode,
-  definitions?: ComponentLookup,
-  limits?: DocumentLimits
+  definitions?: ComponentLookup
 ): readonly string[] {
   if (definitions === undefined || !isComponentInstance(node)) {
     return [node.type];
@@ -888,9 +881,9 @@ export function placementTypesOf(
   const componentId = node.props.componentId;
   const drawn =
     typeof componentId === "string"
-      ? offerableDefinition(definitions.get(componentId), definitions, limits)
+      ? offerableDefinition(definitions.get(componentId), definitions)
       : undefined;
-  return drawn === undefined ? [node.type] : drawn.nodes.map(root => root.type);
+  return drawn === undefined ? [node.type] : drawn.roots;
 }
 
 /**

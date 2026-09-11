@@ -592,9 +592,8 @@ describe("what the editor reads before anyone asks for it", () => {
     openEditor();
 
     const canvas = recorded("canvas");
-    const render = canvas.render as { definitions: unknown; limits: unknown };
+    const render = canvas.render as { definitions: unknown };
     expect(seen.dragOptions?.definitions).toBe(render.definitions);
-    expect(seen.dragOptions?.limits).toBe(render.limits);
   });
 
   it("hands the canvas and the panel ONE definitions map, and the panel the rows and the cut", () => {
