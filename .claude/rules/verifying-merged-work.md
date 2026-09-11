@@ -31,10 +31,13 @@ integration leg as `success` while the merge commit had them queued.
 superseded, not failed.** `main` groups its CI and Integration runs by branch,
 so a newer push cancels the run in flight, and a leg that overruns its budget
 FAILS rather than cancels. The script reads the base's current head and, when
-it has moved past the merge commit, reports those cancelled jobs under
-`superseded` with the head revision to read instead; they do not block. A
-cancelled job on the head itself, or a `failure` anywhere, still blocks. Judge
-`main` by its head's run, which includes every commit before it.
+it has moved past the merge commit AND the head has a run of the same job,
+reports those cancelled jobs under `superseded` with the head revision to read
+instead; they do not block. The head's run is the witness: a concurrency cancel
+leaves one behind and a manual cancel does not, so a cancelled job the head
+never ran still blocks. So does a cancelled job on the head itself, and a
+`failure` anywhere. Judge `main` by its head's run, which includes every
+commit before it.
 
 **Know its range before trusting it.** The script's module header lists what it
 does not cover, and the four worth carrying in your head are: it snapshots

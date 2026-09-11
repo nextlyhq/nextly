@@ -268,9 +268,20 @@ export function gateVerdict({
   coderabbitReviewCount,
   approvalCount = 0,
   supersededBy = null,
+  supersedingRuns = [],
 }) {
   const blockers = [];
   const superseded = [];
+  // The job names the superseding head has a run for. A cancelled job counts
+  // as superseded only when the head is running or ran the SAME job: that run
+  // is the witness that a concurrency group cancelled this one. Without it, a
+  // cancellation somebody made by hand on a commit that was then merged past
+  // would read as superseded and stop blocking.
+  const witnessed = new Set(
+    (Array.isArray(supersedingRuns) ? supersedingRuns : [])
+      .map(run => run?.name)
+      .filter(name => typeof name === "string")
+  );
 
   if (typeof tip !== "string" || tip.length === 0) {
     blockers.push({ kind: "no-tip", detail: "no head revision to merge" });
@@ -315,7 +326,11 @@ export function gateVerdict({
       // rather than cancels. The verdict that describes `main` is the head's,
       // and this one is subsumed by it. Reported, never a blocker; a cancelled
       // job on the head itself is still exactly what it looks like.
-      if (job.conclusion === "cancelled" && supersededBy) {
+      if (
+        job.conclusion === "cancelled" &&
+        supersededBy &&
+        witnessed.has(job.name)
+      ) {
         superseded.push(job.name);
         continue;
       }
@@ -1153,6 +1168,28 @@ export function main(argv) {
     }
   }
 
+  // The head's own runs, read only when there is a head to read. These are the
+  // witnesses: a cancelled job here is filed as superseded only if the head
+  // has a run of the same name, which is what a concurrency cancel leaves
+  // behind and a manual cancel does not.
+  let supersedingRuns = [];
+  if (supersededBy) {
+    try {
+      supersedingRuns = flatPages(
+        ghJson([
+          "api",
+          "--paginate",
+          "--slurp",
+          `repos/${REPO}/commits/${supersededBy}/check-runs?per_page=100`,
+        ]),
+        "check-runs",
+        pageWrapping("check_runs")
+      ).flatMap(page => page.check_runs ?? []);
+    } catch {
+      supersedingRuns = [];
+    }
+  }
+
   // Only read before it is needed. Rewrite reachability answers whether a merge
   // took the whole branch, which an open pull request has not yet asked — so
   // querying it there lets an unrelated endpoint failure refuse a verdict the
@@ -1397,6 +1434,7 @@ export function main(argv) {
     coderabbitReviewCount: coderabbit,
     approvalCount: countWriteAccessApprovals(reviews),
     supersededBy,
+    supersedingRuns,
   });
 
   // Nothing is printed until the freshness read below has decided. Emitting the

@@ -509,6 +509,9 @@ describe("gateVerdict", () => {
       ...passing,
       checkRuns: allGreenExceptCancelled("Integration (postgres)"),
       supersededBy: HEAD,
+      // The witness: the head is running the same job, which is what a
+      // concurrency cancel leaves behind.
+      supersedingRuns: [queued("Integration (postgres)")],
     });
 
     expect(verdict.mergeable).toBe(true);
@@ -517,6 +520,24 @@ describe("gateVerdict", () => {
       jobs: ["Integration (postgres)"],
       by: HEAD,
     });
+  });
+
+  it("still blocks a cancelled job the head has no run of", () => {
+    // The case supersession alone cannot explain. A run somebody cancelled by
+    // hand on a commit that was later merged past has a newer head and no
+    // witness: the head never ran that job. Filing it as superseded would let
+    // a manual cancel stop blocking, so without the witness it stays what it
+    // looks like.
+    const verdict = gateVerdict({
+      ...passing,
+      checkRuns: allGreenExceptCancelled("Integration (postgres)"),
+      supersededBy: "aa11bb22cc33dd44ee55ff6677889900aabbccdd",
+      supersedingRuns: [green(CI)],
+    });
+
+    expect(verdict.mergeable).toBe(false);
+    expect(verdict.blockers.map(b => b.kind)).toContain("job-not-green");
+    expect(verdict.superseded).toBeNull();
   });
 
   it("still blocks on a cancelled job when this revision IS the head", () => {
