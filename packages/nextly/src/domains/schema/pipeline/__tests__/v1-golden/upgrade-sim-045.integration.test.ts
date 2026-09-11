@@ -291,6 +291,32 @@ const migratesActivityLogActor = (stmt: string): boolean => {
 };
 
 /**
+ * A predicate admitting exactly one additive column on exactly one table.
+ *
+ * Two things a looser match lets through, each of which turns the allowlist
+ * into a hole. The WHOLE statement must be the single ADD, not merely contain
+ * one: a substring match admits `ALTER TABLE t ADD c ..., DROP COLUMN d` — a
+ * destructive change riding through on the additive clause beside it. And the
+ * column name must END where the name ends: without a boundary, `actor_type`
+ * admits `actor_type_backup`, so a schema that accidentally renamed the column
+ * would push its ALTER through, apply cleanly, and leave pass 2 silent — the
+ * sim green while the column it promises was never added. The closing quote
+ * or a word boundary is required after the name for that reason.
+ *
+ * Tolerant of pg/MySQL quoting and the optional COLUMN keyword, like every
+ * predicate above.
+ */
+const addsOnlyColumn =
+  (table: string, column: string) =>
+  (stmt: string): boolean => {
+    const s = stmt.trim().replace(/;$/, "");
+    return new RegExp(
+      `^ALTER TABLE [\`"]?${escapeRegExp(table)}[\`"]? ADD (COLUMN )?[\`"]?${escapeRegExp(column)}(?:[\`"]|\\b)[^,]*$`,
+      "i"
+    ).test(s);
+  };
+
+/**
  * The auth log gains the same erasure marker the activity log has, and for the
  * same reason: `ip_address` and `user_agent` are nullable for rows that never
  * carried them, so a bare NULL cannot say whether a person was erased.
@@ -298,16 +324,10 @@ const migratesActivityLogActor = (stmt: string): boolean => {
  * Pinned to the table AND the column rather than allowing any ALTER on it, so a
  * future unintended change to `audit_log` still fails as a phantom diff.
  */
-const addsAuditLogErasureStamp = (stmt: string): boolean => {
-  const s = stmt.trim().replace(/;$/, "");
-  // The WHOLE statement must be the single ADD, not merely contain one. A
-  // substring match would admit `ALTER TABLE audit_log ADD identity_erased_at
-  // ..., DROP COLUMN ip_address` — a destructive change riding through the
-  // guard on the additive clause beside it.
-  return /^ALTER TABLE [`"]?audit_log[`"]? ADD (COLUMN )?[`"]?identity_erased_at[`"]?[^,]*$/i.test(
-    s
-  );
-};
+const addsAuditLogErasureStamp = addsOnlyColumn(
+  "audit_log",
+  "identity_erased_at"
+);
 
 /**
  * The activity log gains the LANGUAGE a mutation was made in.
@@ -322,12 +342,7 @@ const addsAuditLogErasureStamp = (stmt: string): boolean => {
  * for the reason the erasure stamp above gives: a substring match would admit a
  * destructive clause riding through beside the additive one.
  */
-const addsActivityLocaleColumn = (stmt: string): boolean => {
-  const s = stmt.trim().replace(/;$/, "");
-  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?locale[`"]?[^,]*$/i.test(
-    s
-  );
-};
+const addsActivityLocaleColumn = addsOnlyColumn("activity_log", "locale");
 
 /**
  * The activity log gains what each row is ABOUT.
@@ -337,12 +352,10 @@ const addsActivityLocaleColumn = (stmt: string): boolean => {
  * settings namespace, and registry membership then reads a credential rotation
  * as a document in that collection.
  */
-const addsActivitySubjectKindColumn = (stmt: string): boolean => {
-  const s = stmt.trim().replace(/;$/, "");
-  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?subject_kind[`"]?[^,]*$/i.test(
-    s
-  );
-};
+const addsActivitySubjectKindColumn = addsOnlyColumn(
+  "activity_log",
+  "subject_kind"
+);
 
 /**
  * The activity log gains what KIND of actor each row names.
@@ -357,12 +370,10 @@ const addsActivitySubjectKindColumn = (stmt: string): boolean => {
  * for the reason the erasure stamp gives: a substring match would admit a
  * destructive clause riding through beside the additive one.
  */
-const addsActivityActorTypeColumn = (stmt: string): boolean => {
-  const s = stmt.trim().replace(/;$/, "");
-  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?actor_type[`"]?[^,]*$/i.test(
-    s
-  );
-};
+const addsActivityActorTypeColumn = addsOnlyColumn(
+  "activity_log",
+  "actor_type"
+);
 
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
@@ -399,6 +410,32 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           1700000000,
           1700000000
         );
+      // A trail row written before the actor migration. The fixture's
+      // `activity_log` is otherwise empty, and an empty table cannot show that
+      // the migration is data-preserving: every ALTER applies cleanly to
+      // nothing, so a column that had quietly become NOT NULL, or a rebuild
+      // that dropped rows, would leave the sim green. The user is required by
+      // the cascading key the fixture still carries.
+      sqlite
+        .prepare(
+          "INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?)"
+        )
+        .run("u-1", "upgrader@example.com", 1700000000, 1700000000);
+      sqlite
+        .prepare(
+          `INSERT INTO activity_log
+             (id, user_id, user_name, user_email, action, collection, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "al-1",
+          "u-1",
+          "Upgrader",
+          "upgrader@example.com",
+          "update",
+          "articles",
+          1700000000
+        );
 
       const db = drizzleSqlite({ client: sqlite });
       const kit = await getSQLiteDrizzleKit();
@@ -424,6 +461,16 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
         .prepare("SELECT slug FROM dynamic_collections WHERE id = 'dc-1'")
         .get() as { slug: string } | undefined;
       expect(row?.slug).toBe("articles");
+      // The legacy trail row came through the actor migration intact, and its
+      // kind is NULL — the value the schema documents for a row written before
+      // the column existed, and the one a reader is told to read as `user`.
+      const trail = sqlite
+        .prepare(
+          "SELECT user_id, actor_type FROM activity_log WHERE id = 'al-1'"
+        )
+        .get() as { user_id: string; actor_type: string | null } | undefined;
+      expect(trail?.user_id).toBe("u-1");
+      expect(trail?.actor_type).toBeNull();
 
       // Pass 2: silence.
       const second = await kit.pushSchema(desired, db);
@@ -448,6 +495,16 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
       const pool = new Pool({ connectionString: url.toString() });
       try {
         for (const stmt of fixture.statements) await pool.query(stmt);
+        // A trail row written before the actor migration; see the sqlite case
+        // for why an empty `activity_log` proves nothing about it.
+        await pool.query(
+          "INSERT INTO users (id, email) VALUES ('u-1', 'upgrader@example.com')"
+        );
+        await pool.query(
+          `INSERT INTO activity_log
+             (id, user_id, user_name, user_email, action, collection)
+           VALUES ('al-1', 'u-1', 'Upgrader', 'upgrader@example.com', 'update', 'articles')`
+        );
         const db = drizzlePg({ client: pool });
         const kit = await getPgDrizzleKit();
         const { schemaRecord } = generateRuntimeSchema(
@@ -490,6 +547,15 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
         expect(first.hints).toEqual([]);
         await first.apply();
 
+        // The legacy trail row survived, with the kind the schema documents
+        // for a row that predates the column.
+        const trail = await pool.query<{
+          user_id: string;
+          actor_type: string | null;
+        }>("SELECT user_id, actor_type FROM activity_log WHERE id = 'al-1'");
+        expect(trail.rows[0]?.user_id).toBe("u-1");
+        expect(trail.rows[0]?.actor_type).toBeNull();
+
         // Pass 2: silence — the new tables round-trip with no phantom diffs.
         const second = await kit.pushSchema(desired, db, {
           schemas: ["public"],
@@ -522,6 +588,16 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
         // Data that must survive the reconcile.
         await p.query(
           "INSERT INTO roles (id, name, slug, level) VALUES ('r-1', 'Upgrader', 'upgrader', 5)"
+        );
+        // A trail row written before the actor migration; see the sqlite case
+        // for why an empty `activity_log` proves nothing about it.
+        await p.query(
+          "INSERT INTO users (id, email) VALUES ('u-1', 'upgrader@example.com')"
+        );
+        await p.query(
+          `INSERT INTO activity_log
+             (id, user_id, user_name, user_email, action, collection)
+           VALUES ('al-1', 'u-1', 'Upgrader', 'upgrader@example.com', 'update', 'articles')`
         );
 
         const db = drizzleMysql({ client: pool });
@@ -590,6 +666,17 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           "SELECT slug FROM roles WHERE id = 'r-1'"
         )) as unknown as [Array<{ slug: string }>];
         expect(rows[0]?.slug).toBe("upgrader");
+        // The legacy trail row survived, with the kind the schema documents
+        // for a row that predates the column. MySQL is the dialect that could
+        // backfill an implicit value on a column that had become NOT NULL, so
+        // the null is asserted rather than the row's mere presence.
+        const [trail] = (await p.query(
+          "SELECT user_id, actor_type FROM activity_log WHERE id = 'al-1'"
+        )) as unknown as [
+          Array<{ user_id: string; actor_type: string | null }>,
+        ];
+        expect(trail[0]?.user_id).toBe("u-1");
+        expect(trail[0]?.actor_type).toBeNull();
 
         // Pass 2: silence.
         const second = await kit.pushSchema(desired, db, "nextly_upgrade_v1");
