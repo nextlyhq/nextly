@@ -40,7 +40,9 @@ for all published packages. Status: alpha, all packages version in lockstep.
 - `e2e/` - Playwright suite. `docs/` - user docs (MDX, deployed to
   nextlyhq.com/docs). Nothing here renders them: the site fetches and
   compiles them at its build, so `pnpm check:docs-compile` compiles every page
-  with the same MDX compiler and CI refuses one that does not parse.
+  with the same MDX compiler, parses its frontmatter as the site's loader does,
+  and holds the components it uses to `docs/components.json`, the contract the
+  site registers from the other side. CI refuses a page that would not render.
 - `context7.json` - what Context7 indexes for coding agents: `docs/` and the
   root README, with every other root Markdown file excluded by name (Context7
   reads root-level Markdown whatever `folders` says). Its description is held
