@@ -246,6 +246,56 @@ describe("the rows", () => {
     expect(rows[1]).not.toHaveProperty("shadowedBy");
   });
 
+  it("says which rows hold an override of THEIR OWN, apart from the source in force at the target", () => {
+    // The resolver reports the winning exposure's source on the shadowed row
+    // too, so `source` alone would offer a reset on a row with nothing to
+    // reset — and resetting it would remove nothing. Whether THIS row's id
+    // is in the instance's own record is a separate fact.
+    const twice = header({
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "h1",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "headline",
+          label: "Headline",
+          nodeId: "h1",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    });
+    const page = pageOf(instance({ overrides: { headline: "Later wins" } }));
+
+    const rows =
+      inspectInstance(page, "i1", lookupOf(["header", twice]), LIBRARY)?.rows ??
+      [];
+
+    expect(rows.map(row => [row.id, row.source, row.ownOverride])).toEqual([
+      ["title", "instance", false],
+      ["headline", "instance", true],
+    ]);
+  });
+
+  it("counts a cleared property as the row's own override", () => {
+    const page = pageOf(instance({ overrides: { title: { $unset: true } } }));
+
+    const [title] = inspectInstance(page, "i1", HEADER, LIBRARY)?.rows ?? [];
+
+    expect(title?.ownOverride).toBe(true);
+  });
+
+  it("reports no override of its own for an inherited row", () => {
+    const [title] =
+      inspectInstance(pageOf(instance()), "i1", HEADER, LIBRARY)?.rows ?? [];
+
+    expect(title).toMatchObject({ source: "definition", ownOverride: false });
+  });
+
   it("surfaces overrides this instance holds for properties no longer exposed", () => {
     const page = pageOf(
       instance({ overrides: { title: "Acme", subtitle: "Gone now" } })

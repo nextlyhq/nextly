@@ -227,7 +227,10 @@ function ExposedField({
   onReset: (id: string) => void;
 }): React.JSX.Element {
   const id = `nx-exposed-${row.id}`;
-  const overridden = row.source === "instance";
+  // What a reset would remove is this row's OWN override, which is not the
+  // same fact as its source: a row shadowed by a neighbour holding the
+  // override reads `instance` too, and a reset offered there removes nothing.
+  const overridden = row.ownOverride;
   // A label points at a control, and two kinds of row draw none: the label
   // then names the row without claiming to label an input that is not there.
   const hasControl = row.shadowedBy === undefined && row.supported;

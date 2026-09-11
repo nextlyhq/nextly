@@ -64,10 +64,24 @@ export interface ExposedRow {
    * there; {@link cleared} separates the two.
    */
   readonly value: OverrideValue;
-  /** Which layer supplied the value: the definition, a variant, or this instance. */
+  /**
+   * Which layer supplied the value IN FORCE at this row's target: the
+   * definition, a variant, or this instance.
+   *
+   * The target's, not the row's: two exposures aimed at one target share a
+   * value, and the resolver reports the winning exposure's source on both.
+   * What this row itself stores is {@link ownOverride}.
+   */
   readonly source: ExposedValueSource;
   /** True when the author cleared the property rather than inheriting or setting it. */
   readonly cleared: boolean;
+  /**
+   * Whether THIS instance's record holds a value under this row's id — set
+   * or cleared. What a reset would remove, and so whether one is offered: a
+   * row shadowed by a neighbour that holds the override reads `instance` as
+   * its source and has nothing of its own to reset.
+   */
+  readonly ownOverride: boolean;
   /** Whether this inspector can draw a control for it. Carried, not recomputed. */
   readonly supported: boolean;
   /** The choices, for `select` only; empty for every other type. */
@@ -160,7 +174,7 @@ export function inspectInstance(
     label: row?.title ?? componentId,
     ...(row?.usedOn === undefined ? {} : { usedOn: row.usedOn }),
     definitionFound: found,
-    rows: exposure === undefined ? [] : rowsOf(exposure.properties),
+    rows: exposure === undefined ? [] : rowsOf(exposure.properties, node),
     orphaned:
       exposure === undefined
         ? []
@@ -184,11 +198,15 @@ function storedComponentId(node: BlockNode): string {
 
 /** The resolver's rows, as the panel draws them. */
 function rowsOf(
-  properties: ReturnType<typeof instanceExposure>["properties"]
+  properties: ReturnType<typeof instanceExposure>["properties"],
+  node: BlockNode
 ): ExposedRow[] {
   const labels = new Map(
     properties.map(state => [state.property.id, state.property.label] as const)
   );
+  // Read off the node's own record rather than the resolver's source, which
+  // is the target's and is shared by every exposure aimed at it.
+  const stored = storedOverrides(node);
   return properties.map(state => ({
     id: state.property.id,
     label: state.property.label,
@@ -196,6 +214,7 @@ function rowsOf(
     value: state.value,
     source: state.source,
     cleared: state.cleared,
+    ownOverride: Object.hasOwn(stored, state.property.id),
     supported: (EDITABLE_EXPOSED_TYPES as readonly string[]).includes(
       state.property.type
     ),

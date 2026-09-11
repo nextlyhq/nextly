@@ -418,6 +418,45 @@ describe("rows with no control", () => {
     // The row in force keeps its control.
     expect(screen.getByRole("textbox", { name: "Headline" })).toBeDefined();
   });
+
+  it("offers the reset on the row that HOLDS the override, not on the row it shadows", () => {
+    // The shadowed row reads the winner's source, so a reset keyed on source
+    // stood on a row with nothing to reset — pressed, it removed nothing.
+    const twice = header({
+      exposed: [
+        {
+          id: "title",
+          label: "Title",
+          nodeId: "h1",
+          propPath: "text",
+          type: "text",
+        },
+        {
+          id: "headline",
+          label: "Headline",
+          nodeId: "h1",
+          propPath: "text",
+          type: "text",
+        },
+      ],
+    });
+    const editor = mount(
+      instance({ overrides: { headline: "Later wins" } }),
+      twice
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Reset Title to the component's value",
+      })
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset Headline to the component's value",
+      })
+    );
+    expect(appliedProps(editor)).toStrictEqual({ componentId: "header" });
+  });
 });
 
 describe("overrides the component no longer exposes", () => {
