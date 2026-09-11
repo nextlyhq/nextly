@@ -147,10 +147,9 @@ describe("bulk update honours overrideAccess (integration)", () => {
       [{ id, data: { internalNote: "after" } }]
     );
     // Only what this case is about: the protected field did not change. The
-    // row itself fails here because the stripped patch is empty, and the
-    // transactional update refuses an empty patch where the ordinary one does
-    // not; that is the ledger's transactional-update-with-an-empty-patch-fails,
-    // not this flag.
+    // row itself fails here because stripping the field leaves an empty
+    // patch, and the transactional update refuses an empty patch where the
+    // ordinary one does not; that is a property of the patch, not of the flag.
     expect(unelevated.successful).toBe(0);
     let read = await handler.getEntry({
       collectionName: "pages",
