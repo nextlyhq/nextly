@@ -341,6 +341,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "Ordered Post" }
       );
 
+      // The registry mock is a `Record<string, any>`, so its call list is
+      // `any` and the callback's parameter has no contextual type to take --
+      // an implicit `any`, which the typecheck refuses. Annotated as the
+      // argument list it is, rather than widening the helper's type for one
+      // read.
       const collectionPhase = mockHookRegistry.execute.mock.calls.findIndex(
         (call: unknown[]) => call[0] === "beforeChange"
       );
