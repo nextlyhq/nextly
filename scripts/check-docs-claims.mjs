@@ -28,6 +28,10 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
+import { compile } from "@mdx-js/mdx";
+
+import { splitFrontmatter } from "./check-docs-compile.mjs";
+
 /**
  * Files come from git's index, not from a directory walk.
  *
@@ -499,36 +503,50 @@ const REPO_LINK = /github\.com\/nextlyhq\/nextly\/(?:blob|tree|raw)\/([^\s)\]"'`
 
 const HEX_REF = /^[0-9a-f]{7,40}$/i;
 
-/** Markdown links pointing inside the docs site, e.g. `[Preview](/docs/preview)`. */
-const INTERNAL_DOCS_LINK = /\]\((\/docs\/[^)\s]*)\)/g;
-
 /**
- * A link written as a path from the FILE: `../configuration/index.mdx`, `./x.mdx`,
- * `../packages/...`.
+ * Every link destination a file holds, read off its syntax tree.
  *
- * Five of these existed beside three hundred and eighty `/docs/...` links, and every one was
- * outside the check above, which reads only the root-relative form. Two pointed at repository
- * source files and were broken everywhere; three pointed at sibling pages and rendered as
- * written on the site, which had nothing resolving them. One spelling, the guarded one, is
- * the boundary: a docs page links to another page by its URL, and to source by its GitHub URL.
+ * Read off the tree rather than matched in the text, because the text has no end of
+ * spellings: `[x](../y.mdx "title")`, `[x](<../y.mdx>)`, a bare `[x](y.mdx)`, and a
+ * reference definition `[x]: ../y.mdx` are four the patterns this replaced had learned one
+ * at a time, and a fenced sample, an inline code span and an MDX comment were three places
+ * the same patterns had to be taught not to look. A `link` node is a rendered link and a
+ * `code` node is not, by construction.
+ *
+ * Frontmatter is taken off first, the way the site's loader takes it off, or the compiler
+ * would read the YAML as Markdown. A page the compiler cannot parse yields no links; the
+ * compile check reports that page on its own.
  */
-const FILE_PATH_LINK = /(?<!\\)\]\((\.\.?\/[^)\s]*)\)|^ {0,3}\[[^\]\n]+\]:[ \t]*(\.\.?\/\S*)/g;
+/** Whether a syntax-tree node carries a link destination. */
+function hasDestination(node) {
+  return node.type === "link" || node.type === "definition";
+}
 
-/**
- * The text with everything Markdown does not render as prose blanked, line for line.
- *
- * A fenced sample that demonstrates a link, an inline code span, or an MDX comment is not a
- * link; a check that read them as one would refuse a page for teaching the syntax. Blanked
- * rather than removed so a finding still names the line it was read from: every newline is
- * kept and every other character inside becomes a space. A fence closes only on its own
- * marker, so a tilde fence holding backticks is one block.
- */
-export function codeBlanked(text) {
-  const blank = fragment => fragment.replace(/[^\n]/g, " ");
-  return text
-    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, blank)
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, blank)
-    .replace(/(`+)[^`\n][\s\S]*?\1/g, blank);
+/** Every node under one, itself included, in document order. */
+function nodesOf(node) {
+  return [node, ...(node.children ?? []).flatMap(nodesOf)];
+}
+
+async function linkDestinations(text, mdx) {
+  const links = [];
+  const { body, skipped } = splitFrontmatter(text);
+  const collect = () => tree => {
+    for (const node of nodesOf(tree).filter(hasDestination)) {
+      links.push({ url: node.url, line: (node.position?.start.line ?? 0) + skipped });
+    }
+  };
+  try {
+    await compile(body, { format: mdx ? "mdx" : "md", remarkPlugins: [collect] });
+  } catch {
+    return [];
+  }
+  return links;
+}
+
+/** A destination written as a path from the file rather than as a URL. */
+function isFilePath(url) {
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(url)) return false;
+  return /^\.\.?\//.test(url) || /\.mdx?(?:[#?]|$)/i.test(url);
 }
 
 /**
@@ -924,7 +942,7 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   }
 }
 
-function internalLinks(repoRoot, tracked, findings) {
+async function internalLinks(repoRoot, tracked, findings) {
   // The published pages are the docs tree, not every `.mdx` git tracks: a
   // package's README.mdx has GitHub as its surface and its own link rules.
   const pages = new Set(tracked.filter(rel => rel.startsWith("docs/") && rel.endsWith(".mdx")));
@@ -944,29 +962,22 @@ function internalLinks(repoRoot, tracked, findings) {
     } catch {
       continue;
     }
-    const lines = codeBlanked(text).split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      INTERNAL_DOCS_LINK.lastIndex = 0;
-      let match;
-      while ((match = INTERNAL_DOCS_LINK.exec(lines[i])) !== null) {
-        if (!resolves(match[1])) {
-          findings.push({
-            check: "internal-docs-link",
-            file: rel,
-            line: i + 1,
-            message: `links to ${match[1]}, which is not a docs page`,
-          });
-        }
-      }
-      // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
-      if (!pages.has(rel)) continue;
-      FILE_PATH_LINK.lastIndex = 0;
-      while ((match = FILE_PATH_LINK.exec(lines[i])) !== null) {
+    for (const { url, line } of await linkDestinations(text, rel.endsWith(".mdx"))) {
+      if (url.startsWith("/docs/") && !resolves(url)) {
         findings.push({
           check: "internal-docs-link",
           file: rel,
-          line: i + 1,
-          message: `links to ${match[1] ?? match[2]} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
+          line,
+          message: `links to ${url}, which is not a docs page`,
+        });
+      }
+      // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
+      if (pages.has(rel) && isFilePath(url)) {
+        findings.push({
+          check: "internal-docs-link",
+          file: rel,
+          line,
+          message: `links to ${url} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
         });
       }
     }
@@ -1979,7 +1990,7 @@ export async function runChecks({
     exemption("documented-key-prefix"),
     repairs
   );
-  internalLinks(repoRoot, tracked, findings);
+  await internalLinks(repoRoot, tracked, findings);
   pluginRouteMount(repoRoot, tracked, findings, exemption("plugin-route-mount"));
   metaReachability(repoRoot, tracked, findings);
 

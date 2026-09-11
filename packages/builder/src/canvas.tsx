@@ -42,6 +42,7 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
+  INSTANCE_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   previewContainerStyle,
@@ -180,7 +181,11 @@ export function contextMenuTargetOf(
    * a block nobody was pointing at.
    */
   if (owner.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return null;
-  return owner.getAttribute(NODE_ID_ATTRIBUTE);
+  // The same address the click path resolves. Returning the raw attribute here
+  // hands the menu a re-minted id the stored document does not contain, so
+  // `applySelection` keeps the PREVIOUS selection — and a destructive verb then
+  // acts on a block nobody pointed at.
+  return nodeAddressOf(owner);
 }
 
 /**
@@ -245,7 +250,84 @@ export function nodeIdFromEvent(target: EventTarget | null): string | null {
   // canvas rendered within another rendered page would otherwise resolve a
   // click to the outer page's node.
   if (owner.closest(`.${CANVAS_ROOT_CLASS}`) === null) return null;
+  return nodeAddressOf(owner);
+}
+
+/**
+ * Which node an element stands for, once components are inlined.
+ *
+ * EXPORTED because it is the one rule, and every reader of the element-to-node
+ * mapping has to use it. Slice one of this work updated the click path and the
+ * geometry lookup and left three other readers on the raw attribute — the
+ * context menu, the selection markers and the drag rectangles — which is how a
+ * right-click came to act on the previously selected block.
+ *
+ * A component is inlined at render: the instance node is replaced by the tree
+ * its definition describes, and every element of that tree carries a RE-MINTED
+ * id the page's document does not contain. Returning that id hands the editor
+ * an address it cannot select, edit or delete — so a definition-owned element
+ * answers with the INSTANCE the author actually placed, which is a real node in
+ * the page.
+ *
+ * ## Asked of the ELEMENT, never of its ancestors
+ *
+ * `owner.closest(\`[${"$"}{INSTANCE_ATTRIBUTE}]\`)` is the obvious implementation and
+ * it is wrong. An instance's SLOT CONTENT belongs to the page and is
+ * deliberately unmarked, but it renders NESTED INSIDE the definition's marked
+ * box — so a walk upwards finds that box and answers with the component for a
+ * node the author can and should select directly. That content is exactly what
+ * a marketer opened the editor to change.
+ *
+ * The marker is per-node rather than a wrapper element precisely so this
+ * question can be asked without walking, and `hasAttribute` is what asks it:
+ * marked means definition-owned, unmarked means the page's own whatever
+ * encloses it.
+ */
+export function nodeAddressOf(owner: Element): string | null {
+  const instance = owner.getAttribute(INSTANCE_ATTRIBUTE);
+  // Present AND non-empty. The renderer never emits an empty one — it treats
+  // that as no provenance — but an address of "" is not selectable, so reading
+  // it as page-owned is the answer that leaves the element addressable by its
+  // own id.
+  if (instance !== null && instance !== "") return instance;
   return owner.getAttribute(NODE_ID_ATTRIBUTE);
+}
+
+/**
+ * Whether this element is the OUTERMOST one standing for its address.
+ *
+ * Two different things put one address on several elements, and they need
+ * opposite answers:
+ *
+ * - A node rendered more than once — a block that draws its child twice — puts
+ *   the same node id on SIBLING elements. Every copy is a rendering of that
+ *   node, and marking only one outlines a single row of ten while previewing a
+ *   state on another. Neither copy encloses the other, so both are outermost.
+ * - A component instance puts one address on every element its definition
+ *   contributed, NESTED. Those are renderings of different definition nodes
+ *   that share a host, so marking all of them outlines everything inside the
+ *   component and measuring all of them keys the drag geometry to whichever was
+ *   visited last.
+ *
+ * Enclosure is what separates them, so enclosure is what this asks. The host
+ * marker is contiguous over a subtree, so the nearest enclosing one carrying
+ * the same value is the whole test — no walk to the root is needed.
+ */
+export function isOutermostForAddress(
+  element: Element,
+  address: string,
+  container: HTMLElement
+): boolean {
+  const host = element.parentElement?.closest(`[${INSTANCE_ATTRIBUTE}]`);
+  if (host === null || host === undefined) return true;
+  // Bounded by the canvas that owns the element. A canvas can render inside a
+  // definition-owned element — component edit mode does — and ids are scoped
+  // per document, so the inner document may reuse the enclosing instance's
+  // address. An unbounded search then finds the OUTER document's marker,
+  // classifies the inner component as nested inside itself, and leaves it with
+  // no outline and no rectangle for a drag.
+  if (!ownedByCanvas(host, container)) return true;
+  return host.getAttribute(INSTANCE_ATTRIBUTE) !== address;
 }
 
 /**
@@ -265,15 +347,26 @@ export function nodeIdFromEvent(target: EventTarget | null): string | null {
  * effect would spend a frame measuring the wrong block.
  */
 export function nodeElement(root: HTMLElement, id: string): Element | null {
-  let found: Element | null = null;
+  let own: Element | null = null;
+  let hosted: Element | null = null;
   // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
   // that declares its iterator, and this package compiles without one.
   root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    if (found === null && element.getAttribute(NODE_ID_ATTRIBUTE) === id) {
-      found = element;
+    if (own === null && element.getAttribute(NODE_ID_ATTRIBUTE) === id) {
+      own = element;
+    }
+    // An INSTANCE id addresses a node that renders no element of its own: it
+    // was replaced by the definition's tree. The first element that tree
+    // contributed is what a caller measuring the selection needs, and document
+    // order makes that the outermost one.
+    if (hosted === null && element.getAttribute(INSTANCE_ATTRIBUTE) === id) {
+      hosted = element;
     }
   });
-  return found;
+  // The node's OWN element wins where both exist. They cannot today — an
+  // instance is replaced rather than rendered — but the precedence states which
+  // answer is the node's rather than leaving it to iteration order.
+  return own ?? hosted;
 }
 
 /**
@@ -831,8 +924,25 @@ function useCanvasMarkers(
         .forEach(element => touched.add(element));
 
       touched.forEach(element => {
-        const id = element.getAttribute(NODE_ID_ATTRIBUTE);
-        if (id === null || !marked.includes(id)) {
+        // Another canvas's elements are that canvas's to mark, exactly as the
+        // drag pass below leaves them. Ids are scoped per document, so a nested
+        // canvas can hold an instance with the SAME address as the one selected
+        // out here — and marking it would outline a block belonging to a
+        // document this selection is not in.
+        if (!ownedByCanvas(element, container)) return;
+        // The ADDRESS, not the raw attribute. A definition-owned element
+        // carries a re-minted id the selection never holds, so comparing the
+        // attribute leaves a selected component with no outline at all.
+        const id = nodeAddressOf(element);
+        // OUTERMOST only, which draws one outline per instance while still
+        // marking every copy of a node a block rendered more than once — see
+        // `isOutermostForAddress` for why those two cases need opposite
+        // answers.
+        if (
+          id === null ||
+          !marked.includes(id) ||
+          !isOutermostForAddress(element, id, container)
+        ) {
           // Guarded like the writes below: this walk now visits the page root
           // and the container, which never carry the attribute, and removing an
           // absent one still touches the element.

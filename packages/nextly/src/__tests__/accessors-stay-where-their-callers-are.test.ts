@@ -113,11 +113,13 @@ describe("instance accessors are published where their callers can reach them", 
     expect(namesAudience.length).toBeGreaterThan(0);
 
     // A prohibition is a negation attached to USING this function, or one of
-    // the stock phrasings that forbid without a verb. Bare negation is not
-    // enough: "it cannot wait" describes the synchronous sibling and forbids
-    // nothing.
+    // the stock phrasings that forbid without a verb. The verb is what
+    // matters, not the negation: "it cannot wait" describes the synchronous
+    // sibling and forbids nothing, while "callers cannot use this" forbids
+    // exactly what this docblock promises. So `cannot` stays in the list and
+    // is disarmed by the verb requirement, not by its absence.
     const prohibits = (line: string) =>
-      /\b(do not|don't|must not|should not|never|not)\s+(be\s+)?(use|call|invoke|reach for|rely on)\b/i.test(
+      /\b(do not|don't|must not|should not|cannot|can't|never|not)\s+(be\s+)?(use|call|invoke|reach for|rely on)\b/i.test(
         line
       ) ||
       /\b(internal use only|not for (user|plugin|application|external)|not intended for)\b/i.test(

@@ -22,7 +22,8 @@
  *   node scripts/check-context7-index.mjs
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const LIBRARY = "/nextlyhq/nextly";
@@ -78,18 +79,31 @@ function isInside(path, folders) {
 }
 
 /**
- * Why one cited path disagrees with the configuration, or `null`.
- *
- * A file must sit under a listed folder, or be the README; anything else the index cites is
- * a file it holds that the configuration never agreed to.
+ * The rules a cited path is judged by, first applicable first. An exclusion wins over an
+ * inclusion, which is the precedence Context7 documents for `excludeFolders` against
+ * `folders`; then a file must sit under a listed folder or be the README.
  */
+const CITATION_RULES = [
+  [
+    (path, config) => listField(config, "excludeFiles").includes(path),
+    path => `${path} is in excludeFiles and was indexed anyway`,
+  ],
+  [
+    (path, config) => isInside(path, listField(config, "excludeFolders")),
+    path => `${path} is under an excludeFolders entry and was indexed anyway`,
+  ],
+  [
+    (path, config) =>
+      !isInside(path, listField(config, "folders")) && !isKeptRoot(path),
+    (path, config) =>
+      `${path} is outside folders ${JSON.stringify(listField(config, "folders"))} and is not the README, and was indexed`,
+  ],
+];
+
+/** Why one cited path disagrees with the configuration, or `null`. */
 export function citationFinding(path, config) {
-  const folders = listField(config, "folders");
-  if (listField(config, "excludeFiles").includes(path)) {
-    return `${path} is in excludeFiles and was indexed anyway`;
-  }
-  if (isInside(path, folders) || isKeptRoot(path)) return null;
-  return `${path} is outside folders ${JSON.stringify(folders)} and is not the README, and was indexed`;
+  const rule = CITATION_RULES.find(([applies]) => applies(path, config));
+  return rule ? rule[1](path, config) : null;
 }
 
 /**
@@ -104,18 +118,6 @@ export function citationFindings(cited, config) {
     ];
   }
   return [...cited].map(path => citationFinding(path, config)).filter(Boolean);
-}
-
-/**
- * A sentence the index must be able to return, taken from the file rather than written
- * here, so a rewrite of the page cannot leave this comparing against words that no longer
- * exist. The first second-level heading is specific enough to belong to one page.
- */
-export function firstHeading(text, name) {
-  const match = /^##\s+(.+)$/m.exec(text);
-  if (!match)
-    throw new Error(`${name}: no second-level heading to use as a marker`);
-  return match[1].trim();
 }
 
 /** Every heading in a file, top-level and second-level, in order. */
@@ -144,19 +146,33 @@ export function probeMarker(text, corpus) {
   return candidates.find(candidate => !corpus.includes(candidate)) ?? null;
 }
 
-/** The documentation, concatenated, for deciding what a marker must not share. */
-function docsCorpus(root) {
-  const out = [];
-  const walk = dir => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".mdx"))
-        out.push(readFileSync(full, "utf-8"));
+/** The Markdown and MDX files git tracks, which is the set Context7 can have read. */
+function trackedText(root) {
+  const out = execFileSync(
+    "git",
+    ["ls-files", "-z", "--", "*.md", "*.mdx", "**/*.md", "**/*.mdx"],
+    {
+      cwd: root,
+      encoding: "utf-8",
     }
-  };
-  walk(join(root, "docs"));
-  return out.join("\n");
+  );
+  return out.split("\0").filter(Boolean);
+}
+
+/**
+ * Everything the index may have read APART from one file, concatenated, for deciding
+ * which of that file's sentences is its own.
+ *
+ * A probe returns whatever the index holds for a topic and cannot say which file it came
+ * from, so a marker shared with any other file the index may hold would answer for the
+ * wrong one: "Quickstart" heads the root README and two package READMEs. Tracked files
+ * only, because an untracked note on one checkout is not something Context7 has read.
+ */
+function corpusExcept(root, name) {
+  return trackedText(root)
+    .filter(rel => rel !== name)
+    .map(rel => readFileSync(join(root, rel), "utf-8"))
+    .join("\n");
 }
 
 /**
@@ -192,7 +208,10 @@ async function retrievable(get, api, marker, name) {
   if (answer.status !== 200) {
     throw new Unanswerable(`probing for ${name} answered ${answer.status}`);
   }
-  return answer.body.includes(marker);
+  return {
+    found: answer.body.includes(marker),
+    cites: citedPaths(answer.body),
+  };
 }
 
 /** A JSON body, or `Unanswerable`: a truncated or non-JSON answer is no verdict either. */
@@ -204,32 +223,42 @@ function parseAnswer(body, what) {
   }
 }
 
-/** The library's search entry, once it exists and has finished indexing. */
-async function finalizedEntry(get, api) {
+/** The search results as a list, or `Unanswerable` when the answer has another shape. */
+async function searchResults(get, api) {
   const search = await get(
     `${api}/search?query=${encodeURIComponent("nextly")}`
   );
   if (search.status !== 200)
     throw new Unanswerable(`search answered ${search.status}`);
-  const entry = parseAnswer(search.body, "search").results?.find(
-    result => result.id === LIBRARY
+  const { results } = parseAnswer(search.body, "search");
+  if (!Array.isArray(results))
+    throw new Unanswerable("search answered without a list of results");
+  return results;
+}
+
+/** The library's search entry, once it exists and has finished indexing. */
+async function finalizedEntry(get, api) {
+  const entry = (await searchResults(get, api)).find(
+    result => result?.id === LIBRARY
   );
   if (!entry) {
     throw new Unanswerable(
       `${LIBRARY} is not in Context7's search results; register it first`
     );
   }
-  if (entry.state !== "finalized") {
+  if (entry.state !== "finalized")
     throw new Unanswerable(`${LIBRARY} is in state "${entry.state}"`);
-  }
   return entry;
 }
 
-/** A marker for a file, or `Unanswerable` when the file offers nothing to ask for. */
-function markerFor(root, name, corpus) {
-  const marker = probeMarker(readFileSync(join(root, name), "utf-8"), corpus);
+/** A marker for a file, or `Unanswerable` when the file offers nothing of its own to ask for. */
+export function markerFor(root, name) {
+  const marker = probeMarker(
+    readFileSync(join(root, name), "utf-8"),
+    corpusExcept(root, name)
+  );
   if (marker === null)
-    throw new Unanswerable(`${name} offers no sentence to ask for`);
+    throw new Unanswerable(`${name} offers no sentence of its own to ask for`);
   return marker;
 }
 
@@ -241,22 +270,19 @@ function markerFor(root, name, corpus) {
  * since the citation sample cannot. A control that fails is a finding, and the exclusions
  * are then not probed at all: their absences would prove nothing.
  */
-async function keptControls({ root, api, get, corpus }) {
-  const kept = [
-    [
-      DOCS_WITNESS,
-      firstHeading(
-        readFileSync(join(root, DOCS_WITNESS), "utf-8"),
-        DOCS_WITNESS
-      ),
-    ],
-    [README, markerFor(root, README, corpus)],
-  ];
+async function keptControls({ root, api, get }) {
+  const kept = [DOCS_WITNESS, README].map(name => [
+    name,
+    markerFor(root, name),
+  ]);
   const findings = [];
   for (const [name, marker] of kept) {
-    if (await retrievable(get, api, marker, name)) continue;
+    const answer = await retrievable(get, api, marker, name);
+    // The sentence must come back AND be cited from the file it was taken from: a
+    // marker answered from some other file would be a control that never looked.
+    if (answer.found && answer.cites.has(name)) continue;
     findings.push(
-      `the index cannot return "${marker}" from ${name}; an absence would prove nothing`
+      `the index cannot return "${marker}" cited from ${name}; an absence would prove nothing`
     );
   }
   return findings;
@@ -267,26 +293,27 @@ async function keptControls({ root, api, get, corpus }) {
  * that offers nothing to ask for stops the run: a "not probed" would read as a pass to
  * whoever only sees the status.
  */
-async function exclusionFindings({ root, api, get, config, corpus }) {
+async function exclusionFindings({ root, api, get, config }) {
+  const present = listField(config, "excludeFiles").filter(name =>
+    existsSync(join(root, name))
+  );
   const findings = [];
-  for (const name of listField(config, "excludeFiles")) {
-    if (!existsSync(join(root, name))) continue;
-    const marker = markerFor(root, name, corpus);
-    if (await retrievable(get, api, marker, name)) {
-      findings.push(
-        `"${marker}" from ${name} is retrievable; its exclusion did not take`
-      );
-    }
+  for (const name of present) {
+    const marker = markerFor(root, name);
+    const answer = await retrievable(get, api, marker, name);
+    if (!answer.found && !answer.cites.has(name)) continue;
+    findings.push(
+      `${name} is retrievable ("${marker}" came back, or the file was cited); its exclusion did not take`
+    );
   }
   return findings;
 }
 
 /** The findings the index earns against the configuration, given a working library. */
 async function indexFindings({ root, api, get, config, cited }) {
-  const corpus = docsCorpus(root);
   const findings = [
     ...citationFindings(cited, config),
-    ...(await keptControls({ root, api, get, corpus })),
+    ...(await keptControls({ root, api, get })),
   ];
   if (
     findings.some(finding => finding.includes("an absence would prove nothing"))
@@ -295,7 +322,7 @@ async function indexFindings({ root, api, get, config, cited }) {
   }
   return [
     ...findings,
-    ...(await exclusionFindings({ root, api, get, config, corpus })),
+    ...(await exclusionFindings({ root, api, get, config })),
   ];
 }
 
