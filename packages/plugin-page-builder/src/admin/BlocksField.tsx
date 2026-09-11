@@ -2023,21 +2023,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => ({ state: shownStyleState, onChange: setStyleState }),
     [shownStyleState]
   );
-  const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
-  /*
-   * Is a drag happening — of EITHER kind.
-   *
-   * Not `draggingId`, which is the moving node's id and is null for the whole
-   * of a drag from the palette: the block has no node until the release makes
-   * one. Chrome gated on the id stays up while an author drags a new block in,
-   * and the toolbar sits above the drop indicator, covering the position being
-   * aimed at.
-   *
-   * Derived once and shared by the three surfaces below, so they cannot come to
-   * disagree about what counts as a drag.
-   */
-  const dragging = drag.draggingBlockName !== null;
-
   /*
    * The empty-container appender's only read of a block's definition: its
    * accessible label. `{ get: getBlock }` satisfies its `BlockLookup` with no
@@ -2392,6 +2377,32 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * nowhere an author could see while editing.
    */
   const componentLibrary = useComponentLibrary();
+
+  // After the library read and the caps, which it takes: the SAME map and
+  // caps the canvas draws with, so a moved instance is judged by the roots it
+  // draws there rather than by its own, unrestricted type.
+  const drag = useCanvasDrag({
+    editor,
+    slots,
+    nesting,
+    canvasRoot,
+    definitions: componentLibrary.definitions,
+    limits: documentLimits,
+  });
+  /*
+   * Is a drag happening — of EITHER kind.
+   *
+   * Not `draggingId`, which is the moving node's id and is null for the whole
+   * of a drag from the palette: the block has no node until the release makes
+   * one. Chrome gated on the id stays up while an author drags a new block in,
+   * and the toolbar sits above the drop indicator, covering the position being
+   * aimed at.
+   *
+   * Derived once and shared by the three surfaces below, so they cannot come to
+   * disagree about what counts as a drag.
+   */
+  const dragging = drag.draggingBlockName !== null;
+
   /*
    * The rows the panel may OFFER: the library without the definition this very
    * field is editing, when it is editing one. The MAP stays whole — the

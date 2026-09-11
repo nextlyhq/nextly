@@ -36,6 +36,7 @@ import {
   resolveComponentInstances,
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
+  isComponentInstance,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
@@ -582,7 +583,7 @@ export function componentEntriesFrom(
  * it would re-walk every definition on each keystroke of a filter.
  */
 function offerableDefinition(
-  stored: SavedComponent["document"],
+  stored: BlockDocument | null | undefined,
   definitions: ComponentLookup,
   limits: DocumentLimits | undefined
 ): ComponentDocument | undefined {
@@ -857,6 +858,39 @@ function rootsAllowedAt(
     target,
     source
   );
+}
+
+/**
+ * The block types a node ALREADY ON THE PAGE is judged by when it moves.
+ *
+ * The rule {@link entryAllowedAt} applies at the insert, asked of a node
+ * instead of an entry: a block by its own type, an instance by the ROOTS of
+ * the definition it draws — resolved through `definitions` exactly as its
+ * tile was, under the same caps. The instance node's own type is not a
+ * registered block and the nesting source answers "no restriction" for it, so
+ * a move judged by the node's type would let a component whose root belongs
+ * only inside a Columns be dragged into a paragraph after its insert was
+ * refused there.
+ *
+ * An instance that does not resolve — no definition, an unreadable one, a
+ * root the resolver had to leave standing — is judged by its own type, which
+ * is to say not at all. It draws as a placeholder wherever it sits, and
+ * refusing to move one would pin a placeholder to the spot it was left in.
+ */
+export function placementTypesOf(
+  node: BlockNode,
+  definitions?: ComponentLookup,
+  limits?: DocumentLimits
+): readonly string[] {
+  if (definitions === undefined || !isComponentInstance(node)) {
+    return [node.type];
+  }
+  const componentId = node.props.componentId;
+  const drawn =
+    typeof componentId === "string"
+      ? offerableDefinition(definitions.get(componentId), definitions, limits)
+      : undefined;
+  return drawn === undefined ? [node.type] : drawn.nodes.map(root => root.type);
 }
 
 /**
