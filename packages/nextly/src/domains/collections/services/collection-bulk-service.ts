@@ -1552,6 +1552,13 @@ export class CollectionBulkService extends BaseService {
     params: {
       collectionName: string;
       user?: UserContext;
+      /**
+       * D35 system elevation, as on `createEntries`: the collection gate, the
+       * transition pre-resolve and every per-entry write skip access. Without
+       * it a trusted batch update had no trusted path and a plugin's
+       * `updateMany(..., { as: "system" })` was judged as an anonymous caller.
+       */
+      overrideAccess?: boolean;
       authenticatedScope?: AuthenticatedScope;
     },
     entries: BulkUpdateEntry[],
@@ -1567,14 +1574,15 @@ export class CollectionBulkService extends BaseService {
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For update, we check access without document since we don't have it yet
     // Owner-only checks will be done per-entry when we fetch the document
+    const accessUser = params.overrideAccess ? undefined : params.user;
     const accessDenied =
       await this.accessService.checkCollectionAccess<BatchOperationResult>(
         params.collectionName,
         "update",
-        params.user,
+        accessUser,
         undefined,
         undefined,
-        undefined,
+        params.overrideAccess,
         undefined,
         // Judge a scoped API key on its OWN update grant, not the key owner's:
         // otherwise a super-admin-owned key without update-<slug> could
@@ -1603,7 +1611,8 @@ export class CollectionBulkService extends BaseService {
     const transitionAuth =
       await this.mutationService.resolveTransitionAuthorization({
         collectionName: params.collectionName,
-        accessUser: params.user,
+        accessUser,
+        overrideAccess: params.overrideAccess,
         authenticatedScope: params.authenticatedScope,
       });
 
@@ -2160,6 +2169,7 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       user?: UserContext;
       authenticatedScope?: AuthenticatedScope;
+      overrideAccess?: boolean;
       /** Named so the per-item write's request facts survive the narrowing. */
       request?: Request;
     },
