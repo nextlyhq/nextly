@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../database/index";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
+import { PermissionService } from "../../domains/auth/services/permission-service";
 
 import {
   invalidateAllPermissionCaches,
@@ -332,6 +333,27 @@ describe("an API key's grants are retired when the roles behind them change", ()
     await invalidateAllPermissionCaches();
 
     expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("loses a deleted permission through the SERVICE that deletes it", async () => {
+    // Through `PermissionService`, not the invalidation primitive. The case
+    // above calls that primitive directly, so it proves the primitive works
+    // and says nothing about whether anything calls it — measured: removing
+    // the call from the delete path leaves it green.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+
+    await new PermissionService(harness!.adapter as never, {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+    }).deletePermissionById("perm-secrets");
+
+    expect(
+      await grants(),
+      "the deleted row is still in the key's grants"
+    ).not.toContain(ONLY_IN_THE_CATALOGUE);
   });
 
   it("does not file a resolution that raced an invalidation as current", async () => {
