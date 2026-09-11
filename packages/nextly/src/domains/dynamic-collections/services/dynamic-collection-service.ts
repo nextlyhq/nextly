@@ -93,6 +93,19 @@ export interface CollectionArtifacts {
   };
 }
 
+/**
+ * The fields every dynamic collection has without being asked: the system adds
+ * them, so a save never defines them, and the UI may send them back with the
+ * complete field list on an update.
+ */
+const RESERVED_FIELD_NAMES: readonly string[] = [
+  "id",
+  "title",
+  "slug",
+  "created_at",
+  "updated_at",
+];
+
 export interface CreateCollectionInput {
   name: string;
   label?: string;
@@ -412,27 +425,7 @@ export class DynamicCollectionService extends BaseService {
       throw new Error(`Collection "${normalizedName}" already exists`);
     }
 
-    const normalizedFields = data.fields.map(f => ({
-      ...f,
-      name: f.name.toLowerCase(),
-    }));
-
-    // Reserved fields are auto-added by the system and should not be user-defined.
-    const reservedFieldNames = [
-      "id",
-      "title",
-      "slug",
-      "created_at",
-      "updated_at",
-    ];
-    const userDefinedFields = normalizedFields.filter(
-      f => !reservedFieldNames.includes(f.name)
-    );
-
-    this.validationService.validateFieldNames(userDefinedFields);
-    this.validationService.validateJunctionOwnership(userDefinedFields, field =>
-      this.schemaService.junctionTableNameFor(tableName, field)
-    );
+    const userDefinedFields = this.userFieldsOf(data.fields, tableName);
 
     const id = this.generateId();
 
@@ -563,6 +556,26 @@ export class DynamicCollectionService extends BaseService {
    * resolved form would resolve twice and could write a row `migrate:create`
    * would not.
    */
+  /**
+   * The fields a save defines itself, validated: names lower-cased, the
+   * reserved fields dropped, every name checked, and no two many-to-many
+   * fields sharing one junction table — asked through the schema service's own
+   * naming, which is what the DDL is written with.
+   */
+  private userFieldsOf(
+    fields: FieldDefinition[],
+    tableName: string
+  ): FieldDefinition[] {
+    const userDefinedFields = fields
+      .map(f => ({ ...f, name: f.name.toLowerCase() }))
+      .filter(f => !RESERVED_FIELD_NAMES.includes(f.name));
+    this.validationService.validateFieldNames(userDefinedFields);
+    this.validationService.validateJunctionOwnership(userDefinedFields, field =>
+      this.schemaService.junctionTableNameFor(tableName, field)
+    );
+    return userDefinedFields;
+  }
+
   private manifestEntityFor(
     slug: string,
     data: CreateCollectionInput,
@@ -972,45 +985,18 @@ export class DynamicCollectionService extends BaseService {
         this.localizationConfigured
       );
     }
-    const reservedForFields = [
-      "id",
-      "title",
-      "slug",
-      "created_at",
-      "updated_at",
-    ];
     const existingUserFieldsForTransition = (collection.fields || []).filter(
-      (f: FieldDefinition) => !reservedForFields.includes(f.name)
+      (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
     );
 
     if (updates.fields !== undefined) {
-      const normalizedFields = updates.fields.map(f => ({
-        ...f,
-        name: f.name.toLowerCase(),
-      }));
-
-      // Reserved fields are auto-added by the system; the UI may include them
-      // when sending back the complete field list during an update operation.
-      const reservedFieldNames = [
-        "id",
-        "title",
-        "slug",
-        "created_at",
-        "updated_at",
-      ];
-      const userDefinedFields = normalizedFields.filter(
-        f => !reservedFieldNames.includes(f.name)
-      );
-
-      this.validationService.validateFieldNames(userDefinedFields);
-      this.validationService.validateJunctionOwnership(
-        userDefinedFields,
-        field =>
-          this.schemaService.junctionTableNameFor(collection.tableName, field)
+      const userDefinedFields = this.userFieldsOf(
+        updates.fields,
+        collection.tableName
       );
 
       const oldUserFields = (collection.fields || []).filter(
-        (f: FieldDefinition) => !reservedFieldNames.includes(f.name)
+        (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
       );
 
       // Pass status flags so the alter migration can ADD/DROP the
