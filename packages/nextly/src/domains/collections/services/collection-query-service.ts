@@ -134,12 +134,8 @@ import {
   type TranslationFilterState,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { EVERY_TRANSLATION, NO_FALLBACK } from "../../i18n/locale-selector";
-import {
-  isValidLocale,
-  resolveFallbackChain,
-  resolveRequestedLocale,
-} from "../../i18n/resolve-locale";
+import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
@@ -1009,42 +1005,6 @@ export class CollectionQueryService extends BaseService {
   // ============================================================
   // i18n (M4) — companion-aware read helpers
   // ============================================================
-
-  /**
-   * Resolve the fallback chain for a read request, or `null` when localization is off.
-   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale);
-   * otherwise the requested locale's configured chain + default locale is used (spec §8).
-   */
-  private resolveLocaleChain(
-    locale: string | undefined,
-    fallbackLocale: string | false | undefined
-  ): string[] | null {
-    // `locale=all` is handled by a separate keyed-populate path — not a single-value chain.
-    if (!this.localization || locale === EVERY_TRANSLATION) return null;
-    const requested = resolveRequestedLocale(this.localization, locale);
-    // A per-request opt-out disables fallback: return the requested language only.
-    if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
-      return [requested];
-    }
-    // A concrete per-request fallback locale overrides the configured chain: the
-    // requested locale first, then the named fallback's own chain (deduped).
-    if (
-      typeof fallbackLocale === "string" &&
-      isValidLocale(this.localization, fallbackLocale)
-    ) {
-      const seen = new Set<string>();
-      return [
-        requested,
-        ...resolveFallbackChain(this.localization, fallbackLocale),
-      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
-    }
-    // The global localization.fallback switch (default true) disables fallback
-    // for ordinary reads when turned off.
-    if (!this.localization.fallback) {
-      return [requested];
-    }
-    return resolveFallbackChain(this.localization, requested);
-  }
 
   /**
    * `locale=all` populate (admin/export): set each localized field to a language-keyed object
@@ -2714,7 +2674,8 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve the locale chain + load the companion once, so both the sort
       // block (in-query ORDER BY on a localized column) and the post-query populate reuse
       // it. `null` when localization is off or the collection isn't localized.
-      const localeChain = this.resolveLocaleChain(
+      const localeChain = resolveLocaleChain(
+        this.localization,
         params.locale,
         params.fallbackLocale
       );
@@ -3445,12 +3406,13 @@ export class CollectionQueryService extends BaseService {
    * locale-scoped search or filter describes the SAME rows the page returns.
    */
   private async localeScope(params: FilteredReadParams): Promise<{
-    localeChain: ReturnType<CollectionQueryService["resolveLocaleChain"]>;
+    localeChain: string[] | null;
     companion: Awaited<
       ReturnType<CollectionFileManager["loadCompanionSchema"]>
     > | null;
   }> {
-    const localeChain = this.resolveLocaleChain(
+    const localeChain = resolveLocaleChain(
+      this.localization,
       params.locale,
       params.fallbackLocale
     );
