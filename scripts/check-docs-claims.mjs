@@ -503,6 +503,35 @@ const HEX_REF = /^[0-9a-f]{7,40}$/i;
 const INTERNAL_DOCS_LINK = /\]\((\/docs\/[^)\s]*)\)/g;
 
 /**
+ * A link written as a path from the FILE: `../configuration/index.mdx`, `./x.mdx`,
+ * `../packages/...`.
+ *
+ * Five of these existed beside three hundred and eighty `/docs/...` links, and every one was
+ * outside the check above, which reads only the root-relative form. Two pointed at repository
+ * source files and were broken everywhere; three pointed at sibling pages and rendered as
+ * written on the site, which had nothing resolving them. One spelling, the guarded one, is
+ * the boundary: a docs page links to another page by its URL, and to source by its GitHub URL.
+ */
+const FILE_PATH_LINK = /(?<!\\)\]\((\.\.?\/[^)\s]*)\)|^ {0,3}\[[^\]\n]+\]:[ \t]*(\.\.?\/\S*)/g;
+
+/**
+ * The text with everything Markdown does not render as prose blanked, line for line.
+ *
+ * A fenced sample that demonstrates a link, an inline code span, or an MDX comment is not a
+ * link; a check that read them as one would refuse a page for teaching the syntax. Blanked
+ * rather than removed so a finding still names the line it was read from: every newline is
+ * kept and every other character inside becomes a space. A fence closes only on its own
+ * marker, so a tilde fence holding backticks is one block.
+ */
+export function codeBlanked(text) {
+  const blank = fragment => fragment.replace(/[^\n]/g, " ");
+  return text
+    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, blank)
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, blank)
+    .replace(/(`+)[^`\n][\s\S]*?\1/g, blank);
+}
+
+/**
  * Split a link's tail into the ref and the path under it.
  *
  * The ref boundary is not derivable from the string, so it is resolved against the refs the
@@ -896,7 +925,9 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
 }
 
 function internalLinks(repoRoot, tracked, findings) {
-  const pages = new Set(tracked.filter(rel => rel.endsWith(".mdx")));
+  // The published pages are the docs tree, not every `.mdx` git tracks: a
+  // package's README.mdx has GitHub as its surface and its own link rules.
+  const pages = new Set(tracked.filter(rel => rel.startsWith("docs/") && rel.endsWith(".mdx")));
   const resolves = target => {
     const path = target.split("#")[0].replace(/\/+$/, "");
     if (path === "/docs") return true;
@@ -913,7 +944,7 @@ function internalLinks(repoRoot, tracked, findings) {
     } catch {
       continue;
     }
-    const lines = text.split("\n");
+    const lines = codeBlanked(text).split("\n");
     for (let i = 0; i < lines.length; i++) {
       INTERNAL_DOCS_LINK.lastIndex = 0;
       let match;
@@ -926,6 +957,17 @@ function internalLinks(repoRoot, tracked, findings) {
             message: `links to ${match[1]}, which is not a docs page`,
           });
         }
+      }
+      // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
+      if (!pages.has(rel)) continue;
+      FILE_PATH_LINK.lastIndex = 0;
+      while ((match = FILE_PATH_LINK.exec(lines[i])) !== null) {
+        findings.push({
+          check: "internal-docs-link",
+          file: rel,
+          line: i + 1,
+          message: `links to ${match[1] ?? match[2]} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
+        });
       }
     }
   }
