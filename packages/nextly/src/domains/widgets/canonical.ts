@@ -37,7 +37,7 @@ import {
   generatedWidgets,
 } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
-import { listWidgets } from "./registry";
+import { publishableWidgets } from "./publish";
 
 /**
  * The part of a widget that layout resolution needs, from either channel.
@@ -89,6 +89,36 @@ export interface CanonicalWidget {
    */
   lifecycle?: string;
   visibleWhen?: string | readonly string[];
+  /**
+   * The gates INSIDE the declaration: one per action of an `actions` widget,
+   * verbatim, `undefined` where the action declares none.
+   *
+   * Carried so the workspace payload can withhold an action from a reader
+   * who lacks its grant before the declaration ships -- an action is a label
+   * and an href, and the browser hiding it afterwards is not a control.
+   * Verbatim for the same reason `requiredPermission` is: what a gate means
+   * is decided in one place, and a summary that normalised it would be a
+   * second opinion.
+   */
+  actionGates?: readonly unknown[];
+}
+
+/**
+ * The gates an `actions` declaration carries, one per action; none for a
+ * declaration without actions, or with actions that are not a list.
+ */
+export function actionGatesOf(actions: unknown): readonly unknown[] {
+  if (!Array.isArray(actions)) return [];
+  return actions.map(action =>
+    typeof action === "object" && action !== null
+      ? (action as { requiredPermission?: unknown }).requiredPermission
+      : undefined
+  );
+}
+
+/** A summary's action gates, for one written before the field existed. */
+function gatesOf(widget: CanonicalWidget): readonly unknown[] {
+  return widget.actionGates ?? [];
 }
 
 /** The summary of one registered widget. */
@@ -98,6 +128,7 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ...(definition.requiredPermission === undefined
       ? {}
       : { requiredPermission: definition.requiredPermission }),
+    actionGates: actionGatesOf(definition.actions),
     ...(definition.defaultSize === undefined
       ? {}
       : { defaultSize: definition.defaultSize }),
@@ -178,6 +209,10 @@ function mergeCanonical(
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     ...contributedLifecycle,
+    // Both copies' action gates, because both copies ship: the payload carries
+    // each channel's declaration and withholds the actions in each, so every
+    // gate either names has to be resolved.
+    actionGates: [...gatesOf(contribution), ...gatesOf(registration)],
   };
 }
 
@@ -194,6 +229,16 @@ function mergeCanonical(
  * Contributions are taken as already-validated summaries rather than raw
  * declarations, so this module never has to know how a plugin is shaped — and
  * the validation stays where the version boundary is understood.
+ *
+ * 🔴 Registrations are taken AS THE ADMIN MAY RECEIVE THEM, through
+ * `publishableWidgets`, never from the raw registry. A registration JSON
+ * cannot carry is skipped by the workspace payload, so the admin never holds
+ * it -- but taken from the registry here it still won its collision, and the
+ * merged verdict was then the registration's while the declaration that
+ * shipped was the contribution's. An ungated registration the browser would
+ * never see cleared a gated contribution's prose for every reader. What the
+ * install has is what can reach the grid; a registration that cannot is
+ * logged by the projection that skips it and exists nowhere else.
  */
 export function canonicalWidgets(
   contributed: readonly CanonicalWidget[]
@@ -226,7 +271,7 @@ export function canonicalWidgets(
       });
     }
   }
-  for (const definition of listWidgets()) {
+  for (const definition of publishableWidgets()) {
     const registration = fromRegistration(definition);
     const contribution = byId.get(definition.id);
     byId.set(

@@ -35,6 +35,28 @@
   --sidebar-width-safe: var(--sidebar-width, 20.5rem);
 }
 
+/*
+ * A text widget's external link says it opens a new tab. The prose is drawn
+ * by Lexical from markdown, which gives a link no room for a visually-hidden
+ * child the way the actions archetype has -- so the notice is a pseudo-element
+ * here, hidden the way `sr-only` hides, which assistive technology reads as
+ * part of the link's name. Keyed on the attribute the renderer sets rather
+ * than on a class, so a link that opens a new tab is always the link that
+ * announces it.
+ */
+[data-widget-text] a[target="_blank"]::after {
+  content: " (opens in a new tab)";
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Enhanced Calendar Styling */
 [data-slot="calendar"] {
   background-color: var(--nx-popover);

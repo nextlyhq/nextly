@@ -34,9 +34,12 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
-import { useSchemaUpdateInvalidation } from "@admin/hooks/useSchemaUpdateInvalidation";
+import {
+  ADMIN_WORKSPACE_KEY,
+  useSchemaUpdateInvalidation,
+} from "@admin/hooks/useSchemaUpdateInvalidation";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type {
   DashboardLayoutResponse,
@@ -135,6 +138,25 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     () => queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY }),
     [queryClient]
   );
+
+  // 🔴 The reader's view moved under them -- a grant, a role change, a
+  // plugin registering elsewhere -- and the layout says so through `scope`,
+  // a token of the visible cards AND of the shortcuts inside them the reader
+  // may see. The workspace payload was fetched for the PREVIOUS view and is
+  // held fresh for minutes, so a card the server now places has no
+  // declaration to draw with, and a shortcut newly permitted stays withheld,
+  // until that payload is read again. Re-read when the token moves, and only
+  // then: the first token seen is the view the workspace was fetched beside,
+  // and a refetch on it would re-read every dashboard load.
+  const scope = query.data?.scope;
+  const lastScope = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (scope === undefined) return;
+    if (lastScope.current !== undefined && lastScope.current !== scope) {
+      void queryClient.invalidateQueries({ queryKey: ADMIN_WORKSPACE_KEY });
+    }
+    lastScope.current = scope;
+  }, [scope, queryClient]);
 
   const save = useMutation({
     mutationFn: (input: SaveLayoutInput) =>

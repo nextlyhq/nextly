@@ -22,7 +22,7 @@ import { allWidgets } from "../canonical";
 import { refreshCollectionWidgets } from "../collection-widgets";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
-import { readableEntities } from "../../../auth/entity-read-access";
+import { widgetAudience } from "../visibility";
 
 let current: TestNextly | undefined;
 
@@ -140,29 +140,26 @@ describe("a single: query against a real instance", () => {
 
   it("derives a status card per single, offered only for the singles the reader may read", async () => {
     // The card exists for both -- derivation is about the install -- and the
-    // reader gate withholds the one over the refused single by the same
-    // entity read the query would have been refused on.
+    // audience decision the layout places with and the workspace payload
+    // ships from withholds the one over the refused single, by the same entity
+    // read the query would have been refused on.
     current = await boot();
 
     const cards = allWidgets().filter(widget => widget.generated === true);
-    const ids = cards.map(widget => widget.id);
-    expect(ids).toEqual(
+    expect(cards.map(widget => widget.id)).toEqual(
       expect.arrayContaining([
         `single/${SETTINGS}-status`,
         `single/${PRIVATE}-status`,
       ])
     );
-    const subjects = new Map(
-      cards.map(widget => [widget.id, widget.collection])
-    );
-    expect(subjects.get(`single/${SETTINGS}-status`)).toBe(SETTINGS);
-    expect(subjects.get(`single/${PRIVATE}-status`)).toBe(PRIVATE);
 
-    const readable = await readableEntities(
-      [SETTINGS, PRIVATE],
-      readAccessCaller(editor)
-    );
-    expect(readable.has(SETTINGS)).toBe(true);
-    expect(readable.has(PRIVATE)).toBe(false);
+    const audience = await widgetAudience(readAccessCaller(editor));
+    const placed = audience.visible.map(widget => widget.id);
+    expect(placed).toContain(`single/${SETTINGS}-status`);
+    expect(placed).not.toContain(`single/${PRIVATE}-status`);
+    // And the definition the workspace payload ships is the same one.
+    const shipped = audience.generated.map(widget => widget.id);
+    expect(shipped).toContain(`single/${SETTINGS}-status`);
+    expect(shipped).not.toContain(`single/${PRIVATE}-status`);
   });
 });

@@ -26,14 +26,38 @@ consistent no matter who contributed the widget:
 | `table` | Rows and columns |
 | `list` | An ordered list of items |
 | `actions` | Buttons for things to do |
+| `text` | Prose you wrote, as markdown |
 | `custom` | Your own component, when none of the above fit |
 
-A `text` archetype exists in the type union but core has **no renderer for it yet**. A text
-widget that also ships no component of its own draws a card reading "not rendered yet"
-instead of prose — visible rather than silently missing, but not what you wanted. Use
-`custom` with your own component for prose today.
+A `text` widget is its prose. It declares `content` instead of a query, and the host draws
+it: headings, paragraphs, lists, emphasis, inline code, block quotes and links.
+
+```ts
+{
+  id: "acme/release-notes",
+  title: "Before you release",
+  archetype: "text",
+  defaultSize: "md",
+  content: [
+    "## Checklist",
+    "",
+    "Drain the queue, then read [the runbook](https://example.com/runbook).",
+  ].join("\n"),
+}
+```
+
+Three things the markdown cannot do, by design. Raw HTML is shown as the text it is. A link
+may point at `http`, `https`, `mailto`, `tel`, or a path on this site written as `/...`,
+`./...` or `#...`; a link to anything else — a bare `posts?status=draft`, an address with no
+scheme — is left on screen as the markdown you wrote it in, so you can see it was refused. And the
+content is bounded — it travels inside every dashboard load for every reader who is offered
+the card, so it is for notes and a pointer to a runbook, not for the runbook itself. An
+external link opens in a new tab.
 
 Sizes are `sm`, `md`, `lg`, `xl` and `full`; heights are `short` and `tall`.
+Below the admin's `md` breakpoint every card is full width in one column and the dashboard is
+read-only: arranging it is offered from `md` up, and the arrangement made there applies at every
+width.
 
 ## Declared, not fetched
 

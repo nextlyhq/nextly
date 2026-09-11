@@ -92,12 +92,7 @@ import {
   populateTranslationStatus,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { EVERY_TRANSLATION, NO_FALLBACK } from "../../i18n/locale-selector";
-import {
-  isValidLocale,
-  resolveFallbackChain,
-  resolveRequestedLocale,
-} from "../../i18n/resolve-locale";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
   splitLocalizedWrite,
@@ -1077,7 +1072,8 @@ export class SingleQueryService extends BaseService {
     );
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
-    const readLocale = this.resolveLocaleChain(
+    const readLocale = resolveLocaleChain(
+      this.localization,
       options.locale,
       options.fallbackLocale
     )?.[0];
@@ -2108,7 +2104,11 @@ export class SingleQueryService extends BaseService {
     fallbackLocale: string | false | undefined,
     statusFilterValues: readonly string[] | undefined
   ): Promise<void> {
-    const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      locale,
+      fallbackLocale
+    );
     if (!localeChain) return;
     // Gate on THIS single's flag: a non-localized single has no companion table, and
     // buildCompanionSchema would otherwise classify its text fields as translatable and query a
@@ -2248,39 +2248,6 @@ export class SingleQueryService extends BaseService {
             }
           : undefined,
     });
-  }
-
-  /**
-   * Build the requested→fallback locale chain, or `null` when localization is off. A per-request
-   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale, so an
-   * untranslated field reads empty); a per-request string re-enables the chain even when the global
-   * flag is off; otherwise the global `fallback` flag decides. Mirrors the collection read path.
-   */
-  private resolveLocaleChain(
-    locale: string | undefined,
-    fallbackLocale: string | false | undefined
-  ): string[] | null {
-    if (!this.localization || locale === EVERY_TRANSLATION) return null;
-    const requested = resolveRequestedLocale(this.localization, locale);
-    // Per-request disable wins — the admin editor passes this so untranslated fields show blank.
-    if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
-      return [requested];
-    }
-    // A concrete per-request fallback locale overrides the configured chain: the requested
-    // locale first, then the NAMED fallback's own chain (deduped) — not the requested locale's
-    // chain. Mirrors the collection read path so `?locale=de&fallback-locale=en` falls back to en.
-    if (
-      typeof fallbackLocale === "string" &&
-      isValidLocale(this.localization, fallbackLocale)
-    ) {
-      const seen = new Set<string>();
-      return [
-        requested,
-        ...resolveFallbackChain(this.localization, fallbackLocale),
-      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
-    }
-    if (this.localization.fallback === false) return [requested];
-    return resolveFallbackChain(this.localization, requested);
   }
 
   // ============================================================

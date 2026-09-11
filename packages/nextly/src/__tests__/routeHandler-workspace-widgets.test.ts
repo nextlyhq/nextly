@@ -105,9 +105,23 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
     );
 
     // And core's cards travel by the same route, which is what makes the
-    // dashboard's own sections manageable rather than hardcoded above the grid.
+    // dashboard's own sections manageable rather than hardcoded above the grid
+    // -- every one this reader may be told about. The session above holds no
+    // grant at all, so the one core card with a gate is withheld, exactly as
+    // the layout endpoint would withhold it: a declaration ships to a reader
+    // only when the reader may see the card.
+    const gated = CORE_WIDGETS.filter(
+      widget => widget.requiredPermission !== undefined
+    );
+    const open = CORE_WIDGETS.filter(
+      widget => widget.requiredPermission === undefined
+    );
+    expect(gated.map(widget => widget.id)).toEqual(["core/upcoming-releases"]);
     expect(widgets.map(widget => widget.id)).toEqual(
-      expect.arrayContaining(CORE_WIDGETS.map(widget => widget.id))
+      expect.arrayContaining(open.map(widget => widget.id))
+    );
+    expect(widgets.map(widget => widget.id)).not.toContain(
+      "core/upcoming-releases"
     );
   });
 
