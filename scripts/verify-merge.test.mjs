@@ -56,6 +56,16 @@ const forcePush = { event: "head_ref_force_pushed" };
 const commented = { event: "commented" };
 const green = name => ({ name, status: "completed", conclusion: "success" });
 const queued = name => ({ name, status: "queued", conclusion: null });
+const cancelled = name => ({
+  name,
+  status: "completed",
+  conclusion: "cancelled",
+});
+/** Every required job green except the named one, which was cancelled. */
+const allGreenExceptCancelled = name =>
+  REQUIRED.map(check =>
+    check.name === name ? cancelled(check.name) : green(check.name)
+  );
 /** The one check whose ABSENCE means no build ran. Fixtures must name it. */
 const CI = "Lint / Typecheck / Test / Build";
 /** A real 40-character object name; the gate refuses anything shorter as a tip. */
@@ -487,6 +497,59 @@ describe("gateVerdict", () => {
 
     expect(verdict.mergeable).toBe(false);
     expect(verdict.blockers.map(b => b.kind)).toContain("job-not-green");
+  });
+
+  it("reports a cancelled job as superseded when the base moved past it", () => {
+    // `main` groups its runs by branch, so a newer push cancels the run in
+    // flight, and a leg that overruns its budget FAILS rather than cancels. A
+    // cancelled job on a merge commit that is no longer the head therefore
+    // means one thing: the head's run answers for it. Reported, not a blocker.
+    const HEAD = "aa11bb22cc33dd44ee55ff6677889900aabbccdd";
+    const verdict = gateVerdict({
+      ...passing,
+      checkRuns: allGreenExceptCancelled("Integration (postgres)"),
+      supersededBy: HEAD,
+    });
+
+    expect(verdict.mergeable).toBe(true);
+    expect(verdict.blockers).toEqual([]);
+    expect(verdict.superseded).toEqual({
+      jobs: ["Integration (postgres)"],
+      by: HEAD,
+    });
+  });
+
+  it("still blocks on a cancelled job when this revision IS the head", () => {
+    // The control that keeps the case above honest. With nothing pushed after
+    // it, a cancelled job was not superseded by anything, and treating it as
+    // fine would be the merge-past-red the per-commit grouping once guarded.
+    const verdict = gateVerdict({
+      ...passing,
+      checkRuns: allGreenExceptCancelled("Integration (postgres)"),
+      supersededBy: null,
+    });
+
+    expect(verdict.mergeable).toBe(false);
+    expect(verdict.blockers.map(b => b.kind)).toContain("job-not-green");
+    expect(verdict.superseded).toBeNull();
+  });
+
+  it("does not let supersession excuse a job that FAILED", () => {
+    // Only `cancelled` is the superseded shape. A failure on a superseded
+    // commit is still a failure the head inherited, and the head's own run
+    // will say so; hiding it here would be the same red passed twice.
+    const verdict = gateVerdict({
+      ...passing,
+      checkRuns: REQUIRED.map(check =>
+        check.name === "Integration (mysql)"
+          ? { name: check.name, status: "completed", conclusion: "failure" }
+          : green(check.name)
+      ),
+      supersededBy: "aa11bb22cc33dd44ee55ff6677889900aabbccdd",
+    });
+
+    expect(verdict.mergeable).toBe(false);
+    expect(verdict.superseded).toBeNull();
   });
 
   it("blocks when NO jobs reported at all", () => {

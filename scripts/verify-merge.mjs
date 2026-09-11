@@ -267,8 +267,10 @@ export function gateVerdict({
   codexReviewedSha,
   coderabbitReviewCount,
   approvalCount = 0,
+  supersededBy = null,
 }) {
   const blockers = [];
+  const superseded = [];
 
   if (typeof tip !== "string" || tip.length === 0) {
     blockers.push({ kind: "no-tip", detail: "no head revision to merge" });
@@ -307,6 +309,16 @@ export function gateVerdict({
       });
     }
     for (const job of blockingJobs(checkRuns)) {
+      // A cancelled job on a merge commit that is no longer the base's head
+      // was superseded: `main` groups its runs by branch, so a newer push
+      // cancels the one in flight, and a leg that overran its budget FAILS
+      // rather than cancels. The verdict that describes `main` is the head's,
+      // and this one is subsumed by it. Reported, never a blocker; a cancelled
+      // job on the head itself is still exactly what it looks like.
+      if (job.conclusion === "cancelled" && supersededBy) {
+        superseded.push(job.name);
+        continue;
+      }
       blockers.push({
         kind: "job-not-green",
         detail: `${job.name} (${job.status}/${job.conclusion ?? "-"})`,
@@ -344,6 +356,10 @@ export function gateVerdict({
     // rather than raise the bar for any. Surfacing it states the gap instead of
     // hiding it behind a green verdict or making the gate unusable.
     maintainerApproval: approvalCount > 0 ? "approved" : "none",
+    // Reported, never a blocker: which jobs this revision never finished
+    // because a newer push to the base superseded it, and the revision whose
+    // run answers for it instead.
+    superseded: superseded.length > 0 ? { jobs: superseded, by: supersededBy } : null,
   };
 }
 
@@ -353,6 +369,11 @@ export function formatVerdict(verdict) {
   lines.push(verdict.mergeable ? "GATE PASSED" : "GATE BLOCKED");
   for (const blocker of verdict.blockers)
     lines.push(`  - ${blocker.kind}: ${blocker.detail}`);
+  if (verdict.superseded) {
+    lines.push(
+      `  ~ superseded: ${verdict.superseded.jobs.join(", ")} cancelled because ${verdict.superseded.by.slice(0, 9)} pushed to the base afterwards; read that revision's run (not a blocker)`
+    );
+  }
   if (verdict.secondReviewer !== "reviewed") {
     lines.push(
       `  ! second reviewer: ${verdict.secondReviewer} (not a blocker; not coverage either)`
@@ -1114,6 +1135,24 @@ export function main(argv) {
   // the merge reports on a tree nobody has.
   const subject = merged ? meta.mergeSha : tip;
 
+  // The base's CURRENT head, read only after a merge. A merge commit that is no
+  // longer that head has been superseded: the base's workflows group runs by
+  // branch, so a newer push cancels the run in flight, and the cancelled jobs
+  // on this revision are answered by the head's run rather than counted as
+  // failures here. Null when this revision still IS the head, or when the base
+  // cannot be read, in which case a cancelled job stays exactly what it looks
+  // like and the gate errs toward blocking.
+  let supersededBy = null;
+  if (merged && subject) {
+    try {
+      const baseHead = ghJson(["api", `repos/${REPO}/commits/${meta.baseRef}`]);
+      const headSha = typeof baseHead?.sha === "string" ? baseHead.sha : null;
+      if (headSha && headSha !== subject) supersededBy = headSha;
+    } catch {
+      supersededBy = null;
+    }
+  }
+
   // Only read before it is needed. Rewrite reachability answers whether a merge
   // took the whole branch, which an open pull request has not yet asked — so
   // querying it there lets an unrelated endpoint failure refuse a verdict the
@@ -1357,6 +1396,7 @@ export function main(argv) {
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
     approvalCount: countWriteAccessApprovals(reviews),
+    supersededBy,
   });
 
   // Nothing is printed until the freshness read below has decided. Emitting the

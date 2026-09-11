@@ -27,6 +27,15 @@ plus the change rather than the tree CI ran on, and the two disagree. Measured
 on one merged pull request here, the branch head reported the CI job and one
 integration leg as `success` while the merge commit had them queued.
 
+**A cancelled job on a merge commit that is no longer `main`'s head was
+superseded, not failed.** `main` groups its CI and Integration runs by branch,
+so a newer push cancels the run in flight, and a leg that overruns its budget
+FAILS rather than cancels. The script reads the base's current head and, when
+it has moved past the merge commit, reports those cancelled jobs under
+`superseded` with the head revision to read instead; they do not block. A
+cancelled job on the head itself, or a `failure` anywhere, still blocks. Judge
+`main` by its head's run, which includes every commit before it.
+
 **Know its range before trusting it.** The script's module header lists what it
 does not cover, and the four worth carrying in your head are: it snapshots
 threads and checks once rather than holding them still; `REQUIRED_CHECKS` is a

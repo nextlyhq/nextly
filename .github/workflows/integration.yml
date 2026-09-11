@@ -38,12 +38,32 @@ permissions:
 env:
   INTEGRATION_SUITE_BUDGET: 55m
 
-# Keyed per commit on `main` for the same reason as the CI workflow: a shared
-# `github.ref` group cancelled the previous commit's run on every merge, and
-# switching cancellation off is not enough — a group holds one running and one
-# pending run, so a third merge displaces the second while it is still queued.
+# One group per branch, on `main` as on a pull request, so a newer push
+# supersedes the run in flight. Keyed by `github.ref` for both: a pull request's
+# ref is its own, and every main push shares `refs/heads/main`.
+#
+# Main was keyed per commit for a while, so every merge got a verdict of its
+# own. That could not survive the merge rate: each run is three dialects for
+# twenty to thirty-five minutes, with nothing ever superseded the queue only
+# grew, and at one point fifty runs sat queued with nothing on `main` able to
+# report for over half an hour. A verdict that arrives after the next several
+# merges is not a verdict anyone acts on.
+#
+# What per-commit grouping protected against was a superseded run reading as a
+# failed one: `cancelled` and `failure` looked alike, and the habit that
+# teaches is merging past red. Two things make them distinguishable now. A leg
+# that overruns its budget FAILS rather than cancels, so on `main` a cancelled
+# run means exactly one thing, superseded by a newer push. And
+# `scripts/verify-merge.mjs` reads a cancelled job on a merge commit that is no
+# longer `main`'s head as superseded, and points at the head's run, rather than
+# counting it against the pull request.
+#
+# The group is one running plus one pending, so with three quick merges the
+# middle one is displaced before it starts. That is the intended outcome here:
+# only the newest push's verdict describes `main`, and the middle commit's
+# result is subsumed by the one that includes it.
 concurrency:
-  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: integration-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
