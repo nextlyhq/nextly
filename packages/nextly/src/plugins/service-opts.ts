@@ -104,6 +104,15 @@ const REAL_DEPS: ServiceOptsDeps = { listRoleSlugs: listRoleSlugsForUser };
  * was written to refuse. The permission list stays empty: the access services
  * resolve permissions from the id, and from the key's own scope when there is
  * one.
+ *
+ * The roles are the KEY's when the caller arrived on one. `user` names the
+ * key's owner, and a stored role rule reads `user.roles` with no scope in
+ * front of it, so the owner's roles here let a viewer key minted by an
+ * administrator satisfy an administrators-only rule, and refused a key
+ * holding the very role the rule names because its owner did not. The REST
+ * path answers the same question with `resolveRoleSlugs`: a key's roles as
+ * authentication resolved them, an account's from the database. A scope that
+ * carries none falls back to the account, as `apiKeyWriteAllowed` does.
  */
 export async function resolveServiceOpts(
   opts: ServiceOpts,
@@ -144,7 +153,11 @@ export async function resolveServiceOpts(
       id: user.id,
       name: user.name ?? undefined,
       email: user.email,
-      roles: await deps.listRoleSlugs(user.id),
+      // Copied: the scope's arrays are frozen, and the caller object is the
+      // mutable shape every consumer of it is typed against.
+      roles: authenticatedScope?.roles
+        ? [...authenticatedScope.roles]
+        : await deps.listRoleSlugs(user.id),
     });
     return {
       overrideAccess: false,

@@ -113,6 +113,16 @@ beforeEach(async () => {
         access: { read: () => true, create: () => false },
         fields: [text({ name: "title" })],
       }),
+      // A second collection exists only so the catalogue holds a read
+      // permission no hand-built role below is granted. That one slug is what
+      // separates "copied the catalogue" from "copied the owner's rows"; with
+      // a single collection both branches answer `read-posts` and the
+      // assertion would be satisfied by the behaviour it was written to refuse.
+      defineCollection({
+        slug: "notes",
+        access: { read: () => true },
+        fields: [text({ name: "title" })],
+      }),
     ],
     plugins: [writePlugin],
   });
@@ -278,6 +288,151 @@ async function readOnlyKeyOwnedBySuperAdmin(): Promise<string> {
   ownerId = owner.item.id;
   return key;
 }
+
+/**
+ * A super-admin by INHERITANCE, which is what the canonical resolver answers
+ * and a direct read of `user_roles` does not.
+ *
+ * An operator who gives a deputy a role built on top of Super Admin has made a
+ * super-admin: `isSuperAdmin` resolves the inherited set, so the session
+ * bypass, the admin's own checks and the key ceiling all agree they are one.
+ * The key service asked its own narrower question for a while, and their key
+ * took the ordinary branch — so the same person was a super-admin everywhere
+ * except in the key they minted.
+ *
+ * Returns the catalogue permission their own role does NOT hold, which is the
+ * only thing that separates the two branches: the role-rows branch cannot
+ * produce it.
+ */
+async function readOnlyKeyOwnedByAnInheritedSuperAdmin(): Promise<{
+  slugs: string[];
+  ownerId: string;
+  onlyInTheCatalogue: string;
+}> {
+  const nextly = handle!.nextly as unknown as {
+    users: {
+      create: (a: { data: Record<string, unknown> }) => Promise<{
+        item: { id: string };
+      }>;
+    };
+    permissions: {
+      find: (a: { limit: number }) => Promise<{
+        items: { id: string; slug: string }[];
+      }>;
+    };
+    roles: {
+      find: (a: { limit: number }) => Promise<{
+        items: { id: string; slug: string }[];
+      }>;
+      create: (a: { data: Record<string, unknown> }) => Promise<{
+        item: { id: string };
+      }>;
+    };
+  };
+
+  // The first user holds the seeded super-admin role directly, which is also
+  // what puts that role in the table for the deputy's role to inherit.
+  await nextly.users.create({
+    data: {
+      email: "first@example.com",
+      password: "Password123!",
+      name: "First",
+      isActive: true,
+    },
+  });
+
+  const roles = await nextly.roles.find({ limit: 200 });
+  const superAdmin = roles.items.find(r => r.slug === "super-admin");
+  expect(
+    superAdmin,
+    "the seeded super-admin role must exist, or nothing below inherits it"
+  ).toBeDefined();
+
+  const permissions = await nextly.permissions.find({ limit: 300 });
+  const readPosts = permissions.items.find(p => p.slug === "read-posts");
+  const readNotes = permissions.items.find(p => p.slug === "read-notes");
+  expect(
+    readPosts && readNotes,
+    "both collections must have seeded their read permission"
+  ).toBeTruthy();
+
+  // Built ON TOP of Super Admin: one child role, so the service requires at
+  // least one permission of its own, and `read-posts` is the one it gets.
+  // `read-notes` is therefore in the catalogue and NOT in this role's rows.
+  const deputy = await nextly.roles.create({
+    data: {
+      name: "Deputy",
+      slug: "deputy",
+      permissionIds: [readPosts!.id],
+      childRoleIds: [superAdmin!.id],
+    },
+  });
+
+  const owner = await nextly.users.create({
+    data: {
+      email: "deputy@example.com",
+      password: "Password123!",
+      name: "Deputy",
+      isActive: true,
+      roles: [deputy.item.id],
+    },
+  });
+
+  const apiKeys = handle!.getService("apiKeyService") as unknown as {
+    createApiKey: (
+      userId: string,
+      input: { name: string; tokenType: string; expiresIn: string }
+    ) => Promise<{ key: string; meta: { id: string } }>;
+    resolveApiKeyPermissions: (
+      tokenType: string,
+      roleId: string | null,
+      userId: string,
+      keyId: string
+    ) => Promise<string[]>;
+  };
+  const { meta } = await apiKeys.createApiKey(owner.item.id, {
+    name: "the deputy's read-only key",
+    tokenType: "read-only",
+    expiresIn: "never",
+  });
+  const slugs = await apiKeys.resolveApiKeyPermissions(
+    "read-only",
+    null,
+    owner.item.id,
+    meta.id
+  );
+  return {
+    slugs,
+    ownerId: owner.item.id,
+    onlyInTheCatalogue: readNotes!.slug,
+  };
+}
+
+describe("a super-admin by inheritance", () => {
+  it("is one to the resolver every other gate asks", async () => {
+    // The precondition, and the whole point: the deputy holds no `user_roles`
+    // row naming super-admin, so a direct read of that table answers no here
+    // while every gate in the codebase answers yes.
+    const { ownerId } = await readOnlyKeyOwnedByAnInheritedSuperAdmin();
+    expect(await isSuperAdmin(ownerId)).toBe(true);
+  });
+
+  it("mints a key that copies the catalogue, not their own role's rows", async () => {
+    const { slugs, onlyInTheCatalogue } =
+      await readOnlyKeyOwnedByAnInheritedSuperAdmin();
+    expect(
+      slugs,
+      `a permission no role of theirs holds is the only thing the ordinary ` +
+        `branch cannot produce; without it the key copied ${onlyInTheCatalogue}'s ` +
+        `absence, which is the direct-user_roles read back`
+    ).toContain(onlyInTheCatalogue);
+  });
+
+  it("still cannot write, so the inheritance widened nothing", async () => {
+    const { slugs } = await readOnlyKeyOwnedByAnInheritedSuperAdmin();
+    expect(slugs.every(slug => slug.startsWith("read-"))).toBe(true);
+  });
+});
 
 describe("a super-admin's own read-only key", () => {
   it("reads through a plugin route, the way the operator's first key is used", async () => {

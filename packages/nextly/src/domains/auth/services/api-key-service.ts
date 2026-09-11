@@ -66,7 +66,10 @@ import {
 // info (key id, role id, exceeded permission) moves from public message to logContext
 // per spec §13.8 (no identifiers/values in publicMessage).
 import { BaseService } from "../../../services/base-service";
-import { listRoleSlugsForUser } from "../../../services/lib/permissions";
+import {
+  isSuperAdmin,
+  listRoleSlugsForUser,
+} from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
 /** The three token types that determine how permissions are resolved at request time. */
@@ -754,8 +757,11 @@ export class ApiKeyService extends BaseService {
       // subset at best and, on an install whose first user came before the
       // grant, nothing: every request refused, and the first key an operator
       // mints to try an integration with. The catalogue is what their key
-      // copies, bounded by the key's kind like anyone else's.
-      const all = (await this.ownerIsSuperAdmin(userId))
+      // copies, bounded by the key's kind like anyone else's. Whether they are
+      // one is the session bypass's own question, asked of its own resolver:
+      // a role that inherits super-admin answers yes there, so it answers yes
+      // here, where a direct read of `user_roles` said no.
+      const all = (await isSuperAdmin(userId))
         ? await this.resolveCataloguePermissionRows()
         : await this.resolveUserPermissionRows(userId);
       // Still filtered on the STORED slug rather than on `action === "read"`.
@@ -871,25 +877,6 @@ export class ApiKeyService extends BaseService {
       .from(this.permissionsTable)
       .where(isNull(this.permissionsTable.orphanedAt));
     return rows as GrantedPermission[];
-  }
-
-  /** Whether a user holds the super-admin role, by the slug every other check reads. */
-  private async ownerIsSuperAdmin(userId: string): Promise<boolean> {
-    const rows = await this.db
-      .select({ id: this.rolesTable.id })
-      .from(this.userRolesTable)
-      .innerJoin(
-        this.rolesTable,
-        eq(this.userRolesTable.roleId, this.rolesTable.id)
-      )
-      .where(
-        and(
-          eq(this.userRolesTable.userId, userId),
-          eq(this.rolesTable.slug, "super-admin")
-        )
-      )
-      .limit(1);
-    return (rows as unknown[]).length > 0;
   }
 
   private async resolveUserPermissionRows(
@@ -1061,8 +1048,11 @@ export class ApiKeyService extends BaseService {
     if (tokenType !== "role-based") return;
     if (!roleId) return;
 
-    // Super-admin bypass: a super-admin can assign any role
-    if (await this.ownerIsSuperAdmin(creatorId)) return;
+    // Super-admin bypass: a super-admin can assign any role. Asked of the
+    // same resolver as the session bypass, so a role that INHERITS super-admin
+    // counts here exactly as it does there; a direct-row read of `user_roles`
+    // said no to such a creator while every other gate said yes.
+    if (await isSuperAdmin(creatorId)) return;
 
     const creatorRoleRows = await this.db
       .select({ roleId: this.userRolesTable.roleId })

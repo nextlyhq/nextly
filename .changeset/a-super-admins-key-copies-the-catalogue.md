@@ -34,7 +34,9 @@ grant, nothing: every request refused, starting with the first key an operator
 minted to try an integration with. A `read-only` key of theirs now reads every
 collection the install declares, including one added later, and still cannot
 write; a `full-access` key holds every permission. A permission a package
-stopped declaring is not inherited.
+stopped declaring is not inherited. Whether the creator is a Super Admin is
+asked of the same resolver as the session bypass, so a role built on top of
+Super Admin counts here exactly as it does everywhere else.
 
 A plugin calling `ctx.services` as a user now sees that user's roles. The
 caller was built with an empty role, so a code-defined rule such as
@@ -42,3 +44,9 @@ caller was built with an empty role, so a code-defined rule such as
 the same caller's own request passed it, and a negative rule granted what it
 was written to refuse. The roles are resolved and the caller is built by the
 one constructor every other authenticated path uses.
+
+A caller that arrived on an API key is judged on the KEY's roles, not its
+owner's, the way the REST path already judges one. A stored role rule reads
+the caller's roles directly, so the owner's roles let a viewer-scoped key
+minted by an administrator satisfy an administrators-only rule, and refused a
+key holding the very role a rule names because its owner did not hold it.

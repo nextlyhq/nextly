@@ -157,6 +157,75 @@ describe("resolveServiceOpts — the caller's own scope", () => {
     });
   });
 
+  it("judges a key on ITS roles, never its owner's, when the scope carries them", async () => {
+    // The owner holds editor and viewer; the key was minted on viewer alone.
+    // A stored role rule reads `user.roles` with no scope in front of it, so
+    // the owner's roles here would let this key satisfy an editors-only rule
+    // over the plugin path that the REST path refuses it.
+    expect(
+      await resolveServiceOpts({
+        as: "user",
+        user: { id: "editor1", email: "e@e.com", name: "E" },
+        authenticatedScope: { ...KEY_SCOPE, roles: ["viewer"] },
+      })
+    ).toMatchObject({
+      overrideAccess: false,
+      user: { id: "editor1", role: "viewer", roles: ["viewer"] },
+    });
+  });
+
+  it("grants a key the role it was minted on even when its owner lacks it", async () => {
+    // The other direction, and the one that separates this from a blanket
+    // refusal: u1 holds no roles at all, the key holds editor.
+    expect(
+      await resolveServiceOpts({
+        as: "user",
+        user: { id: "u1", email: "u@e.com", name: "U" },
+        authenticatedScope: { ...KEY_SCOPE, roles: ["editor"] },
+      })
+    ).toMatchObject({ user: { role: "editor", roles: ["editor"] } });
+  });
+
+  it("a key whose role is gone holds no roles here either", async () => {
+    // `[]` is what authentication resolves for a role-based key whose role
+    // was deleted. It is a list, not an absence: falling back to the owner's
+    // roles on an empty one would revive the deleted role as the owner.
+    expect(
+      await resolveServiceOpts({
+        as: "user",
+        user: { id: "editor1", email: "e@e.com", name: "E" },
+        authenticatedScope: { ...KEY_SCOPE, roles: [] },
+      })
+    ).toMatchObject({ user: { role: "", roles: [] } });
+  });
+
+  it("falls back to the account's roles for a scope that carries none", async () => {
+    // `roles` is omitted, not emptied, when authentication resolved none;
+    // `apiKeyWriteAllowed` reads `scope.roles ?? user.roles` for the same
+    // reason, and this is the `user.roles` it falls back to.
+    expect(
+      await resolveServiceOpts({
+        as: "user",
+        user: { id: "editor1", email: "e@e.com", name: "E" },
+        authenticatedScope: KEY_SCOPE,
+      })
+    ).toMatchObject({ user: { role: "editor", roles: ["editor", "viewer"] } });
+  });
+
+  it("hands the rule a copy, not the scope's frozen list", async () => {
+    const scope = Object.freeze({
+      ...KEY_SCOPE,
+      roles: Object.freeze(["viewer"]) as readonly string[],
+    });
+    const resolved = await resolveServiceOpts({
+      as: "user",
+      user: { id: "editor1", email: "e@e.com", name: "E" },
+      authenticatedScope: scope,
+    });
+    expect(resolved.user?.roles).toEqual(["viewer"]);
+    expect(Object.isFrozen(resolved.user?.roles)).toBe(false);
+  });
+
   it("omits the key entirely for a session caller, who has no key scope", async () => {
     // The control. `toEqual` ignores an explicitly-undefined property, so
     // asserting the scope is absent has to be done on the KEYS — otherwise a
