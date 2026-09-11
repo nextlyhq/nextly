@@ -36,6 +36,7 @@ import {
 
 import { InsertPanel } from "./insert-panel";
 import type { EditorState } from "./editor-state";
+import { EMPTY_SELECTION } from "./selection";
 
 // The command primitives observe their list box to size it, and jsdom
 // implements no ResizeObserver. Without this every case dies at render with a
@@ -86,6 +87,7 @@ function editorSpy(document: BlockDocument): EditorState & {
   return {
     document,
     selectedId: null,
+    selection: EMPTY_SELECTION,
     select: vi.fn(),
     apply: vi.fn(() => document),
     applyAll: vi.fn(() => document),
@@ -458,13 +460,32 @@ describe("the sentence that says where the next block lands", () => {
    * paragraph is the polite live region that tells them — for a screen-reader
    * author it is the whole answer to "where will this go".
    *
-   * The container's name comes from a lookup the sentence does not need to
-   * render — it has a fallback for a type the registry cannot name — so the
-   * lookup can be dropped and every inside-selection placement still announces
-   * something. Measured: with the lookup replaced by a constant, this file
-   * passed whole. These are the tests that were missing.
+   * The container is named by `blockLabel`, the same rule the palette, the
+   * layers and the inspector read, so the sentence agrees with every other
+   * place the author has already met the block.
    */
-  function selectedEmptyContainer(): EditorState {
+
+  /**
+   * An editor with one block selected, stated the way the real editor states
+   * it: `selectedId` is `selection.primary`, so a fixture that set one and not
+   * the other would be a state the editor never produces.
+   */
+  function selecting(editor: EditorState, id: string): EditorState {
+    return {
+      ...editor,
+      selectedId: id,
+      selection: { ids: [id], primary: id },
+    };
+  }
+
+  function emptyContainer(id: string, type: string): EditorState {
+    return selecting(
+      editorSpy(documentOf([{ id, type, version: 1, props: {} }] as never)),
+      id
+    );
+  }
+
+  it("names the container the block will go inside", () => {
     registerBlocks(
       [
         {
@@ -473,53 +494,32 @@ describe("the sentence that says where the next block lands", () => {
           editor: { label: "Section" },
           slots: { children: {} },
         },
-        { ...base, name: "acme/text", editor: { label: "Text" } },
       ] as never,
       { source: "acme" }
     );
-    const editor = editorSpy(
-      documentOf([
-        { id: "s", type: "acme/section", version: 1, props: {} },
-      ] as never)
-    );
-    return { ...editor, selectedId: "s" } as EditorState;
-  }
-
-  it("names the container the block will go inside", () => {
-    render(<InsertPanel editor={selectedEmptyContainer()} />);
+    render(<InsertPanel editor={emptyContainer("s", "acme/section")} />);
 
     const sentence = screen.getByText("Adds inside Section");
-    // Asserted against the fallback by name, so the failure reads as the
-    // wording the author would actually have heard rather than as a missing
-    // element: the fallback is a real sentence and a real live region.
-    expect(screen.queryByText("Adds inside the selected block")).toBeNull();
     // The announcement is the point. A paragraph with the right words that is
     // not a live region tells a sighted author and nobody else.
     expect(sentence.getAttribute("aria-live")).toBe("polite");
   });
 
-  it("falls back to 'the selected block' only when the registry cannot name it", () => {
+  it("calls an unlabelled container what the palette calls it", () => {
     /*
-     * The control that keeps the fallback honest: it must exist for a container
-     * whose definition carries no label, and it must not be what a labelled
-     * container gets. Without this, making the sentence always say "the
-     * selected block" fails the test above for the right reason, while making
-     * it always say "Section" — or throw on a nameless type — would go unseen.
+     * The control on the name: a container with no `editor.label` still reads
+     * as the humanised type every other surface shows, not as "the selected
+     * block" and not as its raw identity. A sentence that always said
+     * "Section" would fail here; one that kept a naming rule of its own would
+     * disagree with the tile the author just clicked.
      */
     registerBlocks(
       [{ ...base, name: "acme/box", slots: { children: {} } }] as never,
       { source: "acme" }
     );
-    const editor = editorSpy(
-      documentOf([
-        { id: "b", type: "acme/box", version: 1, props: {} },
-      ] as never)
-    );
-    render(
-      <InsertPanel editor={{ ...editor, selectedId: "b" } as EditorState} />
-    );
+    render(<InsertPanel editor={emptyContainer("b", "acme/box")} />);
 
-    expect(screen.getByText("Adds inside the selected block")).toBeTruthy();
+    expect(screen.getByText("Adds inside Box")).toBeTruthy();
   });
 });
 
