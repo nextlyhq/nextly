@@ -117,7 +117,16 @@ expectTypeOf<{
   id: string;
   title: string;
   archetype: "text";
+  content: string;
 }>().toMatchTypeOf<ContributedWidget>();
+
+// And a `text` widget IS its prose: without `content` it describes no body,
+// which is the first refusal in this file by another name.
+expectTypeOf<{
+  id: string;
+  title: string;
+  archetype: "text";
+}>().not.toMatchTypeOf<ContributedWidget>();
 
 // And a query on one is refused where it is written, rather than at boot.
 expectTypeOf<{

@@ -1,0 +1,4483 @@
+{
+  "finding_counts": {
+    "e2e/tests/canvas/driver.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/adapter-drizzle/src/adapter.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 3
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 9
+      }
+    },
+    "packages/adapter-drizzle/src/drizzle-where.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/adapter-drizzle/src/migrations.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/adapter-mysql/src/index.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/adapter-postgres/src/index.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/adapter-sqlite/src/index.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin-css/src/css-scope.mjs": {
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/admin/scripts/build-css-watch.mjs": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/scripts/build-css.mjs": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/scripts/dev.mjs": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/__tests__/helpers/table.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/cli.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/api-keys/ApiKeyTable.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/auth-login/index.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/content/SortableFieldsTable.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/DynamicCollectionNav.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/admin/src/components/features/dashboard/DynamicCustomGroupNav.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/DynamicFieldGroupNav.tsx": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/DynamicPluginNav.tsx": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/dashboard/DynamicPluginSectionItems.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/DynamicSingleNav.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/MobileSidebarDrawer.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/ResponsiveHeader.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/SeedDemoContentCard.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/SidebarNavigation.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/SidebarUserFooter.tsx": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/dashboard/StatsCard.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/APIPlayground/APIPlayground.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/APIPlayground/QueryBuilder.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/APIPlayground/ResponseViewer.tsx": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/APIPlayground/generate-code.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryForm/EntryFormActions.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryForm/EntryMetaStrip.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryForm/EntrySystemHeader.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryForm/PreviewActions.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryForm/ShowJSONDialog.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryForm/useEntryForm.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryList/BulkActionBar.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryList/EntryList.tsx": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryList/EntryTable.tsx": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryList/EntryTableCell.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/entries/EntryList/EntryTableColumns.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/FieldRenderer.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/FieldWrapper.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/media/UploadInput.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/media/UploadPreview.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/media/UploadProgress.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/relational/RelationshipInput.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/relational/RelationshipSearch.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/selection/MultiSelectInput.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/ButtonLinkNode.tsx": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/ImageNode.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextButtonGroupPlugin.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextButtonLinkPlugin.tsx": {
+      "complexity_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextGalleryPlugin.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextInput.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextLinkPlugin.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextToolbar/BlockTypeDropdown.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextToolbar/InsertDropdown.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextToolbar/RichTextToolbar.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/RichTextToolbar/useToolbarState.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/special/VideoNode.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/structured/GroupInput.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/structured/JsonInput.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/structured/RepeaterRowLabel.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/text/CodeInput.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/text/CodeMirrorEditor.tsx": {
+      "complexity_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/entries/fields/text/PasswordInput.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/field-groups/ReconcileFieldGroupDialog.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/DeleteFolderDialog/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/FolderTreePicker/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/FolderTreeView/index.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/MediaCard/index.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/MediaEditDialog/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/MediaGrid/index.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/MediaListView/index.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/MediaPickerDialog/index.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/MediaUploadDropzone/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/media-library/MoveToFolderDialog/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/media-library/index.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/notifications/NotificationRow.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/releases/ReleaseList.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/role-management/PermissionMatrixCell.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/role-management/RoleDeleteDialog.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/role-management/RoleForm.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/ComponentFieldEditor.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/FieldEditorSheet.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/HooksEditor/HookConfigForm.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/HooksEditor/HooksEditor.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/RelationshipEditor.tsx": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/RepeaterFieldEditor.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/SchemaChangeDialog.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/SelectOptionsEditor.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/builder-field-list/NestedFieldGroup.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/builder-field-list/SortableRow.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/builder-settings-modal/AdvancedTab.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/builder-settings-modal/BasicsTab.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/field-editor-sheet/DefaultValueField.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/schema-builder/permission-form/index.tsx": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/settings/EmailProviderForm/EmailProviderForm.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/settings/EmailProviderForm/ProviderConfigFields.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/settings/EmailProviderForm/SecretField.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/settings/EmailProviderForm/schemas/emailProviderSchema.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/settings/EmailTemplateForm/EmailTemplateForm.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/settings/EmailTemplateForm/TemplatePreview.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/settings/UserFieldForm/UserFieldForm.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/settings/UserFieldForm/schemas/userFieldSchema.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/singles/SingleForm.tsx": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/users/UserCustomFields.tsx": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/features/users/UserRoleSelector.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/versions/VersionHistorySheet.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/versions/diff/FieldDiffNode.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/versions/diff/VersionDiffView.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/versions/value-display/FieldValueDisplay.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/versions/value-display/normalize-stored-value.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/versions/value-display/rich-text-to-text.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/features/webhooks/WebhookForm.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/field-ui/ConditionRow.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/field-ui/FieldOptionsEditor.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/layout/sidebar/DualSidebar.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/layout/sidebar/SubSidebarContent.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/layout/sidebar/index.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/shared/ThemeAwareLogo.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/shared/bulk-action-bar/index.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/shared/pagination/index.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/ui/table/data-table/DataTable.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/ui/table/data-table/DataTableView.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/components/ui/table/data-table/cell-registry.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/components/ui/table/list-view/index.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/queries/useSeedStatus.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/queries/useUpdateEntry.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/queries/useWidgetQueries.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useAutoSave.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useAutoSlug.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useColumnVisibility.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useCurrentUserPermissions.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useDraftRecovery.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useFieldBuilder.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/usePluginAutoRegistration.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useRelationshipCreate.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useRoleForm.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useServerTable.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/hooks/useUnsavedChanges.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/layout/DashboardLayout.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/api/buildQuery.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/api/fetcher.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/builder/condition-evaluator.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/builder/field-transformers.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/dates/format.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/lib/errors/error-mapping.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/field-validation.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/fields.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/permissions/authorization.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/routing.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/lib/sidebar-landing.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/collection/components/CollectionTable.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/entries/[slug]/[id]/index.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/entries/[slug]/create.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/field-group/components/FieldGroupTable.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/plugins/[slug].tsx": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/admin/src/pages/dashboard/plugins/[slug]/settings.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/plugins/browse.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/plugins/components/PluginsTable.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/roles/components/RoleTable.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/email-providers/edit/[id].tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/email-providers/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/email-templates/index.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/index.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/permissions/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/webhooks/[id]/deliveries/[deliveryId].tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/webhooks/[id]/deliveries/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/webhooks/edit/[id].tsx": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/settings/webhooks/index.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/singles/[slug]/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/singles/builder/components/DragOverlayContent.tsx": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/singles/components/SinglesTable.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/users/components/UserTable.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/users/create.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/users/edit.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/pages/dashboard/users/fields/index.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/services/entryApi.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/admin/src/services/mediaApi.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/services/singleApi.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/src/types/guards.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/admin/tsup.config.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/derive-seo.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/measure-bytes.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/migration.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/migration.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/registry.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/style/compile-page.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/style/contrast.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/style/contrast.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/style/css-value.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 4
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/blocks-engine/src/style/dtcg.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/style/isolation.ts": {
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 6
+      }
+    },
+    "packages/blocks-engine/src/style/site-tokens.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/style/style.bench.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/style/validate-style-value.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/tree.property.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/url-policy.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-engine/src/validation.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/blocks-react/src/block-boundary.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-react/src/blocks/editor-metadata.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-react/src/layering.test.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-react/src/next.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 4
+      }
+    },
+    "packages/blocks-react/src/page-renderer.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/blocks-react/src/prepare-document.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-react/src/renderable.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 3
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/blocks-react/src/sanitize.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/blocks-react/src/type-surface.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/breakpoint-dialog.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/breakpoints.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/builder-shell.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/canvas.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/geometry-ownership.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/keyboard-move.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/ops.property.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/create-nextly-app/src/cli.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/create-nextly-app/src/create-nextly.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/create-nextly-app/src/installers/dependencies.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/create-nextly-app/src/lib/download-template.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/create-nextly-app/src/utils/template.ts": {
+      "complexity_moderate": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/create-nextly-app/tsup.config.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/eslint-plugin/src/rules/no-token-alpha-suffix.js": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/module-specifiers/src/index.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/rollup.dts.config.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/scripts/verify-dts.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/scripts/verify-exports.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/__tests__/database/_fixture-schema/generator.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/__tests__/helpers/seed-helpers.ts": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/auth-state.ts": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/collections-schema-detail.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/email-providers-detail.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/email-providers-test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/email-templates-detail.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/field-groups-detail.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/media-bulk.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/media-handlers.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/media.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/singles-detail.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/singles-schema-detail.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/singles.ts": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/storage-upload-url.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/user-fields-detail.ts": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/user-fields.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/api/with-error-handler.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/credentials/verify-credentials.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/guards/require-api-key.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/guards/require-permission.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/handlers/accept-invite.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/handlers/deps-bridge.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/handlers/forgot-password.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/handlers/router.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/auth/handlers/session.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/handlers/set-initial-password.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/auth/session/refresh-binding.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/build.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/db-sync.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/dev-build.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/dev-display.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/dev-server.ts": {
+      "complexity_high": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/cli/commands/generate-manifest.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/generate-types.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate-baseline.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate-check.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate-create.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate-down.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate-fresh.ts": {
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate-resolve.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate-status.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/migrate.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/cli/commands/prune.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/commands/upgrade.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/nextly.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/cli/utils/config-loader.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/collections/config/define-config.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/collections/config/validate-config.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/collections/fields/block-props.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/collections/fields/validators/code-validators.ts": {
+      "complexity_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/database/__tests__/repair-sqlite-timestamps.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/database/errors.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/database/factory.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/database/init.ts": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/database/schema-registry.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/database/seeders/index.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/database/seeders/permissions.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/database/seeders/super-admin.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/di/load-dynamic-tables.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/di/register.ts": {
+      "complexity_critical": {
+        "count": 5
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 5
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/direct-api/namespaces/email.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/direct-api/namespaces/forms.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/direct-api/namespaces/releases.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/dispatcher/dispatcher.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/dispatcher/handlers/auth-dispatcher.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/dispatcher/handlers/collection-dispatcher.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/dispatcher/handlers/component-dispatcher.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/dispatcher/handlers/single-dispatcher.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/dispatcher/handlers/versions-methods.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/dispatcher/helpers/desired-schema.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/dispatcher/helpers/validation.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/audit/erasure-aware-insert.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/auth/services/api-key-service.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/auth/services/auth-service.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/auth/services/permission-seed-service.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/auth/services/permission-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/auth/services/role-inheritance-service.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/auth/services/role/role-mutation-service.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/auth/services/role/role-query-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/auth/services/user-role-service.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/__tests__/_fixtures/related-target-read-rule.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/__tests__/_fixtures/single-read-rule.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/__tests__/_fixtures/tenant-read-rule.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/query/geo-utils.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/query/query-operators.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/query/query-parser.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-access-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-bulk-service.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-export-service.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-metadata-service.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
+      "complexity_critical": {
+        "count": 6
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 6
+      },
+      "crap_high": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 7
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-query-service.ts": {
+      "complexity_critical": {
+        "count": 4
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 4
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
+      "complexity_critical": {
+        "count": 4
+      },
+      "crap_critical": {
+        "count": 4
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-relationship-service.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "complexity_high": {
+        "count": 8
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 3
+      },
+      "crap_high": {
+        "count": 8
+      },
+      "crap_moderate": {
+        "count": 9
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-sync-service.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/collections/services/collection-utils.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-registry-service.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-schema-service.ts": {
+      "complexity_critical": {
+        "count": 5
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 5
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/email/provider-definition.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/domains/email/services/attachment-resolver.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/email/services/email-provider-service.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/email/services/email-service.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/email/services/email-template-service.ts": {
+      "crap_high": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/email/services/providers/resend-provider.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/email/services/providers/sendlayer-provider.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/migration/__tests__/helpers/migration-lock-double.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/migration/__tests__/steps.test.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/migration/reconcile.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/migration/run.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/migration/session.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/field-groups/migration/state.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/field-group-metadata-service.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/field-group-mutation-service.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/field-group-query-service.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/field-group-registry-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 3
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 4
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/field-group-schema-service.ts": {
+      "complexity_critical": {
+        "count": 9
+      },
+      "crap_critical": {
+        "count": 9
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/field-group-table-provisioning.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/reconcile-field-group-plan.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "crap_critical": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/domains/field-groups/services/teardown-entity-field-group-data.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/i18n/config/validate.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/i18n/migration/ddl-types.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/i18n/migration/migration-intent.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/i18n/migration/reconcile-companion.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/i18n/runtime/companion-io.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/media/services/media-service.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/releases/releases-repository.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/journal/read-journal.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/migrate-create/down-generator.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/migrate/core-reconcile.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/__tests__/v1-golden/upgrade-sim-045.integration.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/apply.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/classifier/classifier.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/classifier/count-helpers.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/diff/build-from-fields.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/diff/diff.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/diff/introspect-live.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/diff/normalize-default.ts": {
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/filter-unsafe-statements.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/fresh-push.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/live-column-types.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/locks.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/managed-tables.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/pre-cleanup/executor.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/pre-resolution/json-convertibility.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/browser.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/schema/pipeline/rename-detector.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/services/__tests__/column-conformance-matrix.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/services/code-generator.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/services/field-column-descriptor.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/services/plugin-codegen.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/services/runtime-schema-generator.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "crap_critical": {
+        "count": 4
+      }
+    },
+    "packages/nextly/src/domains/schema/services/type-generator.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/schema/services/zod-generator.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/domains/schema/ui-schema/cross-file.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/ui-schema/mutate.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/schema/utils/missing-columns.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/singles/services/ensure-runtime-table.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/singles/services/reconcile-single-companion.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/singles/services/single-metadata-service.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/singles/services/single-mutation-service.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/singles/services/single-query-service.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 3
+      },
+      "crap_high": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 4
+      }
+    },
+    "packages/nextly/src/domains/singles/services/single-registry-service.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/singles/services/single-utils.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/users/services/user-ext-schema-service.ts": {
+      "complexity_critical": {
+        "count": 7
+      },
+      "complexity_high": {
+        "count": 3
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 7
+      },
+      "crap_high": {
+        "count": 6
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/users/services/user-field-definition-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/users/services/user-mutation-service.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 3
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/users/services/user-query-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/versions/__tests__/reference-hydration.integration.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/diff-references.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/versions/diff/compute-diff.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/reference-labels.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/resolve-config.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/restore-snapshot.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/restore-version.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/versions/snapshot-references.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/tag-component-types.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/version-capture-service.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/versions/versions-repository.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/__tests__/prune.test.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/deliver.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/envelope.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/expand-component-fields.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/fan-out.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/prune.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/record-event.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/domains/webhooks/recording-provenance.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/run-drain.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/secret-entries.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/sensitive-fields.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/services/webhook-endpoint-service.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/signing.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/webhooks/stored-recording-policy.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/domains/widgets/execute.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/errors/from-service-envelope.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/events/event-bus.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/field-groups/config/validate-field-group.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/hooks/hook-registry.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/hooks/register-collection-hooks.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/hooks/register-single-hooks.ts": {
+      "complexity_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/hooks/stored-hook-executor.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/init.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/init/__tests__/reload-config.test.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/init/boot-apply.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/init/build-service-config.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/init/first-run.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/init/post-init-tasks.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/init/reload-config.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/lib/__tests__/system-columns.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/middleware/rate-limit.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/next.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/admin-meta.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/admin-views.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/codegen/block-manifest.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/codegen/collect-codegen-names.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/codegen/component-import-map.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/permissions/collect-permissions.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/plugin-introspection.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/schema/apply-contributions.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/plugins/schema/validate-relations.ts": {
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/topo-sort.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/plugins/validate-versions.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/route-handler/auth-handler.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/route-handler/route-parser.ts": {
+      "complexity_critical": {
+        "count": 9
+      },
+      "crap_critical": {
+        "count": 10
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/routeHandler.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "crap_critical": {
+        "count": 4
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/runtime/routing/content-route.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/runtime/routing/resolve-content.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/runtime/seo/build-metadata.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/schemas/_zod/ui-schema.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/schemas/user-fields.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/scripts/load-env.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/scripts/merge-schemas.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/access/constraint-shape.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/collections-handler.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/collections/collection-entry-service.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/collections/drizzle-condition.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/dashboard/activity-log-service.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/dashboard/dashboard-service.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/general-settings/general-settings-service.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/image-size.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/services/lib/permissions.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/media-folder.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/services/media-regeneration.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/media.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/services/upload-service.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/services/upload-validation/validate-upload.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/base-registry-service.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/shared/lib/assert-plugin-field-declarations.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/detach.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/entry-validation.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/env.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/field-defaults.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/field-level-registry.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/shared/lib/field-transform.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/password-fields.ts": {
+      "complexity_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/shared/lib/pluralization.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/rich-text-html.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/lib/user-field-plugin-options.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/shared/types/config.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/singles/config/validate-single.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/storage/env-config.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/storage/image-processor.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/storage/retry.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/types/media.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/users/config/validate-user-config.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/nextly/src/utils/get-trusted-client-ip.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/nextly/src/utils/validate-external-url.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 3
+      }
+    },
+    "packages/nextly/src/validation/error-formatter.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/nextly/test-media-folders.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 7
+      }
+    },
+    "packages/nextly/test-media-storage.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/nextly/tsup.config.js": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/admin/FormBuilderView.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/admin/components/builder/FieldCards.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/admin/components/builder/FieldEditor.tsx": {
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/plugin-form-builder/src/admin/components/builder/FormNotificationsTab.tsx": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/admin/components/builder/FormPreview.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/admin/components/submissions/SubmissionSheet.tsx": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/admin/components/submissions/SubmissionsView.tsx": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 3
+      }
+    },
+    "packages/plugin-form-builder/src/admin/context/FormBuilderContext.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/collections/forms.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/config/defaults.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/config/validate-form.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/handlers/submit-form.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/plugin.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 3
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/utils/evaluate-conditions.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/utils/export-formats.ts": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/utils/field-references.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-form-builder/src/utils/generate-schema.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-page-builder/src/admin/BlocksField.tsx": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/plugin-page-builder/src/core/url-policy.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-page-builder/src/fields/blocksField.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-page-builder/src/site-style-record.ts": {
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-page-builder/src/site-style.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/plugin-sdk/src/plugin-surface.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-seo/src/__tests__/extend.integration.test.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/plugin-seo/src/sitemap.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/storage-s3/src/adapter.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/storage-vercel-blob/src/adapter.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/telemetry/src/classify-error.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/scripts/check-server-safe-artifacts.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/ui/scripts/dev.mjs": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/scripts/published-entries.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/ui/scripts/write-server-safe-isolation-probe.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/ui/src/__tests__/package-scripts-are-cross-platform.test.ts": {
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 3
+      },
+      "complexity_moderate": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 4
+      },
+      "crap_moderate": {
+        "count": 7
+      }
+    },
+    "packages/ui/src/components/field-shell.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/components/tree-view.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/layering.test.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "packages/ui/src/lib/shortcuts/key-spec.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/lib/shortcuts/manager.ts": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 3
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/lib/shortcuts/react.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/styles/__tests__/comments-describe-code.test.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/styles/contrast/__tests__/ink-utilities.test.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/styles/contrast/resolve.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/tailwind-preset.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/ui/src/ui-surface.test.ts": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    }
+  },
+  "runtime_coverage_findings": [],
+  "target_keys": [
+    "packages/admin/src/lib/routing.ts:circular dependency",
+    "packages/nextly/src/plugins/admin-meta.ts:complexity",
+    "packages/nextly/src/auth/pipeline/hooks.ts:high impact",
+    "packages/nextly/src/domains/i18n/migration/ddl-types.ts:complexity",
+    "packages/nextly/src/routeHandler.ts:complexity",
+    "packages/nextly/src/domains/collections/services/collection-utils.ts:complexity",
+    "packages/nextly/src/domains/schema/utils/missing-columns.ts:complexity",
+    "packages/nextly/src/services/general-settings/general-settings-service.ts:complexity",
+    "packages/admin/src/pages/dashboard/redirects/CollectionsLandingRedirect.tsx:circular dependency",
+    "packages/admin/src/pages/dashboard/redirects/SinglesLandingRedirect.tsx:circular dependency",
+    "packages/nextly/src/di/register.ts:complexity",
+    "packages/nextly/src/domains/field-groups/services/field-group-schema-service.ts:complexity",
+    "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-schema-service.ts:complexity",
+    "packages/admin/src/components/features/dashboard/DynamicCollectionNav.tsx:high impact",
+    "packages/nextly/src/domains/singles/services/single-query-service.ts:complexity",
+    "packages/nextly/src/init/build-service-config.ts:complexity",
+    "packages/admin/src/pages/dashboard/roles/edit.tsx:circular dependency",
+    "packages/nextly/src/domains/collections/services/collection-registry-service.ts:complexity",
+    "packages/plugin-form-builder/src/plugin.ts:complexity",
+    "packages/nextly/src/dispatcher/handlers/single-dispatcher.ts:complexity",
+    "packages/nextly/src/domains/field-groups/services/teardown-entity-field-group-data.ts:complexity",
+    "packages/admin/src/pages/dashboard/roles.tsx:circular dependency",
+    "packages/plugin-page-builder/src/admin/BlocksField.tsx:complexity",
+    "packages/admin/src/components/layout/sidebar/DualSidebar.tsx:complexity",
+    "packages/admin/src/components/features/entries/EntryForm/EntrySystemHeader.tsx:complexity",
+    "packages/builder/src/canvas.tsx:complexity",
+    "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts:complexity",
+    "packages/nextly/src/cli/commands/migrate.ts:circular dependency",
+    "packages/blocks-engine/src/style/compile-page.ts:complexity",
+    "packages/blocks-engine/src/validation.ts:complexity",
+    "packages/nextly/src/domains/singles/services/single-registry-service.ts:complexity",
+    "packages/nextly/src/domains/singles/services/single-utils.ts:complexity",
+    "packages/nextly/src/domains/collections/services/collection-relationship-service.ts:complexity",
+    "packages/nextly/src/shared/lib/field-level-registry.ts:complexity",
+    "packages/nextly/src/domains/field-groups/services/field-group-registry-service.ts:complexity",
+    "packages/admin/src/pages/dashboard/users/components/UserTable.tsx:complexity",
+    "packages/nextly/eslint-bare-error-rule.js:dead code",
+    "packages/nextly/src/route-handler/auth-handler.ts:complexity",
+    "packages/nextly/src/domains/webhooks/run-drain.ts:complexity",
+    "packages/nextly/src/domains/schema/services/field-column-descriptor.ts:complexity",
+    "packages/nextly/src/cli/utils/config-loader.ts:complexity",
+    "packages/nextly/src/domains/email/services/email-provider-service.ts:complexity",
+    "packages/nextly/src/domains/field-groups/services/field-group-metadata-service.ts:complexity",
+    "packages/nextly/src/dispatcher/handlers/collection-dispatcher.ts:complexity",
+    "packages/nextly/src/domains/users/services/user-mutation-service.ts:complexity",
+    "packages/nextly/src/collections/config/define-config.ts:complexity",
+    "packages/nextly/src/domains/users/services/user-ext-schema-service.ts:complexity",
+    "packages/nextly/src/route-handler/route-parser.ts:complexity",
+    "packages/nextly/src/domains/collections/services/collection-access-service.ts:complexity",
+    "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx:complexity",
+    "packages/nextly/src/cli/commands/migrate-resolve.ts:circular dependency",
+    "packages/nextly/src/domains/field-groups/migration/session.ts:complexity",
+    "packages/nextly/src/domains/schema/services/type-generator.ts:complexity",
+    "packages/nextly/src/shared/types/config.ts:complexity",
+    "packages/nextly/src/database/errors.ts:high impact",
+    "packages/nextly/src/domains/schema/services/runtime-schema-generator.ts:complexity",
+    "packages/nextly/src/cli/commands/migrate-check.ts:circular dependency",
+    "packages/nextly/src/plugins/schema/apply-contributions.ts:circular dependency",
+    "packages/nextly/src/domains/versions/tag-component-types.ts:complexity",
+    "packages/nextly/src/cli/program.ts:circular dependency",
+    "packages/nextly/src/schemas/_zod/ui-schema.ts:complexity",
+    "packages/blocks-react/src/page-renderer.tsx:complexity",
+    "packages/nextly/src/cli/commands/migrate-down.ts:circular dependency",
+    "packages/nextly/src/domains/field-groups/migration/__tests__/helpers/migration-lock-double.ts:complexity",
+    "packages/nextly/src/cli/commands/db-sync.ts:circular dependency",
+    "packages/nextly/src/services/lib/permissions.ts:complexity",
+    "packages/nextly/src/shared/lib/entry-validation.ts:complexity",
+    "packages/nextly/src/domains/versions/restore-snapshot.ts:complexity",
+    "packages/nextly/src/domains/collections/services/collection-mutation-service.ts:complexity",
+    "packages/nextly/src/init/reload-config.ts:complexity",
+    "packages/admin/src/pages/dashboard/settings/webhooks/[id]/deliveries/index.tsx:complexity",
+    "packages/nextly/src/domains/schema/pipeline/locks.ts:complexity",
+    "packages/nextly/src/runtime/routing/content-route.ts:complexity",
+    "packages/nextly/src/domains/schema/pipeline/fresh-push.ts:complexity",
+    "packages/admin/src/pages/dashboard/settings/permissions/index.tsx:complexity",
+    "packages/nextly/src/domains/versions/snapshot-references.ts:complexity",
+    "packages/admin/src/components/features/media-library/MediaPickerDialog/index.tsx:complexity",
+    "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx:complexity",
+    "packages/nextly/src/cli/commands/prune.ts:circular dependency",
+    "packages/ui/scripts/published-entries.ts:complexity",
+    "packages/admin/src/components/features/entries/APIPlayground/ResponseViewer.tsx:complexity",
+    "packages/blocks-engine/src/registry.ts:complexity",
+    "packages/blocks-engine/src/style/css-value.ts:complexity",
+    "packages/nextly/src/domains/collections/services/collection-query-service.ts:complexity",
+    "packages/nextly/src/domains/users/services/user-query-service.ts:complexity",
+    "packages/admin/src/pages/dashboard/settings/email-providers/edit/[id].tsx:circular dependency",
+    "packages/admin/src/pages/dashboard/settings/webhooks/[id]/deliveries/[deliveryId].tsx:circular dependency",
+    "packages/admin/src/hooks/useCurrentUserPermissions.ts:circular dependency",
+    "packages/nextly/src/shared/lib/field-transform.ts:complexity",
+    "packages/nextly/src/cli/commands/dev-build.ts:complexity",
+    "packages/admin/src/pages/dashboard/settings/api-keys/edit/[id].tsx:circular dependency",
+    "packages/admin/src/pages/dashboard/settings/api-keys/index.tsx:circular dependency",
+    "packages/admin/src/pages/dashboard/users/edit.tsx:complexity",
+    "packages/admin/src/lib/api/fetcher.ts:circular dependency",
+    "packages/blocks-engine/src/style/validate-style-value.ts:complexity",
+    "packages/nextly/src/domains/singles/services/single-mutation-service.ts:complexity",
+    "packages/admin/src/components/features/singles/SingleForm.tsx:complexity",
+    "packages/admin/src/pages/dashboard/settings/webhooks/edit/[id].tsx:circular dependency",
+    "packages/blocks-engine/src/ops.ts:complexity",
+    "packages/nextly/src/cli/commands/dev-server.ts:complexity",
+    "packages/nextly/src/domains/field-groups/migration/state.ts:complexity",
+    "packages/admin/src/components/features/entries/fields/FieldRenderer.tsx:circular dependency",
+    "packages/admin/src/components/features/versions/VersionHistorySheet.tsx:complexity",
+    "packages/admin/src/pages/dashboard/settings/email-templates/edit/[id].tsx:circular dependency",
+    "packages/admin/src/components/features/versions/value-display/normalize-stored-value.ts:complexity",
+    "packages/nextly/src/cli/commands/generate-types.ts:circular dependency",
+    "packages/nextly/src/domains/collections/services/collection-sync-service.ts:complexity",
+    "packages/admin/src/components/features/entries/APIPlayground/APIPlayground.tsx:complexity",
+    "packages/admin/src/pages/dashboard/settings/image-sizes/edit/[id].tsx:circular dependency",
+    "packages/admin/src/lib/api/buildQuery.ts:complexity",
+    "packages/admin/src/components/ui/table/data-table/DataTableView.tsx:complexity",
+    "packages/nextly/src/domains/email/provider-definition.ts:complexity",
+    "packages/plugin-form-builder/src/admin/FormBuilderView.tsx:complexity",
+    "packages/admin/src/components/features/schema-builder/ComponentFieldEditor.tsx:complexity",
+    "packages/nextly/src/cli/commands/plugins.ts:circular dependency",
+    "packages/nextly/src/api/media-handlers.ts:complexity",
+    "packages/plugin-form-builder/src/admin/components/builder/FormPreview.tsx:complexity",
+    "packages/admin/src/components/features/dashboard/SeedDemoContentCard.tsx:complexity",
+    "packages/nextly/src/cli/commands/dev-display.ts:complexity",
+    "packages/plugin-form-builder/src/handlers/submit-form.ts:complexity",
+    "packages/admin/src/hooks/useRouter.ts:circular dependency",
+    "packages/admin/src/pages/dashboard/settings/email-providers/index.tsx:complexity",
+    "packages/nextly/src/domains/schema/services/zod-generator.ts:complexity",
+    "packages/nextly/src/dispatcher/helpers/desired-schema.ts:complexity",
+    "packages/admin/src/components/features/media-library/index.tsx:complexity",
+    "packages/nextly/src/domains/collections/query/query-operators.ts:complexity",
+    "packages/nextly/src/domains/field-groups/services/reconcile-field-group-plan.ts:complexity",
+    "packages/admin/src/pages/dashboard/users/fields/edit/[id].tsx:circular dependency",
+    "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-service.ts:complexity",
+    "packages/blocks-engine/src/style/site-tokens.ts:complexity",
+    "packages/nextly/src/cli/commands/migrate-field-groups.ts:circular dependency",
+    "packages/admin/src/pages/dashboard/settings/api-keys/create.tsx:circular dependency",
+    "packages/admin/src/lib/builder/field-transformers.ts:complexity",
+    "packages/admin/src/components/features/entries/EntryList/EntryTable.tsx:complexity",
+    "packages/admin/src/components/features/entries/fields/FieldWrapper.tsx:complexity",
+    "packages/admin/src/pages/dashboard/collection/components/CollectionTable.tsx:complexity",
+    "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts:complexity",
+    "packages/nextly/src/plugins/admin-views.ts:complexity",
+    "packages/admin/src/pages/dashboard/singles/components/SinglesTable.tsx:complexity",
+    "packages/nextly/src/domains/field-groups/services/field-group-mutation-service.ts:complexity",
+    "packages/nextly/src/schemas/user-fields.ts:complexity",
+    "packages/nextly/src/cli/commands/generate-manifest.ts:circular dependency",
+    "packages/admin/src/pages/dashboard/field-group/components/FieldGroupTable.tsx:complexity",
+    "packages/nextly/src/cli/commands/migrate-fresh.ts:circular dependency",
+    "packages/nextly/src/domains/field-groups/migration/run.ts:complexity",
+    "packages/admin/src/components/features/media-library/MediaUploadDropzone/index.tsx:complexity",
+    "packages/nextly/src/cli/commands/build.ts:complexity",
+    "packages/admin/src/lib/api/refreshInterceptor.ts:circular dependency",
+    "packages/nextly/src/domains/collections/services/collection-metadata-service.ts:complexity",
+    "packages/admin/src/components/features/entries/fields/structured/ComponentInput.tsx:circular dependency",
+    "packages/admin/src/pages/dashboard/entries/[slug]/[id]/index.tsx:complexity",
+    "packages/blocks-engine/src/measure-bytes.ts:complexity",
+    "packages/nextly/src/cli/commands/migrate-status.ts:complexity",
+    "packages/nextly/src/cli/commands/i18n-restore.ts:circular dependency",
+    "packages/nextly/src/domains/schema/services/plugin-codegen.ts:complexity",
+    "packages/admin/src/components/features/entries/fields/media/UploadInput.tsx:complexity",
+    "packages/create-nextly-app/src/create-nextly.ts:complexity",
+    "packages/nextly/src/cli/commands/migrate-create.ts:complexity",
+    "packages/admin/src/pages/registry.ts:circular dependency",
+    "packages/admin/src/components/field-ui/ConditionRow.tsx:complexity",
+    "packages/admin/src/components/features/entries/EntryList/EntryList.tsx:complexity",
+    "packages/nextly/src/cli/commands/migrate-baseline.ts:circular dependency",
+    "packages/nextly/src/cli/commands/add.ts:circular dependency",
+    "packages/nextly/src/services/access/constraint-shape.ts:complexity",
+    "packages/admin-css/src/css-scope.mjs:complexity",
+    "packages/admin/src/components/features/schema-builder/RelationshipEditor.tsx:complexity",
+    "packages/nextly/src/collections/fields/block-props.ts:complexity",
+    "packages/admin/src/components/features/media-library/DeleteFolderDialog/index.tsx:complexity",
+    "packages/admin/src/components/features/entries/fields/special/RichTextToolbar/useToolbarState.ts:complexity",
+    "packages/admin/src/pages/dashboard/users/fields/index.tsx:complexity",
+    "packages/nextly/src/domains/auth/services/role/role-mutation-service.ts:complexity",
+    "packages/admin/src/components/features/versions/value-display/rich-text-to-text.ts:complexity",
+    "packages/nextly/src/cli/commands/permissions-cleanup.ts:circular dependency",
+    "packages/nextly/src/database/seeders/super-admin.ts:complexity",
+    "packages/plugin-form-builder/src/admin/components/submissions/SubmissionsView.tsx:complexity",
+    "packages/adapter-drizzle/src/adapter.ts:complexity",
+    "packages/ui/src/lib/shortcuts/manager.ts:complexity",
+    "packages/admin/src/components/features/api-keys/CreateApiKeyForm.tsx:circular dependency",
+    "packages/nextly/src/plugins/schema/reconcile-builder-contributions.ts:circular dependency",
+    "packages/nextly/src/cli/commands/telemetry.ts:circular dependency",
+    "packages/ui/src/styles/contrast/__tests__/ink-utilities.test.ts:complexity",
+    "packages/plugin-seo/src/sitemap.ts:complexity",
+    "packages/admin/src/hooks/useDraftRecovery.ts:complexity",
+    "packages/ui/src/components/tree-view.tsx:complexity",
+    "packages/ui/scripts/check-server-safe-artifacts.ts:complexity",
+    "packages/nextly/src/cli/commands/init.ts:circular dependency",
+    "packages/ui/src/components/__tests__/tabs-contract.test.ts:complexity",
+    "packages/ui/src/styles/__tests__/comments-describe-code.test.ts:complexity"
+  ]
+}

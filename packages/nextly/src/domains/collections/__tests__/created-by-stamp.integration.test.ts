@@ -1,9 +1,9 @@
 /**
  * Proves the `created_by` owner column is stamped end-to-end on the create
  * path against a real (in-memory SQLite) database: the creating user's id lands
- * in the column, and a system create (no user) leaves it null. This is what
- * makes owner-only access work zero-config — the stored rule compares
- * `created_by` to the caller.
+ * in the column, and a system create (no user) leaves it null. It is what lets
+ * a consumer tell who made a row without the schema author declaring a field
+ * for it.
  *
  * Uses overrideAccess to bypass the RBAC gate while still carrying the user, so
  * the test exercises the stamping without wiring per-user permissions.

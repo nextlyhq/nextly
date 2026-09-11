@@ -524,60 +524,6 @@ export async function refreshCollectionWidgets(): Promise<void> {
 }
 
 /**
- * The generated cards a given reader may be told about.
- *
- * 🔴 FILTERED, and by the permission rather than by anything the client does.
- * A generated card's id, title and query all name a COLLECTION, so publishing
- * the whole set discloses the slug and the existence of every collection in the
- * install to any authenticated reader — including the ones the layout endpoint
- * and the query endpoint deliberately hide from them. That the admin would not
- * draw the card is not a control: the payload is JSON, and reading it is the
- * bypass.
- *
- * 🔴 And a card whose id a CONTRIBUTION already claims is dropped. The admin
- * reads this array as the registration channel, and `mergeCollision` gives a
- * registration authority over the title, archetype, query, size and permission
- * of a colliding contribution — so publishing a generated card under an id a
- * plugin declared would replace that plugin's card with core's guess in the
- * grid, while the server's canonical set kept the plugin's. The two would draw
- * and place different declarations. `canonicalWidgets` already resolves this
- * collision in the contribution's favour; this is the same answer, not a second
- * one.
- *
- * 🔴 A generated card carries NO `requiredPermission`, and the server is what
- * gates it. The permission the client could check is `read-<slug>` read off the
- * flat `/me/permissions` list, and that list does not hold a grant that exists
- * only in a collection's code-defined `access.read` — so a reader the server
- * approved had both cards discarded by the grid, for a query it would have
- * answered. One gate, on the side that can see every rule.
- *
- * 🔴 `allow` is asked about the COLLECTION, and the difference is an API key. `callerHoldsPermission` judges a
- * key on its stamped grant alone, while `canReadEntity` — which the widget query
- * endpoint uses — also evaluates the collection's code-defined `access.read`. A
- * key stamped `read-secret` that those rules reject is refused by the query and
- * would have been told the collection exists by this payload. The two must
- * answer the same question, so this one asks the query path's.
- *
- * Asked once per distinct collection by the caller, which batches those
- * decisions — asking here per widget would fire two checks for every one.
- */
-export function readableGeneratedWidgets(
-  allow: (collectionSlug: string) => boolean,
-  declaredIds: ReadonlySet<string>
-): WidgetDefinition[] {
-  return generatedWidgets().filter(widget => {
-    if (declaredIds.has(widget.id)) return false;
-    const slug = generatedCollectionSlug(widget);
-    // A generated card that names no collection cannot be checked against one,
-    // so it is withheld rather than published. This is unreachable today --
-    // every card here is built from a `collection:` source -- and the branch is
-    // free: it decides from a value already in hand, and refusing is the only
-    // safe answer for a card whose subject cannot be identified.
-    return slug !== undefined && allow(slug);
-  });
-}
-
-/**
  * The collection a generated card is about, taken from the query it will run.
  *
  * From `query.source` rather than by unpicking the widget id, because the
@@ -597,8 +543,8 @@ export function generatedCollectionSlug(
 ): string | undefined {
   // 🔴 Read from the CELLS as well as the top-level query. A `stats` card has
   // no `query` of its own, so deriving from that field alone answered
-  // `undefined` for every health card -- and `readableGeneratedWidgets`
-  // withholds a card whose subject it cannot identify, which is the correct
+  // `undefined` for every health card -- and the reader gate withholds a
+  // card whose subject it cannot identify, which is the correct
   // refusal applied to a wrong answer. The cards were generated, registered,
   // and then silently never published.
   const sources = widget.query

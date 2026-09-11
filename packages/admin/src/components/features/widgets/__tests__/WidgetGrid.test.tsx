@@ -70,7 +70,14 @@ function renderGrid() {
 // that is asked of `coreDrawsArchetype` below.
 const HOST_DRAWN_ARCHETYPES = ["metric", "table", "list", "text", "actions"];
 
-const UNDRAWABLE = HOST_DRAWN_ARCHETYPES.find(
+// Every name above draws now, so the archetype nothing can render is one THIS
+// release does not know: what an admin meets when its server is newer and
+// declares a card from a later vocabulary. That is the realistic shape of
+// "undrawable" from here on, and the cases below test the grid's conduct
+// toward it -- no query spent, no freshness claimed, counted as failed.
+const NEWER_CORE_ARCHETYPE = "sparkline";
+
+const UNDRAWABLE = [...HOST_DRAWN_ARCHETYPES, NEWER_CORE_ARCHETYPE].find(
   // A declaration carrying a query, so what is being asked is "can core draw
   // this archetype at all", not "is this particular widget under-declared".
   archetype =>
@@ -78,9 +85,10 @@ const UNDRAWABLE = HOST_DRAWN_ARCHETYPES.find(
 );
 
 it("has an archetype core cannot draw, which several cases below need", () => {
-  // Stated as its own case so that when core draws everything, this fails with
-  // a sentence instead of leaving the cases below silently vacuous.
-  expect(UNDRAWABLE).toBeDefined();
+  // Stated as its own case so that if the renderer table ever admits a name it
+  // does not know, this fails with a sentence instead of leaving the cases
+  // below silently vacuous.
+  expect(UNDRAWABLE).toBe(NEWER_CORE_ARCHETYPE);
 });
 
 function brandingWith(widgets: unknown[]): AdminBranding {

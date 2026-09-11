@@ -12,7 +12,6 @@
 import type { FieldConfig, IndexConfig } from "@nextly/collections";
 
 import type { RevalidateConfig } from "../../revalidation/types";
-import type { CollectionAccessRules } from "../../services/access/types";
 // Registry-facing resolved versioning config shape for the `versions` column.
 import type { ResolvedVersionsConfig } from "../versions/types";
 
@@ -498,24 +497,6 @@ export interface DynamicCollectionInsert {
 
   /** User ID who created the collection (optional) */
   createdBy?: string;
-
-  /**
-   * Access control rules for CRUD operations.
-   *
-   * Defines who can create, read, update, and delete documents in this collection.
-   * If not specified, all operations default to public access.
-   *
-   * @example
-   * ```typescript
-   * accessRules: {
-   *   create: { type: 'authenticated' },
-   *   read: { type: 'public' },
-   *   update: { type: 'owner-only' },
-   *   delete: { type: 'role-based', allowedRoles: ['admin'] },
-   * }
-   * ```
-   */
-  accessRules?: CollectionAccessRules;
 
   /**
    * Pre-built hooks configured via the Admin UI.

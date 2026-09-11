@@ -39,12 +39,11 @@
  * every document to a caller granted none.
  *
  * **Which documents.** `readableEntities` is coarse BY CONTRACT — it says
- * whether an entity is in reach at all, and leaves the per-row rules of the
- * query that follows to decide what comes back. A collection carrying a stored
- * `owner-only` or `custom` read rule therefore admits every editor at that
- * check while the ordinary read path narrows to a subset, and a version query
- * filtered by collection name alone counted and listed the documents in
- * between: other authors' entry ids, their languages, and when they last
+ * whether an entity is in reach at all, and leaves the query that follows to
+ * decide what comes back. A collection therefore admits an editor at that check
+ * while the ordinary read path still withholds individual rows, and a version
+ * query filtered by collection name alone counted and listed the documents in
+ * between: entry ids the caller cannot open, their languages, and when they last
  * touched them. `visiblePendingEdits` closes it by asking the ordinary read
  * path which of the candidate documents survive, rather than reproducing a rule
  * that may be an arbitrary function.
@@ -143,7 +142,7 @@ const LIST_ROW_BUDGET = 400;
 /**
  * Rows read per round.
  *
- * A document contributes one row per language, and rows a stored rule hides
+ * A document contributes one row per language, and rows the read path withholds
  * contribute none, so how many rows a page of DOCUMENTS costs is not knowable in
  * advance. Rounds make that unnecessary; this only has to be large enough that
  * the ordinary install finishes in one.

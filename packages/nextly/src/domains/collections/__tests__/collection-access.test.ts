@@ -1,8 +1,8 @@
 /**
  *
  * Tests for the access control behaviour of CollectionEntryService:
- * checkCollectionAccess for create/read/update/delete, owner-only filtering
- * via getAccessQueryConstraint, RBAC integration, and overrideAccess bypass.
+ * checkCollectionAccess for create/read/update/delete, the RBAC gate
+ * the RBAC gate, and the overrideAccess bypass.
  *
  * Covers:
  * - Access denied (403) for each CRUD operation
@@ -15,7 +15,6 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { normalizeLocalization } from "../../i18n/config/normalize";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -29,7 +28,7 @@ import {
   createMockCollectionService,
   createMockRelationshipService,
   createMockHookRegistry,
-  createMockAccessControlService,
+  createMockRbacAccessControlService,
   createMockComponentDataService,
   createMockCollection,
   createSampleEntry,
@@ -125,8 +124,9 @@ vi.mock("@nextly/lib/field-transform", () => ({
 // ── Helper to build service with specific access mocks ────────────────────
 
 function buildService(overrides: {
-  accessControlService?: ReturnType<typeof createMockAccessControlService>;
-  rbacAccessControlService?: { checkAccess: ReturnType<typeof vi.fn> };
+  rbacAccessControlService?: ReturnType<
+    typeof createMockRbacAccessControlService
+  >;
   collectionService?: ReturnType<typeof createMockCollectionService>;
   hookRegistry?: ReturnType<typeof createMockHookRegistry>;
   localization?: SanitizedLocalizationConfig;
@@ -144,10 +144,9 @@ function buildService(overrides: {
     (overrides.collectionService ?? createMockCollectionService()) as never,
     createMockRelationshipService() as never,
     (overrides.hookRegistry ?? createMockHookRegistry()) as never,
-    (overrides.accessControlService ??
-      createMockAccessControlService()) as never,
     createMockComponentDataService() as never,
-    overrides.rbacAccessControlService as never,
+    (overrides.rbacAccessControlService ??
+      createMockRbacAccessControlService()) as never,
     overrides.localization as never
   );
 
@@ -161,12 +160,9 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
   describe("read access control", () => {
     it("should deny listEntries when access evaluation returns denied", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Read access denied",
-      });
-      const { service } = buildService({ accessControlService: acs });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
+      const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.listEntries({
         collectionName: "posts",
@@ -179,10 +175,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
 
     it("should allow listEntries when access is granted", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({ allowed: true });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(true);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [];
 
@@ -195,12 +191,9 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
 
     it("should deny getEntry when access is denied", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Cannot read this entry",
-      });
-      const { service } = buildService({ accessControlService: acs });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
+      const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.getEntry({
         collectionName: "posts",
@@ -213,12 +206,9 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
 
     it("should deny countEntries when access is denied", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Count access denied",
-      });
-      const { service } = buildService({ accessControlService: acs });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
+      const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.countEntries({
         collectionName: "posts",
@@ -234,12 +224,9 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
   describe("create access control", () => {
     it("should deny createEntry when access is denied", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Cannot create entries",
-      });
-      const { service } = buildService({ accessControlService: acs });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
+      const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.createEntry(
         { collectionName: "posts", user: { id: "user-1" } },
@@ -251,10 +238,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
 
     it("should allow createEntry when access is granted", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({ allowed: true });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(true);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
@@ -271,15 +258,12 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
   describe("update access control", () => {
     it("should deny updateEntry when access is denied", async () => {
-      const acs = createMockAccessControlService();
+      const rbac = createMockRbacAccessControlService();
       // First call: for the getEntry check pass (we need the entry to exist)
       // The service fetches the entry first, then checks access
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Cannot update entries",
-      });
+      rbac.checkAccess.mockResolvedValue(false);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [createSampleEntry()];
 
@@ -301,13 +285,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
   describe("delete access control", () => {
     it("should deny deleteEntry when access is denied", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Cannot delete entries",
-      });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [createSampleEntry()];
 
@@ -326,14 +307,11 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
   describe("overrideAccess bypass", () => {
     it("should bypass access control on listEntries when overrideAccess is true", async () => {
-      const acs = createMockAccessControlService();
+      const rbac = createMockRbacAccessControlService();
       // Even with denied access, overrideAccess should bypass
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Denied",
-      });
+      rbac.checkAccess.mockResolvedValue(false);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [];
 
@@ -347,13 +325,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
 
     it("should bypass access control on createEntry when overrideAccess is true", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Denied",
-      });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [{ id: "new-1", title: "Test" }];
 
@@ -366,13 +341,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
 
     it("should bypass access control on getEntry when overrideAccess is true", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Denied",
-      });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [createSampleEntry()];
 
@@ -386,13 +358,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     });
 
     it("should bypass access control on deleteEntry when overrideAccess is true", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "Denied",
-      });
+      const rbac = createMockRbacAccessControlService();
+      rbac.checkAccess.mockResolvedValue(false);
       const { service, selectData } = buildService({
-        accessControlService: acs,
+        rbacAccessControlService: rbac,
       });
       selectData.rows = [createSampleEntry()];
 
@@ -412,7 +381,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     it("should deny when RBAC service denies access", async () => {
       const rbac = {
         checkAccess: vi.fn().mockResolvedValue(false),
-        // Answers `undefined`: no code-defined rule, so the stored rules decide.
+        // Answers `undefined`: no code-defined rule governs the operation.
         checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       };
       const { service } = buildService({
@@ -438,7 +407,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     it("should allow when RBAC service allows access", async () => {
       const rbac = {
         checkAccess: vi.fn().mockResolvedValue(true),
-        // Answers `undefined`: no code-defined rule, so the stored rules decide.
+        // Answers `undefined`: no code-defined rule governs the operation.
         checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       };
       const { service, selectData } = buildService({
@@ -477,7 +446,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     it("should skip RBAC when no user is provided", async () => {
       const rbac = {
         checkAccess: vi.fn().mockResolvedValue(false),
-        // Answers `undefined`: no code-defined rule, so the stored rules decide.
+        // Answers `undefined`: no code-defined rule governs the operation.
         checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
       };
       const { service, selectData } = buildService({
@@ -499,153 +468,6 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       expect(result.success).toBe(true);
     });
   });
-
-  // ── Access rules from collection metadata ─────────────────────────────
-
-  describe("access rules extraction", () => {
-    it("should extract access rules from collection.accessRules (new format)", async () => {
-      const acs = createMockAccessControlService();
-      const cs = createMockCollectionService(
-        createMockCollection({
-          accessRules: { read: { type: "authenticated" } },
-        })
-      );
-      const { service, selectData } = buildService({
-        accessControlService: acs,
-        collectionService: cs,
-      });
-      selectData.rows = [];
-
-      await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1" },
-      });
-
-      // The sixth argument is `defaultOwnerField`. It decides which column a
-      // rule-less `owner-only` default reads, and collections pass
-      // DEFAULT_OWNER_FIELD ("created_by") rather than the generic camelCase
-      // fallback, because a collection carries the auto-stamped system column.
-      // Asserting the constant rather than the literal keeps this true if the
-      // column is ever renamed in one place.
-      expect(acs.evaluateAccess).toHaveBeenCalledWith(
-        expect.objectContaining({ read: { type: "authenticated" } }),
-        "read",
-        expect.any(Object),
-        undefined,
-        undefined,
-        DEFAULT_OWNER_FIELD
-      );
-    });
-
-    it("should extract access rules from schemaDefinition.accessRules (legacy format)", async () => {
-      const acs = createMockAccessControlService();
-      const cs = createMockCollectionService(
-        createMockCollection({
-          schemaDefinition: {
-            fields: [],
-            accessRules: { create: { type: "role", role: "admin" } },
-          },
-        })
-      );
-      const { service, selectData } = buildService({
-        accessControlService: acs,
-        collectionService: cs,
-      });
-      selectData.rows = [];
-
-      await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1" },
-      });
-
-      // evaluateAccess should receive the legacy access rules
-      expect(acs.evaluateAccess).toHaveBeenCalled();
-    });
-
-    it("should default to public access when no rules are defined", async () => {
-      const acs = createMockAccessControlService();
-      const cs = createMockCollectionService(
-        createMockCollection({
-          accessRules: undefined,
-          schemaDefinition: { fields: [], accessRules: undefined },
-        })
-      );
-      const { service, selectData } = buildService({
-        accessControlService: acs,
-        collectionService: cs,
-      });
-      selectData.rows = [];
-
-      await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1" },
-      });
-
-      // evaluateAccess should receive undefined rules (defaults to public),
-      // and still the collection's owner column as the sixth argument -- the
-      // default is what a rule-less `owner-only` would read, so it matters
-      // most precisely when no rules are defined.
-      expect(acs.evaluateAccess).toHaveBeenCalledWith(
-        undefined,
-        "read",
-        expect.any(Object),
-        undefined,
-        undefined,
-        DEFAULT_OWNER_FIELD
-      );
-    });
-  });
-
-  // ── Fail-secure on access evaluation errors ───────────────────────────
-
-  describe("fail-secure on access errors", () => {
-    it("should return 500 when access evaluation throws", async () => {
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockRejectedValue(
-        new Error("Access service unavailable")
-      );
-      const { service } = buildService({ accessControlService: acs });
-
-      const result = await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1" },
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(500);
-      expect(result.message).toContain("access");
-    });
-
-    it("REFUSES an evaluator failure that merely says 'not found'", async () => {
-      /*
-       * 🔴 This asserted `success: true` -- that an evaluator failure whose
-       * message happened to contain "not found" resolved to an UNRESTRICTED
-       * read. That is the failure the constraint resolver was changed to stop
-       * making, so the expectation inverts with it.
-       *
-       * The passthrough it was named for still exists, scoped to the metadata
-       * lookup, and is covered where it can be isolated:
-       * `collection-access-constraint.test.ts`. It cannot be isolated here,
-       * because `listEntries` also reads the collection for status resolution,
-       * so a rejecting `getCollection` fails the read for an unrelated reason.
-       */
-      const acs = createMockAccessControlService();
-      acs.evaluateAccess.mockRejectedValue(
-        new Error("policy dependency not found")
-      );
-      const { service, selectData } = buildService({
-        accessControlService: acs,
-      });
-      selectData.rows = [];
-
-      const result = await service.listEntries({
-        collectionName: "posts",
-        user: { id: "user-1" },
-      });
-
-      expect(result.success).toBe(false);
-    });
-  });
 });
 
 // ── Publish-lifecycle transition access ─────────────────────────────────────
@@ -654,18 +476,15 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 // gate does not distinguish it. A write that moves a document into or out of
 // published needs the publish/unpublish permission ON TOP of update.
 describe("publish-transition access control", () => {
-  // evaluateAccess is the gate this harness controls; allow update, deny the
-  // named lifecycle op, so only the transition check can fail.
+  // The RBAC gate is what this harness controls; allow update, deny the named
+  // lifecycle op, so only the transition check can fail.
   const allowUpdateDeny = (op: "publish" | "unpublish") => {
-    const acs = createMockAccessControlService();
-    acs.evaluateAccess.mockImplementation((_rules, operation) =>
-      Promise.resolve(
-        operation === op
-          ? { allowed: false, reason: `Cannot ${op}` }
-          : { allowed: true }
-      )
+    const rbac = createMockRbacAccessControlService();
+    rbac.checkAccess.mockImplementation(
+      ({ operation }: { operation: string }) =>
+        Promise.resolve(operation !== op)
     );
-    return acs;
+    return rbac;
   };
 
   // The transition gate only runs when the collection has the draft/published
@@ -675,9 +494,9 @@ describe("publish-transition access control", () => {
     createMockCollectionService(createMockCollection({ status: true }));
 
   it("denies updateEntry that moves a draft to published without publish", async () => {
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service, selectData } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
@@ -692,9 +511,9 @@ describe("publish-transition access control", () => {
   });
 
   it("denies unpublishing without the unpublish permission", async () => {
-    const acs = allowUpdateDeny("unpublish");
+    const rbac = allowUpdateDeny("unpublish");
     const { service, selectData } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
     });
     selectData.rows = [createSampleEntry({ status: "published" })];
@@ -714,9 +533,9 @@ describe("publish-transition access control", () => {
     // column. The unpublish permission must be required even though the value is
     // not the string "published": the guard cannot key on
     // `typeof status === "string"`, or `status: 0` slips an unpublish past it.
-    const acs = allowUpdateDeny("unpublish");
+    const rbac = allowUpdateDeny("unpublish");
     const { service, selectData } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       // Lifecycle on, but no declared `status` field so a non-string status is
       // not rejected by validation before it reaches the transition gate.
       collectionService: createMockCollectionService(
@@ -724,7 +543,6 @@ describe("publish-transition access control", () => {
           status: true,
           schemaDefinition: {
             fields: [{ name: "title", type: "text" }],
-            accessRules: undefined,
             hooks: [],
             search: undefined,
           },
@@ -746,9 +564,9 @@ describe("publish-transition access control", () => {
   it("does not require publish for an edit that keeps status published", async () => {
     // A caller with update but not publish can still edit a live document, as
     // long as they are not changing whether it is published.
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service, selectData } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
     });
     selectData.rows = [createSampleEntry({ status: "published" })];
@@ -764,9 +582,9 @@ describe("publish-transition access control", () => {
   });
 
   it("does not require publish for a patch that omits status", async () => {
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service, selectData } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
@@ -784,8 +602,10 @@ describe("publish-transition access control", () => {
     // ordinary user field named `status`. Setting it to "published" is a field
     // edit, not a publish, and must not demand the publish permission. The
     // default mock collection has no `status: true` flag, so the gate no-ops.
-    const acs = allowUpdateDeny("publish");
-    const { service, selectData } = buildService({ accessControlService: acs });
+    const rbac = allowUpdateDeny("publish");
+    const { service, selectData } = buildService({
+      rbacAccessControlService: rbac,
+    });
     selectData.rows = [createSampleEntry({ status: "draft" })];
 
     await service.updateEntry(
@@ -794,7 +614,7 @@ describe("publish-transition access control", () => {
     );
 
     // The publish permission is never consulted when there is no lifecycle.
-    const publishConsulted = acs.evaluateAccess.mock.calls.some(
+    const publishConsulted = rbac.checkAccess.mock.calls.some(
       ([, operation]: [unknown, string]) => operation === "publish"
     );
     expect(publishConsulted).toBe(false);
@@ -805,7 +625,7 @@ describe("publish-transition access control", () => {
     // judged on the FINAL data. A hook the caller cannot see derives
     // status: "published" from a body that omits it; the publish permission is
     // still required.
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const hookRegistry = createMockHookRegistry();
     hookRegistry.execute.mockImplementation((_phase: string, ctx: unknown) =>
       Promise.resolve({
@@ -814,7 +634,7 @@ describe("publish-transition access control", () => {
       })
     );
     const { service, selectData } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
       hookRegistry,
     });
@@ -835,9 +655,9 @@ describe("publish-transition access control", () => {
     // would let a caller with update-but-not-publish publish a still-draft
     // translation. The gate must instead compare the write locale's companion
     // `_status` (draft -> published = publish).
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service, selectData, fileManager } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
       localization: normalizeLocalization({
         locales: ["en", "de"],
@@ -885,9 +705,9 @@ describe("publish-transition access control", () => {
     // `?locale=<default>` publish moves the companion into published. Keying the
     // gate on the main row alone sees published -> published and would miss it;
     // the gate must also classify the companion `_status` transition.
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service, selectData, fileManager } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
       localization: normalizeLocalization({
         locales: ["en", "de"],
@@ -930,9 +750,9 @@ describe("publish-transition access control", () => {
     // null) does not persist a companion `_status` — the split only writes a
     // string — so this locale's stored status is unchanged and the edit must not
     // be gated as an unpublish.
-    const acs = allowUpdateDeny("unpublish");
+    const rbac = allowUpdateDeny("unpublish");
     const { service, selectData, fileManager } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       // Lifecycle on, but no declared `status` field, so a non-string status is
       // not rejected by validation before it reaches the transition gate.
       collectionService: createMockCollectionService(
@@ -940,7 +760,6 @@ describe("publish-transition access control", () => {
           status: true,
           schemaDefinition: {
             fields: [{ name: "title", type: "text" }],
-            accessRules: undefined,
             hooks: [],
             search: undefined,
           },
@@ -981,9 +800,9 @@ describe("publish-transition access control", () => {
   });
 
   it("denies creating a document directly as published without publish", async () => {
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
     });
 
@@ -999,7 +818,7 @@ describe("publish-transition access control", () => {
   it("gates a publish derived by a beforeCreate hook, not just the body", async () => {
     // Same secure-by-result rule on create: a hook that derives published from a
     // body omitting status still requires the publish permission.
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const hookRegistry = createMockHookRegistry();
     hookRegistry.execute.mockImplementation((_phase: string, ctx: unknown) =>
       Promise.resolve({
@@ -1008,7 +827,7 @@ describe("publish-transition access control", () => {
       })
     );
     const { service } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
       hookRegistry,
     });
@@ -1023,9 +842,9 @@ describe("publish-transition access control", () => {
   });
 
   it("allows creating a draft without publish", async () => {
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
     });
 
@@ -1040,9 +859,9 @@ describe("publish-transition access control", () => {
   it("bypasses the transition check under overrideAccess", async () => {
     // A trusted server write publishes without a publish permission, exactly as
     // it updates without an update permission.
-    const acs = allowUpdateDeny("publish");
+    const rbac = allowUpdateDeny("publish");
     const { service, selectData } = buildService({
-      accessControlService: acs,
+      rbacAccessControlService: rbac,
       collectionService: lifecycle(),
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
@@ -1062,19 +881,12 @@ describe("publish-transition access control", () => {
     // The route authorizes a document PATCH as `update`, never as `publish`.
     // So on the REST path (routeAuthorized) the publish permission must still
     // be checked at the service — the route never checked it. RBAC allows
-    // update but denies publish; stored rules allow everything, so only the
-    // RBAC publish check can produce the denial.
-    const rbac = {
-      checkAccess: vi.fn((args: { operation: string }) =>
-        Promise.resolve(args.operation !== "publish")
-      ),
-    };
-    const acs = createMockAccessControlService();
-    acs.evaluateAccess.mockResolvedValue({ allowed: true });
+    // update but denies publish, so only the publish check can produce the
+    // denial.
+    const rbac = allowUpdateDeny("publish");
     const { service, selectData } = buildService({
-      accessControlService: acs,
-      collectionService: lifecycle(),
       rbacAccessControlService: rbac,
+      collectionService: lifecycle(),
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
 
@@ -1095,24 +907,15 @@ describe("publish-transition access control", () => {
     );
   });
 
-  it("does not let a super-admin-owned key bypass a stored rule on a plain update", async () => {
+  it("does not let a super-admin-owned key bypass the gate on a plain update", async () => {
     // The primary update gate must also receive the API-key scope, so the
     // session super-admin bypass does not apply to a scoped key on a non-status
     // write — otherwise a super-admin-owned, update-only key would skip the
-    // collection's stored owner/role rules.
-    const acs = createMockAccessControlService();
-    acs.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "owner-only",
-    });
-    const rbac = {
-      checkAccess: vi.fn().mockResolvedValue(true),
-      // Answers `undefined`: no code-defined rule, so the stored rules decide.
-      checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-      getRegisteredAccess: vi.fn().mockReturnValue(undefined),
-    };
+    // collection's code-defined access entirely.
+    const rbac = createMockRbacAccessControlService();
+    // The KEY carries no grant for this write, and the code-defined rule denies.
+    rbac.getRegisteredAccess.mockReturnValue({ update: () => false });
     const { service, selectData } = buildService({
-      accessControlService: acs,
       rbacAccessControlService: rbac,
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
@@ -1131,7 +934,7 @@ describe("publish-transition access control", () => {
       { title: "no status change" }
     );
 
-    // The stored rule ran and denied — the super-admin bypass did not fire.
+    // The gate ran and denied — the super-admin bypass did not fire.
     expect(result.statusCode).toBe(403);
   });
 });

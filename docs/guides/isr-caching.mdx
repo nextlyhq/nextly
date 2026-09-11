@@ -132,8 +132,8 @@ For a singleton (global) use `nextlySingleTags("header")`.
 
 `cachedFind`'s `keyParts` decide which requests share a cache entry. **Include
 anything the result varies by** — and for a read that applies per-caller access
-rules (owner-only scoping, role-based visibility, an API key's narrowed scope),
-that means the caller's identity:
+rules (a code-defined `access.read` that reads the caller's roles or
+permissions, an API key's narrowed scope), that means the caller's identity:
 
 ```tsx
 // Per-user list — the caller's id is in the key, so it never leaks.

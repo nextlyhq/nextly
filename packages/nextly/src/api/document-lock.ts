@@ -104,16 +104,17 @@ function readRef(source: {
  * someone who cannot edit is not.
  *
  * 🔴 UPDATE means THIS document, not documents of this kind. `update-<slug>` is
- * the coarse route permission and says only the latter, so a collection carrying
- * an owner-only stored rule refuses the row while that permission still stands.
- * Without the second gate a non-owner claims a document every real update denies
- * them, and the owner is then shown a false holder and pushed to take over their
- * own row. The gate the version routes already use runs here, for the reason its
+ * the coarse route permission and says only the latter, so a document the caller
+ * cannot actually load — a draft they may not see, a row that is gone — is
+ * refused by the read path while that permission still stands. Without the
+ * second gate a caller claims a document every real update denies them, and the
+ * real editor is then shown a false holder and pushed to take over their own
+ * row. The gate the version routes already use runs here, for the reason its
  * own docblock gives.
  *
  * A release stops at the coarse permission, because it is the opposite
- * statement: that this editor has STOPPED editing. The stored rules read the
- * document, so the holder's own save can flip them mid-claim, and asking them on
+ * statement: that this editor has STOPPED editing. The document gate reads the
+ * row, so the holder's own save can flip its answer mid-claim, and asking it on
  * the way out would refuse the departing editor's own DELETE and strand the
  * claim until its lease lapsed, leaving colleagues a holder who has already
  * left. What a release actually rests on is the claim token, which names the one

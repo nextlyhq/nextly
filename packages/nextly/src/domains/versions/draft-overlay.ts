@@ -101,9 +101,9 @@ export interface DraftOverlayInput {
    * Whether this caller may UPDATE this document.
    *
    * Resolved by the domain against the LOADED row, never inferred from a route
-   * having authorized a READ: an owner-only update rule passes the coarse check
-   * pending a row-level predicate, so treating a reader as an editor would leak
-   * one author's pending edits to another.
+   * having authorized a READ: a caller may read a collection without being able
+   * to write it, so treating a reader as an editor would hand them another
+   * author's pending edits.
    */
   callerMayEdit: boolean;
   /** The language being read, if the request named one. */

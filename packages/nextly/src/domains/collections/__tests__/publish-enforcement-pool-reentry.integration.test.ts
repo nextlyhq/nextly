@@ -529,8 +529,8 @@ describePg(
       const adapter = await connectSingleConnection();
       let handle: TestNextly | undefined;
       // A code beforeDelete hook reading the registry via context.executor.
-      // Exercises both bindings of the delete worker: the metadata/owner reads
-      // (getCollection/getOwnerConstraint) and the beforeDelete hook context.
+      // Exercises both bindings of the delete worker: the metadata read
+      // (getCollection) and the beforeDelete hook context.
       const beforeDeleteHook: HookHandler = async context => {
         const registry = container.get<CollectionRegistryService>(
           "collectionRegistryService"

@@ -84,9 +84,9 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
 
   **`keyParts` is a security boundary, not a performance detail.** Two callers
   whose `keyParts` match share one cache entry. So if the read applies any
-  per-caller rule — owner-only scoping, role-based visibility, an API key's
-  narrowed scope — the caller's identity has to be IN the key, or one user's
-  rows get served to another:
+  per-caller rule — a code-defined `access.read` that reads the caller's
+  roles or permissions, an API key's narrowed scope — the caller's identity
+  has to be IN the key, or one user's rows get served to another:
 
   **A shared cache entry is only safe if the read is public for EVERY reader.**
   Two independent things can make it not so, and each needs its own answer:
@@ -94,16 +94,26 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   - **drafts** — `find()` defaults to `overrideAccess: true`, a trusted server
     read, so a slug filter alone can return an unpublished row. `status:
     "published"` is enforced even on a trusted read and fixes this one.
-  - **per-row access rules** — owner-only scoping, role-based visibility, an API
-    key's narrowed scope. `status` does NOT evaluate these; it is a
-    draft/published lifecycle filter and nothing more. A published row that only
-    its owner may read is still returned by the query above.
+  - **access rules** — a code-defined `access.read` on the collection that
+    decides on the caller (their roles, their permissions, whether they are
+    signed in at all), or an API key's narrowed scope. `status` does NOT
+    evaluate these; it is a draft/published lifecycle filter and nothing more.
+    A published row that only some readers may see is still returned by the
+    query above.
 
-  So the decision is: **does this collection carry read-access rules?**
+  - **field-level read rules** — a field can carry its own `access.read` even
+    when the collection declares none. The shared branch below reads with the
+    Direct API's default `overrideAccess: true`, which bypasses field rules
+    too, so the cached row holds every field and the entry serves fields the
+    schema meant to redact. A collection with ANY field-level read rule takes
+    the per-caller branch — or selects only fields known to be public.
+
+  So the decision is: **does this collection declare a read rule, on the
+  collection or on any of its fields?**
 
   ```ts
-  // NO access rules — the result is identical for every reader, so one shared
-  // entry is correct and gets the full ISR benefit.
+  // NO read rule, on the collection OR its fields — the result is identical for
+  // every reader, so one shared entry is correct and gets the full ISR benefit.
   // `find()` always returns the list envelope `{ items, meta }`, so a detail route takes the
   // first item — and caches THAT, not the envelope around it.
   cachedFind(
@@ -119,8 +129,8 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
     { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
   );
 
-  // ACCESS RULES — evaluate them as the caller, and key by EVERY dimension the
-  // rules read, not just who the caller is.
+  // A READ RULE — evaluate it as the caller, and key by EVERY dimension the
+  // rule reads, not just who the caller is.
   //
   // Both role fields are optional and Nextly reads BOTH: the many-to-many
   // `roles` unioned with the singular `role`. Deduped and sorted, so one role
@@ -144,8 +154,8 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   on CONTENT changes, and a permission change is not one. Include whatever the
   rules actually read: the role set, the claim, the key's scope.
 
-  If you are unsure whether a collection has read rules, do not cache it. A
-  missing cache is slow; a shared one leaks.
+  If you are unsure whether a collection or any of its fields declares a read
+  rule, do not cache it. A missing cache is slow; a shared one leaks.
 
 ## Which Nextly this is, and where its docs are
 
