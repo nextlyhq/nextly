@@ -344,6 +344,26 @@ const addsActivitySubjectKindColumn = (stmt: string): boolean => {
   );
 };
 
+/**
+ * The activity log gains what KIND of actor each row names.
+ *
+ * `user_id` used to be the row's only identity — a reference joined to the
+ * accounts table — so a key's own id there found no account and a key write
+ * was dropped rather than filed against a person who never made it. The kind
+ * column lets a key, an import or a job record what it is, with `user_id` set
+ * only for a `user`. NULL on rows that predate it, which were all user writes.
+ *
+ * Pinned to the table AND the column, and required to be the WHOLE statement,
+ * for the reason the erasure stamp gives: a substring match would admit a
+ * destructive clause riding through beside the additive one.
+ */
+const addsActivityActorTypeColumn = (stmt: string): boolean => {
+  const s = stmt.trim().replace(/;$/, "");
+  return /^ALTER TABLE [`"]?activity_log[`"]? ADD (COLUMN )?[`"]?actor_type[`"]?[^,]*$/i.test(
+    s
+  );
+};
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -456,6 +476,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsAuditLogErasureStamp(s) ||
               addsActivityLocaleColumn(s) ||
               addsActivitySubjectKindColumn(s) ||
+              addsActivityActorTypeColumn(s) ||
               addsPreviewGenerationColumn(s),
             `phantom diff: ${s}`
           ).toBe(true);
@@ -537,6 +558,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               addsAuditLogErasureStamp(s) ||
               addsActivityLocaleColumn(s) ||
               addsActivitySubjectKindColumn(s) ||
+              addsActivityActorTypeColumn(s) ||
               addsPreviewGenerationColumn(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
