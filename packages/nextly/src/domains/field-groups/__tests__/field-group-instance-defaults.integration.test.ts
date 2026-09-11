@@ -59,6 +59,41 @@ async function boot() {
   };
 }
 
+/**
+ * The same field group and collection, localized.
+ *
+ * A localized field group splits each instance into a main payload and a
+ * companion payload before it is written, and the split copies values out of
+ * the instance rather than writing through it. `heading` is translatable and
+ * lands on the companion; `tone` is shared and stays on the main row, so one
+ * instance covers both sides of the split.
+ */
+async function bootLocalized() {
+  current = await createTestNextly({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "lhero",
+        localized: true,
+        fields: [
+          text({ name: "heading", required: true, defaultValue: "Welcome" }),
+          text({ name: "tone", localized: false, defaultValue: "calm" }),
+        ],
+      }),
+    ],
+    collections: [
+      defineCollection({
+        slug: "lpages",
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "slides", component: "lhero", repeatable: true }),
+        ],
+      }),
+    ],
+  });
+  return { handler: current.getService("collectionsHandler") };
+}
+
 type Hero = { heading?: string; tone?: string };
 
 describe("a new field-group instance takes its declared defaults (integration)", () => {
@@ -108,5 +143,27 @@ describe("a new field-group instance takes its declared defaults (integration)",
       heading: "Welcome",
       tone: "calm",
     });
+  });
+  it("fills a repeatable instance of a LOCALIZED field group", async () => {
+    const { handler } = await bootLocalized();
+
+    const created = await handler.createEntry(
+      { collectionName: "lpages", overrideAccess: true },
+      { title: "Home", slides: [{}, { heading: "Given" }] }
+    );
+    expect(created.success, JSON.stringify(created)).toBe(true);
+
+    const read = await handler.getEntry({
+      collectionName: "lpages",
+      entryId: (created.data as { id: string }).id,
+      overrideAccess: true,
+    });
+    const slides = (read.data as { slides?: Hero[] }).slides;
+    // The companion side (`heading`) and the main side (`tone`) both carry the
+    // default: whichever half of the split a child belongs to, it is filled.
+    expect(slides?.map(r => ({ heading: r.heading, tone: r.tone }))).toEqual([
+      { heading: "Welcome", tone: "calm" },
+      { heading: "Given", tone: "calm" },
+    ]);
   });
 });

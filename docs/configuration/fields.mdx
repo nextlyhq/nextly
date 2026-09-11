@@ -1034,6 +1034,13 @@ data built so far at its own level: the document for a top-level field, the
 group or the row for a nested one. Rows are never invented; `minRows` is a
 validation rule, not an instruction to create rows.
 
+Inside a reusable field group, only a constant default applies. A field
+group's fields are read from its stored definition on every write, and a
+function cannot be stored, so a `defaultValue` written as a function on a
+field-group child is not applied anywhere: not on a collection create, not on
+a Single's first read, and not in the admin form. Give a field-group child a
+constant default, or set the value from the parent's own field.
+
 A Single's first read creates its row with the same defaults, top-level and
 nested, with two exceptions: a default on a `fieldGroup` field itself is
 evaluated and then dropped because that field has no column on the row, and a
