@@ -10,7 +10,7 @@
  * @module lib/builder/builder-rows.test
  */
 
-import type { Active } from "@dnd-kit/core";
+import type { Active, Over } from "@dnd-kit/core";
 import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
@@ -102,6 +102,15 @@ describe("what a drag on the canvas says", () => {
     data: { current: undefined },
     rect: { current: { initial: null, translated: null } },
   });
+  // A drop target is an `Over`, a different shape from the `Active` being
+  // dragged: it carries a resolved rect and a `disabled` flag, neither of
+  // which the announcement reads.
+  const over = (id: string): Over => ({
+    id,
+    data: { current: undefined },
+    rect: { width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 },
+    disabled: false,
+  });
 
   it("names every field in a row, and places the row among the rows drawn", () => {
     // Two half-width fields share row 1; the hidden field takes none; the
@@ -134,13 +143,13 @@ describe("what a drag on the canvas says", () => {
       } as Partial<BuilderField>),
     ];
     const speak = builderAnnouncements(withTwoContainers);
-    expect(speak.onDragEnd({ active: at("credit"), over: at("note") })).toBe(
+    expect(speak.onDragEnd({ active: at("credit"), over: over("note") })).toBe(
       "Credit cannot move there. Nothing moved."
     );
     // The accepted case keeps its landing sentence.
-    expect(speak.onDragEnd({ active: at("credit"), over: at("caption") })).toBe(
-      "Credit moved to position 1 of 2."
-    );
+    expect(
+      speak.onDragEnd({ active: at("credit"), over: over("caption") })
+    ).toBe("Credit moved to position 1 of 2.");
   });
 
   it("never reads a row id or a field id aloud", () => {
