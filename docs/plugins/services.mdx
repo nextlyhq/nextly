@@ -82,7 +82,8 @@ query string can never publish every translation of a document by accident. A pl
 that needs the every-locale sweep needs a surface that says so by name; there is none
 yet. A route that forwards `?locale=` and wants a wildcard to read as "no language" can
 ask the core which spellings are selectors — `isLocaleSelector` from
-`@nextlyhq/plugin-sdk` — rather than keep a list of its own. The same spellings are reserved at configuration — along
+`@nextlyhq/plugin-sdk`, `@experimental` until it ships in a release — rather than keep a
+list of its own. The same spellings are reserved at configuration — along
 with `none`, the wire's spelling of `fallbackLocale: false` — so a site cannot name a
 language `all` or `none`. An empty `locale` (what `?locale=` with nothing after it
 forwards) reads as no language named, not as a wrong one.
