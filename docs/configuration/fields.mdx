@@ -937,7 +937,10 @@ function default is not applied on this path, see
 skipped like any other omitted field), and a
 `slug` and title generated after the collection-level `beforeValidate` and
 before the first field-level hook, so a field hook can read them and a
-collection hook in that phase cannot. A bulk create (`createMany`) and a create
+collection hook in that phase cannot. Field-level `access.create` and
+`access.update` rules are applied just before the field hooks, and a denied
+field is removed from the record, so none of this reaches a field the caller
+may not write: not its default, and not a generated `slug` or title. A bulk create (`createMany`) and a create
 inside a transaction start from the submitted body: no defaults are applied, an
 omitted defaulted field stays absent, and its hooks do not run. On an update it
 is the patch, not the stored row, so an unchanged sibling reads as `undefined`.
@@ -950,9 +953,14 @@ it, or an earlier hook that deletes the key, skips them.
 
 **After the write** (`afterChange`) and **on a read** (`afterRead`), `data` is
 the row, persisted or loaded, so a hooked field runs whether or not it changed.
-On a read, field-level `access.read` rules are applied before the hooks, so a
-field the caller may not read is gone from the row by then and its `afterRead`
-does not run. One exception, on every write to a collection or a Single: a `fieldGroup` field
+Two qualifications. On a localized collection or Single, a translated field
+lives in the companion table and is merged into the `afterChange` row only
+when the patch carried it, so an unchanged localized field's `afterChange`
+does not run on an update. On a collection read, field-level `access.read`
+rules are applied before the hooks, so a field the caller may not read is gone
+from the row by then and its `afterRead` does not run; a Single read runs the
+hooks first and redacts afterwards, so there a denied field's `afterRead` does
+run and sees the value, and only the response is redacted. One exception, on every write to a collection or a Single: a `fieldGroup` field
 is stored in its own table and is removed from the row before the main-table
 write, and the `afterChange` hooks run on the returned row without it, so that
 field's `afterChange` hook does not run. Its `beforeValidate` and `beforeChange`
@@ -1018,8 +1026,9 @@ write path from their stored definition, which a function does not survive,
 so an omitted field with a function default is treated as absent: written
 without a value, or refused by validation if the field is also `required`. A
 Single's first-read auto-create holds the code config directly and resolves
-both forms, except for a password field, whose default of either form is
-refused there because that path never hashes. Bulk creates (`createMany`) and
+both forms for its top-level fields (a default on a field nested inside a
+`group` is not resolved there), except for a password field, whose default of
+either form is refused because that path never hashes. Bulk creates (`createMany`) and
 creates inside a transaction apply no defaults of either form.
 
 ---
