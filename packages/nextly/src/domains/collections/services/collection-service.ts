@@ -327,6 +327,49 @@ export class CollectionService extends BaseService {
   }
 
   /**
+   * The tail every `*InTransaction` wrapper shares: collect what the write left
+   * for `withTransaction` to flush after commit, then turn a failed envelope
+   * into the error it came from and hand back the data of a successful one.
+   *
+   * Collected BEFORE the success check, and that ordering is the contract. The
+   * mutation layer sets the intent only once the row is written and carries it
+   * even on a hook-failure result, so a caller that commits despite the failure
+   * still busts the tags; a genuine rollback drops the collector unflushed, so
+   * collecting first is always safe.
+   *
+   * Every failure goes through the converter, including the code-less 404 and
+   * 403 that used to short-circuit to a factory: the converter answers those
+   * with the same generic error, the identifiers stay in the log context and
+   * never reach the wire, and short-circuiting only meant those two outcomes
+   * arrived without the failure they came from.
+   */
+  private settleTxWrite<T>(
+    tx: TransactionContext,
+    result: Parameters<CollectionService["mapLegacyErrorToNextlyError"]>[0] & {
+      revalidationIntent?: RevalidationIntent;
+      eventRecorded?: boolean;
+    },
+    failure: { message: string; logContext: Record<string, unknown> }
+  ): T {
+    this.collectTxIntent(tx, result.revalidationIntent);
+    this.collectTxEvent(tx, result.eventRecorded);
+    this.collectTxCommittedWrite(tx, result.success);
+
+    if (!result.success) {
+      this.logger.warn(failure.message, {
+        ...failure.logContext,
+        message: result.message,
+        statusCode: result.statusCode,
+      });
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        ...failure.logContext,
+      });
+    }
+    return result.data as T;
+  }
+
+  /**
    * Register dynamic collection schemas for runtime use.
    *
    * This should be called during app initialization to register
@@ -597,6 +640,25 @@ export class CollectionService extends BaseService {
     data: Record<string, unknown>[],
     context: RequestContext
   ): Promise<BatchOperationResult> {
+    // The bulk pipeline writes its rows in one pass and does not perform the
+    // localized split a single create does, so it cannot store a row in a
+    // named language. A locale it accepted and could not honour would file
+    // every row under the default language and report success — a caller
+    // told nothing, which is worse than being told no. Refused up front, by
+    // name, with the write that does honour it; a bulk create is one
+    // statement, so there is no per-row failure to report it through.
+    if (context.locale !== undefined) {
+      throw NextlyError.invalidInput({
+        message:
+          "createMany cannot write in a locale; create the rows one at a time with createEntry.",
+        logContext: {
+          reason: "create-many-locale-unsupported",
+          collectionName,
+          locale: context.locale,
+        },
+      });
+    }
+
     this.logger.debug("Creating entries (bulk)", {
       collectionName,
       count: data.length,
@@ -797,6 +859,25 @@ export class CollectionService extends BaseService {
     entryId: string,
     context: RequestContext
   ): Promise<void> {
+    // A delete removes the DOCUMENT: the row and every translation with it.
+    // There is no per-language delete, so a locale here reads as one and is
+    // not one — a caller asking to remove the French translation would remove
+    // the English, the German and the row, and be told nothing. Refused by
+    // name rather than ignored; the day a translation can be removed on its
+    // own, this is where it is honoured.
+    if (context.locale !== undefined) {
+      throw NextlyError.invalidInput({
+        message:
+          "deleteEntry removes every translation of a document; a locale cannot scope it.",
+        logContext: {
+          reason: "delete-entry-locale-unsupported",
+          collectionName,
+          entryId,
+          locale: context.locale,
+        },
+      });
+    }
+
     this.logger.debug("Deleting entry", { collectionName, entryId });
 
     const result = await this.entryService.deleteEntry({
@@ -883,30 +964,17 @@ export class CollectionService extends BaseService {
       data
     );
 
-    // Collect before the success check. The mutation layer sets the intent only
-    // once the row is written and carries it even on a hook-failure result, so a
-    // caller that commits despite the failure still busts the tags; a genuine
-    // rollback drops the collector unflushed, so collecting here is always safe.
-    // withTransaction flushes what was collected once the transaction commits.
-    this.collectTxIntent(tx, result.revalidationIntent);
-    this.collectTxEvent(tx, result.eventRecorded);
-    this.collectTxCommittedWrite(tx, result.success);
-
-    if (!result.success) {
-      this.logger.warn("Entry creation in transaction failed", {
-        collectionName,
-        message: result.message,
-        statusCode: result.statusCode,
-      });
-      throw this.mapLegacyErrorToNextlyError(result);
-    }
+    const entry = this.settleTxWrite<CollectionEntry>(tx, result, {
+      message: "Entry creation in transaction failed",
+      logContext: { collectionName },
+    });
 
     this.logger.info("Entry created in transaction", {
       collectionName,
-      entryId: (result.data as CollectionEntry | null)?.id,
+      entryId: entry?.id,
     });
 
-    return result.data as CollectionEntry;
+    return entry;
   }
 
   /**
@@ -946,36 +1014,17 @@ export class CollectionService extends BaseService {
       data
     );
 
-    // Collect before the success check, so a caller that commits despite a
-    // post-write hook failure still busts the tags (see createEntryInTransaction).
-    this.collectTxIntent(tx, result.revalidationIntent);
-    this.collectTxEvent(tx, result.eventRecorded);
-    this.collectTxCommittedWrite(tx, result.success);
-
-    if (!result.success) {
-      // Every failure goes through the converter, including the code-less 404
-      // and 403 that used to short-circuit to a factory here. The converter
-      // answers those with the same generic error -- the identifiers stay in
-      // the log context and never reach the wire -- and short-circuiting only
-      // meant those two outcomes arrived without the failure they came from.
-      this.logger.warn("Entry update in transaction failed", {
-        collectionName,
-        entryId,
-        message: result.message,
-      });
-      throw this.mapLegacyErrorToNextlyError(result, {
-        entity: "entry",
-        collectionName,
-        entryId,
-      });
-    }
+    const entry = this.settleTxWrite<CollectionEntry>(tx, result, {
+      message: "Entry update in transaction failed",
+      logContext: { collectionName, entryId },
+    });
 
     this.logger.info("Entry updated in transaction", {
       collectionName,
       entryId,
     });
 
-    return result.data as CollectionEntry;
+    return entry;
   }
 
   /**
@@ -1011,24 +1060,10 @@ export class CollectionService extends BaseService {
       ...forwardedFromContext(context),
     });
 
-    // Collect before the success check, so a caller that commits despite a
-    // post-delete hook failure still busts the tags (see createEntryInTransaction).
-    this.collectTxIntent(tx, result.revalidationIntent);
-    this.collectTxEvent(tx, result.eventRecorded);
-    this.collectTxCommittedWrite(tx, result.success);
-
-    if (!result.success) {
-      // Every failure goes through the converter, including the code-less 404
-      // and 403 that used to short-circuit to a factory here. The converter
-      // answers those with the same generic error -- the identifiers stay in
-      // the log context and never reach the wire -- and short-circuiting only
-      // meant those two outcomes arrived without the failure they came from.
-      throw this.mapLegacyErrorToNextlyError(result, {
-        entity: "entry",
-        collectionName,
-        entryId,
-      });
-    }
+    this.settleTxWrite<unknown>(tx, result, {
+      message: "Entry deletion in transaction failed",
+      logContext: { collectionName, entryId },
+    });
 
     this.logger.info("Entry deleted in transaction", {
       collectionName,

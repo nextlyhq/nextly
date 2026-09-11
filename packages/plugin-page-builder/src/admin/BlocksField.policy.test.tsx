@@ -194,6 +194,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // No document around the field: the state every case here was written
   // against, and the one that offers every component.
   useDocumentIdentity: () => null,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change
@@ -841,6 +844,72 @@ describe("what the inspector is told about provenance", () => {
     expect(
       (cascade?.entries ?? []).some(entry => entry.property === "color")
     ).toBe(true);
+  });
+
+  it("compiles the trace under the SAME caps the canvas draws under", () => {
+    /*
+     * The trace takes the caps beside the definitions, and defaulted them to
+     * the engine's when the editor handed over only the map. Under a site cap
+     * the canvas leaves an instance unresolved for budget, the trace composed
+     * it anyway and reported declarations for nodes the canvas drew as a
+     * placeholder. Observed through the cascade: a two-node definition on a
+     * page whose cap has room for one yields NO colour entry once the caps
+     * reach the compile — and does yield one under the engine's defaults,
+     * which is the control the case would pass on vacuously without.
+     */
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "core/text",
+          version: 1,
+          props: { text: "Composed" },
+          styles: { base: { base: { color: "crimson" } } },
+        },
+        { id: "d2", type: "core/text", version: 1, props: { text: "More" } },
+      ],
+    };
+    componentRead = {
+      data: {
+        items: [{ id: "header", title: "Header", document: definition }],
+        meta: { count: 1, truncated: false },
+      },
+      pending: false,
+      error: null,
+      refetch: () => {},
+    };
+    editorDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "i1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    };
+    const hasColour = () =>
+      (
+        (
+          seen.inspector?.cascade as
+            | { entries: { property: string }[] }
+            | undefined
+        )?.entries ?? []
+      ).some(entry => entry.property === "color");
+
+    clientConfig = { limits: { maxNodes: 1 } };
+    openEditor();
+    expect(seen.inspector?.cascade).toBeDefined();
+    expect(hasColour()).toBe(false);
+    cleanup();
+
+    clientConfig = undefined;
+    openEditor();
+    expect(hasColour()).toBe(true);
   });
 
   it("tells the classes manager about a class a linked component applies on this page", () => {

@@ -47,12 +47,13 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
-  componentIdsIn,
+  componentUsageIn,
   isComponentDocument,
   newId,
   type BlockDocument,
   type ComponentLookup,
   type DocumentKind,
+  type DocumentLimits,
   type BreakpointSet,
   type NamedClass,
   type SiteTokenSet,
@@ -82,6 +83,7 @@ import {
   BlockContextMenu,
   EditorCommandPalette,
   BuilderShell,
+  useNoticeQueue,
   Canvas,
   DropIndicator,
   EmptyContainerAppenders,
@@ -365,18 +367,25 @@ export function documentFrom(
  * inside a component however the ids fall, and a component's field on a
  * create form names no row yet and can place anything.
  *
+ * Every read of the graph is bounded by the SITE's node cap, and a read the
+ * cap ends early is not "names nothing" — it is unread, and the candidate is
+ * left out (`reaches`).
+ *
  * Exported for its own test, for the reason `documentFrom` is.
  */
 export function withoutSelf(
   components: readonly SavedComponent[],
   editing: BlockDocument,
   identity: { documentId?: string | undefined } | null,
-  definitions: ComponentLookup
+  definitions: ComponentLookup,
+  limits: DocumentLimits
 ): readonly SavedComponent[] {
   const self = identity?.documentId;
   if (self === undefined || !isComponentDocument(editing)) return components;
   const kept = components.filter(
-    component => component.id !== self && !reaches(component, self, definitions)
+    component =>
+      component.id !== self &&
+      !reaches(component, self, definitions, limits.maxNodes)
   );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
@@ -385,29 +394,44 @@ export function withoutSelf(
 
 /**
  * Whether a component's stored graph names the definition given, at any
- * depth, through the lookup.
+ * depth, through the lookup — or cannot be shown not to.
  *
  * Each definition is read once per question — a loop among other rows ends
  * where it began rather than running on — and one the lookup does not hold
  * names nothing further, which is the honest answer for a reference nothing
  * here can follow.
+ *
+ * Every read is bounded by the cap given, and a read the cap ends early has
+ * answered with a PREFIX: a reference past it is invisible, so "names nothing"
+ * is what an unread definition looks like too, and a candidate cleared on that
+ * answer can close the loop through the part nobody read. So an incomplete
+ * read counts as reaching, and the candidate is left out. That refuses no
+ * legitimate offer — a definition the cap cannot read whole is one the
+ * resolver cannot inline under that cap either — and it is the direction to
+ * err in, because the other one is a saved loop every page then draws as a
+ * placeholder.
  */
 function reaches(
   component: SavedComponent,
   id: string,
-  definitions: ComponentLookup
+  definitions: ComponentLookup,
+  maxNodes: number
 ): boolean {
   const document = component.document;
   if (document === undefined || document === null) return false;
-  const pending = componentIdsIn(document.nodes);
+  const own = componentUsageIn(document.nodes, maxNodes);
+  if (!own.complete) return true;
+  const pending = own.ids;
   const followed = new Set<string>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     if (next === id) return true;
     if (followed.has(next)) continue;
     followed.add(next);
     const definition = definitions.get(next);
-    if (definition !== undefined)
-      pending.push(...componentIdsIn(definition.nodes));
+    if (definition === undefined) continue;
+    const named = componentUsageIn(definition.nodes, maxNodes);
+    if (!named.complete) return true;
+    pending.push(...named.ids);
   }
   return false;
 }
@@ -1977,7 +2001,30 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => readDocumentLimits(clientConfig),
     [clientConfig]
   );
-  const editor = useEditorState({ initialDocument, limits: documentLimits });
+  /*
+   * The site's component definitions, read once per editor and at DRAFT
+   * posture. Without them the renderer draws the could-not-be-loaded marker
+   * for every instance on the page, which is what the editor showed before
+   * this read: a component placed in the builder rendered on the site and
+   * nowhere an author could see while editing.
+   */
+  const componentLibrary = useComponentLibrary();
+  /*
+   * Where a refusal the editor makes is said. The shell provides a sink to
+   * everything it renders, and this editor is built ABOVE the shell — so the
+   * host owns the queue, hands it to the shell to draw and provide, and
+   * raises into it from here.
+   */
+  const notices = useNoticeQueue();
+  const editor = useEditorState({
+    initialDocument,
+    limits: documentLimits,
+    // The SAME map the canvas draws with, so an edit is refused when the page
+    // would no longer compose with it in — every surface reaches the page
+    // through this apply, and this is the one place the reason is known.
+    definitions: componentLibrary.definitions,
+    onRefused: refusal => notices.raise(refusal.sentence),
+  });
 
   /*
    * Dragging blocks on the canvas.
@@ -2379,18 +2426,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * beside each pseudo-class rule so it can show an author the state being
    * edited, and a surface showing the page as published must not have one.
    */
-  /*
-   * The site's component definitions, read once per editor and at DRAFT
-   * posture. Without them the renderer draws the could-not-be-loaded marker
-   * for every instance on the page, which is what the editor showed before
-   * this read: a component placed in the builder rendered on the site and
-   * nowhere an author could see while editing.
-   */
-  const componentLibrary = useComponentLibrary();
 
-  // After the library read, which it takes: the SAME map the canvas draws
-  // with, so a moved instance is judged by the roots it draws there rather
-  // than by its own, unrestricted type.
+  // The SAME map the canvas draws with, so a moved instance is judged by the
+  // roots it draws there rather than by its own, unrestricted type.
   const drag = useCanvasDrag({
     editor,
     slots,
@@ -2427,12 +2465,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       componentLibrary.components,
       initialDocument,
       identity,
-      componentLibrary.definitions
+      componentLibrary.definitions,
+      documentLimits
     );
     return components === componentLibrary.components
       ? componentLibrary
       : { ...componentLibrary, components };
-  }, [componentLibrary, initialDocument, identity]);
+  }, [componentLibrary, initialDocument, identity, documentLimits]);
 
   const canvasRender = useMemo(
     () =>
@@ -2629,10 +2668,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             siteSheet(canvasSiteStyle),
             {
               ...(remotePatterns === undefined ? {} : { remotePatterns }),
-              // The SAME map the canvas resolves against, so the cascade the
-              // inspector reads describes the composed tree on screen rather
-              // than one with every instance left unresolved.
+              // The SAME map the canvas resolves against, under the SAME
+              // caps, so the cascade the inspector reads describes the
+              // composed tree on screen: neither one with every instance
+              // left unresolved, nor one composed past a cap the canvas
+              // stopped at.
               definitions: canvasRender.definitions,
+              limits: canvasRender.limits,
             }
           ),
     [
@@ -2827,6 +2869,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div className="fixed inset-0 z-50 bg-background">
       <BuilderShell
+        notices={notices}
         onExit={done}
         availablePanels={
           entryFields === null
@@ -3115,6 +3158,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           editor={editor}
           onEditText={inline.begin}
           onSaveAsPattern={savePattern.open}
+          /*
+            The same map the canvas draws with, so a keyboard move of an
+            instance is judged by the roots it draws — as its drop is — rather
+            than by the instance node's own type, which the nesting rule
+            restricts nowhere.
+          */
+          definitions={componentLibrary.definitions}
           /*
             Whether the author holds the grant the save is judged by, asked of
             the server because only it knows the RESOLVED collection: a site may

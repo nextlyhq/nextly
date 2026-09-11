@@ -30,10 +30,12 @@
 import {
   DEFAULT_LIMITS,
   type BlockDocument,
+  type ComponentLookup,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { compositionRefusal, type CompositionRefusal } from "./inserter";
 import { applyOps, type BuilderOp } from "./ops";
 import {
   EMPTY_SELECTION,
@@ -111,6 +113,49 @@ export interface UseEditorStateArgs {
   initialDocument: BlockDocument;
   /** The caps this site holds its documents to. */
   limits?: DocumentLimits;
+  /**
+   * The definitions the canvas draws component instances from, so an edit is
+   * refused when the page would no longer compose with it in.
+   *
+   * The op layer counts a stored instance as ONE node and cannot see that the
+   * resolver spends a budget across every instance it inlines, in document
+   * order, and nests to a depth counted from the page root. Handed the
+   * definitions, the apply asks the resolver about every accepted group —
+   * an insert, a move that carries an instance ahead of another, a duplicated
+   * or pasted copy, a pattern bringing instances of its own — and refuses the
+   * edit that would leave a placeholder where a component stood. Absent, a
+   * host that resolves nothing keeps the apply it had.
+   */
+  definitions?: ComponentLookup;
+  /**
+   * Told why an edit was refused for room, with the sentence the author
+   * should read. Surfaces already treat a `null` apply as "nothing happened";
+   * this is the one place the reason is still known.
+   */
+  onRefused?: (refusal: CompositionRefusal) => void;
+}
+
+/**
+ * Whether an edit that turned `before` into `after` leaves the page without
+ * room for a component it holds — telling the host why, when it does.
+ *
+ * Nothing to ask without definitions: a host that resolves nothing has no
+ * composition to judge, and keeps the apply it had.
+ */
+function refusedForRoom(
+  before: BlockDocument,
+  after: BlockDocument,
+  {
+    definitions,
+    onRefused,
+  }: Pick<UseEditorStateArgs, "definitions" | "onRefused">,
+  limits: DocumentLimits
+): boolean {
+  if (definitions === undefined) return false;
+  const refusal = compositionRefusal(before, after, definitions, limits);
+  if (refusal === undefined) return false;
+  onRefused?.(refusal);
+  return true;
 }
 
 /**
@@ -124,7 +169,14 @@ export interface UseEditorStateArgs {
 export function useEditorState({
   initialDocument,
   limits = DEFAULT_LIMITS,
+  definitions,
+  onRefused,
 }: UseEditorStateArgs): EditorState {
+  // Read at apply time rather than closed over, so a library that reloads or
+  // a host that swaps its callback does not rebuild `apply` and everything
+  // keyed on it.
+  const composition = useRef({ definitions, onRefused });
+  composition.current = { definitions, onRefused };
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
   const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
 
@@ -240,6 +292,22 @@ export function useEditorState({
       // `applyOps` caller would still get the op layer's answer — one group
       // with two verdicts.
       if (group.inverses.length === 0) return latestDocument.current;
+
+      // Whether the page still COMPOSES with the edit in, asked of a fresh
+      // edit only. An undo or a redo returns the page to a state that was
+      // accepted when it was made, and a library that grew or a cap that
+      // shrank since must not strand the history.
+      if (
+        into === "new" &&
+        refusedForRoom(
+          latestDocument.current,
+          group.document,
+          composition.current,
+          limits
+        )
+      ) {
+        return null;
+      }
 
       const applied = { document: group.document, inverse: group.inverses };
 

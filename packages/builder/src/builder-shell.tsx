@@ -32,6 +32,7 @@ import {
   BuilderNoticeRegion,
   NoticeSinkProvider,
   useNoticeQueue,
+  type NoticeQueue,
 } from "./builder-notices";
 import type { CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl } from "./canvas-zoom-control";
@@ -109,6 +110,17 @@ type Region = (typeof REGIONS)[number];
 export interface BuilderShellProps {
   /** Rendered inside the switched left panel. Keyed by the panel that is open. */
   renderPanel?: (panel: LeftPanel) => React.ReactNode;
+  /**
+   * The host's notice queue, when the host raises notices of its own.
+   *
+   * The shell owns a queue and renders the region for it, and provides its
+   * `raise` to everything it renders — but a host sits ABOVE the shell, and
+   * an editor it builds there (the apply that refuses an edit for room, say)
+   * has no way to reach that sink. Handed the host's queue, the shell renders
+   * and provides THAT one, so a sentence raised above the shell and one raised
+   * inside it land in the same region. Absent, the shell's own queue serves.
+   */
+  notices?: NoticeQueue;
   /**
    * Which panels the host can actually fill.
    *
@@ -1228,6 +1240,7 @@ export function BuilderShell({
   onShowEmptyElementsChange,
   onZoomChange,
   appliedScale = 1,
+  notices: supplied,
   ...props
 }: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
@@ -1390,7 +1403,12 @@ export function BuilderShell({
    * level because it must survive everything below it being unmounted, which
    * is exactly what the inspector's per-node keys do on every selection change.
    */
-  const notices = useNoticeQueue();
+  // The shell's own queue is built whether or not the host supplied one — a
+  // hook cannot be skipped — and the host's wins, so the region below and the
+  // sink provided to every region report through the queue the host raises
+  // into.
+  const own = useNoticeQueue();
+  const notices = supplied ?? own;
 
   return (
     <ShortcutProvider>

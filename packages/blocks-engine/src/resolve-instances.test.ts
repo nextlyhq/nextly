@@ -3058,14 +3058,20 @@ describe("instanceExposure", () => {
 describe("composedRootTypes", () => {
   // The types at the roots of a document AS THE RESOLVER WOULD COMPOSE IT,
   // read without composing it. The resolver is the oracle in every case: the
-  // query must answer what the composed forest's roots would be, or nothing
-  // where the resolver would leave a root standing.
+  // query must answer the TYPES the composed forest's roots would have — each
+  // once, in the order first met, because its one consumer asks whether every
+  // type may sit somewhere and reads each type once — or nothing where the
+  // resolver would leave a root standing.
   const resolvedRoots = (doc: BlockDocument, definitions: DefinitionsById) =>
     resolveComponentInstances(doc, definitions).document.nodes.map(
       root => root.type
     );
+  const resolvedRootTypes = (
+    doc: BlockDocument,
+    definitions: DefinitionsById
+  ) => [...new Set(resolvedRoots(doc, definitions))];
 
-  it("answers a block's own type, and a root instance's definition's roots, nested", () => {
+  it("answers a block's own type, and a root instance's definition's roots, nested — each type once, in the order first met", () => {
     const definitions = defs({
       header: component([node("d1"), box("d2", [node("d3")])]),
       wrapper: component([instance("w1", "header"), node("w2")]),
@@ -3075,12 +3081,14 @@ describe("composedRootTypes", () => {
     expect(composedRootTypes(doc, definitions)).toEqual([
       "core/text",
       "core/box",
-      "core/text",
-      "core/text",
     ]);
     expect(composedRootTypes(doc, definitions)).toEqual(
-      resolvedRoots(doc, definitions)
+      resolvedRootTypes(doc, definitions)
     );
+    // The composed forest's roots are four; the answer names two types. A
+    // placement verdict reads each type once, so the repeats would only make
+    // the answer as long as the forest.
+    expect(resolvedRoots(doc, definitions)).toHaveLength(4);
   });
 
   it("answers nothing for a root the resolver would leave standing: missing, another kind, a cycle, the composition cap", () => {
@@ -3167,11 +3175,102 @@ describe("composedRootTypes", () => {
       instance("i3", "big"),
     ]);
 
-    expect(composedRootTypes(doc, counting)).toEqual([
-      "core/box",
-      "core/box",
-      "core/box",
-    ]);
+    expect(composedRootTypes(doc, counting)).toEqual(["core/box"]);
     expect(reads).toBe(1);
+  });
+
+  it("walks each definition's roots once per query, however many instances point at it, at any depth", () => {
+    /*
+     * Reading a definition once is not enough: a definition read once and
+     * WALKED once per instance costs its roots per instance, and a definition
+     * whose roots are instances of another multiplies — three levels of two
+     * hundred is eight million root visits, and the answer was as long. The
+     * roots of a definition, once answered, are remembered for the query.
+     *
+     * Observed on the leaf's root node: its `type` is read by the walk and by
+     * nothing else, so the count is the number of times the leaf was walked.
+     */
+    const WIDTH = 200;
+    let leafWalks = 0;
+    const leafRoot = { id: "leaf", version: 1, props: {} };
+    Object.defineProperty(leafRoot, "type", {
+      enumerable: true,
+      get: () => {
+        leafWalks += 1;
+        return "core/text";
+      },
+    });
+    const many = (id: string, of: string) =>
+      Array.from({ length: WIDTH }, (_, i) =>
+        instance(`${id}-${String(i)}`, of)
+      );
+    const definitions = defs({
+      leaf: component([leafRoot as BlockNode]),
+      mid: component(many("m", "leaf")),
+      top: component(many("t", "mid")),
+    });
+    const doc = component([instance("i1", "top")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(leafWalks).toBe(1);
+  });
+
+  it("does not reuse roots answered nearer the surface where the composition cap refuses them deeper down", () => {
+    /*
+     * The one thing a remembered answer depends on besides the definition is
+     * how deep the instance sits: the cap refuses an instance at the depth
+     * limit, so a definition answered at the surface can be one the resolver
+     * leaves standing five levels down. Remembered answers carry the depth
+     * they were answered at and serve only the same depth or nearer.
+     *
+     * `c4` is met first at the surface, where everything under it fits, and
+     * then at the bottom of a chain, where the instance inside it is one
+     * past the cap.
+     */
+    const chain: Record<string, BlockDocument> = {};
+    for (let level = 0; level < MAX_COMPOSED_DEPTH; level += 1) {
+      chain[`c${String(level)}`] = component([
+        instance(`i${String(level)}`, `c${String(level + 1)}`),
+      ]);
+    }
+    chain[`c${String(MAX_COMPOSED_DEPTH)}`] = component([node("leaf")]);
+    const definitions = defs(chain);
+    const deepest = `c${String(MAX_COMPOSED_DEPTH - 1)}`;
+    const doc = component([
+      instance("shallow", deepest),
+      instance("deep", "c0"),
+    ]);
+
+    expect(composedRootTypes(doc, definitions)).toBeUndefined();
+    expect(
+      resolvedRoots(doc, definitions).includes(COMPONENT_INSTANCE_TYPE)
+    ).toBe(true);
+    // The control: met at the surface alone, the same definition answers.
+    expect(
+      composedRootTypes(component([instance("shallow", deepest)]), definitions)
+    ).toEqual(["core/text"]);
+  });
+
+  it("reuses roots answered deeper down where they are met nearer the surface", () => {
+    // The other direction is safe: what fit at depth four fits at depth one.
+    // A query meeting the deep reference first must still answer the shallow
+    // one, and from the remembered walk rather than a second one.
+    let walks = 0;
+    const leafRoot = { id: "leaf", version: 1, props: {} };
+    Object.defineProperty(leafRoot, "type", {
+      enumerable: true,
+      get: () => {
+        walks += 1;
+        return "core/text";
+      },
+    });
+    const definitions = defs({
+      leaf: component([leafRoot as BlockNode]),
+      wrap: component([instance("w1", "leaf")]),
+    });
+    const doc = component([instance("deep", "wrap"), instance("near", "leaf")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(walks).toBe(1);
   });
 });

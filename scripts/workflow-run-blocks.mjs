@@ -202,6 +202,28 @@ export function jobIds(text) {
 }
 
 /**
+ * The jobs whose block mentions a given string, in file order.
+ *
+ * For a check that applies only to jobs doing a particular kind of work. A
+ * ceiling floor derived from a step budget is owed by the jobs that RUN that
+ * budgeted step, and a job that only asks a question of the API is not one of
+ * them; holding it to an hour's ceiling would let a hung request keep a runner
+ * for an hour. Read from the same walk as {@link jobIds}, so the two cannot
+ * disagree about where a job begins.
+ *
+ * @param {string} text the workflow file's contents
+ * @param {string} needle what the job's block must contain
+ * @returns {string[]} the ids of jobs whose block contains it
+ */
+export function jobsMentioning(text, needle) {
+  const mentioning = new Set();
+  walkJobs(text, (job, line) => {
+    if (job !== null && line.includes(needle)) mentioning.add(job);
+  });
+  return [...mentioning];
+}
+
+/**
  * Each job's own `timeout-minutes`, keyed by job id.
  *
  * Per JOB rather than as one list of the numbers in the file. A caller checking

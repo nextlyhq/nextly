@@ -1466,7 +1466,7 @@ describe("the component tier", () => {
     expect(screen.queryByRole("option", { name: /Column card/ })).toBeNull();
   });
 
-  it("refuses to place a component the page has no room for, and says so", () => {
+  it("hands a placement to the editor's apply, which is what judges the page's room for it", () => {
     // The tile is offered — room is a property of the page, not of the
     // definition — and the insert asks the resolver with the node in place.
     // A page of two nodes under a cap of four cannot hold a three-node
@@ -1497,24 +1497,24 @@ describe("the component tier", () => {
         { id: "p2", type: "acme/text", version: 1, props: {} },
       ],
     } as unknown as BlockDocument;
-    // The caps are the EDITOR's: the panel asks under the ones the apply
-    // will enforce, so a second reading of the site's caps cannot disagree.
+    // Room is the EDITOR's question, asked of every accepted group by its own
+    // apply under the caps it enforces; the panel hands the insert over and
+    // treats a null as the refusal it is. Pinned here so the panel cannot
+    // grow a second answer in front of that one.
     const editor = editorSpy(page, { ...DEFAULT_LIMITS, maxNodes: 4 });
-    const raise = vi.fn();
     render(
-      <NoticeSinkProvider raise={raise}>
-        <InsertPanel
-          editor={editor}
-          components={[three]}
-          componentDefinitions={new Map([["three", three.document]])}
-        />
-      </NoticeSinkProvider>
+      <InsertPanel
+        editor={editor}
+        components={[three]}
+        componentDefinitions={new Map([["three", three.document]])}
+      />
     );
 
     fireEvent.click(screen.getByRole("option", { name: /Three up/ }));
 
-    expect(editor.apply).not.toHaveBeenCalled();
-    expect(raise).toHaveBeenCalledWith(expect.stringMatching(/no room left/));
+    expect(editor.apply).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "insert" })
+    );
   });
 
   it("resolves a definition's own instances through the CANVAS's lookup before offering it", () => {

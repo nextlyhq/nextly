@@ -19,7 +19,13 @@
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,6 +113,7 @@ const seen: {
   dragOptions: Record<string, unknown> | undefined;
   toolbar: Record<string, unknown> | undefined;
   spacing: Record<string, unknown> | undefined;
+  keyboard: Record<string, unknown> | undefined;
 } = {
   inspector: undefined,
   canvas: undefined,
@@ -115,6 +122,7 @@ const seen: {
   dragOptions: undefined,
   toolbar: undefined,
   spacing: undefined,
+  keyboard: undefined,
 };
 
 /** What the recorded drag reports as in flight, per test. */
@@ -167,10 +175,15 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       topBar,
       children,
       renderPanel,
+      notices,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
+      notices?: {
+        notices: readonly { message: string }[];
+        raise: (message: string) => void;
+      };
       renderPanel?: (panel: string) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
@@ -189,6 +202,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          */}
         {renderPanel?.(shownPanel)}
         {children}
+        {/* The host's queue, drawn as the real shell draws it: a raise from
+            above the shell has nowhere else to become visible. */}
+        <div data-recorder="notices">
+          {notices?.notices.map(notice => notice.message).join(" | ")}
+        </div>
       </div>
     ),
     BreakpointManager: record("breakpoints"),
@@ -205,7 +223,17 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         <div data-recorder="canvas">{props.overlay as React.ReactNode}</div>
       );
     },
-    BlockKeyboardActions: passthrough,
+    // Passed through AND recorded: the canvas renders inside it, and what the
+    // host hands it decides how a keyboard move is judged.
+    BlockKeyboardActions: ({
+      children,
+      ...props
+    }: {
+      children?: React.ReactNode;
+    } & Record<string, unknown>): React.JSX.Element => {
+      seen.keyboard = props;
+      return <>{children}</>;
+    },
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
      * a stub would take the recorder below out of the tree along with it. The
@@ -269,6 +297,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // Which document the field sits in. Mutable so one case can put the
   // field inside a component's own row.
   useDocumentIdentity: () => documentIdentity,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change
@@ -314,7 +345,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       refetch: () => {},
     };
   },
-  useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
+  // `schedule` too: the real hook offers it and the editor calls it on every
+  // document change, which a re-render after a raised notice is.
+  useDocumentCheckpoint: () => ({
+    record: () => {},
+    clear: () => {},
+    schedule: () => {},
+  }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
@@ -370,6 +407,7 @@ beforeEach(() => {
   seen.canvas = undefined;
   seen.toolbar = undefined;
   seen.spacing = undefined;
+  seen.keyboard = undefined;
   draggingBlockName = null;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
@@ -567,6 +605,36 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(routeReads).toBeGreaterThan(0);
   });
 
+  it("builds the editor with the canvas's map, and a refusal it makes is drawn by the shell", () => {
+    // Room is judged in the editor's apply, which is built above the shell;
+    // its sentence has to reach the region the shell draws, so the host owns
+    // the queue and hands it over. Observed end to end: the refusal callback
+    // the editor was built with puts its sentence where the shell renders.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const render = recorded("canvas").render as { definitions: unknown };
+    expect(editorOptions?.definitions).toBe(render.definitions);
+    const onRefused = editorOptions?.onRefused as (r: {
+      sentence: string;
+    }) => void;
+    act(() => {
+      onRefused({ sentence: "This page has no room left for that component." });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("no room left");
+  });
+
   it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {
     // The insert preflight and the canvas both judge under the site's caps;
     // an editor built under the engine's defaults refuses, silently, an edit
@@ -594,6 +662,28 @@ describe("what the editor reads before anyone asks for it", () => {
     const canvas = recorded("canvas");
     const render = canvas.render as { definitions: unknown };
     expect(seen.dragOptions?.definitions).toBe(render.definitions);
+  });
+
+  it("hands the keyboard verbs the same map, so a moved instance is judged by its roots on every route", () => {
+    // Alt+Arrow, the toolbar and the command palette all move through the
+    // keyboard verbs; judged by the instance node's own type they would lift
+    // a component whose root belongs only inside a container up to the root,
+    // where the same instance's drop is refused.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const render = recorded("canvas").render as { definitions: unknown };
+    expect(seen.keyboard?.definitions).toBe(render.definitions);
+    expect(render.definitions).toBeDefined();
   });
 
   it("hands the canvas and the panel ONE definitions map, and the panel the rows and the cut", () => {
@@ -744,6 +834,47 @@ describe("what a component's own content field may offer", () => {
     const panel = recorded("insertPanel");
     expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
       "d",
+      "footer",
+    ]);
+  });
+
+  it("judges what a candidate reaches under the SITE's node cap, and leaves out one the cap cannot read whole", () => {
+    // The walk over a definition is bounded, and a bound that ends it early
+    // leaves a prefix that names nothing past it. Read under the engine's
+    // default cap, a site that lowered its own would clear a candidate on a
+    // prefix; read under the site's, the same candidate is left out because
+    // it cannot be shown not to reach the row.
+    const text = (id: string) => ({
+      id,
+      type: "core/text",
+      version: 1,
+      props: {},
+    });
+    const library = [
+      { id: "a", title: "A", document: definition },
+      {
+        id: "wide",
+        title: "Wide",
+        document: {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [text("w1"), text("w2"), text("w3")],
+        },
+      },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    componentAnswer = { items: library, meta: { count: 3, truncated: false } };
+    clientConfig = { limits: { maxNodes: 2 } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
       "footer",
     ]);
   });

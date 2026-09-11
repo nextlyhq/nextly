@@ -25,7 +25,14 @@ vi.mock("../../../api/versions-access", () => ({
   resolveCurrentFields: vi.fn(async () => []),
 }));
 
-vi.mock("../../../auth/entity-read-access", () => ({
+// DERIVED from the real module rather than a closed literal: the handler
+// under test reaches this module for more than the one export replaced
+// here, and a literal that names only that export makes every other one
+// undefined the day a new caller appears.
+vi.mock("../../../auth/entity-read-access", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../auth/entity-read-access")
+  >()),
   canReadEntity: vi.fn(async () => true),
 }));
 

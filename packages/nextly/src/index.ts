@@ -492,6 +492,7 @@ export {
   type PluginActionRegistry,
   type PluginRoute,
   type PluginRouteCaller,
+  type PluginRouteIdentity,
   type PluginRouteContext,
   type PluginRouteHandler,
   type PluginRouteMount,
@@ -714,6 +715,17 @@ export type {
   AddressableField,
   UnvalidatedAddressableField,
 } from "./shared/addressable-fields";
+
+// Which `locale` values are selectors rather than languages. Exported because
+// a plugin route that forwards `?locale=` has to tell a visitor's language
+// from a wildcard, and the boundary that refuses the wildcards decides with
+// this same function — a second list would agree with it only until one of
+// them gained an entry.
+export {
+  EVERY_LOCALE,
+  EVERY_TRANSLATION,
+  isLocaleSelector,
+} from "./domains/i18n/locale-selector";
 
 // What a form answers a visitor who reaches it. Exported because the plugin
 // that contributes the forms collection refuses submissions too, and a second

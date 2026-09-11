@@ -41,7 +41,10 @@ vi.mock("../di/container", () => ({
   container: { get: containerGet, has: containerHas },
 }));
 
-vi.mock("../services/lib/permissions", () => ({
+vi.mock("../services/lib/permissions", async importOriginal => ({
+  // Derived from the real module, so an export the subject gains later is
+  // still there; a closed literal broke on exactly that.
+  ...(await importOriginal<typeof import("../services/lib/permissions")>()),
   // `readCaller` (via `authenticated-read.ts`) resolves this to build the
   // caller it hands the dashboard service. Unmocked, it falls through to a
   // real database lookup that has nothing to connect to in this suite.
@@ -129,16 +132,10 @@ beforeEach(() => {
   containerHas.mockReturnValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return {
-        getAllCollections: vi
-          .fn()
-          .mockResolvedValue([{ slug: "posts" }, { slug: "pages" }]),
-      };
+      return { getAllSlugs: vi.fn().mockResolvedValue(["posts", "pages"]) };
     }
     if (name === "singleRegistryService") {
-      return {
-        getAllSingles: vi.fn().mockResolvedValue([{ slug: "site-settings" }]),
-      };
+      return { getAllSlugs: vi.fn().mockResolvedValue(["site-settings"]) };
     }
     return serviceStub;
   });

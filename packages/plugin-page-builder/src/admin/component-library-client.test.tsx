@@ -11,13 +11,14 @@
  * @module admin/component-library-client.test
  */
 import { renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: vi.fn(),
+  useDocumentLocale: vi.fn(),
 }));
 
-import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import {
   COMPONENT_LIBRARY_ROUTE_PATH,
@@ -27,6 +28,13 @@ import {
 import { useComponentLibrary } from "./component-library-client";
 
 const read = vi.mocked(usePluginRoute);
+const documentLocale = vi.mocked(useDocumentLocale);
+
+// A field outside any localized form by default: the language is not
+// knowable, and the read asks for the app default.
+beforeEach(() => {
+  documentLocale.mockReturnValue(null);
+});
 
 function answering(
   items: ComponentLibraryResponse["items"],
@@ -123,6 +131,48 @@ describe("the component read", () => {
       })
     );
     expect(COMPONENT_LIBRARY_ROUTE_PATH).not.toBe(LIBRARY_ROUTE_PATH);
+  });
+
+  it("asks for the language the surrounding document is being edited in, and the default when it is the default or unknown", () => {
+    /*
+     * A component's document field can be localized, and the public renderer
+     * reads definitions in the page's locale. The language travels in the
+     * path — the read hook's cache key — so a switch of language is a
+     * different read rather than the last language's definitions served from
+     * cache, and two surfaces drawing the same language share one.
+     *
+     * The literal spelling, not the helper that produced it: the route reads
+     * this exact query, and a test comparing the helper to itself would agree
+     * with any spelling.
+     */
+    answering([]);
+    documentLocale.mockReturnValue({
+      code: "de",
+      documentLocalized: true,
+      isDefaultLocale: false,
+      rtl: false,
+    });
+
+    renderHook(() => useComponentLibrary());
+
+    expect(read).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path: `${COMPONENT_LIBRARY_ROUTE_PATH}?locale=de`,
+      })
+    );
+
+    // The default language is addressed by an ABSENT parameter, as it is
+    // everywhere in the admin.
+    documentLocale.mockReturnValue({
+      code: null,
+      documentLocalized: true,
+      isDefaultLocale: true,
+      rtl: false,
+    });
+    renderHook(() => useComponentLibrary());
+    expect(read).toHaveBeenLastCalledWith(
+      expect.objectContaining({ path: COMPONENT_LIBRARY_ROUTE_PATH })
+    );
   });
 
   it("hands the canvas a map by id and the panel a list, from ONE response", () => {

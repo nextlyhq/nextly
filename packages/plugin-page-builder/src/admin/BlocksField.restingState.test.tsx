@@ -59,6 +59,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // No document around the field: the state every case here was written
   // against, and the one that offers every component.
   useDocumentIdentity: () => null,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   /*
    * The plugin's reads. The component route is the one the resting card makes,
    * and it is discriminated by PATH so the answer meant for it cannot reach a

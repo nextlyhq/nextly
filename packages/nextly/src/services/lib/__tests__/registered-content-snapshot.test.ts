@@ -27,13 +27,13 @@ vi.mock("../../../di/container", () => ({
 
 import { registeredContentSnapshot } from "../registered-content-slugs";
 
-const collections = { getAllCollections: vi.fn() };
-const singles = { getAllSingles: vi.fn() };
+const collections = { getAllSlugs: vi.fn() };
+const singles = { getAllSlugs: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  collections.getAllCollections.mockResolvedValue([{ slug: "posts" }]);
-  singles.getAllSingles.mockResolvedValue([{ slug: "site-settings" }]);
+  collections.getAllSlugs.mockResolvedValue(["posts"]);
+  singles.getAllSlugs.mockResolvedValue(["site-settings"]);
   containerHas.mockReturnValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") return collections;
@@ -67,7 +67,7 @@ describe("enumerating the content registries", () => {
   it("IS degraded when a registered registry cannot answer", async () => {
     // The case the flag exists for: a registered registry that throws has said
     // nothing about how much it holds, so its empty result is a floor.
-    collections.getAllCollections.mockRejectedValue(new Error("pool timeout"));
+    collections.getAllSlugs.mockRejectedValue(new Error("pool timeout"));
 
     const snapshot = await registeredContentSnapshot();
 

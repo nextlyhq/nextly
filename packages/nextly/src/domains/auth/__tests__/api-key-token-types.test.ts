@@ -3,19 +3,27 @@ import { randomUUID } from "crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
-import { listRoleSlugsForUser } from "../../../services/lib/permissions";
+import {
+  isSuperAdmin,
+  listRoleSlugsForUser,
+} from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import {
   ApiKeyService,
   invalidateApiKeyPermissionsCache,
 } from "../services/api-key-service";
 
-// Mock listRoleSlugsForUser — it uses a global db singleton (not the test DB).
-// We must mock it so tests do not depend on the runtime database connection.
-// The path the subject imports: `api-key-service` reads
-// `listRoleSlugsForUser` from `services/lib/permissions`, and a factory
-// registered against any other specifier leaves the real one in place.
+// Mock the RBAC resolvers — they read a global db singleton (not the test DB).
+// We must mock them so tests do not depend on the runtime database connection.
+// The path the subject imports: `api-key-service` reads `listRoleSlugsForUser`
+// and `isSuperAdmin` from `services/lib/permissions`, and a factory registered
+// against any other specifier leaves the real ones in place. `isSuperAdmin` is
+// the canonical resolver (inheritance and its cache are proven in its own
+// suite, and end to end in `plugin-route-key-scope.integration.test.ts`); here
+// it answers by id, so what this suite proves is what the service does with
+// the answer.
 vi.mock("../../../services/lib/permissions", () => ({
+  isSuperAdmin: vi.fn(),
   listRoleSlugsForUser: vi.fn(),
 }));
 
@@ -48,6 +56,7 @@ function createTestAdapter(db: unknown) {
 const KEY_A = "test-key-a";
 const KEY_B = "test-key-b";
 const KEY_CACHE = "test-key-cache";
+const KEY_SUPER = "test-key-super";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test suite
@@ -86,6 +95,8 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
   beforeEach(async () => {
     testDb = await createTestDb();
     service = new ApiKeyService(createTestAdapter(testDb.db), noopLogger);
+    // Nobody is a super-admin unless a case says so.
+    vi.mocked(isSuperAdmin).mockResolvedValue(false);
 
     // ── Users ────────────────────────────────────────────────────────────────
     userId = randomUUID();
@@ -208,6 +219,7 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
     invalidateApiKeyPermissionsCache(KEY_A);
     invalidateApiKeyPermissionsCache(KEY_B);
     invalidateApiKeyPermissionsCache(KEY_CACHE);
+    invalidateApiKeyPermissionsCache(KEY_SUPER);
     await testDb.reset();
     testDb.close();
     vi.resetAllMocks();
@@ -373,6 +385,139 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
       });
     });
 
+    // ── a super-admin's key ────────────────────────────────────────────────
+    describe("a key created by a super-admin", () => {
+      /**
+       * A super-admin who holds NO permission rows, which is what an install
+       * looks like whose first user came before the setup grant, and what
+       * every install drifts toward: the role is granted the rows that exist
+       * at setup and never the ones a later collection adds. Their power is
+       * the bypass, so the session never notices; a key copies the rows.
+       *
+       * Whether they are one is the canonical resolver's answer, mocked by id
+       * above; no `user_roles` row is seeded because the service must not
+       * read one. It did, directly, and a role that INHERITS super-admin was
+       * a super-admin to every other gate and an ordinary user to its key.
+       */
+      let superAdminId: string;
+
+      beforeEach(async () => {
+        superAdminId = randomUUID();
+        vi.mocked(isSuperAdmin).mockImplementation(
+          async id => id === superAdminId
+        );
+        await testDb.db.insert(testDb.schema.users).values({
+          id: superAdminId,
+          email: `super-${superAdminId}@example.com`,
+          isActive: true,
+        });
+        // A permission a package stopped declaring: kept in the table so a
+        // grant survives, and never copied to a key that inherits nothing else new.
+        await testDb.db.insert(testDb.schema.permissions).values({
+          id: randomUUID(),
+          name: "Read Legacy",
+          slug: "read-legacy",
+          action: "read",
+          resource: "legacy",
+          orphanedAt: new Date(),
+        });
+      });
+
+      it("read-only: holds every read-* permission the install declares, from the catalogue", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect([...slugs].sort()).toEqual([
+          "read-media",
+          "read-posts",
+          "read-users",
+        ]);
+      });
+
+      it("read-only: still cannot write, whoever created it", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs.some(s => !s.startsWith("read-"))).toBe(false);
+      });
+
+      it("full-access: holds every permission the install declares", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect([...slugs].sort()).toEqual([
+          "create-posts",
+          "delete-posts",
+          "read-media",
+          "read-posts",
+          "read-users",
+          "update-posts",
+        ]);
+      });
+
+      it("holds a permission added after the role was granted, which no role copy would", async () => {
+        // The drift the catalogue exists for: a collection added after setup.
+        await testDb.db.insert(testDb.schema.permissions).values({
+          id: randomUUID(),
+          name: "Read Events",
+          slug: "read-events",
+          action: "read",
+          resource: "events",
+        });
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs).toContain("read-events");
+      });
+
+      it("never inherits a permission the install stopped declaring", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs).not.toContain("read-legacy");
+      });
+
+      it("is the control that an ordinary creator still copies their own rows only", async () => {
+        // The editor's read-only key is judged the way it was: their rows,
+        // not the catalogue. `read-media` is in the catalogue and not theirs.
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          userId,
+          KEY_A
+        );
+        expect(slugs).not.toContain("read-media");
+      });
+
+      it("asks the resolver every other gate asks, for the owner and nobody else", async () => {
+        // The control on the question itself. A direct read of `user_roles`
+        // would answer these cases identically for a directly-assigned role
+        // and differently for an inherited one; only the call proves the
+        // service asks the canonical resolver rather than its own rows.
+        await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(vi.mocked(isSuperAdmin).mock.calls).toEqual([[superAdminId]]);
+      });
+    });
     // ── role-based ─────────────────────────────────────────────────────────
 
     describe("role-based token type", () => {

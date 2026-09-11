@@ -1,10 +1,11 @@
 import { measureBytes } from "@nextlyhq/blocks-engine";
 import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
-import type {
-  PluginRouteContext,
-  PluginRoutePermissionScope,
+import {
+  NextlyError,
+  type PluginRouteContext,
+  type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
-import { buildUserContext, requireNextly } from "nextly/runtime";
+import { requireNextly } from "nextly/runtime";
 /**
  * The two reads the editor makes to find out what it may offer and draw: the
  * pattern library for the insert panel, and the component definitions for the
@@ -71,6 +72,7 @@ import { buildUserContext, requireNextly } from "nextly/runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
+  COMPONENT_LIBRARY_LOCALE_PARAM,
   COMPONENT_LIBRARY_ROUTE_PATH,
   LIBRARY_ROUTE_PATH,
   type ComponentLibraryResponse,
@@ -322,46 +324,62 @@ export const DEFAULT_COMPONENT_STORE: ComponentStore = {
  * component was handed its pending draft, and every field-level read rule was
  * skipped on the way. With it, a read-only caller sees the live definition.
  *
- * The caller's own authorization scope travels too. An API key is judged on
- * the grants stamped on IT rather than on the roles of whoever minted it, and
- * `user` alone names the minter.
+ * WHO is asking comes from the dispatcher's caller, resolved once per request
+ * (`ctx.caller.identity()`): the user context with the roles a stored rule
+ * reads and the verified claims a custom rule may decide on, plus the key's
+ * own scope for an API-key caller — a key is judged on the grants stamped on
+ * IT rather than on the roles of whoever minted it, and the account alone
+ * names the minter. Built from `ctx.user` here instead, the context carried
+ * no roles, and a role-based read rule on the components collection refused
+ * the very caller the route's gate had admitted, with an empty library and
+ * nothing to say why.
  *
- * `disableErrors` on the by-id read, so a row the caller may not read answers
- * nothing rather than failing the whole library — the walk reports the gap.
+ * Two answers on the by-id read are the walk's to report as a cut library
+ * and nothing more: the row vanished between the two reads, or THIS caller
+ * may not read it. Anything else — the database, a hook — fails the route,
+ * which the client reads as unavailable and offers the retry for. The read's
+ * own `disableErrors` is deliberately not asked for: it turns every failure
+ * into a missing row, and a transient fault would then be reported as a
+ * static ceiling with no retry, every instance on the page drawn as missing.
  *
  * `requireNextly` per call rather than captured: it refuses until services
  * are registered, and a route handler runs only after that, so the refusal
  * can only fire on a misconfigured boot — where failing loudly is right.
+ *
+ * Both reads name the LOCALE the request asked for, when it asked for one. A
+ * component's document field can be localized, and the public renderer reads
+ * definitions in the page's locale; an editor whose reads named none would
+ * draw an author editing German a canvas of English components. Both reads,
+ * because a listing in one language completed by rows in another labels one
+ * version and draws the other. None named is the app default, as an absent
+ * `?locale=` is everywhere in the admin — and an unknown code resolves to the
+ * default in the Direct API, so nothing here has to know the site's languages.
  */
 function directComponentReads(
-  ctx: Pick<PluginRouteContext, "user" | "caller" | "authenticatedScope">
+  ctx: Pick<PluginRouteContext, "caller">,
+  locale?: string
 ): ComponentReads {
-  const asUser = {
-    overrideAccess: false as const,
-    // The identity the service authorizes by, built by the same function every
-    // enforced read in core builds it with: the caller's verified claims — a
-    // tenant, a plan — spread first so a rule written against one reads it,
-    // and the canonical identity last so a claim cannot restate it. Email
-    // travels so an email-based rule matches. Roles are not on the route
-    // context, so the service resolves them from the account.
-    user:
-      ctx.user === null
-        ? undefined
-        : buildUserContext({
-            claims: ctx.caller?.claims,
-            id: ctx.user.id,
-            name: ctx.user.name ?? undefined,
-            email: ctx.user.email,
-          }),
-    ...(ctx.authenticatedScope === undefined
-      ? {}
-      : { actor: ctx.authenticatedScope }),
+  const inLocale = locale === undefined ? {} : { locale };
+  // Resolved once for both reads, and lazily: the caller resolves its own
+  // identity once per request, and a route with nothing to read never asks.
+  // A public route has no caller; this one is gated, so the anonymous branch
+  // is the honest answer for a context nothing authenticated.
+  const asUser = async () => {
+    const identity = await ctx.caller?.identity();
+    return {
+      overrideAccess: false as const,
+      user: identity?.user,
+      ...(identity?.authenticatedScope === undefined
+        ? {}
+        : { actor: identity.authenticatedScope }),
+    };
   };
   return {
     list: async (slug, page) => {
       const result = await requireNextly().find({
         collection: slug,
-        ...asUser,
+        ...(await asUser()),
+        ...inLocale,
         status: "all",
         sort: "id",
         page,
@@ -369,19 +387,27 @@ function directComponentReads(
       });
       return { data: result.items, hasMore: result.meta.hasNext };
     },
-    read: (slug, id) =>
-      requireNextly().findByID({
-        collection: slug,
-        id,
-        ...asUser,
-        // Every lifecycle state HERE TOO. The listing asked for every state
-        // and got the never-published row; a by-id read that stated none is
-        // bounded back to public states and answers 404 for that same row —
-        // the overlay runs only on a row the lifecycle filter let through.
-        status: "all",
-        draft: true,
-        disableErrors: true,
-      }),
+    read: async (slug, id) => {
+      try {
+        return await requireNextly().findByID({
+          collection: slug,
+          id,
+          ...(await asUser()),
+          ...inLocale,
+          // Every lifecycle state HERE TOO. The listing asked for every state
+          // and got the never-published row; a by-id read that stated none is
+          // bounded back to public states and answers 404 for that same row —
+          // the overlay runs only on a row the lifecycle filter let through.
+          status: "all",
+          draft: true,
+        });
+      } catch (error) {
+        if (NextlyError.isNotFound(error) || NextlyError.isForbidden(error)) {
+          return null;
+        }
+        throw error;
+      }
+    },
   };
 }
 
@@ -547,10 +573,18 @@ function readComponentRow(
 }
 
 /**
- * What every library row must carry to be offered at all: a non-empty id and
- * title. ONE reader for both tiers, because the two collections share this
- * half of their shape and a second reading of it would drift from the first
- * the day either learned a new way a row can be unusable.
+ * What every library row must carry to be offered at all: a non-empty id.
+ * ONE reader for both tiers, because the two collections share this half of
+ * their shape and a second reading of it would drift from the first the day
+ * either learned a new way a row can be unusable.
+ *
+ * A title only LABELS the row, so a row without one is labelled by its id
+ * rather than left out. What a page's renderer reads of a component is its id
+ * and its document; a collection with no title field, or one whose title is
+ * redacted by field-level access, still renders every instance on the public
+ * page, and a canvas that dropped the definition would draw a placeholder
+ * where the page draws the component. The id is the one name a row is sure
+ * to have, and an author can find it by that.
  */
 function identityOf(
   row: unknown
@@ -561,8 +595,13 @@ function identityOf(
   const record = row as Record<string, unknown>;
   const { id, title } = record;
   if (typeof id !== "string" || id === "") return undefined;
-  if (typeof title !== "string" || title === "") return undefined;
-  return { named: { id, title }, record };
+  return {
+    named: {
+      id,
+      title: typeof title === "string" && title !== "" ? title : id,
+    },
+    record,
+  };
 }
 
 /**
@@ -571,8 +610,8 @@ function identityOf(
  *
  * `document: null` for a row the read found but which holds no content — a
  * legal row, and one the panel will skip — and `undefined` for no row at all,
- * or one without an id or title, which the caller reports as a cut library
- * rather than a missing key.
+ * or one without an id, which the caller reports as a cut library rather than
+ * a missing key.
  */
 function withDraftDocument(
   data: unknown,
@@ -879,13 +918,28 @@ export function componentLibraryRoute(
     path: COMPONENT_LIBRARY_ROUTE_PATH,
     requiredPermission: ({ collection }) =>
       collection(store.collection ?? COMPONENTS_SLUG, "read"),
-    handler: async (_req: Request, ctx: PluginRouteContext) =>
+    handler: async (req: Request, ctx: PluginRouteContext) =>
       Response.json(
         await readComponentLibrary({
           ...ctx,
-          components: directComponentReads(ctx),
+          components: directComponentReads(ctx, requestedLocale(req)),
           store,
         })
       ),
   };
+}
+
+/**
+ * The language the request asks the component tier in, or none.
+ *
+ * Read from the query the client writes through the shared contract
+ * (`componentLibraryPath`). An empty value is none: an empty string handed to
+ * the Direct API is not a language, and it is what a client formatting an
+ * absent code carelessly would send.
+ */
+function requestedLocale(req: Request): string | undefined {
+  const locale = new URL(req.url).searchParams.get(
+    COMPONENT_LIBRARY_LOCALE_PARAM
+  );
+  return locale === null || locale === "" ? undefined : locale;
 }

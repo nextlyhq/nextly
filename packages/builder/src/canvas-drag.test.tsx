@@ -33,7 +33,6 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { NoticeSinkProvider } from "./builder-notices";
 import { Canvas, CANVAS_ROOT_CLASS } from "./canvas";
 import { DropIndicator, useCanvasDrag } from "./canvas-drag";
 import { useEditorState, type EditorState } from "./editor-state";
@@ -117,15 +116,21 @@ function Host({
   nesting = PERMISSIVE,
   definitions,
   limits,
+  onRefused,
 }: {
   document: BlockDocument;
   nesting?: NestingSource;
   definitions?: ComponentLookup;
   limits?: DocumentLimits;
+  onRefused?: (refusal: { sentence: string }) => void;
 }): React.JSX.Element {
+  // The editor is where room is judged; the drag hands it the move and the
+  // editor tells the host why when it refuses.
   const editor = useEditorState({
     initialDocument: document,
     ...(limits === undefined ? {} : { limits }),
+    ...(definitions === undefined ? {} : { definitions }),
+    ...(onRefused === undefined ? {} : { onRefused }),
   });
   editorRef = editor;
   const drag = useCanvasDrag({
@@ -519,13 +524,13 @@ describe("useCanvasDrag", () => {
     expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["b", "i1"]);
   });
 
-  it("refuses a move the page has no room for, says why, and applies nothing", () => {
+  it("hands a move to the editor, which refuses one the page has no room for and says why", () => {
     // The budget is spent in document order. Two instances of a three-node
     // component on a page with room for one: carrying the second ahead of
     // the first takes the budget the first had, and the page would draw a
-    // placeholder where a component stood. The resolver is asked with the
-    // move applied, under the editor's own caps, and the sentence reaches
-    // the notice sink; the control moves a block on the same page.
+    // placeholder where a component stood. The editor's own apply asks the
+    // resolver with the move applied, under its caps, and tells the host why;
+    // the control moves a block on the same page.
     registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
     const three: BlockDocument = {
       formatVersion: 1,
@@ -550,13 +555,14 @@ describe("useCanvasDrag", () => {
       ]);
     const limits = { ...DEFAULT_LIMITS, maxNodes: 6 };
 
-    // The sink sits ABOVE the host, where the drag hook runs; the sentence is
-    // what a drop that applies nothing owes the author.
     const raise = vi.fn();
     const refused = render(
-      <NoticeSinkProvider raise={raise}>
-        <Host document={page()} definitions={definitions} limits={limits} />
-      </NoticeSinkProvider>
+      <Host
+        document={page()}
+        definitions={definitions}
+        limits={limits}
+        onRefused={refusal => raise(refusal.sentence)}
+      />
     );
     layout(refused.container, { p0: 100, first: 100, second: 100 });
     const root = rootOf(refused.container);
@@ -573,9 +579,12 @@ describe("useCanvasDrag", () => {
     refused.unmount();
 
     const allowed = render(
-      <NoticeSinkProvider raise={raise}>
-        <Host document={page()} definitions={definitions} limits={limits} />
-      </NoticeSinkProvider>
+      <Host
+        document={page()}
+        definitions={definitions}
+        limits={limits}
+        onRefused={refusal => raise(refusal.sentence)}
+      />
     );
     layout(allowed.container, { p0: 100, first: 100, second: 100 });
     const root2 = rootOf(allowed.container);
