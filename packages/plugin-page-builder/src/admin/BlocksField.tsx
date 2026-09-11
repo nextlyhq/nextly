@@ -2637,6 +2637,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * equal limits reached by different routes select different nodes — a class
    * on a node one walk reaches and the other does not would be reported as
    * absent from a page that renders it.
+   * Composed through the SAME map the canvas draws with, because the stored
+   * document holds one instance node where the canvas draws a definition: a
+   * class applied inside that definition is on the page as rendered, and a
+   * walk over the stored nodes alone would leave it out of the filter. The
+   * usage record asks a different question of the same walk — what this
+   * document itself references — and passes no map.
+   *
    *
    * `complete` is deliberately unread. It says whether the walk hit the
    * document's node ceiling, which bounds what this could CLAIM about usage —
@@ -2649,8 +2656,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     // lowered them renders under those, and a walk here under different bounds
     // selects different nodes — which would report a class as absent from a
     // page that renders it, or present on one that does not.
-    () => classUsageOf(editor.document, documentLimits),
-    [editor.document, documentLimits]
+    () =>
+      classUsageOf(editor.document, documentLimits, canvasRender.definitions),
+    [editor.document, documentLimits, canvasRender.definitions]
   );
 
   /*
