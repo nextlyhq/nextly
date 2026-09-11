@@ -11,10 +11,13 @@
  *
  * So the pages are compiled here, with the compiler the site's MDX pipeline is built on,
  * and a page the compiler rejects is reported with the file, line and column the compiler
- * names. Components are not resolved: `<Callout>` is JSX to the compiler and needs no
- * import, which is the same as at the site. Frontmatter is taken off first, because the
- * site's loader reads it separately and the compiler would otherwise parse the YAML as
- * Markdown.
+ * names. Frontmatter is taken off first, because the site's loader reads it separately and
+ * the compiler would otherwise parse the YAML as Markdown.
+ *
+ * A page can also compile and still not render: `<Warning>` is JSX to the compiler and
+ * needs no import, and the site throws at render time for a component it never
+ * registered. So every component a page uses is held to the set the site provides, read
+ * off the syntax tree so a `<T>` inside a code sample is never mistaken for one.
  *
  * Usage:
  *   node scripts/check-docs-compile.mjs
@@ -25,6 +28,57 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 import { compile } from "@mdx-js/mdx";
+
+/**
+ * The components a documentation page may use.
+ *
+ * The site registers these in `app/docs/[[...slug]]/page.tsx` of nextly-site: Fumadocs'
+ * default MDX components, plus the ones the page adds. A lowercase tag is HTML and is not
+ * checked. This list is a copy of the site's, kept here because the docs cannot read it;
+ * when a component is added there, add it here in the same change.
+ */
+export const SITE_COMPONENTS = new Set([
+  "Callout",
+  "CalloutContainer",
+  "CalloutTitle",
+  "CalloutDescription",
+  "Card",
+  "Cards",
+  "CodeBlockTab",
+  "CodeBlockTabs",
+  "CodeBlockTabsList",
+  "CodeBlockTabsTrigger",
+  "Tab",
+  "Tabs",
+  "Accordion",
+  "Accordions",
+  "Step",
+  "Steps",
+  "File",
+  "Files",
+  "Folder",
+]);
+
+/** Whether a syntax-tree node is a JSX element with a name, block or inline. */
+function isNamedJsx(node) {
+  const jsx =
+    node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement";
+  return jsx && Boolean(node.name);
+}
+
+/** A remark plugin that records the name of every component a page uses. */
+function collectComponents(names) {
+  const visit = node => {
+    if (isNamedJsx(node)) names.add(node.name);
+    for (const child of node.children ?? []) visit(child);
+  };
+  return () => visit;
+}
+
+/** Whether a tag names a component rather than an HTML element. */
+function isComponent(name) {
+  return /^[A-Z]/.test(name);
+}
 
 /**
  * The page body without the frontmatter block it opens with, and how many lines that
@@ -47,12 +101,23 @@ export function withoutFrontmatter(source) {
  */
 export async function compileFinding(source) {
   const { body, skipped } = withoutFrontmatter(source);
+  const names = new Set();
   try {
-    await compile(body, { format: "mdx" });
-    return null;
+    await compile(body, {
+      format: "mdx",
+      remarkPlugins: [collectComponents(names)],
+    });
   } catch (error) {
     return describeFailure(error, skipped);
   }
+  const unknown = [...names].filter(
+    name => isComponent(name) && !SITE_COMPONENTS.has(name)
+  );
+  if (unknown.length === 0) return null;
+  return {
+    where: "",
+    message: `uses ${unknown.map(name => `<${name}>`).join(", ")}, which the site does not register; the page compiles and fails to render`,
+  };
 }
 
 /**

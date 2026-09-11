@@ -48,6 +48,34 @@ describe("compileFinding", () => {
   });
 });
 
+describe("components a page uses", () => {
+  it("passes a component the site registers, and HTML tags", async () => {
+    expect(
+      await compileFinding(
+        `${FRONTMATTER}<Callout>ok</Callout>\n\n<div>html</div>\n`
+      )
+    ).toBeNull();
+  });
+
+  it("reports a component the site never registered", async () => {
+    // Compiles fine; the site throws at render for it. The shape that shipped.
+    const finding = await compileFinding(
+      `${FRONTMATTER}<Warning>\nNot yet.\n</Warning>\n`
+    );
+    expect(finding).not.toBeNull();
+    expect(finding.message).toContain("<Warning>");
+    expect(finding.message).toContain("does not register");
+  });
+
+  it("does not mistake a generic in a code sample for a component", async () => {
+    expect(
+      await compileFinding(
+        `${FRONTMATTER}\`\`\`ts\nconst x: Promise<T> = f<ReturnType<F>>();\n\`\`\`\n`
+      )
+    ).toBeNull();
+  });
+});
+
 describe("the committed pages", () => {
   it("all compile, and there are pages", async () => {
     const { pages, findings } = await checkDocsCompile(process.cwd());
