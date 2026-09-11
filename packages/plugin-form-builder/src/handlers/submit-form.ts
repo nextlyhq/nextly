@@ -8,12 +8,8 @@
  * @since 0.1.0
  */
 
-import {
-  formAvailability,
-  isLocaleSelector,
-  NextlyError,
-  NO_SUCH_FORM,
-} from "nextly";
+import { isLocaleSelector } from "@nextlyhq/plugin-sdk";
+import { formAvailability, NextlyError, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
