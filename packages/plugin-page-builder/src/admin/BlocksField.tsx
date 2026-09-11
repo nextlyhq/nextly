@@ -2539,7 +2539,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             editor.document,
             canvasRender.styleContext,
             siteSheet(canvasSiteStyle),
-            remotePatterns === undefined ? {} : { remotePatterns }
+            {
+              ...(remotePatterns === undefined ? {} : { remotePatterns }),
+              // The SAME map the canvas resolves against, so the cascade the
+              // inspector reads describes the composed tree on screen rather
+              // than one with every instance left unresolved.
+              definitions: canvasRender.definitions,
+            }
           ),
     [
       editor.document,

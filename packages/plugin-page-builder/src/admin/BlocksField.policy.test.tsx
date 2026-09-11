@@ -34,6 +34,17 @@ const seen: {
 let clientConfig: Record<string, unknown> | undefined;
 
 /**
+ * The document the editor holds, as the shell stub reports it.
+ *
+ * Empty for every case not about the page's content; a case that needs an
+ * instance on the page puts one here. Hoisted because the mock factory reads
+ * it.
+ */
+const EMPTY_PAGE = { formatVersion: 1, kind: "page", nodes: [] as unknown[] };
+let editorDocument: { formatVersion: number; kind: string; nodes: unknown[] } =
+  EMPTY_PAGE;
+
+/**
  * What the component route answers with for the test in hand.
  *
  * `pending: false` with no data says the read ANSWERED with nothing — a site
@@ -138,7 +149,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       draggingBlockName: null,
     }),
     useEditorState: () => ({
-      document: { formatVersion: 1, kind: "page", nodes: [] },
+      document: editorDocument,
       selectedId: null,
       selection: { ids: [], primary: null },
       apply: () => null,
@@ -228,6 +239,7 @@ beforeEach(() => {
     error: null,
     refetch: () => {},
   };
+  editorDocument = EMPTY_PAGE;
 });
 
 afterEach(() => {
@@ -725,5 +737,60 @@ describe("what the inspector is told about provenance", () => {
 
     expect(seen.inspector).toBeDefined();
     expect(seen.inspector?.cascade).toBeDefined();
+  });
+
+  it("compiles the trace against the SAME definitions the canvas draws with", () => {
+    /*
+     * One map, two readers. A trace compiled without it leaves every instance
+     * unresolved, so the composed nodes on screen — and their declarations —
+     * are missing from the cascade the provenance dots read. Observed through
+     * the CASCADE rather than a call: a component with a coloured node, on a
+     * page holding one instance of it, yields a colour entry only when the
+     * definitions reached the compile.
+     */
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "core/text",
+          version: 1,
+          props: { text: "Composed" },
+          styles: { base: { base: { color: "crimson" } } },
+        },
+      ],
+    };
+    componentRead = {
+      data: {
+        items: [{ id: "header", title: "Header", document: definition }],
+        meta: { count: 1, truncated: false },
+      },
+      pending: false,
+      error: null,
+      refetch: () => {},
+    };
+    editorDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "i1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    };
+
+    openEditor();
+
+    const cascade = seen.inspector?.cascade as
+      | { entries: { property: string; value?: unknown }[] }
+      | undefined;
+    expect(cascade).toBeDefined();
+    expect(
+      (cascade?.entries ?? []).some(entry => entry.property === "color")
+    ).toBe(true);
   });
 });
