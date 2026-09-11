@@ -18,6 +18,7 @@
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+import { findParentContainerId } from "./field-transformers";
 import { packIntoRows, parseWidth, type WidthField } from "./reflow";
 
 /** One field as the row packer sees it, carrying the field it stands for. */
@@ -60,4 +61,50 @@ export function builderRowIndex(id: string): number | undefined {
   if (!id.startsWith("row-")) return undefined;
   const index = Number(id.slice("row-".length));
   return Number.isNaN(index) ? undefined : index;
+}
+
+/**
+ * Whether a drag between two fields stays inside one container.
+ *
+ * Moving a field out of its group or repeater is deliberately not supported,
+ * so a drag whose ends have different parents is a no-op rather than a move.
+ */
+export function isSameContainerDrag(
+  fields: readonly BuilderField[],
+  activeId: string,
+  overId: string
+): boolean {
+  const activeParent = findParentContainerId([...fields], activeId);
+  const overParent = findParentContainerId([...fields], overId);
+  return Boolean(
+    activeParent &&
+      overParent &&
+      activeParent.containerId === overParent.containerId
+  );
+}
+
+/**
+ * Whether a drop on the canvas is one the drop handler will act on.
+ *
+ * 🔴 The ONE acceptance rule, read by the handler that applies a drop and by
+ * the announcement that describes it. A nested field may move within its own
+ * container; a row may move among the rows; anything else -- a field over a
+ * row, a row over a field, a field over a field in another container -- is
+ * refused and the tree stands. An announcement that decided this for itself
+ * said "moved to" for a drop the handler had just refused.
+ */
+export function builderDropAccepted(
+  fields: readonly BuilderField[],
+  activeId: string,
+  overId: string
+): boolean {
+  if (activeId === overId) return false;
+  const activeRow = builderRowIndex(activeId);
+  const overRow = builderRowIndex(overId);
+  if (activeRow !== undefined || overRow !== undefined) {
+    if (activeRow === undefined || overRow === undefined) return false;
+    const count = builderRows(fields).length;
+    return activeRow < count && overRow < count;
+  }
+  return isSameContainerDrag(fields, activeId, overId);
 }

@@ -19,7 +19,11 @@ import {
 } from "@admin/components/features/entries/fields/structured/field-array-helpers";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
-import { builderRowIndex, builderRows } from "./builder-rows";
+import {
+  builderDropAccepted,
+  builderRowIndex,
+  builderRows,
+} from "./builder-rows";
 import { findFieldById, findParentContainerId } from "./field-transformers";
 
 /** "Title", or "First name and Last name" for a row holding two fields. */
@@ -62,5 +66,22 @@ export function builderAnnouncements(
       : `position ${index + 1} of ${siblings.length}`;
   };
 
-  return sortableAnnouncements({ describe, place });
+  const shared = sortableAnnouncements({ describe, place });
+  return {
+    ...shared,
+    // The landing is spoken only for a drop the handler ACCEPTS, decided by
+    // the same predicate the handler decides with. A field released over a
+    // field in another container is refused there, and the sentence must say
+    // so rather than describe a move that did not happen.
+    onDragEnd: ({ active, over }) => {
+      if (
+        over !== null &&
+        over.id !== active.id &&
+        !builderDropAccepted(fields, String(active.id), String(over.id))
+      ) {
+        return `${describe(active) ?? "The item"} cannot move there. Nothing moved.`;
+      }
+      return shared.onDragEnd({ active, over });
+    },
+  };
 }

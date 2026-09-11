@@ -25,29 +25,13 @@ import {
   reorderNestedFields,
   SYSTEM_FIELD_NAMES,
 } from "@admin/lib/builder";
-import { builderRowIndex, builderRows } from "@admin/lib/builder/builder-rows";
+import {
+  builderDropAccepted,
+  builderRowIndex,
+  builderRows,
+} from "@admin/lib/builder/builder-rows";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import type { FieldDefinition } from "@admin/types/collection";
-
-/**
- * Whether a drag between two fields stays inside one container.
- *
- * Moving a field out of its group or repeater is deliberately not supported,
- * so a drag whose ends have different parents is a no-op rather than a move.
- */
-function isSameContainerDrag(
-  fields: BuilderField[],
-  activeId: string,
-  overId: string
-): boolean {
-  const activeParent = findParentContainerId(fields, activeId);
-  const overParent = findParentContainerId(fields, overId);
-  return Boolean(
-    activeParent &&
-      overParent &&
-      activeParent.containerId === overParent.containerId
-  );
-}
 
 /**
  * Apply a top-level move, which is expressed against ROWS rather than fields:
@@ -138,16 +122,16 @@ export function useBuilderFieldActions(
   const handleRowDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
-      if (!over || active.id === over.id) return;
+      if (!over) return;
       const activeId = String(active.id);
       const overId = String(over.id);
+      // The ONE acceptance rule, shared with the drag announcements so what
+      // the reader is told matches what happens: a refused drop is refused
+      // here and described as unchanged there.
+      if (!builderDropAccepted(builder.fields, activeId, overId)) return;
 
-      if (activeId.startsWith("field_") && overId.startsWith("field_")) {
-        if (isSameContainerDrag(builder.fields, activeId, overId)) {
-          builder.setFields(prev =>
-            reorderNestedFields(prev, activeId, overId)
-          );
-        }
+      if (builderRowIndex(activeId) === undefined) {
+        builder.setFields(prev => reorderNestedFields(prev, activeId, overId));
         return;
       }
 
