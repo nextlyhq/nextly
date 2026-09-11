@@ -16,6 +16,7 @@ import {
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { EVERY_TRANSLATION, NO_FALLBACK } from "../../i18n/locale-selector";
 import {
   isValidLocale,
   resolveFallbackChain,
@@ -251,7 +252,7 @@ export class FieldGroupQueryService extends BaseService {
     // `?locale=all` (admin/export): the parent read projects its own localized fields as
     // language-keyed maps, so mirror that for the embedded component's translatable fields —
     // otherwise they would be missing entirely (the main comp_* table omits those columns).
-    if (locale === "all") {
+    if (locale === EVERY_TRANSLATION) {
       const allReadiness = await this.companionReadiness(companion, executor);
       // Read out here: the narrowing the guard above established does not survive into the
       // closure, and re-asserting it there would be a cast rather than a check.
@@ -417,7 +418,7 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale: string | false | undefined
   ): string[] {
     if (!this.localization) return [requested];
-    if (fallbackLocale === false || fallbackLocale === "none") {
+    if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
       return [requested];
     }
     if (

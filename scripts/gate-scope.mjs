@@ -252,12 +252,21 @@ function missingWorkspaceDir(path, roots) {
  * entry detaches a directory that still exists, and the only changed path is
  * the YAML itself, so nothing names the workspace that just lost its gate.
  * `turbo.jsonc` defines the tasks every workspace runs, so a filtered run
- * exercises the new definition for one package and none of the others.
+ * exercises the new definition for one package and none of the others. The
+ * root manifest and the lockfile define the DEPENDENCY graph: a transitive
+ * upgrade changes what every package compiles against while touching no path
+ * inside any of them, so a diff that reaches only the lockfile derives an
+ * empty scope and the packages it broke are never gated.
+ *
+ * Root paths only. A package's own `package.json` is that package's change and
+ * scopes to it like any other file under its root.
  */
 const ROOT_WIDE_FILES = new Set([
   "pnpm-workspace.yaml",
   "turbo.json",
   "turbo.jsonc",
+  "package.json",
+  "pnpm-lock.yaml",
 ]);
 
 /**

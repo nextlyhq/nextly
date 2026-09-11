@@ -166,6 +166,42 @@ describe("handleRowDragEnd", () => {
     expect(builder.fields.map(f => f.name)).toEqual(["id", "b", "c", "a"]);
   });
 
+  it("moves the row the reader SEES when a hidden field sits above it", () => {
+    // 🔴 The list draws no row for a hidden field, so on screen `row-1` is
+    // `c`. Packed with the hidden field included, `row-1` was the hidden
+    // field itself, and dragging the second visible row moved something the
+    // reader could not see. The hidden field is carried through after the
+    // visible ones rather than lost.
+    const builder = makeBuilder([
+      field("a"),
+      field("mode", { admin: { hidden: true } }),
+      field("c"),
+      field("d"),
+    ]);
+    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+
+    result.current.handleRowDragEnd(drag("row-1", "row-0"));
+
+    expect(builder.fields.map(f => f.name)).toEqual(["c", "a", "d", "mode"]);
+  });
+
+  it("gives a repeater its own row even at a stored half width", () => {
+    // The list forces a container full-width. Packed at its stored 50% it
+    // shared a row with `b`, and `row-1` on screen named a different row from
+    // the one the reorder moved.
+    const builder = makeBuilder([
+      field("a", { admin: { width: "50%" } }),
+      field("gallery", { type: "repeater", admin: { width: "50%" } }),
+      field("b", { admin: { width: "50%" } }),
+    ]);
+    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+
+    // On screen: row 0 = a, row 1 = gallery, row 2 = b.
+    result.current.handleRowDragEnd(drag("row-2", "row-0"));
+
+    expect(builder.fields.map(f => f.name)).toEqual(["b", "a", "gallery"]);
+  });
+
   it("reorders nested fields when both ends share a parent", () => {
     const builder = makeBuilder([
       field("items", {
