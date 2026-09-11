@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -58,11 +58,18 @@ describe("citationFindings", () => {
     ).toEqual(["AGENTS.md is in excludeFiles and was indexed anyway"]);
   });
 
+  it("reports a root file that is neither the README nor excluded", () => {
+    // A CHANGELOG Context7's defaults are trusted to drop, cited anyway.
+    expect(citationFindings(new Set(["CHANGELOG.md"]), config)).toEqual([
+      'CHANGELOG.md is outside folders ["docs"] and is not the README, and was indexed',
+    ]);
+  });
+
   it("reports a file outside the listed folders", () => {
     expect(
       citationFindings(new Set(["packages/nextly/README.md"]), config)
     ).toEqual([
-      'packages/nextly/README.md is outside folders ["docs"] and was indexed',
+      'packages/nextly/README.md is outside folders ["docs"] and is not the README, and was indexed',
     ]);
   });
 
@@ -77,7 +84,13 @@ describe("the committed configuration", () => {
     // new root file that is not for readers of the product is a failing test
     // rather than a surprise in the index.
     const config = JSON.parse(readFileSync("context7.json", "utf-8"));
-    const rootMarkdown = readdirSync(".").filter(name => name.endsWith(".md"));
+    // Tracked files, not the directory: Context7 indexes what is committed,
+    // and a contributor's untracked NOTES.md is not the repository's problem.
+    const rootMarkdown = execFileSync("git", ["ls-files", "--", "*.md"], {
+      encoding: "utf-8",
+    })
+      .split("\n")
+      .filter(name => name.endsWith(".md") && !name.includes("/"));
     // Excluded by Context7's defaults, per its documentation.
     const defaults = new Set([
       "CHANGELOG.md",
@@ -92,6 +105,11 @@ describe("the committed configuration", () => {
         !forReaders.has(name)
     );
     expect(unaccounted).toEqual([]);
+  });
+
+  it("keeps the README, which is the one root file meant to be indexed", () => {
+    const config = JSON.parse(readFileSync("context7.json", "utf-8"));
+    expect(config.excludeFiles).not.toContain("README.md");
   });
 
   it("names only files that exist, so a rename cannot leave one indexed", () => {
@@ -282,6 +300,15 @@ describe("verify", () => {
     });
     expect(status).toBe(2);
     expect(lines.join("\n")).toContain("answered 500");
+  });
+
+  it("cannot answer when the search body is not JSON", async () => {
+    const { status, lines } = await verify({
+      root: ".",
+      get: async () => ({ status: 200, body: "<html>rate limited</html>" }),
+    });
+    expect(status).toBe(2);
+    expect(lines.join("\n")).toContain("not JSON");
   });
 
   it("cannot answer when the transport fails", async () => {

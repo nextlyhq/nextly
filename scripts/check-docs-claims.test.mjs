@@ -269,6 +269,21 @@ describe("context7", () => {
     ).toContain("context7-description");
   });
 
+  it("fires when the file is not tracked at all", async () => {
+    expect(
+      await checksFor({ "packages/nextly/package.json": core(SENTENCE) })
+    ).toContain("context7-missing");
+  });
+
+  it("fires when the core package has no description to follow", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({ name: "nextly", version: "1.0.0" }),
+        "context7.json": config(SENTENCE),
+      })
+    ).toContain("context7-description");
+  });
+
   it("fires when the file does not parse", async () => {
     expect(
       await checksFor({

@@ -61,9 +61,16 @@ function listField(config, name) {
   return Array.isArray(config[name]) ? config[name] : [];
 }
 
-/** Root-level Markdown, which Context7 reads whatever `folders` says. */
-function isRootMarkdown(path) {
-  return !path.includes("/") && path.endsWith(".md");
+/**
+ * The one root file the configuration means to keep.
+ *
+ * Context7 reads every root Markdown file whatever `folders` says, and the configuration
+ * names the rest to exclude them. A cited root file that is neither the README nor named
+ * there, such as a CHANGELOG Context7's defaults are trusted to drop, is a file the index
+ * holds that the configuration never agreed to.
+ */
+function isKeptRoot(path) {
+  return path === README;
 }
 
 function isInside(path, folders) {
@@ -73,16 +80,16 @@ function isInside(path, folders) {
 /**
  * Why one cited path disagrees with the configuration, or `null`.
  *
- * A root-level Markdown file is allowed unless `excludeFiles` names it, which is the rule
- * Context7 documents; anything else must sit under a listed folder.
+ * A file must sit under a listed folder, or be the README; anything else the index cites is
+ * a file it holds that the configuration never agreed to.
  */
 export function citationFinding(path, config) {
   const folders = listField(config, "folders");
   if (listField(config, "excludeFiles").includes(path)) {
     return `${path} is in excludeFiles and was indexed anyway`;
   }
-  if (isInside(path, folders) || isRootMarkdown(path)) return null;
-  return `${path} is outside folders ${JSON.stringify(folders)} and was indexed`;
+  if (isInside(path, folders) || isKeptRoot(path)) return null;
+  return `${path} is outside folders ${JSON.stringify(folders)} and is not the README, and was indexed`;
 }
 
 /**
@@ -188,6 +195,15 @@ async function retrievable(get, api, marker, name) {
   return answer.body.includes(marker);
 }
 
+/** A JSON body, or `Unanswerable`: a truncated or non-JSON answer is no verdict either. */
+function parseAnswer(body, what) {
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Unanswerable(`${what} answered with a body that is not JSON`);
+  }
+}
+
 /** The library's search entry, once it exists and has finished indexing. */
 async function finalizedEntry(get, api) {
   const search = await get(
@@ -195,7 +211,7 @@ async function finalizedEntry(get, api) {
   );
   if (search.status !== 200)
     throw new Unanswerable(`search answered ${search.status}`);
-  const entry = JSON.parse(search.body).results?.find(
+  const entry = parseAnswer(search.body, "search").results?.find(
     result => result.id === LIBRARY
   );
   if (!entry) {

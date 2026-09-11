@@ -121,11 +121,21 @@ const context7Finding = (check, message) => ({
  * What is wrong with a Context7 configuration, or nothing.
  *
  * The rules are in priority order, and the first that applies is the finding: a file that
- * does not parse says nothing an indexer can use; a description naming the retired category
- * is the claim this whole check exists to stop; and a description that merely differs from
- * the core package's is the drift that lets the first two happen unnoticed.
+ * is not tracked or does not parse says nothing an indexer can use; a description naming
+ * the retired category is the claim this whole check exists to stop; a core package with
+ * no description leaves nothing to follow; and a description that merely differs from the
+ * core package's is the drift that lets the others happen unnoticed. `undefined` is the
+ * untracked file, `null` the unreadable one.
  */
 const CONTEXT7_RULES = [
+  [
+    config => config === undefined,
+    () =>
+      context7Finding(
+        "context7-missing",
+        "is not tracked; without it an indexer reads the whole repository and guesses what the project is"
+      ),
+  ],
   [
     config => config === null || typeof config !== "object",
     () => context7Finding("context7-unreadable", "is not a JSON object"),
@@ -147,7 +157,15 @@ const CONTEXT7_RULES = [
       ),
   ],
   [
-    (config, core) => typeof core === "string" && config.description !== core,
+    (_config, core) => typeof core !== "string" || core.trim() === "",
+    () =>
+      context7Finding(
+        "context7-description",
+        `packages/${CORE_PACKAGE}/package.json has no description for this to follow; the sentence lives there`
+      ),
+  ],
+  [
+    (config, core) => config.description !== core,
     () =>
       context7Finding(
         "context7-description",
@@ -1802,10 +1820,16 @@ export async function runChecks({
   // rather than checked on its own: two sentences saying what Nextly is, in
   // two files nobody reads together, is how the second one was still calling
   // this an app framework months after the first stopped.
-  if (trackedSet.has(CONTEXT7_CONFIG)) {
+  //
+  // Held whether or not the file is there: a configuration that is deleted or
+  // never tracked is an indexer left to guess, and a check that skipped it
+  // would report that as clean.
+  {
     const core = packages.find(pkg => pkg.json.name === CORE_PACKAGE);
     const finding = context7Findings(
-      readContext7Config(join(repoRoot, CONTEXT7_CONFIG)),
+      trackedSet.has(CONTEXT7_CONFIG)
+        ? readContext7Config(join(repoRoot, CONTEXT7_CONFIG))
+        : undefined,
       core?.json.description
     );
     if (finding) findings.push(finding);
