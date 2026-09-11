@@ -52,7 +52,13 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
-import { applyOp, OpError, positionOf, type OpPosition } from "./ops";
+import {
+  applyOp,
+  OpError,
+  positionOf,
+  type BuilderOp,
+  type OpPosition,
+} from "./ops";
 
 /**
  * The category an entry falls under when its block declares none.
@@ -600,33 +606,35 @@ function offerableDefinition(
 }
 
 /**
- * Why a placed instance would not compose on THIS page, or nothing when it
- * would.
+ * Why an edit would leave an instance standing on THIS page, or nothing when
+ * it would not.
  *
- * A definition is judged offerable on its own — its roots, its caps — but
- * whether the page has ROOM for it is a property of the page: the resolver
- * spends one node budget across every instance it inlines, and nests to a
- * depth counted from the page root, so a page near its cap can hold the one
- * stored instance node and then leave it unresolved when it renders. The
+ * A definition is judged offerable on its own — its roots — but whether the
+ * page has ROOM for it is a property of the page: the resolver spends one
+ * node budget across every instance it inlines, in document order, and nests
+ * to a depth counted from the page root, so a page near its cap can hold the
+ * one stored instance node and then leave it unresolved when it renders. The
  * apply cannot see that (it counts stored nodes, and an instance is one), so
- * the insert asks the RESOLVER ITSELF: the candidate document is composed the
+ * the edit asks the RESOLVER ITSELF: the candidate document is composed the
  * way the canvas will compose it, and the reason the resolver gives is the
  * reason the author is told.
  *
- * What refuses is every instance the placement LEAVES STANDING that stood
- * before it — the placed one, but also an instance nested inside its
- * definition, which the resolver reports under an id it minted rather than
- * the placed node's, and an instance already on the page that the new one
- * takes the budget from, because the budget is spent in document order. Each
- * is a placeholder the click would put on the page. An instance the page
- * could not hold BEFORE the click is not the click's doing, so the two
- * compositions are compared rather than the second read alone; the resolver
- * mints an instance's ids from what it derives them from, so the same
- * instance answers to the same id in both.
+ * Asked of an OP rather than of a placed node, because a move asks the same
+ * question: an instance carried ahead of another takes the budget that one
+ * had, and one carried into another's slot content nests one composition
+ * deeper. What refuses is every instance the op LEAVES STANDING that stood
+ * before it — the placed one, an instance nested inside its definition, which
+ * the resolver reports under an id it minted rather than the node's, and an
+ * instance already on the page that the edit takes the budget from. Each is
+ * a placeholder the edit would put on the page. An instance the page could
+ * not hold BEFORE the edit is not the edit's doing, so the two compositions
+ * are compared rather than the second read alone; the resolver mints an
+ * instance's ids from what it derives them from, so the same instance answers
+ * to the same id in both.
  *
- * Asked at the insert rather than of every tile per keystroke, for the reason
+ * Asked at the edit rather than of every tile per keystroke, for the reason
  * the pattern planner leaves the machine caps to the apply: room is a property
- * of the page that moves with every edit, and two compositions per click are
+ * of the page that moves with every edit, and two compositions per edit are
  * cheap where one per tile per keystroke is not.
  *
  * `undefined` for "it composes", and for a reason that is not about room —
@@ -641,18 +649,13 @@ function offerableDefinition(
  */
 export function compositionRefusal(
   document: BlockDocument,
-  node: BlockNode,
-  at: OpPosition,
+  op: BuilderOp,
   definitions: ComponentLookup,
   limits?: DocumentLimits
 ): CompositionRefusal | undefined {
   let candidate: BlockDocument;
   try {
-    candidate = applyOp(
-      document,
-      { kind: "insert", node, at },
-      limits
-    ).document;
+    candidate = applyOp(document, op, limits).document;
   } catch (error) {
     if (error instanceof OpError) return undefined;
     throw error;

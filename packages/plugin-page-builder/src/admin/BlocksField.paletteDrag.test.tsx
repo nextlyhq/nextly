@@ -628,9 +628,6 @@ describe("what the editor reads before anyone asks for it", () => {
       patterns: "ready",
       components: "cut",
     });
-    // And the caps the canvas resolves under, so a tile is judged under the
-    // same bounds the instance is drawn under.
-    expect(panel.documentLimits).toBe(render.limits);
   });
 });
 

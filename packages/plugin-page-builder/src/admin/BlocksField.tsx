@@ -1880,7 +1880,6 @@ const COMPONENT_READ_NOTES: Readonly<
 
 function InsertPanelWithLibrary({
   components,
-  documentLimits,
   ...props
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
@@ -1896,8 +1895,6 @@ function InsertPanelWithLibrary({
    * canvas will draw — and where the read stands, which the panel says.
    */
   components: ComponentLibraryRead;
-  /** The caps the canvas resolves under, so a tile is judged under the same. */
-  documentLimits: DocumentLimits;
 }): React.JSX.Element {
   const library = usePatternLibrary();
   return (
@@ -1906,7 +1903,6 @@ function InsertPanelWithLibrary({
       patterns={library.patterns}
       components={components.components}
       componentDefinitions={components.definitions}
-      documentLimits={documentLimits}
       library={{
         patterns: tierStateOf(library),
         components: tierStateOf(components),
@@ -3015,7 +3011,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
                 components={offered}
-                documentLimits={documentLimits}
               />
             ),
             /*
