@@ -166,6 +166,8 @@ Nextly supports API keys via the `Authorization: Bearer nx_live_...` header (no 
 | `full-access` | All permissions of the creator's roles.                 |
 | `role-based`  | Permissions of an explicitly chosen role (independent of the creator). |
 
+A key created by a Super Admin copies the whole permission catalogue rather than the role's rows, because the Super Admin's power is a bypass and the role only holds the permissions that existed when the install was set up: a `read-only` key of theirs can read every collection, including one added later, and still cannot write.
+
 Keys can be time-bound (set an expiry date) and revoked at any time. The full key value is shown to the operator **once** at creation; the database only stores the SHA-256 hash.
 
 ### How verification works

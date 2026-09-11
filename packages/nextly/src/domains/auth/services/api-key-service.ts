@@ -35,7 +35,7 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { toDbError } from "../../../database/errors";
@@ -670,6 +670,11 @@ export class ApiKeyService extends BaseService {
    * - **role-based** — the assigned role's permission set.
    *   If the role has been deleted (`roleId === null`), returns `[]` and logs a warning.
    *
+   * A super-admin creator's "full permission set" is the catalogue, every
+   * permission the install declares, because a super-admin's power is a bypass
+   * and the role's own rows are the ones that existed at setup. The key's kind
+   * still bounds it: read-only stays read-only.
+   *
    * @param tokenType - The key's token type
    * @param roleId - The assigned role ID (only relevant for "role-based" keys)
    * @param userId - The key creator's user ID
@@ -742,7 +747,17 @@ export class ApiKeyService extends BaseService {
       }
       rows = await this.resolveRolePermissionRows(roleId);
     } else {
-      const all = await this.resolveUserPermissionRows(userId);
+      // A super-admin's power is a bypass, not a list. The role is granted
+      // every permission that exists when the install is set up and nothing
+      // grants it the ones a later collection adds, while the session never
+      // needs the rows. A key copies the rows, so a key of theirs held a stale
+      // subset at best and, on an install whose first user came before the
+      // grant, nothing: every request refused, and the first key an operator
+      // mints to try an integration with. The catalogue is what their key
+      // copies, bounded by the key's kind like anyone else's.
+      const all = (await this.ownerIsSuperAdmin(userId))
+        ? await this.resolveCataloguePermissionRows()
+        : await this.resolveUserPermissionRows(userId);
       // Still filtered on the STORED slug rather than on `action === "read"`.
       // A deliberately custom slug is supported, so the two disagree — a row
       // named `view-dashboard` on action `read` is excluded by the slug test
@@ -835,6 +850,46 @@ export class ApiKeyService extends BaseService {
       .where(eq(this.rolePermissionsTable.roleId, roleId));
 
     return rows as GrantedPermission[];
+  }
+
+  /**
+   * Every permission the install declares today, orphans left out.
+   *
+   * Read from the catalogue rather than from any role, because no role is
+   * kept complete: the super-admin role is granted the rows that exist at
+   * setup and never the ones a later collection adds. A permission a package
+   * stopped declaring stays in the table, marked, so a grant survives; a
+   * super-admin's key does not inherit it, since nothing else new can.
+   */
+  private async resolveCataloguePermissionRows(): Promise<GrantedPermission[]> {
+    const rows = await this.db
+      .select({
+        slug: this.permissionsTable.slug,
+        action: this.permissionsTable.action,
+        resource: this.permissionsTable.resource,
+      })
+      .from(this.permissionsTable)
+      .where(isNull(this.permissionsTable.orphanedAt));
+    return rows as GrantedPermission[];
+  }
+
+  /** Whether a user holds the super-admin role, by the slug every other check reads. */
+  private async ownerIsSuperAdmin(userId: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: this.rolesTable.id })
+      .from(this.userRolesTable)
+      .innerJoin(
+        this.rolesTable,
+        eq(this.userRolesTable.roleId, this.rolesTable.id)
+      )
+      .where(
+        and(
+          eq(this.userRolesTable.userId, userId),
+          eq(this.rolesTable.slug, "super-admin")
+        )
+      )
+      .limit(1);
+    return (rows as unknown[]).length > 0;
   }
 
   private async resolveUserPermissionRows(
@@ -1007,23 +1062,7 @@ export class ApiKeyService extends BaseService {
     if (!roleId) return;
 
     // Super-admin bypass: a super-admin can assign any role
-
-    const superAdminCheck = await this.db
-      .select({ id: this.rolesTable.id })
-      .from(this.userRolesTable)
-      .innerJoin(
-        this.rolesTable,
-        eq(this.userRolesTable.roleId, this.rolesTable.id)
-      )
-      .where(
-        and(
-          eq(this.userRolesTable.userId, creatorId),
-          eq(this.rolesTable.slug, "super-admin")
-        )
-      )
-      .limit(1);
-
-    if ((superAdminCheck as unknown[]).length > 0) return;
+    if (await this.ownerIsSuperAdmin(creatorId)) return;
 
     const creatorRoleRows = await this.db
       .select({ roleId: this.userRolesTable.roleId })

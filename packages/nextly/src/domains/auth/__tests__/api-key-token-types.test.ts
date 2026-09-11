@@ -48,6 +48,7 @@ function createTestAdapter(db: unknown) {
 const KEY_A = "test-key-a";
 const KEY_B = "test-key-b";
 const KEY_CACHE = "test-key-cache";
+const KEY_SUPER = "test-key-super";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test suite
@@ -208,6 +209,7 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
     invalidateApiKeyPermissionsCache(KEY_A);
     invalidateApiKeyPermissionsCache(KEY_B);
     invalidateApiKeyPermissionsCache(KEY_CACHE);
+    invalidateApiKeyPermissionsCache(KEY_SUPER);
     await testDb.reset();
     testDb.close();
     vi.resetAllMocks();
@@ -373,6 +375,130 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
       });
     });
 
+    // ── a super-admin's key ────────────────────────────────────────────────
+    describe("a key created by a super-admin", () => {
+      /**
+       * A super-admin whose role holds NO permission rows, which is what an
+       * install looks like whose first user came before the setup grant, and
+       * what every install drifts toward: the role is granted the rows that
+       * exist at setup and never the ones a later collection adds. Their power
+       * is the bypass, so the session never notices; a key copies the rows.
+       */
+      let superAdminId: string;
+
+      beforeEach(async () => {
+        superAdminId = randomUUID();
+        const superAdminRoleId = randomUUID();
+        await testDb.db.insert(testDb.schema.users).values({
+          id: superAdminId,
+          email: `super-${superAdminId}@example.com`,
+          isActive: true,
+        });
+        await testDb.db.insert(testDb.schema.roles).values({
+          id: superAdminRoleId,
+          name: "Super Admin",
+          slug: "super-admin",
+          level: 100,
+          isSystem: true,
+        });
+        await testDb.db.insert(testDb.schema.userRoles).values({
+          id: randomUUID(),
+          userId: superAdminId,
+          roleId: superAdminRoleId,
+        });
+        // A permission a package stopped declaring: kept in the table so a
+        // grant survives, and never copied to a key that inherits nothing else new.
+        await testDb.db.insert(testDb.schema.permissions).values({
+          id: randomUUID(),
+          name: "Read Legacy",
+          slug: "read-legacy",
+          action: "read",
+          resource: "legacy",
+          orphanedAt: new Date(),
+        });
+      });
+
+      it("read-only: holds every read-* permission the install declares, from the catalogue", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect([...slugs].sort()).toEqual([
+          "read-media",
+          "read-posts",
+          "read-users",
+        ]);
+      });
+
+      it("read-only: still cannot write, whoever created it", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs.some(s => !s.startsWith("read-"))).toBe(false);
+      });
+
+      it("full-access: holds every permission the install declares", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect([...slugs].sort()).toEqual([
+          "create-posts",
+          "delete-posts",
+          "read-media",
+          "read-posts",
+          "read-users",
+          "update-posts",
+        ]);
+      });
+
+      it("holds a permission added after the role was granted, which no role copy would", async () => {
+        // The drift the catalogue exists for: a collection added after setup.
+        await testDb.db.insert(testDb.schema.permissions).values({
+          id: randomUUID(),
+          name: "Read Events",
+          slug: "read-events",
+          action: "read",
+          resource: "events",
+        });
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs).toContain("read-events");
+      });
+
+      it("never inherits a permission the install stopped declaring", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs).not.toContain("read-legacy");
+      });
+
+      it("is the control that an ordinary creator still copies their own rows only", async () => {
+        // The editor's read-only key is judged the way it was: their rows,
+        // not the catalogue. `read-media` is in the catalogue and not theirs.
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          userId,
+          KEY_A
+        );
+        expect(slugs).not.toContain("read-media");
+      });
+    });
     // ── role-based ─────────────────────────────────────────────────────────
 
     describe("role-based token type", () => {

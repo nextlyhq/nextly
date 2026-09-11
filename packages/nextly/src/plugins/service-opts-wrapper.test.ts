@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { resolveServiceOpts, wrapCollectionsForPlugin } from "./service-opts";
+import {
+  resolveServiceOpts as resolve,
+  type ServiceOpts,
+  wrapCollectionsForPlugin as wrap,
+} from "./service-opts";
+
+/** No roles for anyone: what a fresh account looks like, and what the tests below assume. */
+const deps = { listRoleSlugs: async () => [] as string[] };
+const wrapCollectionsForPlugin = (collections: never) =>
+  wrap(collections, deps);
+const resolveServiceOpts = (opts: ServiceOpts) => resolve(opts, deps);
 
 function mockCollections() {
   return {
@@ -53,7 +63,13 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
       "vault",
       { title: "a" },
       {
-        user: { id: "u1", email: "u@e.com", role: "", permissions: [] },
+        user: {
+          id: "u1",
+          email: "u@e.com",
+          role: "",
+          roles: [],
+          permissions: [],
+        },
         overrideAccess: false,
       }
     );
@@ -81,7 +97,13 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
       "vault",
       { title: "a" },
       {
-        user: { id: "u1", email: "u@e.com", role: "", permissions: [] },
+        user: {
+          id: "u1",
+          email: "u@e.com",
+          role: "",
+          roles: [],
+          permissions: [],
+        },
         overrideAccess: false,
         authenticatedScope: {
           actorType: "apiKey",
@@ -207,12 +229,14 @@ describe("the hook context a plugin passes", () => {
     );
   });
 
-  it("is absent when the caller passes none", () => {
+  it("is absent when the caller passes none", async () => {
     // The control: a facade that invented a context would satisfy the two
     // above without carrying anything the caller said.
-    expect(resolveServiceOpts({ as: "system" }).context).toBeUndefined();
     expect(
-      resolveServiceOpts({ as: "system", context: { a: 1 } }).context
+      (await resolveServiceOpts({ as: "system" })).context
+    ).toBeUndefined();
+    expect(
+      (await resolveServiceOpts({ as: "system", context: { a: 1 } })).context
     ).toEqual({ a: 1 });
   });
 });

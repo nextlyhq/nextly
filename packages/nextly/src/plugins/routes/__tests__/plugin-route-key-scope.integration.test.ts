@@ -127,13 +127,12 @@ afterEach(async () => {
  * A `viewer` role holding ONLY `read-posts`, and a role-based key scoped to it,
  * minted by the super-admin first user.
  *
- * Role-based rather than read-only because `resolveApiKeyPermissions` derives a
- * read-only key's grants from its OWNER's enumerated slugs — and a super-admin
- * has none, its power being an implicit bypass rather than a list. Such a key
- * resolves to an empty scope and is refused everything, which cannot separate
- * "held to its grant" from "denied outright". A role-based key resolves from
- * the ROLE, so it holds exactly `read-posts` and both directions are testable.
- * It is also the vector `auth/authenticated-scope.ts` names in its own header.
+ * Role-based so the key holds exactly `read-posts`, which makes both directions
+ * testable against one grant. It is also the vector `auth/authenticated-scope.ts`
+ * names in its own header. The super-admin's own read-only key is the other
+ * case below: it used to resolve to an empty scope, because a super-admin's
+ * role holds the rows that existed at setup and their power is the bypass, so
+ * the first key an operator minted was refused everything.
  */
 async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
   const nextly = handle!.nextly as unknown as {
@@ -224,6 +223,94 @@ async function viewerKeyOwnedBySuperAdmin(): Promise<string> {
 }
 
 let ownerId = "";
+
+/**
+ * The super-admin first user's OWN read-only key, the first key an operator
+ * mints to try an integration with. Its grants are the catalogue's read
+ * permissions rather than the role's rows, so it reads whatever the install
+ * declares, and still cannot write.
+ */
+async function readOnlyKeyOwnedBySuperAdmin(): Promise<string> {
+  const nextly = handle!.nextly as unknown as {
+    users: {
+      create: (a: { data: Record<string, unknown> }) => Promise<{
+        item: { id: string };
+      }>;
+    };
+  };
+  const owner = await nextly.users.create({
+    data: {
+      email: "owner@example.com",
+      password: "Password123!",
+      name: "Owner",
+      isActive: true,
+    },
+  });
+  const apiKeys = handle!.getService("apiKeyService") as unknown as {
+    createApiKey: (
+      userId: string,
+      input: { name: string; tokenType: string; expiresIn: string }
+    ) => Promise<{ key: string; meta: { id: string } }>;
+    resolveApiKeyPermissions: (
+      tokenType: string,
+      roleId: string | null,
+      userId: string,
+      keyId: string
+    ) => Promise<string[]>;
+  };
+  const { key, meta } = await apiKeys.createApiKey(owner.item.id, {
+    name: "the operator's own read-only key",
+    tokenType: "read-only",
+    expiresIn: "never",
+  });
+  const scope = await apiKeys.resolveApiKeyPermissions(
+    "read-only",
+    null,
+    owner.item.id,
+    meta.id
+  );
+  // Named here so an emptied scope fails by its cause rather than downstream
+  // as a refusal that reads like the guard working.
+  expect(scope, "the key must hold read-posts and nothing writable").toContain(
+    "read-posts"
+  );
+  expect(scope.every(slug => slug.startsWith("read-"))).toBe(true);
+  ownerId = owner.item.id;
+  return key;
+}
+
+describe("a super-admin's own read-only key", () => {
+  it("reads through a plugin route, the way the operator's first key is used", async () => {
+    const key = await readOnlyKeyOwnedBySuperAdmin();
+    expect(
+      await isSuperAdmin(ownerId),
+      "the key's owner must be a super-admin, or this test proves nothing"
+    ).toBe(true);
+
+    const res = await post("read", { authorization: `Bearer ${key}` });
+    expect(
+      res.status,
+      "a 401 would mean the key never reached the handler"
+    ).not.toBe(401);
+    const body = (await res.json()) as { read: boolean; reason?: string };
+    expect(
+      body.read,
+      "a super-admin's read-only key holds the catalogue's read permissions; " +
+        `a refusal here is the empty scope back: ${body.reason ?? ""}`
+    ).toBe(true);
+  });
+
+  it("still cannot write: the catalogue is bounded by the key's kind", async () => {
+    const key = await readOnlyKeyOwnedBySuperAdmin();
+    const res = await post("write", { authorization: `Bearer ${key}` });
+    expect(res.status).not.toBe(401);
+    const body = (await res.json()) as { wrote: boolean };
+    expect(
+      body.wrote,
+      "a read-only key wrote through a plugin route because its owner is a super-admin"
+    ).toBe(false);
+  });
+});
 
 describe("a plugin route judges an API key on its own grants", () => {
   it("refuses a write the key's own grant does not cover", async () => {

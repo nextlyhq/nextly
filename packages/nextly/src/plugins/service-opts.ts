@@ -1,5 +1,6 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
+import { buildUserContext } from "../auth/user-context";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { NextlyError } from "../errors/nextly-error";
@@ -8,6 +9,7 @@ import type {
   CollectionEntry,
   CollectionService,
 } from "../services/collections/collection-service";
+import { listRoleSlugsForUser } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
@@ -16,9 +18,9 @@ import type { AuthUser } from "../types/auth";
  * Default: `system` when no `user` is supplied (no-user → system). Validation/
  * hooks/events ALWAYS run, even under `system` — only the access check is bypassed.
  *
- * Under `as:'user'`, RBAC is enforced by `user.id` (DB lookup). Code-defined
- * `access` rules that read `ctx.user.role` see it empty — pass `system`, or rely on
- * DB RBAC, for now (documented v1 limitation).
+ * Under `as:'user'`, RBAC is enforced by `user.id` (DB lookup), and the caller's
+ * roles are resolved so a code-defined `access` rule reading `ctx.user.role` or
+ * `ctx.user.roles` sees the same caller a session request would.
  */
 export interface ServiceOpts {
   /**
@@ -80,14 +82,39 @@ export interface ServiceOpts {
   authenticatedScope?: AuthenticatedScope;
 }
 
-/** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
-export function resolveServiceOpts(opts: ServiceOpts): {
+/**
+ * What resolving a caller needs from the outside: the roles a user holds, by
+ * slug. Injectable so the translation is tested without a database; the facade
+ * wrapper supplies the real lookup.
+ */
+export interface ServiceOptsDeps {
+  listRoleSlugs: (userId: string) => Promise<string[]>;
+}
+
+const REAL_DEPS: ServiceOptsDeps = { listRoleSlugs: listRoleSlugsForUser };
+
+/**
+ * Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`.
+ *
+ * A caller is built by `buildUserContext`, the one constructor every
+ * authenticated path uses, with the roles it holds resolved here. Built by hand
+ * with `role: ""`, as it was, a code-defined rule such as
+ * `req.user?.role === "editor"` refused every caller on the plugin path, while
+ * the same caller's own request passed it; and a negative rule granted what it
+ * was written to refuse. The permission list stays empty: the access services
+ * resolve permissions from the id, and from the key's own scope when there is
+ * one.
+ */
+export async function resolveServiceOpts(
+  opts: ServiceOpts,
+  deps: ServiceOptsDeps = REAL_DEPS
+): Promise<{
   user?: RequestContext["user"];
   authenticatedScope?: AuthenticatedScope;
   overrideAccess: boolean;
   context?: Record<string, unknown>;
   request?: Request;
-} {
+}> {
   const { as, user, context, request } = opts;
   // The caller's own scope wins when named; otherwise the one the dispatcher
   // pinned for this request. A route that omits it is the common case, not the
@@ -113,9 +140,21 @@ export function resolveServiceOpts(opts: ServiceOpts): {
         logContext: { reason: "service-opts-user-missing" },
       });
     }
+    const identity = buildUserContext({
+      id: user.id,
+      name: user.name ?? undefined,
+      email: user.email,
+      roles: await deps.listRoleSlugs(user.id),
+    });
     return {
       overrideAccess: false,
-      user: { id: user.id, email: user.email, role: "", permissions: [] },
+      user: {
+        ...identity,
+        id: user.id,
+        email: user.email,
+        role: identity.role ?? "",
+        permissions: [],
+      },
       context,
       request,
       ...(authenticatedScope ? { authenticatedScope } : {}),
@@ -220,7 +259,8 @@ export type PluginCollectionService = Omit<
  * `overrideAccess` directly.
  */
 export function wrapCollectionsForPlugin(
-  collections: CollectionService
+  collections: CollectionService,
+  deps: ServiceOptsDeps = REAL_DEPS
 ): PluginCollectionService {
   return new Proxy(collections, {
     get(target, prop, receiver) {
@@ -235,7 +275,10 @@ export function wrapCollectionsForPlugin(
         prop as string
       ];
       return async (...args: unknown[]) => {
-        const resolved = resolveServiceOpts((args[idx] as ServiceOpts) ?? {});
+        const resolved = await resolveServiceOpts(
+          (args[idx] as ServiceOpts) ?? {},
+          deps
+        );
         const next = [...args];
         // Spread rather than named one by one. Rebuilding this literal is
         // what kept a plugin from reaching the hook context, and the same
