@@ -41,7 +41,10 @@ vi.mock("../di/container", () => ({
   container: { get: containerGet, has: containerHas },
 }));
 
-vi.mock("../services/lib/permissions", () => ({
+vi.mock("../services/lib/permissions", async importOriginal => ({
+  // Derived from the real module, so an export the subject gains later is
+  // still there; a closed literal broke on exactly that.
+  ...(await importOriginal<typeof import("../services/lib/permissions")>()),
   // `readCaller` (via `authenticated-read.ts`) resolves this to build the
   // caller it hands the dashboard service. Unmocked, it falls through to a
   // real database lookup that has nothing to connect to in this suite.
