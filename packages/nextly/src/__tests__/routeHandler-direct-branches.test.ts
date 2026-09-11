@@ -59,8 +59,10 @@ vi.mock("../di/container", () => ({
 
 // `services/lib/permissions` is pulled into routeHandler for super-admin
 // guards. None of the tested branches hit those guards but the import must
-// resolve.
-vi.mock("../services/lib/permissions", () => ({
+// resolve. Derived from the real module rather than written out: a closed
+// literal breaks the moment the subject imports one more export, and did.
+vi.mock("../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<typeof import("../services/lib/permissions")>()),
   isSuperAdmin: vi.fn().mockResolvedValue(false),
   containsSuperAdminRole: vi.fn().mockResolvedValue(false),
   hasSuperAdminExcluding: vi.fn().mockResolvedValue(false),

@@ -171,6 +171,21 @@ describe("a change that redefines the graph for every package", () => {
     expect(rootWideChanges(["turbo.jsonc"])).toEqual(["turbo.jsonc"]);
   });
 
+  it("refuses for the dependency graph: the root manifest and the lockfile", () => {
+    // A transitive upgrade changes what every package compiles against while
+    // touching no path inside any of them. Narrowed, that diff derives an
+    // empty scope and the packages it broke are never gated.
+    expect(rootWideChanges(["pnpm-lock.yaml"])).toEqual(["pnpm-lock.yaml"]);
+    expect(rootWideChanges(["package.json"])).toEqual(["package.json"]);
+  });
+
+  it("scopes a package's own manifest to that package", () => {
+    // The root manifest is root-wide by its PATH, not its name: a workspace's
+    // manifest is that workspace's change, and reading every `package.json` as
+    // graph-wide would make a dependency bump in one plugin test everything.
+    expect(rootWideChanges(["packages/plugin-seo/package.json"])).toEqual([]);
+  });
+
   it("says so in the report as well as in the refusal", () => {
     // The two audiences are separate: one is spliced into a command, the other
     // is read by a person, and a person following the report must not be told

@@ -344,6 +344,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "definePlugin (value)",
   "getCachedNextly (value)",
   "group (value)",
+  "isLocaleSelector (value)",
   "isPluginCategory (value)",
   "isSecret (value)",
   "isTimeseriesInterval (value)",

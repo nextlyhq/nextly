@@ -23,18 +23,12 @@ describe("a field group declared before the group it references", () => {
           {
             slug: "a",
             label: { singular: "a" },
-            fields: [
-              { name: "b", type: "fieldGroup", fieldGroup: "b" },
-              text,
-            ],
+            fields: [{ name: "b", type: "fieldGroup", fieldGroup: "b" }, text],
           },
           {
             slug: "b",
             label: { singular: "b" },
-            fields: [
-              { name: "a", type: "fieldGroup", fieldGroup: "a" },
-              text,
-            ],
+            fields: [{ name: "a", type: "fieldGroup", fieldGroup: "a" }, text],
           },
         ],
       } as never);

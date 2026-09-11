@@ -190,11 +190,33 @@ export interface TransactionContext {
   /**
    * Update records.
    *
+   * @remarks
+   * Built by the adapter rather than by the Drizzle query builder, as `insert`
+   * is: the statement writes the columns the PHYSICAL table has, where the
+   * pooled `update` writes the ones the runtime model declares. A column the
+   * model declares binds through its own encoder, exactly as the query builder
+   * binds it; one it does not declare binds the way this adapter's
+   * transactional insert binds every value; a key naming no column on the
+   * table is a database error rather than a silent drop. A key whose value is
+   * `undefined` is not written, `null` is, and an update naming nothing to
+   * write is refused.
+   *
+   * When `options.returning` asks for rows, they come from a read on this
+   * transaction, decoded as every read is — the model's view of the row,
+   * whatever columns were named. On PostgreSQL and SQLite that read is by the
+   * identities the statement reported through RETURNING, so it is exactly the
+   * rows this update changed. MySQL has no RETURNING, so there the read
+   * re-runs `where`, as it always has on that dialect: an update whose own
+   * write falsifies its `where` reads back nothing, and a row another
+   * transaction adds under the predicate meanwhile is included. A fenced
+   * compare-and-set wants `updateCount` on every dialect.
+   *
    * @param table - Table name
-   * @param data - Data to update
+   * @param data - Data to update, keyed by SQL column name; Drizzle property
+   *   names are accepted as well
    * @param where - Conditions for records to update
    * @param options - Update options
-   * @returns Updated records (with RETURNING columns if specified)
+   * @returns The updated rows when `returning` asked for them, else `[]`
    */
   update<T = unknown>(
     table: string,

@@ -65,6 +65,7 @@ import {
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
+import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
   Pool as CallbackPool,
@@ -759,6 +760,15 @@ export class MySqlAdapter extends DrizzleAdapter {
    * Note: Savepoint methods are not implemented (set to undefined)
    * as savepoints are disabled in this adapter per approved approach.
    */
+  /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
+  protected override compositePrimaryKey(
+    tableObj: Record<string, unknown>
+  ): object[] {
+    return getTableConfig(
+      tableObj as unknown as MySqlTable
+    ).primaryKeys.flatMap(key => key.columns);
+  }
+
   private createTransactionContext(
     connection: PoolConnection
   ): TransactionContext {
@@ -947,6 +957,22 @@ export class MySqlAdapter extends DrizzleAdapter {
         // Fallback: return empty if we can't determine inserted rows
         return [];
       },
+
+      // Adapter-built, as `insert` above is; `transactionUpdate` says why.
+      // A column the model does not declare binds natively, as every value
+      // on this path's insert does.
+      update: this.transactionUpdate(
+        txDb,
+        async statement => {
+          // No RETURNING on MySQL: nothing to report, the read-back is by
+          // the caller's predicate.
+          await txDb().execute(statement);
+          return undefined;
+        },
+        // Structured values as JSON text: mysql2's formatter spells an object
+        // as `key = value` pairs and an array as a value list, neither JSON.
+        value => this.bindUnmodeledStructuredAsJson(value)
+      ),
 
       ...this.createTransactionForwarders(txDb),
 

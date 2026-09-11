@@ -50,6 +50,17 @@ export interface ForwardedContext {
    * tells a rule scoped to a visitor that a seed or a job made this write.
    */
   request: Request | undefined;
+  /**
+   * DATA. The content locale a read answers in or a write stores into, and
+   * what a missing translation falls back to. The request context has carried
+   * both for as long as it has existed, and every entry-service read accepts
+   * both — but they stopped here, so a facade caller was answered in the
+   * default locale whatever it asked for. A method whose destination declares
+   * neither (a delete, a count) receives and ignores them, which the spread
+   * permits and the docblock above explains.
+   */
+  locale: string | undefined;
+  fallbackLocale: string | false | undefined;
 }
 
 /** Read what the entry service needs off a {@link RequestContext}, whole. */
@@ -62,5 +73,7 @@ export function forwardedFromContext(
     authenticatedScope: context.authenticatedScope,
     context: context.context,
     request: context.request,
+    locale: context.locale,
+    fallbackLocale: context.fallbackLocale,
   };
 }

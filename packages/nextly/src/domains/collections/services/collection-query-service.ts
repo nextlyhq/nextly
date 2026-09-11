@@ -14,8 +14,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, or, like, ilike, sql, asc, desc, gte, lt } from "drizzle-orm";
-import type { SQL } from "drizzle-orm";
+import {
+  eq,
+  and,
+  or,
+  like,
+  ilike,
+  sql,
+  asc,
+  desc,
+  gte,
+  lt,
+  type SQL,
+  type SQLWrapper,
+} from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
@@ -122,11 +134,8 @@ import {
   type TranslationFilterState,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import {
-  isValidLocale,
-  resolveFallbackChain,
-  resolveRequestedLocale,
-} from "../../i18n/resolve-locale";
+import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
@@ -597,6 +606,17 @@ interface FilteredReadParams {
   /** When true, bypass all access control checks */
   overrideAccess?: boolean;
   /**
+   * Enforce FIELD-level read rules even on a read that is otherwise trusted.
+   *
+   * Carried on the aggregate surface for the same reason the row scope is: the
+   * search narrowing drops searchable fields the caller may not read, and an
+   * aggregate resolved without this trusts every one of them. The page would
+   * then match on a narrowed set of fields while the total beside it matched on
+   * all of them — and `search=<guess>` against a withheld field becomes a
+   * probe whose answer is the count.
+   */
+  enforceFieldAccess?: boolean;
+  /**
    * The instant a timeseries window ends at, when the caller named one.
    *
    * Carried on the shared params so the plan can refuse an unusable one before
@@ -915,6 +935,18 @@ function toBuckets(
   }));
 }
 
+/**
+ * A Drizzle table as this service reads it: columns addressed by name.
+ *
+ * Narrower than `any` on purpose. The helpers below index this to build
+ * conditions, so `any` would drop checking from every one of those lookups and
+ * from the values handed to the query builder — which is what the repository
+ * prohibits rather than the dynamism itself. The value is genuinely dynamic
+ * (the table is built from user schema at runtime) and genuinely a column map,
+ * and this says exactly that.
+ */
+type DynamicSchema = Record<string, SQLWrapper | undefined>;
+
 export class CollectionQueryService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -975,42 +1007,6 @@ export class CollectionQueryService extends BaseService {
   // ============================================================
 
   /**
-   * Resolve the fallback chain for a read request, or `null` when localization is off.
-   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale);
-   * otherwise the requested locale's configured chain + default locale is used (spec §8).
-   */
-  private resolveLocaleChain(
-    locale: string | undefined,
-    fallbackLocale: string | false | undefined
-  ): string[] | null {
-    // `locale=all` is handled by a separate keyed-populate path — not a single-value chain.
-    if (!this.localization || locale === "all") return null;
-    const requested = resolveRequestedLocale(this.localization, locale);
-    // A per-request opt-out disables fallback: return the requested language only.
-    if (fallbackLocale === false || fallbackLocale === "none") {
-      return [requested];
-    }
-    // A concrete per-request fallback locale overrides the configured chain: the
-    // requested locale first, then the named fallback's own chain (deduped).
-    if (
-      typeof fallbackLocale === "string" &&
-      isValidLocale(this.localization, fallbackLocale)
-    ) {
-      const seen = new Set<string>();
-      return [
-        requested,
-        ...resolveFallbackChain(this.localization, fallbackLocale),
-      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
-    }
-    // The global localization.fallback switch (default true) disables fallback
-    // for ordinary reads when turned off.
-    if (!this.localization.fallback) {
-      return [requested];
-    }
-    return resolveFallbackChain(this.localization, requested);
-  }
-
-  /**
    * `locale=all` populate (admin/export): set each localized field to a language-keyed object
    * covering every configured locale. No-op when localization is off, the request isn't
    * `locale=all`, or the collection isn't localized.
@@ -1051,7 +1047,8 @@ export class CollectionQueryService extends BaseService {
     preloaded?: CompanionSchema | null,
     statusFilterValues?: readonly string[] | null
   ): Promise<void> {
-    if (!this.localization || locale !== "all" || rows.length === 0) return;
+    if (!this.localization || locale !== EVERY_TRANSLATION || rows.length === 0)
+      return;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return;
@@ -1544,8 +1541,7 @@ export class CollectionQueryService extends BaseService {
   private buildLocalizedQueryContext(
     companion: CompanionSchema | null,
     localeChain: string[] | null,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
-    schema: any,
+    schema: DynamicSchema,
     statusFilterValues?: readonly string[] | null
   ): LocalizedQueryContext | null {
     if (!companion || !localeChain || localeChain.length === 0) return null;
@@ -1563,6 +1559,857 @@ export class CollectionQueryService extends BaseService {
         companion.hasStatus && statusFilterValues
           ? statusFilterValues
           : undefined,
+    };
+  }
+
+  /**
+   * The coarse collection-level read gate, asked once for every read verb.
+   *
+   * Returns the refusal envelope to hand straight back, or `null` to continue.
+   * Generic in the payload only because the three verbs answer with different
+   * shapes; the decision itself is one question and must not become three.
+   */
+  private denyCollectionRead<T>(params: {
+    collectionName: string;
+    accessUser?: UserContext;
+    /** Present only on the by-id path, which names the row it is judging. */
+    entryId?: string;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<CollectionServiceResult<T> | null> {
+    return this.accessService.checkCollectionAccess<T>(
+      params.collectionName,
+      "read",
+      params.accessUser,
+      params.entryId,
+      undefined,
+      params.overrideAccess,
+      params.routeAuthorized,
+      // A scoped API key is judged on its own read grant, so the session
+      // super-admin bypass does not apply to a super-admin-owned key here.
+      params.authenticatedScope
+    );
+  }
+
+  /**
+   * Which rows this caller may see, and in which lifecycle state.
+   *
+   * The two questions travel together on every read path — a listing, its
+   * total, and a read by id all narrow by the stored read rule AND by the
+   * Draft/Published filter, and both answers refuse by returning fewer rows
+   * rather than by raising, so the by-id path reports a row it may not see as a
+   * 404 rather than confirming it exists with a 403.
+   *
+   * The loaded collection comes back with them because every caller needs it
+   * next and re-reading it is a second metadata round trip.
+   */
+  private async resolveRowScope(params: {
+    collectionName: string;
+    accessUser?: UserContext;
+    overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+    status?: StatusOption;
+    /**
+     * The document a by-id read names, forwarded so a custom rule deciding FROM
+     * the id is asked about the same document the coarse gate judged. A listing
+     * or an aggregate leaves it absent, which is the honest answer there.
+     */
+    entryId?: string;
+  }): Promise<{
+    accessConstraint: Record<string, unknown> | null;
+    statusFilter: ReturnType<typeof resolveStatusFilter>;
+    collection: unknown;
+  }> {
+    const accessConstraint = await this.accessService.getAccessQueryConstraint(
+      params.collectionName,
+      params.accessUser,
+      params.overrideAccess,
+      // Scope the owner filter too: without this a super-admin-owned scoped key
+      // takes the session bypass and reads past its own grant, the predicate
+      // having been lifted before it ever reached SQL.
+      params.authenticatedScope,
+      params.entryId
+    );
+
+    // `resolveStatusFilter` returns null when the collection has no status
+    // column, the caller is trusted with no explicit choice, or explicit was
+    // 'all'. Callers guard on `schema.status` before using the value, so a
+    // collection with status disabled is never filtered on a missing column.
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const statusFilter = resolveStatusFilter({
+      collectionHasStatus: (collection as { status?: boolean }).status === true,
+      overrideAccess: params.overrideAccess === true,
+      explicit: params.status,
+    });
+
+    return { accessConstraint, statusFilter, collection };
+  }
+
+  /**
+   * The free-text search predicate, or `undefined` when the request has none.
+   *
+   * Returns an UNSATISFIABLE predicate rather than nothing when every
+   * searchable field carries a read rule this caller fails: adding no condition
+   * would match every otherwise-visible row, which is the opposite of a
+   * narrowed search and a worse answer than the leak the narrowing closes.
+   */
+  private async resolveSearchCondition(params: {
+    collectionName: string;
+    search?: string;
+    overrideAccess?: boolean;
+    enforceFieldAccess?: boolean;
+    schema: DynamicSchema;
+    localizedCtx: LocalizedQueryContext | null;
+  }): Promise<ReturnType<typeof and> | undefined> {
+    if (!params.search) return undefined;
+
+    const collectionMeta = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    if (params.search.trim().length < getMinSearchLength(collectionMeta)) {
+      return undefined;
+    }
+
+    // Narrowed, not refused: the caller never named a column, so dropping the
+    // ones they may not read answers what they asked. Leaving them in lets
+    // `search=<guess>` probe a hidden value through which rows come back.
+    const searchableFields = this.searchableFieldsFor(
+      params.collectionName,
+      collectionMeta,
+      fieldTrustOf(params)
+    );
+    if (searchableFields.length === 0) return sql`1 = 0`;
+
+    // localizedCtx routes localized searchable fields to a companion EXISTS
+    // instead of dropping them.
+    return this.buildSearchCondition(
+      params.schema,
+      searchableFields,
+      params.search,
+      this.queryDialect,
+      params.localizedCtx
+    );
+  }
+
+  /**
+   * The caller's own filter, as SQL — component predicates first, then whatever
+   * remains of the plain `where`.
+   *
+   * Component paths (`seo.metaTitle`) become EXISTS subqueries against the
+   * `comp_` tables, so they are lifted out before the generic where-builder,
+   * which has no way to express them and would otherwise drop them silently.
+   * The component table names and discriminator columns are returned as well as
+   * used: the list path resolves them here and hands them to its own count, so
+   * one request costs one registry lookup rather than two.
+   */
+  // Flagged on CRAP only (cyclomatic 12, cognitive 10 are both under their
+  // thresholds); CRAP multiplies complexity by MISSING coverage, and the
+  // coverage term here is estimated rather than measured. It is covered: the
+  // where-clause, component-filter and search tests in collection-query.test.ts
+  // all run through here, and removing the access predicate this method's
+  // sibling adds turns four tests red. The logic itself is not new — it was
+  // inlined in `listEntries` (cyclomatic 87) and `countEntries` (44), both
+  // critical, and lifting it out is what let those drop to 46 and 14.
+  // fallow-ignore-next-line complexity
+  private async resolveFilterConditions(params: {
+    collectionName: string;
+    /** The filter with the language and geo keys already removed. */
+    where: WhereFilter | undefined;
+    schema: DynamicSchema;
+    localizedCtx: LocalizedQueryContext | null;
+    resolvedComponentTables?: Map<string, string>;
+    resolvedComponentTypeColumns?: Map<string, string>;
+  }): Promise<{
+    conditions: SQLWrapper[];
+    componentTables: Map<string, string>;
+    componentTypeColumns: Map<string, string>;
+  }> {
+    const conditions: SQLWrapper[] = [];
+    if (!params.where) {
+      return {
+        conditions,
+        componentTables: params.resolvedComponentTables ?? new Map(),
+        componentTypeColumns: params.resolvedComponentTypeColumns ?? new Map(),
+      };
+    }
+
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    const fields = ((
+      (collection as Record<string, unknown>).schemaDefinition as
+        | Record<string, unknown>
+        | undefined
+    )?.fields ||
+      (collection as Record<string, unknown>).fields ||
+      []) as Array<{
+      name: string;
+      type: string;
+      component?: string;
+      components?: string[];
+    }>;
+
+    const { componentFilters, cleanedWhere } = extractComponentFieldConditions(
+      params.where,
+      fields
+    );
+
+    const componentTables =
+      params.resolvedComponentTables ??
+      (await this.resolveComponentTableNames(componentFilters));
+    const componentTypeColumns =
+      params.resolvedComponentTypeColumns ??
+      (await this.resolveComponentTypeColumns(
+        componentFilters,
+        componentTables.values()
+      ));
+
+    const componentCondition = this.buildComponentFieldConditions(
+      componentFilters,
+      getTableName(params.collectionName),
+      params.schema.id,
+      this.queryDialect,
+      componentTables,
+      componentTypeColumns
+    );
+    if (componentCondition) conditions.push(componentCondition);
+
+    // What remains once the language, geo and component keys have each been
+    // taken by the machinery that can express them.
+    if (cleanedWhere) {
+      const whereCondition = this.buildDrizzleCondition(
+        buildWhereClause(cleanedWhere),
+        params.schema,
+        this.queryDialect,
+        params.localizedCtx
+      );
+      if (whereCondition) conditions.push(whereCondition);
+    }
+
+    return { conditions, componentTables, componentTypeColumns };
+  }
+
+  /**
+   * Turn a settled read request into the SQL conditions that answer it.
+   *
+   * `listEntries` and `countEntries` are one read: the list asks this service
+   * for its own total, and a total taken under a different predicate than the
+   * rows describes rows the page correctly withheld. They were two copies of
+   * this sequence, kept in step by forwarding fourteen parameters from one to
+   * the other, and every one of those forwards was added after the copies had
+   * already come apart — a trusted reader whose drafts were listed and not
+   * counted, a scoped key shown the unscoped total beside filtered rows, a
+   * component-filtered page whose total counted the rows it excluded.
+   *
+   * So the predicate is built once and both queries are built from it. The
+   * order is load-bearing and is the reason this is one method rather than
+   * several: the status filter is resolved BEFORE the localized context, so
+   * per-locale EXISTS checks constrain by the same status; the `_translated`
+   * key is stripped BEFORE the geo and component extractors, which drop object
+   * keys they do not recognize.
+   */
+  // Flagged on CRAP only (cyclomatic 11, cognitive 10 are both under their
+  // thresholds); CRAP multiplies complexity by MISSING coverage, and the
+  // coverage term here is estimated rather than measured. Every read in
+  // collection-query.test.ts and collection-read-access-parity.test.ts reaches
+  // this method, and three separate mutations of it were confirmed to turn
+  // tests red: dropping the access predicate (4 red), dropping the status
+  // filter, and dropping the search condition.
+  //
+  // The sequence is not new code. It was written TWICE — inline in
+  // `listEntries` (cyclomatic 87, critical) and again in `countEntries` (44,
+  // critical) — and the two had already drifted apart repeatedly. Holding it in
+  // one method is what took those two to 46 and 14, and the whole file from 256
+  // cyclomatic to 213.
+  // fallow-ignore-next-line complexity
+  private async resolveReadConditions(params: {
+    collectionName: string;
+    /** The filter the read hooks settled on, not the caller's raw one. */
+    where: WhereFilter | undefined;
+    search?: string;
+    status?: StatusOption;
+    overrideAccess?: boolean;
+    enforceFieldAccess?: boolean;
+    /** The user access is judged for — absent when the read is trusted. */
+    accessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+    schema: DynamicSchema;
+    companion: CompanionSchema | null;
+    localeChain: string[] | null;
+    /**
+     * Whether to pull geo operators out of the filter.
+     *
+     * They are evaluated in memory over rows already fetched, so only a read
+     * that HAS rows can apply them. A count has none, and refuses a geo filter
+     * before reaching here rather than answering a total that ignores it.
+     */
+    extractGeo: boolean;
+    /**
+     * The instant this read resolves a due release against.
+     *
+     * Taken from the caller rather than read here, because the rows and the
+     * total beside them are two calls into this method and a release becoming
+     * due between them would let one response carry pre-release rows next to a
+     * post-release count.
+     */
+    releaseNow: Date;
+    /**
+     * The language filter, when the caller already stripped `_translated` from
+     * the filter it forwarded. Otherwise it is taken from `where` here.
+     */
+    translationFilter?: TranslationStatusFilter;
+    /** Component resolutions already made for this same request. */
+    resolvedComponentTables?: Map<string, string>;
+    resolvedComponentTypeColumns?: Map<string, string>;
+  }): Promise<{
+    /** The accumulated WHERE terms, in the order they were added. */
+    conditions: SQLWrapper[];
+    localizedCtx: LocalizedQueryContext | null;
+    statusFilter: ReturnType<typeof resolveStatusFilter>;
+    /** Geo operators to apply in memory; always empty when `extractGeo` is false. */
+    geoFilters: ReturnType<typeof extractGeoFilters>["geoFilters"];
+    /** The filter with the language and geo keys removed, for a caller that forwards it. */
+    whereAfterGeo: WhereFilter | undefined;
+    componentTables: Map<string, string>;
+    componentTypeColumns: Map<string, string>;
+    translationFilter: TranslationStatusFilter | null;
+  }> {
+    const conditions: SQLWrapper[] = [];
+    const { schema, companion, localeChain } = params;
+
+    // Row scope: the stored read rule's predicate and the Draft/Published
+    // filter. The predicate is applied last, but resolved here so a rule that
+    // refuses is judged against the same request as everything else.
+    const { accessConstraint, statusFilter } = await this.resolveRowScope({
+      collectionName: params.collectionName,
+      accessUser: params.accessUser,
+      overrideAccess: params.overrideAccess,
+      authenticatedScope: params.authenticatedScope,
+      status: params.status,
+    });
+    // The lifecycle predicate: the resolved status set, widened by whatever a
+    // due release has made public as of this read's instant. Built here rather
+    // than at each call site so the rows and the total beside them cannot
+    // disagree about which documents a release has revealed.
+    const releaseCondition = statusCondition({
+      filter: statusFilter,
+      statusColumn: schema.status,
+      idColumn: schema.id,
+      decisions: await this.releaseDecisions(
+        params.collectionName,
+        statusFilter,
+        params.releaseNow
+      ),
+    });
+    if (releaseCondition) conditions.push(releaseCondition);
+
+    // AFTER the status filter, so localized where/search EXISTS checks
+    // constrain by the per-locale status too — a published read must not match
+    // a draft translation.
+    const localizedCtx = this.buildLocalizedQueryContext(
+      companion,
+      localeChain,
+      schema,
+      statusFilter?.values
+    );
+
+    const searchCondition = await this.resolveSearchCondition({
+      collectionName: params.collectionName,
+      search: params.search,
+      overrideAccess: params.overrideAccess,
+      enforceFieldAccess: params.enforceFieldAccess,
+      schema,
+      localizedCtx,
+    });
+    if (searchCondition) conditions.push(searchCondition);
+
+    // The `_translated` language filter comes out FIRST: the geo and component
+    // extractors below drop object-valued keys they do not recognize, so it has
+    // to be removed before them and turned into a companion EXISTS/NOT EXISTS.
+    //
+    // Applied whether or not a `where` survives it. When it is the ONLY filter
+    // the caller forwards `where: undefined` with the key already stripped and
+    // passes the filter itself, and applying it only alongside a `where` would
+    // over-count exactly then.
+    const extracted = this.extractTranslationStatusFilter(params.where);
+    const translationFilter = params.translationFilter ?? extracted.filter;
+    if (translationFilter) {
+      const translationCondition =
+        await this.buildTranslationStatusFilterCondition(
+          params.collectionName,
+          translationFilter,
+          schema.id,
+          companion
+        );
+      if (translationCondition) conditions.push(translationCondition);
+    }
+
+    // Geo operators cannot be translated to SQL across dialects, so a path with
+    // rows lifts them out and applies them in memory.
+    const { geoFilters, cleanedWhere: whereAfterGeo } = params.extractGeo
+      ? extractGeoFilters(extracted.cleanedWhere)
+      : { geoFilters: [], cleanedWhere: extracted.cleanedWhere };
+
+    const filter = await this.resolveFilterConditions({
+      collectionName: params.collectionName,
+      where: whereAfterGeo,
+      schema,
+      localizedCtx,
+      resolvedComponentTables: params.resolvedComponentTables,
+      resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
+    });
+    conditions.push(...filter.conditions);
+    const { componentTables, componentTypeColumns } = filter;
+
+    const accessCondition = this.accessConstraintCondition(
+      params.collectionName,
+      accessConstraint,
+      schema,
+      localizedCtx
+    );
+    if (accessCondition) conditions.push(accessCondition);
+
+    return {
+      conditions,
+      localizedCtx,
+      statusFilter,
+      geoFilters,
+      whereAfterGeo,
+      componentTables,
+      componentTypeColumns,
+      translationFilter: translationFilter ?? null,
+    };
+  }
+
+  /**
+   * Remove the values that never leave the server: password hashes, and the
+   * owner column holding the creator's stable user id.
+   *
+   * One call rather than two decisions at each point, because the two are not
+   * independent — every place that has a reason to clear one has the same
+   * reason to clear the other, and the pipeline below runs it three times. The
+   * owner strip is unconditional while the password strip is not: a collection
+   * without a password field has no hash to clear, but every collection carries
+   * `created_by`, and a document readable by non-creators must not disclose it.
+   */
+  private redactServerOnlyFields(
+    rows: Record<string, unknown>[],
+    fields: FieldDefinition[]
+  ): void {
+    const clearsPasswords = hasPasswordField(fields);
+    for (const row of rows) {
+      if (clearsPasswords) stripPasswordFieldValues(row, fields);
+      stripSystemOwnerField(row);
+    }
+  }
+
+  /**
+   * Run the read-response pipeline over assembled rows: redact, hook, redact
+   * again, project, transform.
+   *
+   * The ORDER is the security contract, and it is why this is one method rather
+   * than a shape each read path arranges for itself. Every step is placed
+   * against a specific way a value escapes:
+   *
+   * 1. password hashes and the owner column go BEFORE any hook, so no hook is
+   *    handed a value it could copy onto a key the later passes do not watch;
+   * 2. JSON columns are decoded before the hooks, which are documented against
+   *    the configured value rather than SQLite's storage encoding;
+   * 3. related rows run their OWN collection's field hooks and access before
+   *    this collection's hooks can observe them, sharing one walk state for the
+   *    whole batch — batch expansion hands the same row object to several
+   *    parents, so a per-row pass would run a shared row's hooks once per
+   *    reference;
+   * 4. after each source hook phase (code, stored, field-level) the related
+   *    rows are re-sanitized, because a hook can write a denied target field
+   *    back onto one, and the root access pass knows only this collection's
+   *    schema;
+   * 5. field access runs BEFORE the field hooks and AGAIN after, sharing a
+   *    redactions store, so a hook cannot read a denied sibling while a
+   *    conditional rule still judges against the whole row;
+   * 6. selection runs LAST of the sanitizing steps, so every pass above judged
+   *    a whole row rather than a projected slice.
+   *
+   * `listEntries` and `getEntry` each had a copy of this, one looping and one
+   * on a single document, and the copies had already drifted: the detail path
+   * stripped the owner column after the stored hooks and the list path did not.
+   * Both are handed an array here — a detail read is a batch of one — so the
+   * order cannot be arranged differently for one of them again.
+   */
+  // Flagged on CRAP only (cyclomatic 12, cognitive 11 are both under their
+  // thresholds); CRAP multiplies complexity by MISSING coverage, and the
+  // coverage term here is estimated rather than measured. It is covered on both
+  // paths: deleting the final owner-column strip turns two tests red (one for
+  // the listing, one for the read by id) and skipping field selection turns a
+  // third red.
+  //
+  // The count resists further splitting for a reason worth stating: the ORDER
+  // of these passes is the security contract, and a reader has to be able to
+  // see it as one sequence. It replaces two copies of that sequence — inline in
+  // `listEntries` (cyclomatic 87) and `getEntry` (64), both critical — which
+  // had already diverged on where the owner column is cleared.
+  // fallow-ignore-next-line complexity
+  private async finalizeReadRows(params: {
+    rows: Record<string, unknown>[];
+    /**
+     * True for a read by id, whose afterRead handlers are handed the DOCUMENT
+     * rather than the page. The only per-path difference this method keeps, and
+     * it is kept because it is a published contract rather than drift — see the
+     * hook section below.
+     */
+    single?: boolean;
+    collectionName: string;
+    fields: FieldDefinition[];
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    sharedContext: Record<string, unknown>;
+    /**
+     * What the hooks may learn about the request that made this read — a
+     * visitor or a server. Resolved once by the caller and handed to every hook
+     * phase here, so the `afterRead` phases see the same facts the `beforeRead`
+     * phases did.
+     */
+    requestFacts: ResolvedRequestFacts;
+    user?: UserContext;
+    fieldAccessUser?: UserContext;
+    overrideAccess?: boolean;
+    enforceFieldAccess?: boolean;
+    trusted?: TrustBound;
+    authenticatedScope?: AuthenticatedScope;
+    select?: Record<string, boolean>;
+    richTextFormat?: RichTextOutputFormat;
+    locale?: string;
+  }): Promise<Record<string, unknown>[]> {
+    const { rows, collectionName, fields } = params;
+
+    // (1) Before any afterRead hook — collection, stored, or field-level — so a
+    // hook receiving the hash cannot copy it into an allowed property the later
+    // redaction does not look at. The final strip below stays as defense in
+    // depth.
+    this.redactServerOnlyFields(rows, fields);
+
+    // (2) On SQLite these columns come back as strings, and a hook is
+    // documented against the configured value.
+    decodeJsonFieldValues(rows, fields, params.locale);
+
+    // (3) One state for the whole batch — see the docblock on sharing.
+    const nestedState = this.relationshipService.createNestedHookState();
+    const nestedAccess = {
+      enforceFieldAccess: true,
+      fieldAccessUser: params.fieldAccessUser,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      // Narrows that bypass per RELATED collection. Absent means unchanged;
+      // dropping it here would silently restore the full bypass.
+      trusted: assumedBound(params.trusted),
+      authenticatedScope: params.authenticatedScope,
+    };
+    for (const row of rows) {
+      await this.relationshipService.applyNestedFieldHooks(
+        row,
+        collectionName,
+        nestedAccess,
+        nestedState
+      );
+    }
+    // Once, after the whole batch: the walk already applied field access to each
+    // related row before its parent's hooks; this re-applies it (restoring the
+    // removed evidence and re-judging the current content) to strip a denied
+    // field a parent hook reintroduced, mutated or added, then rebuilds labels
+    // from the survivors.
+    await this.relationshipService.finalizeRelatedRows(
+      nestedState,
+      nestedAccess
+    );
+
+    // What an afterRead handler is handed, and what it may hand back.
+    //
+    // This is NOT the array-vs-single difference the rest of this method
+    // flattens away — it is each read verb's PUBLISHED hook contract. A handler
+    // registered on a list receives the page as an array; one on a read by id
+    // receives the document, and reads `ctx.data.<field>` off it directly. Give
+    // the by-id path a one-element array instead and every such handler sees
+    // `undefined` for every field, silently: the hook still runs, still returns,
+    // and only the values go missing.
+    const toPayload = (rowSet: Record<string, unknown>[]): unknown =>
+      params.single ? rowSet[0] : rowSet;
+    const toRows = (
+      returned: unknown,
+      fallback: Record<string, unknown>[]
+    ): Record<string, unknown>[] => {
+      if (returned === undefined || returned === null) return fallback;
+      return params.single
+        ? [returned as Record<string, unknown>]
+        : (returned as Record<string, unknown>[]);
+    };
+
+    // Code-registered afterRead hooks, which may transform the data wholesale.
+    const transformed = await this.hookService.hookRegistry.execute(
+      "afterRead",
+      this.hookService.buildHookContext({
+        collection: collectionName,
+        operation: "read" as const,
+        data: toPayload(rows),
+        user: params.user,
+        context: params.sharedContext,
+        req: params.requestFacts,
+      })
+    );
+    const afterCodeHooks = toRows(transformed, rows);
+
+    // (4) A code hook may have RETURNED a reshaped related row carrying a denied
+    // field; sanitize before the stored and field-level hooks run, so one of
+    // them cannot read that field and copy it onto an allowed source key the
+    // final pass no longer looks at. The authoritative pass is idempotent over
+    // the shared walk state, so running it after each source phase is safe.
+    await this.relationshipService.reprojectRelatedRows(
+      afterCodeHooks,
+      collectionName,
+      nestedAccess,
+      nestedState
+    );
+
+    // Stored afterRead hooks (UI-configured).
+    const storedAfterResult = await this.hookService.storedHookExecutor.execute(
+      "afterRead",
+      params.storedHooks,
+      this.hookService.buildPrebuiltHookContext({
+        collection: collectionName,
+        operation: "read",
+        data: toPayload(afterCodeHooks),
+        // The signature wants a thenable; `async` on a body with nothing to
+        // await only asked for a suppression.
+        queryDatabase: () => Promise.resolve(false),
+        req: params.requestFacts,
+        user: params.user,
+        sharedContext: params.sharedContext,
+      })
+    );
+    let finalData = toRows(storedAfterResult.data, afterCodeHooks);
+
+    // Snake_case timestamp columns to their camelCase API form.
+    finalData = finalData.map(row => convertTimestampsToCamelCase(row));
+
+    // Defense in depth: re-strip after the hooks, in case one reintroduced a
+    // password value under its declared key, or the owner column. The detail
+    // path already did both here while the list path did only the password —
+    // the stricter of the two is kept, so a field-level hook below cannot
+    // observe an owner id on either path.
+    this.redactServerOnlyFields(finalData, fields);
+
+    // A stored hook may likewise have reintroduced a denied related field;
+    // sanitize before the field-level hooks read the assembled document.
+    await this.relationshipService.reprojectRelatedRows(
+      finalData,
+      collectionName,
+      nestedAccess,
+      nestedState
+    );
+
+    // (5) Row trust and FIELD trust are separate questions and this read may
+    // answer them differently. `overrideAccess` alone means both; a caller that
+    // asked for field rules to be enforced keeps its row bypass and gives up
+    // only the field one. Computed once, beside the two passes it governs, so
+    // they cannot drift apart.
+    const skipFieldRules =
+      params.enforceFieldAccess === true ? false : params.overrideAccess;
+    for (const row of finalData) {
+      const sourceRedactions: ReadAccessRedactions = new WeakMap();
+      const target = {
+        kind: "collection" as const,
+        slug: collectionName,
+        entry: row,
+        user: params.fieldAccessUser ?? params.user,
+        overrideAccess: skipFieldRules,
+      };
+      await applyFieldReadAccess(target, sourceRedactions);
+      await runFieldHooks({
+        kind: "collection",
+        slug: collectionName,
+        phase: "afterRead",
+        data: row,
+        operation: "read",
+        user: params.user,
+      });
+      await applyFieldReadAccess(target, sourceRedactions);
+    }
+
+    // Authoritative related-row sanitization over the assembled response, after
+    // EVERY source afterRead hook phase above. Before selection, so it judges
+    // whole rows with their sibling evidence intact.
+    await this.relationshipService.reprojectRelatedRows(
+      finalData,
+      collectionName,
+      nestedAccess,
+      nestedState
+    );
+
+    // (6) Last of the sanitizing steps.
+    if (params.select && Object.keys(params.select).length > 0) {
+      finalData = this.applyFieldSelectionToArray(finalData, params.select);
+    }
+
+    if (params.richTextFormat && params.richTextFormat !== "json") {
+      // FieldDefinition[] and FieldConfig[] share the structure
+      // `transformRichTextFields` reads (name, type, fields).
+      const fieldConfig = fields as unknown as Parameters<
+        typeof transformRichTextFields
+      >[1];
+      finalData = finalData.map(row =>
+        transformRichTextFields(row, fieldConfig, params.richTextFormat)
+      );
+    }
+
+    // Final owner-column strip at the response boundary — after every afterRead
+    // hook, field-level read access and transform — so nothing downstream can
+    // re-expose the creator's user id.
+    for (const row of finalData) stripSystemOwnerField(row);
+
+    return finalData;
+  }
+
+  /**
+   * The dialect the where/search builders compile for, asked once rather than
+   * recomputed at each call site — one of the copies had already drifted to
+   * recomputing it inline where its twin used a hoisted local.
+   *
+   * Deliberately the adapter's own `dialect` rather than `BaseService.dialect`,
+   * which reads `getCapabilities().dialect`. Every builder here has always used
+   * this one, and swapping the source is a behaviour change this extraction is
+   * not the place to make.
+   */
+  private get queryDialect(): string {
+    return this.adapter?.dialect || "postgresql";
+  }
+
+  /**
+   * Translate the stored read rule's query constraint into a SQL condition, for
+   * whichever read is asking.
+   *
+   * All three read verbs narrow rows by the same rule, so they must translate
+   * it the same way — through the same builder the caller's own `where` goes
+   * through. It is a full filter predicate: an owner-only read emits one field,
+   * but a custom rule can return any supported operator across several fields,
+   * and reducing it to a single equality binds less than the rule states. A
+   * list that filters and a read-by-id that does not is not a milder version of
+   * the same rule, it is the id-iteration leak the predicate exists to close.
+   *
+   * Returns `undefined` when the rule imposes no predicate. Refuses — rather
+   * than narrowing partially — when the constraint cannot be fully expressed.
+   */
+  private accessConstraintCondition(
+    collectionName: string,
+    accessConstraint: Record<string, unknown> | null,
+    schema: DynamicSchema,
+    localizedCtx: LocalizedQueryContext | null
+  ): ReturnType<typeof and> | undefined {
+    if (!accessConstraint) return undefined;
+
+    // Refuse before translating: a partially translatable constraint yields a
+    // non-empty condition that binds less than the rule requires.
+    const untranslatable = describeUntranslatableConstraint(
+      accessConstraint,
+      name => Object.prototype.hasOwnProperty.call(schema, name),
+      name => Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
+    );
+    // Explicitly against null: a reason can be any string, and an empty one
+    // would read as success.
+    if (untranslatable !== null) {
+      // Logged here rather than left on the error: the callers flatten this
+      // into a result envelope, so the reason would otherwise never reach
+      // operator logs and every refusal would look alike.
+      this.logger.warn("Refused an untranslatable access constraint", {
+        collection: collectionName,
+        reason: untranslatable,
+      });
+      throw NextlyError.forbidden({
+        logContext: {
+          collection: collectionName,
+          reason: "untranslatable-access-constraint",
+          reason_detail: untranslatable,
+        },
+      });
+    }
+
+    // Members that cannot narrow anything are removed before translation, so
+    // the "translated to nothing" check below judges only what was meant to
+    // restrict. A constraint made up entirely of them restricts nothing, and
+    // the rule already allowed the caller.
+    const restricting = stripNoOpConstraintMembers(accessConstraint);
+    if (Object.keys(restricting).length === 0) return undefined;
+
+    const accessCondition = this.buildDrizzleCondition(
+      buildWhereClause(restricting as WhereFilter),
+      schema,
+      this.queryDialect,
+      localizedCtx
+    );
+    if (!accessCondition) {
+      // A constraint that translates to nothing would widen the read to every
+      // row. Fail closed instead: the rule asked to narrow.
+      throw NextlyError.forbidden({
+        logContext: {
+          collection: collectionName,
+          reason: "untranslatable-access-constraint",
+        },
+      });
+    }
+    return accessCondition;
+  }
+
+  /**
+   * The relationship-expansion bounds for a read by id, asked once for both
+   * documents that path can return.
+   *
+   * `getEntry` expands twice — the live row, and the working draft when the
+   * overlay surfaces one — and every option here is a BOUND the relationship
+   * service applies to each target it reads: which pass redacts a related row,
+   * how far the caller's trust carries per target collection, the language a
+   * target's read rule is evaluated in, and the status scope. An option missing
+   * from one of the two calls does not fail, it WIDENS that expansion, so the
+   * two cannot be kept in step by hand.
+   */
+  private buildDetailExpansionOptions(
+    params: {
+      depth?: number;
+      fieldAccessUser?: UserContext;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      trusted?: TrustBound;
+      authenticatedScope?: AuthenticatedScope;
+      status?: StatusOption;
+    },
+    localeChain: string[] | null
+  ): Parameters<CollectionRelationshipService["expandRelationships"]>[3] {
+    return {
+      depth: params.depth,
+      // A related row is redacted by its OWN collection's field rules, for this
+      // caller, and that pass is deferred until the document is assembled: run
+      // earlier it would hide a denied sibling before the rule that masks on it
+      // has been evaluated.
+      enforceFieldAccess: true,
+      fieldAccessUser: params.fieldAccessUser,
+      fieldAccessStage: "assembled" as const,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      // The bound at this path's TOP-LEVEL expansion. Absent means unchanged,
+      // so omitting it leaves the relationship service with no predicate and
+      // every target is read fully trusted before the post-assembly pass runs.
+      trusted: params.trusted,
+      authenticatedScope: params.authenticatedScope,
+      // The language a target collection's read rule is evaluated in when its
+      // predicate names a localized field.
+      locale: localeChain?.[0],
+      // Only "read everything" propagates, and only when the caller actually
+      // asked for it. Deriving this from the parent having resolved to no
+      // filter would unfilter every target behind a status-less collection.
+      status: expansionStatusScope({
+        status: params.status,
+        overrideAccess: params.overrideAccess,
+        bounded: narrows(params.trusted),
+      }),
     };
   }
 
@@ -1807,20 +2654,15 @@ export class CollectionQueryService extends BaseService {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
       // 1. Check collection-level access FIRST
-      const accessDenied = await this.accessService.checkCollectionAccess<
+      const accessDenied = await this.denyCollectionRead<
         PaginatedResponse<unknown>
-      >(
-        params.collectionName,
-        "read",
+      >({
+        collectionName: params.collectionName,
         accessUser,
-        undefined,
-        undefined,
-        params.overrideAccess,
-        params.routeAuthorized,
-        // A scoped API key is judged on its own read grant, so the session
-        // super-admin bypass does not apply to a super-admin-owned key here.
-        params.authenticatedScope
-      );
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+      });
       if (accessDenied) {
         return accessDenied;
       }
@@ -1832,12 +2674,15 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve the locale chain + load the companion once, so both the sort
       // block (in-query ORDER BY on a localized column) and the post-query populate reuse
       // it. `null` when localization is off or the collection isn't localized.
-      const localeChain = this.resolveLocaleChain(
+      const localeChain = resolveLocaleChain(
+        this.localization,
         params.locale,
         params.fallbackLocale
       );
       const companion =
-        localeChain || params.locale === "all" || params.translationStatus
+        localeChain ||
+        params.locale === EVERY_TRANSLATION ||
+        params.translationStatus
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
 
@@ -1890,281 +2735,41 @@ export class CollectionQueryService extends BaseService {
       // Build base query using Drizzle (via BaseService db compatibility layer)
       let query = this.db.select().from(schema);
 
-      // Build final query conditions
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-      const whereConditions: any[] = [];
-
-      // Get access query constraint (e.g., for owner-only filtering)
-      const accessConstraint =
-        await this.accessService.getAccessQueryConstraint(
-          params.collectionName,
-          accessUser,
-          params.overrideAccess,
-          // Scope the owner filter too: without this a super-admin-owned scoped
-          // key takes the session bypass and reads past its own grant, the
-          // predicate having been lifted before it ever reached SQL.
-          params.authenticatedScope
-        );
-
-      // The constraint is applied further down, through the same translation
-      // the caller's own `where` uses: it is a full filter predicate, not a
-      // single equality, and reducing it here would narrow less than the rule
-      // asks for.
-
-      // Apply Draft/Published auto-filter. The helper returns null when the
-      // collection has no status column, the caller is trusted with no
-      // explicit choice, or explicit was 'all'. Otherwise it returns the
-      // value to filter by ('published' for public callers by default).
-      // Guarding on schema.status avoids referencing a column that may not
-      // exist when the collection has status disabled.
-      const collectionForStatus = await this.collectionService.getCollection(
-        params.collectionName
-      );
-      const statusFilter = resolveStatusFilter({
-        collectionHasStatus:
-          (collectionForStatus as { status?: boolean }).status === true,
-        overrideAccess: params.overrideAccess === true,
-        explicit: params.status,
-      });
       // ONE instant for this read. Each release lookup taking its own
       // `new Date()` let a release become due between the row query and a
       // sibling condition, so one response could carry pre-release rows beside
       // a post-release count.
       const readNow = new Date();
-      const releaseCondition = statusCondition({
-        filter: statusFilter,
-        statusColumn: schema.status,
-        idColumn: schema.id,
-        decisions: await this.releaseDecisions(
-          params.collectionName,
-          statusFilter,
-          readNow
-        ),
-      });
-      if (releaseCondition) whereConditions.push(releaseCondition);
-      // Build the localized-query context AFTER the status filter is resolved so
-      // localized where/search EXISTS checks constrain by the per-locale status too
-      // (a published read must not match a draft translation).
-      const localizedCtx = this.buildLocalizedQueryContext(
+
+      // The predicate this request resolves to. The count below is built from
+      // the SAME result, so the total cannot describe a different row set than
+      // the page.
+      const {
+        conditions: whereConditions,
+        localizedCtx,
+        statusFilter,
+        geoFilters,
+        whereAfterGeo,
+        componentTables,
+        componentTypeColumns,
+        translationFilter,
+      } = await this.resolveReadConditions({
+        collectionName: params.collectionName,
+        releaseNow: readNow,
+        where: listQueryWhere,
+        search: params.search,
+        status: params.status,
+        overrideAccess: params.overrideAccess,
+        enforceFieldAccess: params.enforceFieldAccess,
+        accessUser,
+        authenticatedScope: params.authenticatedScope,
+        schema,
         companion,
         localeChain,
-        schema,
-        statusFilter?.values
-      );
-
-      // Apply search filter if provided
-      if (params.search) {
-        // Get collection metadata for search configuration
-        const collectionMeta = await this.collectionService.getCollection(
-          params.collectionName
-        );
-
-        // Check minimum search length
-        const minLength = getMinSearchLength(collectionMeta);
-        if (params.search.trim().length >= minLength) {
-          // Get searchable fields
-          // Narrowed, not refused: the caller never named a column, so
-          // dropping the ones they may not read answers what they asked.
-          // Leaving them in lets `search=<guess>` probe a hidden value
-          // through which rows come back.
-          const searchableFields = this.searchableFieldsFor(
-            params.collectionName,
-            collectionMeta,
-            fieldTrustOf(params)
-          );
-
-          if (searchableFields.length === 0) {
-            // Every searchable field carries a read rule, so this caller has
-            // nothing to be matched against. Adding NO condition would return
-            // and count every otherwise-visible row -- the exact opposite of a
-            // narrowed search, and a worse answer than the leak this narrowing
-            // exists to close. An unsatisfiable predicate is the honest reading
-            // of "matched against nothing".
-            whereConditions.push(sql`1 = 0`);
-          } else {
-            // Determine database dialect for ILIKE vs LIKE
-            const dialect = this.adapter?.dialect || "postgresql";
-
-            // Build search condition (localizedCtx routes localized searchable fields to
-            // a companion EXISTS instead of dropping them).
-            const searchCondition = this.buildSearchCondition(
-              schema,
-              searchableFields,
-              params.search,
-              dialect,
-              localizedCtx
-            );
-
-            if (searchCondition) {
-              whereConditions.push(searchCondition);
-            }
-          }
-        }
-      }
-
-      // ============================================================
-      // GEO FILTERING: Extract geo operators for post-query filtering
-      // ============================================================
-
-      // i18n M7: pull the reserved `_translated` language filter out FIRST — the geo/component
-      // extractors below drop object-valued keys they don't recognize, so it must be removed
-      // before them and turned into a companion EXISTS/NOT EXISTS condition.
-      // Before the filter can reach SQL. Redaction runs on rows already chosen,
-      // so it cannot answer a `where` that selected them BY a hidden value.
-
-      const { filter: translationFilter, cleanedWhere: whereAfterTranslation } =
-        this.extractTranslationStatusFilter(listQueryWhere);
-      if (translationFilter) {
-        const translationCondition =
-          await this.buildTranslationStatusFilterCondition(
-            params.collectionName,
-            translationFilter,
-            schema.id,
-            companion
-          );
-        if (translationCondition) whereConditions.push(translationCondition);
-      }
-
-      // Extract geo filters (near, within) that must be applied in JS
-      // These operators can't be translated to SQL for cross-database support
-      const { geoFilters, cleanedWhere: whereAfterGeo } = extractGeoFilters(
-        whereAfterTranslation
-      );
+        // This path has rows to evaluate them over.
+        extractGeo: true,
+      });
       const hasGeoFilters = geoFilters.length > 0;
-
-      // ============================================================
-      // COMPONENT FIELD FILTERING: Extract for EXISTS subqueries
-      // ============================================================
-
-      // Get collection metadata early for component field detection
-      // (may have been fetched above for search — we'll reuse if available)
-      const collectionForFilters = await this.collectionService.getCollection(
-        params.collectionName
-      );
-      const fieldsForFilters = ((
-        (collectionForFilters as Record<string, unknown>).schemaDefinition as
-          | Record<string, unknown>
-          | undefined
-      )?.fields ||
-        (collectionForFilters as Record<string, unknown>).fields ||
-        []) as Array<{
-        name: string;
-        type: string;
-        component?: string;
-        components?: string[];
-      }>;
-
-      // Extract component field conditions (e.g., 'seo.metaTitle')
-      // These require EXISTS subqueries against component data tables
-      const { componentFilters, cleanedWhere } =
-        extractComponentFieldConditions(whereAfterGeo, fieldsForFilters);
-
-      // Determine database dialect for ILIKE vs LIKE
-      const dialect = this.adapter?.dialect || "postgresql";
-
-      // Get the table name for component subqueries
-      const tableName = getTableName(params.collectionName);
-
-      // Build component field EXISTS conditions
-      const componentTables =
-        await this.resolveComponentTableNames(componentFilters);
-      // Kept so the count over these same filters can reuse them instead of
-      // repeating the registry lookup and the catalog introspection.
-      const componentTypeColumns = await this.resolveComponentTypeColumns(
-        componentFilters,
-        componentTables.values()
-      );
-      const componentCondition = this.buildComponentFieldConditions(
-        componentFilters,
-        tableName,
-        schema.id,
-        dialect,
-        componentTables,
-        componentTypeColumns
-      );
-
-      // Apply component field conditions to query
-      if (componentCondition) {
-        whereConditions.push(componentCondition);
-      }
-
-      // Apply where clause if provided (excluding geo and component operators)
-      if (cleanedWhere) {
-        // Convert WhereFilter to internal WhereClause format
-        const internalWhere = buildWhereClause(cleanedWhere);
-
-        // Build Drizzle condition from the WhereClause
-        const whereCondition = this.buildDrizzleCondition(
-          internalWhere,
-          schema,
-          dialect,
-          localizedCtx
-        );
-
-        if (whereCondition) {
-          whereConditions.push(whereCondition);
-        }
-      }
-
-      // Apply the stored read rule's query constraint through the same
-      // translation the caller's `where` uses. It is a full filter predicate:
-      // an owner-only read emits one field, but a custom rule can return any
-      // supported operator across several fields, and reading a single `equals`
-      // off the first key silently returns rows the rule excludes.
-      if (accessConstraint) {
-        // Refuse before translating: a partially translatable constraint yields a
-        // non-empty condition that binds less than the rule requires.
-        const untranslatable = describeUntranslatableConstraint(
-          accessConstraint,
-          name => Object.prototype.hasOwnProperty.call(schema, name),
-          name =>
-            Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
-        );
-        // Explicitly against null: a reason can be any string, and an empty one
-        // would read as success.
-        if (untranslatable !== null) {
-          // Logged here rather than left on the error: the surrounding catch
-          // flattens this into a result envelope, so the reason would otherwise
-          // never reach operator logs and every refusal would look alike.
-          this.logger.warn("Refused an untranslatable access constraint", {
-            collection: params.collectionName,
-            reason: untranslatable,
-          });
-          throw NextlyError.forbidden({
-            logContext: {
-              collection: params.collectionName,
-              reason: "untranslatable-access-constraint",
-              reason_detail: untranslatable,
-            },
-          });
-        }
-        // Members that cannot narrow anything are removed before translation,
-        // so the "translated to nothing" check below judges only what was meant
-        // to restrict. A constraint made up entirely of them restricts nothing,
-        // and the rule already allowed the caller.
-        const restricting = stripNoOpConstraintMembers(accessConstraint);
-        const accessCondition =
-          Object.keys(restricting).length === 0
-            ? undefined
-            : this.buildDrizzleCondition(
-                buildWhereClause(restricting as WhereFilter),
-                schema,
-                dialect,
-                localizedCtx
-              );
-        if (accessCondition) {
-          whereConditions.push(accessCondition);
-        } else if (Object.keys(restricting).length > 0) {
-          // A constraint that translates to nothing would widen the read to
-          // every row. Fail closed instead: the rule asked to narrow.
-          throw NextlyError.forbidden({
-            logContext: {
-              collection: params.collectionName,
-              reason: "untranslatable-access-constraint",
-            },
-          });
-        }
-      }
 
       // Apply all collective WHERE conditions
       if (whereConditions.length > 0) {
@@ -2306,6 +2911,10 @@ export class CollectionQueryService extends BaseService {
             // totalPages then hides the tail of its own result set.
             status: params.status,
             overrideAccess: params.overrideAccess,
+            // Forwarded for the same reason `overrideAccess` is: the total has
+            // to answer under the field trust the page answered under, or the
+            // count matches on searchable fields the rows were narrowed by.
+            enforceFieldAccess: params.enforceFieldAccess,
             frameworkFilter: true,
             // Not a caller, and not a second boundary. This count is THIS
             // read's own continuation: the caller's filter was judged at the
@@ -2525,247 +3134,28 @@ export class CollectionQueryService extends BaseService {
       // Use geo-filtered entries for the rest of the pipeline
       expandedEntries = geoFilteredEntries;
 
-      // Redact password hashes BEFORE any afterRead hook (collection,
-      // stored, or field-level) runs: a hook receiving the hash could copy
-      // it into another allowed property that the later redaction would not
-      // catch. The final redaction below stays as defense in depth.
-      const collectionHasPassword = hasPasswordField(fields);
-      if (collectionHasPassword) {
-        for (const entry of expandedEntries) {
-          stripPasswordFieldValues(entry, fields);
-        }
-      }
-      // Always strip the system owner column so a list readable by non-creators
-      // never leaks the creator's user id (unconditional — not gated on
-      // password fields).
-      for (const entry of expandedEntries) {
-        stripSystemOwnerField(entry);
-      }
-
-      // Decode before any afterRead hook runs. A hook is documented against the
-      // configured value, and on SQLite these columns are strings, so decoding
-      // after the hooks handed every one of them the storage encoding instead.
-      decodeJsonFieldValues(expandedEntries, fields, params.locale);
-
-      // A related row's own field hooks run BEFORE this collection's afterRead
-      // hooks can observe it, and before field selection narrows it.
-      //
-      // Before the collection's hooks, because one of them can copy a related
-      // row's value onto a root property of its own; the traversal masks the
-      // nested field it walked, never the copy, so a hook handed an unmasked
-      // target could publish it under a key nothing sanitizes. That is the same
-      // reason password hashes are stripped above rather than after.
-      //
-      // Before selection, because selection rebuilds each related row as a fresh
-      // object holding only the projected paths, so a hook masking on a sibling
-      // -- `select: { "author.secret": true }` while the rule reads
-      // `organization.classification` -- would be handed a row with its evidence
-      // missing and fall open.
-      //
-      // Every populated related row is walked, including one under a
-      // relationship the projection drops. Skipping those would leave them on
-      // the document unmasked for the hooks below to read and copy elsewhere,
-      // and the skip could not be honoured coherently in any case: batch
-      // expansion shares one row object between parents, so a row reachable
-      // through both a kept and a dropped relationship would end up masked or
-      // not depending on which reference the traversal happened to meet first.
-      //
-      // One state for the whole listing, for that same sharing: a per-entry pass
-      // would run a shared row's hooks once per reference.
-      const nestedHookState = this.relationshipService.createNestedHookState();
-      const nestedAccess = {
-        enforceFieldAccess: true,
+      // The read-response pipeline. `getEntry` runs the same one over its
+      // single document.
+      const finalData = await this.finalizeReadRows({
+        rows: expandedEntries,
+        collectionName: params.collectionName,
+        fields,
+        storedHooks,
+        sharedContext,
+        // The same facts the beforeRead phases were given, so a hook cannot
+        // learn one thing about the request on the way in and another on
+        // the way out.
+        requestFacts,
+        user: params.user,
         fieldAccessUser: params.fieldAccessUser,
-        user: params.user,
         overrideAccess: params.overrideAccess,
-        // Narrows that bypass per RELATED collection. Absent means unchanged;
-        // dropping it here would silently restore the full bypass.
-        trusted: assumedBound(params.trusted),
+        enforceFieldAccess: params.enforceFieldAccess,
+        trusted: params.trusted,
         authenticatedScope: params.authenticatedScope,
-      };
-      for (const entry of expandedEntries) {
-        await this.relationshipService.applyNestedFieldHooks(
-          entry,
-          params.collectionName,
-          nestedAccess,
-          nestedHookState
-        );
-      }
-      // Once, after the whole listing: the walk already applied field access to
-      // each related row before its parent's hooks; this re-applies it (restoring
-      // the removed evidence and re-judging the current content) to strip a denied
-      // field a parent hook reintroduced, mutated, or added, then rebuilds labels
-      // from the survivors.
-      await this.relationshipService.finalizeRelatedRows(
-        nestedHookState,
-        nestedAccess
-      );
-
-      // Execute afterRead hooks (code-registered)
-      // Hooks can transform the fetched data
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "read" as const,
-        data: expandedEntries,
-        user: params.user,
-        context: sharedContext,
-        req: requestFacts,
+        select: params.select,
+        richTextFormat: params.richTextFormat,
+        locale: params.locale,
       });
-
-      const transformedData = await this.hookService.hookRegistry.execute(
-        "afterRead",
-        afterContext
-      );
-      const dataAfterCodeHooks = (transformedData ??
-        expandedEntries) as unknown[];
-
-      // A code hook may have RETURNED a reshaped related row carrying a denied
-      // field; sanitize now, before the stored and field-level hooks run, so one
-      // of them cannot read that field and copy it onto an allowed source key the
-      // final pass no longer looks at. The authoritative pass is idempotent over
-      // the shared walk state, so running it after each source phase is safe.
-      await this.relationshipService.reprojectRelatedRows(
-        dataAfterCodeHooks as Record<string, unknown>[],
-        params.collectionName,
-        nestedAccess,
-        nestedHookState
-      );
-
-      // Execute stored afterRead hooks (UI-configured)
-      const storedAfterResult =
-        await this.hookService.storedHookExecutor.execute(
-          "afterRead",
-          storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "read",
-            data: dataAfterCodeHooks,
-            // eslint-disable-next-line @typescript-eslint/require-await
-            queryDatabase: async () => false,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-          })
-        );
-      let finalData = (storedAfterResult.data ??
-        dataAfterCodeHooks) as unknown[];
-
-      // Convert snake_case timestamp columns to their camelCase API form.
-      finalData = (finalData as Record<string, unknown>[]).map(entry =>
-        convertTimestampsToCamelCase(entry)
-      );
-
-      // Defense in depth: re-strip after hooks in case a hook re-introduced
-      // a password value under its declared key.
-      if (collectionHasPassword) {
-        for (const entry of finalData as Record<string, unknown>[]) {
-          stripPasswordFieldValues(entry, fields);
-        }
-      }
-
-      // A stored hook may likewise have reintroduced a denied related field;
-      // sanitize before the field-level hooks read the assembled document.
-      await this.relationshipService.reprojectRelatedRows(
-        finalData as Record<string, unknown>[],
-        params.collectionName,
-        nestedAccess,
-        nestedHookState
-      );
-
-      // Field-level afterRead hooks + read access (code-first functions
-      // resolved via the field-level registry): hooks may transform values;
-      // fields whose access.read denies are stripped from the response. Access is
-      // applied BEFORE the hooks and AGAIN after, sharing a redactions store: the
-      // first pass hides a denied source field from the hooks — so a hook on a
-      // selected, allowed field cannot read a denied sibling and copy it onto its
-      // own value (selection now runs last and no longer projects such a sibling out
-      // first) — while restoring each removed value as evidence in the second pass
-      // keeps a conditional rule judging against the whole row and catches a denied
-      // field a hook reintroduced. Runs on the whole rows, before selection.
-      // Row trust and FIELD trust are separate questions and this read may
-      // answer them differently. `overrideAccess` alone means both; a caller
-      // that asked for field rules to be enforced keeps its row bypass and
-      // gives up only the field one. Computed once, beside the two passes it
-      // governs, so they cannot drift apart.
-      const skipFieldRules =
-        params.enforceFieldAccess === true ? false : params.overrideAccess;
-      for (const entry of finalData as Record<string, unknown>[]) {
-        const sourceRedactions: ReadAccessRedactions = new WeakMap();
-        await applyFieldReadAccess(
-          {
-            kind: "collection",
-            slug: params.collectionName,
-            entry,
-            user: params.fieldAccessUser ?? params.user,
-            overrideAccess: skipFieldRules,
-          },
-          sourceRedactions
-        );
-        await runFieldHooks({
-          kind: "collection",
-          slug: params.collectionName,
-          phase: "afterRead",
-          data: entry,
-          operation: "read",
-          user: params.user,
-        });
-        await applyFieldReadAccess(
-          {
-            kind: "collection",
-            slug: params.collectionName,
-            entry,
-            user: params.fieldAccessUser ?? params.user,
-            overrideAccess: skipFieldRules,
-          },
-          sourceRedactions
-        );
-      }
-
-      // Authoritative related-row sanitization: re-apply each related row's OWN
-      // collection field access over the ASSEMBLED response, after EVERY source
-      // afterRead hook phase above (code, stored, and field-level). Those hooks
-      // can write a denied target field back onto a related row, or return a
-      // reshaped document whose related rows are new objects the earlier walk
-      // never held; the root access pass above knows only this collection's
-      // schema and never descends into a related row. Before selection, so it
-      // judges whole rows with their sibling evidence intact.
-      await this.relationshipService.reprojectRelatedRows(
-        finalData as Record<string, unknown>[],
-        params.collectionName,
-        nestedAccess,
-        nestedHookState
-      );
-
-      // Apply field selection if select parameter is provided. Last of the
-      // sanitizing steps, so every hook and access pass above judged the whole
-      // row rather than the projected slice.
-      if (params.select && Object.keys(params.select).length > 0) {
-        finalData = this.applyFieldSelectionToArray(
-          finalData as Record<string, unknown>[],
-          params.select
-        );
-      }
-
-      // Transform rich text fields to requested format (html, both)
-      // Default is "json" which returns the Lexical JSON structure as-is
-      if (params.richTextFormat && params.richTextFormat !== "json") {
-        // Cast FieldDefinition[] to FieldConfig[] - they share the same structure
-        // for the properties used by transformRichTextFields (name, type, fields)
-        const fieldConfig = fields as unknown as Parameters<
-          typeof transformRichTextFields
-        >[1];
-        finalData = (finalData as Record<string, unknown>[]).map(entry =>
-          transformRichTextFields(entry, fieldConfig, params.richTextFormat)
-        );
-      }
-
-      // Final owner-column strip at the response boundary — after every
-      // afterRead hook, field-level read access, and transform — so nothing
-      // downstream can re-expose the creator's user id. (The pre-hook strip
-      // above also keeps it out of hook inputs.)
-      for (const entry of finalData as Record<string, unknown>[]) {
-        stripSystemOwnerField(entry);
-      }
 
       // Build paginated response with all metadata
       const paginatedResponse = buildPaginatedResponse(finalData, {
@@ -2809,256 +3199,6 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Count entries in a collection.
-   *
-   * Returns the total number of entries matching the provided criteria.
-   * Uses efficient SQL COUNT query without fetching entry data.
-   * Applies collection-level access control.
-   *
-   * Security checks are applied in order:
-   * 1. Collection-level access (AccessControlService)
-   *
-   * Runs the read hooks that precede a query -- `beforeOperation` and
-   * `beforeRead` -- so the total describes the rows a list would return. There
-   * is no after phase: those reshape a document, and a count has none.
-   *
-   * Skipped when the caller sets `readHooksAlreadyRan`, which `listEntries`
-   * does for the count it takes for its own total.
-   *
-   * @param params - Collection name, optional user context, and optional search query
-   * @returns Count result with totalDocs or error
-   *
-   * @example
-   * ```typescript
-   * // Count all entries
-   * const result = await entryService.countEntries({
-   *   collectionName: 'posts',
-   *   user: { id: 'user-123', role: 'editor' }
-   * });
-   * console.log(result.data.totalDocs); // 42
-   *
-   * // Count with search filter
-   * const filtered = await entryService.countEntries({
-   *   collectionName: 'posts',
-   *   user: { id: 'user-123' },
-   *   search: 'tutorial'
-   * });
-   *
-   * // Count with where clause
-   * const published = await entryService.countEntries({
-   *   collectionName: 'posts',
-   *   user: { id: 'user-123' },
-   *   where: { status: { equals: 'published' } }
-   * });
-   * ```
-   */
-  /**
-   * Resolve the rows this caller may read, as filters rather than as rows.
-   *
-   * Everything that decides WHICH rows an operation may see lives here:
-   * collection access, the readability guards, the read hooks, release scope,
-   * search, translation and component conditions, the caller's own `where`,
-   * and the access constraint a stored rule contributes. What an operation
-   * then COMPUTES over those rows is the only thing left to its own method.
-   *
-   * Split for that reason and not for length. An aggregate that assembled its
-   * own filters beside this one would answer a question no read can check, and
-   * the two would drift silently the first time a condition was added to one
-   * of them — the shape of the published aggregate-permission bugs in other
-   * systems. There is one pipeline, so there is nothing to drift against.
-   *
-   * Answers a denial as a value rather than throwing it, because a refused
-   * read is an ordinary envelope its caller returns unchanged, and the caller
-   * is what knows the data shape that envelope has to carry.
-   */
-  /**
-   * What a `search` narrows the read to, or nothing when it narrows nothing.
-   *
-   * Answers `1 = 0` rather than no condition when every searchable field
-   * carries a read rule. Adding nothing would return and count every
-   * otherwise-visible row -- the opposite of a narrowed search, and a worse
-   * answer than the disclosure the narrowing exists to close. An unsatisfiable
-   * predicate is the honest reading of "matched against nothing".
-   *
-   * Narrowed rather than refused, because the caller named no column: dropping
-   * the ones they may not read answers what they asked. Leaving them in lets
-   * `search=<guess>` probe a hidden value through which rows come back.
-   */
-  private async searchNarrowing(
-    params: FilteredReadParams,
-    schema: Record<string, unknown>,
-    localizedCtx: ReturnType<
-      CollectionQueryService["buildLocalizedQueryContext"]
-    >
-  ): Promise<unknown> {
-    if (!params.search) return undefined;
-
-    const collectionMeta = await this.collectionService.getCollection(
-      params.collectionName
-    );
-    if (params.search.trim().length < getMinSearchLength(collectionMeta)) {
-      return undefined;
-    }
-
-    const searchableFields = this.searchableFieldsFor(
-      params.collectionName,
-      collectionMeta,
-      fieldTrustOf(params)
-    );
-    if (searchableFields.length === 0) return sql`1 = 0`;
-
-    // `localizedCtx` routes localized searchable fields to a companion EXISTS
-    // instead of dropping them.
-    return this.buildSearchCondition(
-      schema,
-      searchableFields,
-      params.search,
-      this.adapter?.dialect || "postgresql",
-      localizedCtx
-    );
-  }
-
-  /**
-   * What the caller's own `where` narrows the read to.
-   *
-   * Two conditions rather than one, because a filter naming a component field
-   * (`seo.metaTitle`) becomes an EXISTS against that component's own table
-   * while the rest compiles against this one. They travel together so a caller
-   * applies both or neither -- applying only the second would widen the read
-   * to every row the component filter was meant to exclude.
-   *
-   * The `_translated` key is stripped before the component extractor, which
-   * drops object keys it does not recognise; the language filter it carries
-   * gets its own condition.
-   */
-  private async callerWhereConditions(
-    params: FilteredReadParams,
-    countWhere: WhereFilter | undefined,
-    schema: Record<string, unknown> & { id: unknown },
-    localizedCtx: ReturnType<
-      CollectionQueryService["buildLocalizedQueryContext"]
-    >
-  ): Promise<unknown[]> {
-    if (!countWhere) return [];
-
-    const dialect = this.adapter?.dialect || "postgresql";
-    const collectionForFilters = await this.collectionService.getCollection(
-      params.collectionName
-    );
-    const fieldsForFilters = collectionFieldsFor(collectionForFilters);
-
-    const { cleanedWhere: whereWithoutTranslation } =
-      this.extractTranslationStatusFilter(countWhere);
-    const { componentFilters, cleanedWhere } = extractComponentFieldConditions(
-      whereWithoutTranslation,
-      fieldsForFilters
-    );
-
-    const componentTables =
-      params.resolvedComponentTables ??
-      (await this.resolveComponentTableNames(componentFilters));
-    const componentCondition = this.buildComponentFieldConditions(
-      componentFilters,
-      getTableName(params.collectionName),
-      schema.id,
-      dialect,
-      componentTables,
-      params.resolvedComponentTypeColumns ??
-        (await this.resolveComponentTypeColumns(
-          componentFilters,
-          componentTables.values()
-        ))
-    );
-
-    const remaining = cleanedWhere
-      ? this.buildDrizzleCondition(
-          buildWhereClause(cleanedWhere),
-          schema,
-          dialect,
-          localizedCtx
-        )
-      : undefined;
-
-    return [componentCondition, remaining].filter(
-      condition => condition !== undefined && condition !== null
-    );
-  }
-
-  /**
-   * What a stored read rule narrows the read to, refusing rather than
-   * approximating when it cannot be expressed.
-   *
-   * Translated through the same path the caller's own `where` takes, because
-   * it is a full filter predicate: an owner-only read emits one field, but a
-   * custom rule can return any supported operator across several fields, and
-   * reading a single `equals` off the first key silently returns rows the rule
-   * excludes.
-   *
-   * Refuses BEFORE translating when any member is untranslatable, because a
-   * partially translatable constraint yields a non-empty condition binding
-   * less than the rule requires -- a narrower-LOOKING read that is actually
-   * wider. Members that cannot narrow anything are stripped first, so the
-   * "translated to nothing" refusal judges only what was meant to restrict; a
-   * constraint made entirely of them restricts nothing, and the rule has
-   * already admitted the caller.
-   */
-  private accessConstraintCondition(
-    params: FilteredReadParams,
-    accessConstraint: Record<string, unknown> | null,
-    schema: Record<string, unknown>,
-    localizedCtx: ReturnType<
-      CollectionQueryService["buildLocalizedQueryContext"]
-    >
-  ): unknown {
-    if (!accessConstraint) return undefined;
-
-    const untranslatable = describeUntranslatableConstraint(
-      accessConstraint,
-      name => Object.prototype.hasOwnProperty.call(schema, name),
-      name => Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
-    );
-    // Explicitly against null: a reason can be any string, and an empty one
-    // would read as success.
-    if (untranslatable !== null) {
-      // Logged here rather than left on the error: the caller's catch flattens
-      // this into a result envelope, so the reason would otherwise never reach
-      // operator logs and every refusal would look alike.
-      this.logger.warn("Refused an untranslatable access constraint", {
-        collection: params.collectionName,
-        reason: untranslatable,
-      });
-      throw NextlyError.forbidden({
-        logContext: {
-          collection: params.collectionName,
-          reason: "untranslatable-access-constraint",
-          reason_detail: untranslatable,
-        },
-      });
-    }
-
-    const restricting = stripNoOpConstraintMembers(accessConstraint);
-    if (Object.keys(restricting).length === 0) return undefined;
-
-    const condition = this.buildDrizzleCondition(
-      buildWhereClause(restricting as WhereFilter),
-      schema,
-      this.adapter?.dialect || "postgresql",
-      localizedCtx
-    );
-    if (!condition) {
-      // A constraint that translates to nothing would widen the read to every
-      // row. Fail closed instead: the rule asked to narrow.
-      throw NextlyError.forbidden({
-        logContext: {
-          collection: params.collectionName,
-          reason: "untranslatable-access-constraint",
-        },
-      });
-    }
-    return condition;
-  }
-
-  /**
    * Refuse a geo predicate on a read that returns no rows to test it against.
    *
    * `listEntries` evaluates geo operators in memory over the rows it fetched.
@@ -3080,85 +3220,6 @@ export class CollectionQueryService extends BaseService {
         operators: geoFilters.map(f => f.operator),
       },
     });
-  }
-
-  /**
-   * The draft/published scope this read is confined to, and the status values
-   * a localized EXISTS has to agree with.
-   *
-   * Both come back together because they are one decision read twice: the
-   * condition constrains the rows, and the same values constrain any companion
-   * lookup, so a published read does not match a draft translation.
-   *
-   * ONE instant serves the whole read. Each release lookup taking its own
-   * `new Date()` let a release fall due between two conditions of the same
-   * request, so a single response could carry pre-release rows beside a
-   * post-release total.
-   */
-  private async releaseScope(
-    params: FilteredReadParams,
-    // Taken from the caller rather than read off a loosely typed schema, so
-    // both columns keep the types `statusCondition` declares for them.
-    columns: Pick<
-      Parameters<typeof statusCondition>[0],
-      "statusColumn" | "idColumn"
-    >
-  ): Promise<{
-    condition: ReturnType<typeof statusCondition>;
-    statusValues: ReturnType<typeof resolveStatusFilter> extends infer F
-      ? F extends { values: infer V }
-        ? V | undefined
-        : undefined
-      : undefined;
-  }> {
-    const collectionForStatus = await this.collectionService.getCollection(
-      params.collectionName
-    );
-    const statusFilter = resolveStatusFilter({
-      collectionHasStatus:
-        (collectionForStatus as { status?: boolean }).status === true,
-      overrideAccess: params.overrideAccess === true,
-      explicit: params.status,
-    });
-    const condition = statusCondition({
-      filter: statusFilter,
-      statusColumn: columns.statusColumn,
-      idColumn: columns.idColumn,
-      decisions: await this.releaseDecisions(
-        params.collectionName,
-        statusFilter,
-        // The enclosing read's instant when this is its continuation, and its
-        // own clock when it was called directly.
-        params.releaseNow ?? new Date()
-      ),
-    });
-    return { condition, statusValues: statusFilter?.values };
-  }
-
-  /**
-   * What the `_translated` language filter narrows the read to.
-   *
-   * Applied whether or not the caller sent a `where`: when the language filter
-   * is the ONLY filter, `listEntries` strips the key and forwards the filter
-   * separately, so a version that looked inside `where` alone would drop it
-   * and make a total describe more rows than the page it belongs to.
-   */
-  private async languageFilterCondition(
-    params: FilteredReadParams,
-    countWhere: WhereFilter | undefined,
-    idColumn: Parameters<
-      CollectionQueryService["buildTranslationStatusFilterCondition"]
-    >[2]
-  ): Promise<unknown> {
-    const filter =
-      params.translationFilter ??
-      this.extractTranslationStatusFilter(countWhere).filter;
-    if (!filter) return undefined;
-    return this.buildTranslationStatusFilterCondition(
-      params.collectionName,
-      filter,
-      idColumn
-    );
   }
 
   /**
@@ -3314,7 +3375,7 @@ export class CollectionQueryService extends BaseService {
 
   private async validatedGroupKey(
     params: FilteredReadParams,
-    schema: Record<string, unknown>
+    schema: DynamicSchema
   ): Promise<{ key?: string; field?: FieldDefinition }> {
     const groupBy = params.groupBy;
     if (groupBy === undefined) return {};
@@ -3345,17 +3406,18 @@ export class CollectionQueryService extends BaseService {
    * locale-scoped search or filter describes the SAME rows the page returns.
    */
   private async localeScope(params: FilteredReadParams): Promise<{
-    localeChain: ReturnType<CollectionQueryService["resolveLocaleChain"]>;
+    localeChain: string[] | null;
     companion: Awaited<
       ReturnType<CollectionFileManager["loadCompanionSchema"]>
     > | null;
   }> {
-    const localeChain = this.resolveLocaleChain(
+    const localeChain = resolveLocaleChain(
+      this.localization,
       params.locale,
       params.fallbackLocale
     );
     const companion =
-      localeChain || params.locale === "all"
+      localeChain || params.locale === EVERY_TRANSLATION
         ? await this.fileManager.loadCompanionSchema(params.collectionName)
         : null;
     return { localeChain, companion };
@@ -3364,19 +3426,22 @@ export class CollectionQueryService extends BaseService {
   private async resolveReadPlan<TData>(params: FilteredReadParams) {
     const accessUser = params.overrideAccess ? undefined : params.user;
 
-    // 1. Check collection-level access FIRST
-    const accessDenied = await this.accessService.checkCollectionAccess<TData>(
-      params.collectionName,
-      "read",
+    // 1. Check collection-level access FIRST, through the same member the
+    // listing and the read by id go through. An aggregate asking this question
+    // for itself is a second implementation of it: the id, scope and
+    // route-attestation arguments would then have to be kept in step by hand,
+    // and a count that authorized differently from the list it summarises is
+    // exactly the disagreement this service is being shaped to make
+    // impossible. No entry id, because an aggregate names no single row.
+    const accessDenied = await this.denyCollectionRead<TData>({
+      collectionName: params.collectionName,
       accessUser,
-      undefined,
-      undefined,
-      params.overrideAccess,
-      params.routeAuthorized,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       // Same scope judgement as listEntries, so a read cannot describe rows
       // the key itself is not allowed to list.
-      params.authenticatedScope
-    );
+      authenticatedScope: params.authenticatedScope,
+    });
     if (accessDenied) {
       return { allowed: false as const, denied: accessDenied };
     }
@@ -3422,68 +3487,41 @@ export class CollectionQueryService extends BaseService {
 
     const { localeChain, companion } = await this.localeScope(params);
 
-    // Build count query using Drizzle
-    // Start with a base count query
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    const whereConditions: any[] = [];
-
-    // Get access query constraint (e.g., for owner-only filtering)
-    const accessConstraint = await this.accessService.getAccessQueryConstraint(
-      params.collectionName,
+    // The predicate, from the one method that builds it. An aggregate that
+    // assembled its own filters beside `listEntries` would answer a question
+    // no read can check, and the two would drift the first time a condition
+    // was added to one of them. A count and a bucket set enter here as the
+    // same read the page runs, minus the rows.
+    const { conditions: whereConditions } = await this.resolveReadConditions({
+      collectionName: params.collectionName,
+      // The enclosing read's instant when this is its continuation, and this
+      // read's own clock when it was called directly, so a release becoming
+      // due mid-request cannot put pre-release rows beside a post-release
+      // total.
+      releaseNow: params.releaseNow ?? new Date(),
+      where: countWhere,
+      search: params.search,
+      status: params.status,
+      overrideAccess: params.overrideAccess,
+      // The same field trust the page resolved under, so the search narrows
+      // this aggregate by the fields it narrowed the rows by.
+      enforceFieldAccess: params.enforceFieldAccess,
       accessUser,
-      params.overrideAccess,
-      // Scoped the same way as listEntries, so the total matches the rows a
-      // scoped key can actually page through.
-      params.authenticatedScope
-    );
-
-    // The constraint is applied further down, through the same translation
-    // the caller's own `where` uses: it is a full filter predicate, not a
-    // single equality, and reducing it here would narrow less than the rule
-    // asks for.
-
-    const { condition: releaseCondition, statusValues } =
-      await this.releaseScope(params, {
-        statusColumn: schema.status,
-        idColumn: schema.id,
-      });
-    if (releaseCondition) whereConditions.push(releaseCondition);
-    // Build the localized-query context AFTER the status filter is resolved so
-    // localized where/search EXISTS checks constrain by the per-locale status too
-    // (a published read must not match a draft translation).
-    const localizedCtx = this.buildLocalizedQueryContext(
+      authenticatedScope: params.authenticatedScope,
+      schema,
       companion,
       localeChain,
-      schema,
-      statusValues
-    );
-
-    const searched = await this.searchNarrowing(params, schema, localizedCtx);
-    if (searched) whereConditions.push(searched);
-
-    const languageCondition = await this.languageFilterCondition(
-      params,
-      countWhere,
-      schema.id
-    );
-    if (languageCondition) whereConditions.push(languageCondition);
-
-    whereConditions.push(
-      ...(await this.callerWhereConditions(
-        params,
-        countWhere,
-        schema,
-        localizedCtx
-      ))
-    );
-
-    const restriction = this.accessConstraintCondition(
-      params,
-      accessConstraint,
-      schema,
-      localizedCtx
-    );
-    if (restriction) whereConditions.push(restriction);
+      // An aggregate has no rows to evaluate a geo predicate over, and
+      // `refuseGeoInAggregate` above refused one rather than answering over
+      // the candidates it was meant to exclude.
+      extractGeo: false,
+      // Stripped from the `where` `listEntries` forwards, so it is passed
+      // separately or the aggregate would find nothing and over-count.
+      translationFilter: params.translationFilter,
+      // Resolved once for this request by the caller; see the parameters.
+      resolvedComponentTables: params.resolvedComponentTables,
+      resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
+    });
 
     return {
       allowed: true as const,
@@ -3949,18 +3987,14 @@ export class CollectionQueryService extends BaseService {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
       // 1. Check collection-level access FIRST
-      const accessDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "read",
+      const accessDenied = await this.denyCollectionRead({
+        collectionName: params.collectionName,
         accessUser,
-        params.entryId,
-        undefined,
-        params.overrideAccess,
-        params.routeAuthorized,
-        // A scoped API key is judged on its own read grant, so the session
-        // super-admin bypass does not apply to a super-admin-owned key here.
-        params.authenticatedScope
-      );
+        entryId: params.entryId,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+      });
       if (accessDenied) {
         return accessDenied;
       }
@@ -3985,37 +4019,86 @@ export class CollectionQueryService extends BaseService {
         requestFacts,
       });
 
-      // When read access is `owner-only`, fold the ownership
-      // predicate into the SQL WHERE clause. A non-owner gets a 404
-      // (same response shape as a non-existent ID), not a 403, so
-      // IDOR-by-iteration leaks nothing about which IDs exist.
-      const ownerConstraint = await this.accessService.getOwnerConstraint(
-        params.collectionName,
-        "read",
+      // Fold the stored read rule's predicate into the SQL WHERE clause. A
+      // caller the rule excludes gets a 404 (same response shape as a
+      // non-existent ID), not a 403, so IDOR-by-iteration leaks nothing about
+      // which IDs exist.
+      //
+      // The same question `listEntries` and `countEntries` ask, through the
+      // same method. This path used to ask `getOwnerConstraint` instead, which
+      // answers only `owner-only` and returns a flat `{field, value}` pair: the
+      // two agree for an owner-only rule and nowhere else, so a `custom` rule
+      // returning a query constraint narrowed every listing and left a read by
+      // id unfiltered — the row was withheld from the list and reachable by
+      // guessing its id.
+      //
+      // The Draft/Published filter comes back with it, and the same
+      // 404-not-403 reasoning covers it: a public caller asking for a draft
+      // entry by id gets a 404, never a hint that it exists.
+      const {
+        accessConstraint,
+        statusFilter,
+        collection: collectionForStatus,
+      } = await this.resolveRowScope({
+        collectionName: params.collectionName,
         accessUser,
-        params.overrideAccess,
-        // Scope the owner filter too: a super-admin-owned key must still be
-        // bound by a `read: owner-only` rule, not treated as a session admin.
-        params.authenticatedScope
-      );
-
-      // Same 404-not-403 reasoning applies to Draft/Published — a public
-      // caller asking for a draft entry by ID gets a 404, never a hint that
-      // it exists.
-      const collectionForStatus = await this.collectionService.getCollection(
-        params.collectionName
-      );
-      const statusFilter = resolveStatusFilter({
-        collectionHasStatus:
-          (collectionForStatus as { status?: boolean }).status === true,
-        overrideAccess: params.overrideAccess === true,
-        explicit: params.status,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+        status: params.status,
+        // The SETTLED id — the row this read will actually return, which is
+        // the subject a predicate has to be about. A custom rule may decide
+        // from it, so resolving without it asks that rule about no document at
+        // all and a rule allowing exactly one row denies every read of it.
+        //
+        // NOT the id the coarse gate above was given. That one ran before
+        // `resolveReadEntryId`, so it judged the id as REQUESTED, and a
+        // `beforeOperation` hook may have rewritten it since. The order is
+        // deliberate and stays: that resolution runs `beforeOperation` and
+        // `beforeRead`, which are ordinary user code that records audit entries
+        // and spends rate-limit budget, and running them for a request
+        // authorization was going to refuse charges the caller for work and
+        // leaves a trail of reads that did not happen.
+        //
+        // The two subjects therefore differ exactly when a hook rewrites the
+        // id, and both must pass: the requested id at the gate, the settled one
+        // here, where `getAccessQueryConstraint` RAISES a denial rather than
+        // returning an absent predicate. That is the fail-closed direction —
+        // a rewrite can narrow what a caller reaches and never widen it.
+        entryId,
       });
 
       const idCondition = eq(schema.id, entryId);
-      const ownerCondition = ownerConstraint
-        ? eq(schema[ownerConstraint.field], ownerConstraint.value)
-        : null;
+      // The languages this read resolves through, and the companion those
+      // values live in. Resolved HERE, above the predicate, rather than beside
+      // the overlay further down: a stored rule may name a LOCALIZED field,
+      // whose column exists only on the companion, and the shared translator
+      // recognises such a field only when it is given this context. Without it
+      // the by-id path refuses a constraint the listing binds — the same rule
+      // answering 403 here and returning rows there, which is the divergence
+      // this service exists to not have.
+      //
+      // BOTH are reused below — the chain by the overlays and the relationship
+      // expansion, the companion by the three overlays that would otherwise
+      // load it again. `loadCompanionSchema` fetches metadata BEFORE it
+      // consults its cache, so each of those is a query rather than a lookup,
+      // and resolving here without passing it on would have added them to
+      // every localized read by id.
+      const { localeChain, companion } = await this.localeScope(params);
+      // Translated through the shared builder, so a multi-member or
+      // non-`equals` predicate binds here exactly as it binds a listing, and a
+      // localized member becomes the same companion EXISTS.
+      const accessCondition =
+        this.accessConstraintCondition(
+          params.collectionName,
+          accessConstraint,
+          schema,
+          this.buildLocalizedQueryContext(
+            companion,
+            localeChain,
+            schema,
+            statusFilter?.values
+          )
+        ) ?? null;
       // An explicit `status: "draft"` view that opts into the working draft must
       // not filter the live row to draft-only: the split keeps the main row
       // published, so that predicate would 404 before the overlay below can
@@ -4073,7 +4156,7 @@ export class CollectionQueryService extends BaseService {
           });
       const whereParts = [
         idCondition,
-        ownerCondition,
+        accessCondition,
         lifecycleCondition,
       ].filter(
         (c): c is NonNullable<typeof c> => c !== null && c !== undefined
@@ -4096,12 +4179,8 @@ export class CollectionQueryService extends BaseService {
         };
       }
 
-      // Resolved once and reused: relationship expansion below needs the same
-      // language, so deriving it twice would let the two drift.
-      const localeChain = this.resolveLocaleChain(
-        params.locale,
-        params.fallbackLocale
-      );
+      // `localeChain` and `companion` were resolved above the access predicate,
+      // which needs the same pair to judge a rule naming a localized field.
       // i18n M4: resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
@@ -4113,7 +4192,7 @@ export class CollectionQueryService extends BaseService {
             params.collectionName,
             [entry as Record<string, unknown>],
             localeChain,
-            undefined,
+            companion,
             statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
@@ -4126,7 +4205,7 @@ export class CollectionQueryService extends BaseService {
             params.collectionName,
             [entry as Record<string, unknown>],
             params.locale,
-            undefined,
+            companion,
             statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
@@ -4139,7 +4218,7 @@ export class CollectionQueryService extends BaseService {
             this.populateTranslationMeta(
               params.collectionName,
               [entry as Record<string, unknown>],
-              undefined,
+              companion,
               statusFilter?.values ?? null // i18n M6: per-locale published filter
             )
         );
@@ -4165,34 +4244,7 @@ export class CollectionQueryService extends BaseService {
         entry,
         params.collectionName,
         fields,
-        {
-          depth: params.depth,
-          // Same reasoning as the list path: a related row is redacted by its
-          // own collection's field rules, for this caller.
-          enforceFieldAccess: true,
-          fieldAccessUser: params.fieldAccessUser,
-          // Same deferral as the list path; this path runs the same pass.
-          fieldAccessStage: "assembled" as const,
-          user: params.user,
-          overrideAccess: params.overrideAccess,
-          // The bound, at the by-id path's TOP-LEVEL expansion. Omitting it
-          // here leaves the relationship service with no predicate, so every
-          // target is read fully trusted before the post-assembly pass runs.
-          trusted: params.trusted,
-          authenticatedScope: params.authenticatedScope,
-          // As on the list path: the language a target collection's read rule is
-          // evaluated in when its predicate names a localized field.
-          locale: localeChain?.[0],
-          // Only "read everything" propagates, and only when the caller
-          // actually asked for it. Deriving this from the parent having
-          // resolved to no filter would unfilter every target behind a
-          // status-less collection.
-          status: expansionStatusScope({
-            status: params.status,
-            overrideAccess: params.overrideAccess,
-            bounded: narrows(params.trusted),
-          }),
-        }
+        this.buildDetailExpansionOptions(params, localeChain)
       );
 
       // Populate component field data from comp_{slug} tables
@@ -4409,30 +4461,14 @@ export class CollectionQueryService extends BaseService {
           // draft's own component values, and re-reading components from their
           // tables would replace the pending edits with live content.
           if (params.depth !== 0) {
-            const expandOptions: Parameters<
-              CollectionRelationshipService["expandRelationships"]
-            >[3] = {
-              depth: params.depth,
-              enforceFieldAccess: true,
-              fieldAccessUser: params.fieldAccessUser,
-              // The overlaid draft is the document the post-assembly pass runs
-              // over, so its related rows defer field rules for the same reason
-              // the live read does. Without this a draft read hides a denied
-              // sibling before the rule that masks on it has run.
-              fieldAccessStage: "assembled" as const,
-              user: params.user,
-              overrideAccess: params.overrideAccess,
-              // Narrows that bypass per RELATED collection. Absent means unchanged;
-              // dropping it here would silently restore the full bypass.
-              trusted: params.trusted,
-              authenticatedScope: params.authenticatedScope,
-              locale: localeChain?.[0],
-              status: expansionStatusScope({
-                status: params.status,
-                overrideAccess: params.overrideAccess,
-                bounded: narrows(params.trusted),
-              }),
-            };
+            // The same bounds the live row above was expanded under: the draft
+            // is the document the post-assembly pass runs over, so it defers
+            // field rules and carries the caller's trust exactly as the live
+            // read does.
+            const expandOptions = this.buildDetailExpansionOptions(
+              params,
+              localeChain
+            );
             draftEntry = await this.relationshipService.expandRelationships(
               draftEntry,
               params.collectionName,
@@ -4492,204 +4528,30 @@ export class CollectionQueryService extends BaseService {
         };
       }
 
-      // Redact password hashes BEFORE any afterRead hook runs (a hook could
-      // copy the hash elsewhere); the final redaction below is defense in
-      // depth.
-      const detailHasPassword = hasPasswordField(fields);
-      if (detailHasPassword) {
-        stripPasswordFieldValues(expandedEntry, fields);
-      }
-      // Always strip the system owner column (see listEntries).
-      stripSystemOwnerField(expandedEntry);
-
-      // Decode before any afterRead hook runs, for the same reason as the list
-      // path: a hook is documented against the configured value, not the
-      // storage encoding SQLite hands back.
-      decodeJsonFieldValues([expandedEntry], fields, params.locale);
-
-      // Same placement as the list path: a related row's own field hooks run
-      // before this collection's afterRead hooks can copy an unmasked value onto
-      // a root property, and before selection rebuilds the row without the
-      // siblings a masking rule judges on. Every populated related row is
-      // walked, including one the projection drops.
-      //
-      // The state is held here rather than left to the inline finalize so the
-      // related rows can be sanitized twice: once now (so the source collection's
-      // hooks below are handed already sanitized rows), and again after those
-      // hooks (so a denied field one of them writes back onto a related row is
-      // stripped before the response).
-      const detailNestedState =
-        this.relationshipService.createNestedHookState();
-      const detailNestedAccess = {
-        enforceFieldAccess: true,
+      // The read-response pipeline, over a batch of one. Same order, same
+      // passes, same shared walk state as the listing above.
+      const [finalData] = await this.finalizeReadRows({
+        rows: [expandedEntry],
+        // afterRead handlers on a read by id receive the document itself.
+        single: true,
+        collectionName: params.collectionName,
+        fields,
+        storedHooks,
+        sharedContext,
+        // The same facts the beforeRead phases were given, so a hook cannot
+        // learn one thing about the request on the way in and another on
+        // the way out.
+        requestFacts,
+        user: params.user,
         fieldAccessUser: params.fieldAccessUser,
-        user: params.user,
         overrideAccess: params.overrideAccess,
-        // Narrows that bypass per RELATED collection. Absent means unchanged;
-        // dropping it here would silently restore the full bypass.
-        trusted: assumedBound(params.trusted),
+        enforceFieldAccess: params.enforceFieldAccess,
+        trusted: params.trusted,
         authenticatedScope: params.authenticatedScope,
-      };
-      await this.relationshipService.applyNestedFieldHooks(
-        expandedEntry,
-        params.collectionName,
-        detailNestedAccess,
-        detailNestedState
-      );
-      await this.relationshipService.finalizeRelatedRows(
-        detailNestedState,
-        detailNestedAccess
-      );
-
-      // Execute afterRead hooks (code-registered)
-      // Hooks can transform the fetched data
-      const afterContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "read" as const,
-        data: expandedEntry,
-        user: params.user,
-        context: sharedContext,
-        req: requestFacts,
+        select: params.select,
+        richTextFormat: params.richTextFormat,
+        locale: params.locale,
       });
-
-      const transformedData = await this.hookService.hookRegistry.execute(
-        "afterRead",
-        afterContext
-      );
-      const dataAfterCodeHooks = transformedData ?? expandedEntry;
-
-      // A code hook may have RETURNED a reshaped related row carrying a denied
-      // field; sanitize now, before the stored and field-level hooks run, so one
-      // of them cannot read that field and copy it onto an allowed source key the
-      // final pass no longer looks at. Idempotent over the shared walk state.
-      await this.relationshipService.reprojectRelatedRows(
-        [dataAfterCodeHooks],
-        params.collectionName,
-        detailNestedAccess,
-        detailNestedState
-      );
-
-      // Execute stored afterRead hooks (UI-configured)
-      const storedAfterResult =
-        await this.hookService.storedHookExecutor.execute(
-          "afterRead",
-          storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "read",
-            data: dataAfterCodeHooks,
-            // eslint-disable-next-line @typescript-eslint/require-await
-            queryDatabase: async () => false,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-          })
-        );
-      let finalData = (storedAfterResult.data ?? dataAfterCodeHooks) as Record<
-        string,
-        unknown
-      >;
-
-      // Convert snake_case timestamp columns to their camelCase API form.
-      finalData = convertTimestampsToCamelCase(finalData);
-
-      // Defense in depth: re-strip after hooks in case a hook re-introduced
-      // a password value under its declared key.
-      if (detailHasPassword) {
-        stripPasswordFieldValues(finalData, fields);
-      }
-      // Same defense in depth for the owner column.
-      stripSystemOwnerField(finalData);
-
-      // A stored hook may likewise have reintroduced a denied related field;
-      // sanitize before the field-level hooks read the assembled document.
-      await this.relationshipService.reprojectRelatedRows(
-        [finalData],
-        params.collectionName,
-        detailNestedAccess,
-        detailNestedState
-      );
-
-      // Field-level afterRead hooks + read access — same semantics as the list
-      // path above: access is applied BEFORE the hooks and AGAIN after, sharing a
-      // redactions store, so a denied source field is hidden from the hooks (a hook
-      // cannot copy a denied sibling onto an allowed key selection now projects
-      // last) while a conditional rule still judges against the whole row and a
-      // hook-reintroduced denied field is caught.
-      // Row trust and FIELD trust are separate questions and this read may
-      // answer them differently. `overrideAccess` alone means both; a caller
-      // that asked for field rules to be enforced keeps its row bypass and
-      // gives up only the field one. Computed once, beside the two passes it
-      // governs, so they cannot drift apart.
-      const skipFieldRules =
-        params.enforceFieldAccess === true ? false : params.overrideAccess;
-      const detailSourceRedactions: ReadAccessRedactions = new WeakMap();
-      await applyFieldReadAccess(
-        {
-          kind: "collection",
-          slug: params.collectionName,
-          entry: finalData,
-          user: params.fieldAccessUser ?? params.user,
-          overrideAccess: skipFieldRules,
-        },
-        detailSourceRedactions
-      );
-      await runFieldHooks({
-        kind: "collection",
-        slug: params.collectionName,
-        phase: "afterRead",
-        data: finalData,
-        operation: "read",
-        user: params.user,
-      });
-      await applyFieldReadAccess(
-        {
-          kind: "collection",
-          slug: params.collectionName,
-          entry: finalData,
-          user: params.fieldAccessUser ?? params.user,
-          overrideAccess: skipFieldRules,
-        },
-        detailSourceRedactions
-      );
-
-      // Authoritative related-row sanitization over the assembled response,
-      // after EVERY source afterRead hook phase above (code, stored, and
-      // field-level), for the reason given at the same point on the list path:
-      // those hooks can write a denied target field back onto a related row or
-      // return a reshaped document whose related rows are new objects, and the
-      // root access pass sees only this collection's schema. Before selection, so
-      // it judges whole rows with their sibling evidence intact.
-      await this.relationshipService.reprojectRelatedRows(
-        [finalData],
-        params.collectionName,
-        detailNestedAccess,
-        detailNestedState
-      );
-
-      // Apply field selection if select parameter is provided. Last of the
-      // sanitizing steps, so every hook and access pass above judged the whole
-      // row rather than the projected slice.
-      if (params.select && Object.keys(params.select).length > 0) {
-        finalData = this.applyFieldSelection(finalData, params.select);
-      }
-
-      // Transform rich text fields to requested format (html, both)
-      // Default is "json" which returns the Lexical JSON structure as-is
-      if (params.richTextFormat && params.richTextFormat !== "json") {
-        // Cast FieldDefinition[] to FieldConfig[] - they share the same structure
-        // for the properties used by transformRichTextFields (name, type, fields)
-        finalData = transformRichTextFields(
-          finalData,
-          fields as unknown as Parameters<typeof transformRichTextFields>[1],
-          params.richTextFormat
-        );
-      }
-
-      // Final owner-column strip at the response boundary — after the
-      // field-level afterRead hooks, read access, and rich-text transform — so
-      // nothing downstream can re-expose the creator's user id.
-      stripSystemOwnerField(finalData);
 
       // Signal that the returned document is the pending working draft, not the
       // live row (draft/published split). The overlay keeps the draft's `status`
