@@ -41,6 +41,7 @@ import {
   type BlockNode,
   type ComponentDocument,
   type ComponentLookup,
+  type DocumentLimits,
   type NestingSource,
   type NestingVerdict,
   type PlacementTarget,
@@ -523,11 +524,16 @@ export const COMPONENT_ENTRY_PREFIX = "component:";
  */
 export function componentEntriesFrom(
   components: readonly SavedComponent[],
-  definitions: ComponentLookup
+  definitions: ComponentLookup,
+  limits?: DocumentLimits
 ): ComponentInsertEntry[] {
   const entries: ComponentInsertEntry[] = [];
   for (const component of components) {
-    const document = offerableDefinition(component.document, definitions);
+    const document = offerableDefinition(
+      component.document,
+      definitions,
+      limits
+    );
     if (document === undefined) continue;
     entries.push({
       kind: "component",
@@ -565,19 +571,34 @@ export function componentEntriesFrom(
  * the definition's own concern, exactly as its internal nesting is, and does
  * not withhold the tile.
  *
+ * Resolved under the SAME caps the canvas resolves under, handed in by the
+ * host that knows them: a site that lowered its node cap would otherwise see
+ * the palette offer a definition the canvas leaves unresolved, and one that
+ * raised it would see a tile withheld for a definition the canvas draws.
+ *
  * Resolved ONCE per row here rather than per placement inside
  * {@link entryAllowedAt}, for the reason a pattern's preflight is: per target
  * it would re-walk every definition on each keystroke of a filter.
  */
 function offerableDefinition(
   stored: SavedComponent["document"],
-  definitions: ComponentLookup
+  definitions: ComponentLookup,
+  limits: DocumentLimits | undefined
 ): ComponentDocument | undefined {
   if (stored === undefined || stored === null) return undefined;
   if (!isComponentDocument(stored) || stored.nodes.length === 0) {
     return undefined;
   }
-  const resolved = resolveComponentInstances(stored, definitions).document;
+  const resolved = resolveComponentInstances(
+    stored,
+    definitions,
+    limits === undefined ? {} : { limits }
+  ).document;
+  // Asked of the RESOLVED forest, not only the stored one: a root that was an
+  // instance of a component with no roots resolves to nothing at all, and a
+  // tile for that would be placed vacuously — no root type to refuse — and
+  // render nothing.
+  if (resolved.nodes.length === 0) return undefined;
   if (resolved.nodes.some(root => root.type === COMPONENT_INSTANCE_TYPE)) {
     return undefined;
   }

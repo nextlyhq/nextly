@@ -549,19 +549,27 @@ describe("what the editor reads before anyone asks for it", () => {
     const canvas = recorded("canvas");
     const panel = recorded("insertPanel");
     const inspector = recorded("inspector");
-    const definitions = (canvas.render as { definitions: Map<string, unknown> })
-      .definitions;
-    expect(definitions.get("header")).toBe(definition);
-    expect(panel.componentDefinitions).toBe(definitions);
+    const render = canvas.render as {
+      definitions: Map<string, unknown>;
+      limits: unknown;
+    };
+    expect(render.definitions.get("header")).toBe(definition);
+    expect(panel.componentDefinitions).toBe(render.definitions);
     expect(panel.components).toBe(items);
-    expect(panel.truncated).toEqual({ patterns: false, components: true });
+    expect(panel.library).toMatchObject({
+      patterns: "ready",
+      components: "cut",
+    });
+    // And the caps the canvas resolves under, so a tile is judged under the
+    // same bounds the instance is drawn under.
+    expect(panel.documentLimits).toBe(render.limits);
     // And the inspector reads the SAME map, so a selected instance's rows come
     // from the document the canvas draws, with the rows that carry its title.
     const library = inspector.componentLibrary as {
       definitions: unknown;
       components: unknown;
     };
-    expect(library.definitions).toBe(definitions);
+    expect(library.definitions).toBe(render.definitions);
     expect(library.components).toBe(items);
   });
 });

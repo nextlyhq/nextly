@@ -44,6 +44,17 @@ function pending(): void {
     data: undefined,
     error: null,
     pending: true,
+    refetch: () => {},
+  } as unknown as ReturnType<typeof usePluginRoute<ComponentLibraryResponse>>);
+}
+
+/** A read that failed before any data arrived, with the refetch it offers. */
+function failed(refetch: () => void): void {
+  read.mockReturnValue({
+    data: undefined,
+    error: new Error("Forbidden"),
+    pending: false,
+    refetch,
   } as unknown as ReturnType<typeof usePluginRoute<ComponentLibraryResponse>>);
 }
 
@@ -137,7 +148,7 @@ describe("the component read", () => {
     ]);
   });
 
-  it("answers ONE shared empty value across readers while the read is in flight", () => {
+  it("answers ONE shared empty map and list across readers while the read is in flight", () => {
     // Identity, not equality — and across INSTANCES, not only across renders
     // of one. The memo already holds a single instance still; what a shared
     // constant adds is that the editor and the panel, each calling this hook,
@@ -148,9 +159,38 @@ describe("the component read", () => {
     const editor = renderHook(() => useComponentLibrary());
     const panel = renderHook(() => useComponentLibrary());
 
-    expect(panel.result.current).toBe(editor.result.current);
+    expect(panel.result.current.definitions).toBe(
+      editor.result.current.definitions
+    );
+    expect(panel.result.current.components).toBe(
+      editor.result.current.components
+    );
     expect(editor.result.current.definitions.size).toBe(0);
-    expect(editor.result.current.components).toEqual([]);
+    expect(editor.result.current.state).toBe("pending");
+  });
+
+  it("tells a FAILED read apart from a pending one, and hands over the retry", () => {
+    // Both have no data, and only one of them will ever have any. Folded
+    // together, every instance on the page draws as could-not-be-loaded
+    // behind a "loading" that never resolves, with no way to ask again.
+    const refetch = vi.fn();
+    failed(refetch);
+
+    const { result } = renderHook(() => useComponentLibrary());
+
+    expect(result.current.state).toBe("unavailable");
+    expect(result.current.definitions.size).toBe(0);
+    result.current.retry();
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("is ready once the read has answered", () => {
+    // The control for the two above.
+    answering([]);
+
+    const { result } = renderHook(() => useComponentLibrary());
+
+    expect(result.current.state).toBe("ready");
   });
 
   it("says when the ceiling cut the read", () => {

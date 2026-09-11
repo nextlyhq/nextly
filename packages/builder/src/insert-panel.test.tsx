@@ -1504,61 +1504,61 @@ describe("the component tier", () => {
   });
 });
 
-describe("when the library was cut", () => {
+describe("when the library was cut, or could not be read", () => {
   afterEach(() => {
     clearBlocks();
   });
 
-  /** The notice, or nothing: it is a status region, so that is how it is found. */
-  function notice(): HTMLElement | null {
-    return screen.queryByRole("status");
+  /** The notices, or none: they are status regions, so that is how they are found. */
+  function notices(): HTMLElement[] {
+    return screen.queryAllByRole("status");
   }
 
-  it("says nothing when every tier arrived whole", () => {
+  it("says nothing when every tier arrived whole, or is still arriving", () => {
     // The control for the cases below, and the ordinary state: a notice that
     // was always on screen would be one an author learns to read past.
     render(<InsertPanel editor={editorSpy(documentOf())} />);
-    expect(notice()).toBeNull();
+    expect(notices()).toEqual([]);
 
     cleanup();
     render(
       <InsertPanel
         editor={editorSpy(documentOf())}
-        truncated={{ patterns: false, components: false }}
+        library={{ patterns: "ready", components: "ready" }}
       />
     );
-    expect(notice()).toBeNull();
+    expect(notices()).toEqual([]);
   });
 
-  it("names the component tier, and says what a left-out component looks like on the page", () => {
+  it("names the component tier as cut, and says what a left-out component looks like on the page", () => {
     // The second sentence is the one nothing else says: an instance of a
     // component the read left out draws as could-not-be-loaded, which without
     // this reads as a component somebody deleted.
     render(
       <InsertPanel
         editor={editorSpy(documentOf())}
-        truncated={{ components: true }}
+        library={{ components: "cut" }}
       />
     );
 
-    const status = notice();
+    const [status] = notices();
     expect(status?.textContent).toContain("some components are not offered");
     expect(status?.textContent).toContain("could not be loaded");
     expect(status?.textContent).not.toContain("patterns");
   });
 
-  it("names the pattern tier without the sentence about the page", () => {
+  it("names the pattern tier as cut without the sentence about the page", () => {
     // A pattern left out is one the author cannot insert and nothing more: it
     // was copied into the page when placed, so no instance of it can be
     // waiting on the library.
     render(
       <InsertPanel
         editor={editorSpy(documentOf())}
-        truncated={{ patterns: true }}
+        library={{ patterns: "cut" }}
       />
     );
 
-    const status = notice();
+    const [status] = notices();
     expect(status?.textContent).toContain("some patterns are not offered");
     expect(status?.textContent).not.toContain("could not be loaded");
   });
@@ -1567,12 +1567,45 @@ describe("when the library was cut", () => {
     render(
       <InsertPanel
         editor={editorSpy(documentOf())}
-        truncated={{ patterns: true, components: true }}
+        library={{ patterns: "cut", components: "cut" }}
       />
     );
 
-    expect(notice()?.textContent).toContain(
+    expect(notices()[0]?.textContent).toContain(
       "some patterns and components are not offered"
     );
+  });
+
+  it("says when a tier could not be read at all, apart from a cut one, and offers the retry", () => {
+    // Two different sentences for two different states — "some were left
+    // out" and "none could be loaded" — and only the second has a remedy the
+    // author can reach from here.
+    const retry = vi.fn();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "cut", components: "unavailable", retry }}
+      />
+    );
+
+    const [cut, unavailable] = notices();
+    expect(cut?.textContent).toContain("some patterns are not offered");
+    expect(unavailable?.textContent).toContain(
+      "components could not be loaded, so none are offered"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no retry when the host supplied none", () => {
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ components: "unavailable" }}
+      />
+    );
+
+    expect(notices()[0]?.textContent).toContain("could not be loaded");
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 });

@@ -37,6 +37,14 @@ definition by id AS THE USER so an author who may edit a component sees its
 working draft while one who may only read it sees the live definition. The
 canvas and the entry form's resting miniature both resolve instances against
 them, so a placed component renders in the builder — and stays rendered after
-Done — rather than as a could-not-be-loaded placeholder. A definition whose own
-root is another component is judged for placement by what that component
-draws, and the panel says when the library was too large to load whole.
+Done — rather than as a could-not-be-loaded placeholder; both wait for the read
+and say when it failed, with a way to try again. A definition whose own root is
+another component is judged for placement by what that component draws, under
+the site's own document caps, and the panel says when a tier of the library was
+too large to load whole or could not be read.
+
+The Direct API's `findByID` now forwards `status`, so an untrusted by-id read
+can reach a row that was never published — a caller passing it before was
+silently ignored — and `nextly/runtime` exports `buildUserContext`, the one
+builder of the identity an access rule is evaluated against, for a route
+reading on a caller's behalf.

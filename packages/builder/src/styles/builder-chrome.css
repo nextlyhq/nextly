@@ -231,6 +231,21 @@
 }
 
 /*
+ * The retry inside a notice: a link-shaped control in the sentence that
+ * explains it, rather than a button beside it, because the sentence is short
+ * and the action is its last clause.
+ */
+.nx-insert-panel__retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--nx-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/*
  * Tiles, three to a row.
  *
  * The count comes from the panel as `--nx-insert-columns` rather than being

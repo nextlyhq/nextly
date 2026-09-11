@@ -15,6 +15,7 @@ import {
   allBlocks,
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   registerBlocks,
   registryNestingSource,
@@ -1494,6 +1495,50 @@ describe("the component tier", () => {
     });
 
     expect(componentEntriesFrom([loop], lookupOf(loop))).toEqual([]);
+  });
+
+  it("withholds a component whose root resolves to NOTHING", () => {
+    // A root that is an instance of a component with no roots resolves to an
+    // empty forest: there is no root type to refuse, so placement would pass
+    // vacuously and the placed node would render nothing. Emptiness has to be
+    // asked of the RESOLVED forest, not only the stored one.
+    catalog([{ ...base, name: "acme/text" }]);
+    const hollow = stored({ id: "hollow", document: componentOf([]) });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("hollow")]),
+    });
+
+    expect(componentEntriesFrom([wrapper], lookupOf(hollow))).toEqual([]);
+  });
+
+  it("resolves under the caps it is handed, so the tile agrees with the canvas", () => {
+    // A site that lowered its node cap sees the canvas leave a large
+    // definition unresolved; the palette has to withhold that tile rather
+    // than offer one the canvas then draws as could-not-be-loaded. Resolved
+    // under a cap of one node, a wrapper whose header has two cannot be
+    // composed, so its root stays an instance and the tile is withheld;
+    // under the default caps it is offered.
+    catalog([{ ...base, name: "acme/text" }]);
+    const header = stored({
+      id: "header",
+      document: componentOf([
+        { id: "d1", type: "acme/text", version: 1, props: {} },
+        { id: "d2", type: "acme/text", version: 1, props: {} },
+      ]),
+    });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("header")]),
+    });
+    const tight = { ...DEFAULT_LIMITS, maxNodes: 1 };
+
+    expect(componentEntriesFrom([wrapper], lookupOf(header), tight)).toEqual(
+      []
+    );
+    expect(
+      componentEntriesFrom([wrapper], lookupOf(header)).map(e => e.componentId)
+    ).toEqual(["wrapper"]);
   });
 
   it("still offers a component with an unresolvable instance BELOW its root", () => {

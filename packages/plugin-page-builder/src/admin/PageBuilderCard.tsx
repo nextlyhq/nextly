@@ -113,6 +113,17 @@ export interface PageBuilderCardProps {
    */
   styleState: SiteStyleState;
   /**
+   * Whether this site's component definitions are available to draw the page
+   * with, and the way to ask again when they are not.
+   *
+   * The same three states as the style, for the same reason: drawing without
+   * them does not draw nothing, it draws every instance as could-not-be-loaded,
+   * which reads as a site whose components were deleted. And a retry, because
+   * a failed read is the one state with a remedy the author can reach from
+   * here.
+   */
+  components: { state: SiteStyleState; retry: () => void };
+  /**
    * Everything else this site's rendering depends on, as one bundle.
    *
    * The same bundle the canvas is handed, from the same derivation.
@@ -125,6 +136,86 @@ export interface PageBuilderCardProps {
 }
 
 /**
+ * The miniature, or what stands in for it while a read it cannot draw
+ * without is still coming or has failed.
+ *
+ * Two reads gate it, and both fail in the same direction: without the site's
+ * sheet the page draws a plausible design the site does not have, and without
+ * the component definitions every instance draws as could-not-be-loaded. The
+ * two failures are told apart because their remedies differ — a failed style
+ * read is fixed by reloading, a failed component read can be asked again from
+ * here.
+ */
+function Preview({
+  document,
+  siteStyles,
+  styleState,
+  components,
+  render,
+}: Pick<
+  PageBuilderCardProps,
+  "document" | "siteStyles" | "styleState" | "components" | "render"
+>): React.JSX.Element {
+  if (styleState === "pending" || components.state === "pending") {
+    // Sized like the miniature it stands in for, so the card does not resize
+    // under the author the moment the reads arrive.
+    return <Skeleton className="aspect-[16/10] w-full rounded-md" />;
+  }
+  if (styleState === "unavailable") {
+    /*
+     * A refusal, not a fallback. The page COULD be drawn from the config
+     * defaults, and it would look entirely reasonable while missing this
+     * site's stored classes, tokens, fonts and block defaults — a confident
+     * wrong picture, which is worse than none. Saying so also keeps the count
+     * and the action below, so the author is not blocked by it.
+     */
+    return (
+      <div
+        className="flex aspect-[16/10] w-full items-center justify-center rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground"
+        role="status"
+      >
+        This page cannot be previewed right now — the site&apos;s styles could
+        not be loaded.
+      </div>
+    );
+  }
+  if (components.state === "unavailable") {
+    /*
+     * The same refusal for the same reason, with the one remedy the author
+     * can reach from here: the read can be asked again without leaving the
+     * form. Drawing anyway would show every component as could-not-be-loaded,
+     * which is the picture of a different problem.
+     */
+    return (
+      <div
+        className="flex aspect-[16/10] w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground"
+        role="status"
+      >
+        <span>
+          This page cannot be previewed right now — the site&apos;s components
+          could not be loaded.
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={components.retry}
+        >
+          Try again
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <PageMiniature
+      document={document}
+      siteStyles={siteStyles}
+      render={render}
+    />
+  );
+}
+
+/**
  * @param props - the document, the site's sheet and its readiness, and the way in
  * @returns the card the entry form draws in place of the blocks field
  */
@@ -132,6 +223,7 @@ export function PageBuilderCard({
   document,
   siteStyles,
   styleState,
+  components,
   render,
   canEdit,
   onOpen,
@@ -150,29 +242,12 @@ export function PageBuilderCard({
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-      {empty ? null : styleState === "pending" ? (
-        // Sized like the miniature it stands in for, so the card does not
-        // resize under the author the moment the sheet arrives.
-        <Skeleton className="aspect-[16/10] w-full rounded-md" />
-      ) : styleState === "unavailable" ? (
-        /*
-         * A refusal, not a fallback. The page COULD be drawn from the config
-         * defaults, and it would look entirely reasonable while missing this
-         * site's stored classes, tokens, fonts and block defaults — a confident
-         * wrong picture, which is worse than none. Saying so also keeps the
-         * count and the action below, so the author is not blocked by it.
-         */
-        <div
-          className="flex aspect-[16/10] w-full items-center justify-center rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground"
-          role="status"
-        >
-          This page cannot be previewed right now — the site&apos;s styles could
-          not be loaded.
-        </div>
-      ) : (
-        <PageMiniature
+      {empty ? null : (
+        <Preview
           document={document}
           siteStyles={siteStyles}
+          styleState={styleState}
+          components={components}
           render={render}
         />
       )}

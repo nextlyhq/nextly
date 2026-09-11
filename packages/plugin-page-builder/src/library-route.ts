@@ -3,7 +3,7 @@ import type {
   PluginRouteContext,
   PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
-import { requireNextly } from "nextly/runtime";
+import { buildUserContext, requireNextly } from "nextly/runtime";
 /**
  * The two reads the editor makes to find out what it may offer and draw: the
  * pattern library for the insert panel, and the component definitions for the
@@ -298,16 +298,25 @@ export interface ComponentLibraryContext extends LibraryCaller {
  * can only fire on a misconfigured boot — where failing loudly is right.
  */
 function directComponentReads(
-  ctx: Pick<PluginRouteContext, "user" | "authenticatedScope">
+  ctx: Pick<PluginRouteContext, "user" | "caller" | "authenticatedScope">
 ): ComponentReads {
   const asUser = {
     overrideAccess: false as const,
-    // The identity the service authorizes by. Email travels so an email-based
-    // access rule matches; roles are resolved from the account by the service.
+    // The identity the service authorizes by, built by the same function every
+    // enforced read in core builds it with: the caller's verified claims — a
+    // tenant, a plan — spread first so a rule written against one reads it,
+    // and the canonical identity last so a claim cannot restate it. Email
+    // travels so an email-based rule matches. Roles are not on the route
+    // context, so the service resolves them from the account.
     user:
       ctx.user === null
         ? undefined
-        : { id: ctx.user.id, email: ctx.user.email },
+        : buildUserContext({
+            claims: ctx.caller?.claims,
+            id: ctx.user.id,
+            name: ctx.user.name ?? undefined,
+            email: ctx.user.email,
+          }),
     ...(ctx.authenticatedScope === undefined
       ? {}
       : { actor: ctx.authenticatedScope }),
@@ -329,6 +338,11 @@ function directComponentReads(
         collection: slug,
         id,
         ...asUser,
+        // Every lifecycle state HERE TOO. The listing asked for every state
+        // and got the never-published row; a by-id read that stated none is
+        // bounded back to public states and answers 404 for that same row —
+        // the overlay runs only on a row the lifecycle filter let through.
+        status: "all",
         draft: true,
         disableErrors: true,
       }),
@@ -451,22 +465,31 @@ async function readTier<T extends LibraryPattern | LibraryComponent>(
 }
 
 /**
- * A component's completion: the listing's half, then the by-id half.
+ * A component's completion: the listing names it, the by-id read describes it.
  *
- * Skipped when the listing could not shape it; omitted — and counted — when
- * the listing showed it but the by-id read found nothing.
+ * EVERYTHING the item carries comes from the by-id row — the title and
+ * category as much as the document. That row is the one with the working
+ * draft overlaid, and a draft can rename a component or move it to another
+ * category as readily as it can change its content; an item labelled from the
+ * live listing and drawn from the draft would be searched, grouped and named
+ * by one version and rendered as another.
+ *
+ * Skipped when the listing could not name it; omitted — and counted — when
+ * the listing showed it but the by-id read found nothing, or found a row it
+ * could not shape.
  */
 async function completeComponent(
   ctx: ComponentLibraryContext,
   slug: string,
   row: unknown
 ): Promise<Completed<LibraryComponent>> {
-  const listed = readComponentRow(row);
+  const listed = identityOf(row);
   if (listed === undefined) return "skip";
-  return (await withDraftDocument(ctx, slug, listed)) ?? "omit";
+  const data = await ctx.components.read(slug, listed.named.id);
+  return withDraftDocument(data) ?? "omit";
 }
 
-/** The listing's half of a component: identity and how the panel labels it. */
+/** The by-id row as the panel labels it: identity and how it is described. */
 function readComponentRow(
   row: unknown
 ): Omit<LibraryComponent, "document"> | undefined {
@@ -499,22 +522,20 @@ function identityOf(
 }
 
 /**
- * The by-id half: the document as the caller should see it.
+ * The by-id row as one item: how the panel labels it, and the document as the
+ * caller should see it.
  *
- * `null` for a row the read found but which holds no content — a legal row,
- * and one the panel will skip — and `undefined` when the read found no row at
- * all, which the caller reports as a cut library rather than a missing key.
+ * `document: null` for a row the read found but which holds no content — a
+ * legal row, and one the panel will skip — and `undefined` for no row at all,
+ * or one without an id or title, which the caller reports as a cut library
+ * rather than a missing key.
  */
-async function withDraftDocument(
-  ctx: ComponentLibraryContext,
-  slug: string,
-  listed: Omit<LibraryComponent, "document">
-): Promise<LibraryComponent | undefined> {
-  const data = await ctx.components.read(slug, listed.id);
-  if (typeof data !== "object" || data === null) return undefined;
+function withDraftDocument(data: unknown): LibraryComponent | undefined {
+  const labelled = readComponentRow(data);
+  if (labelled === undefined) return undefined;
   const content = (data as Record<string, unknown>).content;
   return {
-    ...listed,
+    ...labelled,
     document:
       content === undefined || content === null
         ? null
@@ -578,6 +599,19 @@ function admits(charged: number, spent: number, kept: number): RowVerdict {
 type Completed<T> = T | "skip" | "omit";
 
 /**
+ * How many rows are completed at once.
+ *
+ * A component's completion is a database round trip, and a library the
+ * design sizes at three thousand completed one row at a time is three thousand
+ * sequential round trips on every editor open — past any request timeout.
+ * Completed all at once, a page that meets the ceiling at its first row pays
+ * ninety-nine reads it will never admit. Eight at a time bounds both: the
+ * wait is a fraction of the serial one, and at most seven reads past the
+ * ceiling are spent.
+ */
+export const COMPLETION_CONCURRENCY = 8;
+
+/**
  * One page of rows, each completed and then admitted under the ceiling.
  *
  * ONE admission for both tiers. The cost, the charge, the verdict and the push
@@ -587,9 +621,10 @@ type Completed<T> = T | "skip" | "omit";
  * listed row becomes an item, and that is the `complete` step handed in: a
  * pattern is whole from the listing, a component needs a by-id read.
  *
- * Completed one row at a time rather than all up front, so a page that meets
- * the ceiling at its first row does not pay a by-id read for the other
- * ninety-nine it will never admit.
+ * Completed in bounded batches and admitted IN ORDER: a batch runs its reads
+ * together, and its rows are then judged one after another exactly as a
+ * serial walk would judge them, so the ceiling cuts the same rows whatever the
+ * batch size. A batch is not started once the ceiling has stopped the read.
  */
 async function collect<T extends LibraryPattern | LibraryComponent>(
   rows: readonly unknown[],
@@ -599,8 +634,31 @@ async function collect<T extends LibraryPattern | LibraryComponent>(
 ): Promise<Collected> {
   let bytes = from;
   let omitted = false;
-  for (const row of rows) {
-    const item = await complete(row);
+  for (let start = 0; start < rows.length; start += COMPLETION_CONCURRENCY) {
+    // Each completion wrapped as a promise: a pattern's completes at once and
+    // a component's waits on a read, and the aggregator takes one shape.
+    const batch = await Promise.all(
+      rows
+        .slice(start, start + COMPLETION_CONCURRENCY)
+        .map(async row => complete(row))
+    );
+    const admitted = admitAll(batch, into, bytes);
+    bytes = admitted.bytes;
+    omitted ||= admitted.omitted;
+    if (admitted.full) return { bytes, full: true, omitted };
+  }
+  return { bytes, full: false, omitted };
+}
+
+/** One batch of completed rows, admitted in order until the ceiling says stop. */
+function admitAll<T extends LibraryPattern | LibraryComponent>(
+  batch: readonly Completed<T>[],
+  into: T[],
+  from: number
+): Collected {
+  let bytes = from;
+  let omitted = false;
+  for (const item of batch) {
     if (item === "skip") continue;
     const size = item === "omit" ? undefined : rowCost(item);
     if (item === "omit" || size === undefined) {
