@@ -1218,14 +1218,16 @@ export class DynamicCollectionService extends BaseService {
 
   generateDropTableMigration(
     collectionName: string,
-    tableName: string
+    tableName: string,
+    fields: FieldDefinition[] = []
   ): {
     migrationSQL: string;
     migrationFileName: string;
   } {
     return this.schemaService.generateDropTableMigration(
       collectionName,
-      tableName
+      tableName,
+      fields
     );
   }
 

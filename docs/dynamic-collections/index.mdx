@@ -52,6 +52,13 @@ without recreating anything or losing content.
   what recreates the table and its registry row in another environment. **Commit it.**
   Deploying without it leaves the collection unreproducible outside the database it was
   created in.
+- A many-to-many relationship field stores its links in a junction table of its own, and the
+  migration follows that table through the field's life: adding the field creates it, removing
+  the field drops it (a field added later under the same name starts with no links), renaming
+  the field renames it so the links travel with the name, and dropping the collection drops
+  every junction the collection's own fields own. Rename one many-to-many field per save — with
+  two renamed in one save the builder cannot tell which old table belongs to which new field,
+  and refuses rather than guess.
 
 ## Related
 
