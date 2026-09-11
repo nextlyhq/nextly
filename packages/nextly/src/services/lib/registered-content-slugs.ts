@@ -51,17 +51,18 @@ export interface RegistryRead {
  * for every caller rather than only the one asking about degradation. Ask `has`
  * for absence, then let anything after it count as failure.
  */
-async function registryRead<T>(
-  service: string,
-  enumerate: (registry: T) => Promise<Array<{ slug: string }>>
-): Promise<RegistryRead> {
+async function registryRead(service: string): Promise<RegistryRead> {
   // Absent: this install registers no content of that kind, and that is a whole
   // answer rather than a shortfall.
   if (!container.has(service)) return { slugs: [], reachable: true };
   try {
-    const registry = container.get<T>(service);
-    const entries = await enumerate(registry);
-    return { slugs: entries.map(entry => String(entry.slug)), reachable: true };
+    // The slug-only projection, not the records. Every caller here wants the
+    // names as candidates and nothing else, and the full read deserializes
+    // each record's fields JSON -- the whole registry materialized to learn
+    // what it is called.
+    const registry = container.get<SlugRegistry>(service);
+    const slugs = await registry.getAllSlugs();
+    return { slugs: slugs.map(slug => String(slug)), reachable: true };
   } catch {
     // Registered and unable to answer -- a construction failure inside the
     // factory included. Contribute nothing, and SAY that it is a floor.
@@ -69,18 +70,19 @@ async function registryRead<T>(
   }
 }
 
+/** The one method a registry needs for this: its names, and nothing else. */
+interface SlugRegistry {
+  getAllSlugs: () => Promise<string[]>;
+}
+
 /** The registered collection slugs, or none when the registry is unreachable. */
 function collectionSlugs(): Promise<RegistryRead> {
-  return registryRead<{
-    getAllCollections: () => Promise<Array<{ slug: string }>>;
-  }>("collectionRegistryService", registry => registry.getAllCollections());
+  return registryRead("collectionRegistryService");
 }
 
 /** The registered single slugs, or none when the registry is unreachable. */
 function singleSlugs(): Promise<RegistryRead> {
-  return registryRead<{
-    getAllSingles: () => Promise<Array<{ slug: string }>>;
-  }>("singleRegistryService", registry => registry.getAllSingles());
+  return registryRead("singleRegistryService");
 }
 
 /**

@@ -29,7 +29,6 @@ import {
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 
-import { isSuperAdmin } from "./permissions";
 import { registeredSlugsOfKind } from "./registered-content-slugs";
 
 /**
@@ -38,7 +37,7 @@ import { registeredSlugsOfKind } from "./registered-content-slugs";
  * The three answers are distinct and collapsing any two is a defect:
  *
  * - `undefined` — no filter. An unauthenticated caller, gated at the route
- *   layer, and a SESSION super admin, who may see everything.
+ *   layer, and nobody else.
  * - `[]` — nothing is visible. A caller the decision admits to nothing, and
  *   also a registry that could not be enumerated: an access decision fails
  *   closed, because admitting nothing is safe and admitting everything is not.
@@ -47,20 +46,22 @@ import { registeredSlugsOfKind } from "./registered-content-slugs";
  *   rows".
  * - a non-empty list — exactly the resources of `kind` this caller may read.
  *
- * An API key takes the long way even when a super admin owns it. Its owner's
- * standing is not the key's: `canReadEntity` judges a key on its own stamped
- * scope, and a super-admin bypass applied here would make a read-only key
- * issued by an administrator equivalent to their whole account on the two
- * endpoints that list the most.
+ * A super admin is not a case here. The shared decision already composes the
+ * bypass -- `canReadEntity` delegates a session whole to `checkAccess`, which
+ * admits a super admin before it consults a rule or a grant -- so a session
+ * super admin is answered with every registered slug by the same machinery
+ * that answers everyone else. Deciding the bypass here as well was a second
+ * super-admin path for the list endpoints alone, one the dashboard scope and
+ * the version reads did not share, and a change to what the bypass means
+ * would have split the lists from them again. It also keeps a key honest: an
+ * API key is judged on its own stamped scope whoever owns it, and there is no
+ * shortcut here for a bypass to leak through.
  */
 export async function readableSlugAllowlist(
   caller: ReadAccessCaller | undefined,
   kind: "collection" | "single"
 ): Promise<string[] | undefined> {
   if (!caller) return undefined;
-  if (caller.authMethod === "session" && (await isSuperAdmin(caller.userId))) {
-    return undefined;
-  }
 
   const registry = await registeredSlugsOfKind(kind);
   if (!registry.reachable) return [];

@@ -129,16 +129,10 @@ beforeEach(() => {
   containerHas.mockReturnValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return {
-        getAllCollections: vi
-          .fn()
-          .mockResolvedValue([{ slug: "posts" }, { slug: "pages" }]),
-      };
+      return { getAllSlugs: vi.fn().mockResolvedValue(["posts", "pages"]) };
     }
     if (name === "singleRegistryService") {
-      return {
-        getAllSingles: vi.fn().mockResolvedValue([{ slug: "site-settings" }]),
-      };
+      return { getAllSlugs: vi.fn().mockResolvedValue(["site-settings"]) };
     }
     return serviceStub;
   });

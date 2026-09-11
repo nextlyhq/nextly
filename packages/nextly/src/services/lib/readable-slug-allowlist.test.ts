@@ -10,6 +10,8 @@
  * And the list is DERIVED from the shared read decision, not from the stored
  * grants: a slug the decision admits is listed whether or not a grant row
  * exists for it, and a slug it refuses is not listed whatever the grants say.
+ * That includes the super-admin bypass, which the decision composes and this
+ * module does not restate.
  *
  * @module services/lib/readable-slug-allowlist.test
  */
@@ -17,7 +19,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReadAccessCaller } from "../../auth/entity-read-access";
 
-const isSuperAdmin = vi.fn();
 const readableEntities = vi.fn();
 const registeredSlugsOfKind = vi.fn();
 
@@ -25,8 +26,14 @@ const registeredSlugsOfKind = vi.fn();
 // lives in its own module precisely so this substitution works — a function
 // calling its neighbours through module-local references cannot have them
 // replaced, and the test would then drive the real permission service.
-vi.mock("./permissions", () => ({ isSuperAdmin }));
 vi.mock("../../auth/entity-read-access", () => ({ readableEntities }));
+// The control for the bypass case: the permission service, were it asked,
+// would call every session here a super admin. The module under test must not
+// ask it -- a bypass restated here would answer "no filter" before the shared
+// decision ran, and this stub is what makes that restatement observable.
+vi.mock("./permissions", () => ({
+  isSuperAdmin: vi.fn().mockResolvedValue(true),
+}));
 vi.mock("./registered-content-slugs", () => ({ registeredSlugsOfKind }));
 
 const { readableSlugAllowlist } = await import("./readable-slug-allowlist");
@@ -46,7 +53,6 @@ const apiKey: ReadAccessCaller = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  isSuperAdmin.mockResolvedValue(false);
   registeredSlugsOfKind.mockResolvedValue({
     slugs: ["posts", "secrets", "notes"],
     reachable: true,
@@ -54,16 +60,30 @@ beforeEach(() => {
 });
 
 describe("which slugs a caller may read", () => {
-  it("answers UNDEFINED for a session super admin, which means no filter", async () => {
-    isSuperAdmin.mockResolvedValue(true);
-    expect(await readableSlugAllowlist(session, "collection")).toBeUndefined();
-    // Nothing else was asked: the bypass is the whole answer.
-    expect(readableEntities).not.toHaveBeenCalled();
-  });
-
   it("answers UNDEFINED for no caller at all", async () => {
     expect(await readableSlugAllowlist(undefined, "single")).toBeUndefined();
     expect(readableEntities).not.toHaveBeenCalled();
+  });
+
+  it("asks the shared decision about EVERY session caller, a super admin included", async () => {
+    // 🔴 No bypass is decided here. `canReadEntity` hands a session whole to
+    // `checkAccess`, which admits a super admin before it reads a rule or a
+    // grant, so a super admin is answered with every registered slug by the
+    // same machinery that answers everyone else -- and a second bypass in
+    // this module was a second super-admin path for the lists alone, one a
+    // change to the shared bypass would leave behind. Asserted as the LIST the
+    // decision returned rather than as "no filter": the two spellings reach
+    // the registry differently, and only this one came from the decision.
+    readableEntities.mockResolvedValue(new Set(["posts", "secrets", "notes"]));
+    expect(await readableSlugAllowlist(session, "collection")).toEqual([
+      "posts",
+      "secrets",
+      "notes",
+    ]);
+    expect(readableEntities).toHaveBeenCalledWith(
+      ["posts", "secrets", "notes"],
+      session
+    );
   });
 
   it("does NOT bypass for an API key, however privileged its owner", async () => {
@@ -71,7 +91,6 @@ describe("which slugs a caller may read", () => {
     // its own stamped scope, and a bypass here would make a read-only key
     // issued by an administrator equivalent to their whole account on the two
     // endpoints that list the most.
-    isSuperAdmin.mockResolvedValue(true);
     readableEntities.mockResolvedValue(new Set(["posts"]));
     expect(await readableSlugAllowlist(apiKey, "collection")).toEqual([
       "posts",

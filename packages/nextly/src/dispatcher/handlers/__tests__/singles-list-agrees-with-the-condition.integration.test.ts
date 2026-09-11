@@ -110,8 +110,8 @@ async function listedSlugs(
 }
 
 /** The listing as the route handler serves an API key: scope pinned for the dispatch. */
-function listedForKey(): Promise<string[]> {
-  return runWithCallerScope(keyScope(), () =>
+function listedForKey(scope = keyScope()): Promise<string[]> {
+  return runWithCallerScope(scope, () =>
     listedSlugs({
       _authenticatedUserId: KEY_OWNER,
       _authenticatedActorType: "apiKey",
@@ -137,11 +137,32 @@ describe("the singles listing and the singles:present condition", () => {
     expect(await listedSlugs()).toContain("homepage");
   });
 
-  it("both refuse a Single that a code rule refuses", async () => {
-    // The must-differ half: a listing that ignored code rules could not
-    // refuse this one, and a condition that ignored them could not either.
+  it("both refuse a Single that a code rule refuses, with the grant HELD", async () => {
+    // 🔴 The must-differ half, and it has to be asked by a caller holding the
+    // grant: a reader with no `read-private` is refused by a grant-only
+    // listing and by the shared decision alike, so it cannot tell the two
+    // apart. This key holds exactly that grant. A listing scoped by grants
+    // lists `private` on it; the shared decision reads the code rule and
+    // refuses, on the listing and the condition alike.
     await boot();
-    expect(await listedSlugs()).not.toContain("private");
+    const privateGrant = {
+      slug: "read-private",
+      resource: "private",
+      action: "read",
+    };
+    const holdsPrivate = apiKeyScope([privateGrant]);
+    expect(await listedForKey(holdsPrivate)).not.toContain("private");
+    expect(await conditionHoldsForKey(holdsPrivate)).toBe(false);
+
+    // The control: the same grant beside one the rule admits. The listing and
+    // the condition both answer for `homepage`, so the refusal above is the
+    // rule's and not a key that sees nothing at all.
+    const holdsBoth = apiKeyScope([
+      privateGrant,
+      { slug: "read-homepage", resource: "homepage", action: "read" },
+    ]);
+    expect(await listedForKey(holdsBoth)).toEqual(["homepage"]);
+    expect(await conditionHoldsForKey(holdsBoth)).toBe(true);
   });
 });
 
