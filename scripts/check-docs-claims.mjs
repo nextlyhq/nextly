@@ -697,6 +697,17 @@ function wordingFor(type) {
   return DESTINATION_WORDING[type] ?? DESTINATION_WORDING.link;
 }
 
+/**
+ * The documentation route: its root, or anything under it.
+ *
+ * The boundary matters because the two wordings disagree about the root. A
+ * LINK to `/docs` is right, and `resolves` says so. An IMAGE there is wrong
+ * whatever answers, and a prefix test for `/docs/` never asked about the root
+ * at all, so `<img src="/docs">` was accepted by a rule that refuses
+ * `/docs/anything`. `/docsomething` is a different route and is not this one.
+ */
+const isDocsRoute = url => /^\/docs(?:[/#?]|$)/.test(url);
+
 /** A destination written as a path from the file rather than as a URL. */
 function isFilePath(url, type) {
   if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(url)) return false;
@@ -1101,7 +1112,9 @@ async function internalLinks(repoRoot, tracked, findings) {
   // package's README.mdx has GitHub as its surface and its own link rules.
   const pages = new Set(tracked.filter(rel => rel.startsWith("docs/") && rel.endsWith(".mdx")));
   const resolves = target => {
-    const path = target.split("#")[0].replace(/\/+$/, "");
+    // The query goes with the fragment: neither names a page, and the route
+    // root reached with either is still the route root.
+    const path = target.split(/[#?]/)[0].replace(/\/+$/, "");
     if (path === "/docs") return true;
     const rel = `docs${path.slice("/docs".length)}`;
     return pages.has(`${rel}.mdx`) || pages.has(`${rel}/index.mdx`);
@@ -1118,7 +1131,7 @@ async function internalLinks(repoRoot, tracked, findings) {
     }
     for (const { url, type, line } of await linkDestinations(text, rel.endsWith(".mdx"))) {
       const { verb, remedy, docsUrlFinding } = wordingFor(type);
-      const docsUrl = url.startsWith("/docs/") ? docsUrlFinding(resolves(url)) : null;
+      const docsUrl = isDocsRoute(url) ? docsUrlFinding(resolves(url)) : null;
       if (docsUrl) {
         findings.push({
           check: "internal-docs-link",

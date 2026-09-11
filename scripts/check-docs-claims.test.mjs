@@ -1229,6 +1229,28 @@ describe("internal-docs-link", () => {
     ]);
   });
 
+  it("refuses an image at the docs route ROOT, which a prefix test never asked about", async () => {
+    // `/docs` is a page, so a LINK there is right and `resolves` says so; an
+    // image there is wrong for the same reason `/docs/b` is, and a
+    // `startsWith("/docs/")` guard skipped the root entirely. The query and
+    // fragment forms are the same route reached three ways. The link beside
+    // each one is the control that the root stays a valid link destination,
+    // and `/docsguide` that a different route is untouched.
+    const page = [
+      '![a](/docs) ![b](/docs#intro) ![c](/docs?v=2) ![d](/docsguide.png)',
+      "[e](/docs) [f](/docs#intro) [g](/docs?v=2)",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => f.message)
+    ).toEqual([
+      "embeds /docs, which is where pages are served, not files",
+      "embeds /docs#intro, which is where pages are served, not files",
+      "embeds /docs?v=2, which is where pages are served, not files",
+    ]);
+  });
+
   it("reads a reference-style image as an image, by the reference that uses its definition", async () => {
     // `[pic]: diagram.png` is an image when `![d][pic]` uses it, and the link
     // heuristic would let a bare `diagram.png` through. The link reference
