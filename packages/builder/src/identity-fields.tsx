@@ -36,8 +36,16 @@ export function IdentityFields({
   const [draft, setDraft] = useStoredDraft(identity.name);
 
   const commitName = () => {
-    if (draft.trim() === identity.name) return;
-    editor.apply(renameOp(nodeId, draft));
+    // Trimmed ONCE, and the same value compared and stored. The rename trims,
+    // so a draft that differs from the name only in its spaces renames
+    // nothing — and the field is handed the stored name back rather than
+    // left showing spaces the document does not hold.
+    const next = draft.trim();
+    if (next === identity.name) {
+      setDraft(identity.name);
+      return;
+    }
+    editor.apply(renameOp(nodeId, next));
   };
 
   return (

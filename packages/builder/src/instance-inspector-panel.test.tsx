@@ -639,3 +639,35 @@ describe("overrides the component no longer exposes", () => {
     ).toBeNull();
   });
 });
+
+describe("the instance's own name", () => {
+  const named = (): BlockNode => ({ ...instance(), name: "Header" });
+
+  it("hands the field back the stored name when a draft differs from it only in spaces, and renames nothing", () => {
+    // The rename trims, so such a draft changes nothing — and a field left
+    // showing the spaces would show a name the document does not hold.
+    const editor = mount(named());
+    const field = screen.getByRole("textbox", { name: "Name" });
+
+    fireEvent.change(field, { target: { value: "  Header  " } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect((field as HTMLInputElement).value).toBe("Header");
+  });
+
+  it("renames with the trimmed name", () => {
+    // The control: a draft that differs once trimmed is applied, trimmed.
+    const editor = mount(named());
+    const field = screen.getByRole("textbox", { name: "Name" });
+
+    fireEvent.change(field, { target: { value: "  Footer  " } });
+    fireEvent.blur(field);
+
+    expect(editor.apply).toHaveBeenCalledWith({
+      kind: "update",
+      id: "i1",
+      patch: { name: "Footer" },
+    });
+  });
+});
