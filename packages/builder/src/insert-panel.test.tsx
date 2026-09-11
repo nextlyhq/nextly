@@ -1377,6 +1377,55 @@ describe("the component tier", () => {
     return new Map(rows.map(row => [row.id, row.document]));
   }
 
+  it("withholds a PATTERN whose root is an instance the destination refuses", () => {
+    // A pattern is copied in as it stands, so a saved-from-a-component pattern
+    // carries the instance node; judged by that node's own type it was offered
+    // at the root while the component's own tile was refused there.
+    registerBlocks(
+      [
+        { ...base, name: "acme/column", parent: ["acme/columns"] },
+        { ...base, name: "acme/columns", slots: { children: {} } },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const column = {
+      id: "column",
+      title: "Column",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/column", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+    const wrapping = {
+      id: "wrapped",
+      title: "Wrapped column",
+      document: {
+        formatVersion: 1,
+        kind: "pattern",
+        nodes: [
+          {
+            id: "p1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "column" },
+          },
+        ],
+      } as unknown as BlockDocument,
+    };
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        patterns={[wrapping]}
+        componentDefinitions={lookupFor(column)}
+      />
+    );
+
+    expect(screen.getByRole("option", { name: /Text/ })).toBeDefined();
+    expect(screen.queryByRole("option", { name: /Wrapped column/ })).toBeNull();
+  });
+
   it("offers no component for which the host supplied no definition", () => {
     // A tile places an instance the canvas resolves against its lookup; with
     // no definition there, the instance would be drawn as missing the moment

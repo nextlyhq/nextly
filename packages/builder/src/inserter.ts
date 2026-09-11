@@ -807,7 +807,8 @@ function humanise(name: string): string {
 export function entryAllowedAt(
   entry: InsertEntry,
   target: PlacementTarget,
-  source: NestingSource
+  source: NestingSource,
+  definitions?: ComponentLookup
 ): NestingVerdict {
   // A pattern and a component are both judged by their ROOTS. The instance
   // node's own type is not a registered block, and the nesting source answers
@@ -817,7 +818,7 @@ export function entryAllowedAt(
   // and a component's were read through the canvas's lookup when it was
   // offered.
   if (entry.kind === "pattern") {
-    return rootsAllowedAt(entry.document, target, source);
+    return rootsAllowedAt(entry.document, target, source, definitions);
   }
   if (entry.kind === "component") {
     return placementVerdict(entry.roots, target, source);
@@ -844,14 +845,22 @@ export function entryAllowedAt(
  * rather than of the destination — it is the same wherever it is offered — so
  * it belongs to whatever judges the pattern itself, not to a question about
  * this target.
+ *
+ * Each root is resolved as a placed node is ({@link placementTypesOf}): a
+ * pattern is COPIED into the page as it stands, and one of its roots may be a
+ * component instance — saving a placed component as a pattern stores exactly
+ * that node. Judged by its own type, which is not a registered block and which
+ * the nesting source therefore restricts nowhere, such a pattern was offered
+ * where the component's own tile is refused.
  */
 function rootsAllowedAt(
   document: BlockDocument,
   target: PlacementTarget,
-  source: NestingSource
+  source: NestingSource,
+  definitions?: ComponentLookup
 ): NestingVerdict {
   return placementVerdict(
-    document.nodes.map(root => root.type),
+    document.nodes.flatMap(root => placementTypesOf(root, definitions)),
     target,
     source
   );
@@ -928,9 +937,12 @@ export function blockAllowedAt(
 export function allowedEntries<TEntry extends InsertEntry>(
   entries: readonly TEntry[],
   target: PlacementTarget,
-  source: NestingSource
+  source: NestingSource,
+  definitions?: ComponentLookup
 ): TEntry[] {
-  return entries.filter(entry => entryAllowedAt(entry, target, source).allowed);
+  return entries.filter(
+    entry => entryAllowedAt(entry, target, source, definitions).allowed
+  );
 }
 
 /**

@@ -1439,6 +1439,53 @@ describe("the component tier", () => {
     expect(uncounted).not.toHaveProperty("usedOn");
   });
 
+  it("judges a PATTERN whose root is an instance by the roots that component draws", () => {
+    // Saving a placed component as a pattern stores the instance node itself,
+    // and a pattern is copied into the page as it stands. Judged by that
+    // node's own type — not a registered block, so unrestricted — the pattern
+    // could be placed where the component's own tile is refused.
+    catalog([
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+      { ...base, name: "acme/columns", slots: { children: {} } },
+    ]);
+    const column = stored({
+      id: "column",
+      document: componentOf([
+        { id: "d1", type: "acme/column", version: 1, props: {} },
+      ]),
+    });
+    const wrapping: SavedPattern = {
+      id: "wrapped",
+      title: "Wrapped column",
+      document: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "pattern",
+        nodes: [instanceOf("column", "p1")],
+      } as BlockDocument,
+    };
+    const [entry] = patternEntriesFrom([wrapping], registryNestingSource());
+
+    const atRoot = entryAllowedAt(
+      entry as never,
+      { kind: "root" },
+      registryNestingSource(),
+      lookupOf(column)
+    );
+    expect(atRoot.allowed).toBe(false);
+    expect(atRoot.reason).toBe("restricted-at-root");
+    expect(atRoot.permitted).toEqual(["acme/columns"]);
+
+    // In the container that root belongs to, the same pattern is offered.
+    expect(
+      entryAllowedAt(
+        entry as never,
+        { kind: "slot", parentType: "acme/columns", slot: "children" },
+        registryNestingSource(),
+        lookupOf(column)
+      ).allowed
+    ).toBe(true);
+  });
+
   it("judges placement by the definition's ROOTS, not by the instance node's type", () => {
     // The instance node's own type is not a registered block, and the nesting
     // source answers "no restriction" for a type it cannot resolve. Judged by

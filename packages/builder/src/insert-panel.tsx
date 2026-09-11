@@ -731,7 +731,13 @@ export function InsertPanel({
         // search is a different message from "nothing can go here", and
         // filtering first would collapse them into one.
         groupByCategory(
-          filterEntries(allowedEntries(catalog, point.target, source), query),
+          filterEntries(
+            // The canvas's lookup travels with the question: a pattern whose
+            // root is a component instance is judged by what that component
+            // draws, as its own tile is.
+            allowedEntries(catalog, point.target, source, componentDefinitions),
+            query
+          ),
           categoryOrder
         );
 
