@@ -83,6 +83,7 @@ function layout(
     version: 3,
     source: "own",
     scope: "tok",
+    audience: "aud",
     ...patch,
   };
 }

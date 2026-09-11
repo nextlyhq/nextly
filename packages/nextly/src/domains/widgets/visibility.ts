@@ -30,6 +30,7 @@ import {
 } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
+import { visibilityToken } from "./layout";
 
 // Re-exported from its own module rather than moved-and-forgotten: this is
 // where every caller already reaches for the gate, and the decision now lives
@@ -93,14 +94,22 @@ export async function permissionVerdicts(
  * about the gates INSIDE them next, and a second pass would be two RBAC reads
  * per slug for one answer.
  */
-async function decide(
-  caller: ReadAccessCaller
-): Promise<{ visible: CanonicalWidget[]; verdicts: Map<string, boolean> }> {
+async function decide(caller: ReadAccessCaller): Promise<{
+  visible: CanonicalWidget[];
+  verdicts: Map<string, boolean>;
+  generated: WidgetDefinition[];
+}> {
   // The same freshness on every surface that asks. A set derived on some
   // earlier request would offer a card for a collection deleted since and
   // refuse it on save, and have no card at all for one created since -- and
   // in production "the next restart" means the next deploy.
   await refreshCollectionWidgets();
+  // 🔴 Both read in the same synchronous span, before any await: the
+  // generated set is a global a concurrent request's refresh replaces, and
+  // the decision below awaits permission reads. The definitions the payload
+  // ships are these -- the ones the entity reads were asked about -- never a
+  // re-read that may hold a different definition under the same id.
+  const generated = generatedWidgets();
   const all = allWidgets();
 
   const verdicts = await permissionVerdicts(
@@ -132,7 +141,7 @@ async function decide(
     }
     return holdsWidgetPermission(widget.requiredPermission, verdicts);
   });
-  return { visible, verdicts };
+  return { visible, verdicts, generated };
 }
 
 /**
@@ -176,12 +185,27 @@ export interface WidgetAudience {
    * this reader holds -- the verdicts `holds` answers from, as a set.
    */
   heldActionGates: ReadonlySet<string>;
+  /**
+   * A token of this whole answer -- the visible cards and the shortcut gates
+   * held inside them -- carried by the workspace payload AND the layout read.
+   *
+   * 🔴 The admin holds the workspace payload for minutes and must know when
+   * it describes a different audience from the layout it is drawing. Comparing
+   * one layout read with the previous one could not tell it that on a first
+   * read: a payload cached before a grant met a layout taken after it, and the
+   * first token seen was assumed to describe the cached payload. Both
+   * responses carrying the token of the audience they were built from lets the
+   * admin compare the two things that must agree. Taken before the condition
+   * pass, because the payload is: it ships every card the reader may see, and
+   * whether a transient card is worth showing is the layout's business alone.
+   */
+  token: string;
 }
 
 export async function widgetAudience(
   caller: ReadAccessCaller
 ): Promise<WidgetAudience> {
-  const { visible, verdicts } = await decide(caller);
+  const { visible, verdicts, generated } = await decide(caller);
   const declared = new Set<string>();
   const generatedIds = new Set<string>();
   for (const widget of visible) {
@@ -197,14 +221,19 @@ export async function widgetAudience(
     caller
   );
   const every = new Map([...verdicts, ...inner]);
+  const heldActionGates = new Set(
+    [...inner].filter(([, held]) => held).map(([slug]) => slug)
+  );
   return {
     visible,
     declared,
-    generated: generatedWidgets().filter(widget => generatedIds.has(widget.id)),
+    generated: generated.filter(widget => generatedIds.has(widget.id)),
     holds: requiredPermission =>
       holdsWidgetPermission(requiredPermission, every),
-    heldActionGates: new Set(
-      [...inner].filter(([, held]) => held).map(([slug]) => slug)
+    heldActionGates,
+    token: visibilityToken(
+      visible.map(widget => widget.id),
+      heldActionGates
     ),
   };
 }
