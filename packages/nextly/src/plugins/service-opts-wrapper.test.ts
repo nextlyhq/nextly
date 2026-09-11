@@ -185,6 +185,130 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
     expect(m.count).not.toHaveBeenCalled();
   });
 
+  describe("the locale a plugin names travels to the facade", () => {
+    /*
+     * One assertion per branch of `resolveServiceOpts`, because each branch
+     * returns its own literal and a literal drops whatever it does not name.
+     * A test of one branch says nothing about the other two — which is how
+     * the pair could be added to the type and still not travel.
+     */
+    const LOCALE = { locale: "de", fallbackLocale: "en" } as const;
+
+    it("system: the pair reaches the context", async () => {
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+        as: "system",
+        ...LOCALE,
+      });
+      expect(m.findEntryById).toHaveBeenCalledWith("vault", "1", {
+        ...SYSTEM_CTX,
+        ...LOCALE,
+      });
+    });
+
+    it("public: the pair reaches the context", async () => {
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+        as: "public",
+        ...LOCALE,
+      });
+      expect(m.findEntryById).toHaveBeenCalledWith("vault", "1", {
+        overrideAccess: false,
+        ...LOCALE,
+      });
+    });
+
+    it("user: the pair reaches the context beside the caller", async () => {
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+        as: "user",
+        user: { id: "u1", email: "u@e.com" },
+        ...LOCALE,
+      });
+      expect(m.findEntryById).toHaveBeenCalledWith("vault", "1", {
+        user: {
+          id: "u1",
+          email: "u@e.com",
+          role: "",
+          roles: [],
+          permissions: [],
+        },
+        overrideAccess: false,
+        ...LOCALE,
+      });
+    });
+
+    it("carries `fallbackLocale: false`, which is a value and not an absence", async () => {
+      // `false` means "no fallback, tell me whether the translation exists".
+      // It is the one value in this pair that a `||` or a truthiness check
+      // silently turns into the default chain, so it gets its own assertion.
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+        as: "system",
+        locale: "fr",
+        fallbackLocale: false,
+      });
+      expect(m.findEntryById).toHaveBeenCalledWith("vault", "1", {
+        ...SYSTEM_CTX,
+        locale: "fr",
+        fallbackLocale: false,
+      });
+    });
+
+    it.each(["*", "all"])(
+      "refuses the selector %j before delegating — it is not a language",
+      async selector => {
+        // `*` moves every translation's lifecycle in one write and `all`
+        // answers a read per language. A route forwarding `?locale=` must
+        // not be able to reach either by accident, and no plugin has a
+        // designed use for them, so the boundary refuses both. Before
+        // delegating: the facade never sees the call.
+        const m = mockCollections();
+        await expect(
+          wrapCollectionsForPlugin(m as never).updateEntry(
+            "vault",
+            "1",
+            { status: "published" },
+            { as: "system", locale: selector }
+          )
+        ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+        expect(m.updateEntry).not.toHaveBeenCalled();
+      }
+    );
+
+    it("reads an empty locale as none named, so a write cannot slip past the refusal", async () => {
+      // `?locale=` forwarded as-is is the empty string. Not a language, not a
+      // selector — and the write path reads any falsy locale as "none named",
+      // which would file the write under the default language rather than
+      // refuse it. So it travels as nothing, the way the wire reads an absent
+      // parameter: the key is absent at the facade, not present and empty.
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).updateEntry(
+        "vault",
+        "1",
+        { title: "b" },
+        { as: "system", locale: "" }
+      );
+      const ctx = m.updateEntry.mock.calls[0][3] as Record<string, unknown>;
+      expect(Object.hasOwn(ctx, "locale")).toBe(false);
+    });
+
+    it("says nothing about locale when the plugin said nothing", async () => {
+      // The control: absent stays absent, so the facade keeps deciding the
+      // default rather than being handed an explicit `undefined` to interpret.
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+        as: "system",
+      });
+      // Asserted as KEY absence. A conjunction of "has the key" and "is not
+      // undefined" is false for a key holding `undefined` too, which is the
+      // exact output this exists to reject — and it passed against it.
+      const ctx = m.findEntryById.mock.calls[0][2] as Record<string, unknown>;
+      expect(Object.hasOwn(ctx, "locale")).toBe(false);
+      expect(Object.hasOwn(ctx, "fallbackLocale")).toBe(false);
+    });
+  });
+
   it("non-access methods pass through unchanged", async () => {
     const m = mockCollections();
     await wrapCollectionsForPlugin(m as never).listCollections();

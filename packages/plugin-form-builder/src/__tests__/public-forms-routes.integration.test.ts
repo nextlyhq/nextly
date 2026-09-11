@@ -18,6 +18,7 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { NO_SUCH_FORM } from "nextly";
+import { defineCollection, text } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -264,5 +265,90 @@ describe("POST /api/forms/:slug/submit", () => {
     expect(res.status).toBe(201);
     const body = (await res.json()) as { message: string };
     expect(body.message).toBe("Got it, thanks.");
+  });
+});
+
+describe("POST /api/forms/:slug/submit?locale=", () => {
+  /**
+   * The wire half of the visitor's language. The handler test proves a named
+   * locale reaches the target read; this proves the built-in route NAMES it,
+   * from the same place core's own routes read a locale on the wire.
+   */
+  async function bootLocalizedRedirect() {
+    const fb = formBuilder({
+      spamProtection: { honeypot: false, recaptcha: { enabled: false } },
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [fb.plugin],
+      collections: [
+        defineCollection({
+          slug: "pages",
+          localized: true,
+          fields: [
+            text({ name: "title" }),
+            text({ name: "slug", localized: true }),
+          ],
+        }),
+      ],
+      localization: { locales: ["en", "fr"], defaultLocale: "en" },
+    });
+    const page = await current.nextly.create({
+      collection: "pages",
+      data: { title: "Thank you", slug: "thanks" },
+    });
+    const pageId = (page as { item: { id: string } }).item.id;
+    await current.nextly.update({
+      collection: "pages",
+      id: pageId,
+      data: { slug: "merci" },
+      locale: "fr",
+    });
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        ...CONTACT,
+        settings: {
+          ...CONTACT.settings,
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: pageId },
+        },
+      },
+    });
+    return createDynamicHandlers();
+  }
+
+  async function submitAt(
+    handlers: ReturnType<typeof createDynamicHandlers>,
+    query: string
+  ) {
+    const res = await handlers.POST(
+      new Request(`http://localhost/api/forms/contact/submit${query}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data: { message: "bonjour" } }),
+      }),
+      params("forms", "contact", "submit")
+    );
+    expect(res.status).toBe(201);
+    return (await res.json()) as { redirect?: string };
+  }
+
+  it("sends a French submission to the French URL", async () => {
+    const handlers = await bootLocalizedRedirect();
+    expect((await submitAt(handlers, "?locale=fr")).redirect).toBe("/merci");
+  });
+
+  it("sends one that names no language to the default URL", async () => {
+    const handlers = await bootLocalizedRedirect();
+    expect((await submitAt(handlers, "")).redirect).toBe("/thanks");
+  });
+
+  it("does not let the read wildcard through as a language", async () => {
+    // `?locale=all` is what a client can send; it is not a language, and
+    // forwarded as one it would answer the slug per language and drop the
+    // redirect after the submission succeeded.
+    const handlers = await bootLocalizedRedirect();
+    expect((await submitAt(handlers, "?locale=all")).redirect).toBe("/thanks");
   });
 });
