@@ -48,6 +48,9 @@ interface Handler {
   getEntry: (
     ctx: Record<string, unknown>
   ) => Promise<{ success: boolean; data: Record<string, unknown> | null }>;
+  listEntries: (
+    ctx: Record<string, unknown>
+  ) => Promise<{ data?: { docs?: Record<string, unknown>[] } }>;
 }
 interface Service {
   createMany: (
@@ -81,7 +84,10 @@ async function boot(options: { drafts?: boolean } = {}) {
     };
   const instance = await createTestNextly({
     fieldGroups: [
-      defineFieldGroup({ slug: "seo", fields: [text({ name: "metaTitle" })] }),
+      defineFieldGroup({
+        slug: "seo",
+        fields: [text({ name: "metaTitle", required: true })],
+      }),
     ],
     collections: [
       defineCollection({
@@ -134,6 +140,33 @@ describe("transactional writes carry field groups (integration)", () => {
     // The field group's own pre-write hook ran on the way, as it does on the
     // ordinary create.
     expect(booted.fired).toContain("seo:beforeChange");
+  });
+
+  it("rolls the whole batch back when a row's component fails validation", async () => {
+    // A component instance is validated by the field-group service's own
+    // pass, which runs AFTER the parent row is inserted. Under the batch's
+    // default `stopOnError: false`, a soft per-item failure would leave that
+    // parent committed without the component it promised. The failure is
+    // marked write-integrity instead, which the batch loop aborts on.
+    const booted = await boot();
+    current = booted.instance;
+
+    const result = await booted.service.createMany(
+      "pages",
+      [
+        { title: "Good", seo: { metaTitle: "present" } },
+        { title: "Bad", seo: {} },
+      ],
+      { overrideAccess: true }
+    );
+
+    expect(result.failed).toBeGreaterThan(0);
+    // Nothing committed: not the bad row, and not the good one before it.
+    const list = await booted.handler.listEntries({
+      collectionName: "pages",
+      overrideAccess: true,
+    });
+    expect(list.data?.docs ?? []).toEqual([]);
   });
 
   it("updateEntryInTransaction persists a field-group value", async () => {

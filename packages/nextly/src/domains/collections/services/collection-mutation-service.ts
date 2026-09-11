@@ -1483,9 +1483,10 @@ export class CollectionMutationService extends BaseService {
    *
    * Mutates `data` in place, since it is the object that continues to the
    * main-row write, and returns what was taken out keyed by field name. The
-   * ordinary create and update each do this inline; the transactional writes
-   * did not, and the difference was an insert that failed on the first field
-   * group and an update that dropped it without a word.
+   * one implementation every write path shapes with: the ordinary create and
+   * update each carried a copy and the transactional writes carried none,
+   * and that difference was an insert that failed on the first field group
+   * and an update that dropped it without a word.
    */
   private extractComponentFieldData(
     data: Record<string, unknown>,
@@ -1508,6 +1509,14 @@ export class CollectionMutationService extends BaseService {
    * writes the default locale, as the rest of that path does. Readiness is
    * read rather than resolved here, which is why a caller that opens its own
    * transaction warms it first (`warmLocalizedReadiness`).
+   *
+   * A failure here is a write-integrity failure: the parent row is already
+   * written, and a component instance is validated by its own pass inside the
+   * field-group service, so a bad instance surfaces only now. Reported as a
+   * soft per-item failure, a batch under `stopOnError: false` would carry on
+   * and commit a row without the component it promised; marked, the batch
+   * loop aborts and the transaction rolls back, and a single transactional
+   * write rethrows into its caller's transaction the same way.
    */
   private async saveComponentFieldDataInTx(
     tx: TransactionContext,
@@ -1522,14 +1531,18 @@ export class CollectionMutationService extends BaseService {
     if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
       return;
     }
-    await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
-      parentId: args.parentId,
-      parentTable: args.tableName,
-      fields: args.fields as unknown as FieldConfig[],
-      data: args.data,
-      locale: undefined,
-      req: args.user ? { user: args.user } : {},
-    });
+    try {
+      await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+        parentId: args.parentId,
+        parentTable: args.tableName,
+        fields: args.fields as unknown as FieldConfig[],
+        data: args.data,
+        locale: undefined,
+        req: args.user ? { user: args.user } : {},
+      });
+    } catch (error: unknown) {
+      throw markWriteIntegrityFailure(error);
+    }
   }
 
   private shapeWriteParts(
@@ -1565,15 +1578,8 @@ export class CollectionMutationService extends BaseService {
       }
     });
 
-    // Extract component field data (stored in separate comp_{slug} tables)
-    // Component fields should not be stored in the collection table
-    const componentFieldData: Record<string, unknown> = {};
-    fields.forEach(field => {
-      if (isFieldGroupField(field) && data[field.name] !== undefined) {
-        componentFieldData[field.name] = data[field.name];
-        delete data[field.name]; // Remove from main update
-      }
-    });
+    // Field-group values go to their own comp_{slug} tables, not this row.
+    const componentFieldData = this.extractComponentFieldData(data, fields);
 
     // Normalize relationship data inside repeater/group fields before serialization.
     // The admin panel may send full relationship objects ({id, title, slug, ...})
@@ -3116,16 +3122,11 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
-      // Extract component field data (stored in separate comp_{slug} tables)
-      // Component fields should not be stored in the collection table
-      // Extract component field data for separate storage in comp_{slug} tables
-      const componentFieldData: Record<string, unknown> = {};
-      fields.forEach(field => {
-        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
-          componentFieldData[field.name] = finalData[field.name];
-          delete finalData[field.name]; // Remove from main insert
-        }
-      });
+      // Field-group values go to their own comp_{slug} tables, not this row.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
 
       this.serializeHasManyRelationships(finalData, fields);
 
