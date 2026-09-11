@@ -129,21 +129,9 @@ export {
   hasSchemaChanged,
 } from "../domains/schema/services/schema-hash";
 
-export { AccessControlService } from "./access";
-export type {
-  AccessRuleType,
-  AccessOperation,
-  StoredAccessRule,
-  CollectionAccessRules,
-  AccessEvaluationResult,
-  CustomAccessFunction,
-} from "./access";
+export type { AccessOperation } from "./access";
 
-export {
-  ACCESS_RULE_TYPES,
-  ACCESS_OPERATIONS,
-  DEFAULT_OWNER_FIELD,
-} from "./access";
+export { ACCESS_OPERATIONS } from "./access";
 
 // Legacy - prefer MediaService from "./media/media-service" for new code.
 export { MediaService as LegacyMediaService } from "./media";

@@ -46,8 +46,8 @@ export interface CachedFindOptions {
    * The parts that make this cache entry unique, e.g. `["posts", slug]`. Beyond
    * the query itself, **include anything the result varies by**.
    *
-   * SECURITY: if the read applies per-caller access rules (owner-only scoping,
-   * role-based visibility, an API-key's narrowed scope), EVERY dimension those
+   * SECURITY: if the read applies per-caller access rules (role-based
+   * visibility, an API-key's narrowed scope), EVERY dimension those
    * rules read MUST be in `keyParts` — not merely who the caller is. A user id
    * alone survives a role change, a claim change and a narrower key scope, so
    * the same person can fill an entry while privileged and read it back after

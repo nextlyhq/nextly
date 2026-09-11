@@ -737,7 +737,7 @@ describe("the declaration set itself", () => {
 
   it("closes every column that is stripped from responses", () => {
     // A value the server refuses to return is not one a client may set. The owner column is the
-    // case: owner-only access filters on it in SQL, so it never leaves the server.
+    // case: it records who created the row and never leaves the server.
     for (const column of SYSTEM_COLUMNS) {
       if (!column.strippedFromResponses) continue;
       expect({ [column.name]: column.writableByClient }).toEqual({

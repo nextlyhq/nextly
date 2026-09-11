@@ -326,7 +326,6 @@ async function registerSingle(
     fields: (single.fields ?? []) as FieldConfig[],
     status: single.status ?? true,
     admin: (single.admin ?? {}) as SingleAdminOptions,
-    accessRules: null,
     source: "ui",
     locked: false,
     configPath: null,

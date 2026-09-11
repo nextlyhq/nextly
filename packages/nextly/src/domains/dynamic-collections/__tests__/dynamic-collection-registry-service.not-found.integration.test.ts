@@ -2,12 +2,12 @@
  * What the registry raises when a collection does not exist.
  *
  * 🔴 Pinned against the REAL producer, because a consumer guard was written
- * against the wrong one. `getAccessQueryConstraint` decides "does this
- * collection exist" from this error, and a typed guard asking
- * `NextlyError.isNotFound` silently missed a bare `Error` here -- turning a
- * missing collection into a 500 rather than the 404 the read paths give it. A
- * unit test that mocked the error shape could not see that; only asking the
- * producer can.
+ * against the wrong one. Consumers decide "does this collection exist" from
+ * this error -- `direct-api/namespaces/collections.ts` is one -- and a typed
+ * guard asking `NextlyError.isNotFound` silently missed a bare `Error` here,
+ * turning a missing collection into a 500 rather than the 404 the read paths
+ * give it. A unit test that mocked the error shape could not see that; only
+ * asking the producer can.
  *
  * The MESSAGE is asserted beside the code on purpose: an older caller still
  * matches on that wording, so it is part of the contract until that caller

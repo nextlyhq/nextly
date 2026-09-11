@@ -81,14 +81,15 @@ A draft read is **never cached**, because cache tags are busted by writes to the
 live row while a draft changes on every save.
 
 **Access.** By default `resolveContent` **enforces** the collection's read
-policy (`overrideAccess: false`). A rule-less (public) collection still renders;
-a collection with a stored member-only or role-based read rule is hidden from an
-unauthenticated request and resolves to `null` (→ `notFound()`, so the URL does
-not reveal that the entry exists). Pass a `user` to render member content, or
-`overrideAccess: true` for a fully trusted read.
+policy (`overrideAccess: false`) — the code-defined `access.read` on its
+`defineCollection` config. A collection that declares none still renders; one
+whose rule refuses an anonymous caller is hidden from an unauthenticated request
+and resolves to `null` (→ `notFound()`, so the URL does not reveal that the
+entry exists). Pass a `user` to render member content, or `overrideAccess: true`
+for a fully trusted read.
 
 ```ts
-// Anonymous public read (default): stored access rules are enforced.
+// Anonymous public read (default): the collection's access rule is enforced.
 await resolveContent("posts", slug);
 
 // Render member-only content for a signed-in reader.
@@ -98,22 +99,17 @@ await resolveContent("posts", slug, { user: { id, role } });
 await resolveContent("posts", slug, { overrideAccess: true, status: "all" });
 ```
 
-> An anonymous read enforces stored rules that **deny outright**
-> (public/authenticated/role-based), and it enforces inline
-> `defineCollection({ access })` code rules: those are handed a real anonymous
-> context (`user: null`, no roles) and decide on it, so a rule like
-> `read: ({ user }) => !!user` hides the content as written.
->
-> What an anonymous read still cannot apply is a **row-level constraint** rule
-> (owner-only, or a custom rule returning a query). Those compare a row against
-> somebody, and there is nobody to compare it to. Gate content that depends on
-> one behind an authenticated read (pass a `user`) rather than the anonymous
-> default.
+> An anonymous read hands the collection's `access.read` rule a real anonymous
+> context (`user: null`, no roles, no permissions) and lets it decide, so a
+> rule like `read: ({ user }) => !!user` hides the content as written, and a
+> rule that admits only by role or permission refuses the anonymous reader by
+> construction. Content meant for a signed-in audience belongs behind an
+> authenticated read (pass a `user`) rather than the anonymous default.
 
 **Caching.** Only a **trusted** (`overrideAccess: true`) read with no `user` is
 F1-cached — an enforced read is never cached, because its result depends on an
-access decision that a content-tag bust can't invalidate (a stored read-policy
-change doesn't write an entry). So a public site that wants cached pages should
+access decision that a content-tag bust can't invalidate (a rule can answer
+differently without any entry being written). So a public site that wants cached pages should
 read its public content with `overrideAccess: true`; access-gated or member
 content runs fresh per request.
 
@@ -181,9 +177,9 @@ behaves as in `resolveContent`.
 **Which factory you call decides whether access rules are consulted at all, so
 choose it per collection set, not per preference.**
 
-- `createContentRoute` reads **enforced**. A rule-less collection still renders;
-  a stored member-only or role-based one is hidden from these anonymous
-  requests.
+- `createContentRoute` reads **enforced**. A collection with no `access.read`
+  still renders; one whose rule refuses an anonymous caller is hidden from
+  these anonymous requests.
 - `createPublicContentRoute` reads **trusted** — access rules are not consulted,
   on the resolved read and on the `generateStaticParams` scan alike. That is
   what makes its reads cacheable and its paths pre-renderable, and it means
@@ -221,7 +217,7 @@ decision rather than an inherited one.
 > **Trusting a collection does not admit its drafts.** A public route
 > pre-renders, so an unpublished row pulled in through a relationship is written
 > into a static artifact and stays there after the row is unpublished —
-> unpublishing cannot take back a page already built. Trust decides *who* may
+> unpublishing cannot take back a page already built. Trust decides _who_ may
 > read a row; being published decides whether it is ready for anyone. Nothing in
 > this config widens a lifecycle.
 

@@ -540,12 +540,6 @@ export class SingleRegistryService extends BaseRegistryService<
       updateData.admin = data.admin ? JSON.stringify(data.admin) : null;
     }
 
-    if (data.accessRules !== undefined) {
-      updateData.access_rules = data.accessRules
-        ? JSON.stringify(data.accessRules)
-        : null;
-    }
-
     if (data.schemaHash) {
       updateData.schema_hash = data.schemaHash;
     }
@@ -925,10 +919,6 @@ export class SingleRegistryService extends BaseRegistryService<
     const versions = r.versions as string | object | null;
     const revalidate = r.revalidate as string | object | null;
     const webhooks = r.webhooks as string | object | null;
-    const accessRules = (r.access_rules ?? r.accessRules) as
-      | string
-      | object
-      | null;
     const tableName = (r.table_name ?? r.tableName) as string;
     const configPath = (r.config_path ?? r.configPath) as string | undefined;
     const schemaHash = (r.schema_hash ?? r.schemaHash) as string;
@@ -952,11 +942,6 @@ export class SingleRegistryService extends BaseRegistryService<
         ? typeof admin === "string"
           ? JSON.parse(admin)
           : admin
-        : undefined,
-      accessRules: accessRules
-        ? typeof accessRules === "string"
-          ? JSON.parse(accessRules)
-          : accessRules
         : undefined,
       source: r.source as SingleSource,
       locked: Boolean(r.locked),
@@ -1057,7 +1042,6 @@ export class SingleRegistryService extends BaseRegistryService<
       description: data.description,
       fields: fieldsJson,
       admin: data.admin ? JSON.stringify(data.admin) : null,
-      access_rules: data.accessRules ? JSON.stringify(data.accessRules) : null,
       source: data.source,
       locked: (data.locked ?? data.source === "code") ? 1 : 0,
       // Persist Draft/Published flag so the Singles edit form shows the

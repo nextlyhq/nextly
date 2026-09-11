@@ -94,8 +94,8 @@ describe("requireRouteVersionReadAccess", () => {
   it("judges an API-key version read on the key's own scope", async () => {
     // A version-history read runs the live-document read gate. For an API-key
     // request it must carry the key's OWN scope, so a super-admin-owned key
-    // scoped for read does not skip the document's stored owner-only/custom read
-    // rule before its history is exposed.
+    // scoped for read does not skip the document's own read gate before its
+    // history is exposed.
     requireRouteCollectionAccessSpy.mockResolvedValue({
       userId: "key-owner",
       permissions: ["read-posts"],

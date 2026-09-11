@@ -250,24 +250,6 @@ export const dynamicCollectionsMysql = mysqlTable(
     lastMigrationId: varchar("last_migration_id", { length: 100 }),
 
     // --------------------------------------------------------
-    // Access Control
-    // --------------------------------------------------------
-
-    /**
-     * Optional per-operation access rules. Consumed by
-     * `CollectionAccessService`; opaque JSON because the rule shape evolves
-     * independently of the migration cycle.
-     */
-    accessRules: json("access_rules").$type<{
-      create?: { type: string; allowedRoles?: string[] };
-      read?: { type: string; allowedRoles?: string[] };
-      update?: { type: string; allowedRoles?: string[] };
-      delete?: { type: string; allowedRoles?: string[] };
-      publish?: { type: string; allowedRoles?: string[] };
-      unpublish?: { type: string; allowedRoles?: string[] };
-    }>(),
-
-    // --------------------------------------------------------
     // Metadata
     // --------------------------------------------------------
 

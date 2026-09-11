@@ -147,9 +147,8 @@ export function previewDraftGate(
     //
     // Rebuilding the sharer's identity re-evaluates FIELD rules against their
     // current permissions and nothing else: the read below runs with
-    // `overrideAccess: true`, so the collection gate and every row-level rule
-    // are bypassed. A sharer who loses their update role, or stops satisfying
-    // an owner-only rule, would therefore keep serving the draft to whoever
+    // `overrideAccess: true`, so the collection gate is bypassed. A sharer who
+    // loses their update role would therefore keep serving the draft to whoever
     // holds the link until it expired — an account that is still ACTIVE, so the
     // deactivation check does not reach it either.
     //

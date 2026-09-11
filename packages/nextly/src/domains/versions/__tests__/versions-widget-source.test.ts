@@ -30,10 +30,8 @@ vi.mock("../../../auth/entity-read-access", async importOriginal => ({
 
 // A PASS-THROUGH, so the assertions below stay about what this module decides:
 // which collections are in reach, and what it answers with. The document-level
-// filter it stands in for reaches the ordinary read path and a stored access
-// rule, neither of which exists in a unit harness --
-// `pending-edits-document-rules.integration.test.ts` drives the real one
-// against a real database and a real owner-only rule. The final test in this
+// filter it stands in for reaches the ordinary read path, which does not exist
+// in a unit harness. The final test in this
 // block is what keeps the substitution honest: it asserts the rows and the
 // caller actually reach this seam, so deleting the call is not a green.
 //
@@ -166,11 +164,11 @@ describe("who the numbers are for", () => {
   });
 
   it("hands every candidate row, and the caller, to the document filter", async () => {
-    // 🔴 Entity access is one axis short: a stored owner-only or custom read
-    // rule narrows which of a collection's documents come back, and a version
-    // read filtered by collection name alone reported another author's entry
-    // ids and edit times. The caller has to reach that decision too -- an id
-    // cannot be judged against a rule written about a key's own scope.
+    // 🔴 Entity access is one axis short: the read path narrows which of a
+    // collection's documents come back, and a version read filtered by
+    // collection name alone reported entry ids and edit times the caller cannot
+    // open. The caller has to reach that decision too -- an id cannot be judged
+    // against a gate written about a key's own scope.
     await executeWidgetQuery(
       { source: VERSIONS_SOURCE_ID, op: "list" },
       caller
