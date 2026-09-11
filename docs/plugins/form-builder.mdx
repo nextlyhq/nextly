@@ -460,12 +460,12 @@ The rate limit store is in-memory. For multi-instance deployments, consider usin
 
 Configuration is available for Google reCAPTCHA v3. Set the site key and secret key globally or per form.
 
-<Warning>
+<Callout type="warn">
   **Not enforced yet.** The settings below are accepted and stored, and nothing
   verifies a token against Google: submissions are accepted whether the token is
   valid, invalid or absent. Turning it on protects nothing today. The honeypot
   and the rate limit above are enforced.
-</Warning>
+</Callout>
 
 ```typescript
 spamProtection: {

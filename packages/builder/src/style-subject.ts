@@ -33,7 +33,8 @@ import {
   findNode,
   locateNode,
 } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+
+import { nodeElement } from "./canvas";
 
 /** One node's own identity, without the chain above it. */
 type SubjectNode = Omit<StyleSubject, "ancestors">;
@@ -184,35 +185,21 @@ export function renderedTagOf(
 }
 
 /**
- * The canvas element the node is drawn as, or `undefined` when it is not drawn.
+ * The element a node renders as, for a reader that may hold no root or no id.
  *
- * The lookup `renderedTagOf` was written around, lifted out because a second
- * question needs the same element rather than its tag: the box of logical sides
- * asks the element which way it runs. Two walks would be two answers to "which
- * element is this node", and they would drift the moment either learns
- * something — a Suspense boundary, a portal, a block that marks more than its
- * root.
- *
- * The id NEVER reaches a selector, for the reason spelled out above: a node id
- * is author data, `querySelector` THROWS on invalid syntax rather than missing,
- * and escaping does not cover a raw line break at all.
- *
- * @param root - the canvas root to search under
- * @param nodeId - the node whose element is wanted
- * @returns the marked element, or `undefined`
+ * An ADAPTER over {@link nodeElement}, not a second search. That function is
+ * the one rule for mapping an id to its element, and it knows what this file
+ * once did not: a component instance renders no element carrying its own id —
+ * it is replaced by the definition's tree — so a lookup over the node-id
+ * attribute alone finds nothing for a selected instance, and the style
+ * inspector then reads its tag and orientation as unknown for as long as it is
+ * selected. Every reader of "which element is this node" goes through the same
+ * rule so that answer cannot drift between them.
  */
 export function markedElementOf(
   root: HTMLElement | null | undefined,
   nodeId: string | null
 ): Element | undefined {
   if (root == null || nodeId === null) return undefined;
-  const marked = root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`);
-  // An index loop rather than `for...of`: a `NodeList` is not iterable under
-  // this package's lib target, and rather than widen that for one walk it is
-  // read the way the DOM has always allowed.
-  for (let index = 0; index < marked.length; index += 1) {
-    const element = marked[index];
-    if (element?.getAttribute(NODE_ID_ATTRIBUTE) === nodeId) return element;
-  }
-  return undefined;
+  return nodeElement(root, nodeId) ?? undefined;
 }

@@ -240,6 +240,13 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
 
+      # The pages under docs/ are compiled by nextlyhq.com, not here, so a page
+      # that does not parse merges green and breaks the site's next deploy.
+      # Compiled with the compiler the site's pipeline is built on.
+      - name: Docs pages compile
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:docs-compile
+
       # Both lanes select packages with a hand-written filter list, so a package
       # that gains a test task and is not added to one runs NOWHERE, and every
       # job stays green because what would have been reported is absent. That is

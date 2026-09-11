@@ -1580,9 +1580,15 @@ export function instanceExposure(
   const nodes = nodeIndex(definition.nodes);
   const applied = appliedWrites(declared, overrides);
   const props = finalProps(nodes, applied);
+  const byNode = writesByNode(applied);
 
   const properties = declared.map(property =>
-    exposedState(property, lastWriteOver(property, applied), props, nodes)
+    exposedState(
+      property,
+      lastWriteOver(property, byNode.get(property.nodeId) ?? []),
+      props,
+      nodes
+    )
   );
 
   const exposedIds = new Set(declared.map(property => property.id));
@@ -1651,6 +1657,29 @@ function finalProps(
 }
 
 /**
+ * The in-force writes grouped by the node they land on, in declaration order.
+ *
+ * A write can only reach an exposure on the SAME node, so a row's winner is
+ * found among its own node's writes rather than by scanning every write for
+ * every row — which at the documented limit of a thousand exposures, all
+ * overridden, was a million reach checks per inspector question. The cost is
+ * now the sum over nodes of rows times writes there, which is linear when
+ * exposures are spread across a definition and only approaches the old bound
+ * when a thousand of them all point at one node.
+ */
+function writesByNode(
+  applied: readonly AppliedWrite[]
+): ReadonlyMap<string, readonly AppliedWrite[]> {
+  const byNode = new Map<string, AppliedWrite[]>();
+  for (const write of applied) {
+    const list = byNode.get(write.property.nodeId) ?? [];
+    list.push(write);
+    byNode.set(write.property.nodeId, list);
+  }
+  return byNode;
+}
+
+/**
  * The last in-force write that reaches this exposure's target, if any.
  *
  * "Reaches" is the writer's notion, not string equality: on one node, a path
@@ -1703,12 +1732,18 @@ function exposedState(
   if (winner === undefined) {
     return { property, source: "definition", value, cleared: false };
   }
-  const cleared = isUnsetOverride(winner.override.value);
   const own = winner.property.id === property.id;
+  // Cleared means THIS row's own write is the sentinel. A descendant's `$unset`
+  // deletes only that key — `a.b` cleared leaves `a` holding whatever else it
+  // had — so an ancestor whose winner is a clearing descendant is superseded,
+  // not cleared, and its value is read from what remains rather than assumed
+  // gone. The value already comes from the final props, so a genuinely cleared
+  // path reads as absent without being forced to.
+  const cleared = own && isUnsetOverride(winner.override.value);
   return {
     property,
     source: winner.override.source,
-    value: cleared ? undefined : value,
+    value,
     cleared,
     ...(own ? {} : { shadowedBy: winner.property.id }),
   };
@@ -1741,8 +1776,15 @@ function inForce(
   property: ExposedProperty,
   stored: SourcedOverride | undefined
 ): SourcedOverride | undefined {
-  if (stored === undefined || property.type !== "visibility") return stored;
-  return visibilityDecision(stored.value) === undefined ? undefined : stored;
+  if (stored === undefined) return undefined;
+  if (property.type === "visibility") {
+    return visibilityDecision(stored.value) === undefined ? undefined : stored;
+  }
+  // The resolver refuses to write a path it cannot use — empty, doubled dots,
+  // over the segment limit — and leaves the node untouched. Counting such an
+  // override as in force would attribute a value to the instance that nothing
+  // rendered, and let it win a collision over a write that did.
+  return isUsablePropPath(property.propPath) ? stored : undefined;
 }
 
 /**
