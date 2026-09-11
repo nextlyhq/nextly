@@ -16,6 +16,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  deferredEntities,
+  setDeferredEntities,
+} from "../../domains/widgets/deferred-entities";
 
 import {
   clearWidgets,
@@ -112,6 +116,26 @@ describe("resetWidgetRegistries", () => {
     // The control: the source core DOES republish is still answerable, so this
     // cannot pass by clearing everything and registering nothing.
     expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
+  });
+
+  it("drops the previous boot's deferred entities, for both kinds", () => {
+    // 🔴 A refusal is a statement about the reloads of ONE process, and this
+    // store outlives that process's services. Left standing across a
+    // `clearServices()` / `registerServices()` pair, a slug the last boot
+    // deferred withheld its source and every generated card for good: only a
+    // later reload replaces a kind's set, and this boot has no reason to run
+    // one. Both kinds asserted, because the store is keyed by kind and a reset
+    // that took one of them would leave the other answering for a boot that is
+    // over.
+    setDeferredEntities("collection", ["posts"]);
+    setDeferredEntities("single", ["settings"]);
+    expect([...deferredEntities("collection")]).toEqual(["posts"]);
+    expect([...deferredEntities("single")]).toEqual(["settings"]);
+
+    resetWidgetRegistries();
+
+    expect([...deferredEntities("collection")]).toEqual([]);
+    expect([...deferredEntities("single")]).toEqual([]);
   });
 
   it("drops the previous boot's widgets and leaves core's own", () => {

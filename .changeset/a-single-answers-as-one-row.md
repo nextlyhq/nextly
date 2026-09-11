@@ -98,3 +98,11 @@ widget sources withheld even when the rest of its kind synced cleanly. The
 singles sync reports a per-single refusal without failing the scope, so a
 reload that refused one single had been clearing the whole deferral set and
 republishing that single's stale field list.
+
+A `next dev` reload whose metadata sync fails now withholds that kind's widget
+sources rather than publishing them over tables the apply has already moved,
+and a single the sync refused no longer has its migration recorded as applied
+-- a label that persists, so the old field list came back against the new
+table on the next restart. A boot also starts with nothing withheld: the
+refusals one boot recorded are its own, and a slug held over from a previous
+boot kept its source and cards hidden for the life of the process.

@@ -277,11 +277,25 @@ function migratedSlugs(
 ): Set<string> {
   const isDeferred = (slug: string): boolean =>
     deferredEntities.has(`${kind}:${slug}`);
+  // 🔴 A slug the sync REFUSED is excluded from both halves as firmly as a
+  // deferred one, and for a reason the in-process deferral cannot cover. The
+  // DDL moved that table and the registry kept its old field list, so
+  // `applied` is the opposite of what just happened -- and unlike the deferral
+  // set, which lives only in this process, the label PERSISTS. After a restart
+  // the set is gone, the row still reads `applied`, and the stale field list
+  // is republished against the table it no longer describes.
+  //
+  // Read from the sync's OWN report rather than passed in beside it: the
+  // result naming the rows it rewrote is the result naming the rows it could
+  // not, so asking it twice cannot disagree with itself.
+  const refused = new Set(syncFailedSlugs(syncResult));
+  const withheld = (slug: string): boolean =>
+    isDeferred(slug) || refused.has(slug);
   const migrated = new Set<string>(
-    rewrittenSlugs(syncResult).filter(slug => !isDeferred(slug))
+    rewrittenSlugs(syncResult).filter(slug => !withheld(slug))
   );
   for (const target of targets) {
-    if (!liveByTable.has(target.tableName) && !isDeferred(target.slug)) {
+    if (!liveByTable.has(target.tableName) && !withheld(target.slug)) {
       migrated.add(target.slug);
     }
   }
@@ -2483,6 +2497,22 @@ async function applyReload(opts?: {
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
       // or HMR cycle will retry via registerServices.
+      //
+      // 🔴 The deferral is published from HERE too, not only from the success
+      // path. A sync that REJECTS stored nothing, so every table this apply
+      // moved now has a registry row describing the shape it had before --
+      // and leaving the previous set standing (usually empty) said the
+      // opposite, publishing sources over tables that had just changed under
+      // them. The whole configured set, because a rejection carries no report
+      // of which entities it got to: the precise set is unknowable here, and
+      // a withheld card that works is recoverable where a card querying a
+      // column that no longer exists is not. The next successful reload
+      // replaces this, and a restart clears it.
+      await publishDeferred(
+        "collection",
+        deferredEntities,
+        targets.map(target => target.slug)
+      );
       collectionSynced = false;
     }
 
@@ -2534,7 +2564,14 @@ async function applyReload(opts?: {
         keepPriorFor: failedSlugs,
       });
     } catch {
-      // Non-fatal: same reasoning as collection metadata sync above.
+      // Non-fatal: same reasoning as collection metadata sync above, and the
+      // deferral is published for the same reason — a rejected sync leaves
+      // every moved table described by the field list it had before.
+      await publishDeferred(
+        "single",
+        deferredEntities,
+        singleTargets.map(target => target.slug)
+      );
       singleSynced = false;
     }
 

@@ -969,6 +969,46 @@ describe("reloadNextlyConfig", () => {
     );
   });
 
+  it("does NOT mark a single 'applied' when its own metadata sync REFUSED it", async () => {
+    // 🔴 The in-process deferral cannot stand in for this. `applied` is
+    // PERSISTED, so it outlives the deferral set: after a restart the set is
+    // gone, the row still reads `applied`, and the source refresh republishes
+    // the field list the registry refused to update -- against the table the
+    // apply just moved. `theme` synced and travels as the control, so a
+    // marking step that had simply stopped running cannot pass this.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    // Both tables are NEW, so the absent-table half would mark both.
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const resolver = buildResolver({
+      singleSyncResult: {
+        created: ["settings", "theme"],
+        updated: [],
+        unchanged: [],
+        errors: [{ slug: "settings" }],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateSingleMigrationStatusSpy).toHaveBeenCalledWith(
+      "theme",
+      "applied"
+    );
+    expect(resolver.updateSingleMigrationStatusSpy).not.toHaveBeenCalledWith(
+      "settings",
+      "applied"
+    );
+  });
+
   it("does NOT mark a DEFERRED single 'applied' in a mixed batch", async () => {
     // The sync payload is every configured single, so a refused one whose
     // fields changed still comes back in `updated`; marking it from that list
@@ -1214,19 +1254,19 @@ describe("reloadNextlyConfig", () => {
 
     expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
     expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", ["settings"]);
-    // The collection sync threw, so nothing may claim to know what it wrote.
-    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
-      "collection",
-      expect.anything()
-    );
+    // The collection sync REJECTED, so it stored nothing while the apply had
+    // already moved the tables: every configured collection is now described
+    // by the field list it had before. Asserting the setter was not called
+    // could not tell that from a set correctly left alone.
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", [
+      "authors",
+    ]);
   });
 
-  it("leaves the single refusal set standing when the single metadata sync throws", async () => {
-    // The other direction of the same separation: a singles sync that threw
-    // wrote nothing, so the registry still describes what an earlier reload
-    // recorded, and replacing the set from here would clear a refusal that
-    // reload correctly made. The collection sync ran, so its kind is still
-    // published.
+  it("defers its kind when the single metadata sync throws, and leaves the other kind alone", async () => {
+    // The other direction of the same separation. The singles sync rejected
+    // after the apply, so its own kind is withheld; the collection sync ran
+    // and published its kind normally.
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
@@ -1258,10 +1298,7 @@ describe("reloadNextlyConfig", () => {
 
     expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
     expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", []);
-    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
-      "single",
-      expect.anything()
-    );
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", ["settings"]);
   });
 
   it("preserves UI-created singles (registry-only) in the desired schema", async () => {
