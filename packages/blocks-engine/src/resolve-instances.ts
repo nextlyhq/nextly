@@ -942,14 +942,15 @@ interface RootsReader extends DefinitionReader {
 function rootTypesOf(
   nodes: readonly unknown[],
   reader: RootsReader,
-  scope: ComposedScope
+  scope: ComposedScope,
+  plans?: ReadonlyMap<string, NodePlan>
 ): readonly string[] | undefined {
   // A set kept in insertion order, so the answer lists types as the composed
   // forest would first meet them and a verdict's first refusal is the
   // forest's first.
   const out = new Set<string>();
   for (const node of nodes) {
-    const types = rootTypesOfNode(node, reader, scope);
+    const types = rootTypesOfNode(node, reader, scope, plans);
     if (types === undefined) return undefined;
     for (const type of types) out.add(type);
   }
@@ -960,7 +961,8 @@ function rootTypesOf(
 function rootTypesOfNode(
   node: unknown,
   reader: RootsReader,
-  scope: ComposedScope
+  scope: ComposedScope,
+  plans?: ReadonlyMap<string, NodePlan>
 ): readonly string[] | undefined {
   // A root the INLINER would drop stands for nothing: `cloneDefinitionForest`
   // skips a node that is not a record or whose id is not a string, so it never
@@ -968,6 +970,15 @@ function rootTypesOfNode(
   // root the page never gets — and one whose every root is dropped would be
   // offered as placing something and place nothing.
   if (!isPlainRecord(node) || typeof node.id !== "string") return [];
+  // What the instance holding this definition decided about this very node.
+  // `cloneDefinitionNode` returns nothing at all for `visible === false`, so a
+  // root an override hides stands for no type — a component whose only root is
+  // hidden composes to nothing and must not be offered as placing anything.
+  // `true` is the other half of the same rule: it deletes the node's own gate
+  // before the instance branch is reached, so a gated root the instance turns
+  // on is expanded rather than left standing.
+  const shown = plans?.get(node.id)?.visible;
+  if (shown === false) return [];
   const { type } = node;
   // A node the inliner keeps and this cannot name: the nesting rule has no
   // type to judge, so the caller is told nothing rather than a guess.
@@ -975,14 +986,29 @@ function rootTypesOfNode(
   if (type !== COMPONENT_INSTANCE_TYPE) return [type];
   // The resolver's own order: a gated instance is returned standing before
   // its id is even read, and an instance naming no component is malformed.
-  if (isConditionGated(node)) return undefined;
+  if (shown !== true && isConditionGated(node)) return undefined;
   const componentId = componentIdOf(node);
   if (componentId === undefined) return undefined;
   // The refusals first, and the resolver's own — a cycle or the cap refuses
   // THIS instance whatever was answered for its definition elsewhere.
   const found = definitionFor(componentId, reader, scope);
   if (typeof found === "string") return undefined;
-  return definitionRootTypes(componentId, found, reader, scope);
+  return definitionRootTypes(componentId, found, reader, scope, node);
+}
+
+/**
+ * Whether any plan decides a node's visibility.
+ *
+ * The ordinary instance decides none — it overrides props, or nothing at all —
+ * and then its definition's roots are the definition's own, which is the answer
+ * worth remembering across every instance that points at it. Only an instance
+ * that hides or shows one of them asks a question of its own.
+ */
+function hidesOrShows(plans: ReadonlyMap<string, NodePlan>): boolean {
+  for (const plan of plans.values()) {
+    if (plan.visible !== undefined) return true;
+  }
+  return false;
 }
 
 /**
@@ -993,20 +1019,41 @@ function definitionRootTypes(
   componentId: string,
   definition: ComponentDocument,
   reader: RootsReader,
-  scope: ComposedScope
+  scope: ComposedScope,
+  instance: Record<string, unknown>
 ): readonly string[] | undefined {
-  const remembered = reader.rootsRead.get(componentId);
+  // The resolver's OWN planner, not a second reading of `props.overrides`: it
+  // is what decides a node's visibility when the page is drawn, it folds the
+  // chosen variant's presets under the instance's own answers, and a rule
+  // spelled twice is one that will eventually differ from the render.
+  const plans = planEdits(
+    definition,
+    instance as unknown as ResolvedBlockNode,
+    undefined,
+    false
+  );
+  const decided = hidesOrShows(plans);
+  // Remembered answers are a property of the DEFINITION. An instance that
+  // decides its visibility is asking a different question, so it neither reads
+  // the memo nor writes to it — two instances of one component can hide
+  // different roots, and the first would otherwise answer for the second.
+  const remembered = decided ? undefined : reader.rootsRead.get(componentId);
   if (remembered !== undefined && scope.depth <= remembered.depth) {
     return remembered.types;
   }
-  const types = rootTypesOf(definition.nodes, reader, {
-    depth: scope.depth + 1,
-    onPath: new Set(scope.onPath).add(componentId),
-  });
+  const types = rootTypesOf(
+    definition.nodes,
+    reader,
+    {
+      depth: scope.depth + 1,
+      onPath: new Set(scope.onPath).add(componentId),
+    },
+    decided ? plans : undefined
+  );
   // Only an ANSWER is remembered. A refusal under this instance can be a
   // property of where it sits — the cap, or a loop closed through the path
   // above — and the same definition may answer under the next.
-  if (types !== undefined) {
+  if (types !== undefined && !decided) {
     reader.rootsRead.set(componentId, { types, depth: scope.depth });
   }
   return types;
