@@ -56,11 +56,18 @@ export function builderRowId(index: number): string {
   return `row-${index}`;
 }
 
-/** The row index a sortable id names, or undefined for any other id. */
+/**
+ * The row index a sortable id names, or undefined for any other id.
+ *
+ * Only the ids `builderRowId` mints -- `row-` and a canonical nonnegative
+ * integer -- name a row. `Number()` alone read `row--1` as -1 and `row-1.5`
+ * as a fraction, and each passed the acceptance rule's upper bound while the
+ * reorder refused it, so the announcement described a move the handler had
+ * just declined.
+ */
 export function builderRowIndex(id: string): number | undefined {
-  if (!id.startsWith("row-")) return undefined;
-  const index = Number(id.slice("row-".length));
-  return Number.isNaN(index) ? undefined : index;
+  const match = /^row-(0|[1-9][0-9]*)$/.exec(id);
+  return match ? Number(match[1]) : undefined;
 }
 
 /**
