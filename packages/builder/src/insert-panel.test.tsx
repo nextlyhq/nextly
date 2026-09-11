@@ -450,6 +450,79 @@ describe("InsertPanel", () => {
   });
 });
 
+describe("the sentence that says where the next block lands", () => {
+  /*
+   * The one placement that differs from what selecting a block usually implies
+   * is "inside": an empty container takes the block rather than standing beside
+   * it. "Inside" is only meaningful if the author knows inside WHAT, and this
+   * paragraph is the polite live region that tells them — for a screen-reader
+   * author it is the whole answer to "where will this go".
+   *
+   * The container's name comes from a lookup the sentence does not need to
+   * render — it has a fallback for a type the registry cannot name — so the
+   * lookup can be dropped and every inside-selection placement still announces
+   * something. Measured: with the lookup replaced by a constant, this file
+   * passed whole. These are the tests that were missing.
+   */
+  function selectedEmptyContainer(): EditorState {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/section",
+          editor: { label: "Section" },
+          slots: { children: {} },
+        },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(
+      documentOf([
+        { id: "s", type: "acme/section", version: 1, props: {} },
+      ] as never)
+    );
+    return { ...editor, selectedId: "s" } as EditorState;
+  }
+
+  it("names the container the block will go inside", () => {
+    render(<InsertPanel editor={selectedEmptyContainer()} />);
+
+    const sentence = screen.getByText("Adds inside Section");
+    // Asserted against the fallback by name, so the failure reads as the
+    // wording the author would actually have heard rather than as a missing
+    // element: the fallback is a real sentence and a real live region.
+    expect(screen.queryByText("Adds inside the selected block")).toBeNull();
+    // The announcement is the point. A paragraph with the right words that is
+    // not a live region tells a sighted author and nobody else.
+    expect(sentence.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("falls back to 'the selected block' only when the registry cannot name it", () => {
+    /*
+     * The control that keeps the fallback honest: it must exist for a container
+     * whose definition carries no label, and it must not be what a labelled
+     * container gets. Without this, making the sentence always say "the
+     * selected block" fails the test above for the right reason, while making
+     * it always say "Section" — or throw on a nameless type — would go unseen.
+     */
+    registerBlocks(
+      [{ ...base, name: "acme/box", slots: { children: {} } }] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(
+      documentOf([
+        { id: "b", type: "acme/box", version: 1, props: {} },
+      ] as never)
+    );
+    render(
+      <InsertPanel editor={{ ...editor, selectedId: "b" } as EditorState} />
+    );
+
+    expect(screen.getByText("Adds inside the selected block")).toBeTruthy();
+  });
+});
+
 describe("the grid, and the strip that describes it", () => {
   /**
    * Seven blocks in one category, named so their position is readable.
