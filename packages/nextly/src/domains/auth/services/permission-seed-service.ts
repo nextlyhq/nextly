@@ -9,7 +9,7 @@ import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import {
   inPermissionSweep,
-  invalidateAllPermissionCaches,
+  writingPermissions,
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
@@ -365,6 +365,28 @@ const SINGLE_SEEDED_ACTIONS = [
   "unpublish",
 ] as const;
 
+/**
+ * Does this permission still answer for anything?
+ *
+ * Two ways to be rubbish, and they need different evidence.
+ *
+ * A permission with no owner belongs to a content type, so a resource that is
+ * no longer a collection, single or component means the type is gone and the
+ * permission with it.
+ *
+ * A permission with an owner belongs to a package, and its resource is a name
+ * that package chose — it matches no collection and never did, so the resource
+ * check says nothing about it. `orphanedAt` is its evidence: it is set only
+ * once the package stops declaring it.
+ */
+function isRubbish(
+  perm: { owner: string | null; resource: string; orphaned: boolean },
+  knownResources: ReadonlySet<string>
+): boolean {
+  if (!perm.owner) return !knownResources.has(perm.resource);
+  return perm.orphaned;
+}
+
 export class PermissionSeedService extends BaseService {
   private _permissionService?: PermissionService;
   private _rolePermissionService?: RolePermissionService;
@@ -640,20 +662,21 @@ export class PermissionSeedService extends BaseService {
   ): Promise<void> {
     const { permissions } = this.tables;
     try {
-      await (this.db as RBACDatabaseInstance)
-        .update(permissions)
-        .set({ owner: null, orphanedAt: null })
-        .where(
-          and(
-            sql`LOWER(${permissions.action}) = LOWER(${action})`,
-            sql`LOWER(${permissions.resource}) = LOWER(${resource})`
-          )
-        );
       // Clearing `orphaned_at` returns the row to the catalogue, which is what
-      // a super-admin's key copies. Unconditional here because this method only
-      // runs when it has a row to repair, and the write either happened or
-      // threw into the branch below.
-      await invalidateAllPermissionCaches();
+      // a super-admin's key copies. This method only runs when it has a row to
+      // repair, so the gate covers a write that either happened or threw into
+      // the branch below.
+      await writingPermissions(permissions, table =>
+        (this.db as RBACDatabaseInstance)
+          .update(table)
+          .set({ owner: null, orphanedAt: null })
+          .where(
+            and(
+              sql`LOWER(${table.action}) = LOWER(${action})`,
+              sql`LOWER(${table.resource}) = LOWER(${resource})`
+            )
+          )
+      );
     } catch {
       // The table may predate the column on a partially migrated database. Nothing is written and
       // the permission keeps whatever it had, which is the state this repair found it in.
@@ -661,6 +684,12 @@ export class PermissionSeedService extends BaseService {
   }
 
   async seedCustomPermissions(
+    perms: CollectedPermission[]
+  ): Promise<SeedResult> {
+    return inPermissionSweep(() => this.seedCustomPermissionsRows(perms));
+  }
+
+  private async seedCustomPermissionsRows(
     perms: CollectedPermission[]
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
@@ -769,11 +798,45 @@ export class PermissionSeedService extends BaseService {
    * unfiltered rewrite of the cache table, and a pass that did must not skip
    * it. Answered once.
    */
-  private async retireCachesIfWritten(written: number): Promise<void> {
-    if (written > 0) await invalidateAllPermissionCaches();
+  /**
+   * Retire one permission row: its grants first, then the row itself.
+   *
+   * Both retiring passes do exactly this and differ only in what they log, so
+   * the order lives in one place. It matters: the grants reference the row, so
+   * removing the row first is a foreign-key failure on any dialect enforcing
+   * one, and leaving the grants behind is a reference to a row that is gone.
+   *
+   * Answers whether it retired anything rather than throwing, because a single
+   * row that cannot be removed is not a reason to abandon the rest of a pass.
+   */
+  private async retirePermissionRow(permissionId: string): Promise<boolean> {
+    const { rolePermissions, permissions } = this.tables;
+    try {
+      await this.db
+        .delete(rolePermissions)
+        .where(eq(rolePermissions.permissionId, permissionId));
+
+      await writingPermissions(permissions, table =>
+        this.db.delete(table).where(eq(table.id, permissionId))
+      );
+      return true;
+    } catch (error) {
+      this.logger.warn?.(
+        `Error deleting permission "${permissionId}": ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    }
   }
 
   async markOrphanedPermissions(
+    declared: CollectedPermission[]
+  ): Promise<SeedResult> {
+    return inPermissionSweep(() => this.markOrphanedPermissionsRows(declared));
+  }
+
+  private async markOrphanedPermissionsRows(
     declared: CollectedPermission[]
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
@@ -812,10 +875,12 @@ export class PermissionSeedService extends BaseService {
         if (isDeclared === !isMarked) continue;
 
         result.total++;
-        await this.db
-          .update(permissions)
-          .set({ orphanedAt: isDeclared ? null : new Date() })
-          .where(eq(permissions.id, String(row.id)));
+        await writingPermissions(permissions, table =>
+          this.db
+            .update(table)
+            .set({ orphanedAt: isDeclared ? null : new Date() })
+            .where(eq(table.id, String(row.id)))
+        );
         result.created++;
 
         this.logger.info?.(
@@ -832,11 +897,6 @@ export class PermissionSeedService extends BaseService {
       );
       result.errors++;
     }
-
-    // `orphaned_at` decides whether a row is IN the catalogue, so marking one
-    // takes it out of a super-admin's key grants and clearing the mark puts it
-    // back.
-    await this.retireCachesIfWritten(result.created);
 
     return result;
   }
@@ -935,6 +995,14 @@ export class PermissionSeedService extends BaseService {
   async deletePermissionsForResource(
     resourceSlug: string
   ): Promise<SeedResult> {
+    return inPermissionSweep(() =>
+      this.deletePermissionsForResourceRows(resourceSlug)
+    );
+  }
+
+  private async deletePermissionsForResourceRows(
+    resourceSlug: string
+  ): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
     try {
@@ -945,40 +1013,21 @@ export class PermissionSeedService extends BaseService {
         limit: 10000,
       });
 
-      const { rolePermissions, permissions } = this.tables;
-
       for (const perm of allPerms.data) {
         if (perm.resource === resourceSlug) {
           result.total++;
 
-          try {
-            await this.db
-              .delete(rolePermissions)
-              .where(eq(rolePermissions.permissionId, perm.id));
-
-            // Delete the permission itself directly (bypass the role check)
-
-            await this.db
-              .delete(permissions)
-              .where(eq(permissions.id, perm.id));
-
+          if (await this.retirePermissionRow(perm.id)) {
             result.created++;
             this.logger.info?.(
               `Deleted permission "${perm.slug}" for resource "${resourceSlug}"`
             );
-          } catch (error) {
+          } else {
             result.skipped++;
-            this.logger.warn?.(
-              `Error deleting permission "${perm.slug}": ${error instanceof Error ? error.message : String(error)}`
-            );
           }
         }
       }
 
-      // Rows that no longer exist must not survive in an answer copied from
-      // them: a super-admin's API key holds the catalogue by copy, and an
-      // ordinary check's decision was cached from the grants these rows carried.
-      await this.retireCachesIfWritten(result.created);
       if (result.created > 0) {
         this.logger.info?.(
           `Deleted ${result.created} permission(s) for resource "${resourceSlug}"`
@@ -1062,10 +1111,15 @@ export class PermissionSeedService extends BaseService {
       if (row.slug !== reversed) continue;
 
       try {
-        await (this.db as RBACDatabaseInstance)
-          .update(permissions)
-          .set({ slug: canonical })
-          .where(eq(permissions.id, row.id));
+        // The stored slug is what a coarse grant check and a key's copied
+        // grants compare against, so a repaired one makes every copy of the
+        // old spelling wrong.
+        await writingPermissions(permissions, table =>
+          (this.db as RBACDatabaseInstance)
+            .update(table)
+            .set({ slug: canonical })
+            .where(eq(table.id, row.id))
+        );
         repaired++;
       } catch {
         // Almost certainly the unique index: another row already answers to
@@ -1073,14 +1127,14 @@ export class PermissionSeedService extends BaseService {
       }
     }
 
-    // The stored slug is what a coarse grant check and a key's grants compare
-    // against, so a repaired one makes every copy of the old spelling wrong.
-    await this.retireCachesIfWritten(repaired);
-
     return repaired;
   }
 
   async cleanupOrphanedPermissions(): Promise<SeedResult> {
+    return inPermissionSweep(() => this.cleanupOrphanedPermissionsRows());
+  }
+
+  private async cleanupOrphanedPermissionsRows(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
     try {
@@ -1106,52 +1160,21 @@ export class PermissionSeedService extends BaseService {
         includeOrphaned: true,
       });
 
-      const { rolePermissions, permissions } = this.tables;
-
       for (const perm of allPerms.data) {
-        // Two ways to be rubbish, and they need different evidence.
-        //
-        // A permission with no owner belongs to a content type, so a resource
-        // that is no longer a collection, single or component means the type
-        // is gone and the permission with it.
-        //
-        // A permission with an owner belongs to a package, and its resource is
-        // a name that package chose — it matches no collection and never did,
-        // so the resource check says nothing about it. `orphanedAt` is its
-        // evidence: it is set only once the package stops declaring it.
-        const isVanishedContentType =
-          !perm.owner && !knownResources.has(perm.resource);
-        const isRetiredDeclaration = Boolean(perm.owner) && perm.orphaned;
-
-        if (isVanishedContentType || isRetiredDeclaration) {
+        if (isRubbish(perm, knownResources)) {
           result.total++;
 
-          try {
-            await this.db
-              .delete(rolePermissions)
-              .where(eq(rolePermissions.permissionId, perm.id));
-
-            // Delete the permission itself directly (bypass the role check)
-
-            await this.db
-              .delete(permissions)
-              .where(eq(permissions.id, perm.id));
-
+          if (await this.retirePermissionRow(perm.id)) {
             result.created++;
             this.logger.info?.(
               `Cleaned up orphaned permission "${perm.slug}" (resource: ${perm.resource})`
             );
-          } catch (error) {
+          } else {
             result.skipped++;
-            this.logger.warn?.(
-              `Error cleaning up permission "${perm.slug}": ${error instanceof Error ? error.message : String(error)}`
-            );
           }
         }
       }
 
-      // Same reason as the resource delete above.
-      await this.retireCachesIfWritten(result.created);
       if (result.created > 0) {
         this.logger.info?.(
           `Cleaned up ${result.created} orphaned permission(s)`

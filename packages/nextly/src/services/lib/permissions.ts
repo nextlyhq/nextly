@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 // Hard runtime guard. The previous form was a try/catch'd dynamic
 // `await import("server-only")` that silently allowed the module to
 // load in client bundles. The audit recommended
@@ -79,8 +81,22 @@ export type PermissionCheck = { action: string; resource: string };
 const CACHE_ENABLED =
   process.env.PERMISSION_CACHE_ENABLED !== "false" &&
   process.env.PERMISSION_CACHE_ENABLED !== "0";
+/**
+ * How long a stored permission answer may be served.
+ *
+ * This is the shared tier, so it is also the longest a revoked grant can
+ * survive somewhere the revoking process cannot reach: every cache here is
+ * retired by a counter held in memory, and a second instance neither sees that
+ * counter move nor has one of its own to compare against. Until that signal is
+ * stored alongside the rows, the TTL is the only bound on cross-instance
+ * staleness, and a day is not a bound worth having for authorization.
+ *
+ * Five minutes matches the window an API key's copied grants already carry, so
+ * the two tiers expire on the same order rather than one outliving the other by
+ * a factor of three hundred. Raising it is safe once the revision is shared.
+ */
 const CACHE_TTL_SECONDS = parseInt(
-  process.env.PERMISSION_CACHE_TTL_SECONDS || "86400",
+  process.env.PERMISSION_CACHE_TTL_SECONDS || "300",
   10
 );
 
@@ -91,6 +107,60 @@ function getTablesLazy() {
     _dialectTables = getDialectTables();
   }
   return _dialectTables;
+}
+
+/**
+ * Store one decision in the SHARED tier, and take it back if the rows it came
+ * from changed while the write was in flight.
+ *
+ * The write is deliberately not awaited: a check should not wait on a cache
+ * fill to answer. That leaves a window, and this is the half that closes it.
+ * An invalidation can tombstone the table while the upsert is outstanding, and
+ * the upsert then lands BEHIND the tombstone carrying a fresh expiry — into the
+ * tier that is shared between instances and lives longest, so it would outlive
+ * every other copy of the same answer. Re-asking the revision afterwards and
+ * retiring this user's rows when it has moved means either the invalidation
+ * caught the row or this does.
+ *
+ * Stated once because it is one property of writing asynchronously, and a
+ * per-branch copy is the one a later branch is written without. A grant and a
+ * denial are equally wrong when they outlive their cause, so both come here.
+ */
+function storeSharedDecision(
+  service: PermissionCacheService,
+  decision: {
+    userId: string;
+    action: string;
+    resource: string;
+    allowed: boolean;
+    roleIds: string[];
+    resolvedUnder: number;
+  }
+): void {
+  const { userId, action, resource, allowed, roleIds, resolvedUnder } =
+    decision;
+  void (async () => {
+    try {
+      await service.setCachedPermission(
+        userId,
+        action,
+        resource,
+        allowed,
+        roleIds
+      );
+      if (!resolvedUnderCurrentRevision(resolvedUnder)) {
+        await service.invalidateByUser(userId);
+      }
+    } catch (error) {
+      getAuthLogger()?.log?.("warn", {
+        category: "auth",
+        op: "cache",
+        message: "DB cache write failed",
+        userId,
+        error: String(error),
+      });
+    }
+  })();
 }
 
 class PermissionChecker {
@@ -236,14 +306,20 @@ class PermissionChecker {
         // And not at all if these rows were invalidated while the read ran.
         if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
           this.memo.set(key, false);
+          // A user with no roles is denied, and that denial is stored on the
+          // same terms as an answer computed from roles: a first role granted
+          // while the write is in flight would otherwise be outlived by a
+          // stored `false`. A denial surviving its cause is as wrong as a
+          // grant surviving its own.
           if (this.cacheService) {
-            void this.cacheService.setCachedPermission(
+            storeSharedDecision(this.cacheService, {
               userId,
               action,
               resource,
-              false,
-              []
-            );
+              allowed: false,
+              roleIds: [],
+              resolvedUnder,
+            });
           }
         }
         return false;
@@ -275,30 +351,15 @@ class PermissionChecker {
       // it would outlast every other copy here. Tombstoning this user's rows
       // when that happens is the write-then-verify half: either the
       // invalidation caught the row, or this does.
-      const service = this.cacheService;
-      if (service && cacheable) {
-        void (async () => {
-          try {
-            await service.setCachedPermission(
-              userId,
-              action,
-              resource,
-              allowed,
-              Array.from(roleIds)
-            );
-            if (!resolvedUnderCurrentRevision(resolvedUnder)) {
-              await service.invalidateByUser(userId);
-            }
-          } catch (error) {
-            getAuthLogger()?.log?.("warn", {
-              category: "auth",
-              op: "cache",
-              message: "DB cache write failed",
-              userId,
-              error: String(error),
-            });
-          }
-        })();
+      if (this.cacheService && cacheable) {
+        storeSharedDecision(this.cacheService, {
+          userId,
+          action,
+          resource,
+          allowed,
+          roleIds: Array.from(roleIds),
+          resolvedUnder,
+        });
       }
 
       return allowed;
@@ -639,6 +700,16 @@ export async function listEffectivePermissions(
  */
 let rbacRevisionCounter = 0;
 
+/**
+ * How many retirements are currently emptying the caches.
+ *
+ * Held while the shared tier is being tombstoned, which is an awaited database
+ * write and therefore a window during which the local numbers are quiet but the
+ * stored rows are not yet gone. See {@link resolvedUnderCurrentRevision}, which
+ * is where it is read.
+ */
+let permissionFlushDepth = 0;
+
 /** The current count; see {@link invalidatePermissionCache}. */
 export function rbacRevision(): number {
   return rbacRevisionCounter;
@@ -658,9 +729,17 @@ export function rbacRevision(): number {
  * result, and a per-cache answer is a list that the next cache is left off.
  *
  * The failing direction is a missed cache write, which costs one re-resolution.
+ *
+ * A retirement that is still running counts as not current, whatever the
+ * numbers say. Clearing the shared tier is an awaited database write, and the
+ * revision cannot be advanced once at the end to cover it: a check that starts
+ * and finishes entirely inside that window reads a row the tombstone has not
+ * reached yet, compares two numbers that have not moved since it captured one,
+ * and promotes the retired answer into a tier that outlives the retirement.
+ * Nothing is cacheable while the caches are being emptied.
  */
 export function resolvedUnderCurrentRevision(revision: number): boolean {
-  return revision === rbacRevisionCounter;
+  return permissionFlushDepth === 0 && revision === rbacRevisionCounter;
 }
 
 /**
@@ -708,8 +787,18 @@ const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
  * Clears the process-local tiers, tombstones the shared one, and advances the
  * revision so derived caches in this process retire with them.
  */
-let permissionSweepDepth = 0;
-let permissionSweepDirty = false;
+/**
+ * The batch the CURRENT operation is part of, or nothing if it is not in one.
+ *
+ * Scoped to the async operation rather than counted for the process. A count is
+ * shared by everything running at the time, so an unrelated revocation raised
+ * while a seeder happened to be awaiting inside its own batch was read as a
+ * nested write, deferred to the end of that batch, and left the revoked
+ * permission authorizing requests for as long as the seeder took — for good, if
+ * it stalled. Membership of a batch is a property of the work, and this is how
+ * the runtime expresses that.
+ */
+const permissionSweep = new AsyncLocalStorage<{ dirty: boolean }>();
 
 /**
  * Run a batch of permission-row writes under ONE table-wide invalidation.
@@ -726,15 +815,16 @@ let permissionSweepDirty = false;
  * outcome worse than doing the work twice.
  */
 export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
-  permissionSweepDepth += 1;
+  // A batch already covering this operation absorbs it: the outer one flushes
+  // on its way out and a second flush would only repeat the work.
+  const enclosing = permissionSweep.getStore();
+  if (enclosing) return run();
+
+  const batch = { dirty: false };
   try {
-    return await run();
+    return await permissionSweep.run(batch, run);
   } finally {
-    permissionSweepDepth -= 1;
-    if (permissionSweepDepth === 0 && permissionSweepDirty) {
-      permissionSweepDirty = false;
-      await flushPermissionCaches();
-    }
+    if (batch.dirty) await flushPermissionCaches();
   }
 }
 
@@ -742,12 +832,50 @@ export async function invalidateAllPermissionCaches(): Promise<void> {
   // Inside a sweep the caches are retired once, at the end. The revision still
   // advances immediately, so nothing in flight can file a result as current
   // while the batch is running — only the expensive table write is deferred.
-  if (permissionSweepDepth > 0) {
-    permissionSweepDirty = true;
+  //
+  // Deferred only for the batch's OWN writes. A revocation raised elsewhere
+  // while a batch happens to be running is not part of it and retires the
+  // caches now, however long the batch still has to run.
+  const batch = permissionSweep.getStore();
+  if (batch) {
+    batch.dirty = true;
     rbacRevisionCounter += 1;
     return;
   }
   await flushPermissionCaches();
+}
+
+/**
+ * Write permission ROWS, and retire what was copied from them.
+ *
+ * The table is reached through this rather than directly so that changing it
+ * and retiring the answers derived from it are one act. A writer that carries
+ * its own invalidation is a chance to omit one, and the omission is invisible
+ * where it happens: a permission row belongs to no user and no role, so every
+ * scoped invalidation is the wrong shape for it, and a writer's own tests
+ * assert on rows rather than on what still answers from cache.
+ *
+ * The table arrives as an argument and comes back as the callback's parameter
+ * so that a write is written inside the gate as a matter of course, and
+ * `packages/nextly/src/domains/auth/services/__tests__/permission-writers-invalidate.test.ts`
+ * holds every other write in the package to the same rule.
+ *
+ * Retirement follows the work whether it succeeded or threw: a statement that
+ * failed partway still changed rows, and caches derived from them are the one
+ * outcome worse than retiring answers that were fine. Where the write is inside
+ * a transaction, wrap the TRANSACTION rather than the statement — retiring
+ * before the commit invites a concurrent read to refill the caches from the
+ * state being replaced.
+ */
+export async function writingPermissions<TTable, T>(
+  permissions: TTable,
+  run: (permissions: TTable) => Promise<T>
+): Promise<T> {
+  try {
+    return await run(permissions);
+  } finally {
+    await invalidateAllPermissionCaches();
+  }
 }
 
 async function flushPermissionCaches(): Promise<void> {
@@ -759,6 +887,11 @@ async function flushPermissionCaches(): Promise<void> {
   rbacRevisionCounter += 1;
 
   if (CACHE_ENABLED) {
+    // Held across the shared write, so nothing computed while the stored rows
+    // are still readable can be filed as current. Advancing the revision again
+    // afterwards would not do it: the window belongs to checks that both start
+    // and finish inside it, and those see two numbers that never moved.
+    permissionFlushDepth += 1;
     try {
       await new PermissionCacheService(getAdapter(), getLogger(), {
         cacheTtlSeconds: CACHE_TTL_SECONDS,
@@ -771,6 +904,8 @@ async function flushPermissionCaches(): Promise<void> {
         error: String(error),
       });
       // Don't throw - cache invalidation failures should not break operations
+    } finally {
+      permissionFlushDepth -= 1;
     }
   }
 }

@@ -45,12 +45,13 @@ the same caller's own request passed it, and a negative rule granted what it
 was written to refuse. The roles are resolved and the caller is built by the
 one constructor every other authenticated path uses.
 
-Changing a permission row now retires the cached answers derived from it. None
-of the nine methods that write those rows invalidated anything, and neither of
-the existing invalidations can express the change: a permission row belongs to
-no user and no role. So a role-based key kept a renamed slug, and a Super
-Admin's key kept a deleted grant and missed a new one, until their entries aged
-out.
+Changing a permission row now retires the cached answers derived from it, and
+retiring them is no longer a separate step a writer has to remember: every
+write goes through one place that does both. None of the methods writing those
+rows invalidated anything, and neither of the existing invalidations can
+express the change, because a permission row belongs to no user and no role. So
+a role-based key kept a renamed slug, and a Super Admin's key kept a deleted
+grant and missed a new one, until their entries aged out.
 
 A cached answer resolved before an invalidation is no longer written after it.
 Every cache here is filled from an asynchronous read, so a lookup that began
@@ -78,3 +79,23 @@ owner's, the way the REST path already judges one. A stored role rule reads
 the caller's roles directly, so the owner's roles let a viewer-scoped key
 minted by an administrator satisfy an administrators-only rule, and refused a
 key holding the very role a rule names because its owner did not hold it.
+
+Stored permission answers now expire after five minutes rather than a day.
+`PERMISSION_CACHE_TTL_SECONDS` still sets it. The stored tier is shared between
+instances and the signal that retires it is held in memory, so an instance that
+did not handle a role change goes on serving what it stored until the entry
+expires; the default was a day, which is not a bound worth having on a revoked
+grant. Installs running a single instance see slightly more cache misses and no
+change in behaviour.
+
+A batch of permission writes no longer defers an unrelated revocation. Seeding
+retires the caches once at the end rather than per row, and the batch is now
+scoped to the operation that opened it, so a revocation raised while a seeder
+happens to be running takes effect immediately instead of waiting for the
+seeder to finish.
+
+A permission answer computed while the caches are being cleared is no longer
+stored. Clearing the shared tier is itself a write, and a check that both began
+and finished during it could read a row the clearing had not yet reached and
+promote it, which put a retired answer back into a faster tier that outlives
+the clearing.
