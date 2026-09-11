@@ -1597,9 +1597,11 @@ async function handleServiceRequest(
  * default the next caller inherits without noticing.
  */
 const NO_WIDGETS: WidgetAudience = {
+  visible: [],
   declared: new Set(),
   generated: [],
   holds: () => false,
+  heldActionGates: new Set(),
 };
 
 /**
@@ -1937,7 +1939,7 @@ async function handleAdminMetaWorkspaceRequest(
   // card to any authenticated caller. That the admin would not draw the card
   // is not a control; the payload is JSON, and reading it is the bypass.
   //
-  // `visibleWidgets` re-derives the generated cards per request, which is why
+  // `widgetAudience` re-derives the generated cards per request, which is why
   // it runs on this route and not in the shared builder: the PUBLIC branding
   // handler deliberately does not initialise services, and refreshing there
   // asked an empty container for the collection registry on every anonymous

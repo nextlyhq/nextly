@@ -58,7 +58,7 @@ import {
   readColumnCount,
   type ColumnCount,
 } from "../domains/widgets/layout";
-import { visibleWidgets } from "../domains/widgets/visibility";
+import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
@@ -258,15 +258,15 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   const reader = await readCaller(auth);
   const caller = readAccessCaller(reader);
 
-  const [stored, permitted] = await Promise.all([
+  const [stored, audience] = await Promise.all([
     service.getLayout(SCOPE_KIND, caller.userId),
-    visibleWidgets(caller),
+    widgetAudience(caller),
   ]);
   // A SECOND pass, after the permission gate and never folded into it. The gate
   // decides what this reader may be told exists; this decides which transient
   // cards are worth showing right now, and a lapsed onboarding card is not a
   // refusal.
-  const widgets = await widgetsWhoseConditionHolds(permitted, reader);
+  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
 
   const source: LayoutSource = stored.layout ? "own" : "default";
   const placements = visibleArrangement(stored.layout, widgets);
@@ -303,7 +303,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // client guessing it would draw a DIFFERENT arrangement from the stored
       // one and then save that back.
       columnCount: stored.layout?.columnCount ?? DEFAULT_COLUMN_COUNT,
-      scope: visibilityToken(widgets.map(w => w.id)),
+      scope: visibilityToken(
+        widgets.map(w => w.id),
+        audience.heldActionGates
+      ),
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
@@ -477,10 +480,8 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // different set can never match: with a transient card filtered out of the
   // GET and left in here, every save on an install that has any content would
   // answer 409 and no reader could rearrange their dashboard at all.
-  const widgets = await widgetsWhoseConditionHolds(
-    await visibleWidgets(caller),
-    reader
-  );
+  const audience = await widgetAudience(caller);
+  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
   const visibleIds = new Set(widgets.map(widget => widget.id));
 
   // 🔴 BEFORE the per-placement checks below, and before the write. The row's
@@ -494,7 +495,10 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // has just become INVISIBLE would otherwise be rejected below as naming an
   // unavailable widget, telling the client its body is malformed when what it
   // actually holds is a stale view.
-  const scope = visibilityToken(widgets.map(widget => widget.id));
+  const scope = visibilityToken(
+    widgets.map(widget => widget.id),
+    audience.heldActionGates
+  );
   if (submittedScope !== scope) {
     throw NextlyError.conflict({
       reason: "state",

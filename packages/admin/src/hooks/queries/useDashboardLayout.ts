@@ -139,14 +139,15 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     [queryClient]
   );
 
-  // 🔴 The visible set moved under the reader -- a grant, a role change, a
+  // 🔴 The reader's view moved under them -- a grant, a role change, a
   // plugin registering elsewhere -- and the layout says so through `scope`,
-  // which is a token of exactly that set. The workspace payload was fetched
-  // for the PREVIOUS set and is held fresh for minutes, so a card the server
-  // now places has no declaration to draw with, and the picker can offer
-  // only its id, until that payload is read again. Re-read when the token
-  // moves, and only then: the first token seen is the set the workspace was
-  // fetched beside, and a refetch on it would re-read every dashboard load.
+  // a token of the visible cards AND of the shortcuts inside them the reader
+  // may see. The workspace payload was fetched for the PREVIOUS view and is
+  // held fresh for minutes, so a card the server now places has no
+  // declaration to draw with, and a shortcut newly permitted stays withheld,
+  // until that payload is read again. Re-read when the token moves, and only
+  // then: the first token seen is the view the workspace was fetched beside,
+  // and a refetch on it would re-read every dashboard load.
   const scope = query.data?.scope;
   const lastScope = useRef<string | undefined>(undefined);
   useEffect(() => {

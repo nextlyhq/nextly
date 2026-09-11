@@ -20,6 +20,14 @@
  * `java\nscript:` reads as no scheme here while reading as `javascript:`
  * there.
  *
+ * 🔴 A numeric character reference no code point can hold is decoded before
+ * the library sees it. The library decodes `&#N;` with `String.fromCodePoint`
+ * in every text node, a link's title and its destination alike, and past
+ * `0x10FFFF` that throws inside the conversion of the whole card -- an editor
+ * whose initial state threw commits nothing, so one such reference blanked
+ * every other line. It becomes U+FFFD here, which is what a browser shows for
+ * the same reference, and the card draws whole.
+ *
  * Raw HTML needs no guard: no transformer parses it, so a `<script>` in the
  * markdown is a text node whose text is `<script>`.
  *
@@ -28,6 +36,7 @@
 
 import { $isLinkNode, formatUrl, LinkNode } from "@lexical/link";
 import {
+  $convertFromMarkdownString,
   LINK,
   TRANSFORMERS,
   type TextMatchTransformer,
@@ -47,32 +56,40 @@ const SAFE_SCHEMES: ReadonlySet<string> = new Set([
 /** The most a decimal entity may name: past it, `String.fromCodePoint` throws. */
 const LAST_CODE_POINT = 0x10ffff;
 
+/** What a browser shows for a numeric character reference outside Unicode. */
+const REPLACEMENT_CHARACTER = "\uFFFD";
+
 /**
- * The capture as `@lexical/markdown` unescapes it before creating the node,
- * or `undefined` where its unescaping would throw.
+ * `markdown` with every numeric character reference no code point can hold
+ * replaced by U+FFFD.
+ *
+ * HTML's own rule for the same reference: a character reference outside the
+ * Unicode range is a parse error whose result is U+FFFD, so `&#1114112;` in a
+ * card reads exactly as it would on a web page. The library decodes such a
+ * reference by throwing instead, and it decodes every text node, a link's
+ * title and a link's destination alike, inside the conversion of the whole
+ * card; decoded here first, nothing it is handed can throw.
+ */
+export function representableMarkdown(markdown: string): string {
+  return markdown.replace(/&#(\d+);/g, (reference, codePoint: string) =>
+    Number(codePoint) > LAST_CODE_POINT ? REPLACEMENT_CHARACTER : reference
+  );
+}
+
+/**
+ * The capture as `@lexical/markdown` unescapes it before creating the node.
  *
  * Mirrors the library's own, which it does not export: a backslash before
- * ASCII punctuation is dropped, and a decimal entity is decoded. The one
- * difference is the entity no code point can hold -- `&#1114112;` and up --
- * which the library decodes by throwing. That throw happens inside the
- * conversion of the whole card, and an editor whose initial state threw
- * commits nothing, so one malformed link blanked every other line of prose.
- * Refused here, before the library is asked, the link stays text and the
- * card draws.
+ * ASCII punctuation is dropped, and a decimal entity is decoded. Made
+ * representable first, by the same rule the whole card is, so a destination
+ * judged on its own decodes the way it will inside the conversion.
  */
-function unescapedByMarkdown(raw: string): string | undefined {
-  let representable = true;
-  const unescaped = raw
+function unescapedByMarkdown(raw: string): string {
+  return representableMarkdown(raw)
     .replace(/\\([!-/:-@[-`{-~])/g, "$1")
-    .replace(/&#(\d+);/g, (entity, codePoint: string) => {
-      const value = Number(codePoint);
-      if (value > LAST_CODE_POINT) {
-        representable = false;
-        return entity;
-      }
-      return String.fromCodePoint(value);
-    });
-  return representable ? unescaped : undefined;
+    .replace(/&#(\d+);/g, (_, codePoint: string) =>
+      String.fromCodePoint(Number(codePoint))
+    );
 }
 
 /**
@@ -103,9 +120,7 @@ function unescapedByMarkdown(raw: string): string | undefined {
  * have read as a harmless path -- never admit one it would have run.
  */
 export function destinationOf(raw: string): string | undefined {
-  const unescaped = unescapedByMarkdown(raw);
-  if (unescaped === undefined) return undefined;
-  const stripped = unescaped.replace(/[\s\p{Cc}]+/gu, "");
+  const stripped = unescapedByMarkdown(raw).replace(/[\s\p{Cc}]+/gu, "");
   if (stripped === "" || formatUrl(stripped) !== stripped) return undefined;
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
   if (scheme && !SAFE_SCHEMES.has(scheme[1].toLowerCase())) return undefined;
@@ -160,10 +175,9 @@ const GUARDED_LINK: TextMatchTransformer = {
 };
 
 /** The editor's transformers, with the link one guarded. */
-export const TEXT_WIDGET_TRANSFORMERS: readonly Transformer[] =
-  TRANSFORMERS.map(transformer =>
-    transformer === LINK ? GUARDED_LINK : transformer
-  );
+const TEXT_WIDGET_TRANSFORMERS: readonly Transformer[] = TRANSFORMERS.map(
+  transformer => (transformer === LINK ? GUARDED_LINK : transformer)
+);
 
 /**
  * Open an external link in a new tab, and say so to the browser.
@@ -173,13 +187,27 @@ export const TEXT_WIDGET_TRANSFORMERS: readonly Transformer[] =
  * window; the `actions` archetype does the same for its external shortcuts,
  * and a link in prose is no less a link.
  */
-export function $openExternalLinksInNewTab(): void {
+function $openExternalLinksInNewTab(): void {
   for (const node of $nodesOfType(LinkNode)) {
     if ($isLinkNode(node) && externalHref(node.getURL())) {
       node.setTarget("_blank");
       node.setRel("noopener noreferrer");
     }
   }
+}
+
+/**
+ * Build a card's nodes from its markdown, inside an editor update.
+ *
+ * The ONE way a card's markdown becomes nodes, so no caller can hand the
+ * library a card without the decoding the conversion depends on, or convert
+ * without the link guard, or leave an external link opening in this tab.
+ */
+export function $importTextWidgetMarkdown(content: string): void {
+  $convertFromMarkdownString(representableMarkdown(content), [
+    ...TEXT_WIDGET_TRANSFORMERS,
+  ]);
+  $openExternalLinksInNewTab();
 }
 
 /**

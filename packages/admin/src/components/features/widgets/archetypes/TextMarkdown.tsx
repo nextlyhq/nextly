@@ -23,18 +23,13 @@
  * @module components/features/widgets/archetypes/TextMarkdown
  */
 
-import { $convertFromMarkdownString } from "@lexical/markdown";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { useCallback, useMemo } from "react";
 
 import { RICH_TEXT_NODES } from "@admin/components/features/entries/fields/special/rich-text-kit";
 
-import {
-  $openExternalLinksInNewTab,
-  TEXT_WIDGET_THEME,
-  TEXT_WIDGET_TRANSFORMERS,
-} from "./text-markdown";
+import { $importTextWidgetMarkdown, TEXT_WIDGET_THEME } from "./text-markdown";
 
 export interface TextMarkdownProps {
   content: string;
@@ -78,10 +73,7 @@ export function TextMarkdown({ content }: TextMarkdownProps) {
       onError: (error: Error) => {
         console.error("[TextMarkdown] Lexical error:", error);
       },
-      editorState: () => {
-        $convertFromMarkdownString(content, [...TEXT_WIDGET_TRANSFORMERS]);
-        $openExternalLinksInNewTab();
-      },
+      editorState: () => $importTextWidgetMarkdown(content),
     }),
     [content]
   );

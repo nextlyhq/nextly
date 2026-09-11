@@ -74,7 +74,7 @@ export async function permissionVerdicts(
 }
 
 /**
- * The widgets this caller is permitted to know exist.
+ * The cards this caller may see, with the verdicts they were decided on.
  *
  * A widget with no `requiredPermission` is visible to any authenticated
  * reader -- that is what omitting it means, and it is what core's own four
@@ -88,19 +88,10 @@ export async function permissionVerdicts(
  * for both copies, and the workspace payload withholds the contribution's
  * prose along with the registration's rather than shipping the copy that
  * happened to carry no gate of its own.
- */
-export async function visibleWidgets(
-  caller: ReadAccessCaller
-): Promise<CanonicalWidget[]> {
-  return (await decide(caller)).visible;
-}
-
-/**
- * The cards this caller may see, with the verdicts they were decided on.
  *
- * One pass for both callers of it: the layout endpoint wants the cards, the
- * workspace payload wants the cards and then the verdicts again for the gates
- * inside them. Two passes would be two RBAC reads per slug for one answer.
+ * The verdicts travel out with the cards because {@link widgetAudience} asks
+ * about the gates INSIDE them next, and a second pass would be two RBAC reads
+ * per slug for one answer.
  */
 async function decide(
   caller: ReadAccessCaller
@@ -144,21 +135,29 @@ async function decide(
 }
 
 /**
- * What ONE reader may be told, in the shape the workspace payload ships.
+ * What ONE reader may be told: the cards, and what the workspace payload
+ * ships for them.
  *
- * The admin reads DECLARED widgets from two places -- each plugin's
- * `widgets`, and the registry's own list -- and both are matched against
- * `declared` by id. A generated card travels as its full definition instead,
- * because the admin holds no copy of it to match: core derived it on the
- * server, and this is the only route by which it reaches the browser. And a
- * declaration is not all-or-nothing: an `actions` widget's shortcuts each
- * carry a gate of their own, so `holds` answers for those before the
- * declaration ships with them.
+ * ONE decision for the two surfaces that ask. The layout endpoint places and
+ * offers `visible`; the admin's workspace payload reads DECLARED widgets from
+ * two places -- each plugin's `widgets`, and the registry's own list -- and
+ * matches both against `declared` by id. A generated card travels as its full
+ * definition instead, because the admin holds no copy of it to match: core
+ * derived it on the server, and this is the only route by which it reaches
+ * the browser. And a declaration is not all-or-nothing: an `actions` widget's
+ * shortcuts each carry a gate of their own, so `holds` answers for those
+ * before the declaration ships with them.
  *
- * Derived from the same decision {@link visibleWidgets} is, so what the
- * payload ships and what the layout endpoint places cannot disagree.
+ * `heldActionGates` is the part of that answer the cards alone cannot carry.
+ * The layout's scope token is what tells a client its view has moved, and a
+ * token of the visible ids alone stood still when a reader gained only a
+ * shortcut's permission -- so the workspace payload, fetched for the earlier
+ * verdicts and held fresh for minutes, kept the shortcut withheld until some
+ * unrelated refresh. The token is taken over these as well.
  */
 export interface WidgetAudience {
+  /** The cards this reader may see, in canonical order. */
+  visible: CanonicalWidget[];
   /** Ids of the declared widgets -- contributed or registered -- this reader may see. */
   declared: ReadonlySet<string>;
   /** The cards core derived that this reader may see. */
@@ -171,6 +170,11 @@ export interface WidgetAudience {
    * the visible declarations carry. A slug nobody resolved refuses.
    */
   holds: (requiredPermission: unknown) => boolean;
+  /**
+   * The permission slugs, named by a gate inside a visible declaration, that
+   * this reader holds -- the verdicts `holds` answers from, as a set.
+   */
+  heldActionGates: ReadonlySet<string>;
 }
 
 export async function widgetAudience(
@@ -193,9 +197,13 @@ export async function widgetAudience(
   );
   const every = new Map([...verdicts, ...inner]);
   return {
+    visible,
     declared,
     generated: generatedWidgets().filter(widget => generatedIds.has(widget.id)),
     holds: requiredPermission =>
       holdsWidgetPermission(requiredPermission, every),
+    heldActionGates: new Set(
+      [...inner].filter(([, held]) => held).map(([slug]) => slug)
+    ),
   };
 }

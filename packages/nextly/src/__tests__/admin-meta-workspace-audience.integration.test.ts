@@ -370,6 +370,47 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     );
   });
 
+  it("keeps a gated contribution gated when an ungated registration the admin cannot receive collides with it", async () => {
+    // 🔴 The registry is the override channel, and a registration stating no
+    // permission un-gates a colliding contribution -- for the card the admin
+    // DRAWS. A registration JSON cannot carry is skipped by this payload, so
+    // the admin never receives it and draws the contribution instead; judged
+    // on the raw registry, the verdict was still the registration's, and the
+    // contribution's prose shipped to a reader lacking the grant it declared.
+    registerWidget(
+      {
+        id: "notes/editors",
+        title: "Editors (registered)",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: {
+          source: `collection:${NOTES}`,
+          op: "count",
+          where: { views: { greater_than: 10n } },
+        },
+      },
+      { source: "@test/app" }
+    );
+
+    const lacking = await workspaceFor(await keyHolding([`read-${NOTES}`]));
+    const declarations = everyDeclaration(lacking);
+    expect(ids(declarations)).not.toContain("notes/editors");
+    expect(declarations.map(widget => widget.content)).not.toContain(
+      EDITORS_ONLY
+    );
+
+    // The control: the contribution still ships, as itself, to a reader
+    // holding ITS gate -- the collision cost it nothing but the override.
+    const holding = await workspaceFor(
+      await keyHolding([`read-${NOTES}`, `create-${NOTES}`])
+    );
+    const copies = everyDeclaration(holding).filter(
+      widget => widget.id === "notes/editors"
+    );
+    expect(copies).toHaveLength(1);
+    expect(copies[0]?.content).toBe(EDITORS_ONLY);
+  });
+
   it("withholds an action whose own gate the reader lacks, on both channels", async () => {
     // 🔴 A shortcut is a label and an href. The card's gate held, so the
     // whole list shipped and the browser hid the protected entry afterwards

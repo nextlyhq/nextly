@@ -139,19 +139,25 @@ describe("the text archetype", () => {
     expect(root.textContent).toContain("[posts](posts?status=draft)");
   });
 
-  it("declines a link whose entity no code point can hold, and still draws the rest", async () => {
-    // 🔴 The library decoded `&#1114112;` by throwing, inside the conversion
-    // of the whole card, and an editor whose initial state threw committed
-    // nothing: the other lines were gone with the link. Declined before the
-    // library is asked, the link is text and the heading is drawn.
+  it("shows a numeric reference no code point can hold as the replacement character, wherever it is written", async () => {
+    // 🔴 The library decodes `&#1114112;` by throwing, inside the conversion
+    // of the whole card, and an editor whose initial state threw commits
+    // nothing: one such reference blanked every other line. It unescapes
+    // every text node, a link's title and a link's destination alike, so a
+    // guard on destinations alone left the prose and the title able to blank
+    // the card. Decoded once, before the library is asked, to what a browser
+    // shows for the same reference -- U+FFFD -- the card draws whole.
     const root = await drawn(
-      "## Still here\n\nA [broken](https://example.com/&#1114112;) link."
+      "## Still here\n\nPrice &#1114112; each. " +
+        'A [titled](https://example.com "&#1114112;") link, ' +
+        "and one [in the address](https://example.com/&#1114112;)."
     );
     expect(root.querySelector("h2")?.textContent).toBe("Still here");
-    expect(root.querySelector("a")).toBeNull();
-    expect(root.textContent).toContain(
-      "[broken](https://example.com/&#1114112;)"
-    );
+    expect(root.textContent).toContain("Price \uFFFD each.");
+    const links = root.querySelectorAll("a");
+    expect(links).toHaveLength(2);
+    expect(links[0]?.getAttribute("title")).toBe("\uFFFD");
+    expect(links[1]?.getAttribute("href")).toBe("https://example.com/\uFFFD");
   });
 
   it("is document content, not a read-only form control", async () => {

@@ -56,3 +56,14 @@ layout endpoint places cards with. Where two plugins contribute the same widget
 id, only the first declaration ships, which is the one the dashboard draws.
 Previously every authenticated caller received every declaration whole and the
 browser hid the gated cards and shortcuts.
+A registered widget the payload cannot carry -- one JSON drops or rewrites --
+no longer wins a collision with a contributed one; the contribution stands, as
+itself, with the gate it declared. And a numeric character reference outside
+Unicode's range (`&#1114112;` and up) in a text widget's markdown now draws as
+the replacement character, as it would on a web page, instead of blanking the
+card.
+
+The dashboard layout's `scope` token now also covers which shortcuts inside
+the visible cards the reader may see, so the admin re-reads its workspace when
+a reader gains or loses a shortcut's permission and not only when a card
+appears or disappears.

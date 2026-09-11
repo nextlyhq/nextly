@@ -15,14 +15,25 @@ import type { WidgetDefinition } from "../definition";
 import { clearWidgets, registerWidget } from "../registry";
 
 function registered(patch: Partial<WidgetDefinition>): WidgetDefinition {
-  return {
+  const definition = {
     id: "core/a",
     title: "A",
     archetype: "custom",
     defaultSize: "full",
     component: "core#A",
     ...patch,
-  } as WidgetDefinition;
+  };
+  // A key set to `undefined` is one JSON drops, and a registration carrying
+  // one is not one the admin may receive -- so a patch that unsets the base
+  // fixture's `component` removes the key rather than voiding it.
+  return withoutUndefined(definition) as WidgetDefinition;
+}
+
+/** `value` less every key set to `undefined`. */
+function withoutUndefined<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as Partial<T>;
 }
 
 beforeEach(() => clearWidgets());
@@ -126,6 +137,54 @@ describe("the canonical widget set", () => {
       { id: "dup/one", requiredPermission: "read-forms" },
     ]);
     expect(merged[0]).not.toHaveProperty("requiredPermission");
+  });
+
+  it("takes a registration only as the admin may RECEIVE it", () => {
+    // 🔴 A registration JSON cannot carry never reaches the browser -- the
+    // workspace payload skips it -- so it must not win a collision here
+    // either. Taken from the raw registry, an ungated registration the admin
+    // would never see merged over a gated contribution, the verdict became
+    // the registration's, and the contribution's declaration shipped to every
+    // reader under a clearance nothing the reader could see had granted.
+    registerWidget(
+      registered({
+        id: "dup/one",
+        archetype: "metric",
+        component: undefined,
+        query: {
+          source: "collection:posts",
+          op: "count",
+          where: { views: { greater_than: 10n } },
+        },
+      } as Partial<WidgetDefinition>)
+    );
+    const merged = canonicalWidgets([
+      { id: "dup/one", requiredPermission: "read-forms" },
+    ]);
+    expect(merged).toHaveLength(1);
+    // The contribution stands alone, gated as it declared.
+    expect(merged[0].requiredPermission).toBe("read-forms");
+  });
+
+  it("has no entry at all for a lone registration the admin cannot receive", () => {
+    // The control for the collision above, and a property of its own: a
+    // card the grid can never draw is not one the layout may place.
+    registerWidget(
+      registered({
+        id: "core/heavy",
+        archetype: "metric",
+        component: undefined,
+        query: {
+          source: "collection:posts",
+          op: "count",
+          where: { views: { greater_than: 10n } },
+        },
+      } as Partial<WidgetDefinition>)
+    );
+    registerWidget(registered({ id: "core/light" }));
+    expect(canonicalWidgets([]).map(widget => widget.id)).toEqual([
+      "core/light",
+    ]);
   });
 
   it("keeps the FIRST of two contributions sharing an id", () => {

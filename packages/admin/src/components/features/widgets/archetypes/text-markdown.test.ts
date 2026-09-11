@@ -10,7 +10,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { destinationOf, externalHref, safeHref } from "./text-markdown";
+import {
+  destinationOf,
+  externalHref,
+  representableMarkdown,
+  safeHref,
+} from "./text-markdown";
 
 describe("which hrefs may become links", () => {
   it("allows the web, mail, phone and paths on this site", () => {
@@ -46,17 +51,31 @@ describe("which hrefs may become links", () => {
     }
   });
 
-  it("declines an entity no code point can hold, rather than throwing", () => {
-    // 🔴 The library decodes `&#1114112;` by throwing a RangeError, inside
-    // the conversion of the whole card -- and an editor whose initial state
-    // threw commits nothing, so one malformed link blanked every other line.
-    // Declined before the library is asked, it stays text.
-    expect(destinationOf("https://example.com/&#1114112;")).toBeUndefined();
-    expect(safeHref("foo&#99999999999999999999;")).toBe(false);
-    // The bound, not merely the shape: the last code point decodes.
+  it("decodes a reference no code point can hold the way a browser does, rather than throwing", () => {
+    // 🔴 The library decodes `&#1114112;` by throwing a RangeError. Judged
+    // here by the same rule the whole card is decoded with -- HTML's, which
+    // yields U+FFFD -- the destination is a string like any other, and the
+    // link is a link to it.
+    expect(destinationOf("https://example.com/&#1114112;")).toBe(
+      "https://example.com/\uFFFD"
+    );
+    expect(destinationOf("https://example.com/&#99999999999999999999;")).toBe(
+      "https://example.com/\uFFFD"
+    );
+    // The bound, not merely the shape: the last code point decodes as itself.
     expect(destinationOf("https://example.com/&#1114111;")).toBe(
       "https://example.com/\u{10FFFF}"
     );
+  });
+
+  it("makes a whole card representable by that one rule", () => {
+    // Prose, a title and a destination are decoded alike, and a reference the
+    // library CAN hold is left for it to decode.
+    expect(
+      representableMarkdown(
+        'Price &#1114112; each, [a](https://x.test "&#1114112;") &#65;'
+      )
+    ).toBe('Price \uFFFD each, [a](https://x.test "\uFFFD") &#65;');
   });
 
   it("refuses a scheme that runs code or carries a payload", () => {

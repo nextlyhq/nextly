@@ -14,7 +14,11 @@ import type { ReadAccessCaller } from "../../../auth/entity-read-access";
 import { setContributedWidgets } from "../canonical";
 import { clearWidgets, registerWidget } from "../registry";
 import { clearSources, registerSource } from "../sources";
-import { visibleWidgets, widgetAudience } from "../visibility";
+import { widgetAudience } from "../visibility";
+
+/** The cards the one decision admits, which is what the layout endpoint places. */
+const visibleWidgets = async (caller: Parameters<typeof widgetAudience>[0]) =>
+  (await widgetAudience(caller)).visible;
 
 const { callerHoldsPermission, readableEntities } = vi.hoisted(() => ({
   callerHoldsPermission: vi.fn(),
@@ -45,14 +49,27 @@ function reader(held: string[], readable: string[] = []): void {
 }
 
 function register(id: string, patch: Record<string, unknown> = {}): void {
-  registerWidget({
+  const definition = {
     id,
     title: id,
     archetype: "text",
     defaultSize: "md",
     content: `notes for ${id}`,
     ...patch,
-  } as Parameters<typeof registerWidget>[0]);
+  };
+  // A key set to `undefined` is one JSON drops, and a registration carrying
+  // one is not one the admin may receive -- so a patch that unsets the base
+  // fixture's `content` removes the key rather than voiding it.
+  registerWidget(
+    withoutUndefined(definition) as Parameters<typeof registerWidget>[0]
+  );
+}
+
+/** `value` less every key set to `undefined`. */
+function withoutUndefined<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as Partial<T>;
 }
 
 beforeEach(() => {

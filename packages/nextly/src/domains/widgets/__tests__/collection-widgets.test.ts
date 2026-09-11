@@ -449,7 +449,7 @@ describe("which collection a generated card is about", () => {
   });
 
   it("names nothing for a card that queries no collection", () => {
-    // The control, and what makes the refusal in `visibleWidgets`
+    // The control, and what makes the refusal in `widgetAudience`
     // meaningful: a card whose subject cannot be identified is withheld.
     expect(
       generatedCollectionSlug({
