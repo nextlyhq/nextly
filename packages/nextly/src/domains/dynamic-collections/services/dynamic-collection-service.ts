@@ -430,6 +430,9 @@ export class DynamicCollectionService extends BaseService {
     );
 
     this.validationService.validateFieldNames(userDefinedFields);
+    this.validationService.validateJunctionOwnership(userDefinedFields, field =>
+      this.schemaService.junctionTableNameFor(tableName, field)
+    );
 
     const id = this.generateId();
 
@@ -1000,6 +1003,11 @@ export class DynamicCollectionService extends BaseService {
       );
 
       this.validationService.validateFieldNames(userDefinedFields);
+      this.validationService.validateJunctionOwnership(
+        userDefinedFields,
+        field =>
+          this.schemaService.junctionTableNameFor(collection.tableName, field)
+      );
 
       const oldUserFields = (collection.fields || []).filter(
         (f: FieldDefinition) => !reservedFieldNames.includes(f.name)

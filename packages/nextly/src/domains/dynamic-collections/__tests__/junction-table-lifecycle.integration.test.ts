@@ -22,6 +22,17 @@ const manyToMany = (name: string): FieldDefinition => ({
 
 const title: FieldDefinition = { name: "title", type: "text" };
 
+/** The same field with its junction named by the author. */
+const named = (
+  name: string,
+  target: string,
+  junctionTable: string
+): FieldDefinition => ({
+  name,
+  type: "relationship",
+  options: { relationType: "manyToMany", target, junctionTable },
+});
+
 describe("junction table lifecycle on a real SQLite database", () => {
   let db: Database.Database;
   const service = new DynamicCollectionSchemaService(undefined, "sqlite");
@@ -172,6 +183,50 @@ describe("junction table lifecycle on a real SQLite database", () => {
     const count = db
       .prepare("SELECT COUNT(*) AS n FROM dc_posts_dc_tags_tags")
       .get() as { n: number };
+    expect(count.n).toBe(0);
+  });
+
+  it("keeps every link when the field's junctionTable is edited", () => {
+    apply(
+      service.generateAlterTableMigration(
+        "dc_posts",
+        [title, manyToMany("tags")],
+        [title, named("tags", "tags", "post_links")]
+      )
+    );
+    expect(tables()).toEqual(["dc_posts", "dc_tags", "post_links"]);
+    const links = db
+      .prepare("SELECT tags_id FROM post_links ORDER BY tags_id")
+      .all() as { tags_id: string }[];
+    expect(links.map(l => l.tags_id)).toEqual(["t1", "t2"]);
+  });
+
+  it("rebuilds a table whose name is reused for another relation", () => {
+    // `CREATE TABLE IF NOT EXISTS` alone would find the old table and keep its
+    // `tags_id` column for a field that stores `authors_id`.
+    apply(service.generateMigrationSQL("dc_authors", []));
+    apply(
+      service.generateAlterTableMigration(
+        "dc_posts",
+        [title, manyToMany("tags")],
+        [title, named("tags", "tags", "post_links")]
+      )
+    );
+    apply(
+      service.generateAlterTableMigration(
+        "dc_posts",
+        [title, named("tags", "tags", "post_links")],
+        [title, named("writers", "authors", "post_links")]
+      )
+    );
+    const columns = (
+      db.pragma("table_info(post_links)") as { name: string }[]
+    ).map(c => c.name);
+    expect(columns).toContain("authors_id");
+    expect(columns).not.toContain("tags_id");
+    const count = db.prepare("SELECT COUNT(*) AS n FROM post_links").get() as {
+      n: number;
+    };
     expect(count.n).toBe(0);
   });
 
