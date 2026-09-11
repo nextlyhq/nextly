@@ -3091,6 +3091,151 @@ describe("composedRootTypes", () => {
     expect(resolvedRoots(doc, definitions)).toHaveLength(4);
   });
 
+  it("leaves out a root a nested instance's OWN override hides", () => {
+    // The gate the query already knew about is the node's own `conditions`,
+    // which the resolver leaves standing for a later pass. An override is a
+    // different mechanism and the resolver acts on it here: the node and its
+    // subtree are gone from the composed forest, so the type it would have
+    // contributed is not a type anything places.
+    const definitions = defs({
+      inner: component([node("d1", { type: "core/column" }), node("d2")], {
+        exposed: [
+          {
+            id: "showCol",
+            label: "Column",
+            nodeId: "d1",
+            propPath: "hidden",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+    const doc = component([
+      instance("n1", "inner", { overrides: { showCol: false } }),
+    ]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(composedRootTypes(doc, definitions)).toEqual(
+      resolvedRootTypes(doc, definitions)
+    );
+    // The control: the same definition placed by an instance that decides
+    // nothing still answers both types.
+    const plain = component([instance("n1", "inner")]);
+    expect(composedRootTypes(plain, definitions)).toEqual([
+      "core/column",
+      "core/text",
+    ]);
+  });
+
+  it("answers NOTHING at all for a component whose every root an override hides", () => {
+    // Offered, it would be a tile placing a component that draws nothing.
+    const definitions = defs({
+      inner: component([node("d1", { type: "core/column" })], {
+        exposed: [
+          {
+            id: "showCol",
+            label: "Column",
+            nodeId: "d1",
+            propPath: "hidden",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+    const doc = component([
+      instance("n1", "inner", { overrides: { showCol: false } }),
+    ]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual([]);
+    expect(resolvedRoots(doc, definitions)).toEqual([]);
+  });
+
+  it("counts a gated root the instance's override turns ON", () => {
+    // The other half of the same rule: `visible === true` deletes the node's
+    // own gate before the instance branch is reached, so a gated root the
+    // author explicitly turned on is expanded rather than left standing.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const definitions = defs({
+      leaf: component([node("l1", { type: "core/column" })]),
+      inner: component(
+        [instance("d1", "leaf") as BlockNode, node("d2")].map((n, i) =>
+          i === 0 ? { ...n, visibility: gate } : n
+        ) as BlockNode[],
+        {
+          exposed: [
+            {
+              id: "showLeaf",
+              label: "Leaf",
+              nodeId: "d1",
+              propPath: "hidden",
+              type: "visibility",
+            },
+          ],
+        }
+      ),
+    });
+    const off = component([instance("n1", "inner")]);
+    const on = component([
+      instance("n1", "inner", { overrides: { showLeaf: true } }),
+    ]);
+
+    // Gated and untouched: the resolver leaves that root standing, so the
+    // query answers nothing rather than a type.
+    expect(composedRootTypes(off, definitions)).toBeUndefined();
+    // Turned on: it is expanded, and its definition's root is what it draws.
+    expect(composedRootTypes(on, definitions)).toEqual([
+      "core/column",
+      "core/text",
+    ]);
+    expect(composedRootTypes(on, definitions)).toEqual(
+      resolvedRootTypes(on, definitions)
+    );
+  });
+
+  it("does not let one instance's decision answer for another's", () => {
+    // A definition's roots are remembered per query; an instance that hides a
+    // root is asking a question of its own, and the memo must not carry its
+    // answer to the next instance of the same component.
+    const definitions = defs({
+      inner: component([node("d1", { type: "core/column" }), node("d2")], {
+        exposed: [
+          {
+            id: "showCol",
+            label: "Column",
+            nodeId: "d1",
+            propPath: "hidden",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+    const hiddenFirst = component([
+      instance("n1", "inner", { overrides: { showCol: false } }),
+      instance("n2", "inner"),
+    ]);
+    const plainFirst = component([
+      instance("n1", "inner"),
+      instance("n2", "inner", { overrides: { showCol: false } }),
+    ]);
+
+    // Both types either way — the plain instance still contributes the column
+    // the hidden one did not — and in the order the composed forest first
+    // meets them, which the hidden root moves.
+    expect(composedRootTypes(hiddenFirst, definitions)).toEqual([
+      "core/text",
+      "core/column",
+    ]);
+    expect(composedRootTypes(plainFirst, definitions)).toEqual([
+      "core/column",
+      "core/text",
+    ]);
+    for (const doc of [hiddenFirst, plainFirst]) {
+      expect(composedRootTypes(doc, definitions)).toEqual(
+        resolvedRootTypes(doc, definitions)
+      );
+    }
+  });
+
   it("answers nothing for a root the resolver would leave standing: missing, another kind, a cycle, the composition cap", () => {
     const missing = component([instance("i1", "nobody")]);
     const wrongKind = component([instance("i1", "page")]);
@@ -3177,6 +3322,56 @@ describe("composedRootTypes", () => {
     expect(
       composedRootTypes(component([instance("i1", "empty")]), definitions)
     ).toEqual([]);
+  });
+
+  it("walks the definition again for an instance that decides, rather than taking the answer given for another", () => {
+    // Counted rather than compared, because the query answers a UNION over
+    // the roots: the plain instance that filled the memo contributes the very
+    // types the memo holds, so a deciding instance wrongly served from it
+    // still lands inside the same set. The invariant is that it is not served
+    // from it at all — one instance's decision is not an answer about the
+    // definition, and the next caller to ask a narrower question would get
+    // the first instance's.
+    let walks = 0;
+    const roots = [node("d1", { type: "core/column" }), node("d2")];
+    const inner = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      exposed: [
+        {
+          id: "showCol",
+          label: "Column",
+          nodeId: "d1",
+          propPath: "hidden",
+          type: "visibility",
+        },
+      ],
+      get nodes() {
+        walks += 1;
+        return roots;
+      },
+    } as unknown as ComponentDocument;
+    const lookup = defs({ inner });
+
+    // Two plain instances: the second takes the first's remembered answer.
+    composedRootTypes(
+      component([instance("n1", "inner"), instance("n2", "inner")]),
+      lookup
+    );
+    const plain = walks;
+
+    // The same pair, with the second deciding: one more read of the roots,
+    // because it answers for itself.
+    walks = 0;
+    composedRootTypes(
+      component([
+        instance("n1", "inner"),
+        instance("n2", "inner", { overrides: { showCol: false } }),
+      ]),
+      lookup
+    );
+
+    expect(walks).toBe(plain + 1);
   });
 
   it("reads each definition once, however many roots point at it", () => {
