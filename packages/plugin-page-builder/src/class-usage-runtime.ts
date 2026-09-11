@@ -427,10 +427,10 @@ export function usageCountReader(
       where: args.where,
       ...AS_THE_SYSTEM,
     });
-    // The bucket COUNT, not the row counts inside them. Each bucket is one
-    // document; summing `count` would put the per-row multiplicity back.
+    // The bucket KEYS, not the row counts inside them. Each bucket is one
+    // distinct value; the counts inside would put per-row multiplicity back.
     return {
-      bucketCount: grouped.buckets.length,
+      buckets: grouped.buckets.map(bucket => bucket.value),
       truncated: grouped.truncated,
     };
   };
@@ -468,6 +468,24 @@ const PROGRESS_PAGE_SIZE = 200;
  * the caller is accumulating across pages and merging per page would allocate
  * two objects for every page of a walk that exists to be cheap.
  */
+/**
+ * The id a stale progress row can be discarded by — or a refusal.
+ *
+ * REFUSED rather than skipped when the id is not a string. A stale row that
+ * cannot be addressed cannot be deleted, so it outlives the discard, and the
+ * next time a host's bounds return to its generation it is read as completed
+ * progress over an index that another generation has since rebuilt. That is
+ * the exact defect the discard exists to prevent, and the delete-failure path
+ * below already refuses for the same reason; an unaddressable row is the same
+ * outcome arriving one step earlier.
+ */
+function staleRowId(row: { id?: unknown }): string {
+  if (typeof row.id === "string" && row.id.length > 0) return row.id;
+  throw new Error(
+    "[page-builder] the usage backfill found a progress row from another derivation with no readable id, so it cannot be discarded and would survive to be reused"
+  );
+}
+
 function sortProgressRows(
   items: readonly unknown[],
   generation: string,
@@ -484,7 +502,7 @@ function sortProgressRows(
       // Another generation's progress, which cannot be reused and must not be
       // left to be reused later. Collected rather than deleted here, so the
       // paging is not walking a collection it is mutating.
-      if (typeof row.id === "string") stale.push(row.id);
+      stale.push(staleRowId(row));
       continue;
     }
     const key = row.scopeKey;

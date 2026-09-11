@@ -132,7 +132,7 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
     // Existence, not how many. One unreadable document is enough to make every
     // count a floor, and `truncated` on this read only means there are more of
     // them than the cap — which does not change the answer.
-    anyUndetermined: markers.bucketCount > 0,
+    anyUndetermined: markers.buckets.length > 0,
   };
 }
 

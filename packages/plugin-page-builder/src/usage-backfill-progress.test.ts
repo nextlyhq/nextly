@@ -126,4 +126,27 @@ describe("reading which scopes are already done", () => {
 
     await expect(store.completed()).rejects.toThrow(/could not discard stale/);
   });
+
+  it("REFUSES when a stale row has no id it could be discarded by", async () => {
+    // The same defect one step earlier. An `afterRead` hook that strips `id`
+    // from the progress collection leaves a stale row that cannot be addressed
+    // for deletion, so it outlives the discard exactly as a failed delete
+    // would — and is read as completed progress the next time the bounds
+    // return to its generation. Skipping it, as an unreadable row elsewhere is
+    // skipped, would be the silent version of the failure the case above
+    // refuses loudly.
+    const t = table([
+      { id: "r1", scopeKey: "here", generation: "10x500x1000" },
+      { scopeKey: "elsewhere", generation: "10x400x1000" } as never,
+    ]);
+    const store = usageBackfillStateStore(
+      t.nextly as never,
+      "state",
+      "10x500x1000"
+    );
+
+    await expect(store.completed()).rejects.toThrow(/no readable id/);
+    // And nothing was deleted on the way: the refusal is the whole answer.
+    expect(t.deleted).toEqual([]);
+  });
 });

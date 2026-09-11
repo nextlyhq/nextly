@@ -15,13 +15,18 @@ import { backfillScopeKey } from "./usage-backfill-scope";
 import { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
 
 function reader(markers: { bucketCount: number; truncated: boolean }) {
+  // `bucketCount` stands for how many marker buckets exist; the reader now
+  // hands back their keys, so the fake mints that many.
   const asked: {
     where: Record<string, { equals: string }>;
     groupBy: string;
   }[] = [];
   const read: GroupedUsageReader = async args => {
     asked.push(args);
-    return markers;
+    return {
+      buckets: Array.from({ length: markers.bucketCount }, (_, i) => `m-${i}`),
+      truncated: markers.truncated,
+    };
   };
   return { read, asked };
 }
@@ -215,7 +220,7 @@ describe("reading how much of the index is there", () => {
     const order: string[] = [];
     const read: GroupedUsageReader = async () => {
       order.push("markers");
-      return { bucketCount: 0, truncated: false };
+      return { buckets: [], truncated: false };
     };
     const scope = {
       entity: "pages",
