@@ -813,7 +813,8 @@ function inlineHostSlots(
 
 /**
  * The block types at the roots of a document as {@link resolveComponentInstances}
- * would compose it — read without composing it.
+ * would compose it — read without composing it. Each type ONCE, in the order
+ * it is first met.
  *
  * A palette judges where a component may be placed by the ROOTS of what it
  * draws, and a library of three thousand definitions asks that of every one
@@ -822,6 +823,17 @@ function inlineHostSlots(
  * its size per wrapper; this reads the roots and follows a root instance into
  * the definition it names, reading each definition once, so it costs the
  * roots.
+ *
+ * The types rather than the roots, because the question asked of the answer
+ * — may every one of these sit here — reads each type once, and the composed
+ * forest can be far wider than the set of types at its roots: a definition
+ * whose roots are two hundred instances of another whose roots are two
+ * hundred more composes to forty thousand roots of one type. Answering the
+ * forest's width would cost that per query; answering its types costs the
+ * registry's. For the same reason a definition's roots are answered once per
+ * query and remembered, whatever number of instances point at it and at
+ * whatever depth — with one care, in {@link rootTypesOfNode}: what fits at
+ * the surface may not fit at the composition cap.
  *
  * `undefined` where the resolver would leave a root STANDING — an instance
  * it cannot expand — because a root the resolver leaves standing is a
@@ -845,51 +857,93 @@ export function composedRootTypes(
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
     return undefined;
   }
-  const reader: DefinitionReader = {
+  const reader: RootsReader = {
     definitions,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
     definitionsRead: new Map<
       string,
       ComponentDocument | ComponentUnresolvedReason
     >(),
+    rootsRead: new Map<string, RememberedRoots>(),
   };
   return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
 }
 
-/** The roots of one forest, or nothing when any root cannot be answered. */
+/** A definition's root types as answered once, and how deep an instance they hold for. */
+interface RememberedRoots {
+  readonly types: readonly string[];
+  /**
+   * The depth of the deepest instance these were answered at.
+   *
+   * The composition cap refuses by depth, so an answer is a fact about the
+   * definition only down to here: what fit under an instance at depth one can
+   * be refused under one at depth four, where the cap is met sooner. An
+   * answer holds for every shallower instance — the same walk, with more
+   * room — and is reused there; a deeper one is walked afresh.
+   */
+  readonly depth: number;
+}
+
+/** What the roots query needs of a run: the reader, and the answers it has already given. */
+interface RootsReader extends DefinitionReader {
+  rootsRead: Map<string, RememberedRoots>;
+}
+
+/**
+ * The types at the roots of one forest, each once, or nothing when any root
+ * cannot be answered.
+ */
 function rootTypesOf(
   nodes: readonly unknown[],
-  reader: DefinitionReader,
+  reader: RootsReader,
   scope: ComposedScope
 ): readonly string[] | undefined {
-  const out: string[] = [];
+  // A set kept in insertion order, so the answer lists types as the composed
+  // forest would first meet them and a verdict's first refusal is the
+  // forest's first.
+  const out = new Set<string>();
   for (const node of nodes) {
     const types = rootTypesOfNode(node, reader, scope);
     if (types === undefined) return undefined;
-    for (const type of types) out.push(type);
+    for (const type of types) out.add(type);
   }
-  return out;
+  return [...out];
 }
 
-/** What one root stands for: its own type, or its definition's roots one scope deeper. */
+/** What one root stands for: its own type, or its definition's root types one scope deeper. */
 function rootTypesOfNode(
   node: unknown,
-  reader: DefinitionReader,
+  reader: RootsReader,
   scope: ComposedScope
 ): readonly string[] | undefined {
-  if (!isPlainRecord(node) || typeof node.type !== "string") return undefined;
-  if (node.type !== COMPONENT_INSTANCE_TYPE) return [node.type];
+  if (!isPlainRecord(node)) return undefined;
+  const { type } = node;
+  if (typeof type !== "string") return undefined;
+  if (type !== COMPONENT_INSTANCE_TYPE) return [type];
   // The resolver's own order: a gated instance is returned standing before
   // its id is even read, and an instance naming no component is malformed.
   if (isConditionGated(node)) return undefined;
   const componentId = componentIdOf(node);
   if (componentId === undefined) return undefined;
+  // The refusals first, and the resolver's own — a cycle or the cap refuses
+  // THIS instance whatever was answered for its definition elsewhere.
   const found = definitionFor(componentId, reader, scope);
   if (typeof found === "string") return undefined;
-  return rootTypesOf(found.nodes, reader, {
+  const remembered = reader.rootsRead.get(componentId);
+  if (remembered !== undefined && scope.depth <= remembered.depth) {
+    return remembered.types;
+  }
+  const types = rootTypesOf(found.nodes, reader, {
     depth: scope.depth + 1,
     onPath: new Set(scope.onPath).add(componentId),
   });
+  // Only an ANSWER is remembered. A refusal under this instance can be a
+  // property of where it sits — the cap, or a loop closed through the path
+  // above — and the same definition may answer under the next.
+  if (types !== undefined) {
+    reader.rootsRead.set(componentId, { types, depth: scope.depth });
+  }
+  return types;
 }
 
 // ---------------------------------------------------------------------------

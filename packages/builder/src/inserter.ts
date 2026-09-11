@@ -294,9 +294,10 @@ export interface ComponentInsertEntry {
    * from the STORED roots would therefore offer a component whose real root is
    * confined to one parent at any destination, and the canvas would then draw
    * that root where it does not belong. The roots here are the block types
-   * that actually land. Read without composing the definition, because a
-   * library of small wrappers around one large definition would otherwise be
-   * cloned whole, once per wrapper, every time the panel opened.
+   * that actually land — each type once, in the order first met, which is all
+   * a placement verdict reads. Read without composing the definition, because
+   * a library of small wrappers around one large definition would otherwise
+   * be cloned whole, once per wrapper, every time the panel opened.
    */
   readonly roots: readonly string[];
   readonly usedOn?: number;
