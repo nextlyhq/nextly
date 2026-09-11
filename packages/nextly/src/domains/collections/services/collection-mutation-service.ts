@@ -6034,8 +6034,6 @@ export class CollectionMutationService extends BaseService {
 
       // Wrap main update and component data save in a transaction so that
       // a component save failure rolls back the entry update — no partial state.
-      // tx.execute() is used for the UPDATE so it runs on the same DB client
-      // as the transaction (unlike tx.update() which delegates to the pool).
       // Resolved versioning config persisted on the collection (or null when
       // unversioned); read once so the in-tx capture below can skip cheaply.
       const versionsConfig = (collection as Record<string, unknown>)
@@ -6767,16 +6765,6 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // Dialect-aware identifier quoting and placeholder syntax.
-          // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
-          const isMysql = this.dialect === "mysql";
-          const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-          const sqlParams: unknown[] = [];
-          const makePlaceholder = () =>
-            this.dialect === "postgresql"
-              ? `$${sqlParams.length}` // length already incremented by push below
-              : "?";
-
           // A row becoming public for the first time records when, once and for good.
           //
           // `status` says what a document IS; nothing said what it HAS BEEN, so an unpublish
@@ -6858,26 +6846,23 @@ export class CollectionMutationService extends BaseService {
             updatePayload.firstPublishedAt = updateStamp;
           }
 
-          const setClauses = Object.entries(updatePayload)
-            .map(([key, val]) => {
-              sqlParams.push(val);
-              return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
-            })
-            .join(", ");
-          sqlParams.push(params.entryId);
+          // Keyed by SQL column name, as the adapter takes it. A transaction's
+          // update is built by the adapter rather than by the query builder,
+          // which is what lets this write reach a column the runtime model
+          // has already moved to a companion table that does not exist yet
+          // (the localization transition window). A key whose value is
+          // `undefined` is not written; `null` clears the column.
+          const columns: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(updatePayload)) {
+            columns[toSnakeCase(key)] = value;
+          }
           // Skip the live-row UPDATE for a draft edit — the pending
           // change is stored as the working draft below, not written to the row.
           if (!storeAsWorkingDraft) {
-            await tx.execute(
-              `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
-              sqlParams as (
-                | string
-                | number
-                | boolean
-                | Date
-                | null
-                | undefined
-              )[]
+            await tx.update(
+              tableName,
+              columns,
+              this.whereEq("id", params.entryId)
             );
           }
 
@@ -9322,7 +9307,10 @@ export class CollectionMutationService extends BaseService {
             tableName,
             {
               ...stripImmutableSystemFields(finalData, "collection"),
-              updatedAt: nowForUpdate,
+              // The SQL name: a dynamic table keys its system columns by it,
+              // and the adapter-built update refuses a key that names no
+              // column rather than dropping it.
+              updated_at: nowForUpdate,
               ...(updateStamp ? { first_published_at: updateStamp } : {}),
             },
             this.whereEq("id", entryId),

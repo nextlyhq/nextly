@@ -928,19 +928,59 @@ Every handler receives its own `value` and a `data` object at the field's own
 nesting level: for a field inside a group or a repeater, the containing row
 rather than the top-level document.
 
-**Before the write** (`beforeValidate`, `beforeChange`), `data` is what was
-submitted: the document on a create, the patch on an update, not the stored
-row, so an unchanged sibling reads as `undefined`. A `beforeChange` handler
-can read and change siblings at that level. No collection-level phase runs
-after it, but a sibling's own hook registered later in the same phase still
-can. Return the value you want stored; touch siblings only when that is the
-intent. These hooks run only when their field is present in the data: an
-update that omits it, or an earlier hook that deletes the key, skips them.
+**Before the write** (`beforeValidate`, `beforeChange`), `data` is the record
+as transformed so far, not a copy of what the caller sent. On an ordinary
+create that means the request with constant field defaults applied before any
+hook runs, so a defaulted field's hook runs on a value nobody submitted (a
+function default is not applied on this path, see
+[`defaultValue`](#defaultvalue), so its field stays absent and its hooks are
+skipped like any other omitted field), and a
+`slug` and title generated after the collection-level `beforeValidate` and
+before the first field-level hook, so a field hook can read them and a
+collection hook in that phase cannot. Field-level `access.create` and
+`access.update` rules are applied just before the field hooks, and a denied
+field is removed from the record, so none of this reaches a field the caller
+may not write: not its default, and not a generated `slug` or title. A bulk create (`createMany`) and a create
+inside a transaction start from the submitted body: no defaults are applied, an
+omitted defaulted field stays absent, and its hooks do not run. On an update it
+is the patch, not the stored row, so an unchanged sibling reads as `undefined`.
+Do not read a key's presence as proof the caller supplied it. A `beforeChange` handler can read and change
+siblings at that level. No collection-level phase runs after it, but a
+sibling's own hook registered later in the same phase still can. Return the
+value you want stored; touch siblings only when that is the intent. These
+hooks run only when their field is present in the data: an update that omits
+it, or an earlier hook that deletes the key, skips them.
 
 **After the write** (`afterChange`) and **on a read** (`afterRead`), `data` is
-the full row, persisted or loaded, so every hooked field runs whether or not it
-changed. A value returned from `afterChange` reshapes the response and does not
-change what was stored.
+the row, persisted or loaded, and a hook runs for every field present on that
+row, whether or not the field changed. The rule that decides the rest: a field
+whose key is absent from the row when the hooks run has no hook run, and these
+are the things that remove a key first.
+
+- **Password fields** are stripped from every read before `afterRead`, on
+  collections and Singles alike, so a password field's `afterRead` never runs.
+- **Denied fields.** On a collection read, field-level `access.read` rules are
+  applied before the hooks, so a field the caller may not read is gone by then.
+  A Single read currently runs the hooks first and redacts afterwards, so there
+  a denied field's `afterRead` does run and sees the value, and only the
+  response is redacted.
+- **Localized fields** live in the companion table and are merged into the
+  `afterChange` row only when the write carried them, so a localized field
+  omitted from a create, or unchanged on an update, has no `afterChange` run.
+- **Field groups** are stored in their own table and removed from the row before
+  the main-table write, and `afterChange` runs on the returned row without them,
+  on collections and Singles and inside a caller's transaction. Their
+  `beforeValidate` and `beforeChange` do run. The one write where a field
+  group's `afterChange` runs is a working-draft update through the ordinary
+  update path: on a collection with `versions: { drafts: true }`, an update to
+  a published entry that names no `status` is held as a draft and `afterChange`
+  runs over that assembled draft. A collection is not eligible to hold drafts
+  when it or one of its field groups has a password field, or when a field
+  group's schema cannot be resolved; a status-less update there writes the live
+  row.
+
+A value returned from `afterChange` reshapes the response and does not change
+what was stored.
 
 Core still normalises the record between the last pre-write hook and the
 write: passwords are hashed and relationship and upload values reduced to ids
@@ -984,6 +1024,22 @@ text({
 ### `defaultValue`
 
 Static value or `(data) => value` function. The function form receives the document data being created so you can compute defaults from sibling fields. Each field type's signature accepts the value type appropriate for that field.
+
+The two forms do not reach every write. On an ordinary collection create
+through the REST or Direct API, a constant default on a column-backed field
+of the collection is applied before any hook runs (a default declared on a
+field inside a reusable field group is not applied on that write, so an
+omitted child stays absent there); a function default is not, because a collection's fields reach that
+write path from their stored definition, which a function does not survive,
+so an omitted field with a function default is treated as absent: written
+without a value, or refused by validation if the field is also `required`. A
+Single's first-read auto-create holds the code config directly and resolves
+both forms for its top-level column-backed fields: a default on a field nested
+inside a `group` is not resolved there, a default on a `fieldGroup` field is
+evaluated and then dropped because that field has no column on the row, and a
+password field's default of either form is refused because that path never
+hashes. Bulk creates (`createMany`) and
+creates inside a transaction apply no defaults of either form.
 
 ---
 

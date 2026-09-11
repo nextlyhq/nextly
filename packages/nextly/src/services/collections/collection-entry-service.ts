@@ -997,6 +997,7 @@ export class CollectionEntryService extends BaseService {
        */
       disableRevalidate?: boolean;
       user?: UserContext;
+      overrideAccess?: boolean;
       authenticatedScope?: AuthenticatedScope;
     },
     entries: BulkUpdateEntry[],
