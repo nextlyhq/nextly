@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { validateWidgetDefinition, widgetValueProblem } from "../definition";
+import {
+  validateWidgetDefinition,
+  widgetValueProblem,
+  MAX_TEXT_CONTENT,
+} from "../definition";
 
 const valid = {
   id: "core/recent-entries",
@@ -93,8 +97,55 @@ describe("validateWidgetDefinition", () => {
         title: "Notes",
         archetype: "text",
         defaultSize: "md",
+        content: "Some notes.",
       })
     ).not.toThrow();
+  });
+
+  it("requires a text widget to carry its prose, and bounds it", () => {
+    // A `text` widget IS its prose, the way an `actions` widget is its
+    // shortcuts: without content it describes an empty card. The bound is
+    // REFUSED rather than cut -- the content rides in every layout response.
+    const notes = {
+      id: "core/notes",
+      title: "Notes",
+      archetype: "text" as const,
+      defaultSize: "md" as const,
+    };
+    expect(() => validateWidgetDefinition(notes)).toThrow(
+      /requires non-empty content/
+    );
+    expect(() =>
+      validateWidgetDefinition({ ...notes, content: "   \n  " })
+    ).toThrow(/requires non-empty content/);
+    expect(() =>
+      validateWidgetDefinition({
+        ...notes,
+        content: "x".repeat(MAX_TEXT_CONTENT + 1),
+      })
+    ).toThrow(/the most a text widget may carry/);
+    expect(() =>
+      validateWidgetDefinition({
+        ...notes,
+        content: "x".repeat(MAX_TEXT_CONTENT),
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses content on any other archetype, the way actions is refused", () => {
+    // Both directions, like every field an archetype owns: prose on a metric
+    // is a field nothing will draw, accepted at every layer and reporting
+    // nothing.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/n",
+        title: "N",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: { source: "collection:posts", op: "count" },
+        content: "Prose nobody draws.",
+      })
+    ).toThrow(/content is only valid for archetype "text"/);
   });
 
   it("FORBIDS a query on text and actions, both directions like component", () => {
@@ -110,6 +161,9 @@ describe("validateWidgetDefinition", () => {
         title: "Notes",
         archetype: "text",
         defaultSize: "md",
+        // Carries its prose, so it reaches the QUERY rule rather than being
+        // refused earlier for describing an empty card.
+        content: "Some notes.",
         query: { source: "collection:posts", op: "list", limit: 5 },
       })
     ).toThrow(/query is only valid for/);
@@ -307,6 +361,7 @@ describe("defaultOrder places a widget without depending on which channel it cam
     title: "Notes",
     archetype: "text" as const,
     defaultSize: "md" as const,
+    content: "Some notes.",
   };
 
   it("accepts a definition that omits it", () => {
@@ -388,7 +443,8 @@ describe("chrome decides whether the HOST frames the widget", () => {
       ["list", { query: { source: "collection:posts", op: "list" } }],
       ["table", { query: { source: "collection:posts", op: "list" } }],
       ["actions", { actions: [{ label: "New", href: "/admin/users/create" }] }],
-      ["text", {}],
+      // Carries its prose for the same reason `actions` carries its shortcuts.
+      ["text", { content: "Prose." }],
     ] as const) {
       expect(() =>
         validateWidgetDefinition({

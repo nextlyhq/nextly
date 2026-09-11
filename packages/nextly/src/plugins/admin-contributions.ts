@@ -367,6 +367,14 @@ export interface PluginAdminStatsWidget extends PluginAdminWidgetBase {
  */
 export interface PluginAdminTextWidget extends PluginAdminWidgetBase {
   archetype: "text";
+  /**
+   * The prose, as markdown: headings, paragraphs, lists, emphasis, inline
+   * code, block quotes and links. Raw HTML is shown as the text it is, and a
+   * link to anything but `http`, `https`, `mailto`, `tel` or a relative path
+   * is left as the markdown it was written in. Bounded; the card is for notes
+   * and a pointer to a runbook, not for the runbook.
+   */
+  content: string;
   query?: never;
   actions?: never;
   /**

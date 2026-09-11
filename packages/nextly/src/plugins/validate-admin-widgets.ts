@@ -30,6 +30,7 @@ import {
   CELL_ARCHETYPES,
   cellsProblem,
   QUERYLESS_ARCHETYPES,
+  textContentProblem,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
@@ -100,6 +101,14 @@ function querylessProblem(widget: Record<string, unknown>): string | undefined {
   // refetch for a result the declared renderer discards.
   const queryProblem = querylessQueryProblem(widget.archetype, widget.query);
   if (queryProblem !== undefined) return queryProblem;
+
+  // `text` IS its prose, through the same rule the registry applies.
+  if (widget.archetype === "text") {
+    const problem = textContentProblem(widget.content);
+    return problem === undefined
+      ? undefined
+      : `names the "text" archetype and ${problem.replace(/^archetype "text" /, "")}`;
+  }
 
   if (widget.archetype !== "actions") return undefined;
 

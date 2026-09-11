@@ -368,6 +368,14 @@ export interface WidgetDefinition {
   component?: string;
   /** Required for `actions`; forbidden otherwise. */
   actions?: WidgetAction[];
+  /**
+   * Required for `text`; forbidden otherwise.
+   *
+   * Markdown, drawn by the host. It ships inside every layout response to
+   * every reader the card is offered to, which is why {@link MAX_TEXT_CONTENT}
+   * bounds it at registration rather than letting a card carry a document.
+   */
+  content?: string;
   /** Required for `stats`; forbidden otherwise. */
   cells?: WidgetStatCell[];
   /** Where a "view all" footer link points. */
@@ -607,6 +615,11 @@ function archetypeRelatedProblem(
     }
   }
 
+  // The same shape rule for prose: a newer core cannot make `content` stop
+  // being a string, so this holds for every standing.
+  if (widget.content !== undefined && typeof widget.content !== "string") {
+    return "content, when given, must be a string";
+  }
   // Placement is a vocabulary judgement, so a newer core's archetype is exempt.
   // An ABSENT one is not: resolution supplies `custom`, which is a name this
   // core knows perfectly well, so the rule applies as it would to any other.
@@ -616,6 +629,9 @@ function archetypeRelatedProblem(
 
   if (widget.actions !== undefined && effective !== "actions") {
     return 'actions are only valid for archetype "actions"';
+  }
+  if (widget.content !== undefined && effective !== "text") {
+    return 'content is only valid for archetype "text"';
   }
 
   return undefined;
@@ -876,6 +892,46 @@ function validateActions(d: Partial<WidgetDefinition>): void {
   d.actions.forEach((action, index) =>
     validateAction(action, `${d.id}: action #${index}`)
   );
+}
+
+/**
+ * The most markdown a `text` widget may carry.
+ *
+ * Generous for notes and a runbook link, and a bound nonetheless: the content
+ * travels inside every layout response to every reader offered the card, so a
+ * declaration is not the place for a document. REFUSED over the cap rather
+ * than cut, because a bound that silently truncates is a bound nobody notices
+ * until the prose ends mid-sentence.
+ */
+export const MAX_TEXT_CONTENT = 10_000;
+
+/**
+ * Why a `text` widget's prose cannot be drawn, or `undefined`.
+ *
+ * Exported so the contributions channel applies the SAME rule the registry
+ * does -- one contract, two channels, one rule, the way `actionProblem` is
+ * shared. A `text` widget IS its prose, so blank content describes an empty
+ * card; the bound is explained on {@link MAX_TEXT_CONTENT}.
+ */
+export function textContentProblem(content: unknown): string | undefined {
+  if (typeof content !== "string" || content.trim() === "") {
+    return 'archetype "text" requires non-empty content';
+  }
+  if (content.length > MAX_TEXT_CONTENT) {
+    return `content is ${content.length} characters; the most a text widget may carry is ${MAX_TEXT_CONTENT}`;
+  }
+  return undefined;
+}
+
+/**
+ * A `text` widget is its prose, so it must have some -- and not too much.
+ *
+ * The misplacement case is the shared rule's, as for `actions`.
+ */
+function validateText(d: Partial<WidgetDefinition>): void {
+  if (d.archetype !== "text") return;
+  const problem = textContentProblem(d.content);
+  if (problem) fail(`${d.id}: ${problem}`);
 }
 
 /**
@@ -1244,6 +1300,7 @@ export function validateWidgetDefinition(
   validateHeight(d);
   validateComponent(d);
   validateActions(d);
+  validateText(d);
   validateQuery(d);
   validateCells(d);
   validateDefaultOrder(d);
