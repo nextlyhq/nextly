@@ -285,6 +285,7 @@ export {
   // composing three thousand of them to read their roots is the cost this
   // avoids.
   composedRootTypes,
+  placementTypesOf,
   // What ONE instance currently shows for each property its definition exposes.
   // Published because the editor draws that panel and the resolver applies the
   // same precedence to render it: definition, then variant, then the instance's
