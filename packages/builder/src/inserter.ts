@@ -41,6 +41,7 @@ import {
   type BlockNode,
   type ComponentDocument,
   type ComponentLookup,
+  type ComponentUnresolvedReason,
   type DocumentLimits,
   type NestingSource,
   type NestingVerdict,
@@ -49,7 +50,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
-import { positionOf, type OpPosition } from "./ops";
+import { applyOp, positionOf, type OpPosition } from "./ops";
 
 /**
  * The category an entry falls under when its block declares none.
@@ -607,6 +608,72 @@ function offerableDefinition(
   // kept: a fresh object per row would rebuild what every consumer keys on.
   return resolved === stored ? stored : { ...stored, nodes: resolved.nodes };
 }
+
+/**
+ * Why a placed instance would not compose on THIS page, or nothing when it
+ * would.
+ *
+ * A definition is judged offerable on its own — its roots, its caps — but
+ * whether the page has ROOM for it is a property of the page: the resolver
+ * spends one node budget across every instance it inlines, and nests to a
+ * depth counted from the page root, so a page near its cap can hold the one
+ * stored instance node and then leave it unresolved when it renders. The
+ * apply cannot see that (it counts stored nodes, and an instance is one), so
+ * the insert asks the RESOLVER ITSELF: the candidate document is composed the
+ * way the canvas will compose it, and the reason the resolver gives for
+ * leaving the new instance standing is the reason the author is told.
+ *
+ * Asked at the insert rather than of every tile per keystroke, for the reason
+ * the pattern planner leaves the machine caps to the apply: room is a property
+ * of the page that moves with every edit, and one composition per click is
+ * cheap where one per tile per keystroke is not.
+ *
+ * `undefined` for "it composes", and for a reason that is not about room —
+ * a missing definition is the tile's concern and was judged when it was
+ * offered — so this refuses only what the page cannot hold.
+ */
+export function compositionRefusal(
+  document: BlockDocument,
+  node: BlockNode,
+  at: OpPosition,
+  definitions: ComponentLookup,
+  limits?: DocumentLimits
+): CompositionRefusal | undefined {
+  const candidate = applyOp(document, { kind: "insert", node, at });
+  if (candidate === null) return undefined;
+  const { unresolved } = resolveComponentInstances(
+    candidate.document,
+    definitions,
+    limits === undefined ? {} : { limits }
+  );
+  const own = unresolved.find(entry => entry.instanceId === node.id);
+  if (own === undefined) return undefined;
+  const sentence = ROOM_REFUSALS[own.reason];
+  return sentence === undefined ? undefined : { reason: own.reason, sentence };
+}
+
+/** A refusal about room: the resolver's reason, and the words an author reads. */
+export interface CompositionRefusal {
+  readonly reason: ComponentUnresolvedReason;
+  readonly sentence: string;
+}
+
+/**
+ * The resolver's reasons that are about the PAGE having no room, each as the
+ * sentence the author reads. Every other reason — a missing definition, a
+ * cycle, a malformed row — is about the definition, and was the tile's
+ * concern when it was offered.
+ */
+const ROOM_REFUSALS: Readonly<
+  Partial<Record<ComponentUnresolvedReason, string>>
+> = {
+  budget:
+    "This page has no room left for that component: placing it would take the page past its block limit.",
+  "node-depth":
+    "That component's content would be nested too deeply here. Place it nearer the top of the page.",
+  "composed-depth":
+    "That component would be nested inside too many components here. Place it nearer the top of the page.",
+};
 
 /**
  * The single node placing a component writes.

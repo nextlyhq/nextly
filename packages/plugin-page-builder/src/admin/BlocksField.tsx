@@ -47,6 +47,7 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
+  isComponentDocument,
   newId,
   type BlockDocument,
   type DocumentKind,
@@ -63,6 +64,7 @@ import {
   DEFAULT_PREFERENCES,
   registrySlotSource,
   type LeftPanel,
+  type SavedComponent,
 } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
@@ -108,6 +110,7 @@ import {
 import {
   loadInlineRichTextEditor,
   useDocumentCheckpoint,
+  useDocumentIdentity,
   usePluginClientConfig,
   useEntryFieldsPanel,
   useReportUnsavedWork,
@@ -325,6 +328,37 @@ export function documentFrom(
   return Array.isArray(candidate.nodes)
     ? (value as BlockDocument)
     : emptyBlockDocument(kinds);
+}
+
+/**
+ * The components a field may OFFER: every one the library holds, except the
+ * one whose own definition this field is editing.
+ *
+ * A component's content field is a blocks field like a page's, and the library
+ * it reads includes the very row being edited — whose saved definition does
+ * not yet hold the reference an author is about to place, so nothing in the
+ * offer refuses it. Placed, the instance points at the definition it sits in;
+ * saved, the resolver reads the loop as a cycle and draws a placeholder. The
+ * row is left out here, where the field knows which document it is inside.
+ *
+ * Judged by BOTH facts: the document being edited is a component, and the
+ * form names the row. Either alone is not enough — a page's field is never
+ * inside a component however the ids fall, and a component's field on a
+ * create form names no row yet and can place anything.
+ *
+ * Exported for its own test, for the reason `documentFrom` is.
+ */
+export function withoutSelf(
+  components: readonly SavedComponent[],
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null
+): readonly SavedComponent[] {
+  const self = identity?.documentId;
+  if (self === undefined || !isComponentDocument(editing)) return components;
+  const kept = components.filter(component => component.id !== self);
+  // The same list when nothing was removed, so the panel's catalogue memo
+  // keeps its key.
+  return kept.length === components.length ? components : kept;
 }
 
 /**
@@ -1706,24 +1740,25 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
  * What stands where the canvas will be, while a read it cannot draw without is
  * still coming or has failed.
  *
- * Two reads gate the canvas, and they fail in the same direction: the site's
- * style, without which the page draws a plausible design the site does not
- * have, and the component definitions, without which every instance draws as
- * could-not-be-loaded — the picture of a site whose components were deleted.
- * Named apart because the remedies differ. A failed style read is fixed by
- * reloading; a failed component read can be asked again from here.
+ * The site's style gates the canvas in both states: without the sheet the page
+ * draws a plausible design the site does not have, and a failed read is fixed
+ * by reloading. The component read gates it only while PENDING — long enough
+ * to keep every instance from flashing as could-not-be-loaded and re-laying
+ * out when the read lands. A FAILED component read must not gate it: the
+ * route refuses a role that may edit pages but not read components, and a
+ * least-privilege page editor would otherwise lose the canvas for every page,
+ * block-only pages included. That state is said beside the canvas instead —
+ * see {@link ComponentsUnavailableNote}.
  *
  * Only the canvas waits: the shell, the rail and the inspector are about the
  * DOCUMENT, which is already in hand.
  */
 function CanvasGate({
-  styles,
-  components,
+  styleError,
 }: {
-  styles: { pending: boolean; error: Error | null };
-  components: ComponentLibraryRead;
+  styleError: Error | null;
 }): React.JSX.Element {
-  if (styles.error !== null) {
+  if (styleError !== null) {
     return (
       <p className="nx-inspector__note" data-canvas-state="failed">
         This site’s styles could not be loaded, so the canvas would not match
@@ -1731,25 +1766,39 @@ function CanvasGate({
       </p>
     );
   }
-  if (components.state === "unavailable") {
-    return (
-      <p className="nx-inspector__note" data-canvas-state="failed">
-        This site’s components could not be loaded, so every one placed on this
-        page would draw as missing.{" "}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={components.retry}
-        >
-          Try again
-        </Button>
-      </p>
-    );
-  }
   return (
     <p className="nx-inspector__note" data-canvas-state="loading">
       Loading this site’s styles and components…
+    </p>
+  );
+}
+
+/**
+ * That the component definitions could not be read, said ABOVE a canvas that
+ * still draws.
+ *
+ * The canvas is drawn without them — every instance on the page as the
+ * could-not-be-loaded marker — because refusing to draw at all would take the
+ * editor away from an author whose role simply cannot read components. What
+ * this adds is the sentence that tells the marker apart from a deleted
+ * component, and the one remedy reachable from here.
+ */
+function ComponentsUnavailableNote({
+  retry,
+}: {
+  retry: () => void;
+}): React.JSX.Element {
+  return (
+    <p
+      className="nx-inspector__note"
+      role="status"
+      data-canvas-state="components-unavailable"
+    >
+      This site’s components could not be loaded, so any placed on this page
+      draw as missing.{" "}
+      <Button type="button" variant="ghost" size="sm" onClick={retry}>
+        Try again
+      </Button>
     </p>
   );
 }
@@ -2276,6 +2325,26 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * nowhere an author could see while editing.
    */
   const componentLibrary = useComponentLibrary();
+  /*
+   * The rows the panel may OFFER: the library without the definition this very
+   * field is editing, when it is editing one. The MAP stays whole — the
+   * canvas still has to resolve every other instance, and an instance of the
+   * definition inside itself is the resolver's cycle to draw.
+   */
+  // Judged on the document the editor OPENED with: a document's kind does not
+  // change while it is edited, and the opening document is the one this
+  // field's own value described.
+  const identity = useDocumentIdentity();
+  const offered = useMemo<ComponentLibraryRead>(() => {
+    const components = withoutSelf(
+      componentLibrary.components,
+      initialDocument,
+      identity
+    );
+    return components === componentLibrary.components
+      ? componentLibrary
+      : { ...componentLibrary, components };
+  }, [componentLibrary, initialDocument, identity]);
 
   const canvasRender = useMemo(
     () =>
@@ -2839,7 +2908,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
-                components={componentLibrary}
+                components={offered}
                 documentLimits={documentLimits}
               />
             ),
@@ -2986,13 +3055,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             the read is cached, so this is one brief state per session rather
             than one per opening.
           */}
+          {componentLibrary.state === "unavailable" ? (
+            <ComponentsUnavailableNote retry={componentLibrary.retry} />
+          ) : null}
           {siteStylePending ||
           siteStyleError !== null ||
-          componentLibrary.state !== "ready" ? (
-            <CanvasGate
-              styles={{ pending: siteStylePending, error: siteStyleError }}
-              components={componentLibrary}
-            />
+          componentLibrary.state === "pending" ? (
+            <CanvasGate styleError={siteStyleError} />
           ) : (
             /*
               Wrapped rather than passed in, because the menu opens over the

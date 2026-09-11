@@ -168,6 +168,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    */
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => ({ siteStyle: undefined }),
+  // No document around the field: the state every case here was written
+  // against, and the one that offers every component.
+  useDocumentIdentity: () => null,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change

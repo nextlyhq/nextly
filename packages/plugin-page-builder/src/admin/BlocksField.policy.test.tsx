@@ -163,6 +163,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    */
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
+  // No document around the field: the state every case here was written
+  // against, and the one that offers every component.
+  useDocumentIdentity: () => null,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change
@@ -359,10 +362,12 @@ describe("what the canvas waits for, the component read", () => {
     ).not.toBeNull();
   });
 
-  it("says the components could not be loaded, and offers to try again", () => {
-    // The one gated read with a remedy the author can reach without leaving
-    // the editor. And it is told apart from a failed STYLE read, whose remedy
-    // is a reload.
+  it("still mounts the canvas when the components could not be read, and says so beside it", () => {
+    // The route refuses a role that may edit pages but not read components,
+    // and a least-privilege page editor must keep the canvas for every page,
+    // block-only pages included. So the failure does not gate; it is said
+    // above the canvas, with the one remedy reachable from here — and told
+    // apart from a failed STYLE read, which does gate and is fixed by a reload.
     const refetch = vi.fn();
     componentRead = {
       data: undefined,
@@ -373,9 +378,12 @@ describe("what the canvas waits for, the component read", () => {
 
     openEditor();
 
-    expect(seen.canvas).toBeUndefined();
-    const failed = document.querySelector('[data-canvas-state="failed"]');
-    expect(failed?.textContent).toContain("components could not be loaded");
+    expect(seen.canvas).toBeDefined();
+    expect(document.querySelector('[data-canvas-state="failed"]')).toBeNull();
+    const note = document.querySelector(
+      '[data-canvas-state="components-unavailable"]'
+    );
+    expect(note?.textContent).toContain("components could not be loaded");
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
