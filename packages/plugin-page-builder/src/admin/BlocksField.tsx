@@ -49,7 +49,9 @@ import {
   previewContainerFor,
   isComponentDocument,
   newId,
+  resolveComponentInstances,
   type BlockDocument,
+  type ComponentLookup,
   type DocumentKind,
   type DocumentLimits,
   type BreakpointSet,
@@ -166,7 +168,10 @@ import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { useMayCreatePattern } from "./pattern-capability-client";
-import { usePatternLibrary } from "./pattern-library-client";
+import {
+  usePatternLibrary,
+  type LibraryReadState,
+} from "./pattern-library-client";
 import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
@@ -332,7 +337,8 @@ export function documentFrom(
 
 /**
  * The components a field may OFFER: every one the library holds, except the
- * one whose own definition this field is editing.
+ * one whose own definition this field is editing and every one that reaches
+ * it.
  *
  * A component's content field is a blocks field like a page's, and the library
  * it reads includes the very row being edited — whose saved definition does
@@ -340,6 +346,19 @@ export function documentFrom(
  * offer refuses it. Placed, the instance points at the definition it sits in;
  * saved, the resolver reads the loop as a cycle and draws a placeholder. The
  * row is left out here, where the field knows which document it is inside.
+ *
+ * The row itself is the shortest loop, not the only one. A component that
+ * holds an instance of this one, placed here, closes the loop one step out;
+ * one that holds THAT closes it two steps out. None is visible against the
+ * saved map until this row is saved, and then every page placing any of them
+ * draws a placeholder. So a candidate is judged by what DRAWING it reads:
+ * resolved through the canvas's own lookup under the canvas's own caps, the
+ * resolver reports every definition it reached, and a candidate that reached
+ * this row is left out. The resolver's walk rather than one written here,
+ * so the offer and the canvas agree on what a definition reaches — and what
+ * the walk stops short of, a candidate past the node cap or nested past the
+ * composition cap, the insert's own preflight refuses at the click for the
+ * reason the walk stopped.
  *
  * Judged by BOTH facts: the document being edited is a component, and the
  * form names the row. Either alone is not enough — a page's field is never
@@ -351,14 +370,35 @@ export function documentFrom(
 export function withoutSelf(
   components: readonly SavedComponent[],
   editing: BlockDocument,
-  identity: { documentId?: string | undefined } | null
+  identity: { documentId?: string | undefined } | null,
+  definitions: ComponentLookup,
+  limits?: DocumentLimits
 ): readonly SavedComponent[] {
   const self = identity?.documentId;
   if (self === undefined || !isComponentDocument(editing)) return components;
-  const kept = components.filter(component => component.id !== self);
+  const kept = components.filter(
+    component =>
+      component.id !== self && !reaches(component, self, definitions, limits)
+  );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
   return kept.length === components.length ? components : kept;
+}
+
+/** Whether drawing a component's definition reads the definition named. */
+function reaches(
+  component: SavedComponent,
+  id: string,
+  definitions: ComponentLookup,
+  limits: DocumentLimits | undefined
+): boolean {
+  const document = component.document;
+  if (document === undefined || document === null) return false;
+  return resolveComponentInstances(
+    document,
+    definitions,
+    limits === undefined ? {} : { limits }
+  ).referenced.includes(id);
 }
 
 /**
@@ -1747,8 +1787,9 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
  * out when the read lands. A FAILED component read must not gate it: the
  * route refuses a role that may edit pages but not read components, and a
  * least-privilege page editor would otherwise lose the canvas for every page,
- * block-only pages included. That state is said beside the canvas instead —
- * see {@link ComponentsUnavailableNote}.
+ * block-only pages included. That state, and a read that failed to refresh
+ * what it had, are said beside the canvas instead — see
+ * {@link ComponentsUnavailableNote}.
  *
  * Only the canvas waits: the shell, the rail and the inspector are about the
  * DOCUMENT, which is already in hand.
@@ -1784,24 +1825,47 @@ function CanvasGate({
  * component, and the one remedy reachable from here.
  */
 function ComponentsUnavailableNote({
+  state,
   retry,
 }: {
+  state: LibraryReadState;
   retry: () => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  const sentence = COMPONENT_READ_NOTES[state];
+  if (sentence === undefined) return null;
   return (
     <p
       className="nx-inspector__note"
       role="status"
-      data-canvas-state="components-unavailable"
+      data-canvas-state={`components-${state}`}
     >
-      This site’s components could not be loaded, so any placed on this page
-      draw as missing.{" "}
+      {sentence}{" "}
       <Button type="button" variant="ghost" size="sm" onClick={retry}>
         Try again
       </Button>
     </p>
   );
 }
+
+/**
+ * What is said beside the canvas of a component read that failed, by how it
+ * failed. Nothing for a read in flight or one that answered: the canvas
+ * waits on the first and draws from the second.
+ *
+ * The two sentences differ in what is true of the instances on the page. A
+ * read that never answered leaves them drawn as missing. One that answered
+ * once and could not answer again leaves them drawn from that answer, which
+ * an edit elsewhere may since have overtaken — so not missing, but possibly
+ * out of date.
+ */
+const COMPONENT_READ_NOTES: Readonly<
+  Partial<Record<LibraryReadState, string>>
+> = {
+  unavailable:
+    "This site’s components could not be loaded, so any placed on this page draw as missing.",
+  stale:
+    "This site’s components could not be reloaded, so any placed on this page may draw out of date.",
+};
 
 function InsertPanelWithLibrary({
   components,
@@ -1854,10 +1918,13 @@ function InsertPanelWithLibrary({
  * is not one to explain.
  */
 function tierStateOf(read: {
-  state: "pending" | "ready" | "unavailable";
+  state: LibraryReadState;
   truncated: boolean;
 }): LibraryTierState {
   if (read.state === "unavailable") return "unavailable";
+  // A failed refresh before a cut: the answer the cut describes is the one
+  // the retry replaces, and a library reloaded whole is reported cut again.
+  if (read.state === "stale") return "stale";
   return read.truncated ? "cut" : "ready";
 }
 
@@ -2339,12 +2406,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     const components = withoutSelf(
       componentLibrary.components,
       initialDocument,
-      identity
+      identity,
+      componentLibrary.definitions,
+      documentLimits
     );
     return components === componentLibrary.components
       ? componentLibrary
       : { ...componentLibrary, components };
-  }, [componentLibrary, initialDocument, identity]);
+  }, [componentLibrary, initialDocument, identity, documentLimits]);
 
   const canvasRender = useMemo(
     () =>
@@ -2568,6 +2637,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * equal limits reached by different routes select different nodes — a class
    * on a node one walk reaches and the other does not would be reported as
    * absent from a page that renders it.
+   * Composed through the SAME map the canvas draws with, because the stored
+   * document holds one instance node where the canvas draws a definition: a
+   * class applied inside that definition is on the page as rendered, and a
+   * walk over the stored nodes alone would leave it out of the filter. The
+   * usage record asks a different question of the same walk — what this
+   * document itself references — and passes no map.
+   *
    *
    * `complete` is deliberately unread. It says whether the walk hit the
    * document's node ceiling, which bounds what this could CLAIM about usage —
@@ -2580,8 +2656,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     // lowered them renders under those, and a walk here under different bounds
     // selects different nodes — which would report a class as absent from a
     // page that renders it, or present on one that does not.
-    () => classUsageOf(editor.document, documentLimits),
-    [editor.document, documentLimits]
+    () =>
+      classUsageOf(editor.document, documentLimits, canvasRender.definitions),
+    [editor.document, documentLimits, canvasRender.definitions]
   );
 
   /*
@@ -3066,9 +3143,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             the read is cached, so this is one brief state per session rather
             than one per opening.
           */}
-          {componentLibrary.state === "unavailable" ? (
-            <ComponentsUnavailableNote retry={componentLibrary.retry} />
-          ) : null}
+          <ComponentsUnavailableNote
+            state={componentLibrary.state}
+            retry={componentLibrary.retry}
+          />
           {siteStylePending ||
           siteStyleError !== null ||
           componentLibrary.state === "pending" ? (

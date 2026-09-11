@@ -103,8 +103,14 @@ import type { BuilderOp } from "./ops";
  * `ready` covers a tier still in flight as well as one that arrived whole: an
  * empty tier that will fill in a moment is not one to explain, and a notice
  * that flashed on every open would be one an author learns to read past.
+ *
+ * `stale` and `unavailable` are both a read that failed, told apart by what
+ * the host still holds. A host that reads afresh on every open keeps its last
+ * answer while it does, so a failure can leave tiles standing — and beside
+ * tiles, "none are offered" is false. What is true of them is that they may
+ * be out of date, which is the sentence a stale tier gets.
  */
-export type LibraryTierState = "ready" | "cut" | "unavailable";
+export type LibraryTierState = "ready" | "cut" | "stale" | "unavailable";
 
 export interface InsertPanelProps {
   /**
@@ -174,17 +180,18 @@ export interface InsertPanelProps {
    * here.
    *
    * A library has a ceiling, and a read that reached it left rows out; a read
-   * can also fail outright. The panel SAYS either beside the tiles it offers,
-   * because the alternative is silence in two places at once: an author
-   * searching here for a component that is not offered, and an instance of it
-   * on the canvas drawn as could-not-be-loaded with nothing to say whether the
-   * library was cut, could not be read, or the component was deleted. A
-   * failed read is the one state with a remedy, so it is offered beside it.
+   * can also fail outright, or fail to refresh what it had. The panel SAYS
+   * each beside the tiles it offers, because the alternative is silence in
+   * two places at once: an author searching here for a component that is not
+   * offered, and an instance of it on the canvas drawn as could-not-be-loaded
+   * with nothing to say whether the library was cut, could not be read, or
+   * the component was deleted. A failed read is the state with a remedy, so
+   * it is offered beside it.
    */
   library?: {
     readonly patterns?: LibraryTierState;
     readonly components?: LibraryTierState;
-    /** Ask the host to read again. Offered beside an unavailable tier. */
+    /** Ask the host to read again. Offered beside a stale or unavailable tier. */
     readonly retry?: () => void;
   };
   /** How nesting is resolved. Defaults to the live registry. */
@@ -469,47 +476,101 @@ const NO_DEFINITIONS: ComponentLookup = new Map();
  * left out is one they cannot insert, while a component left out is also one
  * already on the page drawing as could-not-be-loaded, and that second half is
  * the sentence nothing else says. A tier that could not be read at all gets
- * its own sentence and the retry, because that is the one state with a remedy
- * the author can reach from here.
+ * its own sentence and the retry, because that is a state with a remedy the
+ * author can reach from here — and a tier that could not be RE-read gets a
+ * third, since beside the tiles it left standing the second would be false.
  */
 function LibraryNotices({
   library,
 }: {
   library: InsertPanelProps["library"];
-}): React.JSX.Element | null {
-  const cut = tiersIn(library, "cut");
-  const unavailable = tiersIn(library, "unavailable");
-  if (cut === undefined && unavailable === undefined) return null;
+}): React.JSX.Element {
   return (
     <>
-      {cut === undefined ? null : (
-        <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
-          The library is larger than the editor can load at once, so some {cut}{" "}
-          are not offered here.
-          {cut.includes("components")
-            ? " A component left out shows as “could not be loaded” on the page."
-            : null}
-        </p>
-      )}
-      {unavailable === undefined ? null : (
-        <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
-          The site’s {unavailable} could not be loaded, so none are offered
-          here.
-          {unavailable.includes("components")
-            ? " A component already on the page shows as “could not be loaded”."
-            : null}{" "}
-          {library?.retry === undefined ? null : (
-            <button
-              type="button"
-              className="nx-insert-panel__retry"
-              onClick={library.retry}
-            >
-              Try again
-            </button>
-          )}
-        </p>
-      )}
+      <CutNotice tiers={tiersIn(library, "cut")} />
+      <StaleNotice tiers={tiersIn(library, "stale")} retry={library?.retry} />
+      <UnavailableNotice
+        tiers={tiersIn(library, "unavailable")}
+        retry={library?.retry}
+      />
     </>
+  );
+}
+
+/** The tiers a ceiling cut, and what a cut component means for the page. */
+function CutNotice({
+  tiers,
+}: {
+  tiers: string | undefined;
+}): React.JSX.Element | null {
+  if (tiers === undefined) return null;
+  return (
+    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+      The library is larger than the editor can load at once, so some {tiers}{" "}
+      are not offered here.
+      {tiers.includes("components")
+        ? " A component left out shows as “could not be loaded” on the page."
+        : null}
+    </p>
+  );
+}
+
+/**
+ * The tiers whose last answer could not be refreshed. The tiles stand, so
+ * what is said of them is that they may be out of date — and of a component
+ * on the page, that it draws as it was.
+ */
+function StaleNotice({
+  tiers,
+  retry,
+}: {
+  tiers: string | undefined;
+  retry: (() => void) | undefined;
+}): React.JSX.Element | null {
+  if (tiers === undefined) return null;
+  return (
+    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+      The site’s {tiers} could not be reloaded, so those offered may be out of
+      date.
+      {tiers.includes("components")
+        ? " A component already on the page draws as it was."
+        : null}{" "}
+      <RetryButton retry={retry} />
+    </p>
+  );
+}
+
+/** The tiers that could not be read at all, and what that means for the page. */
+function UnavailableNotice({
+  tiers,
+  retry,
+}: {
+  tiers: string | undefined;
+  retry: (() => void) | undefined;
+}): React.JSX.Element | null {
+  if (tiers === undefined) return null;
+  return (
+    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+      The site’s {tiers} could not be loaded, so none are offered here.
+      {tiers.includes("components")
+        ? " A component already on the page shows as “could not be loaded”."
+        : null}{" "}
+      <RetryButton retry={retry} />
+    </p>
+  );
+}
+
+/** The one remedy a failed read has, when the host supplied it. */
+function RetryButton({
+  retry,
+}: {
+  retry: (() => void) | undefined;
+}): React.JSX.Element | null {
+  if (retry === undefined) return null;
+  return (
+    <button type="button" className="nx-insert-panel__retry" onClick={retry}>
+      Try again
+    </button>
   );
 }
 

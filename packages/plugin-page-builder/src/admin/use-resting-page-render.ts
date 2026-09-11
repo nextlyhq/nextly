@@ -27,7 +27,10 @@ import { useId, useMemo } from "react";
 import { siteSheet } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
-import { useComponentLibrary } from "./component-library-client";
+import {
+  useComponentLibrary,
+  type ComponentLibraryState,
+} from "./component-library-client";
 import {
   pageRenderInputs,
   readDocumentLimits,
@@ -42,7 +45,7 @@ export interface RestingPageRender {
   /** Whether that sheet is usable yet, and why not when it is not. */
   styleState: SiteStyleState;
   /** Whether the component definitions are usable yet, and the way to ask again. */
-  components: { state: SiteStyleState; retry: () => void };
+  components: { state: ComponentLibraryState; retry: () => void };
   /** The rest of this site's rendering, from the derivation the canvas asks. */
   render: PageRenderInputs;
 }

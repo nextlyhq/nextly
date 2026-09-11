@@ -101,16 +101,23 @@ export const LIBRARY_PAGE_SIZE = 100;
 export const MAX_LIBRARY_PATTERNS = 3000;
 
 /**
- * The most reads one library request will make.
+ * The most reads one library request will make, for a tier listing in pages
+ * of `pageSize`.
  *
- * Derived from the two numbers above rather than chosen, so it cannot drift
- * from them — and it bounds the REQUESTS, which the pattern ceiling does not.
- * A page every row of which this reader drops adds nothing to the kept count,
- * so a ceiling counting only kept patterns is never reached and the loop asks
- * for page after page forever. Measured while breaking this: a stop condition
- * on the kept count spun until the process died.
+ * Derived from the item ceiling and the page size rather than chosen, so it
+ * cannot drift from them — and it bounds the REQUESTS, which the item ceiling
+ * does not. A page every row of which this reader drops adds nothing to the
+ * kept count, so a ceiling counting only kept items is never reached and the
+ * loop asks for page after page forever. Measured while breaking this: a stop
+ * condition on the kept count spun until the process died.
+ *
+ * Per tier, because the two list in different page sizes: derived from the
+ * one page size, a tier listing in smaller pages would be cut at a fraction
+ * of the ceiling while its pages were still coming back full.
  */
-const MAX_LIBRARY_PAGES = Math.ceil(MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE);
+function mostPages(pageSize: number): number {
+  return Math.ceil(MAX_LIBRARY_PATTERNS / pageSize);
+}
 
 /**
  * The most bytes of pattern documents one library read will carry.
@@ -329,7 +336,7 @@ function directComponentReads(
         status: "all",
         sort: "id",
         page,
-        limit: LIBRARY_PAGE_SIZE,
+        limit: COMPONENT_LIST_PAGE_SIZE,
       });
       return { data: result.items, hasMore: result.meta.hasNext };
     },
@@ -382,7 +389,8 @@ export async function readPatternLibrary(
           hasMore: result.pagination?.hasMore === true,
         };
       },
-      row => readLibraryRow(row) ?? "skip"
+      row => readLibraryRow(row) ?? "skip",
+      LIBRARY_PAGE_SIZE
     )
   );
 }
@@ -406,7 +414,8 @@ export async function readComponentLibrary(
   return envelope(
     await readTier(
       page => ctx.components.list(slug, page),
-      row => completeComponent(ctx, slug, row)
+      row => completeComponent(ctx, slug, row),
+      COMPONENT_LIST_PAGE_SIZE
     )
   );
 }
@@ -428,16 +437,19 @@ function envelope<T>(tier: TierRead<T>): LibraryListResponse<T> {
 /**
  * Page one collection, completing and admitting each row.
  *
- * ONE walk for both tiers. The page size, the stop rule and the ceiling are
- * properties of a RESPONSE, not of either collection, and two walks would let
- * one tier's paging drift from the other's the first time either was edited
- * alone. What differs per tier is only where a page comes from and how a
- * listed row becomes an item, and both are handed in.
+ * ONE walk for both tiers. The stop rule and the ceiling are properties of a
+ * RESPONSE, not of either collection, and two walks would let one tier's
+ * paging drift from the other's the first time either was edited alone. What
+ * differs per tier is where a page comes from, how a listed row becomes an
+ * item, and how many rows one page carries — and all three are handed in,
+ * the last so the bound on reads is derived here from the size it bounds.
  */
 async function readTier<T extends LibraryPattern | LibraryComponent>(
   pageAt: (page: number) => Promise<CollectionPage>,
-  complete: (row: unknown) => Promise<Completed<T>> | Completed<T>
+  complete: (row: unknown) => Promise<Completed<T>> | Completed<T>,
+  pageSize: number
 ): Promise<TierRead<T>> {
+  const lastPage = mostPages(pageSize);
   const items: T[] = [];
   let truncated = false;
   // Accumulated rather than assigned, unlike `truncated`: an oversized row on
@@ -456,7 +468,7 @@ async function readTier<T extends LibraryPattern | LibraryComponent>(
       truncated = true;
       break;
     }
-    const stop = whyStop({ hasMore: result.hasMore, page });
+    const stop = whyStop({ hasMore: result.hasMore, page, lastPage });
     if (stop === undefined) continue;
     truncated = stop === "cut";
     break;
@@ -612,6 +624,23 @@ type Completed<T> = T | "skip" | "omit";
 export const COMPLETION_CONCURRENCY = 8;
 
 /**
+ * How many rows one read of the COMPONENT listing asks for: one completion
+ * batch.
+ *
+ * The listing only names rows; every field of an item comes from the by-id
+ * read that follows, so the content a listed row carries is read for
+ * nothing. And it IS carried: the service reads whole rows however a caller
+ * narrows the answer — `select` projects the rows after they are read, so a
+ * projection would trim the reply and not the read. A page of a hundred rows
+ * held while its batches completed was therefore a hundred documents of
+ * content in memory at once, at the document ceiling roughly two hundred
+ * mebibytes for a listing that keeps two strings of each. Sized to the batch,
+ * what is held is one batch of listed rows and one batch of by-id rows, and
+ * the bound on reads grows to match so the tier still reaches the ceiling.
+ */
+export const COMPONENT_LIST_PAGE_SIZE = COMPLETION_CONCURRENCY;
+
+/**
  * One page of rows, each completed and then admitted under the ceiling.
  *
  * ONE admission for both tiers. The cost, the charge, the verdict and the push
@@ -692,6 +721,7 @@ function admitAll<T extends LibraryPattern | LibraryComponent>(
 function whyStop(at: {
   hasMore: boolean;
   page: number;
+  lastPage: number;
 }): "ended" | "cut" | undefined {
   // The SERVICE's own answer, not a length this recomputes. A page shorter than
   // asked for does not mean the collection ended: an `afterRead` hook may drop
@@ -699,7 +729,7 @@ function whyStop(at: {
   if (!at.hasMore) return "ended";
   // A bound on the READS, which the per-row ceilings cannot supply: they count
   // what was KEPT, and a page whose every row was dropped keeps none.
-  if (at.page >= MAX_LIBRARY_PAGES) return "cut";
+  if (at.page >= at.lastPage) return "cut";
   return undefined;
 }
 

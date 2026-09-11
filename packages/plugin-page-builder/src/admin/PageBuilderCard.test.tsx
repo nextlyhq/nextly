@@ -204,6 +204,28 @@ describe("PageBuilderCard", () => {
     ).toBeDefined();
   });
 
+  it("draws the page from cached definitions when the read failed to refresh, and says they may be out of date", () => {
+    // Told apart from a read that never answered: the miniature is drawn from
+    // what the read last held, so "draw as missing" would be false beneath
+    // it. The remedy is the same.
+    const retry = vi.fn();
+    const { container } = render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        components={{ state: "stale", retry }}
+      />
+    );
+
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(
+      /could not be reloaded/i
+    );
+    expect(screen.getByRole("status").textContent).not.toMatch(/missing/i);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   /*
    * Kept from the behaviour this replaces, whose reasoning is recorded in
    * BlocksField: a disabled control says "you could do this, but not now",

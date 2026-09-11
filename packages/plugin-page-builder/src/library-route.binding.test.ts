@@ -35,7 +35,11 @@ vi.mock("nextly/runtime", async importOriginal => ({
   requireNextly: () => nextly,
 }));
 
-import { LIBRARY_PAGE_SIZE, componentLibraryRoute } from "./library-route";
+import {
+  COMPLETION_CONCURRENCY,
+  COMPONENT_LIST_PAGE_SIZE,
+  componentLibraryRoute,
+} from "./library-route";
 
 /** A listed row, as the Direct API's canonical list envelope carries one. */
 function listed(...ids: string[]) {
@@ -157,7 +161,7 @@ describe("the component route reads AS THE USER", () => {
       status: "all",
       sort: "id",
       page: 1,
-      limit: LIBRARY_PAGE_SIZE,
+      limit: COMPONENT_LIST_PAGE_SIZE,
     });
   });
 

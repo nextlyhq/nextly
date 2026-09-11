@@ -48,9 +48,14 @@ import {
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASS_NAME_LENGTH,
   isPlainRecord,
+  resolveComponentInstances,
   selectNodes,
 } from "@nextlyhq/blocks-engine";
-import type { DocumentLimits } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  ComponentLookup,
+  DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 
 import { readStoredJson } from "./stored-json";
 
@@ -66,6 +71,19 @@ function namesAClass(value: unknown): value is string {
   return (
     typeof value === "string" && value.length <= MAX_NAMED_CLASS_NAME_LENGTH
   );
+}
+
+/**
+ * Whether a stored value has the shape the walk reads: a record with a
+ * `nodes` array.
+ *
+ * Spelled as a guard for the resolver's sake, which is typed by the document
+ * it composes. Nothing past those two checks is validated — the resolver
+ * begins with the same two and reads defensively from there, exactly as the
+ * walk does, so a value that passes here is one both already accept.
+ */
+function composable(value: unknown): value is BlockDocument {
+  return isPlainRecord(value) && Array.isArray(value.nodes);
 }
 
 /**
@@ -101,14 +119,22 @@ export interface ClassUsage {
  * Sorted so two documents with the same references produce the same list, which
  * is what lets a caller compare a stored list against a fresh one without
  * re-sorting or set arithmetic.
+ *
+ * With `definitions`, the classes the document RENDERS through them: every
+ * component instance is inlined the way the renderer inlines it, under the
+ * same `limits`, before the walk. That is the editor's question — which
+ * classes are on this page as drawn — and it differs from the record's. The
+ * record asks what THIS document references, and a class inside a component's
+ * definition is that component's own record; without `definitions` an
+ * instance stays the one stored node it is, which applies nothing.
  */
 export function classUsageOf(
   stored: unknown,
-  limits: DocumentLimits = DEFAULT_LIMITS
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  definitions?: ComponentLookup
 ): ClassUsage {
   const document = readStoredJson(stored);
-  if (!isPlainRecord(document)) return { ids: [], complete: true };
-  if (!Array.isArray(document.nodes)) return { ids: [], complete: true };
+  if (!composable(document)) return { ids: [], complete: true };
 
   // WHICH nodes are read is the engine's, shared with the style compiler rather
   // than reproduced here. The question is which classes this page RENDERS, so a
@@ -127,7 +153,14 @@ export function classUsageOf(
   // A site compiling with raised limits has to pass the same ones here, or the
   // two answer about different documents again — this parameter is how, and
   // there is no way for this function to discover them on its own.
-  const selection = selectNodes(document, limits);
+  //
+  // The resolver reads defensively too: a shape it cannot compose comes back
+  // unchanged, and the walk below reads that.
+  const rendered =
+    definitions === undefined
+      ? document
+      : resolveComponentInstances(document, definitions, { limits }).document;
+  const selection = selectNodes(rendered, limits);
 
   const ids = new Set<string>();
   for (const entry of selection.nodes) {

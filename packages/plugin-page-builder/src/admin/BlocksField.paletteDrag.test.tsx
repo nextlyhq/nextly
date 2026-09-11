@@ -56,6 +56,8 @@ let documentIdentity: {
  * to the component read would put pattern documents in the definitions map.
  */
 let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
+/** What the component read reports beside its answer: a failed refresh keeps the answer. */
+let componentError: Error | null = null;
 
 /**
  * Which panel the shell stub asks for.
@@ -289,7 +291,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       return {
         data: componentAnswer,
         pending: false,
-        error: null,
+        error: componentError,
         refetch: () => {},
       };
     }
@@ -368,6 +370,7 @@ afterEach(() => {
   // not written for.
   libraryAnswer = undefined;
   componentAnswer = undefined;
+  componentError = null;
   documentIdentity = null;
   shownPanel = "insert";
   routeReads = 0;
@@ -599,6 +602,35 @@ describe("what the editor reads before anyone asks for it", () => {
   });
 });
 
+describe("what the panel is told of a read that failed to refresh", () => {
+  it("names the tier stale, ahead of the cut its last answer carried", () => {
+    // The tiles stand — they are the last answer — so the panel is told they
+    // may be out of date rather than that none are offered. Ahead of the
+    // cut, because the cut describes the answer the retry replaces: a
+    // library reloaded whole is reported cut again.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: true },
+    };
+    componentError = new Error("Forbidden");
+    libraryAnswer = { items: [], meta: { count: 0, truncated: false } };
+
+    openEditor();
+
+    const panel = recorded("insertPanel");
+    expect(panel.library).toMatchObject({
+      patterns: "ready",
+      components: "stale",
+    });
+    expect((panel.componentDefinitions as Map<string, unknown>).size).toBe(1);
+  });
+});
+
 describe("what a component's own content field may offer", () => {
   const definition = {
     formatVersion: 1,
@@ -634,6 +666,48 @@ describe("what a component's own content field may offer", () => {
         "header"
       )
     ).toBe(true);
+  });
+
+  it("leaves out every component that reaches the one being edited, however many steps away", () => {
+    // The direct case above is the shortest cycle, not the only one. Editing
+    // A while B holds an instance of A, placing B makes A → B → A; while C
+    // holds B, placing C makes A → C → B → A. Neither is visible against the
+    // saved map until A is saved, and then every page placing any of them
+    // draws a placeholder. Judged by what drawing each candidate READS
+    // through the canvas's own lookup, so the offer and the canvas agree on
+    // what a definition reaches.
+    const instanceOf = (componentId: string, id: string) => ({
+      id,
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId },
+    });
+    const holding = (node: unknown) => ({
+      formatVersion: 1,
+      kind: "component",
+      nodes: [node],
+    });
+    const library = [
+      { id: "a", title: "A", document: definition },
+      { id: "b", title: "B", document: holding(instanceOf("a", "b-a")) },
+      { id: "c", title: "C", document: holding(instanceOf("b", "c-b")) },
+      { id: "d", title: "D", document: holding(instanceOf("footer", "d-f")) },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    componentAnswer = { items: library, meta: { count: 5, truncated: false } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
+      "d",
+      "footer",
+    ]);
   });
 
   it("offers every component to a PAGE's field, whatever the page's id", () => {

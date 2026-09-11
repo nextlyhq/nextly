@@ -52,6 +52,7 @@ import { Button, Skeleton } from "@nextlyhq/ui";
 import { LayoutGrid } from "lucide-react";
 import { useMemo } from "react";
 
+import type { ComponentLibraryState } from "./component-library-client";
 import type { PageRenderInputs } from "./page-render-inputs";
 import { countByType, documentNodes, totalBlocks } from "./page-summary";
 import { PageMiniature } from "./PageMiniature";
@@ -116,13 +117,15 @@ export interface PageBuilderCardProps {
    * Whether this site's component definitions are available to draw the page
    * with, and the way to ask again when they are not.
    *
-   * The same three states as the style, for the same reason: drawing without
+   * The style's states and one more, for the same reason: drawing without
    * them does not draw nothing, it draws every instance as could-not-be-loaded,
-   * which reads as a site whose components were deleted. And a retry, because
-   * a failed read is the one state with a remedy the author can reach from
-   * here.
+   * which reads as a site whose components were deleted. The extra one is a
+   * read that failed to REFRESH what it had — the page draws from the last
+   * answer, which may be out of date, and the sentence says that rather than
+   * "missing". And a retry, because a failed read is the state with a remedy
+   * the author can reach from here.
    */
-  components: { state: SiteStyleState; retry: () => void };
+  components: { state: ComponentLibraryState; retry: () => void };
   /**
    * Everything else this site's rendering depends on, as one bundle.
    *
@@ -194,14 +197,15 @@ function Preview({
         siteStyles={siteStyles}
         render={render}
       />
-      {components.state === "unavailable" ? (
+      {components.state === "unavailable" || components.state === "stale" ? (
         <p
           className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground"
           role="status"
         >
           <span>
-            The site&apos;s components could not be loaded, so any on this page
-            draw as missing.
+            {components.state === "unavailable"
+              ? "The site’s components could not be loaded, so any on this page draw as missing."
+              : "The site’s components could not be reloaded, so this preview may be out of date."}
           </span>
           <Button
             type="button"

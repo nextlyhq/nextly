@@ -28,7 +28,20 @@ const seen: {
   inspector: Record<string, unknown> | undefined;
   canvas: Record<string, unknown> | undefined;
   breakpoints: Record<string, unknown> | undefined;
-} = { inspector: undefined, canvas: undefined, breakpoints: undefined };
+  classes: Record<string, unknown> | undefined;
+} = {
+  inspector: undefined,
+  canvas: undefined,
+  breakpoints: undefined,
+  classes: undefined,
+};
+
+/**
+ * The rail panel the shell mock asks the editor to draw, when one is asked
+ * for. The real shell draws one at a time and this mock draws none unless
+ * told, so a case about a panel's props names the panel.
+ */
+let shownPanel: "classes" | null = null;
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
@@ -77,7 +90,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
    */
   const real = await importOriginal<Record<string, unknown>>();
   const record =
-    (key: "inspector" | "canvas") =>
+    (key: "inspector" | "canvas" | "classes") =>
     (props: Record<string, unknown>): React.JSX.Element => {
       seen[key] = props;
       return <div data-recorder={key} />;
@@ -98,10 +111,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       inspector,
       topBar,
       children,
+      renderPanel,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
+      renderPanel?: (panel: string) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
         {/*
@@ -111,12 +126,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          */}
         {topBar}
         {inspector}
+        {shownPanel === null ? null : renderPanel?.(shownPanel)}
         {children}
       </div>
     ),
     BreakpointManager: record("breakpoints"),
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    ClassManagerPanel: record("classes"),
     BlockKeyboardActions: passthrough,
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
@@ -240,6 +257,8 @@ beforeEach(() => {
     refetch: () => {},
   };
   editorDocument = EMPTY_PAGE;
+  shownPanel = null;
+  seen.classes = undefined;
 });
 
 afterEach(() => {
@@ -396,6 +415,36 @@ describe("what the canvas waits for, the component read", () => {
       '[data-canvas-state="components-unavailable"]'
     );
     expect(note?.textContent).toContain("components could not be loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what the canvas says of a component read that failed to refresh", () => {
+  it("draws the canvas from the cached definitions and says they may be out of date", () => {
+    // A read that answered once and then could not answer again keeps its
+    // last answer, so the canvas draws — from definitions an edit elsewhere
+    // may have changed. Said as that, with the retry, and not as the
+    // never-read sentence, which would claim instances draw as missing while
+    // they are drawn.
+    const refetch = vi.fn();
+    componentRead = {
+      data: { items: [], meta: { count: 0, truncated: false } },
+      pending: false,
+      error: new Error("Forbidden"),
+      refetch,
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeDefined();
+    expect(
+      document.querySelector('[data-canvas-state="components-unavailable"]')
+    ).toBeNull();
+    const note = document.querySelector(
+      '[data-canvas-state="components-stale"]'
+    );
+    expect(note?.textContent).toContain("could not be reloaded");
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
@@ -792,5 +841,63 @@ describe("what the inspector is told about provenance", () => {
     expect(
       (cascade?.entries ?? []).some(entry => entry.property === "color")
     ).toBe(true);
+  });
+
+  it("tells the classes manager about a class a linked component applies on this page", () => {
+    /*
+     * The same map, a third reader. The manager's on-this-page filter is
+     * built from a walk of the document, and the stored document holds one
+     * instance node where the canvas draws a whole definition — so a class
+     * applied inside that definition is rendered on the page and absent from
+     * the filter unless the walk composes through the same map the canvas
+     * draws with.
+     */
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "core/text",
+          version: 1,
+          props: { text: "Composed" },
+          classes: ["hero"],
+        },
+      ],
+    };
+    componentRead = {
+      data: {
+        items: [{ id: "header", title: "Header", document: definition }],
+        meta: { count: 1, truncated: false },
+      },
+      pending: false,
+      error: null,
+      refetch: () => {},
+    };
+    editorDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["own"],
+        },
+        {
+          id: "i1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    };
+    shownPanel = "classes";
+
+    openEditor();
+
+    expect(seen.classes?.documentClassIds).toEqual(["hero", "own"]);
+    expect(seen.classes?.documentScan).toBe("complete");
   });
 });
