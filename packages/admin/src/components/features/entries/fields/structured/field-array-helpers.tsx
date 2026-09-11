@@ -16,9 +16,12 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  type Announcements,
+  type DataRef,
   type DragEndEvent,
   type SensorDescriptor,
   type SensorOptions,
+  type UniqueIdentifier,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -180,11 +183,20 @@ export interface UseSortableFieldArrayResult {
  * @param move - Function from useFieldArray to move items between indices
  * @returns Sensors and drag end callback
  */
-export function useSortableFieldArray<T extends { id: string }>(
-  items: T[],
-  move: (oldIndex: number, newIndex: number) => void
-): UseSortableFieldArrayResult {
-  const sensors = useSensors(
+/**
+ * The sensors every sortable surface in the admin drags with.
+ *
+ * Pointer AND keyboard, always together. A surface that builds its own
+ * `useSensors` reaches for the pointer and stops, and the keyboard gap that
+ * leaves is invisible to anyone testing with a mouse — two tables shipped that
+ * way. One hook makes the pair the only thing there is to reach for.
+ *
+ * The 8px activation distance keeps a click on a row from starting a drag,
+ * and `sortableKeyboardCoordinates` is what turns an arrow key into a move
+ * to the neighbouring item rather than a move by a fixed number of pixels.
+ */
+export function useSortableSensors(): SensorDescriptor<SensorOptions>[] {
+  return useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
         distance: 8,
@@ -194,6 +206,103 @@ export function useSortableFieldArray<T extends { id: string }>(
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+}
+
+/**
+ * One draggable or droppable as an announcement sees it: an id, and the data
+ * its `useSortable`/`useDroppable` call attached. Both of dnd-kit's `Active`
+ * and `Over` carry these, so one shape describes either end of a drag.
+ */
+export interface AnnouncedItem {
+  id: UniqueIdentifier;
+  data: DataRef;
+}
+
+/**
+ * What a surface knows about the things it sorts.
+ *
+ * `describe` names an item — a field's label, a card's title. `place` says
+ * where it sits, in words the surface owns: "position 2 of 5" for a list,
+ * "column 1 of 3, position 2 of 4" for the grid. Either may answer
+ * `undefined` for an id it does not know, and the sentence is built around
+ * the gap rather than from it.
+ */
+export interface SortableAnnouncementModel {
+  describe: (item: AnnouncedItem) => string | undefined;
+  place?: (item: AnnouncedItem) => string | undefined;
+}
+
+/** The subject of a sentence when a surface cannot name an item. */
+const UNNAMED = "the item";
+
+/**
+ * What a screen reader hears during a drag, said about the THING being moved.
+ *
+ * 🔴 dnd-kit's defaults read the draggable's ID aloud — "Picked up draggable
+ * item 3f9a…" — and every sortable here is keyed by a field name, a placement
+ * id or a uuid, so a reader moving a row by keyboard was told nothing they
+ * could act on. The wording lives here ONCE so a field row and a dashboard
+ * card are announced in the same sentences, and each surface supplies only
+ * what it knows: a name for an id and, where it has one, the place it sits.
+ *
+ * `onDragEnd` names the landing. A surface that already announces its own
+ * landing through a live region of its own overrides it to return
+ * `undefined`, so a drop is not read twice — the dashboard grid does this,
+ * because its button path speaks the same landing sentence and the two ways
+ * of moving a card must sound the same.
+ */
+export function sortableAnnouncements(
+  model: SortableAnnouncementModel
+): Announcements {
+  const name = (item: AnnouncedItem) => model.describe(item) ?? UNNAMED;
+  const at = (item: AnnouncedItem) => model.place?.(item);
+  const withPlace = (item: AnnouncedItem, sentence: string) => {
+    const place = at(item);
+    return place === undefined ? `${sentence}.` : `${sentence}, ${place}.`;
+  };
+  return {
+    onDragStart: ({ active }) => withPlace(active, `Picked up ${name(active)}`),
+    onDragOver: ({ active, over }) => {
+      if (over === null) return `${name(active)} is no longer over a list.`;
+      // The first thing a picked-up item is over is ITSELF, and dnd-kit reports
+      // that as a hover like any other. Said aloud it would overwrite the
+      // pick-up sentence with "Slug is over Slug" -- so it is not said, and
+      // the pick-up stands until the item reaches something else.
+      if (over.id === active.id) return undefined;
+      return withPlace(over, `${name(active)} is over ${name(over)}`);
+    },
+    onDragEnd: ({ active, over }) => {
+      if (over === null) return `${name(active)} was dropped. Nothing moved.`;
+      return `${name(active)} moved to ${at(over) ?? name(over)}.`;
+    },
+    onDragCancel: ({ active }) => {
+      const place = at(active);
+      return place === undefined
+        ? `Dragging cancelled. ${name(active)} is where it was.`
+        : `Dragging cancelled. ${name(active)} returned to ${place}.`;
+    },
+  };
+}
+
+/**
+ * Where an id sits in a single ordered list, as a phrase.
+ *
+ * The `place` a flat sortable list hands to {@link sortableAnnouncements}.
+ * One-based, because a reader is told "position 1 of 5" and not "index 0".
+ */
+export function positionInList(
+  ids: readonly UniqueIdentifier[],
+  id: UniqueIdentifier
+): string | undefined {
+  const index = ids.indexOf(id);
+  return index === -1 ? undefined : `position ${index + 1} of ${ids.length}`;
+}
+
+export function useSortableFieldArray<T extends { id: string }>(
+  items: T[],
+  move: (oldIndex: number, newIndex: number) => void
+): UseSortableFieldArrayResult {
+  const sensors = useSortableSensors();
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
