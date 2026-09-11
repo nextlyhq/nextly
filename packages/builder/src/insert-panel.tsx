@@ -50,7 +50,6 @@
 
 import {
   allBlocks,
-  getBlock,
   planInsertPattern,
   registryNestingSource,
   type AnyBlockDefinition,
@@ -73,6 +72,7 @@ import type { InsertDragEntry } from "./canvas-drag";
 import type { EditorState } from "./editor-state";
 import {
   allowedEntries,
+  blockLabel,
   blockSourceFor,
   catalogFrom,
   filterEntries,
@@ -373,12 +373,20 @@ function describedEntry(
 }
 
 /** Sentence describing where the next insert will land. */
-function placementLabel(point: InsertionPoint, label?: string): string {
+function placementLabel(point: InsertionPoint): string {
   if (point.kind === "inside-selection") {
     // Names the container, because "inside" is only meaningful if the author
     // knows what it is inside OF — and this is the one placement that differs
-    // from what selecting a block usually implies.
-    return `Adds inside ${label ?? "the selected block"}`;
+    // from what selecting a block usually implies. The name is the one every
+    // other surface reads, so a container the palette calls "Box" is not
+    // "the selected block" here; and a container is only ever entered through
+    // a slot, so the other arm is a guard over a target the point cannot carry
+    // rather than a case an author reaches.
+    const container =
+      point.target.kind === "slot"
+        ? blockLabel(point.target.parentType)
+        : "the selected block";
+    return `Adds inside ${container}`;
   }
   return point.kind === "after-selection"
     ? "Adds after the selected block"
@@ -635,14 +643,7 @@ export function InsertPanel({
           placeholder="Search blocks"
         />
         <p className="nx-insert-panel__placement" aria-live="polite">
-          {placementLabel(
-            point,
-            point.kind === "inside-selection"
-              ? getBlock(
-                  point.target.kind === "slot" ? point.target.parentType : ""
-                )?.editor?.label
-              : undefined
-          )}
+          {placementLabel(point)}
         </p>
         <CommandList>
           <CommandEmpty>

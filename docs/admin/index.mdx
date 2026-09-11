@@ -69,7 +69,7 @@ Image-size presets and the (programmatic) Permissions page also live under setti
 
 ## Permissions
 
-Nextly's RBAC model uses permission slugs in the form `<action>-<resource>` (e.g. `read-users`, `create-roles`, `update-api-keys`, `manage-settings`). Permissions and the `Super Admin` role are seeded the first time the database is set up — for the core resources (`users`, `roles`, `permissions`) the seeder creates one row per `(action, resource)` pair across `create`, `read`, `update`, `delete`. See [`packages/nextly/src/database/seeders/permissions.ts`](../packages/nextly/src/database/seeders/permissions.ts) for the seeder source.
+Nextly's RBAC model uses permission slugs in the form `<action>-<resource>` (e.g. `read-users`, `create-roles`, `update-api-keys`, `manage-settings`). Permissions and the `Super Admin` role are seeded the first time the database is set up — for the core resources (`users`, `roles`, `permissions`) the seeder creates one row per `(action, resource)` pair across `create`, `read`, `update`, `delete`. See [`packages/nextly/src/database/seeders/permissions.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/database/seeders/permissions.ts) for the seeder source.
 
 The admin sidebar is permission-gated. The built-in mapping is:
 

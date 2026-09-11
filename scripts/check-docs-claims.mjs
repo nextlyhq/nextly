@@ -95,6 +95,90 @@ export const CATEGORY_SURFACES = [
   "docs/getting-started/index.mdx",
 ];
 
+/** The file Context7 reads to decide what to index, at the repository root. */
+export const CONTEXT7_CONFIG = "context7.json";
+
+/** The package whose description every other statement of the category follows. */
+export const CORE_PACKAGE = "nextly";
+
+/** The parsed configuration, or `null` for a file that is absent or not JSON. */
+export function readContext7Config(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+const context7Finding = (check, message) => ({
+  check,
+  file: CONTEXT7_CONFIG,
+  line: null,
+  message,
+});
+
+/**
+ * What is wrong with a Context7 configuration, or nothing.
+ *
+ * The rules are in priority order, and the first that applies is the finding: a file that
+ * is not tracked or does not parse says nothing an indexer can use; a description naming
+ * the retired category is the claim this whole check exists to stop; a core package with
+ * no description leaves nothing to follow; and a description that merely differs from the
+ * core package's is the drift that lets the others happen unnoticed. `undefined` is the
+ * untracked file, `null` the unreadable one.
+ */
+const CONTEXT7_RULES = [
+  [
+    config => config === undefined,
+    () =>
+      context7Finding(
+        "context7-missing",
+        "is not tracked; without it an indexer reads the whole repository and guesses what the project is"
+      ),
+  ],
+  [
+    config => config === null || typeof config !== "object",
+    () => context7Finding("context7-unreadable", "is not a JSON object"),
+  ],
+  [
+    config => typeof config.description !== "string" || config.description.trim() === "",
+    () =>
+      context7Finding(
+        "context7-description",
+        "has no description; an indexer falls back to guessing what the project is"
+      ),
+  ],
+  [
+    config => RETIRED_CATEGORY.test(config.description),
+    () =>
+      context7Finding(
+        "retired-category",
+        `"app framework" — the category is "content platform"; say what this is for`
+      ),
+  ],
+  [
+    (_config, core) => typeof core !== "string" || core.trim() === "",
+    () =>
+      context7Finding(
+        "context7-description",
+        `packages/${CORE_PACKAGE}/package.json has no description for this to follow; the sentence lives there`
+      ),
+  ],
+  [
+    (config, core) => config.description !== core,
+    () =>
+      context7Finding(
+        "context7-description",
+        `description differs from packages/${CORE_PACKAGE}/package.json; one sentence says what this is`
+      ),
+  ],
+];
+
+export function context7Findings(config, coreDescription) {
+  const rule = CONTEXT7_RULES.find(([applies]) => applies(config, coreDescription));
+  return rule ? rule[1]() : null;
+}
+
 /**
  * The category the project moved away from.
  *
@@ -417,6 +501,35 @@ const HEX_REF = /^[0-9a-f]{7,40}$/i;
 
 /** Markdown links pointing inside the docs site, e.g. `[Preview](/docs/preview)`. */
 const INTERNAL_DOCS_LINK = /\]\((\/docs\/[^)\s]*)\)/g;
+
+/**
+ * A link written as a path from the FILE: `../configuration/index.mdx`, `./x.mdx`,
+ * `../packages/...`.
+ *
+ * Five of these existed beside three hundred and eighty `/docs/...` links, and every one was
+ * outside the check above, which reads only the root-relative form. Two pointed at repository
+ * source files and were broken everywhere; three pointed at sibling pages and rendered as
+ * written on the site, which had nothing resolving them. One spelling, the guarded one, is
+ * the boundary: a docs page links to another page by its URL, and to source by its GitHub URL.
+ */
+const FILE_PATH_LINK = /(?<!\\)\]\((\.\.?\/[^)\s]*)\)|^ {0,3}\[[^\]\n]+\]:[ \t]*(\.\.?\/\S*)/g;
+
+/**
+ * The text with everything Markdown does not render as prose blanked, line for line.
+ *
+ * A fenced sample that demonstrates a link, an inline code span, or an MDX comment is not a
+ * link; a check that read them as one would refuse a page for teaching the syntax. Blanked
+ * rather than removed so a finding still names the line it was read from: every newline is
+ * kept and every other character inside becomes a space. A fence closes only on its own
+ * marker, so a tilde fence holding backticks is one block.
+ */
+export function codeBlanked(text) {
+  const blank = fragment => fragment.replace(/[^\n]/g, " ");
+  return text
+    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, blank)
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, blank)
+    .replace(/(`+)[^`\n][\s\S]*?\1/g, blank);
+}
 
 /**
  * Split a link's tail into the ref and the path under it.
@@ -812,7 +925,9 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
 }
 
 function internalLinks(repoRoot, tracked, findings) {
-  const pages = new Set(tracked.filter(rel => rel.endsWith(".mdx")));
+  // The published pages are the docs tree, not every `.mdx` git tracks: a
+  // package's README.mdx has GitHub as its surface and its own link rules.
+  const pages = new Set(tracked.filter(rel => rel.startsWith("docs/") && rel.endsWith(".mdx")));
   const resolves = target => {
     const path = target.split("#")[0].replace(/\/+$/, "");
     if (path === "/docs") return true;
@@ -829,7 +944,7 @@ function internalLinks(repoRoot, tracked, findings) {
     } catch {
       continue;
     }
-    const lines = text.split("\n");
+    const lines = codeBlanked(text).split("\n");
     for (let i = 0; i < lines.length; i++) {
       INTERNAL_DOCS_LINK.lastIndex = 0;
       let match;
@@ -842,6 +957,17 @@ function internalLinks(repoRoot, tracked, findings) {
             message: `links to ${match[1]}, which is not a docs page`,
           });
         }
+      }
+      // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
+      if (!pages.has(rel)) continue;
+      FILE_PATH_LINK.lastIndex = 0;
+      while ((match = FILE_PATH_LINK.exec(lines[i])) !== null) {
+        findings.push({
+          check: "internal-docs-link",
+          file: rel,
+          line: i + 1,
+          message: `links to ${match[1] ?? match[2]} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
+        });
       }
     }
   }
@@ -1728,6 +1854,27 @@ export async function runChecks({
       line: null,
       message: `"app framework" — the category is "content platform"; say what this is for`,
     });
+  }
+
+  // `context7.json` tells an indexer what the project is, in one sentence an
+  // agent reads before any page. It is a category surface like the npm
+  // description, and it is held to the SAME sentence as the core package's
+  // rather than checked on its own: two sentences saying what Nextly is, in
+  // two files nobody reads together, is how the second one was still calling
+  // this an app framework months after the first stopped.
+  //
+  // Held whether or not the file is there: a configuration that is deleted or
+  // never tracked is an indexer left to guess, and a check that skipped it
+  // would report that as clean.
+  {
+    const core = packages.find(pkg => pkg.json.name === CORE_PACKAGE);
+    const finding = context7Findings(
+      trackedSet.has(CONTEXT7_CONFIG)
+        ? readContext7Config(join(repoRoot, CONTEXT7_CONFIG))
+        : undefined,
+      core?.json.description
+    );
+    if (finding) findings.push(finding);
   }
 
   // --- per-line prose checks ---
