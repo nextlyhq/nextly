@@ -952,29 +952,35 @@ hooks run only when their field is present in the data: an update that omits
 it, or an earlier hook that deletes the key, skips them.
 
 **After the write** (`afterChange`) and **on a read** (`afterRead`), `data` is
-the row, persisted or loaded, so a hooked field runs whether or not it changed.
-Two qualifications. On a localized collection or Single, a translated field
-lives in the companion table and is merged into the `afterChange` row only
-when the write carried it, so a localized field omitted from a create, or
-unchanged on an update, has no `afterChange` run. On a collection read, field-level `access.read`
-rules are applied before the hooks, so a field the caller may not read is gone
-from the row by then and its `afterRead` does not run; a Single read runs the
-hooks first and redacts afterwards, so there a denied field's `afterRead` does
-run and sees the value, and only the response is redacted. One exception, on every write to a collection or a Single: a `fieldGroup` field
-is stored in its own table and is removed from the row before the main-table
-write, and the `afterChange` hooks run on the returned row without it, so that
-field's `afterChange` hook does not run. Its `beforeValidate` and `beforeChange`
-do. The one write where it does run is a working-draft update through the
-ordinary update path: on a collection with `versions: { drafts: true }`, an
-update to a published entry that names no `status` is held as a draft, and
-`afterChange` runs over that assembled draft, field groups included. A
-collection is not eligible to hold drafts when it or one of its field groups
-has a password field, or when a field group's schema cannot be resolved; a
-status-less update there writes the live row and the field group's
-`afterChange` is skipped as on any other write. An update
-made inside a caller's transaction runs `afterChange` over the main row and
-skips the field group there too. A value returned from `afterChange` reshapes
-the response and does not change what was stored.
+the row, persisted or loaded, and a hook runs for every field present on that
+row, whether or not the field changed. The rule that decides the rest: a field
+whose key is absent from the row when the hooks run has no hook run, and these
+are the things that remove a key first.
+
+- **Password fields** are stripped from every read before `afterRead`, on
+  collections and Singles alike, so a password field's `afterRead` never runs.
+- **Denied fields.** On a collection read, field-level `access.read` rules are
+  applied before the hooks, so a field the caller may not read is gone by then.
+  A Single read currently runs the hooks first and redacts afterwards, so there
+  a denied field's `afterRead` does run and sees the value, and only the
+  response is redacted.
+- **Localized fields** live in the companion table and are merged into the
+  `afterChange` row only when the write carried them, so a localized field
+  omitted from a create, or unchanged on an update, has no `afterChange` run.
+- **Field groups** are stored in their own table and removed from the row before
+  the main-table write, and `afterChange` runs on the returned row without them,
+  on collections and Singles and inside a caller's transaction. Their
+  `beforeValidate` and `beforeChange` do run. The one write where a field
+  group's `afterChange` runs is a working-draft update through the ordinary
+  update path: on a collection with `versions: { drafts: true }`, an update to
+  a published entry that names no `status` is held as a draft and `afterChange`
+  runs over that assembled draft. A collection is not eligible to hold drafts
+  when it or one of its field groups has a password field, or when a field
+  group's schema cannot be resolved; a status-less update there writes the live
+  row.
+
+A value returned from `afterChange` reshapes the response and does not change
+what was stored.
 
 Core still normalises the record between the last pre-write hook and the
 write: passwords are hashed and relationship and upload values reduced to ids
@@ -1028,9 +1034,11 @@ write path from their stored definition, which a function does not survive,
 so an omitted field with a function default is treated as absent: written
 without a value, or refused by validation if the field is also `required`. A
 Single's first-read auto-create holds the code config directly and resolves
-both forms for its top-level fields (a default on a field nested inside a
-`group` is not resolved there), except for a password field, whose default of
-either form is refused because that path never hashes. Bulk creates (`createMany`) and
+both forms for its top-level column-backed fields: a default on a field nested
+inside a `group` is not resolved there, a default on a `fieldGroup` field is
+evaluated and then dropped because that field has no column on the row, and a
+password field's default of either form is refused because that path never
+hashes. Bulk creates (`createMany`) and
 creates inside a transaction apply no defaults of either form.
 
 ---
