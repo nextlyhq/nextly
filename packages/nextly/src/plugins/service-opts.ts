@@ -151,12 +151,8 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   // able to reach the sweep by accident. Refused before any branch, so no
   // branch can carry one.
   if (opts.locale !== undefined && isLocaleSelector(opts.locale)) {
-    throw new NextlyError({
-      code: "INVALID_INPUT",
-      statusCode: 400,
-      publicMessage: "locale must name one language.",
-      logMessage:
-        "ServiceOpts.locale received a selector; `*` and `all` are not available through the plugin services",
+    throw NextlyError.invalidInput({
+      message: "locale must name one language.",
       logContext: {
         reason: "service-opts-locale-selector",
         locale: opts.locale,
@@ -168,11 +164,18 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   // name: that is how the locale a plugin could not say stayed unsayable —
   // there was no field to forget, and adding one to three literals is adding
   // it to two. Spread this and a branch cannot lose a field the others carry.
+  //
+  // The pair is present only when the plugin named it. A key holding
+  // `undefined` and no key read the same to every consumer today, but they are
+  // different claims — "no locale" and "the locale is undefined" — and only
+  // the absence says the facade is deciding the default, not being handed one.
   const carried = {
     context: opts.context,
     request: opts.request,
-    locale: opts.locale,
-    fallbackLocale: opts.fallbackLocale,
+    ...(opts.locale !== undefined ? { locale: opts.locale } : {}),
+    ...(opts.fallbackLocale !== undefined
+      ? { fallbackLocale: opts.fallbackLocale }
+      : {}),
   };
   // The caller's own scope wins when named; otherwise the one the dispatcher
   // pinned for this request. A route that omits it is the common case, not the
@@ -190,11 +193,8 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {
-      throw new NextlyError({
-        code: "INVALID_INPUT",
-        statusCode: 400,
-        publicMessage: "Permission configuration is invalid.",
-        logMessage: "ServiceOpts as:'user' requires a `user`",
+      throw NextlyError.invalidInput({
+        message: "Permission configuration is invalid.",
         logContext: { reason: "service-opts-user-missing" },
       });
     }

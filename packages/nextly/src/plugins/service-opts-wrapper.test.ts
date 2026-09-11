@@ -255,11 +255,12 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
       await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
         as: "system",
       });
+      // Asserted as KEY absence. A conjunction of "has the key" and "is not
+      // undefined" is false for a key holding `undefined` too, which is the
+      // exact output this exists to reject — and it passed against it.
       const ctx = m.findEntryById.mock.calls[0][2] as Record<string, unknown>;
-      expect("locale" in ctx && ctx.locale !== undefined).toBe(false);
-      expect("fallbackLocale" in ctx && ctx.fallbackLocale !== undefined).toBe(
-        false
-      );
+      expect(Object.hasOwn(ctx, "locale")).toBe(false);
+      expect(Object.hasOwn(ctx, "fallbackLocale")).toBe(false);
     });
   });
 
