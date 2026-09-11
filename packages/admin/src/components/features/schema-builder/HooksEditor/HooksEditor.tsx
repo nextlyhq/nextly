@@ -40,6 +40,10 @@ import {
 } from "@nextlyhq/ui";
 import { useState, useCallback, useEffect, useMemo } from "react";
 
+import {
+  positionInList,
+  sortableAnnouncements,
+} from "@admin/components/features/entries/fields/structured/field-array-helpers";
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
@@ -77,6 +81,19 @@ export function HooksEditor({
   );
 
   // DnD sensors
+  // Said about the HOOK by the name the catalogue gives it, so a reader
+  // hears "Picked up Auto slug, position 1 of 2" rather than an instance id.
+  const hookIds = hooks.map(hook => hook.id);
+  const announcements = sortableAnnouncements({
+    describe: ({ id }) => {
+      const hook = hooks.find(h => h.id === id);
+      return hook
+        ? (getPrebuiltHook(hook.hookId)?.name ?? hook.hookId)
+        : undefined;
+    },
+    place: ({ id }) => positionInList(hookIds, id),
+  });
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 8 },
@@ -229,9 +246,10 @@ export function HooksEditor({
               sensors={sensors}
               collisionDetection={closestCenter}
               onDragEnd={handleDragEnd}
+              accessibility={{ announcements }}
             >
               <SortableContext
-                items={hooks.map(hook => hook.id)}
+                items={hookIds}
                 strategy={verticalListSortingStrategy}
               >
                 <div className="space-y-2">

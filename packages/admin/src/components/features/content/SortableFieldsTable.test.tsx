@@ -106,6 +106,25 @@ describe("the fields table", () => {
     ).toEqual(["title", "body", "slug"]);
   });
 
+  it("reports a drop back onto its own row as unchanged, and reorders nothing", async () => {
+    // 🔴 Space twice with no arrow. The handler skips the reorder, and the
+    // announcement used to say "Slug moved to position 2 of 3" anyway -- a
+    // confirmation of a move that never happened.
+    const { onReorder } = draw();
+    const heard = recordDragRegion();
+    const handle = screen.getByRole("button", { name: "Drag to reorder Slug" });
+    handle.focus();
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    await waitFor(() => expect(handle).toHaveAttribute("aria-pressed", "true"));
+
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    await waitFor(() =>
+      expect(heard).toContain("Slug was dropped where it was. Nothing moved.")
+    );
+    expect(heard.join(" ")).not.toContain("moved to");
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
   it("says where a cancelled drag returned to", async () => {
     draw();
     const heard = recordDragRegion();

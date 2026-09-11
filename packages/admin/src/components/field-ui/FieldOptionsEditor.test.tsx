@@ -1,12 +1,18 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { layOutStacked, recordDragRegion } from "@admin/__tests__/helpers/drag";
 
 import {
   FieldOptionsEditor,
   withOptionIds,
   type FieldOption,
 } from "./FieldOptionsEditor";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const optionsOf = (...pairs: [string, string][]): FieldOption[] =>
   pairs.map(([label, value], index) => ({
@@ -283,5 +289,32 @@ describe("FieldOptionsEditor row wiring", () => {
     const next = onOptionsChange.mock.calls[0][0] as FieldOption[];
     expect(next[1].value).toBe("changed");
     expect(next[0].value).toBe("first");
+  });
+  it("names each reorder handle after its option, and says what it picked up", async () => {
+    // 🔴 Every handle was "Reorder option", and a drag announced the
+    // generated option id. The handle names the option, and a keyboard
+    // pick-up names it by label and position.
+    render(
+      <FieldOptionsEditor
+        options={optionsOf(["Draft", "draft"], ["Published", "published"])}
+        onOptionsChange={() => {}}
+      />
+    );
+    const handles = screen.getAllByRole("button", { name: /^Reorder / });
+    expect(handles.map(h => h.getAttribute("aria-label"))).toEqual([
+      "Reorder Draft",
+      "Reorder Published",
+    ]);
+    // The row is the sortable node; the handle is its first child.
+    layOutStacked(handles.map(h => h.parentElement as Element));
+    const heard = recordDragRegion();
+
+    handles[1].focus();
+    fireEvent.keyDown(handles[1], { code: "Space", key: " " });
+
+    await waitFor(() =>
+      expect(heard).toContain("Picked up Published, position 2 of 2.")
+    );
+    expect(heard.join(" ")).not.toContain("draggable item");
   });
 });

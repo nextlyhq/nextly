@@ -289,6 +289,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
           <CardContent className="p-3 space-y-3">
             <SortableFieldArrayContainer
               items={items}
+              itemLabel={singularLabel}
               sensors={sensors}
               handleDragEnd={handleDragEnd}
               isSortable={isSortable}

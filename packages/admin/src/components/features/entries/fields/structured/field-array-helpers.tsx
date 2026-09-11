@@ -273,6 +273,13 @@ export function sortableAnnouncements(
     },
     onDragEnd: ({ active, over }) => {
       if (over === null) return `${name(active)} was dropped. Nothing moved.`;
+      // Dropped where it was picked up -- Space twice with no arrow, or a
+      // pointer released over the original row. Every handler skips the
+      // reorder for this, so saying "moved to" here confirmed a move that
+      // did not happen.
+      if (over.id === active.id) {
+        return `${name(active)} was dropped where it was. Nothing moved.`;
+      }
       return `${name(active)} moved to ${at(over) ?? name(over)}.`;
     },
     onDragCancel: ({ active }) => {
@@ -372,6 +379,13 @@ export interface SortableFieldArrayContainerProps<T extends { id: string }> {
   isSortable: boolean;
   disabled?: boolean;
   readOnly?: boolean;
+  /**
+   * What one row is called when a drag announces it, singular: "Gallery
+   * item", "Author". Rows in a repeater carry no label of their own, so the
+   * field's is borrowed and numbered -- "Picked up Gallery item 2, position
+   * 2 of 4". Absent, a row is "Item".
+   */
+  itemLabel?: string;
   children: React.ReactNode;
 }
 
@@ -385,16 +399,26 @@ export function SortableFieldArrayContainer<T extends { id: string }>({
   isSortable,
   disabled,
   readOnly,
+  itemLabel = "Item",
   children,
 }: SortableFieldArrayContainerProps<T>) {
+  const ids = items.map(item => item.id);
+  const announcements = sortableAnnouncements({
+    describe: ({ id }) => {
+      const index = ids.indexOf(String(id));
+      return index === -1 ? undefined : `${itemLabel} ${index + 1}`;
+    },
+    place: ({ id }) => positionInList(ids, id),
+  });
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={closestCenter}
       onDragEnd={handleDragEnd}
+      accessibility={{ announcements }}
     >
       <SortableContext
-        items={items.map(item => item.id)}
+        items={ids}
         strategy={verticalListSortingStrategy}
         disabled={!isSortable || disabled || readOnly}
       >

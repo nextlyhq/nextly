@@ -782,6 +782,7 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
       {/* Sortable List */}
       <SortableFieldArrayContainer
         items={items}
+        itemLabel={singularLabel}
         sensors={sensors}
         handleDragEnd={handleDragEnd}
         isSortable={isSortable}
