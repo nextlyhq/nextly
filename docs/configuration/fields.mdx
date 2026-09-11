@@ -908,13 +908,46 @@ Each function receives `{ req, id?, data? }` and returns `boolean | Promise<bool
 ### `hooks`
 
 Field-level lifecycle hooks. Each hook is an array of handlers run in order.
+On a collection write and on a direct read, each phase runs **after** the
+collection-level hook of the same name; see the
+[execution order](/docs/configuration/collections#execution-order) for how the
+two levels interleave. Two exceptions: a Single's field-level `afterChange`
+runs **before** its entity-level `afterUpdate`, so the entity hook sees what the
+field hooks produced and not the other way round; and a row reached through
+relationship expansion runs only the target's field-level `afterRead`, with no
+collection-level `afterRead` before it.
 
 | Hook | When it runs |
 |---|---|
-| `beforeValidate` | Before validation. Can transform the value. |
-| `beforeChange` | Before the database write. |
+| `beforeValidate` | Before validation, after the collection's `beforeValidate`. Can transform the value. |
+| `beforeChange` | After the collection's `beforeChange`. The last hook before the database write. |
 | `afterChange` | After the database write. |
 | `afterRead` | After reading from the database. Can transform the returned value. |
+
+Every handler receives its own `value` and a `data` object at the field's own
+nesting level: for a field inside a group or a repeater, the containing row
+rather than the top-level document.
+
+**Before the write** (`beforeValidate`, `beforeChange`), `data` is what was
+submitted: the document on a create, the patch on an update, not the stored
+row, so an unchanged sibling reads as `undefined`. A `beforeChange` handler
+can read and change siblings at that level. No collection-level phase runs
+after it, but a sibling's own hook registered later in the same phase still
+can. Return the value you want stored; touch siblings only when that is the
+intent. These hooks run only when their field is present in the data: an
+update that omits it, or an earlier hook that deletes the key, skips them.
+
+**After the write** (`afterChange`) and **on a read** (`afterRead`), `data` is
+the full row, persisted or loaded, so every hooked field runs whether or not it
+changed. A value returned from `afterChange` reshapes the response and does not
+change what was stored.
+
+Core still normalises the record between the last pre-write hook and the
+write: passwords are hashed and relationship and upload values reduced to ids
+on collections and Singles alike, and a collection's `slug` is re-sanitised,
+which a Single's is not. See the
+[execution order](/docs/configuration/collections#execution-order) for what
+runs where.
 
 ```typescript
 text({
