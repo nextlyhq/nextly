@@ -2854,6 +2854,67 @@ describe("instanceExposure", () => {
     expect(ab?.shadowedBy).toBeUndefined();
   });
 
+  it("keeps an ancestor's remaining value when a descendant is cleared", () => {
+    // `a.b` cleared deletes only `b`; the page keeps `{ a: { c: "keep" } }`.
+    // Reading the ancestor's winning write as "the sentinel, so cleared"
+    // would report `a` as gone while the page still renders its other key.
+    const nested = component(
+      [node("d1", { props: { a: { b: "base", c: "keep" } } })],
+      {
+        exposed: [
+          { ...headline, id: "parent", propPath: "a" },
+          { ...headline, id: "child", propPath: "a.b" },
+        ],
+      }
+    );
+    const node1 = instance("i1", "hero", {
+      overrides: { child: { $unset: true } },
+    });
+
+    const [parent, child] = instanceExposure(nested, node1).properties;
+
+    expect(parent?.value).toEqual({ c: "keep" });
+    expect(parent?.cleared).toBe(false);
+    expect(parent?.shadowedBy).toBe("child");
+    expect(child?.cleared).toBe(true);
+    expect(child?.value).toBeUndefined();
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: nested })
+    );
+    expect(rendered.document.nodes[0]!.props.a).toEqual({ c: "keep" });
+  });
+
+  it("does not count an override on a path the resolver refuses as in force", () => {
+    // An empty path, a doubled dot, or one over the segment limit is one the
+    // resolver declines to write. Treating its override as applied would
+    // attribute an unrendered value to the instance — and let it win a
+    // collision over a write that did land.
+    const broken = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        { ...headline, id: "good", propPath: "text" },
+        { ...headline, id: "bad", propPath: "a..b" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { good: "GOOD", bad: "BAD" },
+    });
+
+    const [good, bad] = instanceExposure(broken, node1).properties;
+
+    expect(good?.value).toBe("GOOD");
+    expect(good?.source).toBe("instance");
+    expect(bad?.source).toBe("definition");
+    expect(bad?.value).toBeUndefined();
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: broken })
+    );
+    expect(rendered.document.nodes[0]!.props).toEqual({ text: "GOOD" });
+  });
+
   it("has no path value for a visibility exposure", () => {
     // `visibility` decides whether the node is served at all; it names no prop,
     // so reading `propPath` off the definition would report an unrelated value.
