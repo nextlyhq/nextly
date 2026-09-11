@@ -43,6 +43,7 @@ import {
   componentEntriesFrom,
   compositionRefusal,
   nodeForComponentEntry,
+  placementTypesOf,
   type BlockInsertEntry,
   type SavedComponent,
   type SavedPattern,
@@ -1878,6 +1879,56 @@ describe("the component tier", () => {
       expect(
         compositionRefusal(pageWith(2), node(), { index: 2 }, NONE)
       ).toBeUndefined();
+    });
+  });
+
+  describe("what a node already on the page is judged by when it moves", () => {
+    it("judges a block by its own type", () => {
+      const block: BlockNode = {
+        id: "p0",
+        type: "acme/text",
+        version: 1,
+        props: {},
+      };
+
+      expect(placementTypesOf(block, NONE)).toEqual(["acme/text"]);
+    });
+
+    it("judges an instance by the ROOTS of the definition it draws, resolved as its tile was", () => {
+      // The instance node's own type is not a registered block, and the
+      // nesting source answers "no restriction" for it — so a move judged by
+      // the node's type would let a component whose root belongs only inside
+      // a Columns be dragged into a paragraph after its insert was refused
+      // there. Through the lookup, so a definition whose root is itself an
+      // instance is judged by what that root draws.
+      catalog([
+        { ...base, name: "acme/box", slots: { children: {} } },
+        { ...base, name: "acme/text" },
+      ]);
+      const boxed = stored({
+        id: "boxed",
+        document: componentOf([
+          { id: "d1", type: "acme/box", version: 1, props: {}, slots: {} },
+          instanceOf("header"),
+        ]),
+      });
+      const lookup = lookupOf(stored(), boxed);
+
+      expect(placementTypesOf(instanceOf("boxed"), lookup)).toEqual([
+        "acme/box",
+        "acme/text",
+      ]);
+    });
+
+    it("judges an instance it cannot resolve by its own type, which restricts nothing", () => {
+      // A placeholder is drawn wherever it sits; refusing to move one would
+      // pin it to the spot it was left in.
+      expect(placementTypesOf(instanceOf("missing"), NONE)).toEqual([
+        COMPONENT_INSTANCE_TYPE,
+      ]);
+      expect(placementTypesOf(instanceOf("missing"))).toEqual([
+        COMPONENT_INSTANCE_TYPE,
+      ]);
     });
   });
 

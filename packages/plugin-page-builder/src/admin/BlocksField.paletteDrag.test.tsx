@@ -555,6 +555,25 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(routeReads).toBeGreaterThan(0);
   });
 
+  it("hands the drag the same map and caps the canvas draws with, so a moved instance is judged by its roots", () => {
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const canvas = recorded("canvas");
+    const render = canvas.render as { definitions: unknown; limits: unknown };
+    expect(seen.dragOptions?.definitions).toBe(render.definitions);
+    expect(seen.dragOptions?.limits).toBe(render.limits);
+  });
+
   it("hands the canvas and the panel ONE definitions map, and the panel the rows and the cut", () => {
     // Three props from one read, asserted by identity where identity is the
     // point: the map the panel resolves a tile's roots through must be the

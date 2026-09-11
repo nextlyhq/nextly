@@ -26,6 +26,8 @@ import {
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type ComponentLookup,
+  type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
@@ -98,15 +100,31 @@ function documentOf(nodes: BlockNode[]): BlockDocument {
 /** The editor the last render produced, for asserting what a drop did. */
 let editorRef: EditorState | null = null;
 
-function Host({ document }: { document: BlockDocument }): React.JSX.Element {
+/**
+ * Everything is permitted, so a refused placement never masks a case that is
+ * about the gesture rather than about nesting.
+ */
+const PERMISSIVE: NestingSource = {
+  parentsOf: () => undefined,
+  slotAllowOf: () => undefined,
+};
+
+function Host({
+  document,
+  nesting = PERMISSIVE,
+  definitions,
+}: {
+  document: BlockDocument;
+  nesting?: NestingSource;
+  definitions?: ComponentLookup;
+}): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
   const drag = useCanvasDrag({
     editor,
     slots: registrySlotSource(),
-    // Everything is permitted, so a refused placement never masks a case that
-    // is about the gesture rather than about nesting.
-    nesting: { parentsOf: () => undefined, slotAllowOf: () => undefined },
+    nesting,
+    ...(definitions === undefined ? {} : { definitions }),
   });
 
   return (
@@ -443,6 +461,54 @@ describe("useCanvasDrag", () => {
     expect(indicator(container)).toBeNull();
     release(root, 200, 190);
     expect(editorRef?.document.nodes.map(n => n.id)).toEqual(order);
+  });
+
+  it("judges a moved component instance by the roots of its definition", () => {
+    // The instance node's type is not a registered block, and the nesting
+    // rule answers "no restriction" for it — so a component whose root
+    // belongs only inside a Columns, refused at the insert, could be dragged
+    // into the page root afterwards. Judged by what it draws, the same move
+    // is refused; without the definitions there is nothing to judge it by,
+    // and it moves — which is the control that proves the roots did it.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const nesting: NestingSource = {
+      parentsOf: type => (type === "test/item" ? ["test/columns"] : undefined),
+      slotAllowOf: () => undefined,
+    };
+    const definitions: ComponentLookup = new Map([
+      [
+        "c",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [node("d1", "test/item")],
+        } as BlockDocument,
+      ],
+    ]);
+    const instance = {
+      ...node("i1", "nextly/component-instance"),
+      props: { componentId: "c" },
+    } as BlockNode;
+    const page = () => documentOf([instance, node("b", "test/heading")]);
+
+    const judged = render(
+      <Host document={page()} nesting={nesting} definitions={definitions} />
+    );
+    layout(judged.container, { i1: 100, b: 100 });
+    const root = rootOf(judged.container);
+    press(root, blockElement(judged.container, "i1"), 200, 50);
+    moveTo(root, 200, 190);
+    release(root, 200, 190);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["i1", "b"]);
+    judged.unmount();
+
+    const unjudged = render(<Host document={page()} nesting={nesting} />);
+    layout(unjudged.container, { i1: 100, b: 100 });
+    const root2 = rootOf(unjudged.container);
+    press(root2, blockElement(unjudged.container, "i1"), 200, 50);
+    moveTo(root2, 200, 190);
+    release(root2, 200, 190);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["b", "i1"]);
   });
 
   it("ignores a press that is not the primary button", () => {
