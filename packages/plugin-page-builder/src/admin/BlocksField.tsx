@@ -2629,10 +2629,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             siteSheet(canvasSiteStyle),
             {
               ...(remotePatterns === undefined ? {} : { remotePatterns }),
-              // The SAME map the canvas resolves against, so the cascade the
-              // inspector reads describes the composed tree on screen rather
-              // than one with every instance left unresolved.
+              // The SAME map the canvas resolves against, under the SAME
+              // caps, so the cascade the inspector reads describes the
+              // composed tree on screen: neither one with every instance
+              // left unresolved, nor one composed past a cap the canvas
+              // stopped at.
               definitions: canvasRender.definitions,
+              limits: canvasRender.limits,
             }
           ),
     [
