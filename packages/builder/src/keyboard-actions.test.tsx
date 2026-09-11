@@ -17,8 +17,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
   registerBlocks,
   type BlockDocument,
+  type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
@@ -447,6 +450,101 @@ describe("useBlockKeyboardActions", () => {
     expect(said).toMatch(/has to sit inside a container/i);
     // And the remedy, which is what turns a refusal into an instruction.
     expect(said).toMatch(/goes inside/i);
+  });
+
+  it("REFUSES to move a component instance where the root it draws may not go, given the definitions", () => {
+    /*
+     * The instance node's own type is not a registered block, so a rule keyed
+     * by type restricts it nowhere — and the keyboard judged the node's type,
+     * so Alt+Arrow could lift a component whose root belongs only inside a box
+     * up to the root, where a drop of the same instance is refused. The host
+     * passes the same definitions map the canvas resolves against, and the
+     * move is judged by the roots that map draws.
+     *
+     * Two instances at the root, so `up` on the second has somewhere to go —
+     * the root itself — which is exactly the placement the rule refuses.
+     */
+    const draws: ComponentLookup = new Map([
+      [
+        "header",
+        {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component" as const,
+          nodes: [{ id: "d1", type: "acme/text", version: 1, props: {} }],
+        },
+      ],
+    ]);
+    const page = documentOf([
+      {
+        id: "first",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "header" },
+      },
+      {
+        id: "second",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "header" },
+      },
+    ]);
+    const editor = editorSpy(page, "second");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          nesting={{
+            parentsOf: type =>
+              type === "acme/text" ? ["acme/box"] : undefined,
+          }}
+          definitions={draws}
+        />
+      </ShortcutProvider>
+    );
+
+    press("ArrowUp", { altKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    const said = screen.getByRole("status").textContent ?? "";
+    expect(said).toMatch(/has to sit inside a container/i);
+  });
+
+  it("moves the same instance when no definitions are given, judged by its own type", () => {
+    // The control: the refusal above comes from the definitions, not from the
+    // instance type. A host whose library never loaded resolves nothing, and a
+    // placeholder is movable wherever it sits.
+    const page = documentOf([
+      {
+        id: "first",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "header" },
+      },
+      {
+        id: "second",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "header" },
+      },
+    ]);
+    const editor = editorSpy(page, "second");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          nesting={{
+            parentsOf: type =>
+              type === "acme/text" ? ["acme/box"] : undefined,
+          }}
+        />
+      </ShortcutProvider>
+    );
+
+    press("ArrowUp", { altKey: true });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
   });
 
   it("refuses the save WITHOUT opening the form when the grant is absent", () => {

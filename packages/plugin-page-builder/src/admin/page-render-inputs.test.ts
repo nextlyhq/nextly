@@ -16,10 +16,13 @@ const NO_TIERS = {
   breakpoints: { viewport: [], container: [] },
 } as never;
 
+const DEFINITIONS = new Map();
+
 const base = {
   clientConfig: undefined,
   previewContainer: undefined,
   limits: DEFAULT_LIMITS,
+  definitions: DEFINITIONS,
 };
 
 describe("pageRenderInputs", () => {
@@ -113,5 +116,16 @@ describe("pageRenderInputs", () => {
     });
 
     expect(inputs.limits).toBe(raised);
+  });
+
+  it("hands the renderer the very map the surface read, so instances resolve", () => {
+    // By IDENTITY, not by equality: the renderer memoises its resolution on
+    // the map, and a copy taken here would re-resolve every instance on every
+    // render of the surface. And present at all, which is the point — the
+    // renderer accepts no map and draws a placeholder for every instance, which
+    // is exactly the plausible wrong page this module exists to prevent.
+    const inputs = pageRenderInputs({ ...base, siteStyle: WITH_TIERS });
+
+    expect(inputs.definitions).toBe(DEFINITIONS);
   });
 });

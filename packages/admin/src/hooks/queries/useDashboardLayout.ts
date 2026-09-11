@@ -34,13 +34,14 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 
 import {
   ADMIN_WORKSPACE_KEY,
   useSchemaUpdateInvalidation,
 } from "@admin/hooks/useSchemaUpdateInvalidation";
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import type { AdminBranding } from "@admin/types/branding";
 import type {
   DashboardLayoutResponse,
   WidgetPlacement,
@@ -139,24 +140,39 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     [queryClient]
   );
 
-  // 🔴 The reader's view moved under them -- a grant, a role change, a
-  // plugin registering elsewhere -- and the layout says so through `scope`,
-  // a token of the visible cards AND of the shortcuts inside them the reader
-  // may see. The workspace payload was fetched for the PREVIOUS view and is
-  // held fresh for minutes, so a card the server now places has no
-  // declaration to draw with, and a shortcut newly permitted stays withheld,
-  // until that payload is read again. Re-read when the token moves, and only
-  // then: the first token seen is the view the workspace was fetched beside,
-  // and a refetch on it would re-read every dashboard load.
-  const scope = query.data?.scope;
-  const lastScope = useRef<string | undefined>(undefined);
+  // 🔴 The workspace payload is held fresh for minutes, and it is built for
+  // one audience -- the cards this reader may see and the shortcut gates
+  // inside them. A grant, a role change or a plugin registering elsewhere
+  // moves that audience, and a payload built for the old one has no
+  // declaration for a card the server now places and withholds a shortcut
+  // newly permitted. Both responses carry the token of the audience they were
+  // built for, so each layout read compares its own with the payload's and
+  // reads the payload again when they differ.
+  //
+  // Compared, not remembered: an earlier version re-read only when the
+  // layout's token MOVED between two of its reads, and so assumed the first
+  // token it saw described the cached payload -- a payload cached before a
+  // grant met a first dashboard visit after it, and was kept.
+  //
+  // On a LAYOUT read, and never on a workspace update. At a layout read the
+  // layout is the freshest answer, so a payload that disagrees is the stale
+  // side; reacting to the payload as well could re-read one against the other
+  // indefinitely. A payload that carries no token says nothing either way.
+  const audience = query.data?.audience;
+  const readAt = query.dataUpdatedAt;
   useEffect(() => {
-    if (scope === undefined) return;
-    if (lastScope.current !== undefined && lastScope.current !== scope) {
+    if (audience === undefined || readAt === 0) return;
+    const heldForAnother = queryClient
+      .getQueriesData<AdminBranding>({ queryKey: ADMIN_WORKSPACE_KEY })
+      .some(
+        ([, payload]) =>
+          payload?.widgetAudience !== undefined &&
+          payload.widgetAudience !== audience
+      );
+    if (heldForAnother) {
       void queryClient.invalidateQueries({ queryKey: ADMIN_WORKSPACE_KEY });
     }
-    lastScope.current = scope;
-  }, [scope, queryClient]);
+  }, [audience, readAt, queryClient]);
 
   const save = useMutation({
     mutationFn: (input: SaveLayoutInput) =>

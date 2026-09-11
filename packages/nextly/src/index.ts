@@ -492,6 +492,7 @@ export {
   type PluginActionRegistry,
   type PluginRoute,
   type PluginRouteCaller,
+  type PluginRouteIdentity,
   type PluginRouteContext,
   type PluginRouteHandler,
   type PluginRouteMount,

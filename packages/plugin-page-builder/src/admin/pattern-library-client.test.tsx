@@ -76,6 +76,37 @@ describe("what reaches the insert panel", () => {
     expect(result.current.patterns.map(p => p.id)).toEqual(["sec"]);
   });
 
+  it("tells a read that failed with an earlier answer cached (stale) apart from one that never answered (unavailable)", () => {
+    // The same three-way split the component read makes, for the same
+    // reason: the panel says "none are offered" beside an unavailable tier,
+    // and beside the cached tiles a failed refresh leaves standing, that
+    // sentence would be false.
+    const item = {
+      id: "hero",
+      title: "Hero",
+      granularity: "section",
+      document,
+    };
+    read.mockReturnValue({
+      data: { items: [item], meta: { count: 1, truncated: false } },
+      error: new Error("Forbidden"),
+      pending: false,
+      refetch: () => {},
+    } as unknown as ReturnType<typeof usePluginRoute<LibraryResponse>>);
+    const stale = renderHook(() => usePatternLibrary());
+    read.mockReturnValue({
+      data: undefined,
+      error: new Error("Forbidden"),
+      pending: false,
+      refetch: () => {},
+    } as unknown as ReturnType<typeof usePluginRoute<LibraryResponse>>);
+    const unavailable = renderHook(() => usePatternLibrary());
+
+    expect(stale.result.current.state).toBe("stale");
+    expect(stale.result.current.patterns).toHaveLength(1);
+    expect(unavailable.result.current.state).toBe("unavailable");
+  });
+
   it("returns ONE empty list while the read is in flight", () => {
     // Identity, not emptiness: the panel builds its catalogue in a memo keyed
     // on this array, running the planner's preflight over every pattern, so a

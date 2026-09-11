@@ -54,6 +54,7 @@ import {
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockNode,
+  type ComponentLookup,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -78,16 +79,35 @@ import {
   filterEntries,
   groupByCategory,
   insertionPointFor,
+  componentEntriesFrom,
+  nodeForComponentEntry,
   nodeForEntry,
   patternEntriesFrom,
   registrySlotSource,
+  type ComponentInsertEntry,
   type InsertGroup,
   type InsertionPoint,
   type InsertEntry,
   type PatternInsertEntry,
+  type SavedComponent,
   type SavedPattern,
 } from "./inserter";
 import type { BuilderOp } from "./ops";
+
+/**
+ * Where one tier of the host's library read stands, as the panel says it.
+ *
+ * `ready` covers a tier still in flight as well as one that arrived whole: an
+ * empty tier that will fill in a moment is not one to explain, and a notice
+ * that flashed on every open would be one an author learns to read past.
+ *
+ * `stale` and `unavailable` are both a read that failed, told apart by what
+ * the host still holds. A host that reads afresh on every open keeps its last
+ * answer while it does, so a failure can leave tiles standing — and beside
+ * tiles, "none are offered" is false. What is true of them is that they may
+ * be out of date, which is the sentence a stale tier gets.
+ */
+export type LibraryTierState = "ready" | "cut" | "stale" | "unavailable";
 
 export interface InsertPanelProps {
   /**
@@ -123,6 +143,48 @@ export interface InsertPanelProps {
    * so a caller may hand over whatever its query returned.
    */
   patterns?: readonly SavedPattern[];
+  /**
+   * The site's component definitions to offer beside the blocks. Defaults to
+   * none.
+   *
+   * Supplied rather than fetched, for the reason `patterns` is. Placing one
+   * writes a single instance node pointing at the definition; nothing from the
+   * definition is copied into the page.
+   */
+  components?: readonly SavedComponent[];
+  /**
+   * The lookup the CANVAS resolves instances against, keyed by definition id.
+   *
+   * A definition may itself hold instances of other components, at its root
+   * included, and the panel judges where a tile may go from the block types
+   * that will actually land — so each offered definition is first resolved
+   * through this, exactly as the canvas resolves the page. The canvas's own
+   * lookup rather than one rebuilt from `components`, so the tile and the
+   * drawing cannot read two different maps. A row is offered only when this
+   * holds its definition, and judged by that copy: the placed instance is
+   * resolved against this lookup, so a row it lacks would land as a missing
+   * component. Defaults to an empty lookup, which offers no component.
+   */
+  componentDefinitions?: ComponentLookup;
+  /**
+   * Where each tier of the host's library read stands, when it is not simply
+   * here.
+   *
+   * A library has a ceiling, and a read that reached it left rows out; a read
+   * can also fail outright, or fail to refresh what it had. The panel SAYS
+   * each beside the tiles it offers, because the alternative is silence in
+   * two places at once: an author searching here for a component that is not
+   * offered, and an instance of it on the canvas drawn as could-not-be-loaded
+   * with nothing to say whether the library was cut, could not be read, or
+   * the component was deleted. A failed read is the state with a remedy, so
+   * it is offered beside it.
+   */
+  library?: {
+    readonly patterns?: LibraryTierState;
+    readonly components?: LibraryTierState;
+    /** Ask the host to read again. Offered beside a stale or unavailable tier. */
+    readonly retry?: () => void;
+  };
   /** How nesting is resolved. Defaults to the live registry. */
   nesting?: NestingSource;
   /**
@@ -332,6 +394,193 @@ function DescriptionStrip({
  * name is for. The block's description reaches them through each tile's own
  * `aria-describedby` regardless.
  */
+/**
+ * What placing this tile DOES, for the two tiers where that is not obvious.
+ *
+ * A block tile carries no badge: inserting a block is the panel's ordinary
+ * act. A pattern is inserted as a COPY that forgets its source, and a
+ * component as a LINK that keeps pointing back — and those are opposite
+ * promises about what happens the next time the source is edited. An author
+ * choosing between two tiles that look alike is choosing between them, so the
+ * tile says which.
+ *
+ * `aria-hidden`, because the tile's accessible NAME is pinned to exactly its
+ * visible label so a spoken command matches what is written on it. The same
+ * promise reaches a screen reader through the tile's description instead —
+ * see {@link tierSentence} — which is read right after the name, before the
+ * press.
+ */
+function TierBadge({
+  entry,
+}: {
+  entry: InsertEntry;
+}): React.JSX.Element | null {
+  if (entry.kind === "block") return null;
+  return (
+    <span
+      className="nx-insert-panel__tier"
+      data-tier={entry.kind}
+      aria-hidden="true"
+    >
+      {entry.kind === "pattern" ? "Copy" : "Linked"}
+    </span>
+  );
+}
+
+/**
+ * The tier's promise as a sentence, for the description a screen reader hears.
+ *
+ * Empty for a block, whose description already says what it is. Leads the
+ * description rather than trailing it, because it is the part that decides
+ * whether to press: an author who hears "Header. A site header with
+ * navigation." learns what it draws; one who hears "placed as a link" first
+ * learns what pressing commits them to.
+ */
+function tierSentence(entry: InsertEntry): string {
+  if (entry.kind === "pattern") return "Placed as a copy that keeps no link. ";
+  if (entry.kind === "component") {
+    return "Placed as a link, so an edit to the component changes this page too. ";
+  }
+  return "";
+}
+
+/**
+ * The lookup a host that supplies none is judged under: nothing resolves.
+ *
+ * One shared instance rather than a `new Map()` per render, because the
+ * catalogue memo is keyed on it and a fresh empty map each render would
+ * rebuild the catalogue on every keystroke of the filter.
+ */
+const NO_DEFINITIONS: ComponentLookup = new Map();
+
+/**
+ * That a tier of the library was cut, or could not be read, said where an
+ * author looks for what is missing.
+ *
+ * `status` regions rather than alerts: each is a standing fact about this
+ * read, present from the moment the panel opens, and an alert would interrupt
+ * a screen reader mid-sentence to announce something that is not an event.
+ * Drawn above the tiles so they are read BEFORE an author searches in vain —
+ * a note at the end of a long list is one they reach after giving up.
+ *
+ * Named per tier, because the remedy the author reaches for differs: a pattern
+ * left out is one they cannot insert, while a component left out is also one
+ * already on the page drawing as could-not-be-loaded, and that second half is
+ * the sentence nothing else says. A tier that could not be read at all gets
+ * its own sentence and the retry, because that is a state with a remedy the
+ * author can reach from here — and a tier that could not be RE-read gets a
+ * third, since beside the tiles it left standing the second would be false.
+ */
+function LibraryNotices({
+  library,
+}: {
+  library: InsertPanelProps["library"];
+}): React.JSX.Element {
+  return (
+    <>
+      <CutNotice tiers={tiersIn(library, "cut")} />
+      <StaleNotice tiers={tiersIn(library, "stale")} retry={library?.retry} />
+      <UnavailableNotice
+        tiers={tiersIn(library, "unavailable")}
+        retry={library?.retry}
+      />
+    </>
+  );
+}
+
+/** The tiers a ceiling cut, and what a cut component means for the page. */
+function CutNotice({
+  tiers,
+}: {
+  tiers: string | undefined;
+}): React.JSX.Element | null {
+  if (tiers === undefined) return null;
+  return (
+    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+      The library is larger than the editor can load at once, so some {tiers}{" "}
+      are not offered here.
+      {tiers.includes("components")
+        ? " A component left out shows as “could not be loaded” on the page."
+        : null}
+    </p>
+  );
+}
+
+/**
+ * The tiers whose last answer could not be refreshed. The tiles stand, so
+ * what is said of them is that they may be out of date — and of a component
+ * on the page, that it draws as it was.
+ */
+function StaleNotice({
+  tiers,
+  retry,
+}: {
+  tiers: string | undefined;
+  retry: (() => void) | undefined;
+}): React.JSX.Element | null {
+  if (tiers === undefined) return null;
+  return (
+    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+      The site’s {tiers} could not be reloaded, so those offered may be out of
+      date.
+      {tiers.includes("components")
+        ? " A component already on the page draws as it was."
+        : null}{" "}
+      <RetryButton retry={retry} />
+    </p>
+  );
+}
+
+/** The tiers that could not be read at all, and what that means for the page. */
+function UnavailableNotice({
+  tiers,
+  retry,
+}: {
+  tiers: string | undefined;
+  retry: (() => void) | undefined;
+}): React.JSX.Element | null {
+  if (tiers === undefined) return null;
+  return (
+    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+      The site’s {tiers} could not be loaded, so none are offered here.
+      {tiers.includes("components")
+        ? " A component already on the page shows as “could not be loaded”."
+        : null}{" "}
+      <RetryButton retry={retry} />
+    </p>
+  );
+}
+
+/** The one remedy a failed read has, when the host supplied it. */
+function RetryButton({
+  retry,
+}: {
+  retry: (() => void) | undefined;
+}): React.JSX.Element | null {
+  if (retry === undefined) return null;
+  return (
+    <button type="button" className="nx-insert-panel__retry" onClick={retry}>
+      Try again
+    </button>
+  );
+}
+
+/**
+ * The tiers in one state, as the words a sentence names them with — or
+ * nothing when no tier is in that state.
+ */
+function tiersIn(
+  library: InsertPanelProps["library"],
+  state: LibraryTierState
+): string | undefined {
+  const patterns = library?.patterns === state;
+  const components = library?.components === state;
+  if (patterns && components) return "patterns and components";
+  if (patterns) return "patterns";
+  if (components) return "components";
+  return undefined;
+}
+
 function TouchGestureHint({
   shown,
 }: {
@@ -397,6 +646,9 @@ export function InsertPanel({
   editor,
   definitions,
   patterns,
+  components,
+  componentDefinitions,
+  library,
   nesting,
   categoryOrder,
   onInsert,
@@ -415,7 +667,6 @@ export function InsertPanel({
    * reads a tile by hovering it.
    */
   const [touchPressed, setTouchPressed] = React.useState(false);
-
   // ONE snapshot, taken per mount, that both the catalog and the default
   // expansion below read. The panel documents its palette as read once per
   // mount rather than subscribed to, and a second reading of the registry
@@ -439,8 +690,12 @@ export function InsertPanel({
     () => [
       ...catalogFrom(palette),
       ...patternEntriesFrom(patterns ?? [], source),
+      ...componentEntriesFrom(
+        components ?? [],
+        componentDefinitions ?? NO_DEFINITIONS
+      ),
     ],
-    [palette, patterns, source]
+    [palette, patterns, components, componentDefinitions, source]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather
@@ -476,7 +731,13 @@ export function InsertPanel({
         // search is a different message from "nothing can go here", and
         // filtering first would collapse them into one.
         groupByCategory(
-          filterEntries(allowedEntries(catalog, point.target, source), query),
+          filterEntries(
+            // The canvas's lookup travels with the question: a pattern whose
+            // root is a component instance is judged by what that component
+            // draws, as its own tile is.
+            allowedEntries(catalog, point.target, source, componentDefinitions),
+            query
+          ),
           categoryOrder
         );
 
@@ -553,6 +814,10 @@ export function InsertPanel({
       insertPattern(entry);
       return;
     }
+    if (entry.kind === "component") {
+      insertComponent(entry);
+      return;
+    }
     // `nesting` rather than `source`. They differ exactly when the caller
     // supplied no rules: `source` has already defaulted to the REGISTRY, which
     // knows nothing about a supplied definition and so reports every one of its
@@ -585,6 +850,28 @@ export function InsertPanel({
    * several inserts would come back one root at a time, which is not what the
    * author did.
    */
+  /**
+   * Place a component: ONE insert of an instance node.
+   *
+   * No planner, because there is nothing to plan — a pattern is a forest that
+   * has to be re-identified and judged root by root against the destination,
+   * while an instance is a single node whose content lives in the definition.
+   * The placement was judged when the tile was offered, by the definition's
+   * roots, so a refusal here means the document moved underneath the panel.
+   */
+  const insertComponent = (entry: ComponentInsertEntry) => {
+    if (point === null) return;
+    const node = nodeForComponentEntry(entry);
+    // Whether the PAGE has room for it — the one refusal the tile could not
+    // make, because room moves with every edit — is the editor's own apply's
+    // to make: it asks the resolver with the node in place, under the caps it
+    // enforces, and tells the host why when it refuses. A null here is that
+    // refusal, or a document that moved under the panel.
+    if (editor.apply({ kind: "insert", node, at: point.at }) === null) return;
+    editor.select(node.id);
+    onInsert?.(node);
+  };
+
   const insertPattern = (entry: PatternInsertEntry) => {
     if (point === null) return;
     const plan = planInsertPattern(
@@ -645,6 +932,7 @@ export function InsertPanel({
         <p className="nx-insert-panel__placement" aria-live="polite">
           {placementLabel(point)}
         </p>
+        <LibraryNotices library={library} />
         <CommandList>
           <CommandEmpty>
             {query.trim() === ""
@@ -734,6 +1022,7 @@ export function InsertPanel({
                 >
                   <BlockIconMark icon={entry.icon} />
                   <span className="nx-insert-panel__label">{entry.label}</span>
+                  <TierBadge entry={entry} />
                   {/* Kept in the tile and no longer drawn: `aria-describedby`
                       needs an element to point at, and keeping it here is what
                       stops a tile and the sentence describing it from being
@@ -742,6 +1031,7 @@ export function InsertPanel({
                     className="nx-insert-panel__description"
                     id={tokens.get(entry.id)}
                   >
+                    {tierSentence(entry)}
                     {entry.description}
                   </span>
                 </CommandItem>
