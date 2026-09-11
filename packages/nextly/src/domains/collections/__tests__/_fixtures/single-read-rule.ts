@@ -69,12 +69,18 @@ export default function singleReadRule({
     // flag and allows; the judge after them sees the flag, and sees the nested
     // value only if the evidence a redaction pass removed is restored by path,
     // since the hook on the group rebuilds it as a fresh object.
-    case "nested-aware":
+    case "nested-aware": {
+      // A hook may hand the group over as a JSON string; the rule reads it
+      // either way, so the case can tell evidence from serialisation.
+      const raw = (data as { settings?: unknown })?.settings;
+      const settings = (typeof raw === "string" ? JSON.parse(raw) : raw) as
+        | { visibility?: string }
+        | undefined;
       return !(
         (data as { flagged?: boolean })?.flagged === true &&
-        (data as { settings?: { visibility?: string } })?.settings
-          ?.visibility === "private"
+        settings?.visibility === "private"
       );
+    }
     // Refuses a flagged document when a value nested in a group the caller may
     // not read AT ALL (the group itself is denied) is private. The evidence for
     // the child sits beneath a container the pass removed whole.

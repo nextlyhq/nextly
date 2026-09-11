@@ -509,4 +509,125 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     expect(settings).not.toHaveProperty("openTag");
     expect(settings).not.toHaveProperty("policy");
   });
+
+  it("keeps rows whose ids collide under a naive suffix on separate paths", async () => {
+    // Ids "dup", "dup", "dup#2" and "dup~2": the second "dup" is the second
+    // occurrence of its id, and the later rows' ids LOOK like an occurrence
+    // suffix under either marker. Encoded, a literal "#" in an id cannot
+    // collide with the marker, and "~" is not the marker.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({
+              name: "siteName",
+              hooks: {
+                afterRead: [
+                  ({ value, data }) => {
+                    (data as Record<string, unknown>).flagged = true;
+                    return value;
+                  },
+                ],
+              },
+            }),
+            repeater({
+              name: "entries",
+              fields: [
+                text({ name: "id" }),
+                text({ name: "visibility", access: { read: () => false } }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        entries: [
+          { id: "dup", visibility: "public" },
+          { id: "dup", visibility: "private" },
+          { id: "dup#2", visibility: "public" },
+          { id: "dup~2", visibility: "public" },
+        ],
+      },
+      { overrideAccess: true }
+    );
+
+    const denied = await entry.get("branding", {
+      user: { id: "rows-aware" },
+      routeAuthorized: true,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it("keeps nested evidence for a container an entity hook hands over as a JSON string", async () => {
+    // The Single-level afterRead runs before the field passes and returns
+    // `settings` as a string. The first pass parses rows to judge them and
+    // serialises the redacted group back; evidence recorded by walking the
+    // document afterwards would parse fresh rows and find nothing.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          hooks: {
+            afterRead: [
+              ({ data }) => ({
+                ...(data as Record<string, unknown>),
+                settings: JSON.stringify(
+                  (data as { settings?: unknown }).settings
+                ),
+              }),
+            ],
+          },
+          fields: [
+            text({
+              name: "siteName",
+              hooks: {
+                afterRead: [
+                  ({ value, data }) => {
+                    (data as Record<string, unknown>).flagged = true;
+                    return value;
+                  },
+                ],
+              },
+            }),
+            group({
+              name: "settings",
+              fields: [
+                text({ name: "visibility", access: { read: () => false } }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", settings: { visibility: "private" } },
+      { overrideAccess: true }
+    );
+
+    const denied = await entry.get("branding", {
+      user: { id: "nested-aware" },
+      routeAuthorized: true,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+  });
 });

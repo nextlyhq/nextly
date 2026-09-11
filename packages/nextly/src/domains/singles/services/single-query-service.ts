@@ -77,8 +77,9 @@ import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldReadAccessWithEvidence,
+  newReadAccessEvidence,
+  readAccessGrants,
   runFieldHooks,
-  captureReadAccessEvidence,
   type ReadAccessRedactions,
   snapshotWithReadAccessEvidence,
 } from "../../../shared/lib/field-level-registry";
@@ -2049,6 +2050,13 @@ export class SingleQueryService extends BaseService {
       // who is actually asking.
       const fieldAccessUser = options.fieldAccessUser ?? options.user;
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
+      // One grants resolver for both passes, so the caller's roles and
+      // permissions are read once and both judge with one authority.
+      const fieldAccessGrants = readAccessGrants(fieldAccessUser);
+      // What the first pass removes, by path, recorded during its walk: the
+      // document-level rule below is judged with it restored, and the second
+      // pass reads it back onto a container a hook may have rebuilt.
+      const readAccessEvidence = newReadAccessEvidence();
       await applyFieldReadAccess(
         {
           kind: "single",
@@ -2056,13 +2064,9 @@ export class SingleQueryService extends BaseService {
           entry: doc,
           user: fieldAccessUser,
           overrideAccess: skipFieldRules,
+          grants: fieldAccessGrants,
+          evidence: readAccessEvidence,
         },
-        sourceRedactions
-      );
-      // What the pass removed, by path, taken before any hook can rebuild a
-      // container: the document-level rule below is judged with it restored.
-      const readAccessEvidence = captureReadAccessEvidence(
-        { kind: "single", slug, entry: doc },
         sourceRedactions
       );
 
@@ -2120,6 +2124,7 @@ export class SingleQueryService extends BaseService {
           entry: doc,
           user: fieldAccessUser,
           overrideAccess: skipFieldRules,
+          grants: fieldAccessGrants,
         },
         sourceRedactions,
         readAccessEvidence

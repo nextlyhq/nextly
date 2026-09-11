@@ -582,7 +582,8 @@ async function applyReadAccessRec(
     grants: () => Promise<CallerGrants>;
   },
   redactions: ReadAccessRedactions,
-  restoredByRow: RestoredByRow
+  restoredByRow: RestoredByRow,
+  evidence: { sink: ReadAccessEvidence; path: string } | undefined
 ): Promise<void> {
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
@@ -591,19 +592,29 @@ async function applyReadAccessRec(
   const snapshot = levelHasAccessCallback(fns, "read")
     ? detachData(entry)
     : undefined;
+  if (evidence) evidence.sink.pathOf.set(entry, evidence.path);
   const denied: string[] = [];
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;
     if (fieldFns.fields) {
       const container = openNestedContainer(entry[name]);
       if (container) {
-        for (const row of container.rows) {
+        const segments = evidence
+          ? rowSegments(name, container.rows)
+          : undefined;
+        for (const [index, row] of container.rows.entries()) {
           await applyReadAccessRec(
             row,
             fieldFns.fields,
             ctx,
             redactions,
-            restoredByRow
+            restoredByRow,
+            evidence && segments
+              ? {
+                  sink: evidence.sink,
+                  path: `${evidence.path}/${segments[index]}`,
+                }
+              : undefined
           );
         }
         entry[name] = container.serialize();
@@ -654,6 +665,30 @@ async function applyReadAccessRec(
     // restore a value this row now legitimately carries or no longer hides.
     redactions.delete(entry);
   }
+  // Recorded HERE, while the rows this pass parsed still exist: a container
+  // that arrived as a JSON string is parsed into rows for the walk and
+  // serialised back on the way out, so a walk after the pass would parse
+  // different objects and find nothing under them. Detached, because these
+  // values are handed to rules and hooks that are free to write to what they
+  // are given.
+  if (evidence && Object.keys(removed).length > 0) {
+    evidence.sink.byPath.set(evidence.path, detachData({ ...removed }));
+  }
+}
+
+/**
+ * The caller's grants resolver for a read, to hand to every field-access pass
+ * over one document so roles and permissions are read once. Memoised on first
+ * use, like the resolver each pass would otherwise build for itself.
+ */
+export function readAccessGrants(
+  user: Record<string, unknown> | undefined,
+  authenticatedScope?: AuthenticatedScope
+): () => Promise<CallerGrants> {
+  return grantsResolver(
+    typeof user?.id === "string" ? user.id : undefined,
+    authenticatedScope
+  );
 }
 
 /**
@@ -676,6 +711,18 @@ export async function applyFieldReadAccess(
     /** The caller's own grants when they arrived on an API key; see {@link grantsResolver}. */
     authenticatedScope?: AuthenticatedScope;
     overrideAccess?: boolean;
+    /**
+     * A resolver shared with another pass over the same document, so the two
+     * passes read the caller's roles and permissions once and judge with one
+     * authority; see {@link readAccessGrants}.
+     */
+    grants?: () => Promise<CallerGrants>;
+    /**
+     * Where to record what this pass removes, by path, for a caller that has
+     * to restore it onto rows a hook may have rebuilt; see
+     * {@link ReadAccessEvidence}.
+     */
+    evidence?: ReadAccessEvidence;
   },
   redactions?: ReadAccessRedactions
 ): Promise<void> {
@@ -701,13 +748,16 @@ export async function applyFieldReadAccess(
       // An unauthenticated read still runs the rules — this path, unlike the
       // write one, does not bail without a user — so the resolver is handed the
       // same absent id and answers with no grants rather than not being called.
-      grants: grantsResolver(
-        typeof opts.user?.id === "string" ? opts.user.id : undefined,
-        opts.authenticatedScope
-      ),
+      grants:
+        opts.grants ??
+        grantsResolver(
+          typeof opts.user?.id === "string" ? opts.user.id : undefined,
+          opts.authenticatedScope
+        ),
     },
     store,
-    restoredByRow
+    restoredByRow,
+    opts.evidence ? { sink: opts.evidence, path: "" } : undefined
   );
   // A restored value existed only to feed the snapshots above. The caller was
   // denied it and the post-hook row did not supply it, so it must not appear in
@@ -726,13 +776,16 @@ export async function applyFieldReadAccess(
  * told apart by its occurrence. Keyed by path rather than by row object
  * because a hook may return a fresh container (a spread of the redacted one is
  * the common shape), after which the store's object keys point at rows nothing
- * references and the evidence in them is unreachable.
+ * references and the evidence in them is unreachable. Filled by
+ * {@link applyFieldReadAccess} during its walk, where the rows it parsed
+ * exist; a walk taken afterwards would not find a container it serialised back
+ * to a string.
  */
 export interface ReadAccessEvidence {
   /** Removed values by path. */
   byPath: Map<string, Record<string, unknown>>;
   /**
-   * The path each row object sat at when captured. A hook that reorders or
+   * The path each row object sat at when recorded. A hook that reorders or
    * removes rows keeps the objects it kept, so a row this recognises is
    * restored from where it came rather than from where it now sits; only a
    * row a hook rebuilt falls back to the path its current position yields.
@@ -740,73 +793,27 @@ export interface ReadAccessEvidence {
   pathOf: WeakMap<Record<string, unknown>, string>;
 }
 
+/** An empty evidence record, for a caller about to run a pass that fills it. */
+export function newReadAccessEvidence(): ReadAccessEvidence {
+  return { byPath: new Map(), pathOf: new WeakMap() };
+}
+
 /**
- * Path segments for the rows of one container: `name#<id>` for a row with a
- * string id, `name@<index>` otherwise, and `~<n>` appended to the second and
- * later rows that share an id, since the redaction contract permits duplicates
- * and two rows on one path would overwrite each other's evidence.
+ * Path segments for the rows of one container, collision-free: the id is
+ * percent-encoded, which leaves no `#` in it, and the second and later rows
+ * sharing an id carry `#<n>` after it. An id-less row is named by its index.
+ * The redaction contract permits duplicate ids, so two rows on one path would
+ * otherwise overwrite each other's evidence.
  */
 function rowSegments(name: string, rows: Record<string, unknown>[]): string[] {
   const seen = new Map<string, number>();
   return rows.map((row, index) => {
     if (typeof row.id !== "string") return `${name}@${index}`;
-    const base = `${name}#${row.id}`;
+    const base = `${name}#${encodeURIComponent(row.id)}`;
     const n = (seen.get(base) ?? 0) + 1;
     seen.set(base, n);
-    return n === 1 ? base : `${base}~${n}`;
+    return n === 1 ? base : `${base}#${n}`;
   });
-}
-
-function captureEvidenceRec(
-  entry: Record<string, unknown>,
-  fns: Record<string, FieldFunctions>,
-  redactions: ReadAccessRedactions,
-  path: string,
-  out: ReadAccessEvidence
-): void {
-  out.pathOf.set(entry, path);
-  const removed = redactions.get(entry);
-  if (removed && Object.keys(removed).length > 0) {
-    // Detached: a removed value may be an object, and it is about to be handed
-    // to rules and hooks that are free to write to what they are given.
-    out.byPath.set(path, detachData({ ...removed }));
-  }
-  for (const [name, fieldFns] of Object.entries(fns)) {
-    if (!fieldFns.fields) continue;
-    // A container the pass removed still holds its rows, and those rows'
-    // own redactions were recorded before the parent-level rule took the
-    // container away. Read them from the removed value, since the entry no
-    // longer has the key.
-    const value = name in entry ? entry[name] : removed?.[name];
-    const container = openNestedContainer(value);
-    if (!container) continue;
-    const segments = rowSegments(name, container.rows);
-    container.rows.forEach((row, index) => {
-      captureEvidenceRec(
-        row,
-        fieldFns.fields as Record<string, FieldFunctions>,
-        redactions,
-        `${path}/${segments[index]}`,
-        out
-      );
-    });
-  }
-}
-
-/**
- * Record, by path, what a read-access pass removed from `entry`, at every
- * depth, including beneath a container the pass removed whole. Taken right
- * after the pass and before any hook runs, while the store's row objects are
- * still the rows the document holds.
- */
-export function captureReadAccessEvidence(
-  opts: { kind: EntityKind; slug: string; entry: Record<string, unknown> },
-  redactions: ReadAccessRedactions
-): ReadAccessEvidence {
-  const out: ReadAccessEvidence = { byPath: new Map(), pathOf: new WeakMap() };
-  const fns = getFieldFunctions(opts.kind, opts.slug);
-  if (fns) captureEvidenceRec(opts.entry, fns, redactions, "", out);
-  return out;
 }
 
 function restoreEvidenceRec(
