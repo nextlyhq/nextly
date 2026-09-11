@@ -146,11 +146,10 @@ describe("bulk update honours overrideAccess (integration)", () => {
       { collectionName: "pages" },
       [{ id, data: { internalNote: "after" } }]
     );
-    // Only what this case is about: the protected field did not change. The
-    // row itself fails here because stripping the field leaves an empty
-    // patch, and the transactional update refuses an empty patch where the
-    // ordinary one does not; that is a property of the patch, not of the flag.
-    expect(unelevated.successful).toBe(0);
+    // The row write is allowed and the protected field is stripped from it,
+    // leaving an empty patch, which updates the row's timestamp and nothing
+    // else. What this case is about is the field, asserted below.
+    expect(unelevated.errors).toEqual([]);
     let read = await handler.getEntry({
       collectionName: "pages",
       entryId: id,
