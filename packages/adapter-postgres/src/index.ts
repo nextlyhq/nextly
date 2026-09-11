@@ -1078,11 +1078,9 @@ export class PostgresAdapter extends DrizzleAdapter {
         );
       },
 
-      // Adapter-built, as `insert` above is, and for the same reason: the
-      // statement reaches the columns the physical table has, where the query
-      // builder writes only the ones the runtime model declares. A column the
-      // model knows binds through its own encoder; one it does not binds
-      // natively, as every value on this path's insert does.
+      // Adapter-built, as `insert` above is; `buildTransactionUpdate` says
+      // why. A column the model does not declare binds natively, as every
+      // value on this path's insert does.
       update: async <T = unknown>(
         table: string,
         data: Record<string, unknown>,

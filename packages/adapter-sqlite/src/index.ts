@@ -866,11 +866,9 @@ export class SqliteAdapter extends DrizzleAdapter {
         );
       },
 
-      // Adapter-built, as `insert` above is, and for the same reason: the
-      // statement reaches the columns the physical table has, where the query
-      // builder writes only the ones the runtime model declares. A column the
-      // model knows binds through its own encoder; one it does not binds as
-      // every other value on this path does, through `sanitizeSqliteValue`.
+      // Adapter-built, as `insert` above is; `buildTransactionUpdate` says
+      // why. A column the model does not declare binds as every other value
+      // on this path does, through `sanitizeSqliteValue`.
       // eslint-disable-next-line @typescript-eslint/require-await
       update: async <T = unknown>(
         table: string,
