@@ -3130,6 +3130,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           onEditText={inline.begin}
           onSaveAsPattern={savePattern.open}
           /*
+            The same map the canvas draws with, so a keyboard move of an
+            instance is judged by the roots it draws — as its drop is — rather
+            than by the instance node's own type, which the nesting rule
+            restricts nowhere.
+          */
+          definitions={componentLibrary.definitions}
+          /*
             Whether the author holds the grant the save is judged by, asked of
             the server because only it knows the RESOLVED collection: a site may
             rename it, and the browser knows the declared name alone. Passed

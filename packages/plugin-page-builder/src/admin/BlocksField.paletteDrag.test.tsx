@@ -113,6 +113,7 @@ const seen: {
   dragOptions: Record<string, unknown> | undefined;
   toolbar: Record<string, unknown> | undefined;
   spacing: Record<string, unknown> | undefined;
+  keyboard: Record<string, unknown> | undefined;
 } = {
   inspector: undefined,
   canvas: undefined,
@@ -121,6 +122,7 @@ const seen: {
   dragOptions: undefined,
   toolbar: undefined,
   spacing: undefined,
+  keyboard: undefined,
 };
 
 /** What the recorded drag reports as in flight, per test. */
@@ -221,7 +223,17 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         <div data-recorder="canvas">{props.overlay as React.ReactNode}</div>
       );
     },
-    BlockKeyboardActions: passthrough,
+    // Passed through AND recorded: the canvas renders inside it, and what the
+    // host hands it decides how a keyboard move is judged.
+    BlockKeyboardActions: ({
+      children,
+      ...props
+    }: {
+      children?: React.ReactNode;
+    } & Record<string, unknown>): React.JSX.Element => {
+      seen.keyboard = props;
+      return <>{children}</>;
+    },
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
      * a stub would take the recorder below out of the tree along with it. The
@@ -392,6 +404,7 @@ beforeEach(() => {
   seen.canvas = undefined;
   seen.toolbar = undefined;
   seen.spacing = undefined;
+  seen.keyboard = undefined;
   draggingBlockName = null;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
@@ -646,6 +659,28 @@ describe("what the editor reads before anyone asks for it", () => {
     const canvas = recorded("canvas");
     const render = canvas.render as { definitions: unknown };
     expect(seen.dragOptions?.definitions).toBe(render.definitions);
+  });
+
+  it("hands the keyboard verbs the same map, so a moved instance is judged by its roots on every route", () => {
+    // Alt+Arrow, the toolbar and the command palette all move through the
+    // keyboard verbs; judged by the instance node's own type they would lift
+    // a component whose root belongs only inside a container up to the root,
+    // where the same instance's drop is refused.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const render = recorded("canvas").render as { definitions: unknown };
+    expect(seen.keyboard?.definitions).toBe(render.definitions);
+    expect(render.definitions).toBeDefined();
   });
 
   it("hands the canvas and the panel ONE definitions map, and the panel the rows and the cut", () => {
