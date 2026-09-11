@@ -78,8 +78,6 @@ import type {
   TransactionOptions,
   SqlParam,
   InsertOptions,
-  UpdateOptions,
-  WhereClause,
   DatabaseError,
   DatabaseErrorKind,
 } from "@nextlyhq/adapter-drizzle/types";
@@ -1084,29 +1082,14 @@ export class PostgresAdapter extends DrizzleAdapter {
         );
       },
 
-      // Adapter-built, as `insert` above is; `buildTransactionUpdate` says
-      // why. A column the model does not declare binds natively, as every
-      // value on this path's insert does.
-      update: async <T = unknown>(
-        table: string,
-        data: Record<string, unknown>,
-        where: WhereClause,
-        options?: UpdateOptions
-      ): Promise<T[]> => {
-        try {
-          await txDb().execute(
-            this.buildTransactionUpdate(table, data, where, value => value)
-          );
-        } catch (error) {
-          // Classified with the operation and table named, as the pooled
-          // `update` classifies its failures.
-          throw this.handleQueryError(error, "update", table);
-        }
-        // The rows read back on this transaction, decoded as any read is.
-        return this.updateReturnsRows(options?.returning)
-          ? this.select<T>(table, { where }, txDb())
-          : [];
-      },
+      // Adapter-built, as `insert` above is; `transactionUpdate` says why.
+      // A column the model does not declare binds natively, as every value
+      // on this path's insert does.
+      update: this.transactionUpdate(
+        txDb,
+        statement => txDb().execute(statement),
+        value => value
+      ),
 
       ...this.createTransactionForwarders(txDb),
 

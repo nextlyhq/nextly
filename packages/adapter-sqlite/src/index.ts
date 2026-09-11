@@ -865,32 +865,16 @@ export class SqliteAdapter extends DrizzleAdapter {
         );
       },
 
-      // Adapter-built, as `insert` above is; `buildTransactionUpdate` says
-      // why. A column the model does not declare binds as every other value
-      // on this path does, through `sanitizeSqliteValue`. Synchronous like
-      // `runStatement`, so the promise is already settled either way.
-      update: <T = unknown>(
-        table: string,
-        data: Record<string, unknown>,
-        where: WhereClause,
-        options?: UpdateOptions
-      ): Promise<T[]> => {
-        try {
-          // `run`, not `all`: better-sqlite3 throws on a statement that
-          // returns no rows, which is what this UPDATE is.
-          txDb().run(
-            this.buildTransactionUpdate(table, data, where, sanitizeSqliteValue)
-          );
-        } catch (error) {
-          // Classified with the operation and table named, as the pooled
-          // `update` classifies its failures.
-          return Promise.reject(this.handleQueryError(error, "update", table));
-        }
-        // The rows read back on this transaction, decoded as any read is.
-        return this.updateReturnsRows(options?.returning)
-          ? this.select<T>(table, { where }, txDb())
-          : Promise.resolve([]);
-      },
+      // Adapter-built, as `insert` above is; `transactionUpdate` says why.
+      // A column the model does not declare binds as every other value on
+      // this path does, through `sanitizeSqliteValue`. `run`, not `all`:
+      // better-sqlite3 throws on a statement that returns no rows, which is
+      // what this UPDATE is.
+      update: this.transactionUpdate(
+        txDb,
+        statement => txDb().run(statement),
+        sanitizeSqliteValue
+      ),
 
       ...this.createTransactionForwarders(txDb),
 

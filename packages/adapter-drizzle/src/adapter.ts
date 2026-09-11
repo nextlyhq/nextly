@@ -2294,7 +2294,7 @@ export abstract class DrizzleAdapter {
   }
 
   /**
-   * The statement behind a transaction context's `update`.
+   * A transaction context's `update`, for each adapter to bind.
    *
    * Not forwarded to the pooled `update` the way `select` and `delete` are:
    * that one goes through the Drizzle query builder, which writes the columns
@@ -2303,9 +2303,44 @@ export abstract class DrizzleAdapter {
    * writes a column the model has already moved to a companion table that
    * does not exist yet. The INSERT half of every transaction context already
    * builds its own statement for that reason; `update-statement.ts` is the
-   * UPDATE half, spelled once for the three adapters. Each adapter runs the
-   * statement itself on its transaction executor, and reads the rows back
-   * through `select` when asked (`updateReturnsRows`).
+   * UPDATE half, spelled once for the three adapters, and this runs it: on
+   * the transaction executor, classified with the operation and table named
+   * as the pooled `update` classifies its failures, and read back through
+   * `select` on the same executor when the caller asked for rows.
+   *
+   * @param txDb - thunk returning the transaction-bound Drizzle instance
+   * @param run - how this dialect runs a statement on that instance:
+   *   better-sqlite3 answers synchronously, the pooled drivers do not
+   * @param bindUnmodeled - how a value binds when the model declares no
+   *   column for it; a declared column binds through its own encoder
+   * @returns the context's `update` method
+   */
+  protected transactionUpdate(
+    txDb: () => unknown,
+    run: (statement: SQL) => unknown,
+    bindUnmodeled: (value: unknown) => unknown
+  ): TransactionContext["update"] {
+    return async <T = unknown>(
+      table: string,
+      data: Record<string, unknown>,
+      where: WhereClause,
+      options?: UpdateOptions
+    ): Promise<T[]> => {
+      try {
+        await run(
+          this.buildTransactionUpdate(table, data, where, bindUnmodeled)
+        );
+      } catch (error) {
+        throw this.handleQueryError(error, "update", table);
+      }
+      return this.updateReturnsRows(options?.returning)
+        ? this.select<T>(table, { where }, txDb())
+        : [];
+    };
+  }
+
+  /**
+   * The statement `transactionUpdate` runs.
    *
    * @param bindUnmodeled - how a value binds when the model declares no
    *   column for it; a declared column binds through its own encoder.
@@ -2314,7 +2349,7 @@ export abstract class DrizzleAdapter {
    *   refused that too ("No values to set"), and a patch that names nothing
    *   is a caller's mistake rather than a write of nothing.
    */
-  protected buildTransactionUpdate(
+  private buildTransactionUpdate(
     table: string,
     data: Record<string, unknown>,
     where: WhereClause,
@@ -2354,7 +2389,7 @@ export abstract class DrizzleAdapter {
    * what the query-builder update returned for them, and why the named list
    * selects nothing narrower.
    */
-  protected updateReturnsRows(returning: UpdateOptions["returning"]): boolean {
+  private updateReturnsRows(returning: UpdateOptions["returning"]): boolean {
     return (
       returning !== undefined &&
       !(Array.isArray(returning) && returning.length === 0)

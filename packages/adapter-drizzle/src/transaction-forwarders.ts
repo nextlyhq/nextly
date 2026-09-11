@@ -57,8 +57,8 @@ export interface TransactionCrudDelegator {
  * `update` is not among them. The pooled `update` goes through the Drizzle
  * query builder, which writes the columns the runtime model declares; a
  * transaction's update must reach the columns the physical table has, and
- * each adapter builds that statement beside its transactional `insert` from
- * the base class's `buildTransactionUpdate`.
+ * each adapter binds the base class's `transactionUpdate` beside its
+ * transactional `insert`.
  */
 export type TransactionCrudForwarders = Pick<
   TransactionContext,
