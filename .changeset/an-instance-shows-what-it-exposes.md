@@ -27,8 +27,9 @@
 ---
 
 Selecting a component instance in the builder now opens its own inspector in
-place of the block tabs: the component's title and usage, then one row per
-exposed property showing the value in force, where it came from (inherited,
+place of the block tabs: the component's title (and how many pages use it, once
+the library carries that count), then one row per exposed property showing the
+value in force, where it came from (inherited,
 from a variant, overridden, or cleared), and a visible Reset on every override.
 Text and choice properties are edited in place; rich text, image, link and
 visibility rows show their value and say they are not editable here yet. An

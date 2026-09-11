@@ -351,6 +351,38 @@ describe("where a value came from, and the way back", () => {
   });
 });
 
+describe("a choice with an empty option", () => {
+  it("renders a definition whose select offers “none” as an empty value, and writes it back empty", () => {
+    // The validator accepts `""` as an option value and the select control
+    // throws on it at render, so an otherwise valid component crashed its
+    // inspector. The empty value wears a sentinel in the control and comes
+    // back as `""` — asserted on the WRITE, since the sentinel must never
+    // reach the document.
+    const noneable = header({
+      exposed: [
+        {
+          id: "tone",
+          label: "Tone",
+          nodeId: "h1",
+          propPath: "tone",
+          type: "select",
+          options: [
+            { value: "", label: "None" },
+            { value: "dark", label: "Dark" },
+          ],
+        },
+      ],
+    });
+    const editor = mount(instance({ overrides: { tone: "" } }), noneable);
+
+    // Rendered at all is the first half: the trigger stands and shows the
+    // empty option's label as the current choice.
+    const trigger = screen.getByRole("combobox", { name: "Tone" });
+    expect(trigger.textContent).toContain("None");
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+});
+
 describe("rows with no control", () => {
   it("lists a type it cannot edit yet, with its value, rather than hiding it", () => {
     mount(instance());

@@ -65,6 +65,28 @@ const SOURCE_LABEL: Readonly<Record<ExposedRow["source"], string>> = {
 };
 
 /**
+ * The control's spelling of an option value the definition left EMPTY.
+ *
+ * A definition may offer `""` as a choice — "none", for a select whose other
+ * options are class names — and the validator accepts it. The select control
+ * cannot: the primitive underneath throws at render on an item whose value is
+ * the empty string, which it reserves for "no selection". So the empty value
+ * wears a sentinel in the control and is taken off again on the way back to
+ * the document. A NUL rather than a word, because a definition's option is
+ * free text and any word could be one of them; nothing an author types
+ * contains a NUL.
+ */
+const EMPTY_OPTION = "\u0000";
+
+function encodeOption(value: string): string {
+  return value === "" ? EMPTY_OPTION : value;
+}
+
+function decodeOption(value: string): string {
+  return value === EMPTY_OPTION ? "" : value;
+}
+
+/**
  * What an exposed type is called in a sentence telling the author it cannot be
  * edited here yet. The engine's names are code; these are words.
  */
@@ -288,15 +310,17 @@ function ExposedControl({
   if (row.type === "select") {
     return (
       <Select
-        value={typeof row.value === "string" ? row.value : undefined}
-        onValueChange={next => onSet(row.id, next)}
+        value={
+          typeof row.value === "string" ? encodeOption(row.value) : undefined
+        }
+        onValueChange={next => onSet(row.id, decodeOption(next))}
       >
         <SelectTrigger id={id}>
           <SelectValue placeholder="Choose" />
         </SelectTrigger>
         <SelectContent>
           {row.options.map(option => (
-            <SelectItem key={option.value} value={option.value}>
+            <SelectItem key={option.value} value={encodeOption(option.value)}>
               {option.label}
             </SelectItem>
           ))}
