@@ -196,35 +196,75 @@ describe("room for the components an edit places", () => {
     expect(onRefused).toHaveBeenCalledTimes(1);
   });
 
-  it("never refuses an undo or a redo for room", () => {
+  it("never refuses an undo or a redo for room, even once the library has grown past the page", () => {
     // An accepted edit's inverse returns the page to a state that was
     // accepted; the room question is asked of fresh edits only, so a library
     // that grew or a cap that shrank between the two cannot strand history.
+    // The library GROWS here between each edit and its replay — a definition
+    // of three nodes becomes one of ten, which no longer fits — so a replay
+    // that were asked would be refused.
+    const grown = new Map([
+      [
+        "three",
+        {
+          ...three,
+          nodes: Array.from({ length: 10 }, (_, i) => node(`g${String(i)}`)),
+        } as BlockDocument,
+      ],
+    ]);
     const onRefused = vi.fn();
-    const { result } = renderHook(() =>
-      useEditorState({
-        initialDocument: doc([node("p0")]),
-        limits,
-        definitions,
-        onRefused,
-      })
-    );
+    const mountWith = (initialDocument: BlockDocument) =>
+      renderHook(
+        ({ lookup }: { lookup: Map<string, BlockDocument> }) =>
+          useEditorState({
+            initialDocument,
+            limits,
+            definitions: lookup,
+            onRefused,
+          }),
+        { initialProps: { lookup: definitions } }
+      );
+
+    // A REDO that re-places the instance.
+    const placed = mountWith(doc([node("p0")]));
     act(() => {
-      result.current.apply({
+      placed.result.current.apply({
         kind: "insert",
         node: instance("first"),
         at: { index: 1 },
       });
     });
     act(() => {
-      result.current.undo();
+      placed.result.current.undo();
     });
+    placed.rerender({ lookup: grown });
     act(() => {
-      result.current.redo();
+      placed.result.current.redo();
     });
+    expect(ids(placed.result.current.document)).toEqual(["p0", "first"]);
 
-    expect(ids(result.current.document)).toEqual(["p0", "first"]);
+    // An UNDO that puts a removed instance back.
+    const removed = mountWith(doc([node("p0"), instance("first")]));
+    act(() => {
+      removed.result.current.apply({ kind: "remove", id: "first" });
+    });
+    removed.rerender({ lookup: grown });
+    act(() => {
+      removed.result.current.undo();
+    });
+    expect(ids(removed.result.current.document)).toEqual(["p0", "first"]);
+
     expect(onRefused).not.toHaveBeenCalled();
+    // The control: the grown library DOES refuse the same placement as a
+    // fresh edit, so the replays above were judged by the rule and spared.
+    act(() => {
+      removed.result.current.apply({
+        kind: "insert",
+        node: instance("second"),
+        at: { index: 2 },
+      });
+    });
+    expect(onRefused).toHaveBeenCalledTimes(1);
   });
 
   it("asks nothing of a host that supplies no definitions", () => {

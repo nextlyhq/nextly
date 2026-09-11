@@ -136,6 +136,29 @@ export interface UseEditorStateArgs {
 }
 
 /**
+ * Whether an edit that turned `before` into `after` leaves the page without
+ * room for a component it holds — telling the host why, when it does.
+ *
+ * Nothing to ask without definitions: a host that resolves nothing has no
+ * composition to judge, and keeps the apply it had.
+ */
+function refusedForRoom(
+  before: BlockDocument,
+  after: BlockDocument,
+  {
+    definitions,
+    onRefused,
+  }: Pick<UseEditorStateArgs, "definitions" | "onRefused">,
+  limits: DocumentLimits
+): boolean {
+  if (definitions === undefined) return false;
+  const refusal = compositionRefusal(before, after, definitions, limits);
+  if (refusal === undefined) return false;
+  onRefused?.(refusal);
+  return true;
+}
+
+/**
  * Hold a document and the edits made to it.
  *
  * The document is state and the history is a ref: history changes on every edit
@@ -274,21 +297,16 @@ export function useEditorState({
       // edit only. An undo or a redo returns the page to a state that was
       // accepted when it was made, and a library that grew or a cap that
       // shrank since must not strand the history.
-      if (into === "new") {
-        const { definitions: lookup, onRefused: told } = composition.current;
-        const refusal =
-          lookup === undefined
-            ? undefined
-            : compositionRefusal(
-                latestDocument.current,
-                group.document,
-                lookup,
-                limits
-              );
-        if (refusal !== undefined) {
-          told?.(refusal);
-          return null;
-        }
+      if (
+        into === "new" &&
+        refusedForRoom(
+          latestDocument.current,
+          group.document,
+          composition.current,
+          limits
+        )
+      ) {
+        return null;
       }
 
       const applied = { document: group.document, inverse: group.inverses };
