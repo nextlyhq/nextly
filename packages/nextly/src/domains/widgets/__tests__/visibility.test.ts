@@ -158,7 +158,7 @@ describe("widgetAudience", () => {
     registerSource(source("posts"));
     reader([], ["posts"]);
 
-    const audience = widgetAudience(await visibleWidgets(CALLER));
+    const audience = await widgetAudience(CALLER);
 
     expect([...audience.declared]).toEqual(["acme/welcome", "app/notes"]);
     // The generated half is the DEFINITION, not an id: the admin holds no copy
@@ -183,7 +183,7 @@ describe("widgetAudience", () => {
     registerSource(source("posts"));
     reader([], ["posts"]);
 
-    const audience = widgetAudience(await visibleWidgets(CALLER));
+    const audience = await widgetAudience(CALLER);
 
     expect(audience.declared.has("collection/posts-count")).toBe(true);
     expect(ids(audience.generated)).not.toContain("collection/posts-count");
@@ -197,10 +197,72 @@ describe("widgetAudience", () => {
     registerSource(source("secret"));
     reader([], ["posts"]);
 
-    const audience = widgetAudience(await visibleWidgets(CALLER));
+    const audience = await widgetAudience(CALLER);
 
     expect(ids(audience.generated)).toContain("collection/posts-count");
     expect(ids(audience.generated)).not.toContain("collection/secret-count");
+  });
+
+  it("answers for the gates INSIDE a visible declaration, from either channel", async () => {
+    // 🔴 An `actions` widget's shortcuts each carry a gate of their own, and
+    // a shortcut is a label and an href. The card's gate alone let the whole
+    // list ship and left the browser to hide the protected ones -- readable
+    // from the payload regardless. The verdicts here are what the payload
+    // withholds them with, resolved for the actions a registration and a
+    // contribution declare.
+    register("app/shortcuts", {
+      archetype: "actions",
+      content: undefined,
+      actions: [
+        { label: "Open", href: "/admin/open" },
+        {
+          label: "Publish",
+          href: "/admin/publish",
+          requiredPermission: "publish-notes",
+        },
+        {
+          label: "Purge",
+          href: "/admin/purge",
+          requiredPermission: "purge-notes",
+        },
+      ],
+    });
+    setContributedWidgets([
+      { id: "acme/links", actionGates: [undefined, "export-notes"] },
+    ]);
+    reader(["publish-notes", "export-notes"]);
+
+    const audience = await widgetAudience(CALLER);
+
+    expect(audience.holds(undefined)).toBe(true);
+    expect(audience.holds("publish-notes")).toBe(true);
+    expect(audience.holds("export-notes")).toBe(true);
+    expect(audience.holds("purge-notes")).toBe(false);
+    // Unusable and unresolved gates refuse, the reading the card's own gate
+    // gets: an empty slug is not "no gate", and a slug nobody resolved is not
+    // a held one.
+    expect(audience.holds("")).toBe(false);
+    expect(audience.holds("never-asked")).toBe(false);
+  });
+
+  it("does not resolve the gates inside a card the reader cannot see", async () => {
+    // A withheld card ships no actions to gate, and asking about its inner
+    // gates would be a permission check for a decision nobody will take.
+    register("app/secrets", {
+      archetype: "actions",
+      content: undefined,
+      requiredPermission: "read-secrets",
+      actions: [
+        { label: "Rotate", href: "/x", requiredPermission: "rotate-secrets" },
+      ],
+    });
+    reader([]);
+
+    await widgetAudience(CALLER);
+
+    const asked = callerHoldsPermission.mock.calls.map(call => call[0]);
+    expect(asked).toContain("read-secrets");
+    expect(asked).not.toContain("rotate-secrets");
   });
 });
 

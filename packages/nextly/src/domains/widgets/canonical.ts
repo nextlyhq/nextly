@@ -89,6 +89,36 @@ export interface CanonicalWidget {
    */
   lifecycle?: string;
   visibleWhen?: string | readonly string[];
+  /**
+   * The gates INSIDE the declaration: one per action of an `actions` widget,
+   * verbatim, `undefined` where the action declares none.
+   *
+   * Carried so the workspace payload can withhold an action from a reader
+   * who lacks its grant before the declaration ships -- an action is a label
+   * and an href, and the browser hiding it afterwards is not a control.
+   * Verbatim for the same reason `requiredPermission` is: what a gate means
+   * is decided in one place, and a summary that normalised it would be a
+   * second opinion.
+   */
+  actionGates?: readonly unknown[];
+}
+
+/**
+ * The gates an `actions` declaration carries, one per action; none for a
+ * declaration without actions, or with actions that are not a list.
+ */
+export function actionGatesOf(actions: unknown): readonly unknown[] {
+  if (!Array.isArray(actions)) return [];
+  return actions.map(action =>
+    typeof action === "object" && action !== null
+      ? (action as { requiredPermission?: unknown }).requiredPermission
+      : undefined
+  );
+}
+
+/** A summary's action gates, for one written before the field existed. */
+function gatesOf(widget: CanonicalWidget): readonly unknown[] {
+  return widget.actionGates ?? [];
 }
 
 /** The summary of one registered widget. */
@@ -98,6 +128,7 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ...(definition.requiredPermission === undefined
       ? {}
       : { requiredPermission: definition.requiredPermission }),
+    actionGates: actionGatesOf(definition.actions),
     ...(definition.defaultSize === undefined
       ? {}
       : { defaultSize: definition.defaultSize }),
@@ -178,6 +209,10 @@ function mergeCanonical(
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     ...contributedLifecycle,
+    // Both copies' action gates, because both copies ship: the payload carries
+    // each channel's declaration and withholds the actions in each, so every
+    // gate either names has to be resolved.
+    actionGates: [...gatesOf(contribution), ...gatesOf(registration)],
   };
 }
 

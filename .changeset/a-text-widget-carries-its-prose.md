@@ -36,19 +36,23 @@ through the same rich-text stack the editor uses, read-only, loaded only when a
 text card is on the dashboard.
 
 Three things the markdown cannot do, by design. Raw HTML is shown as the text it
-is. A link may point at `http`, `https`, `mailto`, `tel` or a path on this site;
-one to anything else is left on screen as the markdown it was written in, so the
-author can see it was refused. And the content is bounded at registration, and
-refused over the bound rather than cut: it travels inside every dashboard load
-for every reader offered the card. An external link opens in a new tab.
+is. A link may point at `http`, `https`, `mailto`, `tel`, or a path on this site
+written as `/...`, `./...` or `#...`; one to anything else is left on screen as
+the markdown it was written in, so the author can see it was refused. And the
+content is bounded at registration, and refused over the bound rather than cut:
+it travels inside every dashboard load for every reader offered the card. An
+external link opens in a new tab.
 
 `content` is required for `text` and refused on every other archetype, on both
 the registry and the plugin channel through one rule.
 
 The admin workspace payload now carries only the widget declarations its reader
-may see. A declaration is its whole content, and a `text` widget's prose travels
-with it, so the gate a widget declares through `requiredPermission` is applied
-on the server before the declaration ships, from the plugin channel and the
-registry alike, by the same decision the dashboard layout endpoint places cards
-with. Previously every authenticated caller received every declaration and the
-browser hid the gated cards.
+may see, and only the parts of them. A declaration is its whole content -- a
+`text` widget's prose, an `actions` widget's shortcuts -- so the gate a widget
+declares through `requiredPermission`, and the gate each of its actions
+declares, is applied on the server before the declaration ships, from the
+plugin channel and the registry alike, by the same decision the dashboard
+layout endpoint places cards with. Where two plugins contribute the same widget
+id, only the first declaration ships, which is the one the dashboard draws.
+Previously every authenticated caller received every declaration whole and the
+browser hid the gated cards and shortcuts.

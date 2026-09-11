@@ -104,9 +104,9 @@ import { runWithCallerScope } from "./auth/caller-scope";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import type { WidgetAction } from "./domains/widgets/definition";
 import { publishableWidgets } from "./domains/widgets/publish";
 import {
-  visibleWidgets,
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
@@ -123,6 +123,7 @@ import {
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
+import type { PluginAdminWidget } from "./plugins/admin-contributions";
 import {
   buildPluginAdminMeta,
   type PluginAdminMeta,
@@ -1595,7 +1596,32 @@ async function handleServiceRequest(
  * cannot disclose, which is why it is the value spelled out rather than a
  * default the next caller inherits without noticing.
  */
-const NO_WIDGETS: WidgetAudience = { declared: new Set(), generated: [] };
+const NO_WIDGETS: WidgetAudience = {
+  declared: new Set(),
+  generated: [],
+  holds: () => false,
+};
+
+/**
+ * One declaration with the actions this reader may not see withheld.
+ *
+ * An `actions` widget's shortcuts each carry a gate of their own, and a
+ * shortcut is a label and an href: shipped whole and hidden by the browser
+ * afterwards, the protected ones are readable from the payload regardless.
+ * Filtered on the same reading the card's own gate gets. A declaration
+ * without actions passes through untouched.
+ */
+function actionsForAudience<
+  W extends { id: string; actions?: readonly WidgetAction[] },
+>(widget: W, audience: WidgetAudience): W {
+  if (widget.actions === undefined) return widget;
+  return {
+    ...widget,
+    actions: widget.actions.filter(action =>
+      audience.holds(action.requiredPermission)
+    ),
+  };
+}
 
 /**
  * One plugin's projection with the widgets this reader may not see withheld.
@@ -1606,14 +1632,28 @@ const NO_WIDGETS: WidgetAudience = { declared: new Set(), generated: [] };
  * control -- the payload is JSON, and reading it is the bypass. The key is
  * dropped rather than left as an empty array, which is the shape the
  * projection gives a plugin that contributed none.
+ *
+ * 🔴 And ONLY the declaration that won its id. Two plugins may contribute the
+ * same id; `canonicalWidgets` and the admin's resolver both keep the FIRST,
+ * so the first is the one the reader's verdict is about -- and a later
+ * duplicate, gated on something the reader lacks and carrying its own prose,
+ * would ship under the winner's clearance if the payload were filtered by id
+ * alone. `shipped` runs across the plugins in the order they were declared,
+ * which is the order both resolvers walk.
  */
 function widgetsForAudience(
   plugin: PluginAdminMeta,
-  audience: WidgetAudience
+  audience: WidgetAudience,
+  shipped: Set<string>
 ): PluginAdminMeta {
   if (plugin.widgets === undefined) return plugin;
   const { widgets, ...rest } = plugin;
-  const visible = widgets.filter(widget => audience.declared.has(widget.id));
+  const visible: PluginAdminWidget[] = [];
+  for (const widget of widgets) {
+    if (!audience.declared.has(widget.id) || shipped.has(widget.id)) continue;
+    shipped.add(widget.id);
+    visible.push(actionsForAudience(widget, audience));
+  }
   return visible.length > 0 ? { ...rest, widgets: visible } : rest;
 }
 
@@ -1699,10 +1739,11 @@ async function buildAdminMeta(
   // Collect plugin metadata from registered plugins with host override
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
+  const shipped = new Set<string>();
   const plugins = buildPluginAdminMeta(
     config?.plugins ?? [],
     pluginOverrides
-  ).map(plugin => widgetsForAudience(plugin, audience));
+  ).map(plugin => widgetsForAudience(plugin, audience, shipped));
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -1753,7 +1794,9 @@ async function buildAdminMeta(
   // links -- so shipping every one and leaving the browser to hide the gated
   // cards hands a reader the contents of a card they may not see.
   const widgets = [
-    ...publishableWidgets().filter(widget => audience.declared.has(widget.id)),
+    ...publishableWidgets()
+      .filter(widget => audience.declared.has(widget.id))
+      .map(widget => actionsForAudience(widget, audience)),
     ...audience.generated,
   ];
   if (widgets.length > 0) {
@@ -1900,7 +1943,7 @@ async function handleAdminMetaWorkspaceRequest(
   // asked an empty container for the collection registry on every anonymous
   // login-page request, for a payload that discards the cards anyway.
   const caller = readAccessCaller(await readCaller(auth));
-  const audience = widgetAudience(await visibleWidgets(caller));
+  const audience = await widgetAudience(caller);
 
   const { workspace } = await buildAdminMeta(audience);
   return withSessionCacheHeaders(respondAdminMeta(workspace));

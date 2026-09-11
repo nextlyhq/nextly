@@ -92,6 +92,19 @@ export async function permissionVerdicts(
 export async function visibleWidgets(
   caller: ReadAccessCaller
 ): Promise<CanonicalWidget[]> {
+  return (await decide(caller)).visible;
+}
+
+/**
+ * The cards this caller may see, with the verdicts they were decided on.
+ *
+ * One pass for both callers of it: the layout endpoint wants the cards, the
+ * workspace payload wants the cards and then the verdicts again for the gates
+ * inside them. Two passes would be two RBAC reads per slug for one answer.
+ */
+async function decide(
+  caller: ReadAccessCaller
+): Promise<{ visible: CanonicalWidget[]; verdicts: Map<string, boolean> }> {
   // The same freshness on every surface that asks. A set derived on some
   // earlier request would offer a card for a collection deleted since and
   // refuse it on save, and have no card at all for one created since -- and
@@ -117,7 +130,7 @@ export async function visibleWidgets(
     caller
   );
 
-  return all.filter(widget => {
+  const visible = all.filter(widget => {
     if (widget.generated === true) {
       // A generated card that names no collection cannot be checked against
       // one, so it is withheld rather than published. Unreachable today --
@@ -127,31 +140,43 @@ export async function visibleWidgets(
     }
     return holdsWidgetPermission(widget.requiredPermission, verdicts);
   });
+  return { visible, verdicts };
 }
 
 /**
- * The visible set, split by the channel the workspace payload ships each half
- * through.
+ * What ONE reader may be told, in the shape the workspace payload ships.
  *
  * The admin reads DECLARED widgets from two places -- each plugin's
  * `widgets`, and the registry's own list -- and both are matched against
  * `declared` by id. A generated card travels as its full definition instead,
  * because the admin holds no copy of it to match: core derived it on the
- * server, and this is the only route by which it reaches the browser.
+ * server, and this is the only route by which it reaches the browser. And a
+ * declaration is not all-or-nothing: an `actions` widget's shortcuts each
+ * carry a gate of their own, so `holds` answers for those before the
+ * declaration ships with them.
  *
- * Derived from {@link visibleWidgets} rather than computed beside it, so what
- * the payload ships and what the layout endpoint places cannot disagree.
+ * Derived from the same decision {@link visibleWidgets} is, so what the
+ * payload ships and what the layout endpoint places cannot disagree.
  */
 export interface WidgetAudience {
   /** Ids of the declared widgets -- contributed or registered -- this reader may see. */
   declared: ReadonlySet<string>;
   /** The cards core derived that this reader may see. */
   generated: WidgetDefinition[];
+  /**
+   * Whether a gate INSIDE a visible declaration holds for this reader.
+   *
+   * The same reading as the card's own gate -- absent admits, unusable
+   * refuses, an array is any-of -- against verdicts resolved for every gate
+   * the visible declarations carry. A slug nobody resolved refuses.
+   */
+  holds: (requiredPermission: unknown) => boolean;
 }
 
-export function widgetAudience(
-  visible: readonly CanonicalWidget[]
-): WidgetAudience {
+export async function widgetAudience(
+  caller: ReadAccessCaller
+): Promise<WidgetAudience> {
+  const { visible, verdicts } = await decide(caller);
   const declared = new Set<string>();
   const generatedIds = new Set<string>();
   for (const widget of visible) {
@@ -160,8 +185,17 @@ export function widgetAudience(
     // card, and core's derived copy must not ship beside it under the same id.
     (widget.generated === true ? generatedIds : declared).add(widget.id);
   }
+  // The gates inside the cards that will ship, resolved beside the cards'
+  // own. Only the visible cards': a withheld card ships no actions to gate.
+  const inner = await permissionVerdicts(
+    visible.flatMap(widget => widget.actionGates ?? []),
+    caller
+  );
+  const every = new Map([...verdicts, ...inner]);
   return {
     declared,
     generated: generatedWidgets().filter(widget => generatedIds.has(widget.id)),
+    holds: requiredPermission =>
+      holdsWidgetPermission(requiredPermission, every),
   };
 }

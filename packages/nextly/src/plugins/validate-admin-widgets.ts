@@ -17,7 +17,10 @@
  * @module plugins/validate-admin-widgets
  */
 
-import type { CanonicalWidget } from "../domains/widgets/canonical";
+import {
+  actionGatesOf,
+  type CanonicalWidget,
+} from "../domains/widgets/canonical";
 import type { WidgetArchetype } from "../domains/widgets/definition";
 import {
   actionProblem,
@@ -560,6 +563,9 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
   return {
     id,
     ...(requiredPermission === undefined ? {} : { requiredPermission }),
+    // The gates inside an `actions` declaration, verbatim, for the same
+    // reason the card's own gate is.
+    actionGates: actionGatesOf(declaration.actions),
     ...(defaultSize === undefined ? {} : { defaultSize }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     // `Number.isFinite`, so a `NaN` or an infinity a plugin computed cannot

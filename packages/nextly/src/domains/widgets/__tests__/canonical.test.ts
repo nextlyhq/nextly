@@ -159,7 +159,38 @@ describe("the canonical widget set", () => {
       defaultSize: "md",
       defaultHeight: "tall",
       defaultOrder: 20,
+      // Always stated, as the empty list for a widget with no actions: the
+      // reader gate flattens it, and an absent list would be a second way to
+      // spell "no gates" beside the empty one.
+      actionGates: [],
     });
+  });
+
+  it("carries the gate of every action, from both channels of a colliding id", () => {
+    // 🔴 An `actions` widget's shortcuts each carry a gate of their own, and
+    // the workspace payload withholds a shortcut on it before the declaration
+    // ships. Both copies of a colliding id ship, so both copies' gates are
+    // carried -- verbatim, including the absent ones, so the count matches
+    // the actions.
+    registerWidget(
+      registered({
+        id: "acme/links",
+        archetype: "actions",
+        component: undefined,
+        actions: [
+          { label: "Open", href: "/open" },
+          { label: "Purge", href: "/purge", requiredPermission: "purge-notes" },
+        ],
+      })
+    );
+    const [widget] = canonicalWidgets([
+      { id: "acme/links", actionGates: ["export-notes"] },
+    ]);
+    expect(widget.actionGates).toEqual([
+      "export-notes",
+      undefined,
+      "purge-notes",
+    ]);
   });
 
   it("omits what a declaration did not state", () => {

@@ -43,6 +43,8 @@ const events = defineCollection({
 /** The prose the gated cards carry -- what must never reach the wrong reader. */
 const RUNBOOK = "## Runbook\n\nRotate the keys before a release.";
 const EDITORS_ONLY = "Editors: the queue drains at midnight.";
+/** Prose a LATER plugin attaches to an id the first plugin already claimed. */
+const IMPOSTOR = "The vault code is 4-8-15-16.";
 
 const contributor = definePlugin({
   name: "@test/notes-widgets",
@@ -79,14 +81,61 @@ const contributor = definePlugin({
           requiredPermission: `create-${NOTES}`,
           content: EDITORS_ONLY,
         },
+        // Shortcuts, each with its own gate or none.
+        {
+          id: "notes/shortcuts",
+          title: "Shortcuts",
+          archetype: "actions",
+          defaultSize: "sm",
+          actions: [
+            { label: "All notes", href: "/admin/collections/notes" },
+            {
+              label: "Publish queue",
+              href: "/admin/collections/notes?status=draft",
+              requiredPermission: `publish-${NOTES}`,
+            },
+          ],
+        },
       ],
     },
   },
 });
 
+/**
+ * A second plugin claiming an id the first already declared, gated, with
+ * prose of its own. The canonical set and the admin's resolver both keep the
+ * FIRST declaration, so this one is never the card -- and it must never be
+ * the payload either.
+ */
+const impostor = definePlugin({
+  name: "@test/notes-impostor",
+  version: "1.0.0",
+  nextly: ">=0.0.1",
+  contributes: {
+    admin: {
+      widgets: [
+        {
+          id: "notes/welcome",
+          title: "Welcome (again)",
+          archetype: "text",
+          defaultSize: "md",
+          requiredPermission: `create-${NOTES}`,
+          content: IMPOSTOR,
+        },
+      ],
+    },
+  },
+});
+
+interface WorkspaceDeclaration {
+  id: string;
+  content?: string;
+  actions?: { label: string; requiredPermission?: string }[];
+}
+
 interface WorkspaceBody {
-  widgets?: { id: string; content?: string }[];
-  plugins?: { name: string; widgets?: { id: string; content?: string }[] }[];
+  widgets?: WorkspaceDeclaration[];
+  plugins?: { name: string; widgets?: WorkspaceDeclaration[] }[];
 }
 
 async function workspace(headers: Record<string, string>): Promise<Response> {
@@ -94,7 +143,10 @@ async function workspace(headers: Record<string, string>): Promise<Response> {
   // overlaid with what boot produced; without the stored half there is no
   // plugin projection at all, whatever booted.
   const handlers = createDynamicHandlers({
-    config: sanitizeConfig({ collections: [], plugins: [contributor] }),
+    config: sanitizeConfig({
+      collections: [],
+      plugins: [contributor, impostor],
+    }),
   });
   return handlers.GET(
     new Request("http://localhost/api/admin-meta/workspace", {
@@ -112,11 +164,13 @@ async function workspaceFor(key: string): Promise<WorkspaceBody> {
 }
 
 let handle: TestNextly | undefined;
+/** The instance's first user, created once: the super admin every key is minted by. */
+let ownerId: string | undefined;
 
 beforeEach(async () => {
   handle = await createTestNextly({
     collections: [],
-    plugins: [contributor],
+    plugins: [contributor, impostor],
   });
   // A registration is the OTHER declared channel, and it happens in code after
   // boot exactly as a plugin's `registerWidget` call does.
@@ -141,17 +195,40 @@ beforeEach(async () => {
     },
     { source: "@test/app" }
   );
+  registerWidget(
+    {
+      id: "app/tools",
+      title: "Tools",
+      archetype: "actions",
+      defaultSize: "sm",
+      actions: [
+        { label: "Search", href: "/admin/search" },
+        {
+          label: "Bulk publish",
+          href: "/admin/bulk",
+          requiredPermission: `publish-${NOTES}`,
+        },
+      ],
+    },
+    { source: "@test/app" }
+  );
 });
 
 afterEach(async () => {
   clearWidgets();
   await handle?.destroy();
   handle = undefined;
+  ownerId = undefined;
 });
 
 /**
  * A key holding exactly the grants named, minted by the super-admin first
  * user through the same role table the product reads.
+ *
+ * One owner per instance, because a key may not hold more than its owner
+ * does and only the FIRST user of an instance is the super admin: a second
+ * owner would be refused any grant, and the case minting two keys would be
+ * refused for a reason it is not about.
  */
 async function keyHolding(slugs: string[]): Promise<string> {
   const nextly = handle!.nextly as unknown as {
@@ -172,14 +249,17 @@ async function keyHolding(slugs: string[]): Promise<string> {
     };
   };
 
-  const owner = await nextly.users.create({
-    data: {
-      email: `owner-${slugs.join("-")}@example.com`,
-      password: "Password123!",
-      name: "Owner",
-      isActive: true,
-    },
-  });
+  if (ownerId === undefined) {
+    const owner = await nextly.users.create({
+      data: {
+        email: "owner@example.com",
+        password: "Password123!",
+        name: "Owner",
+        isActive: true,
+      },
+    });
+    ownerId = owner.item.id;
+  }
 
   const permissions = await nextly.permissions.find({ limit: 300 });
   const ids = slugs.map(slug => {
@@ -211,7 +291,7 @@ async function keyHolding(slugs: string[]): Promise<string> {
       }
     ) => Promise<{ key: string }>;
   };
-  const { key } = await apiKeys.createApiKey(owner.item.id, {
+  const { key } = await apiKeys.createApiKey(ownerId, {
     name: `key ${slugs.join(" ")}`,
     tokenType: "role-based",
     roleId: role.item.id,
@@ -244,9 +324,14 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(ids(contributed?.widgets)).toEqual([
       "notes/welcome",
       "notes/runbook",
+      "notes/shortcuts",
     ]);
     expect(ids(body.widgets)).toEqual(
-      expect.arrayContaining(["app/board", "collection/notes-count"])
+      expect.arrayContaining([
+        "app/board",
+        "app/tools",
+        "collection/notes-count",
+      ])
     );
 
     // Then the absences, and on the CONTENT rather than only the id: the whole
@@ -262,6 +347,52 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(declarations.map(widget => widget.content)).toContain(RUNBOOK);
   });
 
+  it("ships only the declaration that won its id, not a later duplicate", async () => {
+    // 🔴 Two plugins contribute `notes/welcome`. The first, ungated, is the
+    // card -- the canonical set and the admin's resolver both keep the first
+    // -- so the id is visible to every reader. Filtered by id alone, the
+    // later duplicate shipped under the winner's clearance, prose and all,
+    // to a reader lacking the grant it declared.
+    const body = await workspaceFor(await keyHolding([`read-${NOTES}`]));
+
+    const copies = everyDeclaration(body).filter(
+      widget => widget.id === "notes/welcome"
+    );
+    expect(copies).toHaveLength(1);
+    expect(copies[0]?.content).toBe("Welcome to the notes desk.");
+    const later = body.plugins?.find(
+      plugin => plugin.name === "@test/notes-impostor"
+    );
+    expect(later).toBeDefined();
+    expect(later?.widgets).toBeUndefined();
+    expect(everyDeclaration(body).map(widget => widget.content)).not.toContain(
+      IMPOSTOR
+    );
+  });
+
+  it("withholds an action whose own gate the reader lacks, on both channels", async () => {
+    // 🔴 A shortcut is a label and an href. The card's gate held, so the
+    // whole list shipped and the browser hid the protected entry afterwards
+    // -- readable from the payload regardless.
+    const lacking = await workspaceFor(await keyHolding([`read-${NOTES}`]));
+    const labels = (body: WorkspaceBody, id: string) =>
+      everyDeclaration(body)
+        .find(widget => widget.id === id)
+        ?.actions?.map(action => action.label);
+    expect(labels(lacking, "notes/shortcuts")).toEqual(["All notes"]);
+    expect(labels(lacking, "app/tools")).toEqual(["Search"]);
+
+    // The control: the grant held, the same lists are whole.
+    const holding = await workspaceFor(
+      await keyHolding([`read-${NOTES}`, `publish-${NOTES}`])
+    );
+    expect(labels(holding, "notes/shortcuts")).toEqual([
+      "All notes",
+      "Publish queue",
+    ]);
+    expect(labels(holding, "app/tools")).toEqual(["Search", "Bulk publish"]);
+  });
+
   it("ships the same declarations to a reader holding the grant", async () => {
     const body = await workspaceFor(
       await keyHolding([`read-${NOTES}`, `create-${NOTES}`])
@@ -274,6 +405,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
       "notes/welcome",
       "notes/runbook",
       "notes/editors",
+      "notes/shortcuts",
     ]);
     expect(ids(body.widgets)).toEqual(
       expect.arrayContaining(["app/board", "app/ops-notes"])
