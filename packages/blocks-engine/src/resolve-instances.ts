@@ -929,11 +929,24 @@ function rootTypesOfNode(
   // THIS instance whatever was answered for its definition elsewhere.
   const found = definitionFor(componentId, reader, scope);
   if (typeof found === "string") return undefined;
+  return definitionRootTypes(componentId, found, reader, scope);
+}
+
+/**
+ * A definition's root types for an instance at this scope: the answer already
+ * given for it at this depth or a deeper one, or walked and remembered.
+ */
+function definitionRootTypes(
+  componentId: string,
+  definition: ComponentDocument,
+  reader: RootsReader,
+  scope: ComposedScope
+): readonly string[] | undefined {
   const remembered = reader.rootsRead.get(componentId);
   if (remembered !== undefined && scope.depth <= remembered.depth) {
     return remembered.types;
   }
-  const types = rootTypesOf(found.nodes, reader, {
+  const types = rootTypesOf(definition.nodes, reader, {
     depth: scope.depth + 1,
     onPath: new Set(scope.onPath).add(componentId),
   });
