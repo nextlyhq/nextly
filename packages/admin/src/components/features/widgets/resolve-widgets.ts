@@ -100,6 +100,8 @@ export interface ReadableWidgetDeclaration {
   query?: WidgetQuery;
   component?: string;
   actions?: WidgetAction[];
+  /** Present for `text`: the markdown the host draws. */
+  content?: string;
   /** Present for `stats`: the numbers the card draws, each with its own query. */
   cells?: WidgetStatCell[];
   link?: { label: string; href: string };
@@ -228,6 +230,7 @@ function resolveOne(
     settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
+    content: meta.content,
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
@@ -274,6 +277,7 @@ function resolveRegistered(
     settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
+    content: meta.content,
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
