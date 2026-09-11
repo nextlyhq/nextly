@@ -56,6 +56,16 @@ let documentIdentity: {
  * to the component read would put pattern documents in the definitions map.
  */
 let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
+/** The options the editor was built with, so a case can ask what caps it applies under. */
+let editorOptions: Record<string, unknown> | undefined;
+/** Records the options and contributes nothing to the editor stub's shape. */
+function recordEditorOptions(
+  options: Record<string, unknown>
+): Record<string, never> {
+  editorOptions = options;
+  return {};
+}
+
 /** What the component read reports beside its answer: a failed refresh keeps the answer. */
 let componentError: Error | null = null;
 
@@ -229,7 +239,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         draggingBlockName,
       };
     },
-    useEditorState: () => ({
+    useEditorState: (options: Record<string, unknown>) => ({
+      ...recordEditorOptions(options),
       document: { formatVersion: 1, kind: "page", nodes: [] },
       selectedId: null,
       selection: { ids: [], primary: null },
@@ -371,6 +382,7 @@ afterEach(() => {
   libraryAnswer = undefined;
   componentAnswer = undefined;
   componentError = null;
+  editorOptions = undefined;
   documentIdentity = null;
   shownPanel = "insert";
   routeReads = 0;
@@ -555,7 +567,18 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(routeReads).toBeGreaterThan(0);
   });
 
-  it("hands the drag the same map and caps the canvas draws with, so a moved instance is judged by its roots", () => {
+  it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {
+    // The insert preflight and the canvas both judge under the site's caps;
+    // an editor built under the engine's defaults refuses, silently, an edit
+    // to a page legal only under a raised cap after both accepted it.
+    openEditor();
+
+    const render = recorded("canvas").render as { limits: unknown };
+    expect(editorOptions?.limits).toBe(render.limits);
+    expect(editorOptions?.limits).toBeDefined();
+  });
+
+  it("hands the drag the same map the canvas draws with, so a moved instance is judged by its roots", () => {
     const definition = {
       formatVersion: 1,
       kind: "component",

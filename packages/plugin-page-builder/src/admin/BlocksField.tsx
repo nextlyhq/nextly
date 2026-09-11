@@ -1954,7 +1954,23 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => documentFrom(initialValue, kinds),
     [initialValue, kinds]
   );
-  const editor = useEditorState({ initialDocument });
+  const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
+  /*
+   * The site's document caps, read once.
+   *
+   * Four readers — the editor's own apply, the renderer inputs, which repair
+   * the document against them, the class-usage count and the drag. Read
+   * separately they would agree until the day one of them was pointed at a
+   * different config. The editor is the reader that must not be missed: an
+   * apply judged under the engine's defaults refuses, silently, an edit to a
+   * page that is legal only under a cap this site raised, after the insert's
+   * preflight and the canvas both accepted it.
+   */
+  const documentLimits = useMemo(
+    () => readDocumentLimits(clientConfig),
+    [clientConfig]
+  );
+  const editor = useEditorState({ initialDocument, limits: documentLimits });
 
   /*
    * Dragging blocks on the canvas.
@@ -2108,7 +2124,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
-  const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
   const checklist = useBuilderChecklist({
     document: editor.document,
     enabled: clientConfig?.checklist !== false,
@@ -2173,18 +2188,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const remotePatterns = useMemo(
     () => readRemotePatterns(clientConfig?.remotePatterns),
-    [clientConfig]
-  );
-
-  /*
-   * The site's document caps, read once.
-   *
-   * Two readers now — the renderer inputs, which repair the document against
-   * them, and the class-usage count. Read separately they would agree until the
-   * day one of them was pointed at a different config.
-   */
-  const documentLimits = useMemo(
-    () => readDocumentLimits(clientConfig),
     [clientConfig]
   );
 
