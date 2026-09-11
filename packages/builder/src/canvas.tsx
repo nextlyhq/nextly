@@ -315,10 +315,18 @@ export function nodeAddressOf(owner: Element): string | null {
  */
 export function isOutermostForAddress(
   element: Element,
-  address: string
+  address: string,
+  container: HTMLElement
 ): boolean {
   const host = element.parentElement?.closest(`[${INSTANCE_ATTRIBUTE}]`);
   if (host === null || host === undefined) return true;
+  // Bounded by the canvas that owns the element. A canvas can render inside a
+  // definition-owned element — component edit mode does — and ids are scoped
+  // per document, so the inner document may reuse the enclosing instance's
+  // address. An unbounded search then finds the OUTER document's marker,
+  // classifies the inner component as nested inside itself, and leaves it with
+  // no outline and no rectangle for a drag.
+  if (!ownedByCanvas(host, container)) return true;
   return host.getAttribute(INSTANCE_ATTRIBUTE) !== address;
 }
 
@@ -916,6 +924,12 @@ function useCanvasMarkers(
         .forEach(element => touched.add(element));
 
       touched.forEach(element => {
+        // Another canvas's elements are that canvas's to mark, exactly as the
+        // drag pass below leaves them. Ids are scoped per document, so a nested
+        // canvas can hold an instance with the SAME address as the one selected
+        // out here — and marking it would outline a block belonging to a
+        // document this selection is not in.
+        if (!ownedByCanvas(element, container)) return;
         // The ADDRESS, not the raw attribute. A definition-owned element
         // carries a re-minted id the selection never holds, so comparing the
         // attribute leaves a selected component with no outline at all.
@@ -927,7 +941,7 @@ function useCanvasMarkers(
         if (
           id === null ||
           !marked.includes(id) ||
-          !isOutermostForAddress(element, id)
+          !isOutermostForAddress(element, id, container)
         ) {
           // Guarded like the writes below: this walk now visits the page root
           // and the container, which never carry the attribute, and removing an

@@ -46,6 +46,8 @@ import {
 
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
+import { markedElementOf } from "./style-subject";
+
 import {
   CANVAS_ROOT_CLASS,
   Canvas,
@@ -205,11 +207,14 @@ describe("addressing a definition-owned element from every reader", () => {
         </>
       )
     );
+    const root = container.querySelector(
+      `.${CANVAS_ROOT_CLASS}`
+    ) as HTMLElement;
     const copies = container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}="twin"]`);
 
     expect(copies).toHaveLength(2);
     copies.forEach(copy => {
-      expect(isOutermostForAddress(copy, "twin")).toBe(true);
+      expect(isOutermostForAddress(copy, "twin", root)).toBe(true);
     });
   });
 
@@ -235,10 +240,64 @@ describe("addressing a definition-owned element from every reader", () => {
       `[${NODE_ID_ATTRIBUTE}="cx-inner"]`
     ) as Element;
 
+    const root = container.querySelector(
+      `.${CANVAS_ROOT_CLASS}`
+    ) as HTMLElement;
+
     expect({
-      outer: isOutermostForAddress(outer, "i1"),
-      inner: isOutermostForAddress(inner, "i1"),
+      outer: isOutermostForAddress(outer, "i1", root),
+      inner: isOutermostForAddress(inner, "i1", root),
     }).toEqual({ outer: true, inner: false });
+  });
+
+  it("does not let an enclosing canvas's marker reach into a nested canvas", () => {
+    // A canvas can render INSIDE a definition-owned element — component edit
+    // mode does — and ids are scoped per document, so the inner document may
+    // reuse the enclosing instance's address. An unbounded ancestor search
+    // finds the OUTER document's marker, calls the inner component nested
+    // inside itself, and leaves it with no outline and no drag rectangle.
+    const { container } = render(
+      canvas(
+        definitionOwned(
+          "cx-outer",
+          "i1",
+          "Outer",
+          canvas(definitionOwned("cx-inner", "i1", "Inner"))
+        )
+      )
+    );
+    const roots = container.querySelectorAll(`.${CANVAS_ROOT_CLASS}`);
+    const innerRoot = roots[1] as HTMLElement;
+    const inner = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="cx-inner"]`
+    ) as Element;
+
+    expect(roots).toHaveLength(2);
+    expect(isOutermostForAddress(inner, "i1", innerRoot)).toBe(true);
+  });
+});
+
+describe("the element a style reading is taken from", () => {
+  it("finds the element an INSTANCE renders as, not only a node's own", () => {
+    // An instance renders no element carrying its own id — it is replaced by
+    // the definition's tree — so a lookup over the node-id attribute alone
+    // finds nothing, and the style inspector reads the selected component's
+    // tag and orientation as unknown for as long as it is selected. The
+    // reverse lookup goes through the same rule the selection uses.
+    const { container } = render(
+      canvas(definitionOwned("cx-outer", "i1", "Outer"))
+    );
+    const root = container.querySelector(
+      `.${CANVAS_ROOT_CLASS}`
+    ) as HTMLElement;
+
+    expect(markedElementOf(root, "i1")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "cx-outer"
+    );
+    // And nothing for no root or no selection, which is what every caller of
+    // this adapter may hold.
+    expect(markedElementOf(null, "i1")).toBeUndefined();
+    expect(markedElementOf(root, null)).toBeUndefined();
   });
 });
 
@@ -2554,6 +2613,31 @@ describe("forcing a state onto a tree React commits over time", () => {
         },
         {
           /*
+           * A block that draws a CANVAS INSIDE itself — the shape component edit
+           * mode produces — holding an instance whose address the outer document
+           * could also select. Ids are scoped per document, so that address
+           * belongs to the inner document, and only the inner canvas may mark it.
+           */
+          name: "acme/nests-a-canvas",
+          version: 1,
+          description: "A block holding a nested canvas.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className, [NODE_ID_ATTRIBUTE]: "host" },
+              createElement(
+                "div",
+                { className: CANVAS_ROOT_CLASS },
+                createElement("div", {
+                  [NODE_ID_ATTRIBUTE]: "cx-inner",
+                  [INSTANCE_ATTRIBUTE]: "i1",
+                })
+              )
+            ),
+        },
+        {
+          /*
            * A block that draws ITS OWN CHILD TWICE, which is what makes one
            * node id many elements. `core/collection-loop` renders its children
            * slot once per entry, so this is the shape of a shipping block
@@ -2621,6 +2705,42 @@ describe("forcing a state onto a tree React commits over time", () => {
       expect(copy.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
       expect(copy.className).toContain(previewStateClass("hover"));
     }
+  });
+
+  it("leaves a NESTED canvas's elements alone, whatever address it selects", async () => {
+    /*
+     * The outer canvas selects "i1". The only element carrying that address is
+     * inside a nested canvas root — another document's, since ids are scoped
+     * per document. Marking it would outline a block this selection is not in,
+     * and clearing it on a later pass would strip a mark the inner canvas set.
+     * The drag pass already leaves foreign canvases alone; this is the same
+     * rule on the selection pass.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "nest",
+                type: "acme/nests-a-canvas",
+                version: 1,
+                props: {},
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="i1"
+      />
+    );
+    await act(async () => undefined);
+
+    const inner = document.querySelector(`[${NODE_ID_ATTRIBUTE}="cx-inner"]`);
+    expect(inner).not.toBeNull();
+    expect(inner?.hasAttribute(SELECTED_ATTRIBUTE)).toBe(false);
   });
 
   it("marks a node that arrives AFTER the commit the effect ran on", async () => {

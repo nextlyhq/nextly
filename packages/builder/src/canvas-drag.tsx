@@ -409,7 +409,7 @@ function snapshotRects(root: HTMLElement): RectSource {
     // whichever element its definition contributed last. A node a block
     // rendered more than once still measures every copy, because sibling copies
     // are each outermost — the last one wins there exactly as it did before.
-    if (id !== null && isOutermostForAddress(element, id)) {
+    if (id !== null && isOutermostForAddress(element, id, root)) {
       measured.set(id, canvasContentRect(element, root));
     }
   });
