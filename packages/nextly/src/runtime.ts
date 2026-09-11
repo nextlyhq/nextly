@@ -113,6 +113,16 @@ export type {
 // singleton and not that reader. Pass the reader for those.
 export { requireNextly } from "./direct-api/nextly";
 
+// The one builder of the `UserContext` an access rule is evaluated against.
+// Exported for a route that reads through the Direct API on a caller's behalf:
+// `requireNextly()` defaults to `overrideAccess: true`, and a caller that turns
+// that off has to say who is asking in the shape every other enforced read
+// says it -- verified claims spread first, canonical identity last -- or a
+// rule written against a claim reads `undefined` and answers differently from
+// the same caller's own request.
+export { buildUserContext } from "./auth/user-context";
+export type { AuthenticatedIdentity } from "./auth/user-context";
+
 export {
   resolveContent,
   isReservedPath,

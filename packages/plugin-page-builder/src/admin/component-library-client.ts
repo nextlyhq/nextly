@@ -45,6 +45,16 @@ import {
   type ComponentLibraryResponse,
 } from "../library-contract";
 
+/**
+ * Where the read stands: still in flight, answered, or failed.
+ *
+ * Three states rather than "data or not", because the two empty ones ask for
+ * opposite things. A pending read wants a moment; a failed one wants a retry
+ * and a sentence, and every instance on the page drawn as could-not-be-loaded
+ * says neither — it reads as a site whose components were deleted.
+ */
+export type ComponentLibraryState = "pending" | "ready" | "unavailable";
+
 /** What one component read hands the editor. */
 export interface ComponentLibraryRead {
   /**
@@ -68,6 +78,10 @@ export interface ComponentLibraryRead {
    * somebody deleted.
    */
   readonly truncated: boolean;
+  /** Where the read stands. The map and the list are empty unless `ready`. */
+  readonly state: ComponentLibraryState;
+  /** Ask again, ignoring anything cached. What a surface offers on `unavailable`. */
+  readonly retry: () => void;
 }
 
 /** Read this site's component definitions, at the editor's posture. */
@@ -77,13 +91,22 @@ export function useComponentLibrary(): ComponentLibraryRead {
     path: COMPONENT_LIBRARY_ROUTE_PATH,
     staleTime: 0,
   });
+  const { data, pending, error, refetch } = read;
   // One memo for both shapes, keyed on the read's data, so the map and the
   // list are always derived from the same response — and so a re-render
   // between reads hands the canvas the same map identity, which is what keeps
   // it from re-resolving every instance on every keystroke.
   return useMemo(() => {
-    const data = read.data;
-    if (data === undefined) return NOTHING_YET;
+    if (data === undefined) {
+      // The failed state is named FIRST, so it cannot fold into the pending
+      // one: both have no data, and only one of them will ever have any. A
+      // read that answered with nothing at all is neither, and is ready.
+      return {
+        ...NOTHING_YET,
+        state: error !== null ? "unavailable" : pending ? "pending" : "ready",
+        retry: refetch,
+      };
+    }
     // Built mutable, published read-only: the map's type is what the renderer
     // takes, and a consumer must not be able to add a definition the read did
     // not return.
@@ -101,18 +124,25 @@ export function useComponentLibrary(): ComponentLibraryRead {
       definitions,
       components: data.items,
       truncated: data.meta.truncated,
+      state: "ready",
+      retry: refetch,
     };
-  }, [read.data]);
+  }, [data, pending, error, refetch]);
 }
 
 /**
- * A stable EMPTY answer while the read is in flight.
+ * A stable EMPTY answer while the read is in flight or has failed.
  *
- * One shared value rather than a fresh object per render, for the reason the
- * pattern client keeps `NO_PATTERNS`: the canvas re-resolves when the map's
- * identity changes, and the panel rebuilds its catalogue when the list's does.
+ * One shared map and one shared list rather than fresh ones per render, for
+ * the reason the pattern client keeps `NO_PATTERNS`: the canvas re-resolves
+ * when the map's identity changes, and the panel rebuilds its catalogue when
+ * the list's does. The state and the retry are added per read, since only the
+ * read knows them.
  */
-const NOTHING_YET: ComponentLibraryRead = {
+const NOTHING_YET: Pick<
+  ComponentLibraryRead,
+  "definitions" | "components" | "truncated"
+> = {
   definitions: new Map(),
   components: [],
   truncated: false,

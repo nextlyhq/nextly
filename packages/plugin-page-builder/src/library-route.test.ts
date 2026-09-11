@@ -14,6 +14,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  COMPLETION_CONCURRENCY,
   LIBRARY_PAGE_SIZE,
   MAX_LIBRARY_BYTES,
   MAX_LIBRARY_PATTERNS,
@@ -87,15 +88,23 @@ function componentContext(
         hasMore: queue.length > 0,
       })
   );
-  const read = vi.fn((_slug: string, id: string) =>
-    Promise.resolve(components.byId?.[id])
-  );
+  // The by-id read answers on the NEXT macrotask, and counts how many reads
+  // are waiting at once: that is the observable of a walk that overlaps its
+  // reads, and a stub answering synchronously could never show more than one.
+  const inFlight = { now: 0, most: 0 };
+  const read = vi.fn(async (_slug: string, id: string) => {
+    inFlight.now += 1;
+    inFlight.most = Math.max(inFlight.most, inFlight.now);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    inFlight.now -= 1;
+    return components.byId?.[id];
+  });
   const ctx: ComponentLibraryContext = {
     self: { collections: self },
     user: { id: "u1" },
     components: { list, read },
   };
-  return { ctx, list, read };
+  return { ctx, list, read, inFlight };
 }
 
 /** How many times the pattern collection was paged. */
@@ -605,7 +614,14 @@ describe("the component tier", () => {
     // the author a stale component beside the draft they just saved.
     const { ctx, read } = componentContext({
       pages: [[componentRow("header", { content: draft("live") })]],
-      byId: { header: { id: "header", content: draft("draft") } },
+      byId: {
+        header: {
+          id: "header",
+          title: "Component header",
+          category: "Sections",
+          content: draft("draft"),
+        },
+      },
     });
 
     const library = await readComponentLibrary(ctx);
@@ -620,6 +636,111 @@ describe("the component tier", () => {
       },
     ]);
     expect(library.meta).toEqual({ count: 1, truncated: false });
+  });
+
+  it("labels the item from the BY-ID row too, so a draft's title and category are the ones shown", async () => {
+    // A working draft can rename a component or move it to another category
+    // as readily as it can change its content. Labelled from the live listing
+    // and drawn from the draft, the tile would be named and grouped by one
+    // version and rendered as another.
+    const { ctx } = componentContext({
+      pages: [
+        [componentRow("header", { title: "Old name", category: "Old group" })],
+      ],
+      byId: {
+        header: {
+          id: "header",
+          title: "New name",
+          category: "New group",
+          description: "From the draft",
+          content: draft("draft"),
+        },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items[0]).toEqual({
+      id: "header",
+      title: "New name",
+      category: "New group",
+      description: "From the draft",
+      document: draft("draft"),
+    });
+  });
+
+  it("omits a listed component whose by-id row cannot be labelled, and says the tier was cut", async () => {
+    // The listing named it, so a library without it is not whole — and a row
+    // the read answered but which carries no title is one nothing can label.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: { id: "a", content: draft("x") },
+        b: { id: "b", title: "B", content: draft("y") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["b"]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("overlaps its by-id reads, boundedly, and admits them in listing order", async () => {
+    // A library of three thousand completed one read at a time is three
+    // thousand round trips in a row. Overlapped without bound, a page that
+    // meets the ceiling at its first row pays ninety-nine reads for nothing.
+    // The batch is what bounds both — and whatever runs together, the rows
+    // are judged in the order they were listed.
+    const ids = Array.from(
+      { length: 20 },
+      (_, i) => `c${String(i).padStart(2, "0")}`
+    );
+    const { ctx, inFlight } = componentContext({
+      pages: [ids.map(id => componentRow(id))],
+      byId: Object.fromEntries(
+        ids.map(id => [
+          id,
+          { id, title: `Component ${id}`, content: draft(id) },
+        ])
+      ),
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(inFlight.most).toBe(COMPLETION_CONCURRENCY);
+    expect(COMPLETION_CONCURRENCY).toBeGreaterThan(1);
+    expect(library.items.map(c => c.id)).toEqual(ids);
+  });
+
+  it("starts no further batch once the ceiling has stopped the read", async () => {
+    // The control for the bound above. Each row fits the budget alone and no
+    // two fit together, so the second row SPENDS it — and only the first
+    // batch's reads are ever made, however many rows the page listed.
+    const ids = Array.from(
+      { length: 20 },
+      (_, i) => `c${String(i).padStart(2, "0")}`
+    );
+    const halfPlus = "x".repeat(Math.ceil(MAX_LIBRARY_BYTES / 2) + 1);
+    const { ctx, read } = componentContext({
+      pages: [ids.map(id => componentRow(id))],
+      byId: Object.fromEntries(
+        ids.map(id => [
+          id,
+          {
+            id,
+            title: `Component ${id}`,
+            content: { ...draft(id), huge: halfPlus },
+          },
+        ])
+      ),
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["c00"]);
+    expect(library.meta.truncated).toBe(true);
+    expect(read.mock.calls.length).toBe(COMPLETION_CONCURRENCY);
   });
 
   it("answers the CANONICAL list envelope, and nothing beside it", async () => {
@@ -645,8 +766,8 @@ describe("the component tier", () => {
     const { ctx, list } = componentContext({
       pages: [[componentRow("a")], [componentRow("b")]],
       byId: {
-        a: { id: "a", content: draft("a") },
-        b: { id: "b", content: draft("b") },
+        a: { id: "a", title: "A", content: draft("a") },
+        b: { id: "b", title: "B", content: draft("b") },
       },
     });
 
@@ -660,7 +781,7 @@ describe("the component tier", () => {
     const { ctx, list, read } = componentContext(
       {
         pages: [[componentRow("a")]],
-        byId: { a: { id: "a", content: draft("x") } },
+        byId: { a: { id: "a", title: "A", content: draft("x") } },
       },
       { components: "site_components" }
     );
@@ -680,7 +801,7 @@ describe("the component tier", () => {
     // the shape says the read was made and found nothing.
     const { ctx } = componentContext({
       pages: [[componentRow("empty")]],
-      byId: { empty: { id: "empty", content: null } },
+      byId: { empty: { id: "empty", title: "Empty", content: null } },
     });
 
     const library = await readComponentLibrary(ctx);
@@ -696,7 +817,7 @@ describe("the component tier", () => {
     // it as one.
     const { ctx } = componentContext({
       pages: [[componentRow("gone"), componentRow("here")]],
-      byId: { here: { id: "here", content: draft("x") } },
+      byId: { here: { id: "here", title: "Here", content: draft("x") } },
     });
 
     const library = await readComponentLibrary(ctx);
@@ -712,8 +833,8 @@ describe("the component tier", () => {
     const { ctx } = componentContext({
       pages: [[componentRow("big"), componentRow("small")]],
       byId: {
-        big: { id: "big", content: { ...draft("y"), huge } },
-        small: { id: "small", content: draft("z") },
+        big: { id: "big", title: "Big", content: { ...draft("y"), huge } },
+        small: { id: "small", title: "Small", content: draft("z") },
       },
     });
 

@@ -7,7 +7,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PageBuilderCard } from "./PageBuilderCard";
@@ -34,6 +34,7 @@ function doc(count: number): BlockDocument {
 const base = {
   siteStyles: undefined,
   styleState: "ready" as const,
+  components: { state: "ready" as const, retry: () => {} },
   // Built through the real derivation, so the fixture cannot describe a bundle
   // the product never produces.
   render: pageRenderInputs({
@@ -41,6 +42,7 @@ const base = {
     clientConfig: undefined,
     previewContainer: undefined,
     limits: DEFAULT_LIMITS,
+    definitions: new Map(),
   }),
   canEdit: true,
   onOpen: () => {},
@@ -151,6 +153,49 @@ describe("PageBuilderCard", () => {
       <PageBuilderCard {...base} document={doc(2)} styleState="unavailable" />
     );
 
+    expect(
+      screen.getByRole("button", { name: /open page builder/i })
+    ).toBeDefined();
+  });
+
+  /*
+   * The component read gates the miniature the way the style read does, and
+   * for the same reason: drawn without definitions, every instance on the page
+   * is the could-not-be-loaded marker, which is the picture of a different
+   * problem. The one difference is the remedy — a failed read can be asked
+   * again from here.
+   */
+  it("draws no page while the component definitions are still arriving", () => {
+    const { container } = render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        components={{ state: "pending", retry: () => {} }}
+      />
+    );
+
+    expect(container.querySelector(MINIATURE)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("says the components could not be loaded, and offers to try again", () => {
+    const retry = vi.fn();
+    const { container } = render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        components={{ state: "unavailable", retry }}
+      />
+    );
+
+    expect(container.querySelector(MINIATURE)).toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(
+      /components could not be loaded/i
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    // And the way into the builder survives it, as it survives a failed
+    // style read.
     expect(
       screen.getByRole("button", { name: /open page builder/i })
     ).toBeDefined();

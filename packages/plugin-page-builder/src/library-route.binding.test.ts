@@ -27,7 +27,11 @@ const nextly = vi.hoisted(() => ({
   findByID: vi.fn(),
 }));
 
-vi.mock("nextly/runtime", () => ({
+// The handle is replaced; everything else — `buildUserContext` above all — is
+// the real module, because what the route hands the handle has to be the
+// identity core builds, not one this file restates.
+vi.mock("nextly/runtime", async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   requireNextly: () => nextly,
 }));
 
@@ -51,12 +55,16 @@ function listed(...ids: string[]) {
 /** A route context: who is asking, and which collections the host has. */
 function contextAs(
   user: PluginRouteContext["user"],
-  authenticatedScope?: PluginRouteContext["authenticatedScope"]
+  authenticatedScope?: PluginRouteContext["authenticatedScope"],
+  claims?: Record<string, unknown>
 ): PluginRouteContext {
   return {
     self: { collections: {} },
     user,
     ...(authenticatedScope === undefined ? {} : { authenticatedScope }),
+    ...(claims === undefined
+      ? {}
+      : { caller: { authMethod: "session", claims, can: async () => true } }),
   } as unknown as PluginRouteContext;
 }
 
@@ -69,6 +77,7 @@ describe("the component route reads AS THE USER", () => {
     nextly.find.mockResolvedValue(listed("header"));
     nextly.findByID.mockResolvedValue({
       id: "header",
+      title: "Component header",
       content: { formatVersion: 1, kind: "component", nodes: [] },
     });
   });
@@ -94,6 +103,39 @@ describe("the component route reads AS THE USER", () => {
       draft: true,
       disableErrors: true,
     });
+  });
+
+  it("asks the by-id read for every lifecycle state, as the listing does", async () => {
+    // The listing found the never-published row under `status: "all"`; a
+    // by-id read that stated nothing is bounded back to public states and
+    // answers 404 for that same row — the draft overlay never reaches it. A
+    // component created and not yet published stayed unplaceable that way.
+    await componentLibraryRoute().handler(
+      request,
+      contextAs({ id: "u1", email: "u1@example.test" } as never)
+    );
+
+    expect(nextly.findByID.mock.calls[0]?.[0]).toMatchObject({ status: "all" });
+  });
+
+  it("carries the caller's verified claims into the identity, and lets the identity win", async () => {
+    // A rule written against a tenant claim reads it off the user; built as
+    // `{ id, email }` alone, the same caller who passed the route gate reads
+    // as having no tenant inside, and gets an empty library. The canonical
+    // fields are spread LAST, so a token cannot restate `id` as a claim.
+    await componentLibraryRoute().handler(
+      request,
+      contextAs({ id: "u1", email: "u1@example.test" } as never, undefined, {
+        tenant: "acme",
+        id: "somebody-else",
+      })
+    );
+
+    for (const call of [nextly.find, nextly.findByID]) {
+      expect(call.mock.calls[0]?.[0]).toMatchObject({
+        user: { id: "u1", email: "u1@example.test", tenant: "acme" },
+      });
+    }
   });
 
   it("lists every lifecycle state, as the user, in id order, a page at a time", async () => {

@@ -50,6 +50,7 @@ import {
   newId,
   type BlockDocument,
   type DocumentKind,
+  type DocumentLimits,
   type BreakpointSet,
   type NamedClass,
   type SiteTokenSet,
@@ -83,6 +84,7 @@ import {
   EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
+  type LibraryTierState,
   selectionIsInspectable,
   pageStyleTrace,
   LayersPanel,
@@ -116,6 +118,7 @@ import {
 // and sonner keeps its queue in module state, so a toast published into another
 // bundled copy would never reach it.
 import {
+  Button,
   chordMatches,
   detectApplePlatform,
   parseKeys,
@@ -419,6 +422,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       document={documentFrom(field.value, kinds)}
       siteStyles={resting.siteStyles}
       styleState={resting.styleState}
+      components={resting.components}
       render={resting.render}
       // The gate is passed through rather than restated: `canEditBlocks`
       // already answers it for the editor above, and two readings of "may this
@@ -1698,8 +1702,61 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
  * registry and a list, and asking for its own data would make every host that
  * renders it depend on this plugin's route.
  */
+/**
+ * What stands where the canvas will be, while a read it cannot draw without is
+ * still coming or has failed.
+ *
+ * Two reads gate the canvas, and they fail in the same direction: the site's
+ * style, without which the page draws a plausible design the site does not
+ * have, and the component definitions, without which every instance draws as
+ * could-not-be-loaded — the picture of a site whose components were deleted.
+ * Named apart because the remedies differ. A failed style read is fixed by
+ * reloading; a failed component read can be asked again from here.
+ *
+ * Only the canvas waits: the shell, the rail and the inspector are about the
+ * DOCUMENT, which is already in hand.
+ */
+function CanvasGate({
+  styles,
+  components,
+}: {
+  styles: { pending: boolean; error: Error | null };
+  components: ComponentLibraryRead;
+}): React.JSX.Element {
+  if (styles.error !== null) {
+    return (
+      <p className="nx-inspector__note" data-canvas-state="failed">
+        This site’s styles could not be loaded, so the canvas would not match
+        the published page. Reload to try again.
+      </p>
+    );
+  }
+  if (components.state === "unavailable") {
+    return (
+      <p className="nx-inspector__note" data-canvas-state="failed">
+        This site’s components could not be loaded, so every one placed on this
+        page would draw as missing.{" "}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={components.retry}
+        >
+          Try again
+        </Button>
+      </p>
+    );
+  }
+  return (
+    <p className="nx-inspector__note" data-canvas-state="loading">
+      Loading this site’s styles and components…
+    </p>
+  );
+}
+
 function InsertPanelWithLibrary({
   components,
+  documentLimits,
   ...props
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
@@ -1712,9 +1769,11 @@ function InsertPanelWithLibrary({
    * them whether or not this panel is ever opened — so the editor makes that
    * read once and hands it down WHOLE: the list the tiles are built from, the
    * lookup the canvas resolves against — so a tile's roots are the roots the
-   * canvas will draw — and whether the read was cut, which the panel says.
+   * canvas will draw — and where the read stands, which the panel says.
    */
   components: ComponentLibraryRead;
+  /** The caps the canvas resolves under, so a tile is judged under the same. */
+  documentLimits: DocumentLimits;
 }): React.JSX.Element {
   const library = usePatternLibrary();
   return (
@@ -1723,12 +1782,34 @@ function InsertPanelWithLibrary({
       patterns={library.patterns}
       components={components.components}
       componentDefinitions={components.definitions}
-      truncated={{
-        patterns: library.truncated,
-        components: components.truncated,
+      documentLimits={documentLimits}
+      library={{
+        patterns: tierStateOf(library),
+        components: tierStateOf(components),
+        // Both reads asked again: the panel offers one retry, and a tier that
+        // was fine is refetched at no cost the author can see.
+        retry: () => {
+          library.retry();
+          components.retry();
+        },
       }}
     />
   );
+}
+
+/**
+ * One tier's state as the panel says it, from the two facts a read carries.
+ *
+ * `unavailable` first, for the reason both reads name it first; then cut; and
+ * a read still in flight is `ready` — an empty tier that will fill in a moment
+ * is not one to explain.
+ */
+function tierStateOf(read: {
+  state: "pending" | "ready" | "unavailable";
+  truncated: boolean;
+}): LibraryTierState {
+  if (read.state === "unavailable") return "unavailable";
+  return read.truncated ? "cut" : "ready";
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
@@ -2759,6 +2840,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
                 components={componentLibrary}
+                documentLimits={documentLimits}
               />
             ),
             /*
@@ -2904,15 +2986,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             the read is cached, so this is one brief state per session rather
             than one per opening.
           */}
-          {siteStylePending || siteStyleError !== null ? (
-            <p
-              className="nx-inspector__note"
-              data-canvas-state={siteStyleError === null ? "loading" : "failed"}
-            >
-              {siteStyleError === null
-                ? "Loading this site\u2019s styles\u2026"
-                : "This site\u2019s styles could not be loaded, so the canvas would not match the published page. Reload to try again."}
-            </p>
+          {siteStylePending ||
+          siteStyleError !== null ||
+          componentLibrary.state !== "ready" ? (
+            <CanvasGate
+              styles={{ pending: siteStylePending, error: siteStyleError }}
+              components={componentLibrary}
+            />
           ) : (
             /*
               Wrapped rather than passed in, because the menu opens over the

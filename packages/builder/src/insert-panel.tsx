@@ -55,6 +55,7 @@ import {
   type AnyBlockDefinition,
   type BlockNode,
   type ComponentLookup,
+  type DocumentLimits,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -93,6 +94,15 @@ import {
   type SavedPattern,
 } from "./inserter";
 import type { BuilderOp } from "./ops";
+
+/**
+ * Where one tier of the host's library read stands, as the panel says it.
+ *
+ * `ready` covers a tier still in flight as well as one that arrived whole: an
+ * empty tier that will fill in a moment is not one to explain, and a notice
+ * that flashed on every open would be one an author learns to read past.
+ */
+export type LibraryTierState = "ready" | "cut" | "unavailable";
 
 export interface InsertPanelProps {
   /**
@@ -151,18 +161,29 @@ export interface InsertPanelProps {
    */
   componentDefinitions?: ComponentLookup;
   /**
-   * Which tiers the host's library read could not carry whole.
-   *
-   * A library has a ceiling, and a read that reached it left rows out. The
-   * panel SAYS so beside the tiles it offers, because the alternative is
-   * silence in two places at once: an author searching here for a component
-   * that is not offered, and an instance of it on the canvas drawn as
-   * could-not-be-loaded with nothing to say the library was cut rather than
-   * the component deleted.
+   * The document caps the CANVAS resolves under, so a definition is judged
+   * offerable under the bounds it will actually be drawn under. Omitted, the
+   * engine's defaults apply — which is also what the canvas does when given
+   * none.
    */
-  truncated?: {
-    readonly patterns?: boolean;
-    readonly components?: boolean;
+  documentLimits?: DocumentLimits;
+  /**
+   * Where each tier of the host's library read stands, when it is not simply
+   * here.
+   *
+   * A library has a ceiling, and a read that reached it left rows out; a read
+   * can also fail outright. The panel SAYS either beside the tiles it offers,
+   * because the alternative is silence in two places at once: an author
+   * searching here for a component that is not offered, and an instance of it
+   * on the canvas drawn as could-not-be-loaded with nothing to say whether the
+   * library was cut, could not be read, or the component was deleted. A
+   * failed read is the one state with a remedy, so it is offered beside it.
+   */
+  library?: {
+    readonly patterns?: LibraryTierState;
+    readonly components?: LibraryTierState;
+    /** Ask the host to read again. Offered beside an unavailable tier. */
+    readonly retry?: () => void;
   };
   /** How nesting is resolved. Defaults to the live registry. */
   nesting?: NestingSource;
@@ -433,43 +454,77 @@ function tierSentence(entry: InsertEntry): string {
 const NO_DEFINITIONS: ComponentLookup = new Map();
 
 /**
- * That the library was cut, said once and where an author looks for what is
- * missing.
+ * That a tier of the library was cut, or could not be read, said where an
+ * author looks for what is missing.
  *
- * A `status` region rather than an alert: it is a standing fact about this
+ * `status` regions rather than alerts: each is a standing fact about this
  * read, present from the moment the panel opens, and an alert would interrupt
  * a screen reader mid-sentence to announce something that is not an event.
- * Drawn above the tiles so it is read BEFORE an author searches in vain — a
- * note at the end of a long list is one they reach after giving up.
+ * Drawn above the tiles so they are read BEFORE an author searches in vain —
+ * a note at the end of a long list is one they reach after giving up.
  *
  * Named per tier, because the remedy the author reaches for differs: a pattern
  * left out is one they cannot insert, while a component left out is also one
  * already on the page drawing as could-not-be-loaded, and that second half is
- * the sentence nothing else says.
+ * the sentence nothing else says. A tier that could not be read at all gets
+ * its own sentence and the retry, because that is the one state with a remedy
+ * the author can reach from here.
  */
-function LibraryCutNotice({
-  truncated,
+function LibraryNotices({
+  library,
 }: {
-  truncated: InsertPanelProps["truncated"];
+  library: InsertPanelProps["library"];
 }): React.JSX.Element | null {
-  const patterns = truncated?.patterns === true;
-  const components = truncated?.components === true;
-  if (!patterns && !components) return null;
-  const tiers =
-    patterns && components
-      ? "patterns and components"
-      : patterns
-        ? "patterns"
-        : "components";
+  const cut = tiersIn(library, "cut");
+  const unavailable = tiersIn(library, "unavailable");
+  if (cut === undefined && unavailable === undefined) return null;
   return (
-    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
-      The library is larger than the editor can load at once, so some {tiers}{" "}
-      are not offered here.
-      {components
-        ? " A component left out shows as “could not be loaded” on the page."
-        : null}
-    </p>
+    <>
+      {cut === undefined ? null : (
+        <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+          The library is larger than the editor can load at once, so some {cut}{" "}
+          are not offered here.
+          {cut.includes("components")
+            ? " A component left out shows as “could not be loaded” on the page."
+            : null}
+        </p>
+      )}
+      {unavailable === undefined ? null : (
+        <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+          The site’s {unavailable} could not be loaded, so none are offered
+          here.
+          {unavailable.includes("components")
+            ? " A component already on the page shows as “could not be loaded”."
+            : null}{" "}
+          {library?.retry === undefined ? null : (
+            <button
+              type="button"
+              className="nx-insert-panel__retry"
+              onClick={library.retry}
+            >
+              Try again
+            </button>
+          )}
+        </p>
+      )}
+    </>
   );
+}
+
+/**
+ * The tiers in one state, as the words a sentence names them with — or
+ * nothing when no tier is in that state.
+ */
+function tiersIn(
+  library: InsertPanelProps["library"],
+  state: LibraryTierState
+): string | undefined {
+  const patterns = library?.patterns === state;
+  const components = library?.components === state;
+  if (patterns && components) return "patterns and components";
+  if (patterns) return "patterns";
+  if (components) return "components";
+  return undefined;
 }
 
 function TouchGestureHint({
@@ -539,7 +594,8 @@ export function InsertPanel({
   patterns,
   components,
   componentDefinitions,
-  truncated,
+  documentLimits,
+  library,
   nesting,
   categoryOrder,
   onInsert,
@@ -584,10 +640,18 @@ export function InsertPanel({
       ...patternEntriesFrom(patterns ?? [], source),
       ...componentEntriesFrom(
         components ?? [],
-        componentDefinitions ?? NO_DEFINITIONS
+        componentDefinitions ?? NO_DEFINITIONS,
+        documentLimits
       ),
     ],
-    [palette, patterns, components, componentDefinitions, source]
+    [
+      palette,
+      patterns,
+      components,
+      componentDefinitions,
+      documentLimits,
+      source,
+    ]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather
@@ -813,7 +877,7 @@ export function InsertPanel({
         <p className="nx-insert-panel__placement" aria-live="polite">
           {placementLabel(point)}
         </p>
-        <LibraryCutNotice truncated={truncated} />
+        <LibraryNotices library={library} />
         <CommandList>
           <CommandEmpty>
             {query.trim() === ""

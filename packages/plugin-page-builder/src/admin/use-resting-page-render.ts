@@ -41,6 +41,8 @@ export interface RestingPageRender {
   siteStyles: PageRendererProps["siteStyles"];
   /** Whether that sheet is usable yet, and why not when it is not. */
   styleState: SiteStyleState;
+  /** Whether the component definitions are usable yet, and the way to ask again. */
+  components: { state: SiteStyleState; retry: () => void };
   /** The rest of this site's rendering, from the derivation the canvas asks. */
   render: PageRenderInputs;
 }
@@ -78,7 +80,8 @@ export function useRestingPageRender(source: string): RestingPageRender {
    * the same DRAFT posture: the miniature shows the author their own page, and
    * the component they are mid-edit on is the one they expect to see in it.
    */
-  const { definitions } = useComponentLibrary();
+  const library = useComponentLibrary();
+  const { definitions } = library;
 
   const render = useMemo(
     () =>
@@ -109,6 +112,8 @@ export function useRestingPageRender(source: string): RestingPageRender {
      * comparison is true on success too.
      */
     styleState: pending ? "pending" : error !== null ? "unavailable" : "ready",
+    // The same three states the read already names, and the retry it holds.
+    components: { state: library.state, retry: library.retry },
     render,
   };
 }

@@ -544,15 +544,30 @@ describe("what the editor reads before anyone asks for it", () => {
 
     openEditor();
 
-    const render = seen.canvas?.render as
-      | { definitions?: Map<string, unknown> }
-      | undefined;
-    expect(render?.definitions?.get("header")).toBe(definition);
-    expect(seen.insertPanel?.componentDefinitions).toBe(render?.definitions);
-    expect(seen.insertPanel?.components).toBe(items);
-    expect(seen.insertPanel?.truncated).toEqual({
-      patterns: false,
-      components: true,
+    // Population first, once: every recorder must have rendered, or the
+    // identity assertions below would be comparing `undefined` to `undefined`.
+    const canvas = recorded("canvas");
+    const panel = recorded("insertPanel");
+    const render = canvas.render as {
+      definitions: Map<string, unknown>;
+      limits: unknown;
+    };
+    expect(render.definitions.get("header")).toBe(definition);
+    expect(panel.componentDefinitions).toBe(render.definitions);
+    expect(panel.components).toBe(items);
+    expect(panel.library).toMatchObject({
+      patterns: "ready",
+      components: "cut",
     });
+    // And the caps the canvas resolves under, so a tile is judged under the
+    // same bounds the instance is drawn under.
+    expect(panel.documentLimits).toBe(render.limits);
   });
 });
+
+/** A recorder's props, asserted present so a missing render cannot read as equal. */
+function recorded(key: "canvas" | "insertPanel"): Record<string, unknown> {
+  const props = seen[key];
+  if (props === undefined) throw new Error(`the ${key} never rendered`);
+  return props;
+}

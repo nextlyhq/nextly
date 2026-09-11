@@ -33,6 +33,20 @@ const seen: {
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
 
+/**
+ * What the component route answers with for the test in hand.
+ *
+ * `pending: false` with no data says the read ANSWERED with nothing — a site
+ * with no components — which is the state every case not about the gate was
+ * written against.
+ */
+let componentRead: {
+  data: unknown;
+  pending: boolean;
+  error: Error | null;
+  refetch: () => void;
+} = { data: undefined, pending: false, error: null, refetch: () => {} };
+
 /** What the stored-style read answers with for the test in hand. */
 let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
   {
@@ -156,12 +170,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * nothing, which is the site with an empty library — the state every one of
    * these cases was written against.
    */
-  usePluginRoute: () => ({
-    data: undefined,
-    pending: false,
-    error: null,
-    refetch: () => {},
-  }),
+  // Discriminated BY PATH, so the component read's state — the one gate this
+  // file drives — cannot reach a read of something else.
+  usePluginRoute: (args: { path: string }) =>
+    args.path === "/library/components"
+      ? componentRead
+      : { data: undefined, pending: false, error: null, refetch: () => {} },
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -205,6 +219,12 @@ beforeEach(() => {
   seen.breakpoints = undefined;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
+  componentRead = {
+    data: undefined,
+    pending: false,
+    error: null,
+    refetch: () => {},
+  };
 });
 
 afterEach(() => {
@@ -316,6 +336,48 @@ describe("when the stored style cannot be read at all", () => {
       document.querySelector('[data-canvas-state="loading"]')
     ).not.toBeNull();
     expect(document.querySelector('[data-canvas-state="failed"]')).toBeNull();
+  });
+});
+
+describe("what the canvas waits for, the component read", () => {
+  it("holds the canvas back while the definitions are still arriving", () => {
+    // Mounted without them, every instance on the page flashes as
+    // could-not-be-loaded and then re-lays-out when the read lands — the same
+    // finished-looking wrong picture the style gate refuses.
+    componentRead = {
+      data: undefined,
+      pending: true,
+      error: null,
+      refetch: () => {},
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeUndefined();
+    expect(
+      document.querySelector('[data-canvas-state="loading"]')
+    ).not.toBeNull();
+  });
+
+  it("says the components could not be loaded, and offers to try again", () => {
+    // The one gated read with a remedy the author can reach without leaving
+    // the editor. And it is told apart from a failed STYLE read, whose remedy
+    // is a reload.
+    const refetch = vi.fn();
+    componentRead = {
+      data: undefined,
+      pending: false,
+      error: new Error("Forbidden"),
+      refetch,
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeUndefined();
+    const failed = document.querySelector('[data-canvas-state="failed"]');
+    expect(failed?.textContent).toContain("components could not be loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });
 

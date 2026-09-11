@@ -76,6 +76,16 @@ export interface PatternLibraryRead {
    * that was cut.
    */
   readonly truncated: boolean;
+  /**
+   * Where the read stands: still in flight, answered, or failed.
+   *
+   * Carried for the reason the component read carries it: a failed read and
+   * an empty library both offer no patterns, and only one of them is a state
+   * the panel should say — with the retry beside it.
+   */
+  readonly state: "pending" | "ready" | "unavailable";
+  /** Ask again, ignoring anything cached. */
+  readonly retry: () => void;
 }
 
 /**
@@ -116,6 +126,10 @@ export function usePatternLibrary(): PatternLibraryRead {
     patterns,
     categories,
     truncated: read.data?.meta.truncated === true,
+    // The failed state named FIRST, so it cannot fold into the pending one.
+    state:
+      read.error !== null ? "unavailable" : read.pending ? "pending" : "ready",
+    retry: read.refetch,
   };
 }
 
