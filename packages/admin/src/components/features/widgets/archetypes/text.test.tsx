@@ -111,6 +111,49 @@ describe("the text archetype", () => {
     expect(root.querySelectorAll("a")).toHaveLength(0);
   });
 
+  it("gives an allowed link the destination that was judged, not the capture", async () => {
+    // 🔴 The guard admitted `\u0001https://example.com` on its stripped form,
+    // then handed the library the raw capture -- which, scheme-less to the
+    // link node's formatter, rendered as `https://\u0001https://example.com`.
+    // The node now carries the judged destination, so the href is the
+    // address the guard read.
+    const root = await drawn(
+      "Read [the docs](\u0001https://example.com/docs)."
+    );
+    const link = root.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("https://example.com/docs");
+    expect(link?.getAttribute("target")).toBe("_blank");
+  });
+
+  it("leaves a bare relative destination as markdown, rather than a link off-site", async () => {
+    // 🔴 `[posts](posts?status=draft)` read as a path on this site and the
+    // link node rendered it as `https://posts?status=draft`, in a new tab.
+    // Refused, the brackets stay on screen; the path spelled `./` is kept.
+    const root = await drawn(
+      "See [posts](posts?status=draft) or [drafts](./posts?status=draft)."
+    );
+    const links = [...root.querySelectorAll("a")];
+    expect(links.map(link => link.getAttribute("href"))).toEqual([
+      "./posts?status=draft",
+    ]);
+    expect(root.textContent).toContain("[posts](posts?status=draft)");
+  });
+
+  it("declines a link whose entity no code point can hold, and still draws the rest", async () => {
+    // 🔴 The library decoded `&#1114112;` by throwing, inside the conversion
+    // of the whole card, and an editor whose initial state threw committed
+    // nothing: the other lines were gone with the link. Declined before the
+    // library is asked, the link is text and the heading is drawn.
+    const root = await drawn(
+      "## Still here\n\nA [broken](https://example.com/&#1114112;) link."
+    );
+    expect(root.querySelector("h2")?.textContent).toBe("Still here");
+    expect(root.querySelector("a")).toBeNull();
+    expect(root.textContent).toContain(
+      "[broken](https://example.com/&#1114112;)"
+    );
+  });
+
   it("is document content, not a read-only form control", async () => {
     // 🔴 `ContentEditable` names itself `role="textbox"` and, when the editor
     // is not editable, `aria-readonly` -- so a card of prose was announced as

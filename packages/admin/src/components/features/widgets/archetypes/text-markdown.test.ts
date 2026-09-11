@@ -21,11 +21,42 @@ describe("which hrefs may become links", () => {
       "tel:+15551234567",
       "/admin/collections/posts",
       "./sibling",
+      "../parent",
       "#section",
-      "posts?status=draft",
     ]) {
       expect(safeHref(href), href).toBe(true);
+      expect(destinationOf(href), href).toBe(href);
     }
+  });
+
+  it("refuses a destination the link node would rewrite before rendering it", () => {
+    // 🔴 `@lexical/link` formats a scheme-less destination: one that does not
+    // start with `/`, `.` or `#` is prefixed `https://`, an address with an
+    // `@` becomes `mailto:`. Read here as a path on this site,
+    // `posts?status=draft` rendered as a link to a host called `posts` that
+    // opened a new tab. Refused, it stays markdown the author can see;
+    // decided by asking the formatter, not by restating its prefixes.
+    for (const href of [
+      "posts?status=draft",
+      "example.com",
+      "me@example.com",
+    ]) {
+      expect(safeHref(href), href).toBe(false);
+      expect(destinationOf(href), href).toBeUndefined();
+    }
+  });
+
+  it("declines an entity no code point can hold, rather than throwing", () => {
+    // 🔴 The library decodes `&#1114112;` by throwing a RangeError, inside
+    // the conversion of the whole card -- and an editor whose initial state
+    // threw commits nothing, so one malformed link blanked every other line.
+    // Declined before the library is asked, it stays text.
+    expect(destinationOf("https://example.com/&#1114112;")).toBeUndefined();
+    expect(safeHref("foo&#99999999999999999999;")).toBe(false);
+    // The bound, not merely the shape: the last code point decodes.
+    expect(destinationOf("https://example.com/&#1114111;")).toBe(
+      "https://example.com/\u{10FFFF}"
+    );
   });
 
   it("refuses a scheme that runs code or carries a payload", () => {
@@ -60,11 +91,12 @@ describe("which hrefs may become links", () => {
     // a backslash before punctuation is dropped and a decimal entity is
     // decoded. Judged on the raw capture, neither spelling shows a scheme,
     // and both reach the DOM as `javascript:`.
-    expect(destinationOf("javascript\\:alert%281%29")).toBe(
-      "javascript:alert%281%29"
-    );
-    expect(destinationOf("javascript&#58;alert%281%29")).toBe(
-      "javascript:alert%281%29"
+    // Asserted on an ALLOWED scheme spelled the same two ways, because the
+    // refused one has no destination to compare: what the guard reads is the
+    // unescaped string, and the scheme is read off that.
+    expect(destinationOf("https\\://example.com")).toBe("https://example.com");
+    expect(destinationOf("https&#58;//example.com")).toBe(
+      "https://example.com"
     );
     for (const href of [
       "javascript\\:alert%281%29",
@@ -84,11 +116,15 @@ describe("which links leave this site", () => {
     expect(externalHref("mailto:a@b.c")).toBe(false);
   });
 
-  it("classifies the destination the browser will follow, not the raw string", () => {
+  it("is asked of the destination the guard produced, which has no control characters left", () => {
     // 🔴 An allowed address behind a leading control character is admitted by
     // the guard and leaves the site when clicked; classified on the raw
-    // string it received no target and no `noopener`.
-    expect(externalHref("\u0001https://example.com")).toBe(true);
-    expect(externalHref(" https://example.com")).toBe(true);
+    // string it received no target and no `noopener`. The guard's destination
+    // is what the node carries, and it is what the classification reads.
+    for (const raw of ["\u0001https://example.com", " https://example.com"]) {
+      const destination = destinationOf(raw);
+      expect(destination, JSON.stringify(raw)).toBe("https://example.com");
+      expect(externalHref(destination!)).toBe(true);
+    }
   });
 });
