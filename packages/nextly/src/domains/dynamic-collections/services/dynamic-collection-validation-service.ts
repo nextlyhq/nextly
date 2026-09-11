@@ -12,6 +12,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
  */
 
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
@@ -221,6 +222,32 @@ export class DynamicCollectionValidationService {
       if (field.type === "relationship") {
         this.validateRelationshipField(field);
       }
+    }
+
+    this.validateJunctionOwnership(fields);
+  }
+
+  /**
+   * Two many-to-many fields may not store their links in one junction table.
+   * A link row carries the two collections' ids and nothing that says which
+   * field made it, so the fields would read each other's links, and removing
+   * either field would take the other's table with it. Only an author-named
+   * `junctionTable` can collide: the generated name carries the field's own.
+   *
+   * @throws Error naming both fields and the table
+   */
+  validateJunctionOwnership(fields: FieldDefinition[]): void {
+    const owners = new Map<string, string>();
+    for (const field of fields) {
+      const table = field.options?.junctionTable;
+      if (!usesJunctionTable(field) || !table) continue;
+      const owner = owners.get(table);
+      if (owner !== undefined) {
+        throw new Error(
+          `Fields "${owner}" and "${field.name}" both store their links in junction table "${table}". Each many-to-many field needs a junction table of its own.`
+        );
+      }
+      owners.set(table, field.name);
     }
   }
 

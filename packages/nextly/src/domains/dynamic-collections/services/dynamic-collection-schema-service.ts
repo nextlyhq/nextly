@@ -1980,43 +1980,61 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
   }
 
   /**
-   * The two foreign keys, carried to their new names. A foreign key is
-   * renamed in place only where the dialect can rename one AND the save left
-   * its referential actions alone: PostgreSQL can, MySQL cannot. Everywhere
-   * else it is dropped and declared again under the new name with the NEW
-   * actions, in the one statement both dialects accept — a rename would keep
-   * the old actions in the database while the registry recorded the new,
-   * and a later delete would cascade, or be refused, against the saved
-   * schema. SQLite cannot alter a constraint at all, so edited actions do
-   * not reach a SQLite junction without the table rebuild the Builder does
-   * not perform; nothing is emitted there, as nothing is for any SQLite
-   * constraint. An edit to the actions of a field whose NAME is unchanged
-   * is not a rename and is not handled here, on any dialect — the column
-   * diff has never emitted one for a relationship either.
+   * The two foreign keys, carried to their new names and their new
+   * referential actions. A foreign key is renamed in place only where the
+   * dialect can rename one AND the save left its actions alone: PostgreSQL
+   * can, MySQL cannot. Otherwise it is dropped and declared again under the
+   * new name with the NEW actions — a rename would keep the old actions in
+   * the database while the registry recorded the new, and a later delete
+   * would cascade, or be refused, against the saved schema. That holds when
+   * the name did not change at all (the author named the junction, so the
+   * table and its constraints keep their names across the field rename):
+   * the constraint is still rebuilt, under the same name, as two statements
+   * — a drop and an add of one name in a single ALTER is MySQL's open bug
+   * #68286 (error 1826), and on PostgreSQL it would rest on the order the
+   * server runs its subcommands in, which nothing here can test. Two names
+   * cannot clash, so PostgreSQL rebuilds those in the one statement it
+   * accepts; MySQL still takes two, since one statement is documented as
+   * supported only under `ALGORITHM=INPLACE`, which adding a foreign key
+   * cannot use while `foreign_key_checks` is on. SQLite cannot alter a
+   * constraint at all, so edited actions do not reach a SQLite junction
+   * without the table rebuild the Builder does not perform; nothing is
+   * emitted there, as nothing is for any SQLite constraint. An edit to the
+   * actions of a field that was NOT renamed is not a rename and is not
+   * handled here, on any dialect — the column diff has never emitted one
+   * for a relationship either.
    */
   private renameJunctionForeignKeys(
     from: JunctionShape,
     to: JunctionShape
   ): string[] {
     const q = (name: string) => this.quoteIdentifier(name);
-    const renameable =
-      this.dialect === "postgresql" &&
-      from.onDelete === to.onDelete &&
-      from.onUpdate === to.onUpdate;
-    const drop =
-      this.dialect === "postgresql" ? "DROP CONSTRAINT" : "DROP FOREIGN KEY";
+    const actionsChanged =
+      from.onDelete !== to.onDelete || from.onUpdate !== to.onUpdate;
     const foreignKeys: Array<[string, string, string, string]> = [
       [from.fkSource, to.fkSource, to.sourceColumn, to.sourceTable],
       [from.fkTarget, to.fkTarget, to.targetColumn, to.targetTable],
     ];
     const out: string[] = [];
     for (const [was, is, column, references] of foreignKeys) {
-      if (was === is) continue;
-      out.push(
-        renameable
-          ? `ALTER TABLE ${q(to.table)} RENAME CONSTRAINT ${q(was)} TO ${q(is)};`
-          : `ALTER TABLE ${q(to.table)} ${drop} ${q(was)}, ADD CONSTRAINT ${q(is)} FOREIGN KEY (${q(column)}) REFERENCES ${q(references)}(${q("id")}) ON DELETE ${to.onDelete} ON UPDATE ${to.onUpdate};`
-      );
+      if (was === is && !actionsChanged) continue;
+      const declare = `ADD CONSTRAINT ${q(is)} FOREIGN KEY (${q(column)}) REFERENCES ${q(references)}(${q("id")}) ON DELETE ${to.onDelete} ON UPDATE ${to.onUpdate}`;
+      const drop =
+        this.dialect === "mysql" ? "DROP FOREIGN KEY" : "DROP CONSTRAINT";
+      if (this.dialect === "mysql" || was === is) {
+        out.push(
+          `ALTER TABLE ${q(to.table)} ${drop} ${q(was)};`,
+          `ALTER TABLE ${q(to.table)} ${declare};`
+        );
+      } else if (actionsChanged) {
+        out.push(
+          `ALTER TABLE ${q(to.table)} DROP CONSTRAINT ${q(was)}, ${declare};`
+        );
+      } else {
+        out.push(
+          `ALTER TABLE ${q(to.table)} RENAME CONSTRAINT ${q(was)} TO ${q(is)};`
+        );
+      }
     }
     return out;
   }
@@ -2062,16 +2080,23 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
     renamedFrom: string | undefined
   ): string[] {
     const newByName = new Map(newFields.map(f => [f.name, f]));
+    // A table another surviving field still resolves to is that field's,
+    // whatever this one called it. Validation refuses two fields naming one
+    // junction on save; a definition saved before it did is still read here.
+    const stillOwned = new Set(
+      newFields
+        .filter(usesJunctionTable)
+        .map(field => this.junctionTableNameFor(tableName, field))
+    );
     return oldFields
       .filter(field => usesJunctionTable(field) && field.name !== renamedFrom)
       .filter(field => {
         const next = newByName.get(field.name);
         return !next || this.storageClassChanged(field, next);
       })
-      .map(
-        field =>
-          `DROP TABLE IF EXISTS ${this.quoteIdentifier(this.junctionTableNameFor(tableName, field))};`
-      );
+      .map(field => this.junctionTableNameFor(tableName, field))
+      .filter(table => !stillOwned.has(table))
+      .map(table => `DROP TABLE IF EXISTS ${this.quoteIdentifier(table)};`);
   }
 
   /** The junctions a save needs: a many-to-many added, or moved in from a column. */

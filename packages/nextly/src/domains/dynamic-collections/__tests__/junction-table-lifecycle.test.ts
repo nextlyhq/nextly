@@ -74,6 +74,23 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       expect(sql).not.toContain(junction("tags"));
     });
 
+    it("keeps a junction table another surviving field still resolves to", () => {
+      // Two fields naming one junction is refused on save now; a definition
+      // saved before that rule still reaches the diff, and the table is the
+      // surviving field's, whatever the removed one called it.
+      const shared = { junctionTable: "shared_links" };
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [
+          manyToMany("tags", "tags", shared),
+          manyToMany("labels", "tags", shared),
+        ],
+        [manyToMany("labels", "tags", shared)]
+      );
+      expect(sql).not.toContain("DROP TABLE");
+      expect(sql).not.toContain("shared_links");
+    });
+
     it("leaves a junction alone when its field stays", () => {
       // The control: the drop is about removal, not about being many-to-many.
       const sql = service().generateAlterTableMigration(
@@ -175,8 +192,12 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
           `ALTER TABLE \`${to}\` RENAME INDEX \`idx_${from}_posts\` TO \`idx_${to}_posts\`;`,
           `ALTER TABLE \`${to}\` RENAME INDEX \`idx_${from}_tags\` TO \`idx_${to}_tags\`;`,
           `ALTER TABLE \`${to}\` RENAME INDEX \`uq_${from}_pair\` TO \`uq_${to}_pair\`;`,
-          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_posts\`, ADD CONSTRAINT \`fk_${to}_posts\` FOREIGN KEY (\`posts_id\`) REFERENCES \`dc_posts\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION;`,
-          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_tags\`, ADD CONSTRAINT \`fk_${to}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION;`,
+          // Two statements each: MySQL refuses a drop and an add of one
+          // foreign key in a single ALTER (bug #68286, open).
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_posts\`;`,
+          `ALTER TABLE \`${to}\` ADD CONSTRAINT \`fk_${to}_posts\` FOREIGN KEY (\`posts_id\`) REFERENCES \`dc_posts\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION;`,
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_tags\`;`,
+          `ALTER TABLE \`${to}\` ADD CONSTRAINT \`fk_${to}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION;`,
         ],
         sqlite: [
           `DROP INDEX IF EXISTS "idx_${from}_posts";`,
@@ -191,7 +212,10 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       // The old spellings survive nowhere but in the rename statements.
       const withoutRenames = sql
         .split("--> statement-breakpoint")
-        .filter(chunk => !/RENAME|DROP INDEX|DROP FOREIGN KEY/.test(chunk));
+        .filter(
+          chunk =>
+            !/RENAME|DROP INDEX|DROP FOREIGN KEY|DROP CONSTRAINT/.test(chunk)
+        );
       expect(withoutRenames.join("\n")).not.toContain(from);
     });
 
@@ -217,8 +241,10 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
           `ALTER TABLE "${to}" RENAME CONSTRAINT "uq_${from}_pair" TO "uq_${to}_pair";`,
         ],
         mysql: [
-          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_posts\`, ADD CONSTRAINT \`fk_${to}_posts\` FOREIGN KEY (\`posts_id\`) REFERENCES \`dc_posts\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
-          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_tags\`, ADD CONSTRAINT \`fk_${to}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_posts\`;`,
+          `ALTER TABLE \`${to}\` ADD CONSTRAINT \`fk_${to}_posts\` FOREIGN KEY (\`posts_id\`) REFERENCES \`dc_posts\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_tags\`;`,
+          `ALTER TABLE \`${to}\` ADD CONSTRAINT \`fk_${to}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
           `ALTER TABLE \`${to}\` RENAME INDEX \`uq_${from}_pair\` TO \`uq_${to}_pair\`;`,
         ],
         sqlite: [`ALTER TABLE "${from}" RENAME TO "${to}";`],
@@ -235,6 +261,50 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
         expect(sql).not.toContain(fragment);
       }
       // Still a rename: the links stay where they are on every dialect.
+      expect(sql).not.toContain("CREATE TABLE");
+      expect(sql).not.toContain("DROP TABLE");
+    });
+
+    it("rebuilds the foreign keys under their unchanged names when the author's junction keeps its name and the actions changed", () => {
+      // The author named the table, so the rename moves nothing — and the
+      // edited actions would stay behind with the constraints. Same name in,
+      // same name out, new actions: a drop and an add as two statements on
+      // PostgreSQL and MySQL (one statement with one name is MySQL's open
+      // bug #68286, and untestable ordering on PostgreSQL), SQLite nothing
+      // (it cannot alter a constraint).
+      const named = { junctionTable: "post_tag_links" };
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany("tags", "tags", named)],
+        [manyToMany("categories", "tags", { ...named, onDelete: "restrict" })]
+      );
+      const t = "post_tag_links";
+      const expected: Record<Dialect, string[]> = {
+        postgresql: [
+          `ALTER TABLE "${t}" DROP CONSTRAINT "fk_${t}_posts";`,
+          `ALTER TABLE "${t}" ADD CONSTRAINT "fk_${t}_posts" FOREIGN KEY ("posts_id") REFERENCES "dc_posts"("id") ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          `ALTER TABLE "${t}" DROP CONSTRAINT "fk_${t}_tags";`,
+          `ALTER TABLE "${t}" ADD CONSTRAINT "fk_${t}_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+        ],
+        mysql: [
+          `ALTER TABLE \`${t}\` DROP FOREIGN KEY \`fk_${t}_posts\`;`,
+          `ALTER TABLE \`${t}\` ADD CONSTRAINT \`fk_${t}_posts\` FOREIGN KEY (\`posts_id\`) REFERENCES \`dc_posts\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          `ALTER TABLE \`${t}\` DROP FOREIGN KEY \`fk_${t}_tags\`;`,
+          `ALTER TABLE \`${t}\` ADD CONSTRAINT \`fk_${t}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+        ],
+        sqlite: [],
+      };
+      for (const statement of expected[dialect]) {
+        expect(sql).toContain(statement);
+      }
+      if (dialect === "sqlite") {
+        expect(sql).not.toContain(t);
+      } else {
+        // Same name both sides: the unique pair and the indexes have nothing
+        // to carry, and there is no rename to perform.
+        expect(sql).not.toContain("RENAME");
+        expect(sql).not.toContain("ON DELETE CASCADE");
+      }
       expect(sql).not.toContain("CREATE TABLE");
       expect(sql).not.toContain("DROP TABLE");
     });
