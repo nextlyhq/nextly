@@ -329,6 +329,38 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
     });
 
+    it("runs field-level beforeChange after collection-level beforeChange", async () => {
+      // The field phase is the last HOOK before the write and is handed the
+      // record, so a collection-level beforeChange is not the final word on any
+      // field. Core normalisation still follows both, so neither is the final
+      // STEP. Payload dispatches the two levels in this order too.
+      selectData.rows = [{ id: "new-1", title: "New Post" }];
+
+      await service.createEntry(
+        { collectionName: "posts" },
+        { title: "Ordered Post" }
+      );
+
+      const collectionPhase = mockHookRegistry.execute.mock.calls.findIndex(
+        call => call[0] === "beforeChange"
+      );
+      expect(collectionPhase, "collection beforeChange ran").toBeGreaterThan(
+        -1
+      );
+
+      const fieldPhase = runFieldHooksSpy.mock.calls.findIndex(
+        call => (call[0] as { phase?: string }).phase === "beforeChange"
+      );
+      expect(fieldPhase, "field beforeChange ran").toBeGreaterThan(-1);
+
+      // Invocation order across two different mocks, since neither list alone
+      // can say which came first.
+      const collectionOrder =
+        mockHookRegistry.execute.mock.invocationCallOrder[collectionPhase];
+      const fieldOrder = runFieldHooksSpy.mock.invocationCallOrder[fieldPhase];
+      expect(collectionOrder).toBeLessThan(fieldOrder!);
+    });
+
     it("should execute afterCreate hooks", async () => {
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
