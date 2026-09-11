@@ -428,7 +428,24 @@ const INTERNAL_DOCS_LINK = /\]\((\/docs\/[^)\s]*)\)/g;
  * written on the site, which had nothing resolving them. One spelling, the guarded one, is
  * the boundary: a docs page links to another page by its URL, and to source by its GitHub URL.
  */
-const FILE_PATH_LINK = /\]\((\.\.?\/[^)\s]*)\)/g;
+const FILE_PATH_LINK = /(?<!\\)\]\((\.\.?\/[^)\s]*)\)|^ {0,3}\[[^\]\n]+\]:[ \t]*(\.\.?\/\S*)/g;
+
+/**
+ * The text with everything Markdown does not render as prose blanked, line for line.
+ *
+ * A fenced sample that demonstrates a link, an inline code span, or an MDX comment is not a
+ * link; a check that read them as one would refuse a page for teaching the syntax. Blanked
+ * rather than removed so a finding still names the line it was read from: every newline is
+ * kept and every other character inside becomes a space. A fence closes only on its own
+ * marker, so a tilde fence holding backticks is one block.
+ */
+export function codeBlanked(text) {
+  const blank = fragment => fragment.replace(/[^\n]/g, " ");
+  return text
+    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, blank)
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, blank)
+    .replace(/(`+)[^`\n][\s\S]*?\1/g, blank);
+}
 
 /**
  * Split a link's tail into the ref and the path under it.
@@ -824,7 +841,9 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
 }
 
 function internalLinks(repoRoot, tracked, findings) {
-  const pages = new Set(tracked.filter(rel => rel.endsWith(".mdx")));
+  // The published pages are the docs tree, not every `.mdx` git tracks: a
+  // package's README.mdx has GitHub as its surface and its own link rules.
+  const pages = new Set(tracked.filter(rel => rel.startsWith("docs/") && rel.endsWith(".mdx")));
   const resolves = target => {
     const path = target.split("#")[0].replace(/\/+$/, "");
     if (path === "/docs") return true;
@@ -841,7 +860,7 @@ function internalLinks(repoRoot, tracked, findings) {
     } catch {
       continue;
     }
-    const lines = text.split("\n");
+    const lines = codeBlanked(text).split("\n");
     for (let i = 0; i < lines.length; i++) {
       INTERNAL_DOCS_LINK.lastIndex = 0;
       let match;
@@ -863,7 +882,7 @@ function internalLinks(repoRoot, tracked, findings) {
           check: "internal-docs-link",
           file: rel,
           line: i + 1,
-          message: `links to ${match[1]} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
+          message: `links to ${match[1] ?? match[2]} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
         });
       }
     }
