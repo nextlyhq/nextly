@@ -78,9 +78,7 @@ export function sortableFields(
   hasStatus = false
 ): string[] {
   const declared = fields
-    .filter(
-      f => !LAYOUT_ONLY_TYPES.has(f.type) && !isNonScalarType(f.type)
-    )
+    .filter(f => !LAYOUT_ONLY_TYPES.has(f.type) && !isNonScalarType(f.type))
     .map(f => f.name);
 
   return [...SYSTEM_SORTABLE, ...(hasStatus ? ["status"] : []), ...declared];
