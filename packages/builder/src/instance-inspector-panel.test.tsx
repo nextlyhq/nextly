@@ -640,6 +640,39 @@ describe("overrides the component no longer exposes", () => {
   });
 });
 
+describe("two editors on one page", () => {
+  it("gives every control an id of its own, so a label points at the control beside it", () => {
+    // A page can hold two blocks fields, each with its own editor. With one
+    // fixed id per exposed property, both labels resolved to the FIRST
+    // editor's control — the second editor's label focused the first's field,
+    // and its own input had no accessible name at all.
+    mount(instance());
+    mount(instance());
+
+    const fields = screen.getAllByRole("textbox", {
+      name: "Title",
+    }) as HTMLInputElement[];
+    expect(fields).toHaveLength(2);
+    expect(new Set(fields.map(field => field.id)).size).toBe(2);
+    for (const field of fields) {
+      expect(
+        Array.from(field.labels ?? []).map(label => label.textContent)
+      ).toEqual(["Title"]);
+    }
+  });
+
+  it("gives the NAME field an id of its own too, which both inspectors draw", () => {
+    mount({ ...instance(), name: "Header" } as BlockNode);
+    mount({ ...instance(), name: "Header" } as BlockNode);
+
+    const names = screen.getAllByRole("textbox", {
+      name: "Name",
+    }) as HTMLInputElement[];
+    expect(names).toHaveLength(2);
+    expect(new Set(names.map(field => field.id)).size).toBe(2);
+  });
+});
+
 describe("the instance's own name", () => {
   const named = (): BlockNode => ({ ...instance(), name: "Header" });
 

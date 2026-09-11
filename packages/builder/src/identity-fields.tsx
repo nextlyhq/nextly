@@ -18,7 +18,7 @@
  */
 
 import { Checkbox, Input, Label } from "@nextlyhq/ui";
-import type * as React from "react";
+import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import { lockOp, renameOp, type BlockIdentity } from "./inspector";
@@ -34,6 +34,11 @@ export function IdentityFields({
   editor: EditorState;
 }): React.JSX.Element {
   const [draft, setDraft] = useStoredDraft(identity.name);
+  // Unique per mount, for the reason the exposed rows' are: two editors on one
+  // page drew two fields under one id, and a label then pointed at the other
+  // editor's control.
+  const nameId = React.useId();
+  const lockId = React.useId();
 
   const commitName = () => {
     // Trimmed ONCE, and the same value compared and stored. The rename trims,
@@ -51,9 +56,9 @@ export function IdentityFields({
   return (
     <div className="nx-inspector__fields nx-inspector__identity">
       <div className="nx-inspector__field">
-        <Label htmlFor="nx-block-name">Name</Label>
+        <Label htmlFor={nameId}>Name</Label>
         <Input
-          id="nx-block-name"
+          id={nameId}
           value={draft}
           placeholder="Unnamed"
           onChange={event => setDraft(event.target.value)}
@@ -70,7 +75,7 @@ export function IdentityFields({
 
       <div className="nx-inspector__field nx-inspector__field--inline">
         <Checkbox
-          id="nx-block-locked"
+          id={lockId}
           checked={identity.locked}
           // Immediately, with no blur to wait for. There is nothing to coalesce
           // in a checkbox, and waiting would leave the canvas disagreeing with a
@@ -79,7 +84,7 @@ export function IdentityFields({
             editor.apply(lockOp(nodeId, checked === true))
           }
         />
-        <Label htmlFor="nx-block-locked">Lock this block</Label>
+        <Label htmlFor={lockId}>Lock this block</Label>
       </div>
     </div>
   );
