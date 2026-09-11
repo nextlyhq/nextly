@@ -592,6 +592,21 @@ export function generatedWidgets(): WidgetDefinition[] {
 }
 
 /**
+ * Rebuild every content source -- both kinds -- from the live registries.
+ *
+ * ONE refresh for the two kinds, and the one every request-time consumer
+ * calls: the layout and the query endpoint both resolve whatever a reader
+ * asks against these sources, and boot publishes none of them. A consumer
+ * that refreshed one kind and not the other would answer for a single only
+ * when some earlier request happened to have refreshed it -- which is how a
+ * `single:` query through the query endpoint was refused as unknown on a cold
+ * process while the same query through the layout endpoint ran.
+ */
+export async function refreshContentSources(): Promise<void> {
+  await Promise.all([refreshCollectionSources(), refreshSingleSources()]);
+}
+
+/**
  * Re-derive the generated set from the install's current collections.
  *
  * Refreshes the SOURCES first, because the widgets are derived from them: a
@@ -603,7 +618,7 @@ export async function refreshCollectionWidgets(): Promise<void> {
   // source list: a single's card is derived the way a collection's is, and a
   // refresh that rebuilt one kind and not the other would offer cards for a
   // single deleted since beside none for one created since.
-  await Promise.all([refreshCollectionSources(), refreshSingleSources()]);
+  await refreshContentSources();
   const sources = listSources();
   setGeneratedWidgets([
     ...collectionWidgets(sources),

@@ -45,3 +45,8 @@ condition now reads the same source registry the collections condition does,
 so the two halves derive from one place. A single whose DDL a reload refused
 is withheld from the sources the way a collection's is, from one shared store
 of deferred entities.
+
+Under `next dev`, a single whose fields you edit keeps its source and its
+status card: the reload re-marks an edited single's migration as applied from
+the sync's own report, as it already did for an edited collection, instead of
+leaving the row `pending` for the rest of the session.
