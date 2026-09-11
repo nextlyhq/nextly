@@ -27,6 +27,14 @@ plus the change rather than the tree CI ran on, and the two disagree. Measured
 on one merged pull request here, the branch head reported the CI job and one
 integration leg as `success` while the merge commit had them queued.
 
+**A merge commit whose jobs are all `skipped` was superseded, and that is a
+pass.** A push to `main` that a newer push has already overtaken skips its
+jobs rather than repeating work: the newer run's verdict includes this commit.
+`skipped` already passes the gate, and here it is literally true. Nothing is
+cancelled by this, so a `cancelled` job still means what it says and still
+blocks. To see what actually tested the commit, read the newest run of that
+workflow on `main`.
+
 **Know its range before trusting it.** The script's module header lists what it
 does not cover, and the four worth carrying in your head are: it snapshots
 threads and checks once rather than holding them still; `REQUIRED_CHECKS` is a
