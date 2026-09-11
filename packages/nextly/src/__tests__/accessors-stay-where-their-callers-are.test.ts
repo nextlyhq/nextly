@@ -87,10 +87,12 @@ describe("instance accessors are published where their callers can reach them", 
     // call" was covered and "should not call" was not, and the next wording
     // nobody anticipates passes just as easily. So it is structural instead.
     //
-    // Every sentence mentioning this function's audience is examined, and none
-    // of them may be a prohibition. A docblock cannot then name plugins as
-    // callers in one breath and warn them off in the next, whatever verb it
-    // reaches for.
+    // Two properties, checked separately because either alone can be
+    // satisfied by a docblock that contradicts itself. The audience must be
+    // named, so the positive claim exists to contradict. And NO sentence may
+    // forbid use, whether or not it names who: "Internal use only." names
+    // nobody and forbids everybody, so filtering to audience sentences first
+    // would discard it unexamined.
     const doc = docblockFor(
       initSource,
       "export async function getCachedNextly"
@@ -100,19 +102,29 @@ describe("instance accessors are published where their callers can reach them", 
       .replace(/^\s*\*+ ?/gm, "")
       .split(/(?<=[.:])\s+/)
       .map(line => line.trim())
-      .filter(line => /plugin|user code|caller/i.test(line));
+      .filter(line => line.length > 0);
 
-    // The control. With nothing matched the assertion below is vacuous, and
-    // would stay green through a docblock that never names the audience at all.
-    expect(sentences.length).toBeGreaterThan(0);
-
-    const forbidding = sentences.filter(line =>
-      /\b(do not|don't|does not|must not|should not|never|cannot|not for|internal use only)\b/i.test(
-        line
-      )
+    const namesAudience = sentences.filter(line =>
+      /plugin|user code|caller/i.test(line)
     );
+    // The control. With no audience sentence the check below has nothing to
+    // contradict, and would stay green through a docblock that never says who
+    // this is for.
+    expect(namesAudience.length).toBeGreaterThan(0);
 
-    expect(forbidding).toEqual([]);
+    // A prohibition is a negation attached to USING this function, or one of
+    // the stock phrasings that forbid without a verb. Bare negation is not
+    // enough: "it cannot wait" describes the synchronous sibling and forbids
+    // nothing.
+    const prohibits = (line: string) =>
+      /\b(do not|don't|must not|should not|never|not)\s+(be\s+)?(use|call|invoke|reach for|rely on)\b/i.test(
+        line
+      ) ||
+      /\b(internal use only|not for (user|plugin|application|external)|not intended for)\b/i.test(
+        line
+      );
+
+    expect(sentences.filter(prohibits)).toEqual([]);
   });
 
   it("does not claim the root avoids the Next peer dependency", () => {
