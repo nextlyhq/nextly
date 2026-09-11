@@ -69,7 +69,6 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
-import { useNoticeSink } from "./builder-notices";
 import type { InsertDragEntry } from "./canvas-drag";
 import type { EditorState } from "./editor-state";
 import {
@@ -77,7 +76,6 @@ import {
   blockLabel,
   blockSourceFor,
   catalogFrom,
-  compositionRefusal,
   filterEntries,
   groupByCategory,
   insertionPointFor,
@@ -668,10 +666,6 @@ export function InsertPanel({
    * reads a tile by hovering it.
    */
   const [touchPressed, setTouchPressed] = React.useState(false);
-  // Where a refusal about the page goes. A no-op outside a shell, so a panel
-  // rendered alone still inserts and still refuses — it just cannot say so.
-  const raise = useNoticeSink();
-
   // ONE snapshot, taken per mount, that both the catalog and the default
   // expansion below read. The panel documents its palette as read once per
   // mount rather than subscribed to, and a second reading of the registry
@@ -861,23 +855,11 @@ export function InsertPanel({
   const insertComponent = (entry: ComponentInsertEntry) => {
     if (point === null) return;
     const node = nodeForComponentEntry(entry);
-    // Whether the PAGE has room for it, asked of the resolver with the node in
-    // place — the one refusal the tile could not make, because room moves with
-    // every edit. Said to the author rather than swallowed: unlike a refusal
-    // from a document that moved, this one is about their page and has a
-    // remedy they can act on.
-    // Under the editor's own caps: the ones its apply will enforce, so the
-    // preflight and the apply cannot disagree about what fits.
-    const refusal = compositionRefusal(
-      editor.document,
-      { kind: "insert", node, at: point.at },
-      componentDefinitions ?? NO_DEFINITIONS,
-      editor.limits
-    );
-    if (refusal !== undefined) {
-      raise(refusal.sentence);
-      return;
-    }
+    // Whether the PAGE has room for it — the one refusal the tile could not
+    // make, because room moves with every edit — is the editor's own apply's
+    // to make: it asks the resolver with the node in place, under the caps it
+    // enforces, and tells the host why when it refuses. A null here is that
+    // refusal, or a document that moved under the panel.
     if (editor.apply({ kind: "insert", node, at: point.at }) === null) return;
     editor.select(node.id);
     onInsert?.(node);

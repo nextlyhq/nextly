@@ -12,7 +12,7 @@
  * @module editor-state.test
  */
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { useEditorState, MAX_HISTORY } from "./editor-state";
 import {
@@ -98,6 +98,151 @@ describe("the caps an editor applies under", () => {
 
     expect(configured.result.current.limits).toBe(raised);
     expect(unconfigured.result.current.limits).toBe(DEFAULT_LIMITS);
+  });
+});
+
+describe("room for the components an edit places", () => {
+  // Every surface reaches the document through this apply, so this is where
+  // the resolver is asked whether the page still composes with the edit in:
+  // an insert, a move, a duplicated group, a paste and a pattern all ask the
+  // same question, and one that asked for itself would be one more that
+  // could forget to. Refused, nothing is committed and the host is told why.
+  const instance = (id: string): BlockNode => ({
+    id,
+    type: "nextly/component-instance",
+    version: 1,
+    props: { componentId: "three" },
+  });
+  const three: BlockDocument = {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [node("d1"), node("d2"), node("d3")],
+  } as BlockDocument;
+  const definitions = new Map([["three", three]]);
+  // Room for one instance of three on a page of one block, not two.
+  const limits = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+  it("refuses an insert the page has no room for, tells the host why, and commits nothing", () => {
+    const onRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([node("p0"), instance("first")]),
+        limits,
+        definitions,
+        onRefused,
+      })
+    );
+
+    let outcome: BlockDocument | null = null;
+    act(() => {
+      outcome = result.current.apply({
+        kind: "insert",
+        node: instance("second"),
+        at: { index: 2 },
+      });
+    });
+
+    expect(outcome).toBeNull();
+    expect(ids(result.current.document)).toEqual(["p0", "first"]);
+    expect(result.current.undoDepth).toBe(0);
+    expect(onRefused).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "budget" })
+    );
+    expect(onRefused.mock.calls[0]?.[0].sentence).toMatch(/no room left/);
+  });
+
+  it("refuses a move and a duplicated group by the same rule", () => {
+    // Moving the second instance ahead of the first takes the budget the
+    // first had; a group of ops is judged once, as the document it leaves.
+    const onRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([
+          node("p0"),
+          instance("first"),
+          instance("second"),
+        ]),
+        limits: { ...DEFAULT_LIMITS, maxNodes: 7 },
+        definitions,
+        onRefused,
+      })
+    );
+    // Room for exactly what stands: the second is already a placeholder,
+    // which is not this edit's doing — moving p0 is allowed.
+    act(() => {
+      expect(
+        result.current.apply({ kind: "move", id: "p0", to: { index: 2 } })
+      ).not.toBeNull();
+    });
+    expect(onRefused).not.toHaveBeenCalled();
+
+    const fresh = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([node("p0"), instance("first")]),
+        limits,
+        definitions,
+        onRefused,
+      })
+    );
+    act(() => {
+      expect(
+        fresh.result.current.applyAll([
+          { kind: "insert", node: instance("copy"), at: { index: 2 } },
+          { kind: "move", id: "copy", to: { index: 1 } },
+        ])
+      ).toBeNull();
+    });
+    expect(ids(fresh.result.current.document)).toEqual(["p0", "first"]);
+    expect(onRefused).toHaveBeenCalledTimes(1);
+  });
+
+  it("never refuses an undo or a redo for room", () => {
+    // An accepted edit's inverse returns the page to a state that was
+    // accepted; the room question is asked of fresh edits only, so a library
+    // that grew or a cap that shrank between the two cannot strand history.
+    const onRefused = vi.fn();
+    const { result } = renderHook(() =>
+      useEditorState({
+        initialDocument: doc([node("p0")]),
+        limits,
+        definitions,
+        onRefused,
+      })
+    );
+    act(() => {
+      result.current.apply({
+        kind: "insert",
+        node: instance("first"),
+        at: { index: 1 },
+      });
+    });
+    act(() => {
+      result.current.undo();
+    });
+    act(() => {
+      result.current.redo();
+    });
+
+    expect(ids(result.current.document)).toEqual(["p0", "first"]);
+    expect(onRefused).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing of a host that supplies no definitions", () => {
+    // Nothing resolves, so nothing is standing that was not standing before;
+    // the host that resolves nothing keeps the apply it had.
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("p0")]), limits })
+    );
+    act(() => {
+      expect(
+        result.current.apply({
+          kind: "insert",
+          node: instance("first"),
+          at: { index: 1 },
+        })
+      ).not.toBeNull();
+    });
+    expect(ids(result.current.document)).toEqual(["p0", "first"]);
   });
 });
 

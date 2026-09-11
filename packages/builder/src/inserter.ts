@@ -52,13 +52,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
-import {
-  applyOp,
-  OpError,
-  positionOf,
-  type BuilderOp,
-  type OpPosition,
-} from "./ops";
+import { positionOf, type OpPosition } from "./ops";
 
 /**
  * The category an entry falls under when its block declares none.
@@ -608,68 +602,59 @@ function offerableDefinition(
 }
 
 /**
- * Why an edit would leave an instance standing on THIS page, or nothing when
- * it would not.
+ * Why the edit that turned `before` into `after` would leave an instance
+ * standing on THIS page, or nothing when it would not.
  *
  * A definition is judged offerable on its own — its roots — but whether the
  * page has ROOM for it is a property of the page: the resolver spends one
  * node budget across every instance it inlines, in document order, and nests
  * to a depth counted from the page root, so a page near its cap can hold the
  * one stored instance node and then leave it unresolved when it renders. The
- * apply cannot see that (it counts stored nodes, and an instance is one), so
- * the edit asks the RESOLVER ITSELF: the candidate document is composed the
+ * op layer cannot see that (it counts stored nodes, and an instance is one),
+ * so the edit asks the RESOLVER ITSELF: the edited document is composed the
  * way the canvas will compose it, and the reason the resolver gives is the
  * reason the author is told.
  *
- * Asked of an OP rather than of a placed node, because a move asks the same
- * question: an instance carried ahead of another takes the budget that one
- * had, and one carried into another's slot content nests one composition
- * deeper. What refuses is every instance the op LEAVES STANDING that stood
- * before it — the placed one, an instance nested inside its definition, which
- * the resolver reports under an id it minted rather than the node's, and an
- * instance already on the page that the edit takes the budget from. Each is
- * a placeholder the edit would put on the page. An instance the page could
- * not hold BEFORE the edit is not the edit's doing, so the two compositions
- * are compared rather than the second read alone; the resolver mints an
- * instance's ids from what it derives them from, so the same instance answers
- * to the same id in both.
+ * Asked of the two DOCUMENTS rather than of a placed node, because every
+ * edit asks the same question: a move carries an instance ahead of another
+ * and takes the budget that one had, or into another's slot content one
+ * composition deeper; a duplicate or a paste places a copy; a pattern brings
+ * instances of its own. What refuses is every instance the edit LEAVES
+ * STANDING that stood before it — a placed one, an instance nested inside its
+ * definition, which the resolver reports under an id it minted rather than
+ * the node's, and an instance already on the page that the edit takes the
+ * budget from. Each is a placeholder the edit would put on the page. An
+ * instance the page could not hold BEFORE the edit is not the edit's doing,
+ * so the two compositions are compared rather than the second read alone;
+ * the resolver mints an instance's ids from what it derives them from, so the
+ * same instance answers to the same id in both.
  *
- * Asked at the edit rather than of every tile per keystroke, for the reason
- * the pattern planner leaves the machine caps to the apply: room is a property
- * of the page that moves with every edit, and two compositions per edit are
- * cheap where one per tile per keystroke is not.
+ * Asked by the editor's own apply, once per accepted group, rather than by
+ * each surface before it applies: room is a property of the page that moves
+ * with every edit, every surface reaches the page through that apply, and a
+ * surface that asked for itself would be one more that could forget to. Two
+ * compositions per edit are cheap where one per tile per keystroke is not.
  *
  * `undefined` for "it composes", and for a reason that is not about room —
  * a missing definition is the tile's concern and was judged when it was
- * offered — so this refuses only what the page cannot hold. The dry run is
- * judged under the same `limits` the composition is, since the editor and the
- * canvas both run under the site's: a page legal only under a raised cap
- * would otherwise be refused here by the engine's default before the resolver
- * ran. And a refusal the apply itself makes — a page already at the stored
- * cap, a target that is gone — is left to the editor's own apply, which
- * refuses it the same way for a block; it is not a sentence about composition.
+ * offered — so this refuses only what the page cannot hold. Judged under the
+ * same `limits` the edit was applied under, since the editor and the canvas
+ * both run under the site's.
  */
 export function compositionRefusal(
-  document: BlockDocument,
-  op: BuilderOp,
+  before: BlockDocument,
+  after: BlockDocument,
   definitions: ComponentLookup,
   limits?: DocumentLimits
 ): CompositionRefusal | undefined {
-  let candidate: BlockDocument;
-  try {
-    candidate = applyOp(document, op, limits).document;
-  } catch (error) {
-    if (error instanceof OpError) return undefined;
-    throw error;
-  }
   const options = limits === undefined ? {} : { limits };
   const standing = new Set(
-    resolveComponentInstances(document, definitions, options).unresolved.map(
+    resolveComponentInstances(before, definitions, options).unresolved.map(
       entry => entry.instanceId
     )
   );
   const introduced = resolveComponentInstances(
-    candidate,
+    after,
     definitions,
     options
   ).unresolved.find(

@@ -82,6 +82,7 @@ import {
   BlockContextMenu,
   EditorCommandPalette,
   BuilderShell,
+  useNoticeQueue,
   Canvas,
   DropIndicator,
   EmptyContainerAppenders,
@@ -1977,7 +1978,30 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => readDocumentLimits(clientConfig),
     [clientConfig]
   );
-  const editor = useEditorState({ initialDocument, limits: documentLimits });
+  /*
+   * The site's component definitions, read once per editor and at DRAFT
+   * posture. Without them the renderer draws the could-not-be-loaded marker
+   * for every instance on the page, which is what the editor showed before
+   * this read: a component placed in the builder rendered on the site and
+   * nowhere an author could see while editing.
+   */
+  const componentLibrary = useComponentLibrary();
+  /*
+   * Where a refusal the editor makes is said. The shell provides a sink to
+   * everything it renders, and this editor is built ABOVE the shell — so the
+   * host owns the queue, hands it to the shell to draw and provide, and
+   * raises into it from here.
+   */
+  const notices = useNoticeQueue();
+  const editor = useEditorState({
+    initialDocument,
+    limits: documentLimits,
+    // The SAME map the canvas draws with, so an edit is refused when the page
+    // would no longer compose with it in — every surface reaches the page
+    // through this apply, and this is the one place the reason is known.
+    definitions: componentLibrary.definitions,
+    onRefused: refusal => notices.raise(refusal.sentence),
+  });
 
   /*
    * Dragging blocks on the canvas.
@@ -2379,18 +2403,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * beside each pseudo-class rule so it can show an author the state being
    * edited, and a surface showing the page as published must not have one.
    */
-  /*
-   * The site's component definitions, read once per editor and at DRAFT
-   * posture. Without them the renderer draws the could-not-be-loaded marker
-   * for every instance on the page, which is what the editor showed before
-   * this read: a component placed in the builder rendered on the site and
-   * nowhere an author could see while editing.
-   */
-  const componentLibrary = useComponentLibrary();
 
-  // After the library read, which it takes: the SAME map the canvas draws
-  // with, so a moved instance is judged by the roots it draws there rather
-  // than by its own, unrestricted type.
+  // The SAME map the canvas draws with, so a moved instance is judged by the
+  // roots it draws there rather than by its own, unrestricted type.
   const drag = useCanvasDrag({
     editor,
     slots,
@@ -2830,6 +2845,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div className="fixed inset-0 z-50 bg-background">
       <BuilderShell
+        notices={notices}
         onExit={done}
         availablePanels={
           entryFields === null

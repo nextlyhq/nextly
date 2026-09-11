@@ -19,7 +19,13 @@
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -167,10 +173,15 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       topBar,
       children,
       renderPanel,
+      notices,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
+      notices?: {
+        notices: readonly { message: string }[];
+        raise: (message: string) => void;
+      };
       renderPanel?: (panel: string) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
@@ -189,6 +200,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          */}
         {renderPanel?.(shownPanel)}
         {children}
+        {/* The host's queue, drawn as the real shell draws it: a raise from
+            above the shell has nowhere else to become visible. */}
+        <div data-recorder="notices">
+          {notices?.notices.map(notice => notice.message).join(" | ")}
+        </div>
       </div>
     ),
     BreakpointManager: record("breakpoints"),
@@ -314,7 +330,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       refetch: () => {},
     };
   },
-  useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
+  // `schedule` too: the real hook offers it and the editor calls it on every
+  // document change, which a re-render after a raised notice is.
+  useDocumentCheckpoint: () => ({
+    record: () => {},
+    clear: () => {},
+    schedule: () => {},
+  }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
@@ -565,6 +587,36 @@ describe("what the editor reads before anyone asks for it", () => {
     openEditor();
 
     expect(routeReads).toBeGreaterThan(0);
+  });
+
+  it("builds the editor with the canvas's map, and a refusal it makes is drawn by the shell", () => {
+    // Room is judged in the editor's apply, which is built above the shell;
+    // its sentence has to reach the region the shell draws, so the host owns
+    // the queue and hands it over. Observed end to end: the refusal callback
+    // the editor was built with puts its sentence where the shell renders.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const render = recorded("canvas").render as { definitions: unknown };
+    expect(editorOptions?.definitions).toBe(render.definitions);
+    const onRefused = editorOptions?.onRefused as (r: {
+      sentence: string;
+    }) => void;
+    act(() => {
+      onRefused({ sentence: "This page has no room left for that component." });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("no room left");
   });
 
   it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {

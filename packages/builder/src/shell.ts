@@ -449,18 +449,18 @@ export { ClassSelector } from "./class-selector";
  */
 export type { ClassCreation, ClassSelectorProps } from "./class-selector";
 /*
- * The notice surface is deliberately NOT exported.
+ * The notice QUEUE is published; the region is not.
  *
- * `BuilderShell` owns its queue and renders the region itself, and it offers no
- * way to supply a queue or to suppress the built-in region — so a host calling
- * `useNoticeQueue` would build a SECOND, empty queue and place a region that
- * can never receive anything, while the shell's own went on reporting. An
- * export whose documented use cannot work is worse than its absence, because
- * the failure is silent and looks like a wiring mistake at the call site.
- *
- * Publishing it needs the shell to accept a queue first. That is a contract
- * change rather than an export, so it waits for a host that wants it.
+ * `BuilderShell` renders the region for whichever queue it holds, and it takes
+ * the host's through its `notices` prop — so a host that raises notices from
+ * above the shell (an editor it builds there refusing an edit for room) builds
+ * the queue with `useNoticeQueue`, hands it to the shell, and raises into it.
+ * Building one and NOT handing it over would place nothing and report nothing,
+ * which is why the region stays unpublished: the shell is the one place a
+ * queue is drawn.
  */
+export { useNoticeQueue } from "./builder-notices";
+export type { NoticeQueue, RaiseNotice } from "./builder-notices";
 export { ClassManagerPanel } from "./class-manager-panel";
 export type {
   ClassManagerPanelProps,

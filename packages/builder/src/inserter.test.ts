@@ -17,6 +17,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  type DocumentLimits,
   registerBlocks,
   registryNestingSource,
   type AnyBlockDefinition,
@@ -48,6 +49,7 @@ import {
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
+import { applyOp, type BuilderOp } from "./ops";
 
 const base = {
   version: 1,
@@ -1568,18 +1570,19 @@ describe("the component tier", () => {
 
     const [offered] = componentEntriesFrom([wrapper], lookup);
     expect(offered?.componentId).toBe("wrapper");
-    expect(
-      compositionRefusal(
-        documentOf([]),
-        {
-          kind: "insert",
-          node: nodeForComponentEntry(offered!),
-          at: { index: 0 },
-        },
-        lookup,
-        tight
-      )?.reason
-    ).toBe("budget");
+    const empty = documentOf([]);
+    const placed = applyOp(
+      empty,
+      {
+        kind: "insert",
+        node: nodeForComponentEntry(offered!),
+        at: { index: 0 },
+      },
+      tight
+    ).document;
+    expect(compositionRefusal(empty, placed, lookup, tight)?.reason).toBe(
+      "budget"
+    );
   });
 
   it("reads a root's types without composing the definition, so a library of wrappers costs its roots", () => {
@@ -1676,6 +1679,12 @@ describe("the component tier", () => {
   });
 
   describe("whether the page has room for it", () => {
+    /** The document an op leaves, under the caps it is applied under. */
+    const after = (
+      document: BlockDocument,
+      op: BuilderOp,
+      limits?: DocumentLimits
+    ): BlockDocument => applyOp(document, op, limits).document;
     /** A page holding `count` plain text nodes at the root. */
     function pageWith(count: number): BlockDocument {
       return documentOf(
@@ -1705,7 +1714,11 @@ describe("the component tier", () => {
       expect(
         compositionRefusal(
           pageWith(2),
-          { kind: "insert", node: node(), at: { index: 2 } },
+          after(pageWith(2), {
+            kind: "insert",
+            node: node(),
+            at: { index: 2 },
+          }),
           lookupOf(three),
           limits
         )
@@ -1722,7 +1735,7 @@ describe("the component tier", () => {
 
       const refusal = compositionRefusal(
         pageWith(2),
-        { kind: "insert", node: node(), at: { index: 2 } },
+        after(pageWith(2), { kind: "insert", node: node(), at: { index: 2 } }),
         lookupOf(three),
         limits
       );
@@ -1762,65 +1775,27 @@ describe("the component tier", () => {
 
       const tooDeep = compositionRefusal(
         pageWith(0),
-        { kind: "insert", node: instance, at: { index: 0 } },
+        after(pageWith(0), {
+          kind: "insert",
+          node: instance,
+          at: { index: 0 },
+        }),
         lookupOf(nested),
         { ...DEFAULT_LIMITS, maxDepth: 1 }
       );
       const fits = compositionRefusal(
         pageWith(0),
-        { kind: "insert", node: instance, at: { index: 0 } },
+        after(pageWith(0), {
+          kind: "insert",
+          node: instance,
+          at: { index: 0 },
+        }),
         lookupOf(nested),
         { ...DEFAULT_LIMITS, maxDepth: 2 }
       );
 
       expect(tooDeep?.reason).toBe("node-depth");
       expect(fits).toBeUndefined();
-    });
-
-    it("judges the dry run under the SITE's limits, so the resolver reaches a page legal only under a raised cap", () => {
-      // The apply is the first stage of the preflight and takes limits of its
-      // own. A page longer than the engine's default cap is legal on a site
-      // that raised it; judged by the default, the dry run refuses it before
-      // the resolver ever runs, and the click then fails on a page the editor
-      // and the canvas both accept. The RESOLVER's verdict is what proves it
-      // ran: under a cap with room for one more node but not for three, the
-      // placement is refused for budget; with room for three, it is placed.
-      catalog([{ ...base, name: "acme/text" }]);
-      const page = pageWith(DEFAULT_LIMITS.maxNodes);
-      const at = { index: page.nodes.length };
-      const lookup = lookupOf(three);
-      const tight = {
-        ...DEFAULT_LIMITS,
-        maxNodes: DEFAULT_LIMITS.maxNodes + 2,
-      };
-      const roomy = {
-        ...DEFAULT_LIMITS,
-        maxNodes: DEFAULT_LIMITS.maxNodes + 4,
-      };
-
-      const insert = { kind: "insert" as const, node: node(), at };
-      expect(compositionRefusal(page, insert, lookup, tight)?.reason).toBe(
-        "budget"
-      );
-      expect(compositionRefusal(page, insert, lookup, roomy)).toBeUndefined();
-    });
-
-    it("leaves a refusal the apply itself makes to the apply, rather than throwing", () => {
-      // A page already at the stored-node cap cannot take the one instance
-      // node either. That is the editor's own refusal, made the same way for
-      // a block, and not a sentence about composition: nothing here throws,
-      // and nothing here answers for it.
-      catalog([{ ...base, name: "acme/text" }]);
-      const full = { ...DEFAULT_LIMITS, maxNodes: 2 };
-
-      expect(
-        compositionRefusal(
-          pageWith(2),
-          { kind: "insert", node: node(), at: { index: 2 } },
-          lookupOf(three),
-          full
-        )
-      ).toBeUndefined();
     });
 
     describe("an instance the click leaves unresolved that is not the placed one", () => {
@@ -1864,7 +1839,11 @@ describe("the component tier", () => {
         expect(
           compositionRefusal(
             pageWith(2),
-            { kind: "insert", node: placed(wrapper), at: { index: 2 } },
+            after(
+              pageWith(2),
+              { kind: "insert", node: placed(wrapper), at: { index: 2 } },
+              tight
+            ),
             both,
             tight
           )?.reason
@@ -1872,7 +1851,11 @@ describe("the component tier", () => {
         expect(
           compositionRefusal(
             pageWith(2),
-            { kind: "insert", node: placed(wrapper), at: { index: 2 } },
+            after(
+              pageWith(2),
+              { kind: "insert", node: placed(wrapper), at: { index: 2 } },
+              roomy
+            ),
             both,
             roomy
           )
@@ -1892,7 +1875,11 @@ describe("the component tier", () => {
         expect(
           compositionRefusal(
             page,
-            { kind: "insert", node: placed(three), at: { index: 1 } },
+            after(
+              page,
+              { kind: "insert", node: placed(three), at: { index: 1 } },
+              limits
+            ),
             both,
             limits
           )?.reason
@@ -1938,7 +1925,11 @@ describe("the component tier", () => {
         expect(
           compositionRefusal(
             page,
-            { kind: "insert", node: instance, at: { index: 2 } },
+            after(
+              page,
+              { kind: "insert", node: instance, at: { index: 2 } },
+              limits
+            ),
             lookup,
             limits
           )?.reason
@@ -1961,7 +1952,11 @@ describe("the component tier", () => {
         expect(
           compositionRefusal(
             page,
-            { kind: "move", id: "second", to: { index: 1 } },
+            after(
+              page,
+              { kind: "move", id: "second", to: { index: 1 } },
+              limits
+            ),
             both,
             limits
           )?.reason
@@ -1969,7 +1964,7 @@ describe("the component tier", () => {
         expect(
           compositionRefusal(
             page,
-            { kind: "move", id: "p0", to: { index: 2 } },
+            after(page, { kind: "move", id: "p0", to: { index: 2 } }, limits),
             both,
             limits
           )
@@ -1990,7 +1985,11 @@ describe("the component tier", () => {
         expect(
           compositionRefusal(
             page,
-            { kind: "insert", node: placed(one), at: { index: 3 } },
+            after(
+              page,
+              { kind: "insert", node: placed(one), at: { index: 3 } },
+              limits
+            ),
             both,
             limits
           )
@@ -2006,7 +2005,11 @@ describe("the component tier", () => {
       expect(
         compositionRefusal(
           pageWith(2),
-          { kind: "insert", node: node(), at: { index: 2 } },
+          after(pageWith(2), {
+            kind: "insert",
+            node: node(),
+            at: { index: 2 },
+          }),
           NONE
         )
       ).toBeUndefined();
