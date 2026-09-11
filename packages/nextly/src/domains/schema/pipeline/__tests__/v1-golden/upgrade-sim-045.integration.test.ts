@@ -375,6 +375,32 @@ const addsActivityActorTypeColumn = addsOnlyColumn(
   "actor_type"
 );
 
+/**
+ * Every statement a v1 upgrade of the 0.45 fixture may emit on ANY dialect,
+ * beyond the dialect's own metadata reconcile.
+ *
+ * One list, read by every dialect's pass-1 check. The postgres and mysql cases
+ * used to carry a copy each, and a column added to one and not the other made
+ * the sim red on a single leg — which is how a legitimate column came to read
+ * as a phantom diff. A predicate belongs here once, and then to no dialect.
+ */
+const POST_045_ADDITIVE: ReadonlyArray<(stmt: string) => boolean> = [
+  isPost045TableStatement,
+  addsOwnerColumn,
+  addsPluginOptionsColumn,
+  addsVersionsColumn,
+  addsRevalidateColumn,
+  addsWebhooksColumn,
+  migratesActivityLogActor,
+  addsAuditLogErasureStamp,
+  addsActivityLocaleColumn,
+  addsActivitySubjectKindColumn,
+  addsActivityActorTypeColumn,
+  addsPreviewGenerationColumn,
+];
+const isPost045Additive = (stmt: string): boolean =>
+  POST_045_ADDITIVE.some(admits => admits(stmt));
+
 // Positive guard: the sim must actually create each new table (an empty first
 // pass would otherwise satisfy the additive-only check vacuously).
 const hasCreateTableFor = (stmts: string[], table: string): boolean =>
@@ -522,21 +548,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
           schemas: ["public"],
         });
         for (const s of first.sqlStatements) {
-          expect(
-            isPost045TableStatement(s) ||
-              addsOwnerColumn(s) ||
-              addsPluginOptionsColumn(s) ||
-              addsVersionsColumn(s) ||
-              addsRevalidateColumn(s) ||
-              addsWebhooksColumn(s) ||
-              migratesActivityLogActor(s) ||
-              addsAuditLogErasureStamp(s) ||
-              addsActivityLocaleColumn(s) ||
-              addsActivitySubjectKindColumn(s) ||
-              addsActivityActorTypeColumn(s) ||
-              addsPreviewGenerationColumn(s),
-            `phantom diff: ${s}`
-          ).toBe(true);
+          expect(isPost045Additive(s), `phantom diff: ${s}`).toBe(true);
         }
         for (const t of POST_045_TABLES) {
           expect(
@@ -623,19 +635,7 @@ describe("existing-user upgrade sim (0.45 DDL → v1)", () => {
               s
             );
           expect(
-            isDefaultReconcile ||
-              isPost045TableStatement(s) ||
-              addsOwnerColumn(s) ||
-              addsPluginOptionsColumn(s) ||
-              addsVersionsColumn(s) ||
-              addsRevalidateColumn(s) ||
-              addsWebhooksColumn(s) ||
-              migratesActivityLogActor(s) ||
-              addsAuditLogErasureStamp(s) ||
-              addsActivityLocaleColumn(s) ||
-              addsActivitySubjectKindColumn(s) ||
-              addsActivityActorTypeColumn(s) ||
-              addsPreviewGenerationColumn(s),
+            isDefaultReconcile || isPost045Additive(s),
             `unexpected reconcile statement shape: ${s}`
           ).toBe(true);
         }
