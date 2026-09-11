@@ -3142,6 +3142,35 @@ describe("composedRootTypes", () => {
     expect(resolvedRoots(gatedBlock, definitions)).toEqual(["core/text"]);
   });
 
+  it("passes over a root the resolver DROPS, and keeps the roots beside it", () => {
+    /*
+     * `cloneDefinitionForest` skips a node it cannot clone — one that is not a
+     * record, or whose id is not a string — so such a root never lands on the
+     * page. Counted here, a component would be offered, and refused, by the
+     * type of a root the page never gets; and one whose every root is dropped
+     * would be offered as placing something and place nothing.
+     */
+    const idless = {
+      type: "core/box",
+      version: 1,
+      props: {},
+    } as unknown as BlockNode;
+    const definitions = defs({
+      partial: component([idless, node("ok")]),
+      allDropped: component([idless, null as unknown as BlockNode]),
+    });
+    const doc = component([instance("i1", "partial")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(composedRootTypes(doc, definitions)).toEqual(
+      resolvedRootTypes(doc, definitions)
+    );
+
+    const nothing = component([instance("i2", "allDropped")]);
+    expect(composedRootTypes(nothing, definitions)).toEqual([]);
+    expect(resolvedRoots(nothing, definitions)).toEqual([]);
+  });
+
   it("answers an empty list for a definition whose roots compose to nothing", () => {
     const definitions = defs({ empty: component([]) });
 
