@@ -78,6 +78,34 @@ export interface ServiceOpts {
    * do, never widens it.
    */
   authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * The content locale this operation reads or writes in.
+   *
+   * DATA, like `context`: which translation a localized field answers with, or
+   * which one a write stores into. Absent means the site's default locale,
+   * which is what every plugin call has silently meant — the request context
+   * always carried this pair, and the facade always accepted it, but nothing
+   * on the plugin path could say it. So a plugin serving a French page read
+   * English content, and a form redirecting to a picked page answered
+   * `/thanks` for a visitor who was on `/merci`.
+   *
+   * The same spelling as `RequestContext` and the wire's `?locale=`, so a
+   * route can hand through what it was given. A code that is not a configured
+   * locale resolves to the default rather than failing: the collection
+   * services decide that, and this does not second-guess them.
+   */
+  locale?: string;
+
+  /**
+   * Which locale a missing translation falls back to, or `false` for none.
+   *
+   * Absent means the configured fallback chain, which is right for a read
+   * that wants SOMETHING to show. `false` is for a read that must know
+   * whether the translation exists — a sitemap deciding whether to list a
+   * language, say — and would be misled by the default's value standing in.
+   */
+  fallbackLocale?: string | false;
 }
 
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
@@ -87,8 +115,21 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   overrideAccess: boolean;
   context?: Record<string, unknown>;
   request?: Request;
+  locale?: string;
+  fallbackLocale?: string | false;
 } {
-  const { as, user, context, request } = opts;
+  const { as, user } = opts;
+  // What travels whatever the caller is, built once. Each branch below used to
+  // write its own literal of these, and a literal drops whatever it does not
+  // name: that is how the locale a plugin could not say stayed unsayable —
+  // there was no field to forget, and adding one to three literals is adding
+  // it to two. Spread this and a branch cannot lose a field the others carry.
+  const carried = {
+    context: opts.context,
+    request: opts.request,
+    locale: opts.locale,
+    fallbackLocale: opts.fallbackLocale,
+  };
   // The caller's own scope wins when named; otherwise the one the dispatcher
   // pinned for this request. A route that omits it is the common case, not the
   // exception, so the ambient value is what makes the key's grants reach the
@@ -99,7 +140,7 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   // `user`, because that shape already means "system" and quietly changing it
   // would elevate nothing and demote every existing plugin call at once.
   if (as === "public") {
-    return { overrideAccess: false, context, request };
+    return { overrideAccess: false, ...carried };
   }
 
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
@@ -116,12 +157,11 @@ export function resolveServiceOpts(opts: ServiceOpts): {
     return {
       overrideAccess: false,
       user: { id: user.id, email: user.email, role: "", permissions: [] },
-      context,
-      request,
+      ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
-  return { overrideAccess: true, context, request };
+  return { overrideAccess: true, ...carried };
 }
 
 /**

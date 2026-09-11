@@ -74,6 +74,23 @@ export interface SubmitFormOptions {
    * Defaults to `system`, so every existing caller behaves as before.
    */
   access?: SubmissionAccess;
+
+  /**
+   * The language the visitor submitted in.
+   *
+   * Decides which translation a picked redirect page is read in, and so which
+   * URL the visitor is sent to: a page whose slug is `thanks` in English and
+   * `merci` in French answered `/thanks` to everyone, because the target was
+   * read with no locale and the default answered. The built-in route takes it
+   * from `?locale=` on the submit URL, the same way core's own routes take a
+   * locale on the wire; a host route passes whatever it resolved for the page
+   * the form was on.
+   *
+   * A code that is not a configured locale reads as the default rather than
+   * failing the submission, which the collection services decide. Absent means
+   * the default, as it always has.
+   */
+  locale?: string;
 }
 
 /**
@@ -230,7 +247,7 @@ export async function submitForm(
   options: SubmitFormOptions,
   context: SubmitFormContext
 ): Promise<SubmitFormResult> {
-  const { formSlug, data, metadata, request } = options;
+  const { formSlug, data, metadata, request, locale } = options;
   const access: SubmissionAccess = options.access ?? { as: "system" };
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
@@ -251,6 +268,13 @@ export async function submitForm(
       });
       return { success: false, outcome: "no-such-form", error: NO_SUCH_FORM };
     }
+
+    // The destination is resolved from one place, because two endings ask for
+    // it — the accepted submission and the throttled one disguised as accepted
+    // — and two call sites naming the inputs separately is how one of them
+    // comes to be answered in the wrong language while the other is right.
+    const redirectFor = () =>
+      resolveRedirectUrl(form, pluginConfig, pluginContext, locale);
 
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
     // so what a visitor is told does not depend on which entry point their
@@ -453,7 +477,7 @@ export async function submitForm(
           // page its author sends people to, and made the one response this
           // whole branch exists to disguise the only accepted one carrying no
           // redirect.
-          redirect: await resolveRedirectUrl(form, pluginConfig, pluginContext),
+          redirect: await redirectFor(),
         };
       }
       throw error;
@@ -484,11 +508,7 @@ export async function submitForm(
 
     // 6. Determine redirect URL. Spam gets the same success shape as a real
     // submission (minus the stored row reference) so bots can't diff the two.
-    const redirect = await resolveRedirectUrl(
-      form,
-      pluginConfig,
-      pluginContext
-    );
+    const redirect = await redirectFor();
 
     if (isContentSpam) {
       return {
@@ -583,7 +603,8 @@ export async function fetchFormBySlug(
 async function resolveRedirectUrl(
   form: FormDocument,
   pluginConfig: ResolvedFormBuilderConfig,
-  pluginContext: PluginContext
+  pluginContext: PluginContext,
+  locale: string | undefined
 ): Promise<string | undefined> {
   const settings = form.settings;
   if (!settings) return undefined;
@@ -606,7 +627,8 @@ async function resolveRedirectUrl(
     (settings as Record<string, unknown>)[field],
     form,
     pluginConfig,
-    pluginContext
+    pluginContext,
+    locale
   );
 }
 
@@ -622,7 +644,8 @@ async function urlForPickedDocument(
   stored: unknown,
   form: FormDocument,
   pluginConfig: ResolvedFormBuilderConfig,
-  pluginContext: PluginContext
+  pluginContext: PluginContext,
+  locale: string | undefined
 ): Promise<string | undefined> {
   const { logger } = pluginContext;
   const patterns = pluginConfig.redirectRelationships;
@@ -644,7 +667,7 @@ async function urlForPickedDocument(
     return undefined;
   }
 
-  const target = await readTarget(reference, form, pluginContext);
+  const target = await readTarget(reference, form, pluginContext, locale);
   if (!target) return undefined;
 
   // Reachability is re-decided HERE, not inherited from the save. Nothing runs
@@ -713,7 +736,8 @@ function buildUrl(
 async function readTarget(
   reference: { collection: string; id: string },
   form: FormDocument,
-  pluginContext: PluginContext
+  pluginContext: PluginContext,
+  locale: string | undefined
 ): Promise<RedirectTargetDocument | undefined> {
   const { logger } = pluginContext;
   const context = {
@@ -724,10 +748,15 @@ async function readTarget(
 
   let row: unknown;
   try {
+    // Read in the visitor's language, so a localized URL field answers with
+    // the slug that page has THERE. The fallback chain stays in force: a page
+    // with no translation for this locale still has a URL, in the language
+    // the site falls back to, and sending the visitor there beats sending
+    // them nowhere.
     row = await pluginContext.services.collections.findEntryById(
       reference.collection,
       reference.id,
-      { as: "system" }
+      { as: "system", locale }
     );
   } catch (error) {
     // The submission already succeeded, so this degrades to "no redirect"

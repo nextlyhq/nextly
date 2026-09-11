@@ -40,6 +40,37 @@ Pick the elevation deliberately. A public route that lists published content sho
 `{ as: "system" }` (the data is public-derived); a route that returns a user's own
 records should use `{ as: "user", user: ctx.user ?? undefined }`.
 
+## Reading and writing in a locale
+
+On a localized site, name the language beside the elevation. `locale` decides which
+translation a read answers with and which one a write stores into; absent, it is the
+site's default, which is what every call has always meant.
+
+```ts
+// A French visitor's page reads French content.
+const page = await ctx.services.collections.findEntryById("pages", id, {
+  as: "system",
+  locale: "fr",
+});
+
+// A translation is written the same way: only the localized fields move.
+await ctx.services.collections.updateEntry(
+  "pages",
+  id,
+  { title: "Merci" },
+  { as: "system", locale: "fr" }
+);
+```
+
+A missing translation is answered by the site's fallback chain, which is right when the
+page has to show *something*. Pass `fallbackLocale: false` when the question is whether
+the translation *exists* — a sitemap deciding whether to list a language, say — and the
+default's value standing in would mislead you.
+
+A code that is not a configured locale resolves to the default rather than failing, the
+same way `?locale=` does on the REST API. The pair is spelled exactly as it is on the
+request context and on the wire, so a route can pass through what it was given.
+
 ## Collection methods
 
 `ctx.services.collections` exposes:

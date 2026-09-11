@@ -254,6 +254,90 @@ describe("a form that redirects to a picked page", () => {
   });
 });
 
+describe("a form submitted in the visitor's language", () => {
+  /**
+   * A page whose URL differs by language: `thanks` in English, `merci` in
+   * French. The target used to be read with no locale, so the default's slug
+   * answered whoever asked, and a French visitor was sent to `/thanks`.
+   */
+  const localizedPages = defineCollection({
+    slug: "pages",
+    localized: true,
+    fields: [text({ name: "title" }), text({ name: "slug", localized: true })],
+  });
+
+  async function bootLocalized() {
+    const { plugin, config } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [localizedPages],
+      localization: { locales: ["en", "fr"], defaultLocale: "en" },
+    });
+    const page = await current.nextly.create({
+      collection: "pages",
+      data: { title: "Thank you", slug: "thanks" },
+    });
+    const pageId = (page as { item: { id: string } }).item.id;
+    await current.nextly.update({
+      collection: "pages",
+      id: pageId,
+      data: { slug: "merci" },
+      locale: "fr",
+    });
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: pageId },
+        },
+      },
+    });
+    const getService = ((name: string) =>
+      name === "db" ? {} : current?.getService(name as never)) as never;
+    const pluginContext = createPluginContext(
+      getService,
+      current.hooks as never
+    );
+    return (locale?: string) =>
+      submitForm(
+        { formSlug: "contact", data: { message: "bonjour" }, locale },
+        { pluginContext, pluginConfig: config }
+      );
+  }
+
+  it("is sent to the page's URL in that language", async () => {
+    const submit = await bootLocalized();
+    const result = await submit("fr");
+    expect(result.success).toBe(true);
+    expect(result.redirect).toBe("/merci");
+  });
+
+  it("is sent to the default's URL when no language is named", async () => {
+    // The control, and the promise to every existing caller: a submission
+    // that names no locale is answered exactly as before.
+    const submit = await bootLocalized();
+    const result = await submit(undefined);
+    expect(result.redirect).toBe("/thanks");
+  });
+
+  it("is sent to the default's URL for a language the site does not have", async () => {
+    // A wrong or forged `?locale=` is not a reason to strand a visitor who
+    // filled the form in: the services resolve an unconfigured code to the
+    // default, and the submission is still stored.
+    const submit = await bootLocalized();
+    const result = await submit("xx");
+    expect(result.success).toBe(true);
+    expect(result.redirect).toBe("/thanks");
+  });
+});
+
 describe("saving a form that redirects to a page", () => {
   /** Create through the collection, which is what the browser posts to. */
   async function create(settings: Record<string, unknown>) {
