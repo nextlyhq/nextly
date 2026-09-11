@@ -1,13 +1,11 @@
 /**
  * A card per collection: what is derived, and what is deliberately not.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   collectionWidgets,
   generatedCollectionSlug,
-  readableGeneratedWidgets,
-  setGeneratedWidgets,
 } from "../collection-widgets";
 import type { WidgetSource } from "../sources";
 
@@ -66,16 +64,18 @@ describe("what a collection gets", () => {
     ]);
   });
 
-  it("is PUBLISHED, not withheld for naming no collection", () => {
-    // 🔴 `readableGeneratedWidgets` withholds a card whose subject it cannot
-    // identify, and the slug was derived from `widget.query.source` alone -- a
-    // field a stats card does not have. Every health card was generated,
-    // registered, and then silently never published. Asserted through the
-    // publication path rather than the generator, because the generator was
-    // never the thing that was wrong.
-    setGeneratedWidgets(collectionWidgets([source({ lifecycleStatus: true })]));
-    const published = readableGeneratedWidgets(() => true, new Set());
-    expect(published.map(w => w.id)).toContain("collection/posts-stats");
+  it("names its collection, so the reader gate can ask about it", () => {
+    // 🔴 The slug was once derived from `widget.query.source` alone -- a field
+    // a stats card does not have -- so every health card named no collection,
+    // and a card whose subject cannot be identified is withheld. Generated,
+    // registered, and then silently never published. That it IS published to
+    // a reader of the collection is asserted in `visibility.test.ts`, where
+    // publication is decided; this pins the derivation the gate reads.
+    const stats = collectionWidgets([source({ lifecycleStatus: true })]).find(
+      w => w.archetype === "stats"
+    );
+    expect(stats).toBeDefined();
+    expect(generatedCollectionSlug(stats!)).toBe("posts");
   });
 
   it("withholds a health card when its cells disagree about the collection", () => {
@@ -434,59 +434,6 @@ describe("what a collection does NOT get", () => {
   });
 });
 
-describe("which generated cards a reader may be told about", () => {
-  const card = (id: string, permission?: string) =>
-    ({
-      id,
-      title: id,
-      archetype: "metric",
-      defaultSize: "sm",
-      ...(permission === undefined ? {} : { requiredPermission: permission }),
-      query: { source: `collection:${id}`, op: "count" },
-    }) as unknown as Parameters<typeof setGeneratedWidgets>[0][number];
-
-  afterEach(() => setGeneratedWidgets([]));
-
-  it("withholds a card for a collection this reader may not read", () => {
-    // 🔴 The disclosure. A generated card's id, title and query all name a
-    // COLLECTION, so publishing the whole set tells any authenticated reader
-    // the slug and the existence of every collection in the install --
-    // including the ones the layout and query endpoints hide from them. That
-    // the admin would not draw the card is not a control: the payload is JSON,
-    // and reading it is the bypass.
-    setGeneratedWidgets([card("secret", "read-secret"), card("open")]);
-
-    const readable = readableGeneratedWidgets(
-      slug => slug !== "secret",
-      new Set()
-    );
-
-    expect(readable.map(w => w.id)).toEqual(["open"]);
-  });
-
-  it("withholds a card whose id a DECLARATION already claimed", () => {
-    // The admin reads this array as the registration channel, and its merge
-    // gives a registration authority over a colliding contribution's title,
-    // archetype, query and permission. Publishing here would replace a plugin's
-    // card with core's guess in the grid while the server's canonical set kept
-    // the plugin's -- drawing one declaration and placing another.
-    setGeneratedWidgets([card("posts"), card("pages")]);
-
-    const readable = readableGeneratedWidgets(() => true, new Set(["posts"]));
-
-    expect(readable.map(w => w.id)).toEqual(["pages"]);
-  });
-
-  it("passes everything a reader may see and nobody claimed", () => {
-    // The control. Without it both refusals above are satisfied by a filter
-    // that returns nothing at all.
-    setGeneratedWidgets([card("posts"), card("pages")]);
-    expect(
-      readableGeneratedWidgets(() => true, new Set()).map(w => w.id)
-    ).toEqual(["posts", "pages"]);
-  });
-});
-
 describe("which collection a generated card is about", () => {
   it("takes it from the QUERY, not from the widget id", () => {
     // 🔴 Access is checked against the thing being READ. The id is a display
@@ -502,7 +449,7 @@ describe("which collection a generated card is about", () => {
   });
 
   it("names nothing for a card that queries no collection", () => {
-    // The control, and what makes the refusal in `readableGeneratedWidgets`
+    // The control, and what makes the refusal in `visibleWidgets`
     // meaningful: a card whose subject cannot be identified is withheld.
     expect(
       generatedCollectionSlug({

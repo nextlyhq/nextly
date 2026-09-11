@@ -1,0 +1,229 @@
+/**
+ * Which widgets a reader may be told exist, and how the answer is split for
+ * the workspace payload.
+ *
+ * `callerHoldsPermission` and `readableEntities` are the seams a caller is put
+ * on either side of; everything between them -- the canonical merge, the
+ * generated cards, the gate -- is real, because the property under test is
+ * what the two surfaces built on this decision are told, not how a verdict is
+ * reached.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ReadAccessCaller } from "../../../auth/entity-read-access";
+import { setContributedWidgets } from "../canonical";
+import { clearWidgets, registerWidget } from "../registry";
+import { clearSources, registerSource } from "../sources";
+import { visibleWidgets, widgetAudience } from "../visibility";
+
+const { callerHoldsPermission, readableEntities } = vi.hoisted(() => ({
+  callerHoldsPermission: vi.fn(),
+  readableEntities: vi.fn(),
+}));
+vi.mock("../../../auth/entity-read-access", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../../../auth/entity-read-access")>();
+  return { ...actual, callerHoldsPermission, readableEntities };
+});
+
+const CALLER: ReadAccessCaller = {
+  userId: "user-1",
+  authMethod: "session",
+  permissions: [],
+  roles: ["editor"],
+};
+
+/** A reader who holds exactly `held`, and may read exactly `readable`. */
+function reader(held: string[], readable: string[] = []): void {
+  callerHoldsPermission.mockImplementation(async (slug: string) =>
+    held.includes(slug)
+  );
+  readableEntities.mockImplementation(
+    async (slugs: string[]) =>
+      new Set(slugs.filter(slug => readable.includes(slug)))
+  );
+}
+
+function register(id: string, patch: Record<string, unknown> = {}): void {
+  registerWidget({
+    id,
+    title: id,
+    archetype: "text",
+    defaultSize: "md",
+    content: `notes for ${id}`,
+    ...patch,
+  } as Parameters<typeof registerWidget>[0]);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  clearWidgets();
+  clearSources();
+  setContributedWidgets([]);
+  reader([]);
+});
+
+afterEach(() => {
+  clearWidgets();
+  clearSources();
+  setContributedWidgets([]);
+});
+
+const ids = (widgets: readonly { id: string }[]) =>
+  widgets.map(widget => widget.id);
+
+describe("visibleWidgets", () => {
+  it("withholds a declared widget whose gate this reader fails, from either channel", async () => {
+    // 🔴 The disclosure. A declaration is its whole content -- a text widget's
+    // prose travels with it -- so a reader the gate refuses must not be told
+    // the card exists, whether a plugin contributed it or an app registered
+    // it. The ungated card and the one whose gate holds are the controls:
+    // without them a filter that returns nothing satisfies the refusal.
+    setContributedWidgets([
+      { id: "acme/runbook", requiredPermission: "manage-settings" },
+      { id: "acme/welcome" },
+    ]);
+    register("app/secrets", { requiredPermission: "read-secrets" });
+    register("app/notes", { requiredPermission: "read-notes" });
+    reader(["read-notes"]);
+
+    expect(ids(await visibleWidgets(CALLER))).toEqual([
+      "acme/welcome",
+      "app/notes",
+    ]);
+  });
+
+  it("gates a colliding pair on the one gate the canonical merge keeps", async () => {
+    // A registration that TIGHTENED the permission on a contributed id gates
+    // both copies. The contribution carries no gate of its own, and shipping
+    // it on that basis would hand the reader the prose the registration was
+    // written to withhold.
+    setContributedWidgets([{ id: "acme/runbook" }]);
+    register("acme/runbook", { requiredPermission: "manage-settings" });
+    reader([]);
+
+    expect(ids(await visibleWidgets(CALLER))).toEqual([]);
+
+    reader(["manage-settings"]);
+    expect(ids(await visibleWidgets(CALLER))).toEqual(["acme/runbook"]);
+  });
+
+  it("denies when the permission decision itself rejects", async () => {
+    register("app/secrets", { requiredPermission: "read-secrets" });
+    callerHoldsPermission.mockRejectedValue(new Error("rbac down"));
+
+    // Fail closed: a check that threw has told us nothing, and "nothing" must
+    // not read as "allowed".
+    expect(ids(await visibleWidgets(CALLER))).toEqual([]);
+  });
+
+  it("gates a generated card on its collection, not on a declared permission", async () => {
+    // A generated card's id, title and query all name a COLLECTION, so the
+    // question is whether this reader may read that collection -- asked of
+    // `readableEntities`, the same answer the query endpoint gives, rather
+    // than of the flat permission list, which cannot see a code-defined
+    // `access.read`.
+    registerSource(source("posts"));
+    registerSource(source("secret"));
+    reader([], ["posts"]);
+
+    const visible = await visibleWidgets(CALLER);
+
+    expect(ids(visible)).toContain("collection/posts-count");
+    expect(ids(visible)).not.toContain("collection/secret-count");
+    expect(visible.every(widget => widget.generated === true)).toBe(true);
+    // Never asked the permission question about a generated card: it declares
+    // no permission, and a decision nobody declared is not one to take.
+    expect(callerHoldsPermission).not.toHaveBeenCalled();
+  });
+
+  it("publishes a health card, whose collection is named by its cells", async () => {
+    // 🔴 A stats card has no `query` of its own, so a collection read from
+    // that field alone answered `undefined` for every health card -- and a
+    // card whose subject cannot be identified is withheld. Every health card
+    // was generated, registered, and then silently never published.
+    registerSource(source("posts", { lifecycleStatus: true }));
+    reader([], ["posts"]);
+
+    expect(ids(await visibleWidgets(CALLER))).toContain(
+      "collection/posts-stats"
+    );
+  });
+});
+
+describe("widgetAudience", () => {
+  it("splits the visible set by the channel each half ships through", async () => {
+    setContributedWidgets([{ id: "acme/welcome" }]);
+    register("app/notes");
+    registerSource(source("posts"));
+    reader([], ["posts"]);
+
+    const audience = widgetAudience(await visibleWidgets(CALLER));
+
+    expect([...audience.declared]).toEqual(["acme/welcome", "app/notes"]);
+    // The generated half is the DEFINITION, not an id: the admin holds no copy
+    // to match against, so this is the only route by which the card arrives.
+    expect(ids(audience.generated)).toEqual(
+      expect.arrayContaining(["collection/posts-count"])
+    );
+    expect(audience.generated[0]).toMatchObject({
+      archetype: expect.any(String),
+      title: expect.any(String),
+    });
+  });
+
+  it("keeps a generated id a plugin also declared on the DECLARED side only", async () => {
+    // 🔴 The canonical merge lets a contribution keep an id core would have
+    // generated. The admin reads the generated half as the registration
+    // channel, and a registration merges over a colliding contribution -- so
+    // core's derived copy shipping beside the plugin's card under the same id
+    // would replace that plugin's card with core's guess in the grid, while
+    // the layout endpoint placed the plugin's.
+    setContributedWidgets([{ id: "collection/posts-count" }]);
+    registerSource(source("posts"));
+    reader([], ["posts"]);
+
+    const audience = widgetAudience(await visibleWidgets(CALLER));
+
+    expect(audience.declared.has("collection/posts-count")).toBe(true);
+    expect(ids(audience.generated)).not.toContain("collection/posts-count");
+    // The control: the collection's OTHER generated card still ships, so the
+    // exclusion above is by id rather than by the whole collection.
+    expect(ids(audience.generated)).toContain("collection/posts-recent");
+  });
+
+  it("withholds a generated card a reader may not see from the generated half", async () => {
+    registerSource(source("posts"));
+    registerSource(source("secret"));
+    reader([], ["posts"]);
+
+    const audience = widgetAudience(await visibleWidgets(CALLER));
+
+    expect(ids(audience.generated)).toContain("collection/posts-count");
+    expect(ids(audience.generated)).not.toContain("collection/secret-count");
+  });
+});
+
+/** A `collection:` source with a title field and a timestamp, as boot derives one. */
+function source(
+  slug: string,
+  patch: Record<string, unknown> = {}
+): Parameters<typeof registerSource>[0] {
+  return {
+    id: `collection:${slug}`,
+    label: slug,
+    kind: "collection",
+    requiredPermission: `read-${slug}`,
+    titleField: "title",
+    supports: ["count", "list"],
+    fields: [
+      { name: "id", type: "string" },
+      { name: "title", type: "string" },
+      { name: "updatedAt", type: "date" },
+      ...(patch.lifecycleStatus === true
+        ? [{ name: "status", type: "string" }]
+        : []),
+    ],
+    ...patch,
+  } as Parameters<typeof registerSource>[0];
+}

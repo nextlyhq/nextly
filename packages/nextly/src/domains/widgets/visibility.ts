@@ -4,10 +4,14 @@
  * ONE implementation, because two surfaces ask it and a disagreement between
  * them is a disclosure rather than a cosmetic difference. The layout endpoint
  * asks so it can place and offer; the admin's workspace payload asks so it can
- * ship the declarations for cards derived from a collection's own name. A copy
- * in the second that drifted from the first would publish the existence and the
- * slug of every collection an install has to a reader the first was hiding them
- * from.
+ * ship the declarations -- and a declaration is not only a name. A `text`
+ * widget carries its prose and an `actions` widget its links, so a payload
+ * that shipped every declaration and left the browser to hide the gated ones
+ * would hand a reader the contents of a card they may not see: the payload is
+ * JSON, and reading it is the bypass. A copy in the second surface that drifted
+ * from the first would publish the existence and the slug of every collection
+ * an install has, and the body of every gated card, to a reader the first was
+ * hiding them from.
  *
  * @module domains/widgets/visibility
  */
@@ -15,10 +19,17 @@
 import {
   authorizationGroups,
   callerHoldsPermission,
+  readableEntities,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 
-import { requiredPermissionSlugs } from "./gate";
+import { allWidgets, type CanonicalWidget } from "./canonical";
+import {
+  generatedWidgets,
+  refreshCollectionWidgets,
+} from "./collection-widgets";
+import type { WidgetDefinition } from "./definition";
+import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 
 // Re-exported from its own module rather than moved-and-forgotten: this is
 // where every caller already reaches for the gate, and the decision now lives
@@ -60,4 +71,97 @@ export async function permissionVerdicts(
     });
   }
   return verdicts;
+}
+
+/**
+ * The widgets this caller is permitted to know exist.
+ *
+ * A widget with no `requiredPermission` is visible to any authenticated
+ * reader -- that is what omitting it means, and it is what core's own four
+ * cards rely on. A widget that declares one is asked about, and the decision is
+ * taken through the same bounded rounds `authorizationGroups` prescribes for
+ * the query batch: a permission check resolves a session caller through a
+ * per-user TTL cache, so firing thirty of them at once makes every one a miss.
+ *
+ * Judged on the CANONICAL set, so a colliding pair is one card with one gate:
+ * a registration that tightened the permission on a contributed id tightens it
+ * for both copies, and the workspace payload withholds the contribution's
+ * prose along with the registration's rather than shipping the copy that
+ * happened to carry no gate of its own.
+ */
+export async function visibleWidgets(
+  caller: ReadAccessCaller
+): Promise<CanonicalWidget[]> {
+  // The same freshness on every surface that asks. A set derived on some
+  // earlier request would offer a card for a collection deleted since and
+  // refuse it on save, and have no card at all for one created since -- and
+  // in production "the next restart" means the next deploy.
+  await refreshCollectionWidgets();
+  const all = allWidgets();
+
+  const verdicts = await permissionVerdicts(
+    all.map(widget => widget.requiredPermission),
+    caller
+  );
+
+  // 🔴 A GENERATED card is gated on its collection, not on a declared
+  // permission — it carries none. `callerHoldsPermission` judges an API key on
+  // its stamped grant alone, while `canReadEntity` also evaluates the
+  // collection's code-defined rules, and the widget query endpoint asks the
+  // second. A key those rules reject had the card offered here and every query
+  // for it refused. The same question, asked once per collection.
+  const readable = await readableEntities(
+    all
+      .map(widget => widget.collection)
+      .filter((slug): slug is string => slug !== undefined),
+    caller
+  );
+
+  return all.filter(widget => {
+    if (widget.generated === true) {
+      // A generated card that names no collection cannot be checked against
+      // one, so it is withheld rather than published. Unreachable today --
+      // every such card is built from a `collection:` source -- and free, since
+      // it decides from a value already in hand.
+      return widget.collection !== undefined && readable.has(widget.collection);
+    }
+    return holdsWidgetPermission(widget.requiredPermission, verdicts);
+  });
+}
+
+/**
+ * The visible set, split by the channel the workspace payload ships each half
+ * through.
+ *
+ * The admin reads DECLARED widgets from two places -- each plugin's
+ * `widgets`, and the registry's own list -- and both are matched against
+ * `declared` by id. A generated card travels as its full definition instead,
+ * because the admin holds no copy of it to match: core derived it on the
+ * server, and this is the only route by which it reaches the browser.
+ *
+ * Derived from {@link visibleWidgets} rather than computed beside it, so what
+ * the payload ships and what the layout endpoint places cannot disagree.
+ */
+export interface WidgetAudience {
+  /** Ids of the declared widgets -- contributed or registered -- this reader may see. */
+  declared: ReadonlySet<string>;
+  /** The cards core derived that this reader may see. */
+  generated: WidgetDefinition[];
+}
+
+export function widgetAudience(
+  visible: readonly CanonicalWidget[]
+): WidgetAudience {
+  const declared = new Set<string>();
+  const generatedIds = new Set<string>();
+  for (const widget of visible) {
+    // Split on the flag, not on membership of the generated set: a generated
+    // id a plugin also declared survives the canonical merge as the PLUGIN's
+    // card, and core's derived copy must not ship beside it under the same id.
+    (widget.generated === true ? generatedIds : declared).add(widget.id);
+  }
+  return {
+    declared,
+    generated: generatedWidgets().filter(widget => generatedIds.has(widget.id)),
+  };
 }

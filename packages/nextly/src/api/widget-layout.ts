@@ -31,20 +31,14 @@
  * @module api/widget-layout
  */
 
-import {
-  readableEntities,
-  type ReadAccessCaller,
-} from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import {
-  allWidgets,
   declaredWidgets,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
-import { refreshCollectionWidgets } from "../domains/widgets/collection-widgets";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import {
   MAX_LAYOUT_BYTES,
@@ -64,10 +58,7 @@ import {
   readColumnCount,
   type ColumnCount,
 } from "../domains/widgets/layout";
-import {
-  holdsWidgetPermission,
-  permissionVerdicts,
-} from "../domains/widgets/visibility";
+import { visibleWidgets } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
@@ -243,57 +234,6 @@ const SCOPE_KIND = "user" as const;
 async function getLayoutService(): Promise<WidgetLayoutService> {
   await getCachedNextly();
   return container.get<WidgetLayoutService>("widgetLayoutService");
-}
-
-/**
- * The widgets this caller is permitted to know exist.
- *
- * A widget with no `requiredPermission` is visible to any authenticated
- * reader -- that is what omitting it means, and it is what core's own four
- * cards rely on. A widget that declares one is asked about, and the decision is
- * taken through the same bounded rounds `authorizationGroups` prescribes for
- * the query batch: a permission check resolves a session caller through a
- * per-user TTL cache, so firing thirty of them at once makes every one a miss.
- *
- * Verdicts are memoized per SLUG, not per widget: several widgets commonly
- * name the same permission, and asking twice is two database reads for one
- * answer.
- */
-
-async function visibleWidgets(
-  caller: ReadAccessCaller
-): Promise<CanonicalWidget[]> {
-  // Same freshness the admin's own payload gets. Without this the endpoint
-  // would place and offer a set derived on some earlier request -- a collection
-  // created since would have no card to add, and one deleted since would still
-  // be offered and then refused on save.
-  await refreshCollectionWidgets();
-  const all = allWidgets();
-
-  const verdicts = await permissionVerdicts(
-    all.map(widget => widget.requiredPermission),
-    caller
-  );
-
-  // 🔴 A GENERATED card is gated on its collection, not on a declared
-  // permission — it carries none. `callerHoldsPermission` judges an API key on
-  // its stamped grant alone, while `canReadEntity` also evaluates the
-  // collection's code-defined rules, and the widget query endpoint asks the
-  // second. A key those rules reject had the card offered here and every query
-  // for it refused. The same question, asked once per collection.
-  const readable = await readableEntities(
-    all
-      .map(widget => widget.collection)
-      .filter((slug): slug is string => slug !== undefined),
-    caller
-  );
-
-  return all.filter(widget => {
-    if (widget.generated === true) {
-      return widget.collection !== undefined && readable.has(widget.collection);
-    }
-    return holdsWidgetPermission(widget.requiredPermission, verdicts);
-  });
 }
 
 /**

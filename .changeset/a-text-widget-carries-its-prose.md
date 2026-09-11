@@ -44,3 +44,11 @@ for every reader offered the card. An external link opens in a new tab.
 
 `content` is required for `text` and refused on every other archetype, on both
 the registry and the plugin channel through one rule.
+
+The admin workspace payload now carries only the widget declarations its reader
+may see. A declaration is its whole content, and a `text` widget's prose travels
+with it, so the gate a widget declares through `requiredPermission` is applied
+on the server before the declaration ships, from the plugin channel and the
+registry alike, by the same decision the dashboard layout endpoint places cards
+with. Previously every authenticated caller received every declaration and the
+browser hid the gated cards.
