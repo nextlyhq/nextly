@@ -12,14 +12,18 @@
  * @module components/features/widgets/edit/useDashboardArrangement
  */
 
-import type { DragEndEvent } from "@dnd-kit/core";
+import type { Announcements, DragEndEvent } from "@dnd-kit/core";
 import { DEFAULT_COLUMN_COUNT } from "nextly/config";
 import { useCallback, useMemo } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { useSortableFieldArray } from "../../entries/fields/structured/field-array-helpers";
+import {
+  sortableAnnouncements,
+  useSortableSensors,
+  type AnnouncedItem,
+} from "../../entries/fields/structured/field-array-helpers";
 import {
   columnFromDropData,
   dropSide,
@@ -112,9 +116,18 @@ export interface DashboardArrangement {
    * and the whole of any outage.
    */
   hasArrangement: boolean;
-  sortableItems: Array<{ id: string }>;
-  sensors: ReturnType<typeof useSortableFieldArray>["sensors"];
-  handleDragEnd: ReturnType<typeof useSortableFieldArray>["handleDragEnd"];
+  sensors: ReturnType<typeof useSortableSensors>;
+  handleDragEnd: (event: DragEndEvent) => void;
+  /**
+   * What a screen reader hears while a card is being dragged.
+   *
+   * Pick-up, hover and cancel are spoken here, about the card by title and
+   * in column-and-position terms. The LANDING is deliberately not: the grid
+   * speaks that through its own live region, in the same sentence the Move
+   * buttons use, so a card moved by keyboard and one moved by button sound
+   * identical and no drop is read twice.
+   */
+  announcements: Announcements;
 }
 
 export function useDashboardArrangement(
@@ -218,11 +231,6 @@ export function useDashboardArrangement(
     [visible, columnCount]
   );
 
-  const sortableItems = useMemo(
-    () => visible.map(row => ({ id: row.placementId })),
-    [visible]
-  );
-
   /** The placements the grid actually draws, which is what a position counts. */
   const renderedIds = useMemo(
     () => new Set(visible.map(row => row.placementId)),
@@ -233,16 +241,60 @@ export function useDashboardArrangement(
   // Two implementations of "where does this land" agree until one is edited,
   // and a grid whose drag and whose buttons disagreed would be impossible to
   // reason about from either.
-  // `useSortableFieldArray` hands back INDICES into the list it was given, and
-  // that list is the filtered view. They are turned into placement ids here,
-  // once, so the editor never sees a position that means something different to
-  // it than it did to the grid.
-  // Only the SENSORS are borrowed. `useSortableFieldArray` resolves a drop to a
-  // pair of indices into one list, which cannot express a column: an index says
-  // where in a sequence a card landed and says nothing about which column it
-  // landed in. The sensors are the half that is genuinely shared -- a pointer
-  // and a keyboard sensor, configured identically wherever this admin drags.
-  const { sensors } = useSortableFieldArray(sortableItems, () => {});
+  // The sensors alone are shared with every other sortable surface. The
+  // drop is NOT: a flat list resolves a drop to a pair of indices, which
+  // cannot express a column, so this hook keeps its own `handleDragEnd` below.
+  const sensors = useSortableSensors();
+
+  /**
+   * A card or a column as the announcements see it.
+   *
+   * 🔴 A column is recognised from the droppable's DATA, exactly as the drop
+   * handler recognises it, so the sentence a reader hears while hovering
+   * describes the same target the release will act on. Recognising it from
+   * the shape of the id instead would let a card named like a column be
+   * announced as one.
+   */
+  const describeItem = useCallback(
+    (item: AnnouncedItem): string | undefined => {
+      const column = columnFromDropData(item.data.current);
+      if (column !== undefined) return `column ${column + 1} of ${columnCount}`;
+      return visible.find(row => row.placementId === String(item.id))?.widget
+        .title;
+    },
+    [visible, columnCount]
+  );
+
+  /**
+   * Where a card sits, in the same terms the landing is announced in.
+   *
+   * Read from the DRAWN columns, the buckets the grid renders from, so the
+   * position a reader is told on pick-up counts the cards they can see.
+   */
+  const placeItem = useCallback(
+    (item: AnnouncedItem): string | undefined => {
+      const id = String(item.id);
+      const column = columns.findIndex(bucket =>
+        bucket.some(row => row.placementId === id)
+      );
+      if (column === -1) return undefined;
+      const position =
+        columns[column].findIndex(row => row.placementId === id) + 1;
+      return `column ${column + 1} of ${columnCount}, position ${position} of ${columns[column].length}`;
+    },
+    [columns, columnCount]
+  );
+
+  const announcements = useMemo<Announcements>(
+    () => ({
+      ...sortableAnnouncements({ describe: describeItem, place: placeItem }),
+      // The landing is spoken by `announceLanding` below, through the grid's
+      // own live region and in the Move buttons' sentence. Spoken here as
+      // well, a keyboard drop would be read twice in two wordings.
+      onDragEnd: () => undefined,
+    }),
+    [describeItem, placeItem]
+  );
 
   /**
    * Say where a card ended up, in the terms the reader can verify.
@@ -379,8 +431,8 @@ export function useDashboardArrangement(
     moveWithinColumn,
     moveColumn,
     hasArrangement,
-    sortableItems,
     sensors,
+    announcements,
     handleDragEnd,
   };
 }

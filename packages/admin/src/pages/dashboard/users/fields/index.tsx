@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  closestCenter,
-  DndContext,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
+import { closestCenter, DndContext, type DragEndEvent } from "@dnd-kit/core";
 import {
   arrayMove,
   SortableContext,
@@ -43,6 +36,11 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import {
+  positionInList,
+  sortableAnnouncements,
+  useSortableSensors,
+} from "@admin/components/features/entries/fields/structured/field-array-helpers";
 import { UserBreadcrumbs } from "@admin/components/features/user-management/breadcrumbs";
 import {
   AlertTriangle,
@@ -365,7 +363,7 @@ function SortableFieldRow({
             {...attributes}
             {...listeners}
             tabIndex={0}
-            aria-label="Drag to reorder"
+            aria-label={`Drag to reorder ${field.label}`}
             onClick={e => e.stopPropagation()}
           >
             <GripVertical className="h-4 w-4" />
@@ -513,12 +511,10 @@ function UserFieldsTable() {
     UserFieldDefinitionRecord[] | null
   >(null);
 
-  // DnD sensors
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 8 },
-    })
-  );
+  // Pointer AND keyboard, from the hook every sortable surface shares. The
+  // pointer-only pair this replaced left the table unreachable from the
+  // keyboard.
+  const sensors = useSortableSensors();
 
   // Fetch fields
   const { data, isLoading, isError, error } = useUserFields();
@@ -568,6 +564,15 @@ function UserFieldsTable() {
     const start = page * pageSize;
     return filteredFields.slice(start, start + pageSize);
   }, [filteredFields, page, pageSize]);
+
+  // Said about the FIELD, and placed within the PAGE the reader is looking
+  // at -- the same list the sortable context holds -- rather than within every
+  // field the install has, most of which are not on screen.
+  const pageIds = paginatedFields.map(f => f.id);
+  const announcements = sortableAnnouncements({
+    describe: ({ id }) => paginatedFields.find(f => f.id === id)?.label,
+    place: ({ id }) => positionInList(pageIds, id),
+  });
 
   // Reset page when search changes
   useEffect(() => {
@@ -753,6 +758,7 @@ function UserFieldsTable() {
             sensors={sensors}
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
+            accessibility={{ announcements }}
           >
             <Table aria-label="User fields table" className="min-w-max">
               <TableHeader className="bg-[var(--nx-table-header-bg)]">
@@ -780,7 +786,7 @@ function UserFieldsTable() {
               {/* Custom fields (draggable) */}
               <TableBody>
                 <SortableContext
-                  items={paginatedFields.map(f => f.id)}
+                  items={pageIds}
                   strategy={verticalListSortingStrategy}
                 >
                   {paginatedFields.map(field => (
