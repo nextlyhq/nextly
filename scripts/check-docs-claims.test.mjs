@@ -1052,6 +1052,40 @@ describe("internal-docs-link", () => {
     }
   });
 
+  it("fires on every spelling of a file-path destination", async () => {
+    // Read off the syntax tree, so the forms the patterns had to learn one at
+    // a time are all one node: bare, titled, angle-bracketed, and a reference
+    // definition.
+    const page = [
+      "Bare [n](production-migrations.mdx), titled [t](../guides/next.mdx \"Next\"),",
+      "angled [a](<../x y.mdx>), reference [r][ref].",
+      "",
+      "[ref]: ../configuration/index.mdx",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({
+      "docs/guides/a.mdx": page,
+      "docs/guides/production-migrations.mdx": "# p\n",
+      "docs/guides/next.mdx": "# n\n",
+      "docs/configuration/index.mdx": "# c\n",
+    });
+    const links = findings.filter(f => f.check === "internal-docs-link");
+    expect(links.map(f => f.message.split(" as a file path")[0].replace("links to ", ""))).toEqual([
+      "production-migrations.mdx",
+      "../guides/next.mdx",
+      "../x y.mdx",
+      "../configuration/index.mdx",
+    ]);
+    expect(links.map(f => f.line)).toEqual([1, 1, 2, 4]);
+  });
+
+  it("names the file's own line, frontmatter included", async () => {
+    const findings = await findingsFor({
+      "docs/a.mdx": "---\ntitle: A\n---\n\nSee [gone](/docs/nope).\n",
+    });
+    expect(findings.filter(f => f.check === "internal-docs-link").map(f => f.line)).toEqual([5]);
+  });
+
   it("fires on a reference definition that points at a file", async () => {
     expect(
       await checksFor({
