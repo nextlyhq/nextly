@@ -429,8 +429,9 @@ What a `beforeChange` handler returns is written without being re-validated.
   - **It runs only when its field is in the data.** An update whose patch omits
     the field, or an earlier hook that deleted the key, skips that field's hooks
     entirely. A field hook is not a point that runs on every write.
-  - **`data` is the record so far, at the field's own level.** On a create it
-    is the submitted document with defaults, `slug` and title already applied;
+  - **`data` is the record so far, at the field's own level.** On an ordinary
+    create it is the submitted document with constant defaults, `slug` and
+    title already applied (a bulk or transactional create applies no defaults);
     on an update it is the submitted patch, not the stored row, so an unchanged
     sibling reads as `undefined`. For a field inside a group or a repeater it is
     the containing row, not the top-level document. The
