@@ -76,12 +76,9 @@ import { detachData } from "../../../shared/lib/detach";
 import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
-  applyFieldReadAccessWithEvidence,
-  newReadAccessEvidence,
   readAccessGrants,
   runFieldHooks,
   type ReadAccessRedactions,
-  snapshotWithReadAccessEvidence,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -2007,6 +2004,40 @@ export class SingleQueryService extends BaseService {
         stripPasswordFieldValues(doc, singleMeta.fields);
       }
 
+      // 7.5. Judge the document the read ASSEMBLED, not the row it started
+      // from, and before any afterRead hook runs. A document-dependent rule
+      // reads `data`, and `data` is assembled in stages after the earlier gate:
+      // defaults on auto-create, translations from the companion table,
+      // component rows from their own tables, a held working draft. A rule such
+      // as `data?.secret !== true` sees none of that on the bare main-table row
+      // and admits a caller the assembled document denies. The earlier gate
+      // stays because it refuses callers before those stages run any side
+      // effects.
+      //
+      // Before the hooks, not after them: access decides on what is stored,
+      // and a hook shapes what is returned. Judged here the rule sees every
+      // stored value, including fields the caller may not read, with nothing
+      // yet redacted, so no redacted value has to be reconstructed for it; and
+      // no hook or field rule has run yet that could change the document or
+      // the caller it is judged against.
+      if (deferCustomRule && !options.overrideAccess) {
+        const denial = await this.judgeAssembledDocument({
+          slug,
+          accessRules: singleMeta.accessRules,
+          user: options.user,
+          locale: options.locale,
+          fallbackLocale: options.fallbackLocale,
+          // A detached copy, so the rule decides rather than edits. `data` is
+          // handed to user code, and passing the response object itself would
+          // let a rule that assigns to it rewrite what the caller receives,
+          // including putting back a value a later stage is meant to withhold.
+          // Deep, because a shallow copy still shares every nested component,
+          // repeater and expanded relation with the response.
+          document: detachData(doc),
+        });
+        if (denial) return denial;
+      }
+
       // 8. Execute afterRead hooks
       if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
         const afterContext = buildSingleHookContext({
@@ -2029,42 +2060,34 @@ export class SingleQueryService extends BaseService {
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
       // Field read access, then the field-level afterRead hooks, then field
-      // read access AGAIN, sharing one redactions store: the same two passes
-      // the collection read runs. The first hides a denied field from the
-      // hooks, so a hook on an allowed field cannot read a denied sibling and
-      // copy it onto its own value; the second re-judges the post-hook document
-      // with the removed values restored as evidence, so a conditional rule
-      // still sees the whole document and a denied field a hook reintroduced
-      // is caught. Document trust and FIELD trust are separate questions and
-      // this read may answer them differently: `overrideAccess` alone means
-      // both; a caller that asked for field rules to be enforced keeps its
-      // document bypass and gives up only the field one.
+      // read access AGAIN, sharing one redactions store: the two passes the
+      // collection read runs. The first hides a denied field from the hooks,
+      // so a hook on an allowed field cannot read a denied sibling and copy it
+      // onto its own value; the second re-judges the post-hook document, with
+      // the first pass's removals restored as evidence where the rows still
+      // stand, so a denied field a hook reintroduced is caught. Document trust
+      // and FIELD trust are separate questions and this read may answer them
+      // differently: `overrideAccess` alone means both; a caller that asked for
+      // field rules to be enforced keeps its document bypass and gives up only
+      // the field one.
       const skipFieldRules =
         options.enforceFieldAccess === true ? false : options.overrideAccess;
       // The field-access identity, never the hook one. A preview judges these
       // fields as the sharer while the hooks go on seeing the anonymous bearer
       // who is actually asking.
       const fieldAccessUser = options.fieldAccessUser ?? options.user;
+      const fieldAccess = {
+        kind: "single" as const,
+        slug,
+        entry: doc,
+        user: fieldAccessUser,
+        overrideAccess: skipFieldRules,
+        // One grants resolver for both passes, so the caller's roles and
+        // permissions are read once and both passes judge with one authority.
+        grants: readAccessGrants(fieldAccessUser),
+      };
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
-      // One grants resolver for both passes, so the caller's roles and
-      // permissions are read once and both judge with one authority.
-      const fieldAccessGrants = readAccessGrants(fieldAccessUser);
-      // What the first pass removes, by path, recorded during its walk: the
-      // document-level rule below is judged with it restored, and the second
-      // pass reads it back onto a container a hook may have rebuilt.
-      const readAccessEvidence = newReadAccessEvidence();
-      await applyFieldReadAccess(
-        {
-          kind: "single",
-          slug,
-          entry: doc,
-          user: fieldAccessUser,
-          overrideAccess: skipFieldRules,
-          grants: fieldAccessGrants,
-          evidence: readAccessEvidence,
-        },
-        sourceRedactions
-      );
+      await applyFieldReadAccess(fieldAccess, sourceRedactions);
 
       await runFieldHooks({
         kind: "single",
@@ -2075,56 +2098,7 @@ export class SingleQueryService extends BaseService {
         user: options.user,
       });
 
-      // 9. Judge the document being RETURNED, not the row the read started
-      // from. A document-dependent rule reads `data`, and `data` is assembled in
-      // stages after the earlier gate: defaults on auto-create, translations
-      // from the companion table, component rows from their own tables, and
-      // whatever a hook changed. A rule such as `data?.secret !== true` sees
-      // none of that on the bare main-table row and admits a caller the
-      // assembled document denies. The earlier gate stays because it refuses
-      // callers before those stages run any side effects; this is the decision
-      // that governs what is handed back.
-      if (deferCustomRule && !options.overrideAccess) {
-        const finalDenial = await this.judgeAssembledDocument({
-          slug,
-          accessRules: singleMeta.accessRules,
-          user: options.user,
-          locale: options.locale,
-          fallbackLocale: options.fallbackLocale,
-          // A detached copy, so the rule decides rather than edits. `data` is
-          // handed to user code, and passing the response object itself would
-          // let a rule that assigns to it rewrite what the caller receives,
-          // including putting back a value a later stage is meant to withhold.
-          // Deep, because a shallow copy still shares every nested component,
-          // repeater and expanded relation with the response. With the values
-          // the pass above removed put back as evidence: a rule may be written
-          // to inspect a denied field, and a copy without it would show the
-          // field absent, the "missing means allowed" reading that admits a
-          // caller the rule exists to refuse.
-          document: snapshotWithReadAccessEvidence(
-            { kind: "single", slug, entry: doc },
-            readAccessEvidence,
-            detachData
-          ),
-        });
-        if (finalDenial) return finalDenial;
-      }
-
-      // 10. The second field-access pass, over the post-hook document, with
-      // the path-keyed evidence restored first so a container a hook rebuilt
-      // is judged against what the first pass removed from it.
-      await applyFieldReadAccessWithEvidence(
-        {
-          kind: "single",
-          slug,
-          entry: doc,
-          user: fieldAccessUser,
-          overrideAccess: skipFieldRules,
-          grants: fieldAccessGrants,
-        },
-        sourceRedactions,
-        readAccessEvidence
-      );
+      await applyFieldReadAccess(fieldAccess, sourceRedactions);
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last

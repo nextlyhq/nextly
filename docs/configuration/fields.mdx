@@ -962,8 +962,9 @@ are the things that remove a key first.
 - **Denied fields.** On a read, collection or Single, field-level
   `access.read` rules are applied before the hooks, so a field the caller may
   not read is gone by then, and again after them, so a value a hook put back
-  is removed. A Single's document-level access rule is still judged with the
-  denied values present, so a rule written to inspect one keeps working.
+  is removed. A Single's document-level read rule is judged on the assembled
+  stored document before any `afterRead` hook and before field access, so it
+  sees denied values, and a hook cannot change whether the caller may read.
 - **Localized fields** live in the companion table and are merged into the
   `afterChange` row only when the write carried them, so a localized field
   omitted from a create, or unchanged on an update, has no `afterChange` run.

@@ -9,12 +9,16 @@
  * since it existed. Both now do: the first pass hides, the second re-judges
  * the post-hook document and catches a value a hook put back.
  *
+ * A Single also has a document-level read rule. It is judged on the assembled
+ * stored document before any afterRead hook and before field access, so it
+ * sees every stored value and nothing a hook produced.
+ *
  * Asserted through a booted instance and `findSingle`, with a hook that records
  * what it was handed, because the failure was in what reached app code.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, group, repeater, text } from "../../../config";
+import { defineSingle, group, text } from "../../../config";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   createTestNextly,
@@ -144,37 +148,20 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     expect(doc?.apiToken).toBe("reintroduced");
   });
 
-  it("lets the document rule see a denied nested value a hook's rebuilt group dropped", async () => {
-    // The gate before the hooks judges the stored document and allows it: no
-    // flag yet. A hook on `siteName` then flags the document, and the hook on
-    // `settings` returns a fresh spread of the redacted group, so the row
-    // object the redaction store keyed `visibility` on is gone. The judge
-    // after the hooks must still see `settings.visibility`, or "missing means
-    // allowed" admits the caller the rule exists to refuse.
+  it("judges the document rule on the stored document, denied fields included", async () => {
+    // The rule reads a nested value the caller may not read. It is judged
+    // before field read access removes that value, so it sees it.
     current = await createTestNextly({
       singles: [
         defineSingle({
           slug: "branding",
           fields: [
-            text({
-              name: "siteName",
-              hooks: {
-                afterRead: [
-                  ({ value, data }) => {
-                    (data as Record<string, unknown>).flagged = true;
-                    return value;
-                  },
-                ],
-              },
-            }),
+            text({ name: "siteName" }),
             group({
               name: "settings",
               fields: [
                 text({ name: "visibility", access: { read: () => false } }),
               ],
-              hooks: {
-                afterRead: [({ value }) => ({ ...(value as object) })],
-              },
             }),
           ],
         }),
@@ -199,7 +186,7 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     expect(denied.success).toBe(false);
     expect(denied.statusCode).toBe(403);
 
-    // The mirror: a public value passes, and still never reaches the response.
+    // The mirror: a public value passes, and never reaches the response.
     await entry.update(
       "branding",
       { settings: { visibility: "public" } },
@@ -215,11 +202,13 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     ).not.toHaveProperty("visibility");
   });
 
-  it("keeps the evidence beneath a container the caller may not read at all", async () => {
-    // The first pass removes `vault` whole (its own rule denies), and the
-    // child's redaction was recorded before that on a row the document no
-    // longer holds. A hook flags the document; the judge must still see
-    // `vault.visibility`.
+  it("does not let an afterRead hook change the access decision", async () => {
+    // The design this file protects, pinned so it is changed on purpose or
+    // not at all. The rule refuses a flagged document, and only a hook sets
+    // the flag. Access is decided on the stored document before any hook
+    // runs, so the read is allowed; judging after the hooks would need every
+    // value field access removed reconstructed onto whatever the hooks
+    // returned, which cannot be done soundly.
     current = await createTestNextly({
       singles: [
         defineSingle({
@@ -236,13 +225,6 @@ describe("a Single read redacts before its field hooks (integration)", () => {
                 ],
               },
             }),
-            group({
-              name: "vault",
-              access: { read: () => false },
-              fields: [
-                text({ name: "visibility", access: { read: () => false } }),
-              ],
-            }),
           ],
         }),
       ],
@@ -255,379 +237,16 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     const entry = current.getService("singleEntryService");
     await entry.update(
       "branding",
-      { siteName: "Acme", vault: { visibility: "private" } },
-      { overrideAccess: true }
-    );
-
-    const denied = await entry.get("branding", {
-      user: { id: "denied-container-aware" },
-      routeAuthorized: true,
-    });
-    expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
-  });
-
-  it("re-judges a conditional child in a rebuilt group against the sibling it depends on", async () => {
-    // `openTag` may be read only while `visibility` is not private. The first
-    // pass removes both (visibility by its rule, openTag by its condition);
-    // the hook on `settings` returns a fresh group carrying `openTag` back
-    // and no `visibility`. The second pass must judge `openTag` against the
-    // removed `visibility`, which only path-keyed evidence can reach, and
-    // strip it.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          fields: [
-            text({ name: "siteName" }),
-            group({
-              name: "settings",
-              fields: [
-                text({ name: "visibility", access: { read: () => false } }),
-                text({
-                  name: "openTag",
-                  access: {
-                    read: ({ data }) =>
-                      (data as { visibility?: string })?.visibility !==
-                      "private",
-                  },
-                }),
-              ],
-              hooks: {
-                afterRead: [
-                  ({ value }) => ({
-                    ...(value as object),
-                    openTag: "reintroduced",
-                  }),
-                ],
-              },
-            }),
-          ],
-        }),
-      ],
-    });
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      { siteName: "Acme", settings: { visibility: "private", openTag: "x" } },
-      { overrideAccess: true }
-    );
-
-    const doc = (await current.nextly.findSingle({
-      slug: "branding",
-      overrideAccess: true,
-      enforceFieldAccess: true,
-      user: NOBODY,
-    })) as { settings?: { openTag?: string; visibility?: string } } | null;
-
-    expect(doc?.settings).not.toHaveProperty("openTag");
-    expect(doc?.settings).not.toHaveProperty("visibility");
-  });
-
-  it("keeps two repeater rows with one id on separate evidence paths", async () => {
-    // The redaction contract permits duplicate ids. Keyed by id alone, the
-    // second row's evidence would overwrite the first's and the judge would
-    // see the private row as public.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          fields: [
-            text({
-              name: "siteName",
-              hooks: {
-                afterRead: [
-                  ({ value, data }) => {
-                    (data as Record<string, unknown>).flagged = true;
-                    return value;
-                  },
-                ],
-              },
-            }),
-            repeater({
-              name: "entries",
-              fields: [
-                text({ name: "id" }),
-                text({ name: "visibility", access: { read: () => false } }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    });
-    await current.adapter.update(
-      "dynamic_singles",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "branding" }] }
-    );
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      {
-        siteName: "Acme",
-        entries: [
-          { id: "dup", visibility: "private" },
-          { id: "dup", visibility: "public" },
-        ],
-      },
-      { overrideAccess: true }
-    );
-
-    const denied = await entry.get("branding", {
-      user: { id: "rows-aware" },
-      routeAuthorized: true,
-    });
-    expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
-  });
-
-  it("restores a reordered id-less row's evidence to the row it came from", async () => {
-    // The hook on `entries` reverses the rows. The rows are the same objects
-    // the capture saw, so each is restored from its own path, not from the
-    // path its new position yields. The rule reads the FIRST row after the
-    // reversal, which is the private one.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          fields: [
-            text({
-              name: "siteName",
-              hooks: {
-                afterRead: [
-                  ({ value, data }) => {
-                    (data as Record<string, unknown>).flagged = true;
-                    return value;
-                  },
-                ],
-              },
-            }),
-            repeater({
-              name: "entries",
-              fields: [
-                text({ name: "label" }),
-                text({ name: "visibility", access: { read: () => false } }),
-              ],
-              hooks: {
-                afterRead: [({ value }) => [...(value as unknown[])].reverse()],
-              },
-            }),
-          ],
-        }),
-      ],
-    });
-    await current.adapter.update(
-      "dynamic_singles",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "branding" }] }
-    );
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      {
-        siteName: "Acme",
-        entries: [
-          { label: "A", visibility: "public" },
-          { label: "B", visibility: "private" },
-        ],
-      },
-      { overrideAccess: true }
-    );
-
-    const denied = await entry.get("branding", {
-      user: { id: "first-row-aware" },
-      routeAuthorized: true,
-    });
-    expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
-  });
-
-  it("keeps what a rule writes into restored evidence out of the second pass", async () => {
-    // `policy` is denied and restored as evidence for the rule, which writes
-    // `mode: "public"` into it. `openTag` may be read only while the policy
-    // is not private, and the hook on `settings` carries it back. The second
-    // pass must judge against the policy as captured, not as the rule left
-    // it, and strip `openTag`.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          fields: [
-            text({ name: "siteName" }),
-            group({
-              name: "settings",
-              fields: [
-                group({
-                  name: "policy",
-                  access: { read: () => false },
-                  fields: [text({ name: "mode" })],
-                }),
-                text({
-                  name: "openTag",
-                  access: {
-                    read: ({ data }) =>
-                      (data as { policy?: { mode?: string } })?.policy?.mode !==
-                      "private",
-                  },
-                }),
-              ],
-              hooks: {
-                afterRead: [
-                  ({ value }) => ({
-                    ...(value as object),
-                    openTag: "reintroduced",
-                  }),
-                ],
-              },
-            }),
-          ],
-        }),
-      ],
-    });
-    await current.adapter.update(
-      "dynamic_singles",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "branding" }] }
-    );
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      {
-        siteName: "Acme",
-        settings: { policy: { mode: "private" }, openTag: "x" },
-      },
+      { siteName: "Acme" },
       { overrideAccess: true }
     );
 
     const result = await entry.get("branding", {
-      user: { id: "policy-mutating" },
+      user: { id: "flag-aware" },
       routeAuthorized: true,
     });
     expect(result.success).toBe(true);
-    const settings = (result.data as { settings?: Record<string, unknown> })
-      ?.settings;
-    expect(settings).not.toHaveProperty("openTag");
-    expect(settings).not.toHaveProperty("policy");
-  });
-
-  it("keeps rows whose ids collide under a naive suffix on separate paths", async () => {
-    // Ids "dup", "dup", "dup#2" and "dup~2": the second "dup" is the second
-    // occurrence of its id, and the later rows' ids LOOK like an occurrence
-    // suffix under either marker. Encoded, a literal "#" in an id cannot
-    // collide with the marker, and "~" is not the marker.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          fields: [
-            text({
-              name: "siteName",
-              hooks: {
-                afterRead: [
-                  ({ value, data }) => {
-                    (data as Record<string, unknown>).flagged = true;
-                    return value;
-                  },
-                ],
-              },
-            }),
-            repeater({
-              name: "entries",
-              fields: [
-                text({ name: "id" }),
-                text({ name: "visibility", access: { read: () => false } }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    });
-    await current.adapter.update(
-      "dynamic_singles",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "branding" }] }
-    );
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      {
-        siteName: "Acme",
-        entries: [
-          { id: "dup", visibility: "public" },
-          { id: "dup", visibility: "private" },
-          { id: "dup#2", visibility: "public" },
-          { id: "dup~2", visibility: "public" },
-        ],
-      },
-      { overrideAccess: true }
-    );
-
-    const denied = await entry.get("branding", {
-      user: { id: "rows-aware" },
-      routeAuthorized: true,
-    });
-    expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
-  });
-
-  it("keeps nested evidence for a container an entity hook hands over as a JSON string", async () => {
-    // The Single-level afterRead runs before the field passes and returns
-    // `settings` as a string. The first pass parses rows to judge them and
-    // serialises the redacted group back; evidence recorded by walking the
-    // document afterwards would parse fresh rows and find nothing.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          hooks: {
-            afterRead: [
-              ({ data }) => ({
-                ...(data as Record<string, unknown>),
-                settings: JSON.stringify(
-                  (data as { settings?: unknown }).settings
-                ),
-              }),
-            ],
-          },
-          fields: [
-            text({
-              name: "siteName",
-              hooks: {
-                afterRead: [
-                  ({ value, data }) => {
-                    (data as Record<string, unknown>).flagged = true;
-                    return value;
-                  },
-                ],
-              },
-            }),
-            group({
-              name: "settings",
-              fields: [
-                text({ name: "visibility", access: { read: () => false } }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    });
-    await current.adapter.update(
-      "dynamic_singles",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "branding" }] }
-    );
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      { siteName: "Acme", settings: { visibility: "private" } },
-      { overrideAccess: true }
-    );
-
-    const denied = await entry.get("branding", {
-      user: { id: "nested-aware" },
-      routeAuthorized: true,
-    });
-    expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // The hook ran, so the response carries what it set.
+    expect((result.data as { flagged?: boolean })?.flagged).toBe(true);
   });
 });

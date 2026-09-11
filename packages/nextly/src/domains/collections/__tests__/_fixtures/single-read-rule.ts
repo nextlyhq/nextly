@@ -64,57 +64,19 @@ export default function singleReadRule({
     // locale's value.
     case "assembled-aware":
       return (data as { visibility?: string })?.visibility !== "private";
-    // Refuses a document a hook has flagged when a value nested inside a group
-    // the caller may not read is private. The gate before the hooks sees no
-    // flag and allows; the judge after them sees the flag, and sees the nested
-    // value only if the evidence a redaction pass removed is restored by path,
-    // since the hook on the group rebuilds it as a fresh object.
-    case "nested-aware": {
-      // A hook may hand the group over as a JSON string; the rule reads it
-      // either way, so the case can tell evidence from serialisation.
-      const raw = (data as { settings?: unknown })?.settings;
-      const settings = (typeof raw === "string" ? JSON.parse(raw) : raw) as
-        | { visibility?: string }
-        | undefined;
-      return !(
-        (data as { flagged?: boolean })?.flagged === true &&
-        settings?.visibility === "private"
+    // Refuses a document with a private value nested in a group the caller may
+    // not read. The rule sees it because the document is judged before field
+    // read access removes it.
+    case "nested-aware":
+      return (
+        (data as { settings?: { visibility?: string } })?.settings
+          ?.visibility !== "private"
       );
-    }
-    // Refuses a flagged document when a value nested in a group the caller may
-    // not read AT ALL (the group itself is denied) is private. The evidence for
-    // the child sits beneath a container the pass removed whole.
-    case "denied-container-aware":
-      return !(
-        (data as { flagged?: boolean })?.flagged === true &&
-        (data as { vault?: { visibility?: string } })?.vault?.visibility ===
-          "private"
-      );
-    // Refuses a flagged document when any row of a repeater the caller may read
-    // carries a private value in a child the caller may not.
-    case "rows-aware":
-      return !(
-        (data as { flagged?: boolean })?.flagged === true &&
-        ((data as { entries?: { visibility?: string }[] })?.entries ?? []).some(
-          row => row.visibility === "private"
-        )
-      );
-    // Refuses a flagged document whose FIRST repeater row is private, and
-    // writes into a denied policy object on the way. The first tests that a
-    // row a hook reordered is judged as the row it is; the second that what a
-    // rule writes into its argument does not reach the pass after it.
-    case "first-row-aware":
-      return !(
-        (data as { flagged?: boolean })?.flagged === true &&
-        (data as { entries?: { visibility?: string }[] })?.entries?.[0]
-          ?.visibility === "private"
-      );
-    case "policy-mutating": {
-      const policy = (data as { settings?: { policy?: { mode?: string } } })
-        ?.settings?.policy;
-      if (policy) policy.mode = "public";
-      return true;
-    }
+    // Refuses a document an afterRead hook has flagged. The flag exists only
+    // after the hooks run, so this rule must never see it: access decides on
+    // the stored document, and a hook shapes the response.
+    case "flag-aware":
+      return (data as { flagged?: boolean })?.flagged !== true;
     // Refuses on a value that exists only in the document a first read would
     // create, so the rule can decide correctly only if those defaults are judged
     // before the write that materializes them.

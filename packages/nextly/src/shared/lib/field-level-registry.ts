@@ -582,8 +582,7 @@ async function applyReadAccessRec(
     grants: () => Promise<CallerGrants>;
   },
   redactions: ReadAccessRedactions,
-  restoredByRow: RestoredByRow,
-  evidence: { sink: ReadAccessEvidence; path: string } | undefined
+  restoredByRow: RestoredByRow
 ): Promise<void> {
   // Taken BEFORE the recursion below replaces nested containers with their
   // redacted serialization: a parent-level rule reading a protected nested
@@ -592,29 +591,19 @@ async function applyReadAccessRec(
   const snapshot = levelHasAccessCallback(fns, "read")
     ? detachData(entry)
     : undefined;
-  if (evidence) evidence.sink.pathOf.set(entry, evidence.path);
   const denied: string[] = [];
   for (const [name, fieldFns] of Object.entries(fns)) {
     if (!(name in entry)) continue;
     if (fieldFns.fields) {
       const container = openNestedContainer(entry[name]);
       if (container) {
-        const segments = evidence
-          ? rowSegments(name, container.rows)
-          : undefined;
-        for (const [index, row] of container.rows.entries()) {
+        for (const row of container.rows) {
           await applyReadAccessRec(
             row,
             fieldFns.fields,
             ctx,
             redactions,
-            restoredByRow,
-            evidence && segments
-              ? {
-                  sink: evidence.sink,
-                  path: `${evidence.path}/${segments[index]}`,
-                }
-              : undefined
+            restoredByRow
           );
         }
         entry[name] = container.serialize();
@@ -665,15 +654,6 @@ async function applyReadAccessRec(
     // restore a value this row now legitimately carries or no longer hides.
     redactions.delete(entry);
   }
-  // Recorded HERE, while the rows this pass parsed still exist: a container
-  // that arrived as a JSON string is parsed into rows for the walk and
-  // serialised back on the way out, so a walk after the pass would parse
-  // different objects and find nothing under them. Detached, because these
-  // values are handed to rules and hooks that are free to write to what they
-  // are given.
-  if (evidence && Object.keys(removed).length > 0) {
-    evidence.sink.byPath.set(evidence.path, detachData({ ...removed }));
-  }
 }
 
 /**
@@ -717,12 +697,6 @@ export async function applyFieldReadAccess(
      * authority; see {@link readAccessGrants}.
      */
     grants?: () => Promise<CallerGrants>;
-    /**
-     * Where to record what this pass removes, by path, for a caller that has
-     * to restore it onto rows a hook may have rebuilt; see
-     * {@link ReadAccessEvidence}.
-     */
-    evidence?: ReadAccessEvidence;
   },
   redactions?: ReadAccessRedactions
 ): Promise<void> {
@@ -756,8 +730,7 @@ export async function applyFieldReadAccess(
         ),
     },
     store,
-    restoredByRow,
-    opts.evidence ? { sink: opts.evidence, path: "" } : undefined
+    restoredByRow
   );
   // A restored value existed only to feed the snapshots above. The caller was
   // denied it and the post-hook row did not supply it, so it must not appear in
@@ -766,156 +739,6 @@ export async function applyFieldReadAccess(
   // without reintroducing the value must not resurrect the value the first pass
   // removed. Removed after every snapshot is taken, so re-judging still saw it.
   for (const { row, name } of restored) delete row[name];
-}
-
-/**
- * The values a read-access pass removed, keyed by where they sat.
- *
- * A path is the chain of field names from the root, with a repeater row named
- * by its `id` when it has one and by its index otherwise, and a repeated id
- * told apart by its occurrence. Keyed by path rather than by row object
- * because a hook may return a fresh container (a spread of the redacted one is
- * the common shape), after which the store's object keys point at rows nothing
- * references and the evidence in them is unreachable. Filled by
- * {@link applyFieldReadAccess} during its walk, where the rows it parsed
- * exist; a walk taken afterwards would not find a container it serialised back
- * to a string.
- */
-export interface ReadAccessEvidence {
-  /** Removed values by path. */
-  byPath: Map<string, Record<string, unknown>>;
-  /**
-   * The path each row object sat at when recorded. A hook that reorders or
-   * removes rows keeps the objects it kept, so a row this recognises is
-   * restored from where it came rather than from where it now sits; only a
-   * row a hook rebuilt falls back to the path its current position yields.
-   */
-  pathOf: WeakMap<Record<string, unknown>, string>;
-}
-
-/** An empty evidence record, for a caller about to run a pass that fills it. */
-export function newReadAccessEvidence(): ReadAccessEvidence {
-  return { byPath: new Map(), pathOf: new WeakMap() };
-}
-
-/**
- * Path segments for the rows of one container, collision-free: the id is
- * percent-encoded, which leaves no `#` in it, and the second and later rows
- * sharing an id carry `#<n>` after it. An id-less row is named by its index.
- * The redaction contract permits duplicate ids, so two rows on one path would
- * otherwise overwrite each other's evidence.
- */
-function rowSegments(name: string, rows: Record<string, unknown>[]): string[] {
-  const seen = new Map<string, number>();
-  return rows.map((row, index) => {
-    if (typeof row.id !== "string") return `${name}@${index}`;
-    const base = `${name}#${encodeURIComponent(row.id)}`;
-    const n = (seen.get(base) ?? 0) + 1;
-    seen.set(base, n);
-    return n === 1 ? base : `${base}#${n}`;
-  });
-}
-
-function restoreEvidenceRec(
-  entry: Record<string, unknown>,
-  fns: Record<string, FieldFunctions>,
-  evidence: ReadAccessEvidence,
-  path: string,
-  restored: RestoredEvidence[]
-): void {
-  const removed = evidence.byPath.get(path);
-  if (removed) {
-    for (const [name, value] of Object.entries(removed)) {
-      // A hook's own value stands; only an absent key takes the evidence. A
-      // fresh copy each time: the rule this feeds may write to it, and the
-      // pass after the rule must see the evidence as captured.
-      if (!(name in entry)) {
-        entry[name] = detachData(value);
-        restored.push({ row: entry, name });
-      }
-    }
-  }
-  for (const [name, fieldFns] of Object.entries(fns)) {
-    if (!fieldFns.fields || !(name in entry)) continue;
-    const container = openNestedContainer(entry[name]);
-    if (!container) continue;
-    const segments = rowSegments(name, container.rows);
-    container.rows.forEach((row, index) => {
-      restoreEvidenceRec(
-        row,
-        fieldFns.fields as Record<string, FieldFunctions>,
-        evidence,
-        evidence.pathOf.get(row) ?? `${path}/${segments[index]}`,
-        restored
-      );
-    });
-    entry[name] = container.serialize();
-  }
-}
-
-/**
- * A detached copy of a document with the captured evidence put back, for a
- * rule that judges the document rather than a field.
- *
- * The Single read redacts fields before its hooks, so a hook cannot read a
- * denied sibling, and then judges the assembled document against its own
- * access rules. That rule may be written to inspect a denied field, and a copy
- * taken after redaction would show it absent, which reads as allowed. The
- * evidence is restored onto the LIVE document for the length of the copy and
- * removed again before this returns, because only the live rows are the
- * objects the capture recognises: a row a hook reordered is restored from the
- * path it had when captured, and a container a hook rebuilt from the path its
- * position yields, where a rebuilt container keyed by object identity alone
- * would get nothing back. The response object carries none of it afterwards.
- * What is left to position is a repeater a hook both rebuilt row by row and
- * reordered, with no ids to tell the rows apart.
- */
-export function snapshotWithReadAccessEvidence<
-  T extends Record<string, unknown>,
->(
-  opts: { kind: EntityKind; slug: string; entry: T },
-  evidence: ReadAccessEvidence,
-  detach: <V>(value: V) => V
-): T {
-  const fns = getFieldFunctions(opts.kind, opts.slug);
-  if (!fns || evidence.byPath.size === 0) return detach(opts.entry);
-  const restored: RestoredEvidence[] = [];
-  restoreEvidenceRec(opts.entry, fns, evidence, "", restored);
-  try {
-    return detach(opts.entry);
-  } finally {
-    for (const { row, name } of restored) delete row[name];
-  }
-}
-
-/**
- * Run a further read-access pass over a document with the captured evidence
- * restored by path first, and remove again afterwards whatever that restore
- * put back.
- *
- * The pass's own evidence is keyed by row object and cannot reach a container
- * a hook rebuilt; the path-keyed evidence can. Restored only onto absent keys,
- * so a hook's own value is judged as the hook left it, and every value this put
- * back is removed after the pass whatever the rule decided: the caller was
- * denied it and the post-hook row did not supply it, so a rule whose condition a
- * hook flipped from deny to allow must not resurrect the value. The pass judges
- * the current content, so a denied value a hook reintroduced is still caught.
- */
-export async function applyFieldReadAccessWithEvidence(
-  opts: Parameters<typeof applyFieldReadAccess>[0],
-  redactions: ReadAccessRedactions,
-  evidence: ReadAccessEvidence
-): Promise<void> {
-  const fns = getFieldFunctions(opts.kind, opts.slug);
-  const restored: RestoredEvidence[] = [];
-  if (fns && !opts.overrideAccess && evidence.byPath.size > 0) {
-    restoreEvidenceRec(opts.entry, fns, evidence, "", restored);
-  }
-  try {
-    await applyFieldReadAccess(opts, redactions);
-  } finally {
-    for (const { row, name } of restored) delete row[name];
-  }
 }
 
 /** Recursive worker for hooks. Transforms values in registration order. */
