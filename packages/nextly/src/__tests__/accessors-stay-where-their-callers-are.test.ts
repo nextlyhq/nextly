@@ -74,20 +74,29 @@ describe("instance accessors are published where their callers can reach them", 
     // The claim this file protects is an argument, and an argument lives in
     // prose. Read from source because the sentence it replaced said the
     // opposite and was wrong for as long as it stood.
-    //
-    // Asserted as a positive sentence and nothing else. Whether some other
-    // sentence in the block FORBIDS the same callers is a question about
-    // English, and a pattern asked to answer it either misses the next wording
-    // ("must never be used by") or catches a description ("is never used
-    // before boot"). The audience claim is a string, and a string is decidable.
-    // A block that named plugins and then banned them would pass here; that is
-    // a contradiction a reader sees, not a shape a test can be trusted to.
     const doc = docblockFor(
       initSource,
       "export async function getCachedNextly"
     );
 
     expect(doc).toContain("plugin code doing server work outside a route");
+  });
+
+  it("marks the async accessor public, and never internal", () => {
+    // Whether a SENTENCE forbids the callers the block names is a question
+    // about English: a pattern asked it misses the next wording ("must never
+    // be used by") or catches a description ("is never used before boot"). The
+    // TSDoc release tag is the same statement as data. `@internal` is how this
+    // repository says "not for consumers", so the block carries `@public` and
+    // must not carry `@internal`, and a reader who adds a prose ban beside a
+    // `@public` tag has written a contradiction the tag decides.
+    const doc = docblockFor(
+      initSource,
+      "export async function getCachedNextly"
+    );
+
+    expect(doc).toMatch(/^\s*\*\s*@public\s*$/m);
+    expect(doc).not.toMatch(/@internal\b/);
   });
 
   it("does not claim the root avoids the Next peer dependency", () => {
