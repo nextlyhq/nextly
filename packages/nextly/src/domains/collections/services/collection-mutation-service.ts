@@ -8521,10 +8521,61 @@ export class CollectionMutationService extends BaseService {
         return transitionDenied;
       }
 
+      // A localized collection keeps its translatable values in the companion
+      // `_locales` table, and the migrated main table has no columns for them:
+      // unsplit, this insert names columns the table does not have and every
+      // row of a bulk create fails with the driver's own message. Split here,
+      // as `createEntry` does, so the two create paths write a localized
+      // collection the same way rather than one of them not at all. No locale
+      // is named — the bulk entry points refuse one — so this is the default
+      // language's write, which is what `undefined` resolves to. The metadata
+      // read is bound to this transaction's connection; a pooled one would
+      // wait for a connection this transaction is holding.
+      const localizedWrite = await this.splitLocalizedWriteData(
+        params.collectionName,
+        entryData,
+        undefined,
+        true,
+        tx.getDrizzle()
+      );
+
       // Insert using transaction context
       const entry = await tx.insert<unknown>(tableName, entryData, {
         returning: "*",
       });
+
+      // The companion row for this write's locale, on the same transaction, so
+      // it rolls back with the main row. A brand-new parent has no row to
+      // conflict with, which is why this inserts where the update path upserts.
+      if (localizedWrite) {
+        await tx.insert(
+          localizedWrite.companionTableName,
+          {
+            _parent: (entry as { id: string }).id,
+            _locale: localizedWrite.writeLocale,
+            ...localizedWrite.companionData,
+            // The staleness stamp is the shared rule rather than a restatement:
+            // a create that forgot it leaves every new document's translations
+            // reading as UNKNOWN until each locale is rewritten.
+            ...companionContentStamp(
+              localizedWrite.companionData,
+              localizedWrite.companionTableName,
+              this.dialect
+            ),
+          },
+          {}
+        );
+        // Split out of the insert, so the returned row lacks them: merge them
+        // back for the hooks, the event and the response. Under the column's
+        // own name, which is how every other key on this path's row is spelled.
+        // `_status` is a companion column, not an entry field.
+        for (const [column, value] of Object.entries(
+          localizedWrite.companionData
+        )) {
+          if (column === "_status") continue;
+          (entry as Record<string, unknown>)[column] = value;
+        }
+      }
 
       await this.saveComponentFieldDataInTx(tx, {
         parentId: (entry as { id: string }).id,
@@ -9047,6 +9098,21 @@ export class CollectionMutationService extends BaseService {
         liveStatus: existingEntry.status,
       });
 
+      // The same split the single-entry update performs, for the same reason
+      // the create path above needs one: a localized collection's translatable
+      // values belong in the companion row, and the migrated main table has no
+      // columns for them. Skipped for a held edit, which writes no live row at
+      // all. No locale is named on this path, so it is the default language's.
+      const localizedUpdate = storeAsWorkingDraft
+        ? null
+        : await this.splitLocalizedWriteData(
+            params.collectionName,
+            finalData,
+            undefined,
+            false,
+            tx.getDrizzle()
+          );
+
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -9074,6 +9140,32 @@ export class CollectionMutationService extends BaseService {
             : "Entry not found",
           data: null,
         };
+      }
+
+      // The translatable values, into the companion row for this write's
+      // locale, on the same transaction. An upsert rather than an insert: the
+      // parent already exists and may or may not have a row in this language.
+      // Nothing is written when the patch touched no translatable field —
+      // inventing a row there would claim a translation nobody made.
+      if (
+        localizedUpdate &&
+        Object.keys(localizedUpdate.companionData).length > 0
+      ) {
+        await upsertCompanionRow(
+          companionWriteVia(tx, this.dialect),
+          localizedUpdate.companionTableName,
+          entryId,
+          localizedUpdate.writeLocale,
+          localizedUpdate.companionData
+        );
+        // Split out of the patch, so the returned row lacks them: merge them
+        // back under the column's own name, as the create path does.
+        for (const [column, value] of Object.entries(
+          localizedUpdate.companionData
+        )) {
+          if (column === "_status") continue;
+          (updated as Record<string, unknown>)[column] = value;
+        }
       }
 
       // Compute the intent from the updated row and the pre-update row, before
