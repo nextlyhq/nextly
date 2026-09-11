@@ -77,6 +77,8 @@ import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   runFieldHooks,
+  snapshotWithReadAccessEvidence,
+  type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -2027,9 +2029,35 @@ export class SingleQueryService extends BaseService {
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
-      // Field-level afterRead hooks (functions resolved via the field-level
-      // registry). Field read access runs further down, once the document-level
-      // decision has been made.
+      // Field read access, then the field-level afterRead hooks, then field
+      // read access AGAIN, sharing one redactions store: the same two passes
+      // the collection read runs. The first hides a denied field from the
+      // hooks, so a hook on an allowed field cannot read a denied sibling and
+      // copy it onto its own value; the second re-judges the post-hook document
+      // with the removed values restored as evidence, so a conditional rule
+      // still sees the whole document and a denied field a hook reintroduced
+      // is caught. Document trust and FIELD trust are separate questions and
+      // this read may answer them differently: `overrideAccess` alone means
+      // both; a caller that asked for field rules to be enforced keeps its
+      // document bypass and gives up only the field one.
+      const skipFieldRules =
+        options.enforceFieldAccess === true ? false : options.overrideAccess;
+      // The field-access identity, never the hook one. A preview judges these
+      // fields as the sharer while the hooks go on seeing the anonymous bearer
+      // who is actually asking.
+      const fieldAccessUser = options.fieldAccessUser ?? options.user;
+      const sourceRedactions: ReadAccessRedactions = new WeakMap();
+      await applyFieldReadAccess(
+        {
+          kind: "single",
+          slug,
+          entry: doc,
+          user: fieldAccessUser,
+          overrideAccess: skipFieldRules,
+        },
+        sourceRedactions
+      );
+
       await runFieldHooks({
         kind: "single",
         slug,
@@ -2057,36 +2085,34 @@ export class SingleQueryService extends BaseService {
           fallbackLocale: options.fallbackLocale,
           // A detached copy, so the rule decides rather than edits. `data` is
           // handed to user code, and passing the response object itself would
-          // let a rule that assigns to it rewrite what the caller receives —
+          // let a rule that assigns to it rewrite what the caller receives,
           // including putting back a value a later stage is meant to withhold.
           // Deep, because a shallow copy still shares every nested component,
-          // repeater and expanded relation with the response.
-          document: detachData(doc),
+          // repeater and expanded relation with the response. With the values
+          // the pass above removed put back as evidence: a rule may be written
+          // to inspect a denied field, and a copy without it would show the
+          // field absent, the "missing means allowed" reading that admits a
+          // caller the rule exists to refuse.
+          document: snapshotWithReadAccessEvidence(
+            { kind: "single", slug, entry: doc },
+            sourceRedactions,
+            detachData
+          ),
         });
         if (finalDenial) return finalDenial;
       }
 
-      // 10. Redact fields the caller may not read, AFTER the document-level
-      // decision. Redaction removes values a rule may be written to inspect, so
-      // running it first lets a rule guarding a companion- or component-backed
-      // field see that field absent — the same "missing means allowed" reading
-      // that admits a caller the rule exists to refuse. Access decides on the
-      // document as assembled; the response is narrowed once it is decided.
-      // Document trust and FIELD trust are separate questions and this read may
-      // answer them differently. `overrideAccess` alone means both; a caller
-      // that asked for field rules to be enforced keeps its document bypass and
-      // gives up only the field one. Mirrors the collection read path.
-      await applyFieldReadAccess({
-        kind: "single",
-        slug,
-        entry: doc,
-        // The field-access identity, never the hook one. A preview judges these
-        // fields as the sharer while the hooks above go on seeing the anonymous
-        // bearer who is actually asking.
-        user: options.fieldAccessUser ?? options.user,
-        overrideAccess:
-          options.enforceFieldAccess === true ? false : options.overrideAccess,
-      });
+      // 10. The second field-access pass, over the post-hook document.
+      await applyFieldReadAccess(
+        {
+          kind: "single",
+          slug,
+          entry: doc,
+          user: fieldAccessUser,
+          overrideAccess: skipFieldRules,
+        },
+        sourceRedactions
+      );
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last

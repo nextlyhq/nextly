@@ -718,6 +718,43 @@ export async function applyFieldReadAccess(
   for (const { row, name } of restored) delete row[name];
 }
 
+/**
+ * A detached copy of `entry` with the values prior read-access passes removed
+ * put back at every depth, for a rule that judges the DOCUMENT rather than a
+ * field.
+ *
+ * The Single read redacts fields before its hooks, so a hook cannot read a
+ * denied sibling, and then judges the assembled document against its own
+ * access rules. That rule may be written to inspect a denied field, and a copy
+ * taken after redaction would show it absent, which reads as allowed. So the
+ * evidence is restored onto the live document for the length of the copy and
+ * removed again before this returns; the response never carries it, and the
+ * next pass still sees it as removed.
+ */
+export function snapshotWithReadAccessEvidence<
+  T extends Record<string, unknown>,
+>(
+  opts: { kind: EntityKind; slug: string; entry: T },
+  redactions: ReadAccessRedactions,
+  detach: <V>(value: V) => V
+): T {
+  const fns = getFieldFunctions(opts.kind, opts.slug);
+  if (!fns) return detach(opts.entry);
+  const restored: RestoredEvidence[] = [];
+  restoreReadAccessEvidence(
+    opts.entry,
+    fns,
+    redactions,
+    restored,
+    new WeakMap()
+  );
+  try {
+    return detach(opts.entry);
+  } finally {
+    for (const { row, name } of restored) delete row[name];
+  }
+}
+
 /** Recursive worker for hooks. Transforms values in registration order. */
 async function runFieldHooksRec(
   data: Record<string, unknown>,
