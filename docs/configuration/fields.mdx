@@ -919,11 +919,18 @@ two levels interleave.
 | `afterChange` | After the database write. |
 | `afterRead` | After reading from the database. Can transform the returned value. |
 
-Every handler receives its own `value` **and the whole record as `data`**. A
-`beforeChange` handler can therefore read, and change, fields other than its
-own, and because it is the last thing to run before the write, nothing after it
-will put them back. Return the value you want stored; touch other fields only
-when that is the intent.
+Every handler receives its own `value` and, as `data`, **the record at its own
+nesting level**: the whole document for a top-level field, the containing row
+for a field inside a group or a repeater. A `beforeChange` handler can read and
+change sibling fields at that level, and no later hook will put them back.
+Return the value you want stored; touch siblings only when that is the intent.
+
+A field's hooks run only when that field is present in the data. An update that
+omits it, or an earlier hook that deletes the key, skips them. And core still
+normalises the record after the last hook: slugs are re-sanitised, passwords
+hashed, relationship and upload values reduced to ids. See the
+[execution order](/docs/configuration/collections#execution-order) for what
+runs where.
 
 ```typescript
 text({

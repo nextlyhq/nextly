@@ -399,19 +399,30 @@ to supply or repair a value you want the rules applied to; use `beforeChange` to
 derive the value that gets stored, knowing the document has already passed them.
 What a `beforeChange` handler returns is written without being re-validated.
 
-<Warning>
-  **The field-level `beforeChange` is the last hook before the write, and it
-  receives the whole record.** A field hook is handed `data` alongside its own
-  `value`, so it can change any field, not only its own. That means a
-  collection-level `beforeChange` is not the final word: a field hook
-  registered later, by a plugin or by the application, runs after it and can
-  overwrite what it set.
-
-  There is no collection-level phase after the field hooks. If you need a
-  guarantee about the stored shape of a record, put it in the field hook of the
-  field it concerns, which is the latest point that runs. This matches
+<Callout type="warn">
+  **The field-level `beforeChange` is the last hook before the write.** A
+  top-level field hook is handed `data` alongside its own `value`, so it can
+  change other fields, not only its own. That means a collection-level
+  `beforeChange` is not the final word: a field hook registered later, by a
+  plugin or by the application, runs after it and can overwrite what it set.
+  There is no collection-level phase after the field hooks. This matches
   Payload's ordering, so hooks written against that model behave the same here.
-</Warning>
+
+  Three things bound what a field hook can guarantee:
+
+  - **It is the last hook, not the last step.** After every hook has run, core
+    still normalises the record before the write: a `slug` is re-sanitised, so
+    a hook returning `"Changed By Hook"` stores `changed-by-hook`; password
+    fields are hashed; an explicit `status: undefined` is dropped; relationship
+    and upload values are reduced to ids. A hook whose output must survive
+    exactly cannot rely on being last.
+  - **It runs only when its field is in the data.** An update whose patch omits
+    the field, or an earlier hook that deleted the key, skips that field's hooks
+    entirely. A field hook is not a point that runs on every write.
+  - **A nested field's hook sees its own row.** For a field inside a group or a
+    repeater, `data` is the containing row at that nesting level, not the
+    top-level document.
+</Callout>
 
 ### Hook handler signature
 

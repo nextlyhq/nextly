@@ -330,11 +330,10 @@ describe("CollectionEntryService — Mutation Contracts", () => {
     });
 
     it("runs field-level beforeChange after collection-level beforeChange", async () => {
-      // The order a plugin author has to know and nothing documented: the
-      // field phase is the LAST hook before the write, and it is handed the
-      // whole record, so a collection-level beforeChange is not the final word
-      // on any field. Payload orders these the same way; this pins that the
-      // implementation matches what the guide now says.
+      // The field phase is the last HOOK before the write and is handed the
+      // record, so a collection-level beforeChange is not the final word on any
+      // field. Core normalisation still follows both, so neither is the final
+      // STEP. Payload dispatches the two levels in this order too.
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
       await service.createEntry(
@@ -363,9 +362,9 @@ describe("CollectionEntryService — Mutation Contracts", () => {
     });
 
     it("hands the field-level beforeChange hook the whole record", async () => {
-      // The consequence of the order above. A field hook that receives only its
-      // own value could not undo a collection hook's work on some other field;
-      // one that receives the record can, and does in Payload too.
+      // A top-level field hook that received only its own value could not
+      // change a sibling; one handed the record can. Nested rows are handed
+      // their own row instead, which `runFieldHooksRec` decides.
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
       await service.createEntry(
