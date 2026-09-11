@@ -79,6 +79,20 @@ export type WidgetLifecycle = (typeof WIDGET_LIFECYCLES)[number];
  * the first declined should not be offered it again. It discloses nothing
  * about rows — only that a setup offer was answered.
  *
+ * `collections:present` — this READER may read at least one collection.
+ * `singles:present` — the same, of singles. These two gate the cards that
+ * LIST collections and singles, which used to decide their own emptiness: the
+ * collections card drew a get-started panel of its own when it had no counts,
+ * and the singles card returned nothing at all — hiding itself, which is the
+ * exact thing this lifecycle exists to remove, because a card that renders
+ * nothing still holds its grid placement and the layout reserves an empty slot
+ * for it. Both are about SCHEMAS rather than rows, which is why neither is a
+ * reading of `content:empty`: a fresh install with one collection and no
+ * entries satisfies `content:empty` while the collections card has something
+ * to draw. Reader-scoped like the content conditions, and for the same reason
+ * — a card offered on the strength of a collection the reader may not read is
+ * a card that opens onto a refusal.
+ *
  * Namespaced `subject:state` so a later condition about a different subject
  * cannot be mistaken for a variant of this one, and so the set stays readable
  * as it grows.
@@ -87,6 +101,8 @@ export const WIDGET_CONDITIONS = [
   "content:empty",
   "onboarding:incomplete",
   "seed:unanswered",
+  "collections:present",
+  "singles:present",
 ] as const;
 export type WidgetCondition = (typeof WIDGET_CONDITIONS)[number];
 

@@ -142,16 +142,35 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     defaultSize: "full",
     defaultOrder: 10,
     component: "core#CollectionQuickLinks",
+    /*
+     * Offered only while this reader has a collection to see. The card used to
+     * answer that for itself, drawing a get-started panel of its own when it
+     * had no counts -- a third pitch on a fresh dashboard already carrying the
+     * seed offer and the setup checklist, each of which is the host's to make
+     * and each of which the host now withdraws on its own. A reader with
+     * nothing to list is not shown an empty list.
+     */
+    lifecycle: "conditional",
+    visibleWhen: "collections:present",
   },
   {
     id: "core/singles",
     title: "Singles",
-    description: "The project's singles, or nothing when it has none.",
+    description: "The project's singles.",
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
     defaultOrder: 20,
     component: "core#SinglesQuickLinks",
+    /*
+     * The same rule, and this card is why the rule exists in the grid at all:
+     * it used to return nothing when the install had no singles, and a card
+     * that renders nothing still holds its placement, so the layout reserved
+     * an empty slot on every install that never used singles. The host drops
+     * it instead.
+     */
+    lifecycle: "conditional",
+    visibleWhen: "singles:present",
   },
   {
     id: "core/quick-create",

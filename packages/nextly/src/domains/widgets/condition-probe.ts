@@ -30,7 +30,11 @@
 
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
-import { readableCollectionSlugs, readerHasContent } from "./reader-content";
+import {
+  readableCollectionSlugs,
+  readableSingleSlugs,
+  readerHasContent,
+} from "./reader-content";
 
 /** What every condition evaluator is handed. */
 export interface ConditionProbe {
@@ -38,12 +42,15 @@ export interface ConditionProbe {
   readonly caller: ReadCaller;
   /** The collections this reader may read, resolved at most once. */
   readableSlugs(): Promise<string[]>;
+  /** The singles this reader may read, resolved at most once. */
+  readableSingles(): Promise<string[]>;
   /** Whether this reader can see any row at all, resolved at most once. */
   hasContent(): Promise<boolean>;
 }
 
 export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let slugs: Promise<string[]> | undefined;
+  let singles: Promise<string[]> | undefined;
   let content: Promise<boolean> | undefined;
 
   const readableSlugs = (): Promise<string[]> => {
@@ -54,6 +61,10 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   return {
     caller,
     readableSlugs,
+    readableSingles: () => {
+      singles ??= readableSingleSlugs(caller);
+      return singles;
+    },
     hasContent: () => {
       // Takes the slugs from the same memo rather than resolving its own, which
       // is the duplication this module was added to remove.
