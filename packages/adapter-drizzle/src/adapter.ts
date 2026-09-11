@@ -14,6 +14,11 @@
 import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
+import {
+  bindStructuredAsJson,
+  isJsonColumn,
+  type ColumnKindInput,
+} from "./column-kinds";
 import { buildDrizzleOrderBy } from "./drizzle-order";
 import { buildDrizzleWhere } from "./drizzle-where";
 import {
@@ -526,23 +531,10 @@ export abstract class DrizzleAdapter {
       const sqlName = (colDef as { name: string }).name;
       sqlToJs.set(sqlName, jsName);
 
-      // Detect JSON/JSONB columns — Drizzle auto-serializes objects for these,
-      // so pre-stringified values must be parsed to avoid double-encoding.
-      const dataType = (colDef as { dataType?: string }).dataType;
-      const columnType = (colDef as { columnType?: string }).columnType;
-      // Detect JSON/JSONB columns — Drizzle auto-serializes objects for these,
-      // so pre-stringified values must be parsed to avoid double-encoding.
-      // IMPORTANT: For SQLite, only match text columns declared with { mode: "json" }
-      // (columnType "SQLiteTextJson", dataType "json"). Plain SQLiteText columns
-      // (dataType "string") store pre-serialized strings and must NOT be re-parsed,
-      // otherwise better-sqlite3 receives objects it cannot bind.
-      if (
-        dataType === "json" ||
-        columnType === "PgJsonb" ||
-        columnType === "PgJson" ||
-        columnType === "MySqlJson" ||
-        columnType === "SQLiteTextJson" // SQLite JSON-mode text columns only
-      ) {
+      // Drizzle serializes objects for a JSON column itself, so a value that
+      // arrives already serialized is parsed first or it is serialized twice.
+      // One predicate with the transactional path, so the two cannot drift.
+      if (isJsonColumn(colDef as ColumnKindInput)) {
         jsonColumns.add(jsName);
       }
     }
@@ -2347,14 +2339,14 @@ export abstract class DrizzleAdapter {
       const tableObj = this.resolvedTableObject(table);
       const identity =
         wantsRows && this.getCapabilities().supportsReturning
-          ? primaryKeyColumns(tableObj)
+          ? this.identityColumns(tableObj)
           : [];
       let reported: Record<string, unknown>[] | undefined;
       try {
         reported = await run(
           this.buildTransactionUpdate(tableObj, table, data, where, {
             bindUnmodeled,
-            returning: identity.map(name => sql`${sql.identifier(name)}`),
+            returning: identity.map(key => sql`${sql.identifier(key.sqlName)}`),
           }),
           identity.length > 0
         );
@@ -2362,16 +2354,75 @@ export abstract class DrizzleAdapter {
         throw this.handleQueryError(error, "update", table);
       }
       if (!wantsRows) return [];
-      if (identity.length > 0 && Array.isArray(reported)) {
-        if (reported.length === 0) return [];
-        return this.select<T>(
-          table,
-          { where: rowsByIdentity(identity, reported) },
-          txDb()
+      if (identity.length === 0 || !Array.isArray(reported)) {
+        return this.select<T>(table, { where }, txDb());
+      }
+      // In bounded pieces: one predicate per reported row is a statement
+      // SQLite refuses past a thousand branches and PostgreSQL past its
+      // parameter limit, and a batch update can touch far more rows.
+      const rows: T[] = [];
+      for (let at = 0; at < reported.length; at += IDENTITY_READ_BACK_CHUNK) {
+        rows.push(
+          ...(await this.select<T>(
+            table,
+            {
+              where: rowsByIdentity(
+                identity,
+                reported.slice(at, at + IDENTITY_READ_BACK_CHUNK)
+              ),
+            },
+            txDb()
+          ))
         );
       }
-      return this.select<T>(table, { where }, txDb());
+      return rows;
     };
+  }
+
+  /**
+   * The columns that identify a row of this table, under both spellings: the
+   * SQL name RETURNING reports and the Drizzle property name the query
+   * builder's WHERE is addressed by. Columns flagged primary first; failing
+   * that, the table-level primary key the dialect's table config carries
+   * (`primaryKey({ columns })` leaves each column's flag false), which each
+   * adapter reads through its own dialect. Empty when the model declares
+   * neither, and the read-back falls back to the caller's predicate.
+   */
+  protected identityColumns(
+    tableObj: Record<string, unknown>
+  ): Array<{ jsName: string; sqlName: string }> {
+    const columns: Array<[string, { name?: unknown; primary?: unknown }]> =
+      Object.entries(getColumns(tableObj as never));
+    const flagged = columns.filter(([, c]) => c.primary === true);
+    const members =
+      flagged.length > 0
+        ? flagged
+        : columns.filter(([, c]) =>
+            this.compositePrimaryKey(tableObj).includes(c)
+          );
+    return members.flatMap(([jsName, c]) =>
+      typeof c.name === "string" ? [{ jsName, sqlName: c.name }] : []
+    );
+  }
+
+  /**
+   * How a value binds to a column the model does not declare, on a driver
+   * that binds scalars, dates and binary natively: a structured value goes
+   * as JSON text, since what node-postgres and mysql2 make of a bare object
+   * or array is not JSON. For the adapters to hand `transactionUpdate`.
+   */
+  protected bindUnmodeledStructuredAsJson(value: unknown): unknown {
+    return bindStructuredAsJson(value);
+  }
+
+  /**
+   * The columns of a table-level `primaryKey({ columns })`, as the dialect's
+   * table config reports them. The base class cannot read that config without
+   * naming a dialect, so each adapter answers for its own; a dialect that does
+   * not answer reports none.
+   */
+  protected compositePrimaryKey(_tableObj: Record<string, unknown>): object[] {
+    return [];
   }
 
   /** The registered table object, or the error every CRUD method throws without one. */
@@ -2501,38 +2552,43 @@ export abstract class DrizzleAdapter {
 }
 
 /**
- * The SQL names of a table's primary key columns, read off the model. Empty
- * when the model declares none, which is when a read-back cannot be by
- * identity.
+ * How many reported rows one read-back statement names. Well under SQLite's
+ * expression-depth limit of a thousand and its default variable limit, and
+ * under PostgreSQL's parameter limit, with a composite key of several columns.
  */
-function primaryKeyColumns(tableObj: Record<string, unknown>): string[] {
-  const names: string[] = [];
-  for (const column of Object.values(getColumns(tableObj as never))) {
-    const candidate = column as { name?: unknown; primary?: unknown };
-    if (candidate.primary === true && typeof candidate.name === "string") {
-      names.push(candidate.name);
-    }
-  }
-  return names;
-}
+const IDENTITY_READ_BACK_CHUNK = 200;
 
 /**
- * The predicate that names exactly the rows a statement reported: one
- * `and` of every key column per row, `or`-ed together, so a composite key is
- * matched as a whole rather than column by column.
+ * The predicate that names exactly the rows a statement reported, addressed
+ * by the Drizzle property names the where builder resolves: for a single-
+ * column key one `IN` over the reported values; for a composite key one `and`
+ * of every key column per row, `or`-ed together, so the key is matched as a
+ * whole rather than column by column.
  */
 function rowsByIdentity(
-  identity: string[],
+  identity: Array<{ jsName: string; sqlName: string }>,
   rows: Record<string, unknown>[]
 ): WhereClause {
+  if (identity.length === 1) {
+    const [key] = identity;
+    return {
+      and: [
+        {
+          column: key.jsName,
+          op: "IN",
+          value: rows.map(row => row[key.sqlName]) as WhereCondition["value"],
+        },
+      ],
+    };
+  }
   return {
     or: rows.map(
       (row): WhereClause => ({
         and: identity.map(
-          (column): WhereCondition => ({
-            column,
+          (key): WhereCondition => ({
+            column: key.jsName,
             op: "=",
-            value: row[column] as WhereCondition["value"],
+            value: row[key.sqlName] as WhereCondition["value"],
           })
         ),
       })

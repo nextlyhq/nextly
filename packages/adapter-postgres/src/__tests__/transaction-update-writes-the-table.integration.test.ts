@@ -35,6 +35,7 @@ const TABLE_DEFINITION: TableDefinition = {
     { name: "published_at", type: "timestamp" },
     { name: "updated_at", type: "timestamp" },
     { name: "published", type: "boolean" },
+    { name: "extra", type: "jsonb" },
   ],
 };
 
@@ -244,6 +245,24 @@ describe.skipIf(!TEST_DB_URL)(
       );
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ id: "a", slug: "renamed" });
+    });
+
+    it("stores a structured value on an undeclared JSON column as JSON", async () => {
+      // The driver would spell a bare object or array as something that is
+      // not JSON; the unmodeled binder serializes it, and the column reads
+      // back as the document that was written.
+      const document = { a: [1, 2, { b: null }], c: "d" };
+      await adapter.transaction(async ctx => {
+        await ctx.update(TABLE, { slug: "j", extra: document }, byId("a"));
+      });
+      const stored = await adapter.executeQuery<{ extra: unknown }>(
+        `SELECT extra FROM ${TABLE} WHERE id = $1`,
+        ["a"]
+      );
+      const value = stored[0]?.extra;
+      expect(typeof value === "string" ? JSON.parse(value) : value).toEqual(
+        document
+      );
     });
 
     it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {

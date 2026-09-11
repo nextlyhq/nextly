@@ -41,6 +41,7 @@ const TABLE_DEFINITION: TableDefinition = {
     { name: "published_at", type: "datetime" },
     { name: "updated_at", type: "datetime" },
     { name: "published", type: "boolean" },
+    { name: "extra", type: "json" },
   ],
 };
 
@@ -248,6 +249,24 @@ describe("MySQL transaction update writes the physical table", async () => {
     expect((everything[0].updatedAt as Date).getTime()).toBe(AT.getTime());
     expect(Object.hasOwn(everything[0], "title")).toBe(false);
     expect((await stored("a"))?.title).toBe("T");
+  });
+
+  it("stores a structured value on an undeclared JSON column as JSON", async () => {
+    // The driver would spell a bare object or array as something that is
+    // not JSON; the unmodeled binder serializes it, and the column reads
+    // back as the document that was written.
+    const document = { a: [1, 2, { b: null }], c: "d" };
+    await adapter.transaction(async ctx => {
+      await ctx.update(TABLE, { slug: "j", extra: document }, byId("a"));
+    });
+    const stored = await adapter.executeQuery<{ extra: unknown }>(
+      `SELECT extra FROM ${TABLE} WHERE id = ?`,
+      ["a"]
+    );
+    const value = stored[0]?.extra;
+    expect(typeof value === "string" ? JSON.parse(value) : value).toEqual(
+      document
+    );
   });
 
   it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {

@@ -65,6 +65,7 @@ import {
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
+import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
   Pool as CallbackPool,
@@ -759,6 +760,15 @@ export class MySqlAdapter extends DrizzleAdapter {
    * Note: Savepoint methods are not implemented (set to undefined)
    * as savepoints are disabled in this adapter per approved approach.
    */
+  /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
+  protected override compositePrimaryKey(
+    tableObj: Record<string, unknown>
+  ): object[] {
+    return getTableConfig(
+      tableObj as unknown as MySqlTable
+    ).primaryKeys.flatMap(key => key.columns);
+  }
+
   private createTransactionContext(
     connection: PoolConnection
   ): TransactionContext {
@@ -959,7 +969,9 @@ export class MySqlAdapter extends DrizzleAdapter {
           await txDb().execute(statement);
           return undefined;
         },
-        value => value
+        // Structured values as JSON text: mysql2's formatter spells an object
+        // as `key = value` pairs and an array as a value list, neither JSON.
+        value => this.bindUnmodeledStructuredAsJson(value)
       ),
 
       ...this.createTransactionForwarders(txDb),

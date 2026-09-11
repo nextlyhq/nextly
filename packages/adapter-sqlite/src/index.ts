@@ -68,6 +68,7 @@ import {
   drizzle,
   type BetterSQLite3Database,
 } from "drizzle-orm/better-sqlite3";
+import { getTableConfig, type SQLiteTable } from "drizzle-orm/sqlite-core";
 
 // Re-export types for convenience
 export type {
@@ -711,6 +712,15 @@ export class SqliteAdapter extends DrizzleAdapter {
   /**
    * Creates a TransactionContext for the given database connection.
    */
+  /** A table-level `primaryKey({ columns })`, read through the SQLite table config. */
+  protected override compositePrimaryKey(
+    tableObj: Record<string, unknown>
+  ): object[] {
+    return getTableConfig(
+      tableObj as unknown as SQLiteTable
+    ).primaryKeys.flatMap(key => key.columns);
+  }
+
   private createTransactionContext(db: Database.Database): TransactionContext {
     // better-sqlite3 is synchronous; the methods below are async to satisfy
     // the TransactionContext contract shared with truly-async dialect adapters.

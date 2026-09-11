@@ -89,6 +89,7 @@ import {
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
 
@@ -955,6 +956,15 @@ export class PostgresAdapter extends DrizzleAdapter {
       .join(", ");
   }
 
+  /** A table-level `primaryKey({ columns })`, read through the PostgreSQL table config. */
+  protected override compositePrimaryKey(
+    tableObj: Record<string, unknown>
+  ): object[] {
+    return getTableConfig(tableObj as unknown as PgTable).primaryKeys.flatMap(
+      key => key.columns
+    );
+  }
+
   private createTransactionContext(client: PoolClient): TransactionContext {
     // Bind a Drizzle instance to this transaction's checked-out client so the
     // delegated CRUD methods run inside the transaction and see its uncommitted
@@ -1088,7 +1098,9 @@ export class PostgresAdapter extends DrizzleAdapter {
       update: this.transactionUpdate(
         txDb,
         async statement => (await txDb().execute(statement)).rows,
-        value => value
+        // Structured values as JSON text: node-postgres would spell an array
+        // as a PostgreSQL array literal, which no JSON column accepts.
+        value => this.bindUnmodeledStructuredAsJson(value)
       ),
 
       ...this.createTransactionForwarders(txDb),

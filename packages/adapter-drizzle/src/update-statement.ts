@@ -54,6 +54,7 @@
 
 import { Column, getColumns, is, SQL, sql } from "drizzle-orm";
 
+import { isJsonColumn } from "./column-kinds";
 import { buildDrizzleWhere } from "./drizzle-where";
 import type { WhereClause } from "./types";
 
@@ -101,22 +102,6 @@ function isBindableColumn(value: unknown): value is BindableColumn {
     typeof (value as { name?: unknown }).name === "string" &&
     typeof (value as { mapToDriverValue?: unknown }).mapToDriverValue ===
       "function"
-  );
-}
-
-/**
- * Whether a column stores JSON, in the spelling each dialect's column class
- * reports. The same test the query-builder path applies before `.set()`.
- */
-function isJsonColumn(column: BindableColumn): boolean {
-  return (
-    column.dataType === "json" ||
-    column.columnType === "PgJsonb" ||
-    column.columnType === "PgJson" ||
-    column.columnType === "MySqlJson" ||
-    // SQLite JSON-mode text only. A plain text column stores a serialized
-    // string as it is, and parsing that would hand the driver an object.
-    column.columnType === "SQLiteTextJson"
   );
 }
 

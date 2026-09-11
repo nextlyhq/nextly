@@ -12,7 +12,12 @@
 // model, since the model cannot see the column whose write is in question.
 
 import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+} from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createSqliteAdapter } from "../index";
@@ -221,6 +226,110 @@ describe("SQLite transaction update writes the physical table", () => {
     );
     expect(Buffer.isBuffer(stored[0]?.cover)).toBe(true);
     expect(Buffer.compare(stored[0]!.cover, bytes)).toBe(0);
+  });
+
+  describe("the identity read-back", () => {
+    // A key whose property name differs from its SQL name, and a key made of
+    // two columns declared at the table level (each column's own flag stays
+    // false): both identify their rows through the same read-back.
+    const SESSIONS = "int_txsqlite_update_sessions";
+    const sessions = sqliteTable(SESSIONS, {
+      sessionToken: text("session_token").primaryKey(),
+      label: text("label"),
+    });
+    const LINKS = "int_txsqlite_update_links";
+    const links = sqliteTable(
+      LINKS,
+      {
+        postId: text("post_id").notNull(),
+        tagId: text("tag_id").notNull(),
+        weight: integer("weight"),
+      },
+      t => [primaryKey({ columns: [t.postId, t.tagId] })]
+    );
+
+    beforeEach(async () => {
+      adapter.setTableResolver({
+        getTable: (name: string) =>
+          name === TABLE
+            ? pages
+            : name === SESSIONS
+              ? sessions
+              : name === LINKS
+                ? links
+                : null,
+      });
+      await adapter.executeQuery(`DROP TABLE IF EXISTS ${SESSIONS}`);
+      await adapter.createTable({
+        name: SESSIONS,
+        columns: [
+          { name: "session_token", type: "text", primaryKey: true },
+          { name: "label", type: "text" },
+        ],
+      });
+      await adapter.executeQuery(
+        `INSERT INTO ${SESSIONS} (session_token, label) VALUES ('s1', 'one')`
+      );
+      await adapter.executeQuery(`DROP TABLE IF EXISTS ${LINKS}`);
+      await adapter.executeQuery(
+        `CREATE TABLE ${LINKS} (post_id text NOT NULL, tag_id text NOT NULL, weight integer, PRIMARY KEY (post_id, tag_id))`
+      );
+      await adapter.executeQuery(
+        `INSERT INTO ${LINKS} (post_id, tag_id, weight) VALUES ('p1', 't1', 1), ('p2', 't2', 1), ('p1', 't2', 5)`
+      );
+    });
+
+    it("addresses a key by its property name when that differs from its SQL name", async () => {
+      const rows = await adapter.transaction(ctx =>
+        ctx.update<{ sessionToken: string; label: string }>(
+          SESSIONS,
+          { label: "renamed" },
+          { and: [{ column: "label", op: "=", value: "one" }] },
+          { returning: "*" }
+        )
+      );
+      expect(rows).toEqual([{ sessionToken: "s1", label: "renamed" }]);
+    });
+
+    it("reads a table-level composite key back as a whole", async () => {
+      // `weight = 1` is false of both touched rows once the write lands, so a
+      // read by predicate would answer nothing; and matching the key column
+      // by column — post in (p1, p2), tag in (t1, t2) — would admit the
+      // untouched ('p1','t2'). The whole-key predicate returns exactly the two.
+      const rows = await adapter.transaction(ctx =>
+        ctx.update<{ postId: string; tagId: string; weight: number }>(
+          LINKS,
+          { weight: 2 },
+          { and: [{ column: "weight", op: "=", value: 1 }] },
+          { returning: "*" }
+        )
+      );
+      expect(
+        rows.map(r => `${r.postId}/${r.tagId}/${r.weight}`).sort()
+      ).toEqual(["p1/t1/2", "p2/t2/2"]);
+    });
+
+    it("reads back more rows than one statement may name", async () => {
+      // SQLite refuses an expression a thousand branches deep and caps bound
+      // variables; the read-back is issued in bounded pieces.
+      const values = Array.from(
+        { length: 1200 },
+        (_, i) => `('s-${i}', 'bulk')`
+      ).join(", ");
+      await adapter.executeQuery(
+        `INSERT INTO ${SESSIONS} (session_token, label) VALUES ${values}`
+      );
+      const rows = await adapter.transaction(ctx =>
+        ctx.update<{ sessionToken: string }>(
+          SESSIONS,
+          { label: "done" },
+          { and: [{ column: "label", op: "=", value: "bulk" }] },
+          { returning: ["session_token"] }
+        )
+      );
+      expect(rows).toHaveLength(1200);
+      expect(new Set(rows.map(r => r.sessionToken)).size).toBe(1200);
+    });
   });
 
   it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {
