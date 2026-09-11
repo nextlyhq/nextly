@@ -1,3 +1,6 @@
+import { NextlyError } from "../../../errors/nextly-error";
+import { isReservedLocaleCode } from "../locale-selector";
+
 import { normalizeLocalization } from "./normalize";
 import type { LocalizationConfig } from "./types";
 
@@ -37,6 +40,21 @@ export function validateLocalizationConfig(input: LocalizationConfig): void {
         `Invalid locale code '${l.code}' in localization.locales — a code must be ` +
           `non-empty and contain only letters, digits, '-' or '_' (e.g. 'en', 'en-US').`
       );
+    }
+    // The instructions are reserved. `*` already fails the pattern; `all` and
+    // `none` do not, and a site that configured either as a language could
+    // never use it as one — a read naming `all` answers with every
+    // translation, and a fallback naming `none` disables fallback instead of
+    // choosing that language. Refused at configuration, where the collision
+    // is a sentence rather than a page that silently answers in every
+    // language at once.
+    if (isReservedLocaleCode(l.code)) {
+      throw NextlyError.invalidInput({
+        message:
+          `Locale code '${l.code}' in localization.locales is reserved: the core ` +
+          `reads it as an instruction rather than a language. Choose another code.`,
+        logContext: { reason: "localization-locale-code-is-reserved" },
+      });
     }
     // Bound the length to the companion `_locale` VARCHAR(20) so a longer code
     // can't fail or silently truncate (and then collide) on insert.

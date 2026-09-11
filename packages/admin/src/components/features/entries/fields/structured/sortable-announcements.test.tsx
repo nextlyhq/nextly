@@ -94,6 +94,16 @@ describe("what a drag says", () => {
     );
   });
 
+  it("reports a drop back onto its own row as unchanged", () => {
+    // 🔴 Space twice with no arrow, or a pointer released over the original
+    // row: dnd-kit hands the item itself as `over`, every handler skips the
+    // reorder, and "moved to position 2 of 3" confirmed a move that never
+    // happened.
+    expect(say.onDragEnd({ active: active("slug"), over: over("slug") })).toBe(
+      "Slug was dropped where it was. Nothing moved."
+    );
+  });
+
   it("says nothing moved on a drop outside the list", () => {
     expect(say.onDragEnd({ active: active("title"), over: null })).toBe(
       "Title was dropped. Nothing moved."

@@ -81,6 +81,9 @@ export function SortableHookCard({
         {/* Drag Handle */}
         <button
           type="button"
+          // An icon alone is a button with no name. Named per HOOK, so a
+          // reader moving by keyboard knows which one they hold.
+          aria-label={`Reorder ${hookConfig.name}`}
           className="cursor-grab active:cursor-grabbing p-1 text-muted-foreground hover:text-foreground"
           {...attributes}
           {...listeners}

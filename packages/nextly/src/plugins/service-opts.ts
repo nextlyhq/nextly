@@ -2,6 +2,7 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
+import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
 import type {
@@ -78,6 +79,47 @@ export interface ServiceOpts {
    * do, never widens it.
    */
   authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * The content locale this operation reads or writes in.
+   *
+   * DATA, like `context`: which translation a localized field answers with, or
+   * which one a write stores into. Absent means the site's default locale,
+   * which is what every plugin call has silently meant — the request context
+   * always carried this pair, and the facade always accepted it, but nothing
+   * on the plugin path could say it. So a plugin serving a French page read
+   * English content, and a form redirecting to a picked page answered
+   * `/thanks` for a visitor who was on `/merci`.
+   *
+   * The same spelling as `RequestContext` and the wire's `?locale=`, so a
+   * route can hand through what it was given, and what it was given is judged
+   * here and below rather than trusted. One language code, only. The
+   * selectors the core understands elsewhere — `*`, which moves every
+   * translation's lifecycle in one write, and `all`, which answers a read
+   * with one value per language — are refused at this boundary, because a
+   * value forwarded from a query string must never be able to publish every
+   * translation of a document, and no plugin has a designed use for either;
+   * a plugin that needs the sweep needs a surface that says so by name.
+   *
+   * The collection services decide what an unconfigured code means, and they
+   * decide it differently by verb: a READ resolves it to the default, so a
+   * wrong query string still shows a page; a WRITE is refused (`400`), so a
+   * typo cannot overwrite the default language's content. `createMany`
+   * refuses any locale at all, by name — its bulk pipeline cannot perform the
+   * localized split, and accepting a value it could not honour would file the
+   * rows under the default language silently.
+   */
+  locale?: string;
+
+  /**
+   * Which locale a missing translation falls back to, or `false` for none.
+   *
+   * Absent means the configured fallback chain, which is right for a read
+   * that wants SOMETHING to show. `false` is for a read that must know
+   * whether the translation exists — a sitemap deciding whether to list a
+   * language, say — and would be misled by the default's value standing in.
+   */
+  fallbackLocale?: string | false;
 }
 
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
@@ -87,8 +129,49 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   overrideAccess: boolean;
   context?: Record<string, unknown>;
   request?: Request;
+  locale?: string;
+  fallbackLocale?: string | false;
 } {
-  const { as, user, context, request } = opts;
+  const { as, user } = opts;
+  // `?locale=` with nothing after it reaches a route as the empty string, and
+  // a route forwarding what it was given hands that on. It is not a language
+  // and not a selector: the write path takes any falsy locale as "none named"
+  // and would file the write under the default language, which is the one
+  // wrong code the documented refusal would not catch. It names nothing, so it
+  // travels as nothing — the same reading the wire gives an absent parameter.
+  const locale = opts.locale === "" ? undefined : opts.locale;
+  // A selector is not a language. `*` is the every-locale lifecycle sweep
+  // and `all` the every-translation read; both are core vocabulary a plugin
+  // has no designed use for, and a route forwarding `?locale=` must not be
+  // able to reach the sweep by accident. Refused before any branch, so no
+  // branch can carry one.
+  if (locale !== undefined && isLocaleSelector(locale)) {
+    throw NextlyError.invalidInput({
+      message: "locale must name one language.",
+      logContext: {
+        reason: "service-opts-locale-selector",
+        locale,
+      },
+    });
+  }
+  // What travels whatever the caller is, built once. Each branch below used to
+  // write its own literal of these, and a literal drops whatever it does not
+  // name: that is how the locale a plugin could not say stayed unsayable —
+  // there was no field to forget, and adding one to three literals is adding
+  // it to two. Spread this and a branch cannot lose a field the others carry.
+  //
+  // The pair is present only when the plugin named it. A key holding
+  // `undefined` and no key read the same to every consumer today, but they are
+  // different claims — "no locale" and "the locale is undefined" — and only
+  // the absence says the facade is deciding the default, not being handed one.
+  const carried = {
+    context: opts.context,
+    request: opts.request,
+    ...(locale !== undefined ? { locale } : {}),
+    ...(opts.fallbackLocale !== undefined
+      ? { fallbackLocale: opts.fallbackLocale }
+      : {}),
+  };
   // The caller's own scope wins when named; otherwise the one the dispatcher
   // pinned for this request. A route that omits it is the common case, not the
   // exception, so the ambient value is what makes the key's grants reach the
@@ -99,29 +182,25 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   // `user`, because that shape already means "system" and quietly changing it
   // would elevate nothing and demote every existing plugin call at once.
   if (as === "public") {
-    return { overrideAccess: false, context, request };
+    return { overrideAccess: false, ...carried };
   }
 
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {
-      throw new NextlyError({
-        code: "INVALID_INPUT",
-        statusCode: 400,
-        publicMessage: "Permission configuration is invalid.",
-        logMessage: "ServiceOpts as:'user' requires a `user`",
+      throw NextlyError.invalidInput({
+        message: "Permission configuration is invalid.",
         logContext: { reason: "service-opts-user-missing" },
       });
     }
     return {
       overrideAccess: false,
       user: { id: user.id, email: user.email, role: "", permissions: [] },
-      context,
-      request,
+      ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
-  return { overrideAccess: true, context, request };
+  return { overrideAccess: true, ...carried };
 }
 
 /**
