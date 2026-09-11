@@ -77,8 +77,19 @@ describe("the rows the builder draws", () => {
 
   it("round-trips a row id", () => {
     expect(builderRowIndex(builderRowId(3))).toBe(3);
+    expect(builderRowIndex(builderRowId(0))).toBe(0);
     expect(builderRowIndex("field_abc")).toBeUndefined();
     expect(builderRowIndex("row-x")).toBeUndefined();
+  });
+
+  it("names a row only for the ids the list mints", () => {
+    // 🔴 `Number()` read `row--1` as -1 and `row-1.5` as a fraction. Each
+    // sat below the acceptance rule's upper bound, so a drop was announced as
+    // a move while the reorder's own range check refused it. Only a canonical
+    // nonnegative integer -- what `builderRowId` writes -- names a row.
+    for (const id of ["row--1", "row-1.5", "row-01", "row-", "row-1e2"]) {
+      expect(builderRowIndex(id), id).toBeUndefined();
+    }
   });
 });
 
@@ -127,6 +138,33 @@ describe("what a drag on the canvas says", () => {
   it("names a nested field and places it among its siblings", () => {
     expect(say.onDragStart({ active: at("credit") })).toBe(
       "Picked up Credit, position 2 of 2."
+    );
+  });
+
+  it("says a field with no label and no name yet is unnamed, rather than nothing", () => {
+    // 🔴 A field just added to the canvas has both empty until its author
+    // fills them in, and it drags in that state. Read as `label || name` it
+    // was announced as "Picked up , row 2" and, beside a named field, as
+    // "and Title".
+    const blank = field("new_1", { name: "", label: "", width: "50%" });
+    const speak = builderAnnouncements([
+      field("title", { label: "Title", width: "50%" }),
+      blank,
+      field("new_2", { name: "", label: "" }),
+      field("gallery", {
+        type: "repeater",
+        label: "Gallery",
+        fields: [field("new_3", { name: "", label: "" })],
+      } as Partial<BuilderField>),
+    ]);
+    expect(speak.onDragStart({ active: at("row-0") })).toBe(
+      "Picked up Title and an unnamed field, row 1 of 3."
+    );
+    expect(speak.onDragStart({ active: at("row-1") })).toBe(
+      "Picked up an unnamed field, row 2 of 3."
+    );
+    expect(speak.onDragStart({ active: at("new_3") })).toBe(
+      "Picked up an unnamed field, position 1 of 1."
     );
   });
 
@@ -189,5 +227,9 @@ describe("which drops the canvas accepts", () => {
 
   it("refuses a row index the canvas does not draw", () => {
     expect(builderDropAccepted(fields, "row-0", "row-9")).toBe(false);
+    // Below the count too: a negative index passes `< count` and is refused
+    // by the reorder, so accepting it here announces a move that never
+    // happens.
+    expect(builderDropAccepted(fields, "row-0", "row--1")).toBe(false);
   });
 });

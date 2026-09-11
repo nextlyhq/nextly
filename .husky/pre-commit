@@ -37,4 +37,8 @@ else
   echo "  CI will still run the scan on your PR."
 fi
 
-npx lint-staged
+# Serially, not in parallel. `.changeset/*.md` matches two globs in
+# lint-staged.config.mjs -- prettier, which rewrites the file, and the
+# changeset checker, which reads it -- and run at once the checker can read a
+# file prettier is halfway through writing.
+npx lint-staged --concurrent false

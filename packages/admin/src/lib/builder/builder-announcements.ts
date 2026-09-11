@@ -26,9 +26,23 @@ import {
 } from "./builder-rows";
 import { findFieldById, findParentContainerId } from "./field-transformers";
 
+/**
+ * What a field is called when spoken: its label, else its name, else that
+ * it has neither yet.
+ *
+ * A field just added to the canvas has an empty label AND an empty name until
+ * its author fills them in, and it is draggable in that state. Read as
+ * `label || name` it was announced as nothing at all -- "Picked up , row 2" --
+ * and a row holding one was "and Title". The fallback is a description rather
+ * than a placeholder name, so it cannot be mistaken for a field called that.
+ */
+export function fieldSubject(field: BuilderField): string {
+  return field.label || field.name || "an unnamed field";
+}
+
 /** "Title", or "First name and Last name" for a row holding two fields. */
 function labelsOf(fields: readonly BuilderField[]): string {
-  const labels = fields.map(f => f.label || f.name);
+  const labels = fields.map(fieldSubject);
   if (labels.length <= 1) return labels[0] ?? "an empty row";
   return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
@@ -45,7 +59,7 @@ export function builderAnnouncements(
       return row ? labelsOf(row.map(item => item._field)) : undefined;
     }
     const field = findFieldById([...fields], String(id));
-    return field ? field.label || field.name : undefined;
+    return field ? fieldSubject(field) : undefined;
   };
 
   const place = ({ id }: AnnouncedItem): string | undefined => {
