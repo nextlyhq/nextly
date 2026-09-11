@@ -118,6 +118,11 @@ class MockAdapter extends DrizzleAdapter {
     return callback(ctx);
   }
 
+  /** The protected error wrapper, reachable from the tests. */
+  queryError(error: unknown, operation: string, table: string) {
+    return this.handleQueryError(error, operation, table);
+  }
+
   getCapabilities(): DatabaseCapabilities {
     return {
       dialect: "postgresql",
@@ -266,6 +271,47 @@ describe("DrizzleAdapter", () => {
       expect(result.applied).toEqual([]);
       expect(result.pending).toEqual([]);
       expect(result.current).toBeNull();
+    });
+  });
+
+  describe("a query error's context", () => {
+    const CONTEXT = "update operation failed on table 'posts'";
+
+    it("is attached to a driver message that quotes the failed statement", () => {
+      // Drizzle's own shape on PostgreSQL and MySQL: the statement, spelled in
+      // lower case, so the operation's name is in the message already.
+      const error = adapter.queryError(
+        new Error(
+          'Failed query: update "posts" set "ghost" = $1 where "id" = $2\nparams: x,1'
+        ),
+        "update",
+        "posts"
+      );
+      expect(error.message).toBe(
+        `${CONTEXT}: Failed query: update "posts" set "ghost" = $1 where "id" = $2\nparams: x,1`
+      );
+      expect(error.table).toBe("posts");
+    });
+
+    it("is attached when only a name in the message contains the operation", () => {
+      const error = adapter.queryError(
+        new Error('column "ghost" of relation "update_log" does not exist'),
+        "update",
+        "update_log"
+      );
+      expect(error.message).toBe(
+        'update operation failed on table \'update_log\': column "ghost" of relation "update_log" does not exist'
+      );
+    });
+
+    it("is attached once, however often the same error is handled", () => {
+      const first = adapter.queryError(
+        new Error("no such column: ghost"),
+        "update",
+        "posts"
+      );
+      const again = adapter.queryError(first, "update", "posts");
+      expect(again.message).toBe(`${CONTEXT}: no such column: ghost`);
     });
   });
 

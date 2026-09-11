@@ -1,5 +1,5 @@
 /**
- * Read authorization for the system resources that have no stored rules.
+ * Read authorization for the system resources that have no collection config.
  *
  * `media` and `users` are system tables rather than dynamic collections, so
  * their readers (`mediaService.findById`, `userService.listUsersByIds`, and the

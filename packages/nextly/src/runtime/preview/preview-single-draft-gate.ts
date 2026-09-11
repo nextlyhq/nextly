@@ -102,7 +102,7 @@ export function previewSingleDraftGate(
     // working-draft overlay is gated on being able to EDIT the document, so
     // edit capability is what decides whether a draft may be handed out at all;
     // and it is non-mutating by construction, loading the row through the
-    // adapter and evaluating the stored rules against it.
+    // adapter and running the gate against it.
     //
     // What it does NOT catch, stated rather than left to be found: a sharer who
     // keeps update access and loses READ access through a custom rule. Closing

@@ -670,10 +670,10 @@ async function singleFacts(
  *
  * Two gates, because the route's own is one axis short of what the token hands
  * out. `requireRouteCollectionAccess` answers the coarse RBAC question — may
- * this caller update this slug — while a Single's STORED rules (owner-only,
- * role based, custom) are evaluated against the loaded document and can deny a
- * caller who holds that permission. A link minted on the permission alone is a
- * bearer credential for a draft the real update path refuses to show them.
+ * this caller update this slug — while the real update path additionally
+ * requires the document to exist and to be reachable in the language asked for.
+ * A link minted on the permission alone is a bearer credential for a draft that
+ * path refuses to show them.
  *
  * That the token's subject and the gate's subject are the same document does
  * not close it: the divergence here is between a PERMISSION and a stored RULE,
@@ -736,8 +736,8 @@ async function mintForSingle(
     });
   }
 
-  // The Single's STORED rules, against the real document, in the TRANSLATION
-  // the token will name. Runs before anything is signed and before the trusted
+  // The Single's own gate, against the real document, in the TRANSLATION the
+  // token will name. Runs before anything is signed and before the trusted
   // read below, so a refused caller reaches neither.
   refuseApiKeyMint(auth);
   const { user } = await callerFor(auth);

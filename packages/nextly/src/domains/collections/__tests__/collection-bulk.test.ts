@@ -39,7 +39,7 @@ import {
   createMockCollectionService,
   createMockRelationshipService,
   createMockHookRegistry,
-  createMockAccessControlService,
+  createMockRbacAccessControlService,
   createMockComponentDataService,
   createSampleEntry,
 } from "./collection-test-helpers";
@@ -148,7 +148,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
     const mockCollectionService = createMockCollectionService();
     const mockRelationshipService = createMockRelationshipService();
     const mockHookRegistry = createMockHookRegistry();
-    const mockAccessControlService = createMockAccessControlService();
+    const mockRbac = createMockRbacAccessControlService();
     mockComponentDataService = createMockComponentDataService();
 
     service = new CollectionEntryService(
@@ -158,9 +158,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       mockCollectionService as never,
       mockRelationshipService as never,
       mockHookRegistry as never,
-      mockAccessControlService as never,
       mockComponentDataService as never,
-      undefined
+      mockRbac as never
     );
   });
 
@@ -478,11 +477,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // throws NextlyError.forbidden so the dispatcher emits a canonical
       // 403 error envelope instead of fabricating a synthetic row in
       // `failures[]` with no real id to attach it to.
-      const mockACS = createMockAccessControlService();
-      mockACS.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "No update access",
-      });
+      const mockACS = createMockRbacAccessControlService();
+      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(
@@ -492,9 +488,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         createMockCollectionService() as never,
         createMockRelationshipService() as never,
         createMockHookRegistry() as never,
-        mockACS as never,
         createMockComponentDataService() as never,
-        undefined
+        mockACS as never
       );
 
       await expect(
@@ -540,11 +535,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // See bulkUpdateByQuery analogue above: a collection-wide access denial
       // is a request-level authorization failure (403), not a partial-success
       // entry in `failures[]`.
-      const mockACS = createMockAccessControlService();
-      mockACS.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "No delete access",
-      });
+      const mockACS = createMockRbacAccessControlService();
+      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(
@@ -554,9 +546,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         createMockCollectionService() as never,
         createMockRelationshipService() as never,
         createMockHookRegistry() as never,
-        mockACS as never,
         createMockComponentDataService() as never,
-        undefined
+        mockACS as never
       );
 
       await expect(
@@ -651,9 +642,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         createMockCollectionService() as never,
         createMockRelationshipService() as never,
         createMockHookRegistry() as never,
-        createMockAccessControlService() as never,
         createMockComponentDataService() as never,
-        undefined
+        createMockRbacAccessControlService() as never
       );
 
       const result = await svc.duplicateEntry({

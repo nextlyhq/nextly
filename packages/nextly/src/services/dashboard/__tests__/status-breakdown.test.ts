@@ -4,8 +4,7 @@
  * `getStats` computes `content.totalEntries` from the access-controlled
  * per-collection counts (`collection-counts.test.ts`), but its sibling
  * `status` breakdown used to run raw `SELECT ... GROUP BY status` over the
- * PHYSICAL table -- ignoring both the collection's access rule and its
- * stored row-level constraint. A collection with an owner-only read rule
+ * PHYSICAL table -- ignoring the collection's access gate entirely. It
  * therefore reported the WHOLE table's draft/published split to a reader who
  * could see only a fraction of it: the breakdown both disclosed hidden row
  * counts and contradicted the total sitting beside it in the same response.
@@ -36,8 +35,8 @@ import { DashboardService } from "../dashboard-service";
 import { someResources, type ReadCaller } from "../readable-resources";
 
 /**
- * Table-wide truth: 5 rows, 4 published, 1 draft. A stored owner-only read
- * rule means Alice may see only her own 1 row, which happens to be published.
+ * Table-wide truth: 5 rows, 4 published, 1 draft. Alice's own read reaches only
+ * 1 of them, which happens to be published.
  */
 const RAW_PUBLISHED_EVERYONE = 4;
 const RAW_DRAFT_EVERYONE = 1;

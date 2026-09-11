@@ -9,11 +9,11 @@
  * The consequence was that `access: { create: false }` on a collection was
  * accepted at boot, recorded in the registry, and never consulted for the one
  * caller it most obviously describes: an anonymous visitor posting to a public
- * route. Only the STORED rules ran, which live elsewhere and are usually empty,
- * so the declaration was inert while looking deliberate.
+ * route. Nothing else asked, so the declaration was inert while looking
+ * deliberate.
  *
  * These pin the three answers the evaluator owes: deny, allow, and "no opinion"
- * so the stored rules still decide.
+ * so the caller falls through to its public default.
  */
 
 import { describe, expect, it } from "vitest";
@@ -74,7 +74,7 @@ describe("code-defined access for a caller with no session", () => {
   });
 
   it("answers undefined when no rule governs the operation", async () => {
-    // Not `false`. "No opinion" leaves the stored rules to decide, and
+    // Not `false`. "No opinion" leaves the caller to its public default, and
     // returning a verdict here would close every operation a collection did
     // not happen to name.
     await expect(
@@ -96,8 +96,8 @@ describe("code-defined access for a caller with no session", () => {
 
   it("denies when the rule throws, rather than falling through", async () => {
     // Fail-secure, matching the authenticated path. A rule that threw did not
-    // allow anything, and answering `undefined` here would hand the decision to
-    // stored rules that usually allow.
+    // allow anything, and answering `undefined` here would hand the caller a
+    // public default that allows.
     await expect(
       service().checkAnonymousCodeAccess({
         operation: "create",

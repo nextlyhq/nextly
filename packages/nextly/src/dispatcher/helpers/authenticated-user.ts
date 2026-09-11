@@ -34,14 +34,14 @@ function readAuthenticatedClaims(p: Params): Record<string, unknown> {
  * "anonymous" — so an absent user is never mistaken for a trusted one.
  *
  * Access rules are evaluated against this object: `roles` drives role-based
- * rules and field-level `access.read` callbacks, and `id` drives owner-only
- * scoping. `role` repeats the first role because rules and field callbacks
+ * rules and field-level `access.read` callbacks. `role` repeats the first role
+ * because rules and field callbacks
  * written against a single-role model read `user.role`; without it a
  * legitimately authorized caller would have fields stripped.
  *
  * Shared, and in two directions. Every REST collection and single operation
  * reaches its access check through this one function, so a field added or
- * dropped here changes what every stored rule and field callback is judged on.
+ * dropped here changes what every access rule and field callback is judged on.
  * And the object itself is built by `buildUserContext`, which the preview-link
  * mint probe also calls — that shared constructor is what makes the probe reach
  * the same verdict the bearer's own read will, rather than a near-miss that

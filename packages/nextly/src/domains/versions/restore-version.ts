@@ -415,8 +415,8 @@ export async function restoreVersion(
   // strip nested keys in place.
   //
   // The probe carries the document's id, which the payload deliberately does
-  // not: `id` is immutable and was stripped before this point. A rule keyed on
-  // the document — owner-only visibility, say — would otherwise evaluate with
+  // not: `id` is immutable and was stripped before this point. A field rule
+  // keyed on the document would otherwise evaluate with
   // no id and hide fields the same caller can read in version history, making
   // restore stricter than the endpoint the snapshot came from.
   const readProbe: Record<string, unknown> = {

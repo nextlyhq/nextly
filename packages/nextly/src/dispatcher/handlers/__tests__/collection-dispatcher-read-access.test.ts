@@ -1,7 +1,6 @@
 // The read handlers must hand the caller's identity to the query service, or the
-// collection's stored read rules cannot be evaluated for them: the service falls
-// back to the rule-less default and an admin-configured "owner-only read"
-// silently returns every row over HTTP.
+// collection's read gate cannot be evaluated for them: the service falls back to
+// the permission-less default and returns every row over HTTP.
 //
 // These assert the forwarding contract rather than the enforcement itself
 // (enforcement lives in the query/access services and is covered there), because
@@ -105,7 +104,7 @@ describe("collection read handlers forward the caller to the query service", () 
       // `user.role`; without it an authorized caller would have fields stripped.
       role: "editor",
     });
-    // The route ran the coarse RBAC gate already; stored rules still run.
+    // The route ran the coarse RBAC gate already, so it is not run again.
     expect(args.routeAuthorized).toBe(true);
   });
 
@@ -203,8 +202,8 @@ describe("collection read handlers forward the caller to the query service", () 
 
   it("forwards the API-key scope on every read, not just getEntry", async () => {
     // Without the scope the access service treats a super-admin-owned key as an
-    // unscoped super-admin session and lifts the stored owner-only predicate, so
-    // the key reads rows outside its own grant. getEntry alone forwarding it is
+    // unscoped super-admin session and lifts the gate entirely, so the key reads
+    // rows outside its own grant. getEntry alone forwarding it is
     // not enough: list and count are the paths that return rows in bulk.
     const listEntries = vi.fn().mockResolvedValue(listResult);
     const countEntries = vi.fn().mockResolvedValue(countResult);

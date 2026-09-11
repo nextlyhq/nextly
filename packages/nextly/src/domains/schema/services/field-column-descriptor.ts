@@ -673,8 +673,8 @@ export interface SystemColumnSet {
   hasStatus?: boolean;
   /**
    * True for a Single's table. Singles are a single global row with no
-   * per-user owner, so the `created_by` owner column is NOT injected (owner-only
-   * access is a collection concept). Keeps the runtime schema, the diff input,
+   * per-user owner, so the `created_by` owner column is NOT injected. Keeps the
+   * runtime schema, the diff input,
    * and the DDL in lockstep — otherwise a Single's runtime schema would select
    * a column its physical table never gets.
    */

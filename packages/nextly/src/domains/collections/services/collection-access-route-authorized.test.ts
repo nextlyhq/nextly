@@ -1,11 +1,16 @@
 /**
- * Proves the route-write access decoupling: a route-authorized write skips only
- * the redundant RBAC gate (the middleware already ran it) but STILL evaluates
- * the stored collection access rules, while `overrideAccess` remains a full
- * system bypass and super-admin bypasses the stored rules on every transport.
+ * Proves the route-write access decoupling: a route-authorized write skips the
+ * redundant RBAC gate (the middleware already ran it), `overrideAccess` remains
+ * a full system bypass, and super-admin bypasses the gate on every transport
+ * EXCEPT through a scoped API key.
  *
- * Before the fix, route writes forced `overrideAccess: true`, which returned
- * early and never evaluated the stored rules — the bug these tests guard.
+ * The API-key section is the load-bearing half. A key is authoritative on its
+ * OWN stamped grants and never on its owner's roles, so the two directions are
+ * asserted against each other: a key the owner's RBAC would allow but the scope
+ * does not, and a key the scope allows but the owner's RBAC would deny.
+ *
+ * Every case here drives `checkCollectionAccess` rather than a leaf, because
+ * the claim is about how the layers combine.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -16,29 +21,23 @@ import {
   createMockDb,
   createMockAdapter,
   silentLogger,
-  createMockCollectionService,
-  createMockAccessControlService,
 } from "../__tests__/collection-test-helpers";
 
 function buildAccessService() {
-  const accessControlService = createMockAccessControlService();
   const rbac = {
     checkAccess: vi.fn().mockResolvedValue(true),
-    // Answers `undefined`: no code-defined rule, so the stored rules decide.
+    // Answers `undefined`: no code-defined rule governs the operation.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     // No code-defined access by default: a scoped API key is judged on its
     // permission grant alone unless a test registers a rule.
     getRegisteredAccess: vi.fn().mockReturnValue(undefined),
   };
-  const collectionService = createMockCollectionService();
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
     silentLogger as never,
-    collectionService as never,
-    accessControlService as never,
     rbac as never
   );
-  return { service, accessControlService, rbac };
+  return { service, rbac };
 }
 
 // A caller with no super-admin role. Its `roles` deliberately omit super-admin
@@ -51,47 +50,21 @@ const superAdminUser = { id: "user-1", roles: ["super-admin"] };
 const singularRoleSuperAdmin = { id: "user-1", role: "super-admin" };
 
 describe("checkCollectionAccess — route-authorized decoupling", () => {
-  it("still evaluates stored rules when routeAuthorized (denies via stored rule)", async () => {
-    const { service, accessControlService, rbac } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "not the owner",
+  it("skips the redundant RBAC gate when routeAuthorized", async () => {
+    const { service, rbac } = buildAccessService();
+    // Would deny if it were consulted, which is what makes the skip observable
+    // rather than merely unobjectionable.
+    rbac.checkAccess.mockResolvedValue(false);
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "update",
+      user,
+      overrideAccess: false,
+      routeAuthorized: true,
     });
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      user,
-      "doc-1",
-      { id: "doc-1", createdBy: "someone-else" },
-      false, // overrideAccess
-      true // routeAuthorized
-    );
-
-    // The stored rule was evaluated and denied — the exact path route writes
-    // used to skip.
-    expect(result?.statusCode).toBe(403);
-    expect(accessControlService.evaluateAccess).toHaveBeenCalledTimes(1);
-    // The redundant RBAC gate is skipped when routeAuthorized.
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
-  });
-
-  it("allows when routeAuthorized and the stored rule allows, skipping RBAC", async () => {
-    const { service, accessControlService, rbac } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
-
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      user,
-      "doc-1",
-      { id: "doc-1" },
-      false,
-      true
-    );
-
     expect(result).toBeNull();
-    expect(accessControlService.evaluateAccess).toHaveBeenCalledTimes(1);
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
@@ -99,153 +72,80 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     const { service, rbac } = buildAccessService();
     rbac.checkAccess.mockResolvedValue(false);
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "update",
       user,
-      "doc-1",
-      { id: "doc-1" },
-      false,
-      false // routeAuthorized
-    );
+      overrideAccess: false,
+      routeAuthorized: false,
+    });
 
     expect(result?.statusCode).toBe(403);
     expect(rbac.checkAccess).toHaveBeenCalledTimes(1);
   });
 
   it("bypasses everything when overrideAccess is true (system write)", async () => {
-    const { service, accessControlService, rbac } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({ allowed: false });
+    const { service, rbac } = buildAccessService();
+    rbac.checkAccess.mockResolvedValue(false);
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "update",
       user,
-      "doc-1",
-      { id: "doc-1" },
-      true, // overrideAccess
-      true
-    );
+      overrideAccess: true,
+      routeAuthorized: false,
+    });
 
     expect(result).toBeNull();
-    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
-  it("lets a super-admin (by authorized role) bypass stored rules on the route path", async () => {
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "not the owner",
+  it("lets a super-admin (by authorized role) bypass the gate", async () => {
+    const { service, rbac } = buildAccessService();
+    rbac.checkAccess.mockResolvedValue(false);
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "update",
+      user: superAdminUser,
+      overrideAccess: false,
+      routeAuthorized: false,
     });
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      superAdminUser,
-      "doc-1",
-      { id: "doc-1", createdBy: "someone-else" },
-      false,
-      true
-    );
-
     expect(result).toBeNull();
-    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
-  });
-
-  it("lets a super-admin bypass stored rules on the Direct API path too", async () => {
-    const { service, accessControlService, rbac } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "not the owner",
-    });
-
-    // routeAuthorized: false = Direct API. A super-admin bypasses on every
-    // transport, short-circuiting before the RBAC gate.
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      superAdminUser,
-      "doc-1",
-      { id: "doc-1", createdBy: "someone-else" },
-      false,
-      false // routeAuthorized (Direct API)
-    );
-
-    expect(result).toBeNull();
-    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
-  it("lets a super-admin identified by the singular `role` bypass stored rules", async () => {
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "not the owner",
+  it("lets a super-admin identified by the singular `role` bypass the gate", async () => {
+    const { service, rbac } = buildAccessService();
+    rbac.checkAccess.mockResolvedValue(false);
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "update",
+      user: singularRoleSuperAdmin,
+      overrideAccess: false,
+      routeAuthorized: false,
     });
 
-    // A Direct API caller carrying only `{ id, role: "super-admin" }` (no
-    // `roles` array) must still bypass — the changeset promises the bypass on
-    // every transport, and this surface only forwards the singular slug.
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      singularRoleSuperAdmin,
-      "doc-1",
-      { id: "doc-1", createdBy: "someone-else" },
-      false,
-      false // routeAuthorized (Direct API)
-    );
-
     expect(result).toBeNull();
-    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
   });
 
   it("fails closed when routeAuthorized is set without an authenticated user", async () => {
-    const { service, accessControlService, rbac } = buildAccessService();
-    // A rule-less collection would otherwise fall through to the public default.
-    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
+    const { service, rbac } = buildAccessService();
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      undefined, // no user
-      "doc-1",
-      { id: "doc-1" },
-      false, // overrideAccess
-      true // routeAuthorized
-    );
-
-    // A bare routeAuthorized flag (e.g. a direct bulkUpdateByQuery caller) must
-    // not skip the RBAC gate and reach the stored-rule public default.
-    expect(result?.statusCode).toBe(403);
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
-    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
-  });
-
-  it("does NOT grant the super-admin bypass to a scoped context (no super-admin role)", async () => {
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "not the owner",
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "update",
+      user: undefined,
+      overrideAccess: false,
+      routeAuthorized: true,
     });
 
-    // `user` here has roles ["editor"] — even if this account happens to own a
-    // super-admin key elsewhere, the authorized role set has no super-admin, so
-    // the stored rules must still be evaluated and can deny. Guards the API-key
-    // owner escalation.
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      user,
-      "doc-1",
-      { id: "doc-1", createdBy: "someone-else" },
-      false,
-      true
-    );
-
+    // A bare routeAuthorized flag (e.g. a direct bulkUpdateByQuery caller) must
+    // not skip the RBAC gate and fall through to the permission-less default.
     expect(result?.statusCode).toBe(403);
-    expect(accessControlService.evaluateAccess).toHaveBeenCalledTimes(1);
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 });
 
@@ -262,39 +162,10 @@ describe("CollectionAccessService.isSuperAdmin", () => {
 
   it("is false for a scoped context without the super-admin role", () => {
     const { service } = buildAccessService();
-    // The transaction owner-only safety nets rely on this being scope-keyed:
-    // an editor (even one whose account owns a super-admin key elsewhere) must
-    // not skip the owner check.
+    // Keyed on the authorized role set, not the account: an editor (even one
+    // whose account owns a super-admin key elsewhere) gets no bypass.
     expect(service.isSuperAdmin(user)).toBe(false);
     expect(service.isSuperAdmin(undefined)).toBe(false);
-  });
-});
-
-describe("getAccessRules normalizes collection owner fields", () => {
-  it("rewrites the createdBy/created_by alias to the system column, leaving custom fields", () => {
-    const { service } = buildAccessService();
-    const rules = service.getAccessRules({
-      accessRules: {
-        read: { type: "owner-only", ownerField: "createdBy" },
-        update: { type: "owner-only", ownerField: "created_by" },
-        delete: { type: "owner-only", ownerField: "authorId" },
-        create: { type: "authenticated" },
-      },
-    });
-    // Both spellings of the reserved owner name resolve to the stamped column.
-    expect(rules?.read?.ownerField).toBe("created_by");
-    expect(rules?.update?.ownerField).toBe("created_by");
-    // A genuine custom owner field is left untouched.
-    expect(rules?.delete?.ownerField).toBe("authorId");
-    expect(rules?.create?.type).toBe("authenticated");
-  });
-
-  it("leaves a rule-less owner-only rule alone (default resolved downstream)", () => {
-    const { service } = buildAccessService();
-    const rules = service.getAccessRules({
-      accessRules: { read: { type: "owner-only" } },
-    });
-    expect(rules?.read?.ownerField).toBeUndefined();
   });
 });
 
@@ -310,17 +181,18 @@ describe("checkCollectionAccess — scoped API key", () => {
     // The OWNER can publish...
     rbac.checkAccess.mockResolvedValue(true);
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      apiKeyOwner,
-      "doc-1",
-      { id: "doc-1" },
-      false, // overrideAccess
-      false, // routeAuthorized (transition check)
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
       // ...but the KEY is scoped for update only.
-      { actorType: "apiKey", permissions: ["update-posts"] }
-    );
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["update-posts"],
+      } as never,
+    });
 
     expect(result?.statusCode).toBe(403);
     // The owner's RBAC is never consulted for a scoped key.
@@ -332,16 +204,17 @@ describe("checkCollectionAccess — scoped API key", () => {
     // The key's resolved role set carries super-admin (from its owner), but the
     // session super-admin bypass must NOT apply to a scoped key — otherwise an
     // update-only key issued by an admin could publish.
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      { id: "admin-1", roles: ["super-admin"] },
-      "doc-1",
-      { id: "doc-1" },
-      false,
-      false,
-      { actorType: "apiKey", permissions: ["update-posts"] }
-    );
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: { id: "admin-1", roles: ["super-admin"] },
+      overrideAccess: false,
+      routeAuthorized: false,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["update-posts"],
+      } as never,
+    });
 
     expect(result?.statusCode).toBe(403);
   });
@@ -353,16 +226,17 @@ describe("checkCollectionAccess — scoped API key", () => {
     // `rbac.checkAccess` — the path the API-key branch replaces — would have run).
     rbac.getRegisteredAccess.mockReturnValue({ publish: () => false });
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      apiKeyOwner,
-      "doc-1",
-      { id: "doc-1" },
-      false,
-      false,
-      { actorType: "apiKey", permissions: ["publish-posts"] }
-    );
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["publish-posts"],
+      } as never,
+    });
 
     expect(result?.statusCode).toBe(403);
   });
@@ -371,16 +245,17 @@ describe("checkCollectionAccess — scoped API key", () => {
     const { service, rbac } = buildAccessService();
     rbac.getRegisteredAccess.mockReturnValue({ publish: () => true });
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      apiKeyOwner,
-      "doc-1",
-      { id: "doc-1" },
-      false,
-      false,
-      { actorType: "apiKey", permissions: ["publish-posts"] }
-    );
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["publish-posts"],
+      } as never,
+    });
 
     expect(result).toBeNull();
   });
@@ -390,17 +265,18 @@ describe("checkCollectionAccess — scoped API key", () => {
     // The OWNER cannot publish...
     rbac.checkAccess.mockResolvedValue(false);
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      apiKeyOwner,
-      "doc-1",
-      { id: "doc-1" },
-      false,
-      false,
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
       // ...but the KEY carries the publish grant.
-      { actorType: "apiKey", permissions: ["update-posts", "publish-posts"] }
-    );
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["update-posts", "publish-posts"],
+      } as never,
+    });
 
     expect(result).toBeNull();
     expect(rbac.checkAccess).not.toHaveBeenCalled();
@@ -410,327 +286,18 @@ describe("checkCollectionAccess — scoped API key", () => {
     const { service, rbac } = buildAccessService();
     rbac.checkAccess.mockResolvedValue(false);
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      apiKeyOwner,
-      "doc-1",
-      { id: "doc-1" },
-      false,
-      false,
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: apiKeyOwner,
+      overrideAccess: false,
+      routeAuthorized: false,
       // A session caller carries a scope with actorType "user" (or none), so the
       // owner/session RBAC decides.
-      { actorType: "user", permissions: [] }
-    );
+      authenticatedScope: { actorType: "user", permissions: [] } as never,
+    });
 
     expect(result?.statusCode).toBe(403);
     expect(rbac.checkAccess).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("getOwnerConstraint — scoped API key", () => {
-  // getOwnerConstraint emits the owner predicate that a read/mutate folds into
-  // its WHERE clause. The session super-admin bypass lifts it — but a scoped API
-  // key owned by a super-admin must still obey a stored owner-only rule, so the
-  // predicate has to survive for the key even though the account is super-admin.
-  function buildWithOwnerOnlyRead() {
-    const accessControlService = createMockAccessControlService();
-    const rbac = {
-      checkAccess: vi.fn().mockResolvedValue(true),
-      // Answers `undefined`: no code-defined rule, so the stored rules decide.
-      checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-      getRegisteredAccess: vi.fn().mockReturnValue(undefined),
-    };
-    const collectionService = {
-      getCollection: vi
-        .fn()
-        .mockResolvedValue({ accessRules: { read: { type: "owner-only" } } }),
-      generateId: vi.fn(),
-    };
-    return new CollectionAccessService(
-      createMockAdapter(createMockDb({ rows: [] })) as never,
-      silentLogger as never,
-      collectionService as never,
-      accessControlService as never,
-      rbac as never
-    );
-  }
-
-  it("lifts the owner predicate for a session super-admin (no scope)", async () => {
-    const service = buildWithOwnerOnlyRead();
-    const constraint = await service.getOwnerConstraint(
-      "posts",
-      "read",
-      superAdminUser,
-      false
-    );
-    expect(constraint).toBeNull();
-  });
-
-  it("keeps the owner predicate for a super-admin-owned scoped API key", async () => {
-    const service = buildWithOwnerOnlyRead();
-    const constraint = await service.getOwnerConstraint(
-      "posts",
-      "read",
-      superAdminUser,
-      false,
-      { actorType: "apiKey", permissions: ["read-posts"] }
-    );
-    // The scope skips the super-admin bypass, so the owner-only rule still binds
-    // the key to rows it owns.
-    expect(constraint).toEqual({ field: "created_by", value: "user-1" });
-  });
-});
-
-describe("getAccessQueryConstraint — scoped API key", () => {
-  // The list/count reads fold their owner predicate in through this method
-  // rather than getOwnerConstraint, so the scoped-key carve-out has to hold here
-  // too. Without it a super-admin-owned key takes the session bypass and the
-  // predicate is lifted before it ever reaches SQL, returning every row in the
-  // collection to a key whose grant covers only its own.
-  const OWNER_QUERY = { created_by: { equals: "user-1" } };
-
-  function buildWithOwnerOnlyRead() {
-    const accessControlService = createMockAccessControlService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: true,
-      query: OWNER_QUERY,
-    });
-    const rbac = {
-      checkAccess: vi.fn().mockResolvedValue(true),
-      // Answers `undefined`: no code-defined rule, so the stored rules decide.
-      checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-      getRegisteredAccess: vi.fn().mockReturnValue(undefined),
-    };
-    const collectionService = {
-      getCollection: vi
-        .fn()
-        .mockResolvedValue({ accessRules: { read: { type: "owner-only" } } }),
-      generateId: vi.fn(),
-    };
-    return new CollectionAccessService(
-      createMockAdapter(createMockDb({ rows: [] })) as never,
-      silentLogger as never,
-      collectionService as never,
-      accessControlService as never,
-      rbac as never
-    );
-  }
-
-  it("emits the owner constraint for an ordinary caller", async () => {
-    const service = buildWithOwnerOnlyRead();
-    expect(
-      await service.getAccessQueryConstraint("posts", user, false)
-    ).toEqual(OWNER_QUERY);
-  });
-
-  it("lifts the constraint for a session super-admin (no scope)", async () => {
-    const service = buildWithOwnerOnlyRead();
-    expect(
-      await service.getAccessQueryConstraint("posts", superAdminUser, false)
-    ).toBeNull();
-  });
-
-  it("keeps the constraint for a super-admin-owned scoped API key", async () => {
-    const service = buildWithOwnerOnlyRead();
-    const constraint = await service.getAccessQueryConstraint(
-      "posts",
-      superAdminUser,
-      false,
-      { actorType: "apiKey", permissions: ["read-posts"] }
-    );
-    expect(constraint).toEqual(OWNER_QUERY);
-  });
-
-  it("still lifts the constraint for a session caller arriving with a scope", async () => {
-    const service = buildWithOwnerOnlyRead();
-    // A session caller gets a scope with an empty permission list, which must not
-    // be mistaken for a key: the super-admin bypass belongs to the session path.
-    const constraint = await service.getAccessQueryConstraint(
-      "posts",
-      superAdminUser,
-      false,
-      { actorType: "user", permissions: [] }
-    );
-    expect(constraint).toBeNull();
-  });
-});
-
-describe("checkCollectionAccess — deferStoredRuleEval", () => {
-  it("skips the docless stored-rule eval when deferred (no cached denial)", async () => {
-    const { service, accessControlService } = buildAccessService();
-    // A document-dependent rule (e.g. custom) that would deny on absent data.
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "custom denied on missing data",
-    });
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      user,
-      undefined,
-      undefined,
-      false, // overrideAccess
-      false, // routeAuthorized
-      undefined, // authenticatedScope
-      true // deferStoredRuleEval
-    );
-    // The RBAC gate still ran (mock allows); the stored rule is left for the
-    // under-lock recheck, so it is NOT evaluated docless here.
-    expect(result).toBeNull();
-    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
-  });
-
-  it("evaluates the stored rule when not deferred (denies)", async () => {
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "denied",
-    });
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      user,
-      undefined,
-      undefined,
-      false,
-      false,
-      undefined,
-      false // deferStoredRuleEval
-    );
-    expect(result?.statusCode).toBe(403);
-    expect(accessControlService.evaluateAccess).toHaveBeenCalled();
-  });
-});
-
-describe("resolveTransitionDocumentRule — owner-only transition pre-resolve", () => {
-  const ownerOnlyPublish = {
-    accessRules: { publish: { type: "owner-only" } },
-  } as Record<string, unknown>;
-
-  it("returns the pre-fetched rules + user for an owner-only publish rule", () => {
-    const { service } = buildAccessService();
-    const resolved = service.resolveTransitionDocumentRule(
-      ownerOnlyPublish,
-      user
-    );
-    expect(resolved).not.toBeNull();
-    expect(resolved?.user).toBe(user);
-    expect(resolved?.accessRules.publish?.type).toBe("owner-only");
-  });
-
-  it("returns null for a super-admin SESSION (stored rules are bypassed)", () => {
-    const { service } = buildAccessService();
-    expect(
-      service.resolveTransitionDocumentRule(ownerOnlyPublish, superAdminUser)
-    ).toBeNull();
-  });
-
-  it("keeps the rule for a super-admin-owned scoped API key", () => {
-    const { service } = buildAccessService();
-    const resolved = service.resolveTransitionDocumentRule(
-      ownerOnlyPublish,
-      superAdminUser,
-      { actorType: "apiKey", permissions: ["publish-posts"] }
-    );
-    // The scope skips the super-admin bypass, so the owner-only rule still applies.
-    expect(resolved).not.toBeNull();
-  });
-
-  it("returns null when no owner-only publish/unpublish rule exists", () => {
-    const { service } = buildAccessService();
-    // An owner-only READ rule is document-dependent for reads but not for the
-    // publish/unpublish transition, so there is nothing to enforce under the lock.
-    expect(
-      service.resolveTransitionDocumentRule(
-        { accessRules: { read: { type: "owner-only" } } } as Record<
-          string,
-          unknown
-        >,
-        user
-      )
-    ).toBeNull();
-  });
-
-  it("returns the rules for a custom publish rule (may inspect the document)", () => {
-    const { service } = buildAccessService();
-    const resolved = service.resolveTransitionDocumentRule(
-      {
-        accessRules: { publish: { type: "custom", functionPath: "./fn" } },
-      } as Record<string, unknown>,
-      user
-    );
-    // A custom rule can key off id/data, so it must be re-judged under the lock.
-    expect(resolved).not.toBeNull();
-    expect(resolved?.accessRules.publish?.type).toBe("custom");
-  });
-});
-
-describe("evaluateTransitionDocumentRule — owner-only against a locked row", () => {
-  it("returns null (skips) when the operation has no owner-only rule", async () => {
-    const { service, accessControlService } = buildAccessService();
-    const result = await service.evaluateTransitionDocumentRule(
-      { publish: { type: "role-based", allowedRoles: ["editor"] } },
-      "publish",
-      user,
-      { id: "doc-1", created_by: "someone-else" }
-    );
-    expect(result).toBeNull();
-    // A non-owner-only rule was already decided by the permission pre-resolve, so
-    // the document evaluator must not re-run it.
-    expect(accessControlService.evaluateAccess).not.toHaveBeenCalled();
-  });
-
-  it("returns a 403 when the owner-only rule denies the locked document", async () => {
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "You can only modify your own documents",
-    });
-    const result = await service.evaluateTransitionDocumentRule(
-      { publish: { type: "owner-only" } },
-      "publish",
-      user,
-      { id: "doc-1", created_by: "someone-else" }
-    );
-    expect(result?.statusCode).toBe(403);
-    expect(result?.success).toBe(false);
-  });
-
-  it("returns null when the owner-only rule allows the locked document", async () => {
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({ allowed: true });
-    const result = await service.evaluateTransitionDocumentRule(
-      { publish: { type: "owner-only" } },
-      "publish",
-      user,
-      { id: "doc-1", created_by: "user-1" }
-    );
-    expect(result).toBeNull();
-  });
-
-  it("re-judges a custom rule against the locked row, forwarding its id", async () => {
-    const { service, accessControlService } = buildAccessService();
-    accessControlService.evaluateAccess.mockResolvedValue({
-      allowed: false,
-      reason: "custom denied",
-    });
-    const result = await service.evaluateTransitionDocumentRule(
-      { publish: { type: "custom", functionPath: "./fn" } },
-      "publish",
-      user,
-      { id: "doc-1", title: "hello" }
-    );
-    expect(result?.statusCode).toBe(403);
-    // The locked row's id and full data reach the custom evaluator, so a
-    // row-dependent rule sees the real document instead of the docless default.
-    expect(accessControlService.evaluateAccess).toHaveBeenCalledWith(
-      { publish: { type: "custom", functionPath: "./fn" } },
-      "publish",
-      expect.anything(),
-      "doc-1",
-      { id: "doc-1", title: "hello" },
-      expect.anything()
-    );
   });
 });
