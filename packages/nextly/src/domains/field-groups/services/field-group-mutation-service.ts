@@ -18,6 +18,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
+import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
@@ -888,6 +889,18 @@ export class FieldGroupMutationService extends BaseService {
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
         const instanceId = instance.id;
+        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
+        // `companion` out of the instance by value when the field group is
+        // localized, so a default filled in, a relationship normalized or a
+        // password hashed after the split stays on the instance and never
+        // reaches the rows this write stores.
+        await this.prepareInstanceForWrite(
+          instance,
+          componentFields,
+          instanceId && existingMap.has(instanceId) ? "update" : "create",
+          req
+        );
+
         // i18n: split translatable values out per instance (companion-owned). The
         // diff-by-id update keeps the instance id stable, so companion rows for OTHER
         // locales survive a re-save in one locale.
@@ -895,13 +908,6 @@ export class FieldGroupMutationService extends BaseService {
           componentMeta,
           instance,
           locale
-        );
-
-        await this.prepareInstanceForWrite(
-          instance,
-          componentFields,
-          instanceId && existingMap.has(instanceId) ? "update" : "create",
-          req
         );
 
         if (instanceId && existingMap.has(instanceId)) {
@@ -1017,6 +1023,18 @@ export class FieldGroupMutationService extends BaseService {
       for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
         const instanceId = instance.id;
+        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
+        // `companion` out of the instance by value when the field group is
+        // localized, so a default filled in, a relationship normalized or a
+        // password hashed after the split stays on the instance and never
+        // reaches the rows this write stores.
+        await this.prepareInstanceForWrite(
+          instance,
+          componentFields,
+          instanceId && existingMap.has(instanceId) ? "update" : "create",
+          req
+        );
+
         // i18n: split translatable values out (companion-owned) per instance.
         const { schema, main, companion } = await this.splitLocalizedComponent(
           componentMeta,
@@ -1026,13 +1044,6 @@ export class FieldGroupMutationService extends BaseService {
           // opened, because asking now would mean querying a possibly-absent relation,
           // and on PostgreSQL that aborts the transaction outright.
           { adapter: this.txWriteAdapter(tx) }
-        );
-
-        await this.prepareInstanceForWrite(
-          instance,
-          componentFields,
-          instanceId && existingMap.has(instanceId) ? "update" : "create",
-          req
         );
 
         if (instanceId && existingMap.has(instanceId)) {
@@ -1197,18 +1208,23 @@ export class FieldGroupMutationService extends BaseService {
         const tableName = meta.tableName;
         const componentFields = meta.fields;
         const instanceId = instance.id;
-        // i18n: split translatable values out per instance using its own component meta.
-        const { schema, main, companion } = await this.splitLocalizedComponent(
-          meta,
-          instance,
-          locale
-        );
-
+        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
+        // `companion` out of the instance by value when the field group is
+        // localized, so a default filled in, a relationship normalized or a
+        // password hashed after the split stays on the instance and never
+        // reaches the rows this write stores.
         await this.prepareInstanceForWrite(
           instance,
           componentFields,
           instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
           req
+        );
+
+        // i18n: split translatable values out per instance using its own component meta.
+        const { schema, main, companion } = await this.splitLocalizedComponent(
+          meta,
+          instance,
+          locale
         );
 
         if (instanceId && globalExistingMap.has(instanceId)) {
@@ -1360,6 +1376,18 @@ export class FieldGroupMutationService extends BaseService {
         const tableName = meta.tableName;
         const componentFields = meta.fields;
         const instanceId = instance.id;
+        // Prepare BEFORE splitting: splitLocalizedComponent copies `main` and
+        // `companion` out of the instance by value when the field group is
+        // localized, so a default filled in, a relationship normalized or a
+        // password hashed after the split stays on the instance and never
+        // reaches the rows this write stores.
+        await this.prepareInstanceForWrite(
+          instance,
+          componentFields,
+          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
+          req
+        );
+
         // i18n: split translatable values out per instance using its own component meta.
         const { schema, main, companion } = await this.splitLocalizedComponent(
           meta,
@@ -1369,13 +1397,6 @@ export class FieldGroupMutationService extends BaseService {
           // opened, because asking now would mean querying a possibly-absent relation,
           // and on PostgreSQL that aborts the transaction outright.
           { adapter: this.txWriteAdapter(tx) }
-        );
-
-        await this.prepareInstanceForWrite(
-          instance,
-          componentFields,
-          instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
-          req
         );
 
         if (instanceId && globalExistingMap.has(instanceId)) {
@@ -1626,6 +1647,13 @@ export class FieldGroupMutationService extends BaseService {
           },
         ],
       });
+    }
+    // A new instance takes its declared defaults before validation, as a new
+    // entry does, so a required child with a default is not refused on an
+    // instance the caller could not have completed. An existing instance is
+    // left alone: its absent keys are the caller's patch, not missing values.
+    if (mode === "create") {
+      applyFieldDefaults(instance, componentFields);
     }
     // Reduced in place, and before validation, because both halves of the write
     // depend on it. A validator is written against a field's public value, the

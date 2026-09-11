@@ -64,6 +64,19 @@ async function handlerFor(): Promise<CollectionsHandler> {
             name: "items",
             fields: [text({ name: "label", defaultValue: "dl" })],
           }),
+          // Function defaults below the top level: the registry keeps a
+          // group's and a repeater's children, so these resolve too.
+          group({
+            name: "audit",
+            fields: [text({ name: "note", defaultValue: () => "fn-nested" })],
+          }),
+          repeater({
+            name: "links",
+            fields: [
+              text({ name: "href" }),
+              text({ name: "rel", defaultValue: row => `rel:${row.href}` }),
+            ],
+          }),
         ],
       }),
     ],
@@ -109,14 +122,28 @@ describe("field defaults on a collection create (integration)", () => {
     expect(data.mandatory).toBe("filled");
   });
 
-  it("leaves a function default unapplied, since it cannot be stored", async () => {
+  it("applies a function default, which the stored definition cannot carry", async () => {
     // A collection's fields reach the write path from its stored definition,
-    // and a function does not survive being stored, so by then the field looks
-    // as though no default was declared. Asserted rather than left implicit so
-    // the boundary is visible and a future change to it is deliberate.
+    // where a function does not survive. The field-level registry captures it
+    // from the live config at boot, and the write reads it from there. It is
+    // resolved against the data built so far, so it can read `title`.
     const handler = await handlerFor();
     const data = await createAndRead(handler, { title: "Home" });
-    expect(data.derived).toBeNull();
+    expect(data.derived).toBe("re: Home");
+  });
+
+  it("applies function defaults nested in a group and in each supplied repeater row", async () => {
+    const handler = await handlerFor();
+    const data = await createAndRead(handler, {
+      title: "Home",
+      links: [{ href: "/a" }, { href: "/b", rel: "given" }],
+    });
+    expect(data.audit).toEqual({ note: "fn-nested" });
+    // Resolved against its own row, and never over a supplied value.
+    expect(data.links).toEqual([
+      { href: "/a", rel: "rel:/a" },
+      { href: "/b", rel: "given" },
+    ]);
   });
 
   it("fills a group's children, including a required one", async () => {
