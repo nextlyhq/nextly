@@ -82,6 +82,7 @@ const DECLARED_DIFFERENCES: Array<{
       title: "T",
       archetype: "text",
       defaultSize: "sm",
+      content: "Prose.",
       component: "p#X",
     },
   },
@@ -246,7 +247,29 @@ const MUST_AGREE: Array<{
       title: "T",
       archetype: "text",
       defaultSize: "sm",
+      content: "Prose.",
       actions: [{ label: "L", href: "/h" }],
+    },
+  },
+  {
+    // A text widget IS its prose, on both channels, through one rule.
+    case: "a text widget with no content",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "text",
+      defaultSize: "sm",
+    },
+  },
+  {
+    case: "content on an archetype that is not text",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "actions",
+      defaultSize: "sm",
+      actions: [{ label: "L", href: "/h" }],
+      content: "Prose nobody draws.",
     },
   },
   {
@@ -275,6 +298,7 @@ const MUST_AGREE: Array<{
       title: "T",
       archetype: "text",
       defaultSize: "sm",
+      content: "Prose.",
       query: { source: "collection:p", op: "count" },
     },
   },
