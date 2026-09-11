@@ -1,13 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
   citationFindings,
   citedPaths,
-  firstHeading,
   headings,
   LIBRARY,
+  markerFor,
   probeMarker,
   REPO_BLOB,
   Unanswerable,
@@ -50,6 +50,18 @@ describe("citationFindings", () => {
         config
       )
     ).toEqual([]);
+  });
+
+  it("reports a file under an excluded folder even when a listed folder holds it", () => {
+    expect(
+      citationFindings(new Set(["docs/internal/secret.mdx"]), {
+        folders: ["docs"],
+        excludeFolders: ["docs/internal"],
+        excludeFiles: [],
+      })
+    ).toEqual([
+      "docs/internal/secret.mdx is under an excludeFolders entry and was indexed anyway",
+    ]);
   });
 
   it("reports an excluded root file that was indexed anyway", () => {
@@ -119,22 +131,8 @@ describe("the committed configuration", () => {
   });
 });
 
-describe("firstHeading", () => {
-  it("takes the first second-level heading", () => {
-    expect(firstHeading("# T\n\ntext\n\n## First\n\n## Second\n", "x")).toBe(
-      "First"
-    );
-  });
-
-  it("refuses a page with none, rather than probing for an empty string", () => {
-    expect(() => firstHeading("# T\n\ntext\n", "x")).toThrow(
-      /no second-level heading/
-    );
-  });
-});
-
 describe("probeMarker", () => {
-  it("takes the first heading the documentation does not contain", () => {
+  it("takes the first heading nothing else contains", () => {
     const file = "# Title\n\n## Overview\n\n## Repository map\n";
     expect(headings(file)).toEqual(["Title", "Overview", "Repository map"]);
     // "Overview" is a heading a docs page also uses, so probing for it would
@@ -150,49 +148,69 @@ describe("probeMarker", () => {
     expect(probeMarker("<p>markup</p>\n- a list\n", "")).toBeNull();
   });
 
-  it("finds a marker in every committed excluded file that has headings", () => {
-    // The real files against the real docs, so the probe has something to ask
-    // for; CLAUDE.md is one line and is the known exception.
+  it("finds a marker of its own in every committed excluded file", () => {
+    // The real files against everything else git tracks, so the probe has a
+    // sentence no other file the index may hold could answer for. CLAUDE.md
+    // is one line, `@AGENTS.md`, and even that is its own.
     const config = JSON.parse(readFileSync("context7.json", "utf-8"));
-    const corpus = readdirSync("docs", { recursive: true })
-      .filter(name => String(name).endsWith(".mdx"))
-      .map(name => readFileSync(`docs/${name}`, "utf-8"))
-      .join("\n");
-    expect(corpus.length).toBeGreaterThan(10000);
-    // Every excluded file, CLAUDE.md included: its one line, `@AGENTS.md`, is a
-    // sentence the docs do not contain, so even that file can be asked for.
-    const unprobeable = config.excludeFiles.filter(
-      name => probeMarker(readFileSync(name, "utf-8"), corpus) === null
-    );
-    expect(unprobeable).toEqual([]);
+    for (const name of config.excludeFiles.filter(name => existsSync(name))) {
+      expect(markerFor(".", name), name).toEqual(expect.any(String));
+    }
+  });
+
+  it("chooses a README sentence no package README shares", () => {
+    // "Quickstart" heads the root README and two package READMEs; a probe for
+    // it could be answered from either, which is a control that never looked.
+    const marker = markerFor(".", "README.md");
+    for (const other of [
+      "packages/nextly/README.md",
+      "packages/create-nextly-app/README.md",
+    ]) {
+      expect(
+        readFileSync(other, "utf-8"),
+        `${other} shares "${marker}"`
+      ).not.toContain(marker);
+    }
   });
 });
 
 /** What the search endpoint says about the library. */
-function searchAnswer({ registered, state }) {
-  const results = registered ? [{ id: LIBRARY, state }] : [];
-  return { status: 200, body: JSON.stringify({ results }) };
-}
-
-/** What a topic query returns: the sentence, when the script says the index has it. */
-function topicAnswer(topic, topics) {
+function searchAnswer({ registered, state, results }) {
+  if (results !== undefined)
+    return { status: 200, body: JSON.stringify({ results }) };
   return {
     status: 200,
-    body: topics[topic] ? `### x\n\n${topic}\n` : "nothing\n",
+    body: JSON.stringify({
+      results: registered ? [{ id: LIBRARY, state }] : [],
+    }),
+  };
+}
+
+/**
+ * What a topic query returns: the sentence, cited from the file the script
+ * says holds it, or nothing.
+ */
+function topicAnswer(topic, topics) {
+  const from = topics[topic];
+  if (!from) return { status: 200, body: "nothing\n" };
+  return {
+    status: 200,
+    body: `### x\n\nSource: ${REPO_BLOB}main/${from}\n\n${topic}\n`,
   };
 }
 
 /**
  * A Context7 that answers from a script.
  *
- * `topics` maps a probed sentence to whether the index "returns" it; anything
- * not listed comes back empty. The real files under the repository root are
- * read for their markers, so the stand-in answers the questions the script
- * really asks.
+ * `topics` maps a probed sentence to the file the index "cites" it from;
+ * anything not listed comes back empty. The real files under the repository
+ * root are read for their markers, so the stand-in answers the questions the
+ * script really asks.
  */
 function context7({
   state = "finalized",
   registered = true,
+  results,
   cites = ["docs/index.mdx", "README.md"],
   topics = {},
   statusFor = () => 200,
@@ -203,7 +221,8 @@ function context7({
   return async url => {
     const status = statusFor(url);
     if (status !== 200) return { status, body: "" };
-    if (url.includes("/search?")) return searchAnswer({ registered, state });
+    if (url.includes("/search?"))
+      return searchAnswer({ registered, state, results });
     const topic = new URL(url).searchParams.get("topic");
     return topic === null
       ? { status: 200, body: dump }
@@ -213,30 +232,26 @@ function context7({
 
 /** The markers the script will ask for, read from the real files. */
 function realMarkers() {
-  const corpus = readdirSync("docs", { recursive: true })
-    .filter(name => String(name).endsWith(".mdx"))
-    .map(name => readFileSync(`docs/${name}`, "utf-8"))
-    .join("\n");
   const config = JSON.parse(readFileSync("context7.json", "utf-8"));
   return {
-    docs: firstHeading(
-      readFileSync("docs/getting-started/index.mdx", "utf-8"),
-      "docs"
-    ),
-    readme: probeMarker(readFileSync("README.md", "utf-8"), corpus),
+    docs: markerFor(".", "docs/getting-started/index.mdx"),
+    readme: markerFor(".", "README.md"),
     excluded: Object.fromEntries(
       config.excludeFiles
         .filter(name => existsSync(name))
-        .map(name => [name, probeMarker(readFileSync(name, "utf-8"), corpus)])
+        .map(name => [name, markerFor(".", name)])
     ),
   };
 }
 
 describe("verify", () => {
   const markers = realMarkers();
-  const kept = { [markers.docs]: true, [markers.readme]: true };
+  const kept = {
+    [markers.docs]: "docs/getting-started/index.mdx",
+    [markers.readme]: "README.md",
+  };
 
-  it("passes when the kept files come back and no excluded file does", async () => {
+  it("passes when the kept files come back cited and no excluded file does", async () => {
     const { status, lines } = await verify({
       root: ".",
       get: context7({ topics: kept }),
@@ -245,24 +260,39 @@ describe("verify", () => {
     expect(status).toBe(0);
   });
 
+  it("fails when a kept file's sentence comes back cited from somewhere else", async () => {
+    // The README's sentence answered from a package README: the marker is
+    // present, the root README is not, and the control must not clear.
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({
+        topics: { ...kept, [markers.readme]: "packages/nextly/README.md" },
+      }),
+    });
+    expect(status).toBe(1);
+    expect(lines.join("\n")).toContain("cited from README.md");
+  });
+
   it("fails when an excluded file's sentence is retrievable", async () => {
     const [name, marker] = Object.entries(markers.excluded)[0];
     const { status, lines } = await verify({
       root: ".",
-      get: context7({ topics: { ...kept, [marker]: true } }),
+      get: context7({ topics: { ...kept, [marker]: name } }),
     });
     expect(status).toBe(1);
-    expect(lines.join("\n")).toContain(`from ${name} is retrievable`);
+    expect(lines.join("\n")).toContain(`${name} is retrievable`);
   });
 
   it("fails when the README, which the configuration keeps, cannot be retrieved", async () => {
     const { status, lines } = await verify({
       root: ".",
-      get: context7({ topics: { [markers.docs]: true } }),
+      get: context7({
+        topics: { [markers.docs]: "docs/getting-started/index.mdx" },
+      }),
     });
     expect(status).toBe(1);
     expect(lines.join("\n")).toContain(
-      "from README.md; an absence would prove nothing"
+      "cited from README.md; an absence would prove nothing"
     );
   });
 
@@ -284,6 +314,19 @@ describe("verify", () => {
     expect(
       (await verify({ root: ".", get: context7({ state: "initial" }) })).status
     ).toBe(2);
+  });
+
+  it("cannot answer when the search results are not a list, or hold a null", async () => {
+    expect(
+      (await verify({ root: ".", get: context7({ results: {} }) })).status
+    ).toBe(2);
+    // A null entry is skipped rather than thrown on; the library is then simply absent.
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({ results: [null] }),
+    });
+    expect(status).toBe(2);
+    expect(lines.join("\n")).toContain("not in Context7's search results");
   });
 
   it("cannot answer when a probe gets no answer, rather than counting it as absent", async () => {
