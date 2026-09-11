@@ -1,0 +1,24 @@
+{
+  "$comment": "The MDX components a documentation page may use. nextlyhq.com registers every name here in app/docs/[[...slug]]/page.tsx and holds itself to this list; check-docs-compile holds every page to it. A page using a name that is not here compiles and then fails to render on the site. Fumadocs' default MDX components come first, then the ones the site adds.",
+  "components": [
+    "Callout",
+    "CalloutContainer",
+    "CalloutTitle",
+    "CalloutDescription",
+    "Card",
+    "Cards",
+    "CodeBlockTab",
+    "CodeBlockTabs",
+    "CodeBlockTabsList",
+    "CodeBlockTabsTrigger",
+    "Tab",
+    "Tabs",
+    "Accordion",
+    "Accordions",
+    "Step",
+    "Steps",
+    "File",
+    "Files",
+    "Folder"
+  ]
+}
