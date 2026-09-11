@@ -33,6 +33,7 @@
     "check:doc-samples": "node scripts/check-doc-samples.mjs",
     "docs:fix": "node scripts/check-docs-claims.mjs --fix",
     "check:repo-metadata": "node scripts/check-repo-metadata.mjs",
+    "check:context7-index": "node scripts/check-context7-index.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "lint": "turbo run lint",
     "lint:design": "node scripts/lint-design.mjs",
