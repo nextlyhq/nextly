@@ -148,8 +148,12 @@ describe("bulk update honours overrideAccess (integration)", () => {
     );
     // The row write is allowed and the protected field is stripped from it,
     // leaving an empty patch, which updates the row's timestamp and nothing
-    // else. What this case is about is the field, asserted below.
+    // else. Counted, not just error-free: a row skipped without being
+    // accounted for would also report no errors.
     expect(unelevated.errors).toEqual([]);
+    expect(unelevated.successful).toBe(1);
+    expect(unelevated.failed).toBe(0);
+    expect(unelevated.ids).toEqual([id]);
     let read = await handler.getEntry({
       collectionName: "pages",
       entryId: id,
