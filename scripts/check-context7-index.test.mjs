@@ -7,8 +7,11 @@ import {
   citedPaths,
   firstHeading,
   headings,
+  LIBRARY,
   probeMarker,
   REPO_BLOB,
+  Unanswerable,
+  verify,
 } from "./check-context7-index.mjs";
 
 /** A dump in the shape Context7 returns, measured on /upstash/context7. */
@@ -123,9 +126,10 @@ describe("probeMarker", () => {
     );
   });
 
-  it("reports nothing to probe for a file with no unshared heading", () => {
-    expect(probeMarker("@AGENTS.md\n", "")).toBeNull();
+  it("falls back to a line of prose, and reports nothing when every line is shared", () => {
+    expect(probeMarker("@AGENTS.md\n", "")).toBe("@AGENTS.md");
     expect(probeMarker("## Setup\n", "## Setup")).toBeNull();
+    expect(probeMarker("<p>markup</p>\n- a list\n", "")).toBeNull();
   });
 
   it("finds a marker in every committed excluded file that has headings", () => {
@@ -137,10 +141,158 @@ describe("probeMarker", () => {
       .map(name => readFileSync(`docs/${name}`, "utf-8"))
       .join("\n");
     expect(corpus.length).toBeGreaterThan(10000);
+    // Every excluded file, CLAUDE.md included: its one line, `@AGENTS.md`, is a
+    // sentence the docs do not contain, so even that file can be asked for.
     const unprobeable = config.excludeFiles.filter(
       name => probeMarker(readFileSync(name, "utf-8"), corpus) === null
     );
-    expect(unprobeable).toEqual(["CLAUDE.md"]);
+    expect(unprobeable).toEqual([]);
+  });
+});
+
+/** What the search endpoint says about the library. */
+function searchAnswer({ registered, state }) {
+  const results = registered ? [{ id: LIBRARY, state }] : [];
+  return { status: 200, body: JSON.stringify({ results }) };
+}
+
+/** What a topic query returns: the sentence, when the script says the index has it. */
+function topicAnswer(topic, topics) {
+  return {
+    status: 200,
+    body: topics[topic] ? `### x\n\n${topic}\n` : "nothing\n",
+  };
+}
+
+/**
+ * A Context7 that answers from a script.
+ *
+ * `topics` maps a probed sentence to whether the index "returns" it; anything
+ * not listed comes back empty. The real files under the repository root are
+ * read for their markers, so the stand-in answers the questions the script
+ * really asks.
+ */
+function context7({
+  state = "finalized",
+  registered = true,
+  cites = ["docs/index.mdx", "README.md"],
+  topics = {},
+  statusFor = () => 200,
+} = {}) {
+  const dump = cites
+    .map(path => `Source: ${REPO_BLOB}main/${path}\n`)
+    .join("\n");
+  return async url => {
+    const status = statusFor(url);
+    if (status !== 200) return { status, body: "" };
+    if (url.includes("/search?")) return searchAnswer({ registered, state });
+    const topic = new URL(url).searchParams.get("topic");
+    return topic === null
+      ? { status: 200, body: dump }
+      : topicAnswer(topic, topics);
+  };
+}
+
+/** The markers the script will ask for, read from the real files. */
+function realMarkers() {
+  const corpus = readdirSync("docs", { recursive: true })
+    .filter(name => String(name).endsWith(".mdx"))
+    .map(name => readFileSync(`docs/${name}`, "utf-8"))
+    .join("\n");
+  const config = JSON.parse(readFileSync("context7.json", "utf-8"));
+  return {
+    docs: firstHeading(
+      readFileSync("docs/getting-started/index.mdx", "utf-8"),
+      "docs"
+    ),
+    readme: probeMarker(readFileSync("README.md", "utf-8"), corpus),
+    excluded: Object.fromEntries(
+      config.excludeFiles
+        .filter(name => existsSync(name))
+        .map(name => [name, probeMarker(readFileSync(name, "utf-8"), corpus)])
+    ),
+  };
+}
+
+describe("verify", () => {
+  const markers = realMarkers();
+  const kept = { [markers.docs]: true, [markers.readme]: true };
+
+  it("passes when the kept files come back and no excluded file does", async () => {
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({ topics: kept }),
+    });
+    expect(lines.join("\n")).toContain("finalized");
+    expect(status).toBe(0);
+  });
+
+  it("fails when an excluded file's sentence is retrievable", async () => {
+    const [name, marker] = Object.entries(markers.excluded)[0];
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({ topics: { ...kept, [marker]: true } }),
+    });
+    expect(status).toBe(1);
+    expect(lines.join("\n")).toContain(`from ${name} is retrievable`);
+  });
+
+  it("fails when the README, which the configuration keeps, cannot be retrieved", async () => {
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({ topics: { [markers.docs]: true } }),
+    });
+    expect(status).toBe(1);
+    expect(lines.join("\n")).toContain(
+      "from README.md; an absence would prove nothing"
+    );
+  });
+
+  it("fails when a cited file is one the configuration excludes", async () => {
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({ topics: kept, cites: ["docs/index.mdx", "AGENTS.md"] }),
+    });
+    expect(status).toBe(1);
+    expect(lines.join("\n")).toContain(
+      "AGENTS.md is in excludeFiles and was indexed anyway"
+    );
+  });
+
+  it("cannot answer while the library is unregistered or still indexing", async () => {
+    expect(
+      (await verify({ root: ".", get: context7({ registered: false }) })).status
+    ).toBe(2);
+    expect(
+      (await verify({ root: ".", get: context7({ state: "initial" }) })).status
+    ).toBe(2);
+  });
+
+  it("cannot answer when a probe gets no answer, rather than counting it as absent", async () => {
+    // The excluded-file probe answers 500. Read as "not retrievable" it would
+    // clear the exclusion; it is the question going unanswered.
+    const excludedMarker = Object.values(markers.excluded)[0];
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({
+        topics: kept,
+        statusFor: url =>
+          decodeURIComponent(url).includes(excludedMarker) ? 500 : 200,
+      }),
+    });
+    expect(status).toBe(2);
+    expect(lines.join("\n")).toContain("answered 500");
+  });
+
+  it("cannot answer when the transport fails", async () => {
+    const { status, lines } = await verify({
+      root: ".",
+      get: async () => {
+        throw new Unanswerable("boom");
+      },
+    });
+    expect(status).toBe(2);
+    expect(lines.join("\n")).toContain("cannot answer");
   });
 });
 
