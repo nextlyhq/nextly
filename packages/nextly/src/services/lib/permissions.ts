@@ -199,6 +199,12 @@ class PermissionChecker {
         // promoting it would put a retired decision back into tier 1 for that
         // tier's whole life, having just been tombstoned in tier 2. Recompute
         // instead, which is what a miss would have done anyway.
+        //
+        // NOT covered by a test, and said here rather than left to look like
+        // coverage: `setCachedPermission` does not take effect under
+        // `createTestNextly` — the table is created and a write followed by a
+        // read returns null — so no test can reach this branch. The predicate
+        // it uses is covered; this call site is not.
         if (dbCached !== null && resolvedUnderCurrentRevision(resolvedUnder)) {
           // Cache hit - promote to tier 1
           this.memo.set(key, dbCached);
