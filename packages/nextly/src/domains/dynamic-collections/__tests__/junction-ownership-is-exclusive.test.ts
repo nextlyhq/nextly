@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { DynamicCollectionValidationService } from "../services/dynamic-collection-validation-service";
 
@@ -26,13 +27,23 @@ describe("junction ownership is exclusive", () => {
   const service = new DynamicCollectionValidationService();
 
   it("refuses two many-to-many fields that name the same junction table, naming both", () => {
-    expect(() =>
+    let refused: unknown;
+    try {
       service.validateFieldNames([
         relationship("tags", "manyToMany", "post_tag_links"),
         { name: "summary", type: "text" },
         relationship("labels", "manyToMany", "post_tag_links"),
-      ])
-    ).toThrow(
+      ]);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    const { errors } = (refused as NextlyError).publicData as {
+      errors: Array<{ code: string; message: string }>;
+    };
+    expect(errors).toHaveLength(1);
+    expect(errors[0].code).toBe("JUNCTION_TABLE_SHARED");
+    expect(errors[0].message).toContain(
       'Fields "tags" and "labels" both store their links in junction table "post_tag_links"'
     );
   });

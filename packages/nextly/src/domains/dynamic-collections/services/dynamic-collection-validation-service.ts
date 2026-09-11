@@ -11,6 +11,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
  * static analyzers.
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
@@ -234,7 +235,7 @@ export class DynamicCollectionValidationService {
    * either field would take the other's table with it. Only an author-named
    * `junctionTable` can collide: the generated name carries the field's own.
    *
-   * @throws Error naming both fields and the table
+   * @throws NextlyError (validation, `JUNCTION_TABLE_SHARED`) naming both fields and the table
    */
   validateJunctionOwnership(fields: FieldDefinition[]): void {
     const owners = new Map<string, string>();
@@ -243,9 +244,19 @@ export class DynamicCollectionValidationService {
       if (!usesJunctionTable(field) || !table) continue;
       const owner = owners.get(table);
       if (owner !== undefined) {
-        throw new Error(
-          `Fields "${owner}" and "${field.name}" both store their links in junction table "${table}". Each many-to-many field needs a junction table of its own.`
-        );
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fields",
+              code: "JUNCTION_TABLE_SHARED",
+              message:
+                `Fields "${owner}" and "${field.name}" both store their links in ` +
+                `junction table "${table}". Each many-to-many field needs a ` +
+                `junction table of its own.`,
+            },
+          ],
+          logContext: { fields: [owner, field.name], junctionTable: table },
+        });
       }
       owners.set(table, field.name);
     }
