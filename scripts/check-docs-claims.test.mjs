@@ -226,6 +226,84 @@ describe("naming-rule", () => {
   });
 });
 
+describe("context7", () => {
+  const core = (description) =>
+    JSON.stringify({ name: "nextly", version: "1.0.0", description });
+  const config = (description) =>
+    JSON.stringify({ projectTitle: "Nextly", description, folders: ["docs"] });
+  const SENTENCE = "Nextly is an open-source CMS and visual page builder for Next.js.";
+
+  it("holds the committed file to the committed core description", async () => {
+    // The real files, not a fixture: this is the parity the check exists for.
+    const { context7Findings, readContext7Config } = await import("./check-docs-claims.mjs");
+    const config = readContext7Config("context7.json");
+    const { description } = JSON.parse(await readFile("packages/nextly/package.json", "utf-8"));
+    expect(config).not.toBeNull();
+    expect(context7Findings(config, description)).toBeNull();
+  });
+
+  it("fires when the description names the retired category", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": config("Nextly is an app framework for Next.js."),
+      })
+    ).toContain("retired-category");
+  });
+
+  it("fires when the description drifts from the core package's", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": config("Nextly is a CMS for Next.js."),
+      })
+    ).toContain("context7-description");
+  });
+
+  it("fires when there is no description at all", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": JSON.stringify({ folders: ["docs"] }),
+      })
+    ).toContain("context7-description");
+  });
+
+  it("fires when the file is not tracked at all", async () => {
+    expect(
+      await checksFor({ "packages/nextly/package.json": core(SENTENCE) })
+    ).toContain("context7-missing");
+  });
+
+  it("fires when the core package has no description to follow", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({ name: "nextly", version: "1.0.0" }),
+        "context7.json": config(SENTENCE),
+      })
+    ).toContain("context7-description");
+  });
+
+  it("fires when the file does not parse", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": "{ not json",
+      })
+    ).toContain("context7-unreadable");
+  });
+
+  it("is silent when the two sentences agree", async () => {
+    const checks = await checksFor({
+      "packages/nextly/package.json": core(SENTENCE),
+      "context7.json": config(SENTENCE),
+    });
+    expect(checks).not.toContain("context7-description");
+    expect(checks).not.toContain("context7-unreadable");
+    expect(checks).not.toContain("retired-category");
+  });
+});
+
 describe("retired-category", () => {
   it("declares only surfaces that exist, so a rename cannot drop one silently", async () => {
     const { CATEGORY_SURFACES } = await import("./check-docs-claims.mjs");
