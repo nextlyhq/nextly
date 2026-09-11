@@ -10,7 +10,7 @@
  * @module lib/builder/builder-rows.test
  */
 
-import type { Active } from "@dnd-kit/core";
+import type { Active, Over } from "@dnd-kit/core";
 import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
@@ -77,8 +77,19 @@ describe("the rows the builder draws", () => {
 
   it("round-trips a row id", () => {
     expect(builderRowIndex(builderRowId(3))).toBe(3);
+    expect(builderRowIndex(builderRowId(0))).toBe(0);
     expect(builderRowIndex("field_abc")).toBeUndefined();
     expect(builderRowIndex("row-x")).toBeUndefined();
+  });
+
+  it("names a row only for the ids the list mints", () => {
+    // 🔴 `Number()` read `row--1` as -1 and `row-1.5` as a fraction. Each
+    // sat below the acceptance rule's upper bound, so a drop was announced as
+    // a move while the reorder's own range check refused it. Only a canonical
+    // nonnegative integer -- what `builderRowId` writes -- names a row.
+    for (const id of ["row--1", "row-1.5", "row-01", "row-", "row-1e2"]) {
+      expect(builderRowIndex(id), id).toBeUndefined();
+    }
   });
 });
 
@@ -102,6 +113,14 @@ describe("what a drag on the canvas says", () => {
     data: { current: undefined },
     rect: { current: { initial: null, translated: null } },
   });
+  // A droppable carries a resolved rect where a draggable carries a ref to
+  // one; the sentences read neither, so both are empty here.
+  const over = (id: string): Over => ({
+    id,
+    data: { current: undefined },
+    rect: { width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 },
+    disabled: false,
+  });
 
   it("names every field in a row, and places the row among the rows drawn", () => {
     // Two half-width fields share row 1; the hidden field takes none; the
@@ -121,6 +140,33 @@ describe("what a drag on the canvas says", () => {
     );
   });
 
+  it("says a field with no label and no name yet is unnamed, rather than nothing", () => {
+    // 🔴 A field just added to the canvas has both empty until its author
+    // fills them in, and it drags in that state. Read as `label || name` it
+    // was announced as "Picked up , row 2" and, beside a named field, as
+    // "and Title".
+    const blank = field("new_1", { name: "", label: "", width: "50%" });
+    const speak = builderAnnouncements([
+      field("title", { label: "Title", width: "50%" }),
+      blank,
+      field("new_2", { name: "", label: "" }),
+      field("gallery", {
+        type: "repeater",
+        label: "Gallery",
+        fields: [field("new_3", { name: "", label: "" })],
+      } as Partial<BuilderField>),
+    ]);
+    expect(speak.onDragStart({ active: at("row-0") })).toBe(
+      "Picked up Title and an unnamed field, row 1 of 3."
+    );
+    expect(speak.onDragStart({ active: at("row-1") })).toBe(
+      "Picked up an unnamed field, row 2 of 3."
+    );
+    expect(speak.onDragStart({ active: at("new_3") })).toBe(
+      "Picked up an unnamed field, position 1 of 1."
+    );
+  });
+
   it("says a drop the handler refuses moved nothing", () => {
     // 🔴 A nested field released over a field in ANOTHER container is refused
     // by the drop handler, and the generic landing sentence said "moved to"
@@ -134,13 +180,13 @@ describe("what a drag on the canvas says", () => {
       } as Partial<BuilderField>),
     ];
     const speak = builderAnnouncements(withTwoContainers);
-    expect(speak.onDragEnd({ active: at("credit"), over: at("note") })).toBe(
+    expect(speak.onDragEnd({ active: at("credit"), over: over("note") })).toBe(
       "Credit cannot move there. Nothing moved."
     );
     // The accepted case keeps its landing sentence.
-    expect(speak.onDragEnd({ active: at("credit"), over: at("caption") })).toBe(
-      "Credit moved to position 1 of 2."
-    );
+    expect(
+      speak.onDragEnd({ active: at("credit"), over: over("caption") })
+    ).toBe("Credit moved to position 1 of 2.");
   });
 
   it("never reads a row id or a field id aloud", () => {
@@ -180,5 +226,9 @@ describe("which drops the canvas accepts", () => {
 
   it("refuses a row index the canvas does not draw", () => {
     expect(builderDropAccepted(fields, "row-0", "row-9")).toBe(false);
+    // Below the count too: a negative index passes `< count` and is refused
+    // by the reorder, so accepting it here announces a move that never
+    // happens.
+    expect(builderDropAccepted(fields, "row-0", "row--1")).toBe(false);
   });
 });
