@@ -1,0 +1,152 @@
+name: Superseded on main
+description: >
+  Whether a newer push to `main` already has a run of this workflow, and which
+  earlier commit was the last this workflow actually tested. A run that finds
+  a newer one skips its jobs rather than repeating work the newer run will do.
+
+# Why a run skips itself instead of being cancelled.
+#
+# `main` groups its runs per commit, so nothing cancels anything and every
+# commit keeps a verdict of its own. At the merge rate this repository sees that
+# queue could not drain: each Integration run is three dialects for half an
+# hour, and fifty runs sat queued with nothing on `main` able to report.
+#
+# Cancelling the older run was tried and reversed. `cancelled` then has to mean
+# "superseded", or "somebody stopped it", or "it hit its timeout", and every
+# reader of the check has to tell those apart with rules that grow as each new
+# way of being wrong turns up. Skipping keeps `cancelled` meaning what it says.
+# A skipped job is already how this repository expresses "this commit cannot
+# affect me", it already passes the merge gate, and here it is literally true:
+# the newer run's verdict includes this commit.
+#
+# The queue drains because every queued run starts, asks, and stops within a
+# few seconds; only the newest does the work.
+
+inputs:
+  workflow:
+    description: "The workflow file name, e.g. `ci.yml`. Runs of other workflows are not consulted."
+    required: true
+  substantive-job:
+    description: >
+      The display name of the job that does this workflow's real work. The last
+      completed run whose job of this name concluded `success` or `failure` is
+      the last commit this workflow actually tested, and is what a
+      change-detection step should diff against. Without it, a docs-only push landing after a superseded
+      code push would diff against the code push alone, read as inert, and
+      leave that code untested.
+    required: true
+  token:
+    description: "A token with `actions: read`."
+    required: true
+
+outputs:
+  superseded:
+    description: "`true` when a newer push to `main` already has a run of this workflow."
+    value: ${{ steps.ask.outputs.superseded }}
+  last-tested-sha:
+    description: >
+      The head commit of the newest completed run of this workflow on `main`
+      whose substantive job reached a verdict. Empty when none is found or the
+      history could not be read, in which case a caller that narrows its work
+      by diff should run everything: diffing against `github.event.before`
+      instead would reopen the hole this output closes.
+    value: ${{ steps.ask.outputs.last_tested_sha }}
+
+runs:
+  using: composite
+  steps:
+    - name: Ask
+      id: ask
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        WORKFLOW: ${{ inputs.workflow }}
+        SUBSTANTIVE_JOB: ${{ inputs.substantive-job }}
+        REPO: ${{ github.repository }}
+        THIS_RUN: ${{ github.run_number }}
+        THIS_SHA: ${{ github.sha }}
+        EVENT: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+      run: |
+        set -uo pipefail
+
+        # Only a push to main can be superseded. A pull request run answers for
+        # its own head and nothing else.
+        if [ "$EVENT" != "push" ] || [ "$REF" != "refs/heads/main" ]; then
+          echo "superseded=false" >> "$GITHUB_OUTPUT"
+          echo "last_tested_sha=" >> "$GITHUB_OUTPUT"
+          echo "not a push to main; nothing to ask"
+          exit 0
+        fi
+
+        # The most recent runs of THIS workflow on main, newest first. Run
+        # numbers are per-workflow and monotonic, so "newer" is a number
+        # comparison rather than a timestamp one, and a run that has not
+        # started yet still counts. One page: a newer run is by definition on
+        # it, and the walk below stops at the first tested commit, so paging
+        # through the workflow's whole history would cost a request per fifty
+        # runs to read nothing.
+        runs=$(gh api \
+          "repos/$REPO/actions/workflows/$WORKFLOW/runs?branch=main&event=push&per_page=100" \
+          --jq '.workflow_runs[] | {n: .run_number, sha: .head_sha, id: .id, status: .status, conclusion: .conclusion}' 2>/dev/null) || runs=""
+
+        if [ -z "$runs" ]; then
+          # Could not read the history. Fail OPEN: run everything, as a fresh
+          # repository or a transient API failure should, and say so.
+          echo "superseded=false" >> "$GITHUB_OUTPUT"
+          echo "last_tested_sha=" >> "$GITHUB_OUTPUT"
+          echo "::warning::could not list runs of $WORKFLOW on main; running everything"
+          exit 0
+        fi
+
+        # A newer run covers this one only if it can still deliver a verdict:
+        # queued, in progress, or completed with one. A newer run already
+        # cancelled or timed out tested nothing and covers nothing, so this
+        # run does its own work. A covering run that is cancelled AFTER this
+        # one skipped cannot be undone here; the recovery is the next push,
+        # whose diff base is the last commit that actually reached a verdict
+        # (below), so the whole untested range is tested then. Until that
+        # push, the cancelled run is the newest thing on main and reads as
+        # what it is.
+        newer=$(printf '%s\n' "$runs" | jq -r --argjson me "$THIS_RUN" --arg sha "$THIS_SHA" \
+          'select(.n > $me and .sha != $sha)
+           | select(.status != "completed" or .conclusion == "success" or .conclusion == "failure")
+           | .sha' | head -1)
+
+        if [ -n "$newer" ]; then
+          echo "superseded=true" >> "$GITHUB_OUTPUT"
+          echo "last_tested_sha=" >> "$GITHUB_OUTPUT"
+          echo "::notice::superseded: $newer already has a newer run of $WORKFLOW on main; skipping"
+          exit 0
+        fi
+
+        # Not superseded. Find the last commit this workflow actually tested,
+        # walking completed runs newest-first and asking each whether its
+        # substantive job reached a verdict. Only `success` and `failure` are
+        # verdicts: both mean the job ran to its end and judged the commit,
+        # and a failed one is red on main where someone will look. A job that
+        # was skipped (its run superseded or inert), cancelled, or timed out
+        # judged nothing, and a docs-only push diffing against it would read
+        # as inert and leave that commit's code untested.
+        #
+        # `gh api --jq` takes one filter and no `--arg`, so the job name is
+        # bound by `jq` itself over the raw response.
+        last=""
+        for id in $(printf '%s\n' "$runs" | jq -r --argjson me "$THIS_RUN" \
+          'select(.n < $me and .status == "completed") | .id'); do
+          conclusion=$(gh api "repos/$REPO/actions/runs/$id/jobs?per_page=100" 2>/dev/null \
+            | jq -r --arg name "$SUBSTANTIVE_JOB" \
+              '[.jobs[] | select(.name == $name)] | first | .conclusion // "absent"') || conclusion="absent"
+          if [ "$conclusion" = "success" ] || [ "$conclusion" = "failure" ]; then
+            last=$(printf '%s\n' "$runs" | jq -r --argjson id "$id" 'select(.id == $id) | .sha')
+            break
+          fi
+        done
+
+        echo "superseded=false" >> "$GITHUB_OUTPUT"
+        echo "last_tested_sha=$last" >> "$GITHUB_OUTPUT"
+        if [ -n "$last" ]; then
+          echo "last commit $WORKFLOW actually tested on main: $last"
+        else
+          echo "::notice::no earlier tested commit found for $WORKFLOW; a caller that diffs should run everything"
+        fi

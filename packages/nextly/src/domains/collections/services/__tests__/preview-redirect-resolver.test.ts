@@ -948,7 +948,10 @@ describe("the authenticated boundary on the explaining form", () => {
     const readModule = (rel: string): { at: string; source: string } | null => {
       for (const at of [rel, rel.replace(/\.ts$/, "/index.ts")]) {
         try {
-          return { at, source: readFileSync(fileURLToPath(new URL(at, root)), "utf8") };
+          return {
+            at,
+            source: readFileSync(fileURLToPath(new URL(at, root)), "utf8"),
+          };
         } catch {
           continue;
         }

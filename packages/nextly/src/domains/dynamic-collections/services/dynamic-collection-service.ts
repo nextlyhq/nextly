@@ -1045,10 +1045,11 @@ export class DynamicCollectionService extends BaseService {
         // Detected from the FULL lists: a renamed LOCALIZED field-group field
         // sits in neither shared list, and its association migration must not
         // be excluded along with its column handling.
-        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
-          oldUserFields,
-          userDefinedFields
-        );
+        const groupAssociationRename =
+          this.schemaService.detectFieldGroupAssociationRename(
+            oldUserFields,
+            userDefinedFields
+          );
         const mainSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldShared,
@@ -1101,10 +1102,11 @@ export class DynamicCollectionService extends BaseService {
           localMigrationSQL = assemble(localCompanionSQL);
         }
       } else {
-        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
-          oldUserFields,
-          userDefinedFields
-        );
+        const groupAssociationRename =
+          this.schemaService.detectFieldGroupAssociationRename(
+            oldUserFields,
+            userDefinedFields
+          );
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldUserFields,

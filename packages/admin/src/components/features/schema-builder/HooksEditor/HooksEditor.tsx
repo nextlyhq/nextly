@@ -40,6 +40,10 @@ import {
 } from "@nextlyhq/ui";
 import { useState, useCallback, useEffect, useMemo } from "react";
 
+import {
+  positionInList,
+  sortableAnnouncements,
+} from "@admin/components/features/entries/fields/structured/field-array-helpers";
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
@@ -76,7 +80,24 @@ export function HooksEditor({
     [onExpandedChange]
   );
 
+  // The hooks that are DRAWN: a saved hook whose id the catalogue no longer
+  // knows renders no card, and a list that still counted it announced
+  // "position 2 of 2" for the one card the reader could see. Derived once and
+  // used for the sortable ids, the cards and the announcements alike.
+  const renderedHooks = hooks.filter(hook => getPrebuiltHook(hook.hookId));
+  const hookIds = renderedHooks.map(hook => hook.id);
+  // Said about the HOOK by the name the catalogue gives it, so a reader
+  // hears "Picked up Auto slug, position 1 of 2" rather than an instance id.
+  const announcements = sortableAnnouncements({
+    describe: ({ id }) => {
+      const hook = renderedHooks.find(h => h.id === id);
+      return hook ? getPrebuiltHook(hook.hookId)?.name : undefined;
+    },
+    place: ({ id }) => positionInList(hookIds, id),
+  });
+
   // DnD sensors
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 8 },
@@ -229,13 +250,14 @@ export function HooksEditor({
               sensors={sensors}
               collisionDetection={closestCenter}
               onDragEnd={handleDragEnd}
+              accessibility={{ announcements }}
             >
               <SortableContext
-                items={hooks.map(hook => hook.id)}
+                items={hookIds}
                 strategy={verticalListSortingStrategy}
               >
                 <div className="space-y-2">
-                  {hooks.map(hook => (
+                  {renderedHooks.map(hook => (
                     <SortableHookCard
                       key={hook.id}
                       hook={hook}

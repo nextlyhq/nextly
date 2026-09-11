@@ -56,7 +56,9 @@ const TYPES_WITH_TYPE_SPECIFIC_EDITOR = new Set([
  * strand a migrated definition on the general tab with no way to edit it.
  */
 function hasTypeSpecificEditor(type: string): boolean {
-  return TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(type) || isFieldGroupFieldType(type);
+  return (
+    TYPES_WITH_TYPE_SPECIFIC_EDITOR.has(type) || isFieldGroupFieldType(type)
+  );
 }
 
 export function GeneralTab({ field, readOnly = false, onChange }: Props) {

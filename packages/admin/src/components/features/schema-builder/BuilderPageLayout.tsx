@@ -17,6 +17,7 @@ import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import type { ReactNode } from "react";
 
 import { PageContainer } from "@admin/components/layout/page-container";
+import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
 
 import type { BuilderConfig } from "./builder-config";
 import { BuilderFieldList } from "./BuilderFieldList";
@@ -93,6 +94,9 @@ export function BuilderPageLayout({
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}
           onDragEnd={onRowDragEnd}
+          accessibility={{
+            announcements: builderAnnouncements(builder.fields),
+          }}
         >
           <BuilderFieldList
             fields={builder.fields}

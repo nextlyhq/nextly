@@ -468,6 +468,8 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * this package does not mark optional, so a consumer installs it whichever
  * subpath they import. The boundary is about what a module GRAPH pulls in, not
  * about what a package manager resolves.
+ *
+ * @public
  */
 export async function getCachedNextly(): Promise<Nextly> {
   // Before ANY return, including the cached one. This is the surface that could

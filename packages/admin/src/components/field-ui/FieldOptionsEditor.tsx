@@ -35,6 +35,10 @@ import {
 } from "@nextlyhq/ui";
 import { useState, useCallback, useMemo } from "react";
 
+import {
+  positionInList,
+  sortableAnnouncements,
+} from "@admin/components/features/entries/fields/structured/field-array-helpers";
 import * as Icons from "@admin/components/icons";
 import { generateSlug } from "@admin/lib/fields";
 
@@ -224,7 +228,9 @@ function SortableOptionRow({
     >
       <button
         type="button"
-        aria-label="Reorder option"
+        // Named per OPTION. Every handle labelled alike is N identical
+        // buttons to a reader moving by keyboard.
+        aria-label={`Reorder ${option.label || option.value || "option"}`}
         disabled={disabled}
         className="cursor-grab p-1 text-muted-foreground hover:text-foreground active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50"
         {...attributes}
@@ -294,6 +300,19 @@ export function FieldOptionsEditor({
   const [importText, setImportText] = useState("");
   const [importFormat, setImportFormat] = useState<"csv" | "json">("csv");
   const [importError, setImportError] = useState<string | null>(null);
+
+  // Said about the OPTION by its label -- a reader hears "Picked up Draft,
+  // position 1 of 3", not the generated option id.
+  const optionIds = options.map(option => option.id);
+  const announcements = sortableAnnouncements({
+    describe: ({ id }) => {
+      const option = options.find(o => o.id === id);
+      // The same fallback the handle uses, so an option added and dragged
+      // before it has a label or value is still "option" and not a blank.
+      return option ? option.label || option.value || "option" : undefined;
+    },
+    place: ({ id }) => positionInList(optionIds, id),
+  });
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -431,9 +450,10 @@ export function FieldOptionsEditor({
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
+          accessibility={{ announcements }}
         >
           <SortableContext
-            items={options.map(option => option.id)}
+            items={optionIds}
             strategy={verticalListSortingStrategy}
           >
             <div className="space-y-1.5">

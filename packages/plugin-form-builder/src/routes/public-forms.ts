@@ -327,6 +327,15 @@ async function acceptSubmission(
     {
       formSlug: slug,
       data,
+      // The visitor's language, from `?locale=` on the submit URL — the same
+      // place core's own routes read a locale on the wire — so a picked
+      // redirect page answers with its URL in that language. A form on a
+      // French page posts to `/api/forms/contact/submit?locale=fr` and is
+      // sent to `/merci`; one that names no locale is answered in the
+      // default, as before. An unconfigured code reads as the default rather
+      // than refusing the submission: the visitor filled the form in, and a
+      // wrong query string is not a reason to lose what they wrote.
+      locale: new URL(req.url).searchParams.get("locale") || undefined,
       // The request itself, so the write seam resolves the client under this
       // deployment's proxy-trust settings and judges this submission on the
       // same facts as one arriving through any other door.
