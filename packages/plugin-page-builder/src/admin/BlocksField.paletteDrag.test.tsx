@@ -826,6 +826,47 @@ describe("what a component's own content field may offer", () => {
     ]);
   });
 
+  it("judges what a candidate reaches under the SITE's node cap, and leaves out one the cap cannot read whole", () => {
+    // The walk over a definition is bounded, and a bound that ends it early
+    // leaves a prefix that names nothing past it. Read under the engine's
+    // default cap, a site that lowered its own would clear a candidate on a
+    // prefix; read under the site's, the same candidate is left out because
+    // it cannot be shown not to reach the row.
+    const text = (id: string) => ({
+      id,
+      type: "core/text",
+      version: 1,
+      props: {},
+    });
+    const library = [
+      { id: "a", title: "A", document: definition },
+      {
+        id: "wide",
+        title: "Wide",
+        document: {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [text("w1"), text("w2"), text("w3")],
+        },
+      },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    componentAnswer = { items: library, meta: { count: 3, truncated: false } };
+    clientConfig = { limits: { maxNodes: 2 } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
+      "footer",
+    ]);
+  });
+
   it("offers every component to a PAGE's field, whatever the page's id", () => {
     // The control, and the rule's second half: a page is never inside a
     // component, however the ids happen to fall.

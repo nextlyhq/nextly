@@ -47,12 +47,13 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
-  componentIdsIn,
+  componentUsageIn,
   isComponentDocument,
   newId,
   type BlockDocument,
   type ComponentLookup,
   type DocumentKind,
+  type DocumentLimits,
   type BreakpointSet,
   type NamedClass,
   type SiteTokenSet,
@@ -366,18 +367,25 @@ export function documentFrom(
  * inside a component however the ids fall, and a component's field on a
  * create form names no row yet and can place anything.
  *
+ * Every read of the graph is bounded by the SITE's node cap, and a read the
+ * cap ends early is not "names nothing" — it is unread, and the candidate is
+ * left out (`reaches`).
+ *
  * Exported for its own test, for the reason `documentFrom` is.
  */
 export function withoutSelf(
   components: readonly SavedComponent[],
   editing: BlockDocument,
   identity: { documentId?: string | undefined } | null,
-  definitions: ComponentLookup
+  definitions: ComponentLookup,
+  limits: DocumentLimits
 ): readonly SavedComponent[] {
   const self = identity?.documentId;
   if (self === undefined || !isComponentDocument(editing)) return components;
   const kept = components.filter(
-    component => component.id !== self && !reaches(component, self, definitions)
+    component =>
+      component.id !== self &&
+      !reaches(component, self, definitions, limits.maxNodes)
   );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
@@ -386,29 +394,44 @@ export function withoutSelf(
 
 /**
  * Whether a component's stored graph names the definition given, at any
- * depth, through the lookup.
+ * depth, through the lookup — or cannot be shown not to.
  *
  * Each definition is read once per question — a loop among other rows ends
  * where it began rather than running on — and one the lookup does not hold
  * names nothing further, which is the honest answer for a reference nothing
  * here can follow.
+ *
+ * Every read is bounded by the cap given, and a read the cap ends early has
+ * answered with a PREFIX: a reference past it is invisible, so "names nothing"
+ * is what an unread definition looks like too, and a candidate cleared on that
+ * answer can close the loop through the part nobody read. So an incomplete
+ * read counts as reaching, and the candidate is left out. That refuses no
+ * legitimate offer — a definition the cap cannot read whole is one the
+ * resolver cannot inline under that cap either — and it is the direction to
+ * err in, because the other one is a saved loop every page then draws as a
+ * placeholder.
  */
 function reaches(
   component: SavedComponent,
   id: string,
-  definitions: ComponentLookup
+  definitions: ComponentLookup,
+  maxNodes: number
 ): boolean {
   const document = component.document;
   if (document === undefined || document === null) return false;
-  const pending = componentIdsIn(document.nodes);
+  const own = componentUsageIn(document.nodes, maxNodes);
+  if (!own.complete) return true;
+  const pending = own.ids;
   const followed = new Set<string>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     if (next === id) return true;
     if (followed.has(next)) continue;
     followed.add(next);
     const definition = definitions.get(next);
-    if (definition !== undefined)
-      pending.push(...componentIdsIn(definition.nodes));
+    if (definition === undefined) continue;
+    const named = componentUsageIn(definition.nodes, maxNodes);
+    if (!named.complete) return true;
+    pending.push(...named.ids);
   }
   return false;
 }
@@ -2442,12 +2465,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       componentLibrary.components,
       initialDocument,
       identity,
-      componentLibrary.definitions
+      componentLibrary.definitions,
+      documentLimits
     );
     return components === componentLibrary.components
       ? componentLibrary
       : { ...componentLibrary, components };
-  }, [componentLibrary, initialDocument, identity]);
+  }, [componentLibrary, initialDocument, identity, documentLimits]);
 
   const canvasRender = useMemo(
     () =>

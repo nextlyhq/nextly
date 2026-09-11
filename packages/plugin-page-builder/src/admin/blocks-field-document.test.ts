@@ -8,6 +8,7 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
   type BlockNode,
@@ -132,7 +133,9 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup).map(r => r.id)
+      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
+        r => r.id
+      )
     ).toEqual(["d", "footer"]);
   });
 
@@ -166,7 +169,9 @@ describe("withoutSelf", () => {
     const library = [a, gated, ...chain];
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
-    expect(withoutSelf(library, editing, identity, lookup)).toEqual([]);
+    expect(
+      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS)
+    ).toEqual([]);
   });
 
   it("ends a loop among other rows where it began, and follows nothing from a row the lookup does not hold", () => {
@@ -189,10 +194,76 @@ describe("withoutSelf", () => {
     };
 
     expect(
-      withoutSelf(library, editing, identity, lookup).map(r => r.id)
+      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
+        r => r.id
+      )
     ).toEqual(["x", "y", "s"]);
     // x's question reads y then x; y's reads x then y; s's reads nobody.
     expect(reads).toBe(5);
+  });
+
+  it("leaves out a candidate whose graph could not be read whole under the site's cap, whether or not the readable prefix names the row", () => {
+    /*
+     * The walk over a definition is bounded by the site's node cap, and a
+     * bound that ends it early leaves a PREFIX. A reference past the cap is
+     * then invisible, so "names nothing" is what an unread definition looks
+     * like too — and a candidate cleared on that answer can close a loop
+     * through the part nobody read. So an incomplete read is not "no": the
+     * candidate is left out. It costs no legitimate offer, because a
+     * definition the cap cannot read whole is one the resolver cannot inline
+     * under that cap either.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 3 };
+    const a = row("a", componentOf([text("t")]));
+    // Four entries before the reference: the cap reads three and stops.
+    const late = row(
+      "late",
+      componentOf([
+        text("l1"),
+        text("l2"),
+        text("l3"),
+        text("l4"),
+        instanceOf("a", "late-a"),
+      ])
+    );
+    // Over the cap and naming nothing at all — the case a prefix would clear.
+    const wide = row(
+      "wide",
+      componentOf([text("w1"), text("w2"), text("w3"), text("w4")])
+    );
+    // Under the cap and naming nothing: the control, kept.
+    const small = row("small", componentOf([text("s1")]));
+    const library = [a, late, wide, small];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(
+      withoutSelf(library, editing, identity, lookup, limits).map(r => r.id)
+    ).toEqual(["small"]);
+    // The SITE's cap, not the engine's default: under the default all three
+    // are read whole, and only the one that names the row goes.
+    expect(
+      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
+        r => r.id
+      )
+    ).toEqual(["wide", "small"]);
+  });
+
+  it("leaves out a candidate whose graph reaches, through the lookup, a definition the cap cannot read whole", () => {
+    // The same rule one step out: a followed definition is read under the
+    // same bound, and one that cannot be read whole may name the row past it.
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 3 };
+    const a = row("a", componentOf([text("t")]));
+    const wide = row(
+      "wide",
+      componentOf([text("w1"), text("w2"), text("w3"), text("w4")])
+    );
+    const viaWide = row("via-wide", componentOf([instanceOf("wide", "v-w")]));
+    const library = [a, wide, viaWide];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(
+      withoutSelf(library, editing, identity, lookup, limits).map(r => r.id)
+    ).toEqual([]);
   });
 
   it("reads each definition's references once per row, never its subtree", () => {
@@ -213,7 +284,9 @@ describe("withoutSelf", () => {
     const library = [a, holder];
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
-    expect(withoutSelf(library, editing, identity, lookup)).toEqual([]);
+    expect(
+      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS)
+    ).toEqual([]);
     // One walk of the holder's own forest reads its slots once; a
     // composition would clone them.
     expect(descents).toBe(1);
