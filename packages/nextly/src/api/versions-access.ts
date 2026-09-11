@@ -3,9 +3,9 @@
  *
  * Version rows carry a full snapshot of a document, so reading them must be at
  * least as restricted as reading the document itself. A coarse `read-<slug>`
- * permission is not sufficient: collections can additionally apply owner-only
- * rules, draft/published filtering, and field-level `access.read` redaction,
- * none of which the version table knows about.
+ * permission is not sufficient: a collection additionally applies
+ * draft/published filtering and field-level `access.read` redaction, neither of
+ * which the version table knows about.
  *
  * The gate therefore resolves the caller, then reads the LIVE document through
  * the same service a normal read uses. If that read denies or finds nothing,
@@ -83,8 +83,8 @@ export async function requireRouteVersionReadAccess(
 
   // For an API-key request the live-document read gate must judge the key's OWN
   // read grant, not the key owner's roles — otherwise a super-admin-owned key
-  // scoped for read could see a document's history while bypassing its stored
-  // owner-only/custom read rule (the dispatcher path does the same).
+  // scoped for read could see a document's history while bypassing the
+  // collection's own read gate (the dispatcher path does the same).
   const authenticatedScope: AuthenticatedScope | undefined =
     auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined;
 
@@ -104,8 +104,8 @@ export async function requireRouteVersionReadAccess(
  * authenticated and coarsely authorized.
  *
  * The dispatcher authorizes centrally before dispatching, so it needs the
- * document-level half of the gate on its own — owner-only rules,
- * draft/published visibility, and (for Singles) the live-id match. Keeping this
+ * document-level half of the gate on its own — draft/published visibility,
+ * and (for Singles) the live-id match. Keeping this
  * separate from {@link requireRouteVersionReadAccess} means those rules are defined
  * once instead of drifting between the two entry points.
  *
@@ -118,8 +118,8 @@ export async function assertVersionDocumentReadable(
   user: UserContext,
   // The caller's authenticated scope. Version history is a read of the live
   // document, so a scoped API key is judged on its OWN read grant here — a
-  // super-admin-owned key does not skip the document's stored owner-only/custom
-  // read rules before its snapshots are exposed.
+  // super-admin-owned key does not skip the document's own read gate before
+  // its snapshots are exposed.
   authenticatedScope?: AuthenticatedScope
 ): Promise<void> {
   const readable = await canReadLiveDocument(
@@ -150,10 +150,10 @@ export async function assertVersionDocumentReadable(
  * Renaming or otherwise editing a version changes a record of the document, so
  * it owes the document's own update rules. The route-level `update-<slug>`
  * permission is coarse: it says the caller may update documents of this kind,
- * not that they may update THIS one. A collection or Single carrying an
- * owner-only or role-based per-document rule refuses the document itself while
- * that coarse permission still stands, and without this gate the history would
- * stay editable.
+ * not that they may reach THIS one. A document the caller cannot load — it is a
+ * draft they may not see, or a Single whose live id has moved — is refused by
+ * the read path while that coarse permission still stands, and without this gate
+ * the history would stay editable.
  *
  * Read access is assumed to have been established already. That is why a
  * refusal here is 403 rather than the read gate's 404: the caller has proven
@@ -232,8 +232,7 @@ async function canUpdateLiveSingle(
 
 /**
  * Whether the caller can read the live document, using the same service the
- * normal read path uses so owner-only rules and stored access rules apply
- * identically.
+ * normal read path uses so the collection's own gate applies identically.
  *
  * A denial (403) and a missing document (404) both mean "no history for you".
  * Any other failure is a real server-side fault — a component/relationship load
@@ -262,7 +261,7 @@ async function canReadLiveDocument(
     // resolving its creator's stored roles). Document-level rules still run.
     routeAuthorized: true,
     // A scoped API key is judged on its OWN read grant, so a super-admin-owned
-    // key does not skip the collection's stored owner-only/custom read rule.
+    // key does not skip the collection's read gate.
     authenticatedScope,
     // Match the authenticated read path: without this, a status-enabled
     // collection filters to published only, and a draft would report no

@@ -181,6 +181,33 @@
   // An entry without a reason is indistinguishable from a silenced bug, so
   // each one names what the shared block is and why merging it would be worse
   // than repeating it.
+  // What `fallow audit` compares complexity against.
+  //
+  // The audit gate is new-only, and for dead code and duplication that
+  // attribution is enough: a finding either exists on the base or it does
+  // not. Complexity is different. A function is attributed to the change
+  // whenever the diff touches a line inside it, so a change that REMOVES a
+  // branch from a large pre-existing function is reported as introducing its
+  // CRAP score — measured here on a pull request whose diff shrank
+  // `updateEntry` and was refused for its score of 1645, a number no single
+  // change produces. The gate then blocks precisely the changes that reduce
+  // the debt, and the way past it is a suppression comment on the function,
+  // which hides the number for good.
+  //
+  // A baseline keeps the number visible and stops it gating. It records, per
+  // file, how many findings of each severity `main` already carries; the
+  // audit suppresses findings up to that count and still fails on any the
+  // change adds beyond it. Regenerate it from a clean checkout of `main`
+  // when the counts drift:
+  //
+  //   fallow health --save-baseline fallow-health-baseline.json --workspace !playground
+  //
+  // It is deliberately generated from `main`, never from a branch: a branch
+  // that baselines its own findings has written itself a pass.
+  "audit": {
+    "healthBaseline": "fallow-health-baseline.json"
+  },
+
   "duplicates": {
     "ignoredClones": [
       // collections/services/collection-mutation-service.ts — 17 lines shared

@@ -19,6 +19,8 @@
 // first query will surface real DB errors loudly, and `nextly db:sync`
 // remains the canonical recovery path.
 
+import { runBoundedDiagnostic } from "./bounded-diagnostic";
+
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
@@ -63,18 +65,25 @@ export type EnsureFirstRunSetupResult =
 const PROBE_TABLE = "nextly_schema_events";
 
 /**
- * How long the check may take before boot proceeds without it.
+ * How long a startup diagnostic may take before boot proceeds without it.
  *
- * A rejection is caught below, but a STALLED query never rejects: a saturated
- * pool or an unresponsive database would hold the await for the driver's own
- * timeout, which can be minutes. That would make a diagnostic the reason an
- * initialized deployment could not restart, so the wait is bounded here rather
- * than left to the driver.
+ * Shared by every check on the initialized-boot path; why the wait is bounded
+ * at all is explained in `./bounded-diagnostic`.
  */
 const DRIFT_CHECK_TIMEOUT_MS = 2_000;
 
 /**
- * Compare the live core tables against the running code and warn on a gap.
+ * Compare the live core tables against the running code and warn on a gap —
+ * in either direction.
+ *
+ * One introspection answers two questions. Columns the code expects and the
+ * database lacks are drift, and the operator is pointed at the upgrade.
+ * Columns the database still carries that the code no longer reads — the
+ * retired `access_rules` registry column, when it still holds rules — are
+ * the mirror case, and the operator is told those rules are no longer
+ * enforced. Both are derived from the same snapshot rather than each taking
+ * their own: two snapshots of one database can disagree with each other, and
+ * two bounded waits on a slow database delay the boot twice.
  *
  * Never throws, and never delays boot by more than
  * {@link DRIFT_CHECK_TIMEOUT_MS}: a database that cannot be introspected
@@ -88,37 +97,20 @@ export async function warnIfCoreSchemaIsBehind(
   runCheck: (
     a: AdapterLike,
     l: LoggerLike
-  ) => Promise<void> = runCoreSchemaDriftCheck
+  ) => Promise<void> = runCoreSchemaChecks
 ): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const timedOut = Symbol("drift-check-timeout");
-    const deadline = new Promise<typeof timedOut>(resolve => {
-      timer = setTimeout(() => resolve(timedOut), timeoutMs);
-      // Do not hold the event loop open for a diagnostic.
-      timer.unref?.();
-    });
-
-    const outcome = await Promise.race([runCheck(adapter, logger), deadline]);
-    if (outcome === timedOut) {
-      logger.debug?.(
-        "[nextly] Core schema check timed out; continuing startup."
-      );
-    }
-  } catch (error) {
-    // Diagnostics must not be the reason a boot fails.
-    logger.debug?.(
-      `[nextly] Could not check core schema state: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  await runBoundedDiagnostic({
+    run: () => runCheck(adapter, logger),
+    logger,
+    timeoutMs,
+    timedOutMessage:
+      "[nextly] Core schema check timed out; continuing startup.",
+    failedMessagePrefix: "[nextly] Could not check core schema state: ",
+  });
 }
 
 /** The check itself; bounded by its caller. */
-async function runCoreSchemaDriftCheck(
+async function runCoreSchemaChecks(
   adapter: AdapterLike,
   logger: LoggerLike
 ): Promise<void> {
@@ -130,6 +122,17 @@ async function runCoreSchemaDriftCheck(
   const { findCoreSchemaDrift, formatCoreSchemaDriftWarning } = await import(
     "./core-schema-drift"
   );
+  const [
+    {
+      countRetiredAccessRules,
+      findRetiredAccessRulesColumns,
+      formatRetiredAccessRulesWarning,
+    },
+    { countNulls, countRows },
+  ] = await Promise.all([
+    import("./retired-access-rules"),
+    import("../domains/schema/pipeline/classifier/count-helpers"),
+  ]);
 
   // 🔴 Both sides take the registry this database actually holds. Checking for
   // the legacy name on a migrated database misses the table that is really
@@ -154,6 +157,22 @@ async function runCoreSchemaDriftCheck(
   const drift = findCoreSchemaDrift(live, desired);
   if (drift.length > 0) {
     logger.warn(formatCoreSchemaDriftWarning(drift));
+  }
+
+  // The mirror case, read off the SAME snapshot: the two registry tables are
+  // core tables, so their columns are already in hand. The column's presence
+  // is what decides whether there is anything to count — asking a table that
+  // no longer has it would be the error this check exists to avoid causing.
+  const carrying = findRetiredAccessRulesColumns(live);
+  if (carrying.length === 0) return;
+  const found = await countRetiredAccessRules(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    carrying,
+    { countNulls, countRows }
+  );
+  if (found.length > 0) {
+    logger.warn(formatRetiredAccessRulesWarning(found));
   }
 }
 
@@ -182,6 +201,10 @@ export async function ensureFirstRunSetup(
     // Core tables never gain columns after first run, though, so a database
     // created by an earlier release can be missing columns this one expects.
     // Report that rather than let a downstream query fail far from the cause.
+    // The same pass also reports the mirror case — something the database
+    // still has that the running code no longer reads. Rules left in the
+    // retired `access_rules` column look exactly as they did while they were
+    // enforced, so this is the only place they are named.
     await warnIfCoreSchemaIsBehind(adapter, logger);
     return { ranSetup: false, reason: "already_initialized" };
   }

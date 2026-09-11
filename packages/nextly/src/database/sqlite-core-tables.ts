@@ -277,7 +277,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "schema_version" INTEGER NOT NULL DEFAULT 1,
       "migration_status" TEXT NOT NULL DEFAULT 'pending',
       "last_migration_id" TEXT,
-      "access_rules" TEXT,
       "created_by" TEXT REFERENCES "users"("id"),
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL
@@ -300,7 +299,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "description" TEXT,
       "fields" TEXT NOT NULL,
       "admin" TEXT,
-      "access_rules" TEXT,
       "source" TEXT NOT NULL DEFAULT 'ui',
       "locked" INTEGER NOT NULL DEFAULT 0,
       "status" INTEGER NOT NULL DEFAULT 0,

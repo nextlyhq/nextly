@@ -21,7 +21,6 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { RevalidateConfig } from "../../revalidation/types";
-import type { StoredAccessRule } from "../../services/access/types";
 import type { SingleAdminOptions } from "../../singles/config/types";
 // Registry-facing webhook recording shape for the `webhooks` column. Declared
 // once alongside the collections registry types so both tables store the
@@ -82,58 +81,6 @@ export type SingleMigrationStatus =
 // ============================================================
 // Single Access Rules
 // ============================================================
-
-/**
- * Access control rules for a Single.
- *
- * Unlike Collections which have create/read/update/delete operations,
- * Singles only support read and update:
- * - **No create:** Document is auto-created on first access
- * - **No delete:** Singles always exist once accessed
- *
- * These rules are used for UI-created Singles. Code-first Singles
- * use the `access` property with functions instead.
- *
- * @example
- * ```typescript
- * // Public read, admin-only update
- * const accessRules: SingleAccessRules = {
- *   read: { type: 'public' },
- *   update: { type: 'role-based', allowedRoles: ['admin'] },
- * };
- *
- * // Authenticated users can read and update
- * const authAccessRules: SingleAccessRules = {
- *   read: { type: 'authenticated' },
- *   update: { type: 'authenticated' },
- * };
- * ```
- */
-export interface SingleAccessRules {
-  /**
-   * Access rule for reading the Single document.
-   * If not specified, defaults to public access.
-   */
-  read?: StoredAccessRule;
-
-  /**
-   * Access rule for updating the Single document.
-   * If not specified, defaults to public access.
-   */
-  update?: StoredAccessRule;
-
-  /**
-   * Access rule for making the Single public (status → published).
-   * If not specified, defaults to public access.
-   */
-  publish?: StoredAccessRule;
-
-  /**
-   * Access rule for taking the Single down (status → out of published).
-   * If not specified, defaults to public access.
-   */
-  unpublish?: StoredAccessRule;
-}
 
 // ============================================================
 // Dynamic Single Types
@@ -296,25 +243,6 @@ export interface DynamicSingleInsert {
    * Only set for UI-created Singles.
    */
   createdBy?: string;
-
-  /**
-   * Access control rules for read/update operations.
-   *
-   * Defines who can read and update this Single.
-   * If not specified, all operations default to public access.
-   *
-   * Note: Singles don't have create/delete access rules since
-   * documents are auto-created and cannot be deleted.
-   *
-   * @example
-   * ```typescript
-   * accessRules: {
-   *   read: { type: 'public' },
-   *   update: { type: 'role-based', allowedRoles: ['admin'] },
-   * }
-   * ```
-   */
-  accessRules?: SingleAccessRules;
 }
 
 /**
@@ -426,35 +354,3 @@ export const SINGLE_MIGRATION_STATUSES: readonly SingleMigrationStatus[] = [
   "applied",
   "failed",
 ] as const;
-
-/**
- * All supported Single access operations.
- *
- * Unlike Collections which have create/read/update/delete,
- * Singles only support read and update operations.
- *
- * @example
- * ```typescript
- * for (const op of SINGLE_ACCESS_OPERATIONS) {
- *   const rule = accessRules[op];
- *   // ...
- * }
- * ```
- */
-export const SINGLE_ACCESS_OPERATIONS = [
-  "read",
-  "update",
-  "publish",
-  "unpublish",
-] as const satisfies readonly (keyof SingleAccessRules)[];
-
-// Fails to compile if a rule key is added to `SingleAccessRules` without being
-// listed here, so the enumerable list can never fall behind the rule shape.
-type _UnlistedSingleOperation = Exclude<
-  keyof SingleAccessRules,
-  (typeof SINGLE_ACCESS_OPERATIONS)[number]
->;
-const _singleOperationsAreComplete: [_UnlistedSingleOperation] extends [never]
-  ? true
-  : never = true;
-void _singleOperationsAreComplete;

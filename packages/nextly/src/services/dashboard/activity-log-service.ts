@@ -166,8 +166,8 @@ export interface ActivityLogQueryOptions {
    * same way: no caller means no document can be authorized, so a feed asked
    * without one answers empty rather than answering about everything the scope
    * admits. The scope decides which collections are in reach; only the caller
-   * decides which of their documents are, and a stored `owner-only` or `custom`
-   * read rule makes those different sets.
+   * decides which of their documents are, and the read path's own filtering
+   * makes those different sets.
    */
   caller?: ReadCaller;
 }

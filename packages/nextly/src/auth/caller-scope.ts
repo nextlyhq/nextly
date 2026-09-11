@@ -60,11 +60,10 @@ export function currentCallerScope(): AuthenticatedScope | undefined {
  * request pinned.
  *
  * Published as one function because two callers answering it separately is how
- * a gate and the check backing it up came to disagree. `getOwnerConstraint`
- * resolved the ambient scope and the post-fetch owner check read only its
- * argument, so a request whose scope arrives through the store alone looked
- * like an API key to the SQL predicate and like a session to the check that
- * stands in when the predicate is absent — which is exactly when it matters.
+ * a gate and the check backing it up came to disagree: one resolved the
+ * ambient scope and the other read only its argument, so a request whose scope
+ * arrives through the store alone looked like an API key to the first and like
+ * a session to the second — which is exactly when it matters.
  *
  * An explicit argument still wins, so a caller may narrow.
  */
