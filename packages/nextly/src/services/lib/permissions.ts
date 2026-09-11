@@ -194,7 +194,12 @@ class PermissionChecker {
           action,
           resource
         );
-        if (dbCached !== null) {
+        // The lookup is itself awaited, so an invalidation can land while it
+        // is outstanding: the row it returns was read before the change and
+        // promoting it would put a retired decision back into tier 1 for that
+        // tier's whole life, having just been tombstoned in tier 2. Recompute
+        // instead, which is what a miss would have done anyway.
+        if (dbCached !== null && resolvedUnderCurrentRevision(resolvedUnder)) {
           // Cache hit - promote to tier 1
           this.memo.set(key, dbCached);
           setCacheEntry(key, dbCached, userId, []);
@@ -256,14 +261,38 @@ class PermissionChecker {
 
       // Async write to DB cache (don't block response). Skipped under a
       // transaction executor for the same pooled-query reason as the read above.
-      if (this.cacheService && cacheable) {
-        void this.cacheService.setCachedPermission(
-          userId,
-          action,
-          resource,
-          allowed,
-          Array.from(roleIds)
-        );
+      //
+      // Checked again AFTER the upsert, not only before it. This write is not
+      // awaited, so an invalidation can tombstone the table while it is still
+      // in flight and the upsert then lands behind it with a fresh expiry —
+      // into the tier that is shared between instances and lives for a day, so
+      // it would outlast every other copy here. Tombstoning this user's rows
+      // when that happens is the write-then-verify half: either the
+      // invalidation caught the row, or this does.
+      const service = this.cacheService;
+      if (service && cacheable) {
+        void (async () => {
+          try {
+            await service.setCachedPermission(
+              userId,
+              action,
+              resource,
+              allowed,
+              Array.from(roleIds)
+            );
+            if (!resolvedUnderCurrentRevision(resolvedUnder)) {
+              await service.invalidateByUser(userId);
+            }
+          } catch (error) {
+            getAuthLogger()?.log?.("warn", {
+              category: "auth",
+              op: "cache",
+              message: "DB cache write failed",
+              userId,
+              error: String(error),
+            });
+          }
+        })();
       }
 
       return allowed;
@@ -673,7 +702,49 @@ const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
  * Clears the process-local tiers, tombstones the shared one, and advances the
  * revision so derived caches in this process retire with them.
  */
+let permissionSweepDepth = 0;
+let permissionSweepDirty = false;
+
+/**
+ * Run a batch of permission-row writes under ONE table-wide invalidation.
+ *
+ * The database tier is tombstoned by an unfiltered update of every cached row,
+ * which is the right cost once and the wrong cost per row: a seeder calls
+ * `ensurePermission` once per permission, so a single new collection rewrote
+ * and locked the whole cache table six times over, each after the first
+ * already having expired everything the next one would find.
+ *
+ * Nested batches collapse into the outermost, and the flush happens on the way
+ * out whether the batch succeeded or threw — a partial write still changed
+ * rows, and leaving the caches holding answers derived from them is the one
+ * outcome worse than doing the work twice.
+ */
+export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
+  permissionSweepDepth += 1;
+  try {
+    return await run();
+  } finally {
+    permissionSweepDepth -= 1;
+    if (permissionSweepDepth === 0 && permissionSweepDirty) {
+      permissionSweepDirty = false;
+      await flushPermissionCaches();
+    }
+  }
+}
+
 export async function invalidateAllPermissionCaches(): Promise<void> {
+  // Inside a sweep the caches are retired once, at the end. The revision still
+  // advances immediately, so nothing in flight can file a result as current
+  // while the batch is running — only the expensive table write is deferred.
+  if (permissionSweepDepth > 0) {
+    permissionSweepDirty = true;
+    rbacRevisionCounter += 1;
+    return;
+  }
+  await flushPermissionCaches();
+}
+
+async function flushPermissionCaches(): Promise<void> {
   cache.clear();
   keyToRoleIds.clear();
   roleIdToKeys.clear();
@@ -832,8 +903,14 @@ export async function isSuperAdmin(
     const checker = new PermissionChecker();
     const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
+    // One decision, asked once: an executor-backed result reflects an
+    // uncommitted transaction, and a result whose rows were invalidated while
+    // this ran is already stale. Neither may be cached.
+    const cacheable = () =>
+      !executor && resolvedUnderCurrentRevision(resolvedUnder);
+
     if (roleIds.size === 0) {
-      if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
+      if (cacheable()) {
         superAdminCache.set(userId, {
           value: false,
           expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
@@ -862,7 +939,7 @@ export async function isSuperAdmin(
     // Populate the process-wide cache only for pooled checks; an executor-backed
     // result reflects the caller's uncommitted transaction (see the param note).
     // And only if nothing invalidated these rows while the reads were running.
-    if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
+    if (cacheable()) {
       superAdminCache.set(userId, {
         value: result,
         expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,

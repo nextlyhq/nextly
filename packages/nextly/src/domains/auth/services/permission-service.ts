@@ -745,6 +745,29 @@ export class PermissionService extends BaseService {
    * @throws NextlyError(BUSINESS_RULE_VIOLATION) when the permission is
    *   currently assigned to one or more roles.
    */
+  /**
+   * Remove one permission row, and retire the answers copied from it.
+   *
+   * Both public deletes reach the same statement by different routes — one is
+   * given the id, the other resolves it from an action and a resource — so the
+   * removal itself is written once. Two copies drift, and the invalidation is
+   * exactly the kind of trailing step one copy loses: a permission row belongs
+   * to no user and no role, so nothing scoped can stand in for it, and a key
+   * that copied the row keeps a grant the install no longer declares.
+   */
+  private async removePermissionRow(permissionId: string): Promise<void> {
+    try {
+      await (this.db as RBACDatabaseInstance)
+        .delete(this.tables.permissions)
+        .where(eq(this.tables.permissions.id, permissionId));
+      await invalidateAllPermissionCaches();
+    } catch (err) {
+      // Normalise raw driver errors so fk-violation / etc. produce the right
+      // NextlyError instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+  }
+
   async deletePermissionById(permissionId: string): Promise<void> {
     const permission = await (
       this.db as RBACDatabaseInstance
@@ -794,20 +817,7 @@ export class PermissionService extends BaseService {
       });
     }
 
-    try {
-      await (this.db as RBACDatabaseInstance)
-        .delete(this.tables.permissions)
-        .where(eq(this.tables.permissions.id, permissionId));
-
-      // The row is gone, so every answer copied from it is wrong — a
-      // super-admin's key holds the catalogue by copy, and kept a deleted
-      // grant until its entry aged out.
-      await invalidateAllPermissionCaches();
-    } catch (err) {
-      // Normalise raw driver errors so fk-violation / etc. produce the
-      // right NextlyError instead of collapsing to INTERNAL_ERROR.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-    }
+    await this.removePermissionRow(permissionId);
   }
 
   /**
@@ -862,18 +872,6 @@ export class PermissionService extends BaseService {
       });
     }
 
-    try {
-      await (this.db as RBACDatabaseInstance)
-        .delete(this.tables.permissions)
-        .where(eq(this.tables.permissions.id, permissionId));
-
-      // Same reason as the delete above: a row nothing declares any more must
-      // not survive in a copy of it.
-      await invalidateAllPermissionCaches();
-    } catch (err) {
-      // Normalise raw driver errors so the kind is mapped correctly
-      // instead of collapsing to INTERNAL_ERROR.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-    }
+    await this.removePermissionRow(String(permissionId));
   }
 }

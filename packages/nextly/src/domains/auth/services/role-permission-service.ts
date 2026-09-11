@@ -10,7 +10,10 @@ import type {
 
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
-import { invalidatePermissionCache } from "../../../services/lib/permissions";
+import {
+  invalidateAllPermissionCaches,
+  invalidatePermissionCache,
+} from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
 /**
@@ -192,6 +195,11 @@ export class RolePermissionService extends BaseService {
         .update(this.tables.permissions)
         .set({ slug: canonical })
         .where(eq(this.tables.permissions.id, permissionId));
+
+      // The stored slug is what a coarse grant check and an API key's copied
+      // grants compare against, so a repaired one makes every copy of the old
+      // spelling wrong.
+      await invalidateAllPermissionCaches();
     } catch {
       // `slug` is unique, so another row may already answer to the canonical
       // name — a swapped pair of `(action, resource)` produces exactly that.

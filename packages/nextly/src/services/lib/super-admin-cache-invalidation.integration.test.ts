@@ -27,9 +27,11 @@ import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { PermissionService } from "../../domains/auth/services/permission-service";
 
 import {
+  inPermissionSweep,
   invalidateAllPermissionCaches,
   invalidatePermissionCache,
   isSuperAdmin,
+  rbacRevision,
 } from "./permissions";
 
 let harness: TestNextly | undefined;
@@ -454,5 +456,62 @@ describe("an API key's grants are retired when the roles behind them change", ()
     await invalidatePermissionCache({ userId: OWNER });
 
     expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+});
+
+/**
+ * A batch of permission writes retires the caches ONCE.
+ *
+ * The database tier is tombstoned by an unfiltered update of every cached row.
+ * That is the right cost once and the wrong cost per row: a seeder ensures one
+ * permission at a time, so a single new collection would rewrite and lock the
+ * whole table once per permission, each pass after the first expiring rows the
+ * previous one had already expired.
+ */
+describe("a sweep of permission writes", () => {
+  it("advances the revision per write, so nothing in flight files as current", async () => {
+    // Deferring the table write must NOT defer the revision: a resolution
+    // running alongside the batch has to be refused, and the counter is what
+    // refuses it.
+    harness = harness ?? (await createTestNextly());
+    const before = rbacRevision();
+    await inPermissionSweep(async () => {
+      await invalidateAllPermissionCaches();
+      await invalidateAllPermissionCaches();
+      await invalidateAllPermissionCaches();
+    });
+    expect(rbacRevision()).toBeGreaterThan(before + 2);
+  });
+
+  it("clears the process caches by the time the batch returns", async () => {
+    // Deferred is not skipped. The flush happens on the way out, so a caller
+    // that awaited the batch sees retired caches.
+    const userId = `sweep-${randomUUID()}`;
+    await seedSuperAdminRole().catch(() => {});
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+
+    await demote(userId);
+    await inPermissionSweep(async () => {
+      await invalidateAllPermissionCaches();
+    });
+
+    expect(await isSuperAdmin(userId)).toBe(false);
+  });
+
+  it("flushes even when the batch throws, since a partial write still changed rows", async () => {
+    const userId = `sweep-throw-${randomUUID()}`;
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+
+    await demote(userId);
+    await expect(
+      inPermissionSweep(async () => {
+        await invalidateAllPermissionCaches();
+        throw new Error("half of the batch landed");
+      })
+    ).rejects.toThrow("half of the batch landed");
+
+    expect(await isSuperAdmin(userId)).toBe(false);
   });
 });

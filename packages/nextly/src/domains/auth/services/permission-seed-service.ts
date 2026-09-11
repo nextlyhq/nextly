@@ -7,7 +7,10 @@ import type { CollectedPermission } from "../../../plugins/permissions/collect-p
 import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
-import { invalidateAllPermissionCaches } from "../../../services/lib/permissions";
+import {
+  inPermissionSweep,
+  invalidateAllPermissionCaches,
+} from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
@@ -398,6 +401,10 @@ export class PermissionSeedService extends BaseService {
    * email-providers, email-templates.
    */
   async seedSystemPermissions(): Promise<SeedResult> {
+    return inPermissionSweep(() => this.seedSystemPermissionsRows());
+  }
+
+  private async seedSystemPermissionsRows(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
     // Before seeding, repair rows an older version wrote with the two halves
@@ -449,6 +456,14 @@ export class PermissionSeedService extends BaseService {
    * @param collectionSlug - The collection slug (e.g., "posts", "products")
    */
   async seedCollectionPermissions(collectionSlug: string): Promise<SeedResult> {
+    return inPermissionSweep(() =>
+      this.seedCollectionPermissionsRows(collectionSlug)
+    );
+  }
+
+  private async seedCollectionPermissionsRows(
+    collectionSlug: string
+  ): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(collectionSlug);
     const actions = COLLECTION_SEEDED_ACTIONS;
@@ -494,6 +509,12 @@ export class PermissionSeedService extends BaseService {
    * @param singleSlug - The single slug (e.g., "site-settings", "header")
    */
   async seedSinglePermissions(singleSlug: string): Promise<SeedResult> {
+    return inPermissionSweep(() => this.seedSinglePermissionsRows(singleSlug));
+  }
+
+  private async seedSinglePermissionsRows(
+    singleSlug: string
+  ): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const label = this.slugToLabel(singleSlug);
     const actions = SINGLE_SEEDED_ACTIONS;
@@ -536,6 +557,10 @@ export class PermissionSeedService extends BaseService {
    * publish-lifecycle permissions for each.
    */
   async seedAllCollectionPermissions(): Promise<SeedResult> {
+    return inPermissionSweep(() => this.seedAllCollectionPermissionsRows());
+  }
+
+  private async seedAllCollectionPermissionsRows(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
     try {
@@ -567,6 +592,10 @@ export class PermissionSeedService extends BaseService {
    * read, update, publish and unpublish permissions for each.
    */
   async seedAllSinglePermissions(): Promise<SeedResult> {
+    return inPermissionSweep(() => this.seedAllSinglePermissionsRows());
+  }
+
+  private async seedAllSinglePermissionsRows(): Promise<SeedResult> {
     const result = this.emptySeedResult();
 
     try {
@@ -732,6 +761,18 @@ export class PermissionSeedService extends BaseService {
    * @param declared - Every custom permission currently declared, from every
    *   plugin, including disabled ones.
    */
+  /**
+   * Retire the caches, when a pass actually wrote something.
+   *
+   * Four passes here end with the same question, and asking it four times is
+   * four copies of one rule: a pass that changed nothing must not pay for an
+   * unfiltered rewrite of the cache table, and a pass that did must not skip
+   * it. Answered once.
+   */
+  private async retireCachesIfWritten(written: number): Promise<void> {
+    if (written > 0) await invalidateAllPermissionCaches();
+  }
+
   async markOrphanedPermissions(
     declared: CollectedPermission[]
   ): Promise<SeedResult> {
@@ -794,8 +835,8 @@ export class PermissionSeedService extends BaseService {
 
     // `orphaned_at` decides whether a row is IN the catalogue, so marking one
     // takes it out of a super-admin's key grants and clearing the mark puts it
-    // back. Only when something was actually written.
-    if (result.created > 0) await invalidateAllPermissionCaches();
+    // back.
+    await this.retireCachesIfWritten(result.created);
 
     return result;
   }
@@ -934,15 +975,14 @@ export class PermissionSeedService extends BaseService {
         }
       }
 
+      // Rows that no longer exist must not survive in an answer copied from
+      // them: a super-admin's API key holds the catalogue by copy, and an
+      // ordinary check's decision was cached from the grants these rows carried.
+      await this.retireCachesIfWritten(result.created);
       if (result.created > 0) {
         this.logger.info?.(
           `Deleted ${result.created} permission(s) for resource "${resourceSlug}"`
         );
-        // Rows that no longer exist must not survive in an answer copied from
-        // them: a super-admin's API key holds the catalogue by copy, and an
-        // ordinary check's decision was cached from the grants these rows
-        // carried. Only when something was actually deleted.
-        await invalidateAllPermissionCaches();
       }
     } catch (error) {
       this.logger.warn(
@@ -1035,7 +1075,7 @@ export class PermissionSeedService extends BaseService {
 
     // The stored slug is what a coarse grant check and a key's grants compare
     // against, so a repaired one makes every copy of the old spelling wrong.
-    if (repaired > 0) await invalidateAllPermissionCaches();
+    await this.retireCachesIfWritten(repaired);
 
     return repaired;
   }
@@ -1110,9 +1150,9 @@ export class PermissionSeedService extends BaseService {
         }
       }
 
+      // Same reason as the resource delete above.
+      await this.retireCachesIfWritten(result.created);
       if (result.created > 0) {
-        // Same reason as the resource delete above.
-        await invalidateAllPermissionCaches();
         this.logger.info?.(
           `Cleaned up ${result.created} orphaned permission(s)`
         );
