@@ -64,6 +64,17 @@ export default function singleReadRule({
     // locale's value.
     case "assembled-aware":
       return (data as { visibility?: string })?.visibility !== "private";
+    // Refuses a document a hook has flagged when a value nested inside a group
+    // the caller may not read is private. The gate before the hooks sees no
+    // flag and allows; the judge after them sees the flag, and sees the nested
+    // value only if the evidence a redaction pass removed is restored by path,
+    // since the hook on the group rebuilds it as a fresh object.
+    case "nested-aware":
+      return !(
+        (data as { flagged?: boolean })?.flagged === true &&
+        (data as { settings?: { visibility?: string } })?.settings
+          ?.visibility === "private"
+      );
     // Refuses on a value that exists only in the document a first read would
     // create, so the rule can decide correctly only if those defaults are judged
     // before the write that materializes them.

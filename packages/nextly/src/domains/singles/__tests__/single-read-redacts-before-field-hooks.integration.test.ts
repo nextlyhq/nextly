@@ -14,12 +14,17 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, text } from "../../../config";
+import { defineSingle, group, text } from "../../../config";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+
+const RULE_PATH = new URL(
+  "../../collections/__tests__/_fixtures/single-read-rule.ts",
+  import.meta.url
+).pathname;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -137,5 +142,76 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     // The `leak` hook's reassignment is judged like anything else: allowed
     // for this user, so the post-hook value stands.
     expect(doc?.apiToken).toBe("reintroduced");
+  });
+
+  it("lets the document rule see a denied nested value a hook's rebuilt group dropped", async () => {
+    // The gate before the hooks judges the stored document and allows it: no
+    // flag yet. A hook on `siteName` then flags the document, and the hook on
+    // `settings` returns a fresh spread of the redacted group, so the row
+    // object the redaction store keyed `visibility` on is gone. The judge
+    // after the hooks must still see `settings.visibility`, or "missing means
+    // allowed" admits the caller the rule exists to refuse.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({
+              name: "siteName",
+              hooks: {
+                afterRead: [
+                  ({ value, data }) => {
+                    (data as Record<string, unknown>).flagged = true;
+                    return value;
+                  },
+                ],
+              },
+            }),
+            group({
+              name: "settings",
+              fields: [
+                text({ name: "visibility", access: { read: () => false } }),
+              ],
+              hooks: {
+                afterRead: [({ value }) => ({ ...(value as object) })],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", settings: { visibility: "private" } },
+      { overrideAccess: true }
+    );
+
+    const denied = await entry.get("branding", {
+      user: { id: "nested-aware" },
+      routeAuthorized: true,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+
+    // The mirror: a public value passes, and still never reaches the response.
+    await entry.update(
+      "branding",
+      { settings: { visibility: "public" } },
+      { overrideAccess: true }
+    );
+    const allowed = await entry.get("branding", {
+      user: { id: "nested-aware" },
+      routeAuthorized: true,
+    });
+    expect(allowed.success).toBe(true);
+    expect(
+      (allowed.data as { settings?: { visibility?: string } })?.settings
+    ).not.toHaveProperty("visibility");
   });
 });

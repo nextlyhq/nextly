@@ -77,8 +77,9 @@ import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   runFieldHooks,
-  snapshotWithReadAccessEvidence,
+  captureReadAccessEvidence,
   type ReadAccessRedactions,
+  withReadAccessEvidence,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -2057,6 +2058,12 @@ export class SingleQueryService extends BaseService {
         },
         sourceRedactions
       );
+      // What the pass removed, by path, taken before any hook can rebuild a
+      // container: the document-level rule below is judged with it restored.
+      const readAccessEvidence = captureReadAccessEvidence(
+        { kind: "single", slug, entry: doc },
+        sourceRedactions
+      );
 
       await runFieldHooks({
         kind: "single",
@@ -2093,10 +2100,10 @@ export class SingleQueryService extends BaseService {
           // to inspect a denied field, and a copy without it would show the
           // field absent, the "missing means allowed" reading that admits a
           // caller the rule exists to refuse.
-          document: snapshotWithReadAccessEvidence(
-            { kind: "single", slug, entry: doc },
-            sourceRedactions,
-            detachData
+          document: withReadAccessEvidence(
+            detachData(doc),
+            { kind: "single", slug },
+            readAccessEvidence
           ),
         });
         if (finalDenial) return finalDenial;
