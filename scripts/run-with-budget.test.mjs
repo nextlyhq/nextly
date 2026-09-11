@@ -18,6 +18,13 @@
  *   printed "budget exceeded" for every non-zero exit, which would send the
  *   next person to raise a budget over a genuine red suite.
  *
+ * A third case was REMOVED rather than repaired: it read a bare 137 as the
+ * budget firing. That is no longer what the script does, because the runner's
+ * out-of-memory killer produces 137 as well — so exit code alone cannot
+ * separate them and elapsed time does. The two cases named "does NOT call an
+ * early SIGKILL a budget overrun" and "DOES call a SIGKILL after the budget
+ * elapsed an overrun" cover both directions of that split.
+ *
  * And one property is the reason the script is a script at all: with no
  * `timeout` on PATH it must REFUSE rather than run the command unbounded.
  * Degrading quietly would reinstate exactly the state being removed while
@@ -31,7 +38,13 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,8 +53,30 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = fileURLToPath(new URL("./run-with-budget.sh", import.meta.url));
 
+/**
+ * A directory holding ONLY the tools the script needs besides `timeout`.
+ *
+ * PATH is set to this and nothing else, so the script's own `awk`, `date` and
+ * `sleep` resolve while `timeout` resolves only when a case supplies one. The
+ * obvious alternative — appending `/bin:/usr/bin` — makes the "no `timeout`"
+ * case find the REAL `/usr/bin/timeout` on every Ubuntu runner, run the command
+ * through it, and pass or fail for reasons that have nothing to do with the
+ * refusal being tested. That was live: it read as green on a Mac, which has no
+ * `timeout`, and would have gone red on CI for the wrong reason.
+ */
+function toolsDir() {
+  const dir = mkdtempSync(join(tmpdir(), "tools-"));
+  for (const tool of ["awk", "date", "sleep"]) {
+    const real = execFileSync("/bin/sh", ["-c", `command -v ${tool}`], {
+      encoding: "utf8",
+    }).trim();
+    symlinkSync(real, join(dir, tool));
+  }
+  return dir;
+}
+
 /** A `timeout` that exits with whatever the case asks for, and records its argv. */
-function stubDir(exitCode) {
+function stubDir(exitCode, sleepSeconds = 0) {
   const dir = mkdtempSync(join(tmpdir(), "budget-"));
   const argvLog = join(dir, "argv");
   const stub = join(dir, "timeout");
@@ -49,7 +84,11 @@ function stubDir(exitCode) {
     stub,
     // `#!/bin/sh`, not `#!/usr/bin/env sh`: PATH holds only this directory, so
     // `env` would have no `sh` to find and every case would exit 127.
-    `#!/bin/sh\nprintf '%s\\n' "$@" > ${argvLog}\nexit ${exitCode}\n`
+    //
+    // The sleep is how a case controls ELAPSED time, which is the only thing
+    // that separates a budget that expired from a command killed by something
+    // else — both exit 137.
+    `#!/bin/sh\nprintf '%s\\n' "$@" > ${argvLog}\nsleep ${sleepSeconds}\nexit ${exitCode}\n`
   );
   chmodSync(stub, 0o755);
   return { dir, argvLog };
@@ -70,7 +109,11 @@ function run(args, { path }) {
     // and fail identically in every case, which reads as seven passing
     // refusals rather than a broken harness.
     const stdout = execFileSync("/bin/sh", [SCRIPT, ...args], {
-      env: { PATH: path },
+      // The case's directory first, then the tools the script needs — and no
+      // system directory at all, so a real `timeout` can never be found by
+      // accident. `/bin/sh` itself is invoked by absolute path for the same
+      // reason.
+      env: { PATH: `${path}:${toolsDir()}` },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -123,17 +166,6 @@ describe("run-with-budget.sh", () => {
     expect(result.output).toContain("55m");
   });
 
-  it("treats a SIGKILL escalation as the budget firing too", () => {
-    // 137 is 128+9: what `--kill-after` produces when the command ignored
-    // TERM. Reading only 124 would let a wedged worker — the case the
-    // escalation exists for — exit quietly.
-    const { dir } = stubDir(137);
-    const result = run(["55m", "the suite", "anything"], { path: dir });
-
-    expect(result.status).toBe(137);
-    expect(result.output).toContain(BUDGET_ERROR);
-  });
-
   it("does NOT call an ordinary test failure a budget overrun", () => {
     const { dir } = stubDir(3);
     const result = run(["55m", "the suite", "anything"], { path: dir });
@@ -143,11 +175,58 @@ describe("run-with-budget.sh", () => {
   });
 
   it("refuses rather than running unbounded when there is no `timeout`", () => {
+    // An empty directory as the case's own, so PATH holds the tools and nothing
+    // that could resolve `timeout`. On a runner with `/usr/bin/timeout` the old
+    // PATH found it, ran `anything` through it, and exited 127 — a red that
+    // said nothing about the refusal.
     const empty = mkdtempSync(join(tmpdir(), "no-timeout-"));
     const result = run(["55m", "the suite", "anything"], { path: empty });
 
     expect(result.status).toBe(2);
     expect(result.output).toContain("refusing to run unbounded");
+  });
+
+  it("refuses a budget of zero, which DISABLES the timeout", () => {
+    // GNU `timeout` documents 0 as disabling the bound, so `0m` would run the
+    // command unbounded while the workflow, the env var and this wrapper all
+    // still read as bounded.
+    const { dir } = stubDir(0);
+    const result = run(["0m", "the suite", "anything"], { path: dir });
+
+    expect(result.status).toBe(2);
+    expect(result.output).toContain("disables the timeout");
+  });
+
+  it("refuses a duration it cannot read, rather than guessing one", () => {
+    const { dir } = stubDir(0);
+    const result = run(["soon", "the suite", "anything"], { path: dir });
+
+    expect(result.status).toBe(2);
+    expect(result.output).toContain("cannot read");
+  });
+
+  it("does NOT call an early SIGKILL a budget overrun", () => {
+    // The runner's out-of-memory killer also produces 137, on a command that
+    // died in its first seconds. Reporting that as an overrun sends the next
+    // person to raise a budget that was never the problem.
+    const { dir } = stubDir(137);
+    const result = run(["1h", "the MySQL integration suite", "anything"], {
+      path: dir,
+    });
+
+    expect(result.status).toBe(137);
+    expect(result.output).not.toContain(BUDGET_ERROR);
+    expect(result.output).toContain("killed by SIGKILL");
+  });
+
+  it("DOES call a SIGKILL after the budget elapsed an overrun", () => {
+    // The other side of the same discrimination: a TERM-ignoring worker killed
+    // by the escalation, which is a real overrun and must stay loud.
+    const { dir } = stubDir(137, 2);
+    const result = run(["1s", "the suite", "anything"], { path: dir });
+
+    expect(result.status).toBe(137);
+    expect(result.output).toContain(BUDGET_ERROR);
   });
 
   it("refuses a call that names no command to run", () => {

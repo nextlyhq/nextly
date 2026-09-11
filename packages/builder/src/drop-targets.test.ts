@@ -77,7 +77,7 @@ function documentOf(nodes: BlockNode[]): BlockDocument {
 function rootRegion(childIds: string[], axis: "x" | "y" = "y"): DropRegion {
   return {
     id: ROOT_REGION,
-    at: { kind: "root" },
+    target: { kind: "root" },
     depth: 0,
     rect: { x: 0, y: 0, width: 400, height: 1000 },
     axis,
@@ -178,7 +178,7 @@ describe("targetsInRegion", () => {
     // would read as "beside this container" rather than "inside it".
     const region: DropRegion = {
       id: "box::children",
-      at: { kind: "slot", parentType: "core/box", slot: "children" },
+      target: { kind: "slot", parentType: "core/box", slot: "children" },
       parentId: "box",
       slot: "children",
       depth: 1,
@@ -219,7 +219,7 @@ describe("targetsInRegion", () => {
   it("addresses a slot region by parent and slot, never by position", () => {
     const region: DropRegion = {
       id: "box::children",
-      at: { kind: "slot", parentType: "core/box", slot: "children" },
+      target: { kind: "slot", parentType: "core/box", slot: "children" },
       parentId: "box",
       slot: "children",
       depth: 1,
@@ -322,7 +322,7 @@ describe("collectRegions", () => {
       })
     );
 
-    expect(regions.map(r => [r.id, r.at])).toEqual([
+    expect(regions.map(r => [r.id, r.target])).toEqual([
       [ROOT_REGION, { kind: "root" }],
       [
         "outer::children",
@@ -336,7 +336,7 @@ describe("collectRegions", () => {
 describe("regionAt", () => {
   const outer: DropRegion = {
     id: "outer::children",
-    at: { kind: "slot", parentType: "core/box", slot: "children" },
+    target: { kind: "slot", parentType: "core/box", slot: "children" },
     parentId: "outer",
     slot: "children",
     depth: 1,
@@ -346,7 +346,7 @@ describe("regionAt", () => {
   };
   const inner: DropRegion = {
     id: "inner::items",
-    at: { kind: "slot", parentType: "core/row", slot: "items" },
+    target: { kind: "slot", parentType: "core/row", slot: "items" },
     parentId: "inner",
     slot: "items",
     depth: 2,
@@ -459,7 +459,7 @@ describe("resolveDrop", () => {
     const regions = [
       {
         id: "acc::panels",
-        at: { kind: "slot", parentType: "core/accordion", slot: "panels" },
+        target: { kind: "slot", parentType: "core/accordion", slot: "panels" },
         parentId: "acc",
         slot: "panels",
         depth: 1,
@@ -515,7 +515,7 @@ describe("resolveDrop", () => {
         regions: [
           {
             id: ROOT_REGION,
-            at: { kind: "root" },
+            target: { kind: "root" },
             depth: 0,
             rect: { x: 0, y: 0, width: 400, height: 200 },
             axis: "y",

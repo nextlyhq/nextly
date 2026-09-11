@@ -226,6 +226,84 @@ describe("naming-rule", () => {
   });
 });
 
+describe("context7", () => {
+  const core = (description) =>
+    JSON.stringify({ name: "nextly", version: "1.0.0", description });
+  const config = (description) =>
+    JSON.stringify({ projectTitle: "Nextly", description, folders: ["docs"] });
+  const SENTENCE = "Nextly is an open-source CMS and visual page builder for Next.js.";
+
+  it("holds the committed file to the committed core description", async () => {
+    // The real files, not a fixture: this is the parity the check exists for.
+    const { context7Findings, readContext7Config } = await import("./check-docs-claims.mjs");
+    const config = readContext7Config("context7.json");
+    const { description } = JSON.parse(await readFile("packages/nextly/package.json", "utf-8"));
+    expect(config).not.toBeNull();
+    expect(context7Findings(config, description)).toBeNull();
+  });
+
+  it("fires when the description names the retired category", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": config("Nextly is an app framework for Next.js."),
+      })
+    ).toContain("retired-category");
+  });
+
+  it("fires when the description drifts from the core package's", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": config("Nextly is a CMS for Next.js."),
+      })
+    ).toContain("context7-description");
+  });
+
+  it("fires when there is no description at all", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": JSON.stringify({ folders: ["docs"] }),
+      })
+    ).toContain("context7-description");
+  });
+
+  it("fires when the file is not tracked at all", async () => {
+    expect(
+      await checksFor({ "packages/nextly/package.json": core(SENTENCE) })
+    ).toContain("context7-missing");
+  });
+
+  it("fires when the core package has no description to follow", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": JSON.stringify({ name: "nextly", version: "1.0.0" }),
+        "context7.json": config(SENTENCE),
+      })
+    ).toContain("context7-description");
+  });
+
+  it("fires when the file does not parse", async () => {
+    expect(
+      await checksFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": "{ not json",
+      })
+    ).toContain("context7-unreadable");
+  });
+
+  it("is silent when the two sentences agree", async () => {
+    const checks = await checksFor({
+      "packages/nextly/package.json": core(SENTENCE),
+      "context7.json": config(SENTENCE),
+    });
+    expect(checks).not.toContain("context7-description");
+    expect(checks).not.toContain("context7-unreadable");
+    expect(checks).not.toContain("retired-category");
+  });
+});
+
 describe("retired-category", () => {
   it("declares only surfaces that exist, so a rename cannot drop one silently", async () => {
     const { CATEGORY_SURFACES } = await import("./check-docs-claims.mjs");
@@ -954,6 +1032,61 @@ describe("internal-docs-link", () => {
       await checksFor({
         "docs/a.mdx": "See [preview](/docs/preview) for more.\n",
         "docs/preview/index.mdx": "# preview\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+
+  it("fires on a link written as a path from the file, to a page or to source", async () => {
+    for (const body of [
+      "See [config](../configuration/index.mdx).\n",
+      "See [next](./production-migrations.mdx).\n",
+      "See [code](../packages/nextly/src/x.ts).\n",
+    ]) {
+      expect(
+        await checksFor({
+          "docs/guides/a.mdx": body,
+          "docs/configuration/index.mdx": "# c\n",
+          "docs/guides/production-migrations.mdx": "# p\n",
+        })
+      ).toContain("internal-docs-link");
+    }
+  });
+
+  it("fires on a reference definition that points at a file", async () => {
+    expect(
+      await checksFor({
+        "docs/guides/a.mdx": "See [config][c].\n\n[c]: ../configuration/index.mdx\n",
+        "docs/configuration/index.mdx": "# c\n",
+      })
+    ).toContain("internal-docs-link");
+  });
+
+  it("does not fire on a link the page only shows, in a fence, a code span or a comment", async () => {
+    // A page teaching the syntax is not linking with it. The prose beside the
+    // samples still is, which is the control that the scan ran on the page.
+    const shown = [
+      "```md",
+      "[local](../README.md)",
+      "```",
+      "",
+      "Inline: `[local](../README.md)` and {/* [gone](../old.mdx) */} here.",
+      "",
+    ].join("\n");
+    expect(await checksFor({ "docs/a.mdx": shown })).not.toContain("internal-docs-link");
+    expect(
+      await checksFor({ "docs/a.mdx": `${shown}\nBut [this](../b.mdx) is a link.\n` })
+    ).toContain("internal-docs-link");
+  });
+
+  it("does not fire on a file-path link outside the published pages", async () => {
+    // A README's `./CONTRIBUTING.md` is a link GitHub renders; the boundary is
+    // the docs, whose links are URLs on the site.
+    expect(
+      await checksFor({
+        "README.md": "See [contributing](./CONTRIBUTING.md).\n",
+        "CONTRIBUTING.md": "# c\n",
+        // An `.mdx` outside the docs tree is not a published page either.
+        "packages/example/README.mdx": "See [contributing](./CONTRIBUTING.md).\n",
       })
     ).not.toContain("internal-docs-link");
   });

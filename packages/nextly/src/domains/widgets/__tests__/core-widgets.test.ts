@@ -122,6 +122,26 @@ describe("core widget definitions", () => {
     expect(checklist?.visibleWhen).toBe("onboarding:incomplete");
   });
 
+  it("offers the collections card only while there is a collection to list", () => {
+    // This one drew a get-started panel of its own when it had no counts -- a
+    // third pitch on a fresh dashboard already carrying the seed offer and the
+    // checklist, decided inside a permanent card where the host could not
+    // withdraw it. The host decides now, and from the same reader-scoped
+    // answer the other conditions use.
+    const collections = CORE_WIDGETS.find(w => w.id === "core/collections");
+    expect(collections?.lifecycle).toBe("conditional");
+    expect(collections?.visibleWhen).toBe("collections:present");
+  });
+
+  it("offers the singles card only while there is a single to list", () => {
+    // The card that returned NOTHING when the install had no singles, and so
+    // held an empty grid placement on every install that never used them --
+    // the reserved-slot defect the lifecycle was introduced to remove.
+    const singles = CORE_WIDGETS.find(w => w.id === "core/singles");
+    expect(singles?.lifecycle).toBe("conditional");
+    expect(singles?.visibleWhen).toBe("singles:present");
+  });
+
   it("keeps every OTHER core card permanent", () => {
     // The control. A conversion that made the whole list conditional would
     // satisfy the cases above while emptying the dashboard, and nothing in
@@ -136,6 +156,8 @@ describe("core widget definitions", () => {
     expect(conditional).toEqual([
       "core/seed-demo-content",
       "core/onboarding-checklist",
+      "core/collections",
+      "core/singles",
     ]);
   });
 

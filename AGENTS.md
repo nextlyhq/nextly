@@ -39,6 +39,12 @@ for all published packages. Status: alpha, all packages version in lockstep.
 - `apps/playground` - contributor dev harness (not published).
 - `e2e/` - Playwright suite. `docs/` - user docs (MDX, deployed to
   nextlyhq.com/docs).
+- `context7.json` - what Context7 indexes for coding agents: `docs/` and the
+  root README, with every other root Markdown file excluded by name (Context7
+  reads root-level Markdown whatever `folders` says). Its description is held
+  to the core package's by `check-docs-claims`; `pnpm check:context7-index`
+  reads back what the live index cites, and exits 2 rather than 0 while the
+  library is unregistered.
 
 Before editing a package, read its README.md and check for a nested AGENTS.md.
 

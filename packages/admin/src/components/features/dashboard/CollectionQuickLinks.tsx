@@ -13,8 +13,6 @@ import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
 
-import { GetStartedEmptyState } from "./GetStartedEmptyState";
-
 interface CollectionGroup {
   name: string | null;
   collections: CollectionCount[];
@@ -170,8 +168,6 @@ export const CollectionQuickLinks: React.FC = () => {
           <AlertCircle className="h-4 w-4" />
           <span>Connection Error</span>
         </div>
-      ) : counts.length === 0 ? (
-        <GetStartedEmptyState />
       ) : (
         <div className="space-y-12">
           {groups.map(group => (

@@ -70,6 +70,30 @@ async function seedIsUnanswered(): Promise<boolean> {
 }
 
 /**
+ * Whether this reader may read at least one collection.
+ *
+ * Read from the probe's memoised slugs, so on the default dashboard — where
+ * `content:empty` and `onboarding:incomplete` have already resolved them — this
+ * costs nothing further. Existence and permission are all it asks; no row is
+ * counted, so a collection with no entries yet still counts as present, which
+ * is the point: the card this gates lists collections, and a collection with
+ * nothing in it is still something to list.
+ */
+async function collectionsArePresent(probe: ConditionProbe): Promise<boolean> {
+  return (await probe.readableSlugs()).length > 0;
+}
+
+/**
+ * Whether this reader may read at least one single.
+ *
+ * The same question of the other registry. Why it is answered from a different
+ * place than the collections is set out on `readableSingleSlugs`.
+ */
+async function singlesArePresent(probe: ConditionProbe): Promise<boolean> {
+  return (await probe.readableSingles()).length > 0;
+}
+
+/**
  * One arm per condition, exhaustively.
  *
  * A `Record` keyed by the union rather than a `switch` with a default: a
@@ -84,6 +108,8 @@ const EVALUATORS: Record<
   "content:empty": contentIsEmpty,
   "onboarding:incomplete": onboardingIsIncomplete,
   "seed:unanswered": seedIsUnanswered,
+  "collections:present": collectionsArePresent,
+  "singles:present": singlesArePresent,
 };
 
 /**
