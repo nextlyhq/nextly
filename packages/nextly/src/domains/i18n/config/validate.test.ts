@@ -33,6 +33,18 @@ describe("validateLocalizationConfig", () => {
     ).toThrow(/reserved/i);
   });
 
+  it("rejects the fallback sentinel spelled as a locale code", () => {
+    // `fallbackLocale: "none"` is the wire's spelling of "no fallback", so a
+    // configured language called `none` could never be chosen as one:
+    // naming it disables fallback instead.
+    expect(() =>
+      validateLocalizationConfig({
+        locales: ["en", "none"],
+        defaultLocale: "en",
+      })
+    ).toThrow(/reserved/i);
+  });
+
   it("rejects duplicate locale codes", () => {
     expect(() =>
       validateLocalizationConfig({ locales: ["en", "en"], defaultLocale: "en" })

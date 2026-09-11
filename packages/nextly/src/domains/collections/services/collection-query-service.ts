@@ -122,7 +122,7 @@ import {
   type TranslationFilterState,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import { EVERY_TRANSLATION, NO_FALLBACK } from "../../i18n/locale-selector";
 import {
   isValidLocale,
   resolveFallbackChain,
@@ -988,7 +988,7 @@ export class CollectionQueryService extends BaseService {
     if (!this.localization || locale === EVERY_TRANSLATION) return null;
     const requested = resolveRequestedLocale(this.localization, locale);
     // A per-request opt-out disables fallback: return the requested language only.
-    if (fallbackLocale === false || fallbackLocale === "none") {
+    if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
       return [requested];
     }
     // A concrete per-request fallback locale overrides the configured chain: the

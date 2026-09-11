@@ -1,5 +1,5 @@
 import { NextlyError } from "../../../errors/nextly-error";
-import { isLocaleSelector } from "../locale-selector";
+import { isReservedLocaleCode } from "../locale-selector";
 
 import { normalizeLocalization } from "./normalize";
 import type { LocalizationConfig } from "./types";
@@ -41,18 +41,19 @@ export function validateLocalizationConfig(input: LocalizationConfig): void {
           `non-empty and contain only letters, digits, '-' or '_' (e.g. 'en', 'en-US').`
       );
     }
-    // The selectors are reserved. `*` already fails the pattern; `all` does
-    // not, and a site that configured it as a language could never read or
-    // write that language — every read naming it answers with every
-    // translation instead, and the plugin boundary refuses it as a selector.
-    // Refused at configuration, where the collision is a sentence rather than
-    // a page that silently answers in every language at once.
-    if (isLocaleSelector(l.code)) {
+    // The instructions are reserved. `*` already fails the pattern; `all` and
+    // `none` do not, and a site that configured either as a language could
+    // never use it as one — a read naming `all` answers with every
+    // translation, and a fallback naming `none` disables fallback instead of
+    // choosing that language. Refused at configuration, where the collision
+    // is a sentence rather than a page that silently answers in every
+    // language at once.
+    if (isReservedLocaleCode(l.code)) {
       throw NextlyError.invalidInput({
         message:
-          `Locale code '${l.code}' in localization.locales is reserved: it selects ` +
-          `every language rather than naming one. Choose another code.`,
-        logContext: { reason: "localization-locale-code-is-a-selector" },
+          `Locale code '${l.code}' in localization.locales is reserved: the core ` +
+          `reads it as an instruction rather than a language. Choose another code.`,
+        logContext: { reason: "localization-locale-code-is-reserved" },
       });
     }
     // Bound the length to the companion `_locale` VARCHAR(20) so a longer code

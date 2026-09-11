@@ -43,8 +43,10 @@ translation with the document, and a locale on it would read as removing one.
 The selectors `*` and `all` are refused outright, from one classifier the
 core now exports as `isLocaleSelector`: a value forwarded from a query string
 must never be able to publish every translation of a document. The same
-spellings are reserved at localization configuration — a site can no longer
-name a language `all`, which could never be read or written as one.
+spellings are reserved at localization configuration, together with `none`,
+the wire's spelling of no fallback — a site can no longer name a language
+`all` or `none`, neither of which could ever be read, written or chosen as
+one. An empty locale reads as none named.
 
 The form builder uses it for the one place a visitor could see the gap. A
 form that redirects to a picked page read that page with no locale, so a page

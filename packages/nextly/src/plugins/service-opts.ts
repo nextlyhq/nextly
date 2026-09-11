@@ -133,17 +133,24 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   fallbackLocale?: string | false;
 } {
   const { as, user } = opts;
+  // `?locale=` with nothing after it reaches a route as the empty string, and
+  // a route forwarding what it was given hands that on. It is not a language
+  // and not a selector: the write path takes any falsy locale as "none named"
+  // and would file the write under the default language, which is the one
+  // wrong code the documented refusal would not catch. It names nothing, so it
+  // travels as nothing — the same reading the wire gives an absent parameter.
+  const locale = opts.locale === "" ? undefined : opts.locale;
   // A selector is not a language. `*` is the every-locale lifecycle sweep
   // and `all` the every-translation read; both are core vocabulary a plugin
   // has no designed use for, and a route forwarding `?locale=` must not be
   // able to reach the sweep by accident. Refused before any branch, so no
   // branch can carry one.
-  if (opts.locale !== undefined && isLocaleSelector(opts.locale)) {
+  if (locale !== undefined && isLocaleSelector(locale)) {
     throw NextlyError.invalidInput({
       message: "locale must name one language.",
       logContext: {
         reason: "service-opts-locale-selector",
-        locale: opts.locale,
+        locale,
       },
     });
   }
@@ -160,7 +167,7 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   const carried = {
     context: opts.context,
     request: opts.request,
-    ...(opts.locale !== undefined ? { locale: opts.locale } : {}),
+    ...(locale !== undefined ? { locale } : {}),
     ...(opts.fallbackLocale !== undefined
       ? { fallbackLocale: opts.fallbackLocale }
       : {}),
