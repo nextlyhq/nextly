@@ -83,12 +83,12 @@ export const SinglesQuickLinks: React.FC = () => {
 
   const singles = singlesData?.items ?? [];
 
-  // Hide the entire section when there are no Singles. Keeps the
-  // dashboard minimal on installs that don't use Singles at all.
-  if (!isLoading && !error && singles.length === 0) {
-    return null;
-  }
-
+  // Whether this card is offered at all is the HOST's decision, through the
+  // `singles:present` condition on its declaration. It used to hide itself
+  // here when the list was empty, and a card that renders nothing still holds
+  // its placement -- so the grid reserved an empty slot on every install that
+  // never used singles. The card draws what it has and never second-guesses
+  // the host.
   return (
     <section aria-labelledby="dashboard-singles-heading" className="space-y-6">
       <div className="flex items-center justify-between">
