@@ -958,6 +958,33 @@ describe("internal-docs-link", () => {
     ).not.toContain("internal-docs-link");
   });
 
+  it("fires on a link written as a path from the file, to a page or to source", async () => {
+    for (const body of [
+      "See [config](../configuration/index.mdx).\n",
+      "See [next](./production-migrations.mdx).\n",
+      "See [code](../packages/nextly/src/x.ts).\n",
+    ]) {
+      expect(
+        await checksFor({
+          "docs/guides/a.mdx": body,
+          "docs/configuration/index.mdx": "# c\n",
+          "docs/guides/production-migrations.mdx": "# p\n",
+        })
+      ).toContain("internal-docs-link");
+    }
+  });
+
+  it("does not fire on a file-path link outside the published pages", async () => {
+    // A README's `./CONTRIBUTING.md` is a link GitHub renders; the boundary is
+    // the docs, whose links are URLs on the site.
+    expect(
+      await checksFor({
+        "README.md": "See [contributing](./CONTRIBUTING.md).\n",
+        "CONTRIBUTING.md": "# c\n",
+      })
+    ).not.toContain("internal-docs-link");
+  });
+
   it("ignores the anchor when resolving", async () => {
     expect(
       await checksFor({
