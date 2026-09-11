@@ -383,6 +383,69 @@ describe("a choice with an empty option", () => {
   });
 });
 
+/**
+ * A select offering `""` and `"\u0000"`: both are legal option values, and a
+ * spelling that gave `""` a sentinel of its own made the two one item value.
+ */
+const nulAndNone = () =>
+  header({
+    exposed: [
+      {
+        id: "tone",
+        label: "Tone",
+        nodeId: "h1",
+        propPath: "tone",
+        type: "select",
+        options: [
+          { value: "", label: "None" },
+          { value: "\u0000", label: "Nul" },
+        ],
+      },
+    ],
+  });
+
+describe("two options the control once spelled alike", () => {
+  it("shows a stored empty value as the empty option, not as the NUL one", () => {
+    // Spelled alike, the two items shared one value and the control drew the
+    // later of them for either — the empty choice read as "Nul".
+    mount(instance({ overrides: { tone: "" } }), nulAndNone());
+
+    const shown = screen.getByRole("combobox", { name: "Tone" }).textContent;
+    expect(shown).toContain("None");
+    expect(shown).not.toContain("Nul");
+  });
+
+  it("writes the NUL when it is chosen from the empty option, rather than nothing", () => {
+    // Spelled alike, the item chosen carried the value the control already
+    // held, so choosing it changed nothing and wrote nothing.
+    const editor = mount(instance({ overrides: { tone: "" } }), nulAndNone());
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Tone" }));
+    fireEvent.click(screen.getByRole("option", { name: "Nul" }));
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { tone: "\u0000" },
+    });
+  });
+
+  it("writes the empty value when the empty option is chosen", () => {
+    // The control for the empty spelling: it must still come back as `""`.
+    const editor = mount(
+      instance({ overrides: { tone: "\u0000" } }),
+      nulAndNone()
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Tone" }));
+    fireEvent.click(screen.getByRole("option", { name: "None" }));
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { tone: "" },
+    });
+  });
+});
+
 describe("rows with no control", () => {
   it("lists a type it cannot edit yet, with its value, rather than hiding it", () => {
     mount(instance());
@@ -390,6 +453,75 @@ describe("rows with no control", () => {
     const note = screen.getByText(/Not editable here yet \(image\)/);
     expect(note.textContent).toContain("hero.png");
     expect(screen.queryByRole("textbox", { name: "Picture" })).toBeNull();
+  });
+
+  it("shows a structured value in words — rich text as its text, a list by its count, other data as data — rather than as nothing", () => {
+    // A value that is there and one that is not both read as empty through
+    // the text field's reader, so a row showed nothing where the page shows
+    // a passage.
+    const passage = {
+      root: {
+        type: "root",
+        children: [
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Hello " },
+              { type: "text", text: "world" },
+            ],
+          },
+        ],
+      },
+    };
+    const structured = header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/heading",
+          version: 1,
+          props: {
+            body: passage,
+            gallery: ["a.png", "b.png"],
+            hero: { url: "/logo.png", alt: "Logo" },
+          },
+        },
+      ],
+      exposed: [
+        {
+          id: "body",
+          label: "Body",
+          nodeId: "h1",
+          propPath: "body",
+          type: "richText",
+        },
+        {
+          id: "gallery",
+          label: "Gallery",
+          nodeId: "h1",
+          propPath: "gallery",
+          type: "image",
+        },
+        {
+          id: "hero",
+          label: "Hero",
+          nodeId: "h1",
+          propPath: "hero",
+          type: "image",
+        },
+      ],
+    });
+    mount(instance(), structured);
+
+    expect(
+      screen.getByText(/Not editable here yet \(rich text\)/).textContent
+    ).toContain("“Hello world”");
+    const images = screen
+      .getAllByText(/Not editable here yet \(image\)/)
+      .map(note => note.textContent);
+    expect(images).toEqual([
+      expect.stringContaining("“2 items”"),
+      expect.stringContaining('“{"url":"/logo.png","alt":"Logo"}”'),
+    ]);
   });
 
   it("names the exposure the page shows instead, for a shadowed row, and draws no control for it", () => {
@@ -479,6 +611,22 @@ describe("overrides the component no longer exposes", () => {
       componentId: "header",
       overrides: { title: "Acme" },
     });
+  });
+
+  it("shows an orphaned structured value as data and a cleared one as cleared, rather than as having no value", () => {
+    mount(
+      instance({
+        overrides: {
+          title: "Acme",
+          logo: { url: "/logo.png" },
+          subtitle: { $unset: true },
+        },
+      })
+    );
+
+    expect(screen.getByText('{"url":"/logo.png"}')).toBeDefined();
+    expect(screen.getByText("(cleared)")).toBeDefined();
+    expect(screen.queryByText("(no text value)")).toBeNull();
   });
 
   it("draws no such section when there are none", () => {

@@ -28,7 +28,13 @@
  * @module instance-inspector-panel
  */
 
-import { findNode, type OverrideValue } from "@nextlyhq/blocks-engine";
+import {
+  findNode,
+  isRichTextValue,
+  isUnsetOverride,
+  richTextToPlainText,
+  type OverrideValue,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   Input,
@@ -65,25 +71,27 @@ const SOURCE_LABEL: Readonly<Record<ExposedRow["source"], string>> = {
 };
 
 /**
- * The control's spelling of an option value the definition left EMPTY.
+ * The control's spelling of a definition's option value, and back.
  *
- * A definition may offer `""` as a choice — "none", for a select whose other
- * options are class names — and the validator accepts it. The select control
- * cannot: the primitive underneath throws at render on an item whose value is
- * the empty string, which it reserves for "no selection". So the empty value
- * wears a sentinel in the control and is taken off again on the way back to
- * the document. A NUL rather than a word, because a definition's option is
- * free text and any word could be one of them; nothing an author types
- * contains a NUL.
+ * EVERY value wears a one-character prefix. A definition may offer `""` as a
+ * choice — "none", for a select whose other options are class names — and the
+ * validator accepts it, while the primitive underneath the select throws at
+ * render on an item whose value is the empty string, which it reserves for
+ * "no selection". A sentinel spelling `""` alone collides with the option
+ * whose value IS that sentinel — an option's value is free text, so no string
+ * is safe — and two items then share one value: the control draws the later
+ * of them for either, and choosing one while the other is held changes
+ * nothing. A prefix on every value cannot collide: distinct values stay
+ * distinct, and no spelling is empty.
  */
-const EMPTY_OPTION = "\u0000";
+const OPTION_PREFIX = "=";
 
 function encodeOption(value: string): string {
-  return value === "" ? EMPTY_OPTION : value;
+  return `${OPTION_PREFIX}${value}`;
 }
 
 function decodeOption(value: string): string {
-  return value === EMPTY_OPTION ? "" : value;
+  return value.slice(OPTION_PREFIX.length);
 }
 
 /**
@@ -302,7 +310,7 @@ function ExposedControl({
     );
   }
   if (!row.supported) {
-    const shown = storedText(row.value);
+    const shown = valueSummary(row.value);
     return (
       <p className="nx-inspector__note">
         {shown === "" ? null : `“${shown}” — `}
@@ -332,6 +340,57 @@ function ExposedControl({
     );
   }
   return <ExposedTextField id={id} row={row} onSet={onSet} />;
+}
+
+/**
+ * A stored value as a line an author can read — empty only for a value that
+ * is empty.
+ *
+ * {@link storedText} answers what a TEXT FIELD can hold, and a structured
+ * value is not that: a rich-text document, a link or an image object, a list.
+ * Read through it, a value that is there and one that is not both came out
+ * empty, so a row showed nothing where the page shows a passage and an
+ * orphan read as holding no value. Rich text is read as its words, through
+ * the engine's own reader; a list says how many entries it holds; any other
+ * structure shows its data; a cleared override says so.
+ */
+function valueSummary(value: OverrideValue): string {
+  if (isUnsetOverride(value)) return "(cleared)";
+  if (isRichTextValue(value)) return clipped(richTextToPlainText(value));
+  if (Array.isArray(value)) {
+    return value.length === 1 ? "1 item" : `${String(value.length)} items`;
+  }
+  if (typeof value === "object" && value !== null) {
+    return clipped(dataOf(value));
+  }
+  return storedText(value);
+}
+
+/** How many characters of a summary a row shows before it trails off. */
+const SUMMARY_LENGTH = 80;
+
+/** One line of at most {@link SUMMARY_LENGTH} characters, whitespace folded. */
+function clipped(text: string): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length <= SUMMARY_LENGTH
+    ? line
+    : `${line.slice(0, SUMMARY_LENGTH - 1)}…`;
+}
+
+/**
+ * A structured value as JSON, or a plain statement that it is one.
+ *
+ * Stored values arrive as JSON and serialise back; one a hook built in memory
+ * can hold a cycle or a bigint, which `JSON.stringify` refuses, and a summary
+ * must not take the panel down over it.
+ */
+function dataOf(value: object): string {
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    if (error instanceof TypeError) return "(structured value)";
+    throw error;
+  }
 }
 
 /** A value as editable text, or empty when it is not representable. */
@@ -422,9 +481,9 @@ function OrphanedOverrides({
           <li key={entry.id} className="nx-inspector__orphan">
             <code>{entry.id}</code>
             <span className="nx-inspector__orphan-value">
-              {storedText(entry.value) === ""
-                ? "(no text value)"
-                : storedText(entry.value)}
+              {valueSummary(entry.value) === ""
+                ? "(empty)"
+                : valueSummary(entry.value)}
             </span>
             <Button
               type="button"
