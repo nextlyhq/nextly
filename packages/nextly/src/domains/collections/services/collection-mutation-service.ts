@@ -1294,6 +1294,43 @@ export class CollectionMutationService extends BaseService {
     return resolveRequestedLocale(this.localization, requested);
   }
 
+  /**
+   * The companion row a CREATE writes: the new parent, the write's locale, the
+   * translatable values, and the staleness stamp. An insert rather than an
+   * upsert, because a parent this transaction has just created has no row to
+   * conflict with — the update paths upsert instead.
+   *
+   * The stamp is not optional and not restated per caller: a create that
+   * forgot it leaves every new document's translations reading as UNKNOWN
+   * until each locale is rewritten, and a staleness signal that never fires
+   * for new content is invisible. Both create paths call this, so they cannot
+   * come to disagree about what a new translation carries.
+   */
+  private async insertCompanionRow(
+    tx: TransactionContext,
+    localizedWrite: {
+      companionTableName: string;
+      writeLocale: string;
+      companionData: Record<string, unknown>;
+    },
+    parentId: unknown
+  ): Promise<void> {
+    await tx.insert(
+      localizedWrite.companionTableName,
+      {
+        _parent: parentId,
+        _locale: localizedWrite.writeLocale,
+        ...localizedWrite.companionData,
+        ...companionContentStamp(
+          localizedWrite.companionData,
+          localizedWrite.companionTableName,
+          this.dialect
+        ),
+      },
+      {}
+    );
+  }
+
   private async splitLocalizedWriteData(
     collectionName: string,
     entryData: Record<string, unknown>,
@@ -3321,26 +3358,7 @@ export class CollectionMutationService extends BaseService {
         // i18n M5: write the translatable values to the companion `_locales` row for the
         // write's locale (same transaction → rolls back with the main insert).
         if (localizedWrite) {
-          await tx.insert(
-            localizedWrite.companionTableName,
-            {
-              _parent: entry.id,
-              _locale: localizedWrite.writeLocale,
-              ...localizedWrite.companionData,
-              // i18n B2: this is the THIRD companion write path, and it does not go through
-              // `upsertCompanionRow` -- it inserts a brand-new row on a parent this transaction
-              // has just created, where there is no conflict to resolve. The stamp rule is shared
-              // rather than restated, because a create that forgot it would leave every new
-              // document's translations reading as UNKNOWN until each locale was rewritten, and a
-              // staleness signal that never fires for new content is invisible.
-              ...companionContentStamp(
-                localizedWrite.companionData,
-                localizedWrite.companionTableName,
-                this.dialect
-              ),
-            },
-            {}
-          );
+          await this.insertCompanionRow(tx, localizedWrite, entry.id);
           // The localized values were split out of the main insert, so the
           // returned main row lacks them. Merge them back (camelCase keys) so
           // afterCreate hooks, events, and the response include them. `_status`
@@ -8548,22 +8566,10 @@ export class CollectionMutationService extends BaseService {
       // it rolls back with the main row. A brand-new parent has no row to
       // conflict with, which is why this inserts where the update path upserts.
       if (localizedWrite) {
-        await tx.insert(
-          localizedWrite.companionTableName,
-          {
-            _parent: (entry as { id: string }).id,
-            _locale: localizedWrite.writeLocale,
-            ...localizedWrite.companionData,
-            // The staleness stamp is the shared rule rather than a restatement:
-            // a create that forgot it leaves every new document's translations
-            // reading as UNKNOWN until each locale is rewritten.
-            ...companionContentStamp(
-              localizedWrite.companionData,
-              localizedWrite.companionTableName,
-              this.dialect
-            ),
-          },
-          {}
+        await this.insertCompanionRow(
+          tx,
+          localizedWrite,
+          (entry as { id: string }).id
         );
         // Split out of the insert, so the returned row lacks them: merge them
         // back for the hooks, the event and the response. Under the column's

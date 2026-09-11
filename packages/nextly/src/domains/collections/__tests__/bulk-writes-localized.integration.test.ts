@@ -30,6 +30,7 @@ afterEach(async () => {
 interface CompanionRow {
   _parent: string;
   _locale: string;
+  _updated_at?: unknown;
   title?: unknown;
   kind?: unknown;
 }
@@ -62,7 +63,7 @@ async function boot(): Promise<TestNextly> {
 /** The companion rows as the database holds them, not as a read resolves them. */
 async function companionRows(handle: TestNextly): Promise<CompanionRow[]> {
   return handle.adapter.executeQuery<CompanionRow>(
-    'SELECT "_parent", "_locale", "title", "kind" FROM "dc_pages_locales" ORDER BY "title"'
+    'SELECT "_parent", "_locale", "_updated_at", "title", "kind" FROM "dc_pages_locales" ORDER BY "title"'
   );
 }
 
@@ -92,6 +93,12 @@ describe("a bulk write on a localized collection", () => {
     // refuse a named locale.
     expect([...new Set(rows.map(r => r._locale))]).toEqual(["en"]);
     expect(new Set(rows.map(r => r._parent)).size).toBe(2);
+    // Each new translation carries the staleness stamp. Without it the row
+    // reads as UNKNOWN age and is never reported stale — a signal that never
+    // fires for new content is invisible, so the create must not skip it.
+    expect(
+      rows.every(r => r._updated_at !== null && r._updated_at !== undefined)
+    ).toBe(true);
 
     // And the values come back out through an ordinary read.
     const listed = await handler.listEntries({
