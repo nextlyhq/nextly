@@ -61,15 +61,21 @@ describe("listCollections resolves its allowlist before querying", () => {
 
     const passed = listCollections.mock.calls[0][0];
     expect([...passed.slugAllowlist].sort()).toEqual(["pages", "posts"]);
-    // Asked about THIS caller, so a handler passing a constant fails here
-    // rather than merely passing something list-shaped.
-    expect(allowlistFor).toHaveBeenCalledWith("u1");
+    // Asked about THIS caller, in the shape the shared read decision takes,
+    // and about the collections registry -- so a handler passing a constant,
+    // or a bare id, or the other kind fails here rather than merely passing
+    // something list-shaped.
+    expect(allowlistFor).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "u1", authMethod: "session" }),
+      "collection"
+    );
   });
 
-  it("passes NO allowlist for a super admin", async () => {
-    // The control in the permissive direction: a super admin sees everything,
-    // and `undefined` is how the registry is told not to filter. An empty
-    // array here would hide every collection from them.
+  it("passes NO allowlist when the decision answers with none", async () => {
+    // The control in the permissive direction: `undefined` is how the registry
+    // is told not to filter, and the dispatcher must hand it through as it is.
+    // An empty array here would hide every collection from a caller the
+    // decision chose not to scope.
     allowlistFor.mockResolvedValue(undefined);
     const listCollections = vi.fn().mockResolvedValue(serviceResult(["posts"]));
 
@@ -84,7 +90,7 @@ describe("listCollections resolves its allowlist before querying", () => {
   });
 
   it("passes an EMPTY allowlist for a reader granted nothing", async () => {
-    // 🔴 Distinct from the super-admin case above, and the distinction is the
+    // 🔴 Distinct from the unscoped case above, and the distinction is the
     // whole gate: `undefined` means "no filter", `[]` means "nothing is
     // visible". Collapsing them shows every collection to a reader with no
     // grants at all.
