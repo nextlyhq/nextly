@@ -9,22 +9,47 @@
  * dispatcher request to that answer, kept in one place so no handler builds
  * its own caller and quietly asks a different question.
  *
- * An API key's own scoped grants arrive on the params; a session caller has
- * none there, and `canReadEntity` resolves theirs from the database.
+ * 🔴 An API key is read from the scope the route handler PINNED for the
+ * request, not rebuilt from the route params. The params are a lossy copy:
+ * they carry the stored permission slugs and neither the key's own roles —
+ * serialised only for the methods `ROLE_AWARE_READ_METHODS` names, which the
+ * list reads are not — nor the grant rows a rule's `resource:action` spelling
+ * is derived from. A caller rebuilt from them let a code rule deciding on
+ * `roles`, or checking `permissions.includes("posts:read")`, refuse a key the
+ * detail route had just admitted. The pinned scope holds all of it.
+ *
+ * The params remain the fallback for a transport that pins nothing — a direct
+ * dispatch in a test, or one not yet wired through the route handler — and are
+ * exactly as lossy there as they always were. A session caller carries no
+ * grants either way; `canReadEntity` resolves theirs from the database.
  *
  * @module dispatcher/handlers/read-access-caller
  */
 
+import { ruleFacingPermissions } from "../../auth/authenticated-scope";
+import { currentCallerScope } from "../../auth/caller-scope";
 import type { ReadAccessCaller } from "../../auth/entity-read-access";
 import type { UserContext } from "../../domains/singles/types";
 import type { Params } from "../types";
 
-export function readAccessCallerFromParams(
+export function readAccessCallerForDispatch(
   p: Params,
   user: UserContext
 ): ReadAccessCaller {
-  const isApiKey = p._authenticatedActorType === "apiKey";
+  const pinned = currentCallerScope();
+  if (pinned?.actorType === "apiKey") {
+    return {
+      userId: user.id,
+      authMethod: "api-key",
+      permissions: [...pinned.permissions],
+      ...(pinned.grants
+        ? { rulePermissions: ruleFacingPermissions(pinned) }
+        : {}),
+      roles: [...(pinned.roles ?? user.roles ?? [])],
+    };
+  }
 
+  const isApiKey = p._authenticatedActorType === "apiKey";
   let permissions: string[] = [];
   if (isApiKey && p._authenticatedPermissions) {
     try {

@@ -113,7 +113,7 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
-import { readAccessCallerFromParams } from "./read-access-caller";
+import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
@@ -420,7 +420,7 @@ const COLLECTIONS_METHODS: Record<
       // the registry short-circuits to a zero-row, zero-total answer.
       const slugAllowlist = await readableSlugAllowlist(
         p._authenticatedUserId
-          ? readAccessCallerFromParams(p, userFromParams(p))
+          ? readAccessCallerForDispatch(p, userFromParams(p))
           : undefined,
         "collection"
       );

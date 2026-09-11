@@ -114,7 +114,7 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
-import { readAccessCallerFromParams } from "./read-access-caller";
+import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
@@ -487,7 +487,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // zero-row, zero-total response.
       const user = authenticatedSingleUser(p);
       const slugAllowlist = await readableSlugAllowlist(
-        user ? readAccessCallerFromParams(p, user) : undefined,
+        user ? readAccessCallerForDispatch(p, user) : undefined,
         "single"
       );
 

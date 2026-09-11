@@ -49,7 +49,7 @@ import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
 import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
-import { readAccessCallerFromParams } from "./read-access-caller";
+import { readAccessCallerForDispatch } from "./read-access-caller";
 
 /** Page size when the caller does not ask for one. */
 const DEFAULT_LIMIT = 25;
@@ -447,7 +447,7 @@ export async function setVersionLabelForDocument(
   assertPositiveInteger(args.versionNo, "versionNo");
   const { provided, label } = readLabelFromBody(args.body);
 
-  const caller = readAccessCallerFromParams(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.params, args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     throw NextlyError.notFound({
@@ -536,7 +536,7 @@ export async function restoreVersionForDocument(
     request?: Request;
   }
 ): Promise<{ restoredFrom: number; droppedFields: string[] }> {
-  const caller = readAccessCallerFromParams(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.params, args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     // "Not found" rather than "forbidden", matching the document gate below: a
@@ -610,7 +610,7 @@ export async function discardWorkingDraftForDocument(
     locale?: string | null;
   }
 ): Promise<unknown> {
-  const caller = readAccessCallerFromParams(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.params, args.user);
 
   // Read gate first: the route authorized this as an update, not a read, so a
   // caller who cannot read the document is refused here — as "not found" so the
@@ -686,7 +686,7 @@ export async function autosaveForDocument(
     locale?: string | null;
   }
 ): Promise<unknown> {
-  const caller = readAccessCallerFromParams(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.params, args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     throw NextlyError.notFound({
@@ -850,7 +850,7 @@ export async function autosaveForDocument(
 export async function getAutosaveForDocument(
   args: Omit<VersionMethodArgs, "locale"> & { params: Params }
 ): Promise<unknown> {
-  const caller = readAccessCallerFromParams(args.params, args.user);
+  const caller = readAccessCallerForDispatch(args.params, args.user);
 
   if (!(await canReadEntity(args.slug, caller))) {
     throw NextlyError.notFound({
