@@ -10,7 +10,6 @@
  *
  * Key differences from Dynamic Collections and Singles:
  * - `label` is singular only (like Singles, no plural form needed)
- * - No `accessRules` (Components are templates/schemas, not documents)
  * - No `hooks` (Components don't have lifecycle hooks)
  * - No `timestamps` configuration
  * - Table name convention: `comp_` prefix (e.g., 'comp_seo')

@@ -256,9 +256,9 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const service = await getActivityLogService();
   // The caller WHOLE, and resolved ONCE. Both consumers read it: the scope
   // decides which collections are in reach, and the feed then authorizes each
-  // row's DOCUMENT as this caller -- a stored owner-only or custom read rule
-  // makes those two different sets, and a feed given only the scope reports one
-  // author's entry titles to another.
+  // row's DOCUMENT as this caller -- the read path's own filtering makes those
+  // two different sets, and a feed given only the scope reports entry titles the
+  // caller cannot open.
   const caller = await readCaller(auth);
   const scope = await resolveReadableResources(caller);
   const result = await service.getRecentActivity({ limit, scope, caller });

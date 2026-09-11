@@ -258,7 +258,7 @@ describe("previewDraftGate", () => {
     expect(resolvePreviewIdentity).not.toHaveBeenCalled();
   });
   // A sharer who is still ACTIVE but no longer authorized — an update role
-  // withdrawn, an owner-only rule they stopped satisfying. Rebuilding their
+  // withdrawn, say. Rebuilding their
   // identity re-evaluates FIELD rules and nothing else, because the read runs
   // with the row checks bypassed, so without this the link kept serving the
   // draft until it expired.

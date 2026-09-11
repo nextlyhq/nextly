@@ -658,7 +658,7 @@ export class DynamicCollectionSchemaService {
       );
     const hasTitleField = declaresColumn("title");
     const hasSlugField = declaresColumn("slug");
-    // A single is one global row, so owner-only ownership is meaningless and it gets no
+    // A single is one global row with no per-user owner, so it gets no
     // `created_by`. Prefer the explicit flag, but fall back to the `single_` table prefix so this
     // stays in lockstep with the runtime schema and the diff, which derive it from the name, even
     // when a caller omits the option.

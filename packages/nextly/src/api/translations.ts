@@ -16,15 +16,10 @@
  * @since 1.0.0
  */
 
-import {
-  canReadEntity,
-  type ReadAccessCaller,
-} from "../auth/entity-read-access";
-import type { AuthContext } from "../auth/middleware";
+import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import { container } from "../di";
 import { getAdapterFromDI } from "../dispatcher/helpers/di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
-import type { UserContext } from "../domains/collections/services/collection-types";
 import { COMPANION_UPDATED_AT_COLUMN } from "../domains/i18n/companion-columns";
 import {
   TRANSLATION_FILTER_STATES,
@@ -53,6 +48,7 @@ import {
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { CollectionsHandler } from "../services/collections-handler";
+import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import {
   authenticatedRead,
@@ -110,16 +106,14 @@ function parseLimit(raw: string | null): number {
  * that keeps another author's titles out of the answer.
  */
 async function readableCollections(
-  auth: AuthContext,
-  caller: { user: UserContext },
+  caller: ReadCaller,
   slugs: readonly string[]
 ): Promise<Set<string>> {
-  const readCaller: ReadAccessCaller = {
-    userId: auth.userId,
-    authMethod: auth.authMethod === "api-key" ? "api-key" : "session",
-    permissions: auth.permissions,
-    roles: caller.user.roles ?? [],
-  };
+  // Derived from the resolved caller by the one projection every read decision
+  // uses, rather than assembled here from the auth context: a hand-built
+  // caller carried the key's grants in the stored spelling only, so a rule
+  // reading `posts:read` was answered differently here than on a direct read.
+  const readCaller = readAccessCaller(caller);
   // One decision, then bounded groups — never one flat `Promise.all` over every
   // localized collection. `canReadEntity` resolves a session caller through the
   // per-user super-admin cache, and a simultaneous cold start makes every call
@@ -374,7 +368,6 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // named back to someone with no right to know it exists.
   const localized = await localizedCollections();
   const readable = await readableCollections(
-    auth,
     caller,
     localized.map(c => c.slug)
   );
@@ -419,9 +412,9 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
         // `canReadEntity` above — the canonical decision, and the reason this
         // collection is in `queried` at all. Attesting it here elides ONLY that
         // redundant re-check: `checkCollectionAccess` skips the RBAC/code-access
-        // gate under `routeAuthorized` and still evaluates the stored rules
-        // (owner-only, role-based, custom) against the real user, which is what
-        // keeps another author's titles out of this list.
+        // gate under `routeAuthorized`, and the read that follows still applies
+        // the collection's lifecycle filter and field-level rules against the
+        // real user.
         //
         // Not merely wasted work. A code-defined `access.read` callback may do
         // asynchronous external work, so running it twice per collection doubles

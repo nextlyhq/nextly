@@ -40,7 +40,7 @@ const packageRoot = resolve(
  * are converted to NextlyError and its entry is deleted — the reader below rejects zero-valued
  * entries, so a fully cleaned file leaves the ledger entirely rather than sitting at 0.
  */
-const EXPECTED_ALLOWLIST_SIZE = 95;
+const EXPECTED_ALLOWLIST_SIZE = 93;
 
 const ALLOWLIST_FILE = "eslint-bare-error-allowlist.json";
 
