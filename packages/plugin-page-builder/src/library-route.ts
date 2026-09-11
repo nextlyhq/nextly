@@ -559,10 +559,18 @@ function readComponentRow(
 }
 
 /**
- * What every library row must carry to be offered at all: a non-empty id and
- * title. ONE reader for both tiers, because the two collections share this
- * half of their shape and a second reading of it would drift from the first
- * the day either learned a new way a row can be unusable.
+ * What every library row must carry to be offered at all: a non-empty id.
+ * ONE reader for both tiers, because the two collections share this half of
+ * their shape and a second reading of it would drift from the first the day
+ * either learned a new way a row can be unusable.
+ *
+ * A title only LABELS the row, so a row without one is labelled by its id
+ * rather than left out. What a page's renderer reads of a component is its id
+ * and its document; a collection with no title field, or one whose title is
+ * redacted by field-level access, still renders every instance on the public
+ * page, and a canvas that dropped the definition would draw a placeholder
+ * where the page draws the component. The id is the one name a row is sure
+ * to have, and an author can find it by that.
  */
 function identityOf(
   row: unknown
@@ -573,8 +581,13 @@ function identityOf(
   const record = row as Record<string, unknown>;
   const { id, title } = record;
   if (typeof id !== "string" || id === "") return undefined;
-  if (typeof title !== "string" || title === "") return undefined;
-  return { named: { id, title }, record };
+  return {
+    named: {
+      id,
+      title: typeof title === "string" && title !== "" ? title : id,
+    },
+    record,
+  };
 }
 
 /**
@@ -583,8 +596,8 @@ function identityOf(
  *
  * `document: null` for a row the read found but which holds no content — a
  * legal row, and one the panel will skip — and `undefined` for no row at all,
- * or one without an id or title, which the caller reports as a cut library
- * rather than a missing key.
+ * or one without an id, which the caller reports as a cut library rather than
+ * a missing key.
  */
 function withDraftDocument(
   data: unknown,
