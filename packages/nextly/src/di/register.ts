@@ -126,7 +126,10 @@ import { resolvePlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
-import { applyPluginSchemaContributionsDeferred } from "../plugins/schema/apply-contributions";
+import {
+  applyPluginSchemaContributionsDeferred,
+  assertRegisteredKeepTheirKind,
+} from "../plugins/schema/apply-contributions";
 import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
   collectUnresolvedRelationTargets,
@@ -839,6 +842,17 @@ export async function registerServices(
     // below keeps a plugin-free or unchanged boot write-free (no registry
     // writes, no DDL, no apply-helper imports) — the byte-for-byte no-op path.
     const builderEntities = await loadBuilderEntities(adapter);
+
+    assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
+
+    // 🔴 One slug belongs to one KIND, and this is the first point in the boot
+    // that can see both sides of it: the fold refused a plugin taking a slug
+    // the config's own entities hold, but the Builder's entities live in the
+    // `dynamic_*` tables and were unknowable then. Refused here rather than at
+    // registration, where whichever of the two registers second is rejected by
+    // a message naming neither the other kind nor its owner -- and where, for
+    // a permission named `read-<slug>` and a code rule resolved by slug alone,
+    // the install would be ambiguous even if both could be stored.
     const { entities, unresolved } = reconcileBuilderContributions(
       deferredExtends,
       builderEntities

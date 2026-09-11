@@ -387,6 +387,15 @@ interface SlugClaim {
   owner: string;
 }
 
+/** One kind's entities as claims on the namespace, from one owner. */
+function claimsOfKind(
+  kind: EntityKind,
+  owner: string,
+  entities: readonly Slugged[] | undefined
+): SlugClaim[] {
+  return (entities ?? []).map(entity => ({ slug: entity.slug, kind, owner }));
+}
+
 /**
  * Every claim on the slug namespace, in the order a collision reads naturally:
  * the config's own entities first, then each plugin's in resolved order --
@@ -396,20 +405,14 @@ function slugClaims(
   config: NextlyServiceConfig,
   renamed: ReadonlyArray<{ owner: string; contributes: RenamedContributes }>
 ): SlugClaim[] {
-  const ofKind = (
-    kind: EntityKind,
-    owner: string,
-    entities: readonly Slugged[] | undefined
-  ): SlugClaim[] =>
-    (entities ?? []).map(entity => ({ slug: entity.slug, kind, owner }));
   return [
-    ...ofKind("collection", "code", config.collections),
-    ...ofKind("single", "code", config.singles),
-    ...ofKind("component", "code", config.fieldGroups),
+    ...claimsOfKind("collection", "code", config.collections),
+    ...claimsOfKind("single", "code", config.singles),
+    ...claimsOfKind("component", "code", config.fieldGroups),
     ...renamed.flatMap(({ owner, contributes }) => [
-      ...ofKind("collection", owner, contributes.collections),
-      ...ofKind("single", owner, contributes.singles),
-      ...ofKind("component", owner, contributes.fieldGroups),
+      ...claimsOfKind("collection", owner, contributes.collections),
+      ...claimsOfKind("single", owner, contributes.singles),
+      ...claimsOfKind("component", owner, contributes.fieldGroups),
     ]),
   ];
 }
@@ -447,6 +450,49 @@ function assertOneKindPerSlug(claims: readonly SlugClaim[]): void {
       `${claim.owner} (${claim.kind})`,
     ]);
   }
+}
+
+/**
+ * The entities a REGISTRY already holds, per kind, as this check reads them:
+ * the Builder's own and the code-first rows registered beside them.
+ */
+export interface RegisteredEntitiesByKind {
+  collections?: readonly Slugged[];
+  singles?: readonly Slugged[];
+  components?: readonly Slugged[];
+}
+
+/**
+ * The same one-slug-one-kind rule, once the REGISTERED entities are known.
+ *
+ * 🔴 {@link assertOneKindPerSlug} runs at fold time, where the Builder's
+ * entities cannot be seen: they live in the `dynamic_*` tables rather than in
+ * any config, and the Builder's own merge pairs each kind separately. So a
+ * Builder single and a plugin collection under one slug passed every check
+ * and met only `assertGlobalResourceSlugAvailable`, at registration, where
+ * one of the two is refused -- the app then boots missing whichever lost, and
+ * the refusal names neither the other kind nor its owner.
+ *
+ * Run wherever the registered set becomes knowable -- the runtime after
+ * `loadBuilderEntities`, the CLI after reading the ui-schema manifest -- it
+ * refuses the pair up front, with both owners and kinds in the error.
+ *
+ * A registered row of the SAME kind as a configured entity is that entity's
+ * own row, or a Builder entity the Builder's merge already resolves; neither
+ * is this rule's business.
+ */
+export function assertRegisteredKeepTheirKind(
+  config: Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups">,
+  registered: RegisteredEntitiesByKind
+): void {
+  assertOneKindPerSlug([
+    ...claimsOfKind("collection", "code", config.collections),
+    ...claimsOfKind("single", "code", config.singles),
+    ...claimsOfKind("component", "code", config.fieldGroups),
+    ...claimsOfKind("collection", "registered", registered.collections),
+    ...claimsOfKind("single", "registered", registered.singles),
+    ...claimsOfKind("component", "registered", registered.components),
+  ]);
 }
 
 /**

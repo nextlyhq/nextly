@@ -8,9 +8,12 @@
  * gone -- its reads answering not-found under the plugin collection's rule.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
+import { createAdapter } from "../../../database/factory";
+import { clearServices } from "../../../di/register";
+import { seedBuilderSingle } from "../../__tests__/seed-builder-entity";
 import { definePlugin } from "../../plugin-context";
 import { createTestNextly, type TestNextly } from "../../test-nextly";
 
@@ -100,6 +103,78 @@ describe("booting a plugin entity beside an app entity of another kind", () => {
     ).getAllSingles();
 
     expect(collections.map(row => row.slug)).toContain("announcements");
+    expect(singles.map(row => row.slug)).toContain("homepage");
+  });
+});
+
+describe("booting a config entity beside a Builder entity of another kind", () => {
+  // The Builder's entities live in the `dynamic_*` tables, so the fold cannot
+  // see them; this is the check that runs once the registry is readable. Both
+  // boots share one adapter, the way the other two-phase suites do -- the
+  // first creates the registry tables, the second meets what was seeded.
+  let shared: Awaited<ReturnType<typeof createAdapter>> | undefined;
+  let booted: TestNextly | undefined;
+
+  afterAll(async () => {
+    await booted?.destroy();
+    booted = undefined;
+    shared = undefined;
+  });
+
+  async function withBuilderSingle(): Promise<
+    Awaited<ReturnType<typeof createAdapter>>
+  > {
+    const adapter = await createAdapter({
+      type: "sqlite",
+      memory: true,
+    } as Parameters<typeof createAdapter>[0]);
+    shared = adapter;
+    const first = await createTestNextly({ adapter });
+    await seedBuilderSingle(adapter, {
+      slug: "homepage",
+      fields: [{ name: "headline", type: "text" }],
+    });
+    // Not `destroy()`: it disconnects the adapter, and the second boot needs
+    // the database the first one created. Clearing the container is what the
+    // other two-phase suites do.
+    void first;
+    clearServices();
+    return adapter;
+  }
+
+  it("refuses a collection whose slug a Builder single already holds", async () => {
+    const adapter = await withBuilderSingle();
+
+    await expect(
+      createTestNextly({
+        adapter,
+        collections: [
+          defineCollection({ slug: "homepage", fields: [text({ name: "c" })] }),
+        ],
+      })
+    ).rejects.toMatchObject({ code: "NEXTLY_SCHEMA_SLUG_COLLISION" });
+  });
+
+  it("boots beside a Builder single whose slug nothing else holds", async () => {
+    // The control: a check that refused every boot with a Builder entity in
+    // the registry would pass the case above.
+    const adapter = await withBuilderSingle();
+
+    booted = await createTestNextly({
+      adapter,
+      collections: [
+        defineCollection({
+          slug: "announcements",
+          fields: [text({ name: "c" })],
+        }),
+      ],
+    });
+
+    const singles = await (
+      booted.getService("singleRegistryService") as {
+        getAllSingles(): Promise<{ slug: string }[]>;
+      }
+    ).getAllSingles();
     expect(singles.map(row => row.slug)).toContain("homepage");
   });
 });

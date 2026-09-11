@@ -12,6 +12,7 @@ import type { PluginDefinition } from "../plugin-context";
 import {
   applyPluginSchemaContributions,
   applyPluginSchemaContributionsDeferred,
+  assertRegisteredKeepTheirKind,
   finalizeDeferredExtendTargets,
   resolveBuilderExtends,
 } from "./apply-contributions";
@@ -229,6 +230,41 @@ describe("applyPluginSchemaContributions (slug collisions — D13)", () => {
       );
       expect(merged.collections?.map(c => c.slug)).toEqual(["posts"]);
       expect(merged.singles?.map(s => s.slug)).toEqual(["settings", "hero"]);
+    });
+
+    it("refuses a configured entity whose slug a REGISTERED entity of another kind holds", () => {
+      // The Builder's entities are unknown at fold time -- they live in the
+      // `dynamic_*` tables -- so this is the same rule run once they are
+      // readable, at the runtime boot and on the CLI.
+      const err = collisionError(() =>
+        assertRegisteredKeepTheirKind(cfg({ collections: [coll("shared")] }), {
+          singles: [{ slug: "shared" }],
+        })
+      );
+      expect(err.logContext?.reason).toBe("slug-collision");
+      expect(err.logContext?.owners).toEqual([
+        "code (collection)",
+        "registered (single)",
+      ]);
+
+      collisionError(() =>
+        assertRegisteredKeepTheirKind(cfg({ singles: [single("shared")] }), {
+          collections: [{ slug: "shared" }],
+        })
+      );
+    });
+
+    it("says nothing about a registered entity of the SAME kind, which is that entity's own row", () => {
+      // The control, twice over: a code-first entity IS a registry row, so
+      // refusing a same-kind pair would refuse every boot that has one -- and
+      // an unrelated Builder entity is no one's business.
+      expect(() =>
+        assertRegisteredKeepTheirKind(cfg({ collections: [coll("posts")] }), {
+          collections: [{ slug: "posts" }],
+          singles: [{ slug: "homepage" }],
+          components: [{ slug: "hero" }],
+        })
+      ).not.toThrow();
     });
 
     it("leaves a code-vs-code clash across kinds to defineConfig (G2 -- plugin-free path unchanged)", () => {

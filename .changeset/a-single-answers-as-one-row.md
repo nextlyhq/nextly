@@ -68,13 +68,17 @@ slug, say -- now fails the boot naming it, as a collection in the same state
 already did, instead of leaving the app running without a single its config
 declares.
 
-A plugin can no longer contribute a collection, single or field group under a
-slug another kind already holds. Slugs are one namespace across kinds -- as
+A collection, single or field group can no longer take a slug another kind
+already holds. Slugs are one namespace across kinds -- as
 `defineConfig` already enforced for an app's own config -- and before, such a
 boot succeeded while the registry silently refused one of the two at sync, so
 an app's single could vanish behind a plugin's collection of the same slug.
 The boot now fails with `NEXTLY_SCHEMA_SLUG_COLLISION`, naming both owners in
-the log.
+the log. The same rule is applied to the entities the Schema Builder owns,
+once the registry is readable -- at the runtime boot and on the CLI -- so a
+Builder single and a plugin collection under one slug are refused up front
+rather than at registration, where one of the two was rejected by a message
+naming neither the other kind nor its owner.
 
 Under `next dev`, a single whose fields you edit keeps its source and its
 status card: the reload re-marks an edited single's migration as applied from
