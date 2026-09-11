@@ -105,6 +105,7 @@ result.meta.hasPrev;     // boolean
 | `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
 | `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
 | `pagination` | `boolean` | `true` | Set `false` to return all matching rows without paging. |
+| `status` | `"published" \| "draft" \| "all"` | — | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |
 | `user` | `{ id, role? }` | — | Required when `overrideAccess: false`. |
@@ -144,6 +145,8 @@ if (post) {
 | `depth` | `number` | `0` | Relationship population depth. |
 | `select` | `Record<string, boolean>` | — | Whitelist or blacklist fields. |
 | `populate` | `Record<string, boolean \| PopulateOptions>` | — | Per-field population control. |
+| `status` | `"published" \| "draft" \| "all"` | — | As on `find`. An untrusted read that states none answers `NOT_FOUND` for a row that was never published, whatever `draft` says. |
+| `draft` | `boolean` | `false` | Overlay the pending working draft on a drafts-enabled collection. Granted outright to a trusted read; for an untrusted one, only when the caller may update the document. |
 | `richTextFormat` | `"json" \| "html" \| "both"` | `"json"` | Output format for rich text fields. |
 | `disableErrors` | `boolean` | `false` | Return `null` instead of throwing. |
 | `overrideAccess` | `boolean` | `true` | Bypass access control. |

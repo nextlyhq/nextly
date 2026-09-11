@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReadAccessCaller } from "../../../auth/entity-read-access";
 import { setContributedWidgets } from "../canonical";
+import { generatedWidgets, setGeneratedWidgets } from "../collection-widgets";
 import { clearWidgets, registerWidget } from "../registry";
 import { clearSources, registerSource } from "../sources";
 import { widgetAudience } from "../visibility";
@@ -218,6 +219,40 @@ describe("widgetAudience", () => {
 
     expect(ids(audience.generated)).toContain("collection/posts-count");
     expect(ids(audience.generated)).not.toContain("collection/secret-count");
+  });
+
+  it("ships the generated definitions it AUTHORIZED, even when the set is replaced mid-decision", async () => {
+    // 🔴 The generated set is a global a concurrent request's refresh
+    // replaces, and the decision awaits permission reads in between. Re-read
+    // afterwards, the payload shipped whatever definition held each id by
+    // then -- one the entity read was never asked about. Here the
+    // replacement keeps the id and reads a collection this reader may not.
+    registerSource(source("posts"));
+    reader([], ["posts"]);
+    readableEntities.mockImplementation(async (slugs: string[]) => {
+      setGeneratedWidgets(
+        generatedWidgets().map(widget =>
+          widget.id === "collection/posts-count" && widget.query
+            ? {
+                ...widget,
+                title: "Secret",
+                query: { ...widget.query, source: "collection:secret" },
+              }
+            : widget
+        )
+      );
+      return new Set(slugs.filter(slug => slug === "posts"));
+    });
+
+    const audience = await widgetAudience(CALLER);
+
+    const card = audience.generated.find(
+      widget => widget.id === "collection/posts-count"
+    );
+    // The control that the card was offered at all, so the property below is
+    // not satisfied by an empty half.
+    expect(card).toBeDefined();
+    expect(card?.query?.source).toBe("collection:posts");
   });
 
   it("answers for the gates INSIDE a visible declaration, from either channel", async () => {

@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_NODES,
@@ -105,6 +106,86 @@ describe("the classes a page references", () => {
         ],
       })
     ).toEqual(["a", "m", "z"]);
+  });
+});
+
+describe("the classes a page renders through its components", () => {
+  const definition = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [
+      { id: "d1", type: "core/text", version: 1, props: {}, classes: ["hero"] },
+    ],
+  };
+  const page = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      { id: "n1", type: "core/text", version: 1, props: {}, classes: ["own"] },
+      {
+        id: "n2",
+        type: "nextly/component-instance",
+        version: 1,
+        props: { componentId: "header" },
+      },
+    ],
+  };
+
+  it("counts a class a linked component applies, when handed the definitions the page draws with", () => {
+    // The page holds one instance node, and what that node RENDERS is the
+    // definition's tree. A walk over the stored page never sees the class
+    // inside it, so a filter built from that walk leaves out a class the
+    // page is actively rendering.
+    const definitions = new Map([["header", definition]]);
+
+    expect(classUsageOf(page, DEFAULT_LIMITS, definitions).ids).toEqual([
+      "hero",
+      "own",
+    ]);
+  });
+
+  it("reads only the page's own references when handed no definitions", () => {
+    // The control, and the record's own question: what THIS document
+    // references. A component's classes are the component's record.
+    expect(classUsageOf(page).ids).toEqual(["own"]);
+  });
+
+  it("leaves an instance it cannot resolve as the stored node, which applies nothing", () => {
+    expect(classUsageOf(page, DEFAULT_LIMITS, new Map()).ids).toEqual(["own"]);
+  });
+
+  it("composes under the limits handed in, so a class inside an instance the page has no room for is not counted", () => {
+    // The canvas resolves under the site's caps and leaves an instance the
+    // page cannot hold standing as a placeholder, which applies no class. A
+    // walk composing under looser caps would count a class the page does
+    // not render.
+    const two = {
+      ...definition,
+      nodes: [
+        {
+          id: "d1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["hero"],
+        },
+        {
+          id: "d2",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["hero"],
+        },
+      ],
+    };
+    const definitions = new Map([["header", two]]);
+    const tight = { ...DEFAULT_LIMITS, maxNodes: 2 };
+
+    expect(classUsageOf(page, tight, definitions).ids).toEqual(["own"]);
+    expect(classUsageOf(page, DEFAULT_LIMITS, definitions).ids).toEqual([
+      "hero",
+      "own",
+    ]);
   });
 });
 

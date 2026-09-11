@@ -1,4 +1,5 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { AuthUser } from "../../types/auth";
 import type { PermissionSlug } from "../contributions";
 import type { PluginContext } from "../plugin-context";
@@ -57,6 +58,15 @@ export interface PluginRouteContext extends PluginContext {
 }
 
 /**
+ * @public Who a plugin route's caller is to an enforced read.
+ *
+ * `user` is the `UserContext` every stored access rule is evaluated against;
+ * `authenticatedScope` is present only for an `api-key` caller and narrows
+ * the read to the key's own grants.
+ */
+export type PluginRouteIdentity = ReadCaller;
+
+/**
  * @public What the authenticated caller of a plugin route may do.
  *
  * Deliberately NOT a permission array. A session caller's permissions are
@@ -70,6 +80,19 @@ export interface PluginRouteCaller {
    * OWN stamped scope, which is narrower than its owner's grants by design.
    */
   authMethod: "session" | "api-key";
+  /**
+   * The caller as an ENFORCED Direct API read takes them: the canonical
+   * identity with the roles a stored rule reads, the verified claims a custom
+   * rule may decide on, and — for an `api-key` caller — the key's own scope.
+   *
+   * A route reading "as the user" passes these to `find` / `findByID` with
+   * `overrideAccess: false`. Built from `user` alone, a context carries no
+   * roles, and a role-based rule on the collection then refuses a caller the
+   * route's own gate admitted — with nothing in the route to say why. The
+   * roles are resolved from the account once per request, on first use, by
+   * the same reader {@link can} judges by.
+   */
+  identity(): Promise<PluginRouteIdentity>;
   /**
    * The authenticating API key's own id, present only for an `api-key` caller.
    * Carried so a write can be attributed to the specific key rather than only

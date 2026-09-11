@@ -94,6 +94,7 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
+import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -125,7 +126,10 @@ import { resolvePlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
-import { applyPluginSchemaContributionsDeferred } from "../plugins/schema/apply-contributions";
+import {
+  applyPluginSchemaContributionsDeferred,
+  assertRegisteredKeepTheirKind,
+} from "../plugins/schema/apply-contributions";
 import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
   collectUnresolvedRelationTargets,
@@ -838,6 +842,17 @@ export async function registerServices(
     // below keeps a plugin-free or unchanged boot write-free (no registry
     // writes, no DDL, no apply-helper imports) — the byte-for-byte no-op path.
     const builderEntities = await loadBuilderEntities(adapter);
+
+    assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
+
+    // 🔴 One slug belongs to one KIND, and this is the first point in the boot
+    // that can see both sides of it: the fold refused a plugin taking a slug
+    // the config's own entities hold, but the Builder's entities live in the
+    // `dynamic_*` tables and were unknowable then. Refused here rather than at
+    // registration, where whichever of the two registers second is rejected by
+    // a message naming neither the other kind nor its owner -- and where, for
+    // a permission named `read-<slug>` and a code rule resolved by slug alone,
+    // the install would be ambiguous even if both could be stored.
     const { entities, unresolved } = reconcileBuilderContributions(
       deferredExtends,
       builderEntities
@@ -2499,8 +2514,14 @@ async function syncCodeFirstSingles(
       webhooks: storedWebhookRecording(single.webhooks),
     }));
 
+  // Declared out here so the per-single failures can be judged AFTER the catch
+  // below. Judged inside it, the refusal this raises would be caught by the
+  // same catch and turned back into the warning it exists to replace.
+  let singleSyncResult: Awaited<
+    ReturnType<SingleRegistryService["syncCodeFirstSingles"]>
+  > | null = null;
   try {
-    const singleSyncResult = await singleRegistry.syncCodeFirstSingles(
+    singleSyncResult = await singleRegistry.syncCodeFirstSingles(
       codeFirstSingleConfigs
     );
     logger.info?.(
@@ -2520,6 +2541,44 @@ async function syncCodeFirstSingles(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
     );
     return;
+  }
+
+  // 🔴 The same reading the collections sync makes of its own errors, and for
+  // the same reason. On a fresh database the registry table does not exist yet
+  // and every entry fails that way, which must not stop the app from reaching
+  // `/setup`. ANY OTHER failure means this single did not register at all -- a
+  // slug a collection already owns is refused right here, by the guard that
+  // keeps one slug to one kind -- and the app then ran without it, answering
+  // not-found for a single the config declares. Reported rather than
+  // swallowed, so the boot says which single and why.
+  if (singleSyncResult.errors.length > 0) {
+    const allAreMissingTable = singleSyncResult.errors.every(
+      entry =>
+        entry.error.includes("does not exist") ||
+        entry.error.includes("no such table") ||
+        entry.error.includes("doesn't exist")
+    );
+    if (allAreMissingTable) {
+      logger.warn?.(
+        `Singles sync skipped (database tables not yet created — run migrations first). ${singleSyncResult.errors.length} single(s) deferred.`
+      );
+    } else {
+      // `NextlyError`, unlike the bare throw the collections path still
+      // carries: the slugs and the driver's words are operator detail, so they
+      // ride in `logContext` while the thrown message stays canonical.
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage: `Failed to register ${singleSyncResult.errors.length} single(s)`,
+        logContext: {
+          reason: "single-sync-failed",
+          singles: singleSyncResult.errors.map(entry => ({
+            slug: entry.slug,
+            error: entry.error,
+          })),
+        },
+      });
+    }
   }
 
   // dynamic_singles) only describe what SHOULD exist; the actual storage

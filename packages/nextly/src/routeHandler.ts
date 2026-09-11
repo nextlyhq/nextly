@@ -105,6 +105,7 @@ import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import type { WidgetAction } from "./domains/widgets/definition";
+import { visibilityToken } from "./domains/widgets/layout";
 import { publishableWidgets } from "./domains/widgets/publish";
 import {
   widgetAudience,
@@ -1602,6 +1603,7 @@ const NO_WIDGETS: WidgetAudience = {
   generated: [],
   holds: () => false,
   heldActionGates: new Set(),
+  token: visibilityToken([], []),
 };
 
 /**
@@ -1804,6 +1806,11 @@ async function buildAdminMeta(
   if (widgets.length > 0) {
     workspace.widgets = widgets;
   }
+  // The audience both widget channels above were filtered for, as the layout
+  // read also reports it: the admin compares the two to learn that a payload
+  // it has held for minutes was built for a different reader than the layout
+  // in front of it -- a grant, a role change -- and reads it again.
+  workspace.widgetAudience = audience.token;
 
   // Override config branding with DB values when available
   try {

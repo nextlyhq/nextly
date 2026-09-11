@@ -1,7 +1,15 @@
 import { measureBytes } from "@nextlyhq/blocks-engine";
-import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
+import {
+  NextlyError,
+  type PluginRouteContext,
+  type PluginRoutePermissionScope,
+} from "@nextlyhq/plugin-sdk";
+import { requireNextly } from "nextly/runtime";
 /**
- * The one read the insert panel makes to find out what it may offer.
+ * The two reads the editor makes to find out what it may offer and draw: the
+ * pattern library for the insert panel, and the component definitions for the
+ * canvas, the panel and the inspector.
  *
  * ## Why a route rather than the collection API
  *
@@ -15,7 +23,16 @@ import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
  * surface this package may import from, so a browser-side read of the
  * collection is not merely worse here — it does not exist.
  *
- * ## Published only, and NOT by saying so
+ * ## Two routes, one walk
+ *
+ * A route of its own per tier, because a plugin route declares ONE permission
+ * and the tiers are read under different grants, and because each then answers
+ * the canonical list envelope. What the two share is everything about HOW a
+ * collection is paged and admitted under a ceiling — one walk and one
+ * admission, below — so a tier is a completion function and a permission, not
+ * a copy of the loop.
+ *
+ * ## Patterns: published only, and NOT by saying so
  *
  * A draft pattern is one being worked on, and offering it would put a
  * half-built starting point in front of every author on the site. The read is
@@ -31,22 +48,36 @@ import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
  * else matches nothing, and the library comes back empty with no error. The
  * service asks the workflow which states are public; this cannot.
  *
- * ## No declared permission, deliberately
+ * ## Components: every state the caller may read, with the draft overlaid
  *
- * The route is authenticated — a plugin route without `public: true` is — and
- * the read runs AS THE USER, so core enforces whatever read permission the
- * `patterns` collection actually seeded. Naming one here would have to spell
- * the collection slug, and a host may rename that collection: the permission
- * would then be seeded under the new name and refused under the old one, which
- * is a route nobody can call. The service knows the resolved name; this does
- * not.
+ * The opposite posture, because the reader is different. The editor is where a
+ * component is placed, and a component created as a draft and never published
+ * is exactly the one an author building a draft page reaches for — listing
+ * only public states would make it unplaceable until it was published, which
+ * is the wrong way round. So the listing asks for every lifecycle state, and
+ * the service still decides which ROWS this caller may see. The document then
+ * comes from a by-id read that can overlay the working draft, which a listing
+ * cannot — see {@link ComponentReads}.
+ *
+ * ## The permission follows the collection
+ *
+ * Each route demands the read permission of the collection it serves, COMPUTED
+ * from the resolved slug rather than spelled: a host may rename a collection,
+ * and a permission naming the declared slug would then be seeded under the new
+ * name and refused under the old one, which is a route nobody can call.
  *
  * @module library-route
  */
 
+import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
+  COMPONENT_LIBRARY_LOCALE_PARAM,
+  COMPONENT_LIBRARY_ROUTE_PATH,
   LIBRARY_ROUTE_PATH,
+  type ComponentLibraryResponse,
+  type LibraryComponent,
+  type LibraryListResponse,
   type LibraryPattern,
   type LibraryResponse,
 } from "./library-contract";
@@ -73,16 +104,23 @@ export const LIBRARY_PAGE_SIZE = 100;
 export const MAX_LIBRARY_PATTERNS = 3000;
 
 /**
- * The most reads one library request will make.
+ * The most reads one library request will make, for a tier listing in pages
+ * of `pageSize`.
  *
- * Derived from the two numbers above rather than chosen, so it cannot drift
- * from them — and it bounds the REQUESTS, which the pattern ceiling does not.
- * A page every row of which this reader drops adds nothing to the kept count,
- * so a ceiling counting only kept patterns is never reached and the loop asks
- * for page after page forever. Measured while breaking this: a stop condition
- * on the kept count spun until the process died.
+ * Derived from the item ceiling and the page size rather than chosen, so it
+ * cannot drift from them — and it bounds the REQUESTS, which the item ceiling
+ * does not. A page every row of which this reader drops adds nothing to the
+ * kept count, so a ceiling counting only kept items is never reached and the
+ * loop asks for page after page forever. Measured while breaking this: a stop
+ * condition on the kept count spun until the process died.
+ *
+ * Per tier, because the two list in different page sizes: derived from the
+ * one page size, a tier listing in smaller pages would be cut at a fraction
+ * of the ceiling while its pages were still coming back full.
  */
-const MAX_LIBRARY_PAGES = Math.ceil(MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE);
+function mostPages(pageSize: number): number {
+  return Math.ceil(MAX_LIBRARY_PATTERNS / pageSize);
+}
 
 /**
  * The most bytes of pattern documents one library read will carry.
@@ -133,8 +171,8 @@ export const MAX_LIBRARY_BYTES = 16 * 1024 * 1024;
  * a failed request instead of a shorter list. `undefined` says so, and the
  * caller drops the row exactly as it drops one it could not key or label.
  */
-function rowCost(pattern: LibraryPattern): number | undefined {
-  const measured = measureBytes(pattern, MAX_LIBRARY_BYTES);
+function rowCost(row: LibraryPattern | LibraryComponent): number | undefined {
+  const measured = measureBytes(row, MAX_LIBRARY_BYTES);
   if (measured.exceeded && measured.reason === "unwritable") return undefined;
   return measured.bytes;
 }
@@ -153,7 +191,10 @@ function rowCost(pattern: LibraryPattern): number | undefined {
  * can report, and `false`, which is a byte longer than `true`.
  */
 const RESPONSE_FRAMING_BYTES = measureBytes(
-  { items: [], meta: { count: MAX_LIBRARY_PATTERNS, truncated: false } },
+  {
+    items: [],
+    meta: { count: MAX_LIBRARY_PATTERNS, truncated: false },
+  } satisfies LibraryListResponse<never>,
   Number.MAX_SAFE_INTEGER
 ).bytes;
 
@@ -166,10 +207,28 @@ const RESPONSE_FRAMING_BYTES = measureBytes(
  */
 const ROW_SEPARATOR_BYTES = 1;
 
-/** The capabilities this route uses, named rather than imported whole. */
-export interface LibraryRouteContext {
+/**
+ * One page of one collection, as the walk consumes it.
+ *
+ * `hasMore` is the SERVICE's answer to whether more rows exist. A page can come
+ * back shorter than asked for without the collection ending — an `afterRead`
+ * hook may drop rows — so a length check stops early and every row on later
+ * pages disappears. It also cannot tell a library that ends exactly at the
+ * ceiling from one that does not.
+ */
+export interface CollectionPage {
+  readonly data: readonly unknown[];
+  readonly hasMore: boolean;
+}
+
+/** Who is asking, and which collections the host actually has. */
+interface LibraryCaller {
   self: { collections: Record<string, string | undefined> };
   user: unknown;
+}
+
+/** The capabilities the pattern route uses, named rather than imported whole. */
+export interface PatternLibraryContext extends LibraryCaller {
   services: {
     collections: {
       listEntries(
@@ -178,11 +237,6 @@ export interface LibraryRouteContext {
         context: unknown
       ): Promise<{
         data: unknown[];
-        // The SERVICE's answer to whether more rows exist. A page can come back
-        // shorter than asked for without the collection ending — an `afterRead`
-        // hook may drop rows — so a length check stops early and every pattern
-        // on later pages disappears. It also cannot tell a library that ends
-        // exactly at the ceiling from one that does not.
         pagination?: { hasMore?: boolean };
       }>;
     };
@@ -190,7 +244,175 @@ export interface LibraryRouteContext {
 }
 
 /**
- * Read the library, as the user asking for it.
+ * The two reads of the components collection the plugin-facing service cannot
+ * make, injected so the route declaration is the one place that binds them and
+ * a test can supply a value.
+ *
+ * Both reach the Direct API, and both must read AS THE USER — see
+ * {@link directComponentReads} for what that takes.
+ */
+export interface ComponentReads {
+  /**
+   * One page of the collection at the EDITOR's lifecycle scope: every state,
+   * with the service deciding which rows this caller may see.
+   *
+   * The plugin-facing listing forwards no lifecycle scope, and an untrusted
+   * read that states none is bounded to public states — so a draft-only
+   * component would never be listed and never be placeable. Deterministically
+   * ordered by `id`, because these are independent offset queries: the service
+   * adds `ORDER BY` only when a sort is asked for, and an unordered offset read
+   * is free to return rows in a different order per page, so one row can arrive
+   * twice and another never at all.
+   */
+  list(slug: string, page: number): Promise<CollectionPage>;
+  /**
+   * One component by id, with its working draft overlaid where this caller may
+   * edit it, or nothing.
+   *
+   * A listing answers with LIVE rows: the working-draft overlay lives in the
+   * by-id path and nowhere else, so a definition read from the listing would
+   * show an editor a stale component beside the draft they just saved. Answers
+   * the ROW (whatever shape the read returns); the caller reads the content
+   * field off it.
+   */
+  read(slug: string, id: string): Promise<unknown>;
+}
+
+/** The capabilities the component route uses. */
+export interface ComponentLibraryContext extends LibraryCaller {
+  components: ComponentReads;
+  /** Where the definitions live: the store the plugin was told, or its own. */
+  store: ComponentStore;
+}
+
+/**
+ * Where component definitions are read from.
+ *
+ * `collection` names a store the plugin does NOT own — a host that keeps its
+ * definitions in a collection of its own and renders from it; absent, the
+ * plugin's contributed collection, under whatever name the host gave it.
+ * `field` is the blocks field the definition lives in on that row.
+ *
+ * ONE statement of this, shared with the readiness notice: a host that
+ * redirected the renderer says so once, and the editor's read and the notice
+ * follow it together. An editor reading the plugin's store regardless drew a
+ * different definition for the same id than the page did, or none. A host
+ * that supplies definitions from no collection at all (`resolveComponents`
+ * on its render route) is outside what any collection read can follow, and
+ * the plugin says so where that option is documented.
+ */
+export interface ComponentStore {
+  readonly collection?: string;
+  readonly field: string;
+}
+
+/** The plugin's own store, read from the field the renderer defaults to. */
+export const DEFAULT_COMPONENT_STORE: ComponentStore = {
+  field: COMPONENT_DOCUMENT_FIELD,
+};
+
+/**
+ * The component reads the route binds: the Direct API, AS THE USER.
+ *
+ * `overrideAccess: false` is the whole of "as the user", and it has to be
+ * SAID. `requireNextly()` is the trusted server handle and defaults every
+ * call to `overrideAccess: true`; passing `user` beside that default names a
+ * caller and narrows nothing. On the by-id read the difference is the draft:
+ * `draft: true` is an opt-in the service grants outright to an overriding
+ * caller and, for everyone else, only after probing whether THIS caller may
+ * update THIS row — so without the `false`, an author who may merely read a
+ * component was handed its pending draft, and every field-level read rule was
+ * skipped on the way. With it, a read-only caller sees the live definition.
+ *
+ * WHO is asking comes from the dispatcher's caller, resolved once per request
+ * (`ctx.caller.identity()`): the user context with the roles a stored rule
+ * reads and the verified claims a custom rule may decide on, plus the key's
+ * own scope for an API-key caller — a key is judged on the grants stamped on
+ * IT rather than on the roles of whoever minted it, and the account alone
+ * names the minter. Built from `ctx.user` here instead, the context carried
+ * no roles, and a role-based read rule on the components collection refused
+ * the very caller the route's gate had admitted, with an empty library and
+ * nothing to say why.
+ *
+ * Two answers on the by-id read are the walk's to report as a cut library
+ * and nothing more: the row vanished between the two reads, or THIS caller
+ * may not read it. Anything else — the database, a hook — fails the route,
+ * which the client reads as unavailable and offers the retry for. The read's
+ * own `disableErrors` is deliberately not asked for: it turns every failure
+ * into a missing row, and a transient fault would then be reported as a
+ * static ceiling with no retry, every instance on the page drawn as missing.
+ *
+ * `requireNextly` per call rather than captured: it refuses until services
+ * are registered, and a route handler runs only after that, so the refusal
+ * can only fire on a misconfigured boot — where failing loudly is right.
+ *
+ * Both reads name the LOCALE the request asked for, when it asked for one. A
+ * component's document field can be localized, and the public renderer reads
+ * definitions in the page's locale; an editor whose reads named none would
+ * draw an author editing German a canvas of English components. Both reads,
+ * because a listing in one language completed by rows in another labels one
+ * version and draws the other. None named is the app default, as an absent
+ * `?locale=` is everywhere in the admin — and an unknown code resolves to the
+ * default in the Direct API, so nothing here has to know the site's languages.
+ */
+function directComponentReads(
+  ctx: Pick<PluginRouteContext, "caller">,
+  locale?: string
+): ComponentReads {
+  const inLocale = locale === undefined ? {} : { locale };
+  // Resolved once for both reads, and lazily: the caller resolves its own
+  // identity once per request, and a route with nothing to read never asks.
+  // A public route has no caller; this one is gated, so the anonymous branch
+  // is the honest answer for a context nothing authenticated.
+  const asUser = async () => {
+    const identity = await ctx.caller?.identity();
+    return {
+      overrideAccess: false as const,
+      user: identity?.user,
+      ...(identity?.authenticatedScope === undefined
+        ? {}
+        : { actor: identity.authenticatedScope }),
+    };
+  };
+  return {
+    list: async (slug, page) => {
+      const result = await requireNextly().find({
+        collection: slug,
+        ...(await asUser()),
+        ...inLocale,
+        status: "all",
+        sort: "id",
+        page,
+        limit: COMPONENT_LIST_PAGE_SIZE,
+      });
+      return { data: result.items, hasMore: result.meta.hasNext };
+    },
+    read: async (slug, id) => {
+      try {
+        return await requireNextly().findByID({
+          collection: slug,
+          id,
+          ...(await asUser()),
+          ...inLocale,
+          // Every lifecycle state HERE TOO. The listing asked for every state
+          // and got the never-published row; a by-id read that stated none is
+          // bounded back to public states and answers 404 for that same row —
+          // the overlay runs only on a row the lifecycle filter let through.
+          status: "all",
+          draft: true,
+        });
+      } catch (error) {
+        if (NextlyError.isNotFound(error) || NextlyError.isForbidden(error)) {
+          return null;
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+/**
+ * Read the pattern library, as the user asking for it.
  *
  * Separate from the route declaration so it can be tested against a stub
  * without a server: what this decides — which rows travel, how many, and what
@@ -198,60 +420,213 @@ export interface LibraryRouteContext {
  * inside `contributes.routes` can only be tested by booting one.
  */
 export async function readPatternLibrary(
-  ctx: LibraryRouteContext
+  ctx: PatternLibraryContext
 ): Promise<LibraryResponse> {
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
   // AS THE USER. A route reading with the instance's own identity would answer
-  // every caller with every pattern, whatever the collection's permissions say.
+  // every caller with every row, whatever the collection's permissions say.
+  // NO status predicate, deliberately — see the module docblock. And the same
+  // deterministic order the component listing asks for, for the same reason.
   const asUser = { as: "user" as const, user: ctx.user ?? undefined };
+  return envelope(
+    await readTier(
+      async page => {
+        const result = await ctx.services.collections.listEntries(
+          slug,
+          {
+            sort: { field: "id", direction: "asc" as const },
+            pagination: { limit: LIBRARY_PAGE_SIZE, page },
+          },
+          asUser
+        );
+        return {
+          data: result.data,
+          hasMore: result.pagination?.hasMore === true,
+        };
+      },
+      row => readLibraryRow(row) ?? "skip",
+      LIBRARY_PAGE_SIZE
+    )
+  );
+}
 
-  const items: LibraryPattern[] = [];
+/**
+ * Read the component library: metadata from the listing, the document from a
+ * by-id read that can see the working draft.
+ *
+ * Two reads per component rather than one, and the second is the point. The
+ * listing is what pages the collection deterministically and applies the
+ * caller's access; the by-id read is the only path to the draft overlay. A
+ * component whose by-id read answers nothing — the row vanished between the
+ * two, or the service declined — is left out and the tier marked cut, since
+ * a library missing a definition the author can see in the collection is not
+ * a whole library.
+ */
+export async function readComponentLibrary(
+  ctx: ComponentLibraryContext
+): Promise<ComponentLibraryResponse> {
+  const slug =
+    ctx.store.collection ??
+    ctx.self.collections[COMPONENTS_SLUG] ??
+    COMPONENTS_SLUG;
+  return envelope(
+    await readTier(
+      page => ctx.components.list(slug, page),
+      row => completeComponent(ctx, slug, row),
+      COMPONENT_LIST_PAGE_SIZE
+    )
+  );
+}
+
+/** One tier's read: what it kept, and whether it was cut. */
+interface TierRead<T> {
+  readonly items: T[];
+  readonly truncated: boolean;
+}
+
+/** The canonical list envelope, built in one place so neither route drifts. */
+function envelope<T>(tier: TierRead<T>): LibraryListResponse<T> {
+  return {
+    items: tier.items,
+    meta: { count: tier.items.length, truncated: tier.truncated },
+  };
+}
+
+/**
+ * Page one collection, completing and admitting each row.
+ *
+ * ONE walk for both tiers. The stop rule and the ceiling are properties of a
+ * RESPONSE, not of either collection, and two walks would let one tier's
+ * paging drift from the other's the first time either was edited alone. What
+ * differs per tier is where a page comes from, how a listed row becomes an
+ * item, and how many rows one page carries — and all three are handed in,
+ * the last so the bound on reads is derived here from the size it bounds.
+ */
+async function readTier<T extends LibraryPattern | LibraryComponent>(
+  pageAt: (page: number) => Promise<CollectionPage>,
+  complete: (row: unknown) => Promise<Completed<T>> | Completed<T>,
+  pageSize: number
+): Promise<TierRead<T>> {
+  const lastPage = mostPages(pageSize);
+  const items: T[] = [];
   let truncated = false;
   // Accumulated rather than assigned, unlike `truncated`: an oversized row on
   // page one is a cut library even when page nine simply ends, and the stop
   // reason below overwrites what it knows nothing about.
   let omitted = false;
-  // Seeded with what the envelope costs, so the ceiling bounds the ANSWER
-  // rather than the rows inside it.
+  // Seeded with the framing, so the ceiling bounds the ANSWER rather than the
+  // rows inside it.
   let bytes = RESPONSE_FRAMING_BYTES;
   for (let page = 1; ; page += 1) {
-    const result = await ctx.services.collections.listEntries(
-      slug,
-      {
-        // NO status predicate, deliberately — see the module docblock.
-        //
-        // A DETERMINISTIC order, because these are independent offset queries.
-        // The service adds `ORDER BY` only when a sort is asked for, and an
-        // unordered offset read is free to return rows in a different order per
-        // page — so one pattern can arrive twice and another never at all,
-        // assembled into a library nobody can explain. `id` is the unique key,
-        // which is what makes it a tie-breaker rather than another ambiguity;
-        // the panel decides how to PRESENT them.
-        sort: { field: "id", direction: "asc" as const },
-        pagination: { limit: LIBRARY_PAGE_SIZE, page },
-      },
-      asUser
-    );
-    const page_ = collectPage(result.data, items, bytes);
+    const result = await pageAt(page);
+    const page_ = await collect(result.data, complete, items, bytes);
     bytes = page_.bytes;
     omitted ||= page_.omitted;
     if (page_.full) {
       truncated = true;
       break;
     }
-
-    const stop = whyStop({
-      hasMore: result.pagination?.hasMore === true,
-      page,
-    });
+    const stop = whyStop({ hasMore: result.hasMore, page, lastPage });
     if (stop === undefined) continue;
     truncated = stop === "cut";
     break;
   }
+  return { items, truncated: truncated || omitted };
+}
 
+/**
+ * A component's completion: the listing names it, the by-id read describes it.
+ *
+ * EVERYTHING the item carries comes from the by-id row — the title and
+ * category as much as the document. That row is the one with the working
+ * draft overlaid, and a draft can rename a component or move it to another
+ * category as readily as it can change its content; an item labelled from the
+ * live listing and drawn from the draft would be searched, grouped and named
+ * by one version and rendered as another.
+ *
+ * Skipped when the listing could not name it; omitted — and counted — when
+ * the listing showed it but the by-id read found nothing, or found a row it
+ * could not shape.
+ */
+async function completeComponent(
+  ctx: ComponentLibraryContext,
+  slug: string,
+  row: unknown
+): Promise<Completed<LibraryComponent>> {
+  const listed = identityOf(row);
+  if (listed === undefined) return "skip";
+  const data = await ctx.components.read(slug, listed.named.id);
+  return withDraftDocument(data, ctx.store.field, listed.named.id) ?? "omit";
+}
+
+/**
+ * What every library row must carry to be offered at all: a non-empty id.
+ * ONE reader for both tiers, because the two collections share this half of
+ * their shape and a second reading of it would drift from the first the day
+ * either learned a new way a row can be unusable.
+ *
+ * A title only LABELS the row, so a row without one is labelled by its id
+ * rather than left out. What a page's renderer reads of a component is its id
+ * and its document; a collection with no title field, or one whose title is
+ * redacted by field-level access, still renders every instance on the public
+ * page, and a canvas that dropped the definition would draw a placeholder
+ * where the page draws the component. The id is the one name a row is sure
+ * to have, and an author can find it by that.
+ */
+function identityOf(
+  row: unknown
+):
+  | { named: { id: string; title: string }; record: Record<string, unknown> }
+  | undefined {
+  if (typeof row !== "object" || row === null) return undefined;
+  const record = row as Record<string, unknown>;
+  const { id, title } = record;
+  if (typeof id !== "string" || id === "") return undefined;
   return {
-    items,
-    meta: { count: items.length, truncated: truncated || omitted },
+    named: {
+      id,
+      title: typeof title === "string" && title !== "" ? title : id,
+    },
+    record,
+  };
+}
+
+/**
+ * The by-id row as one item: how the panel labels it, and the document as the
+ * caller should see it.
+ *
+ * The id is the LISTING's, never the by-id row's. That row is a presentation
+ * of the same record — an `afterRead` hook may rewrite or drop its `id` —
+ * while stored instances reference the id the collection holds, which is the
+ * one the listing named. Keyed by the presentation, the client's definitions
+ * answer to a name no instance uses and every instance of it draws as
+ * missing. Everything else — the title, the category, the description and the
+ * content — is the by-id row's, because that is the one carrying the draft.
+ *
+ * `document: null` for a row the read found but which holds no content — a
+ * legal row, and one the panel will skip — and `undefined` for no row at all,
+ * which the caller reports as a cut library rather than a missing key.
+ */
+function withDraftDocument(
+  data: unknown,
+  field: string,
+  id: string
+): LibraryComponent | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const record = data as Record<string, unknown>;
+  const title = record.title;
+  const content = record[field];
+  return {
+    id,
+    // Labelled by the id where the row has no readable title, as `identityOf`
+    // labels a listing row: the id is the one name it is sure to have.
+    title: typeof title === "string" && title !== "" ? title : id,
+    ...optionalText(record.description, "description"),
+    ...optionalText(record.category, "category"),
+    document:
+      content === undefined || content === null
+        ? null
+        : (content as LibraryComponent["document"]),
   };
 }
 
@@ -300,34 +675,97 @@ function admits(charged: number, spent: number, kept: number): RowVerdict {
 }
 
 /**
- * Add this page's readable rows, stopping the moment a ceiling is reached.
+ * What completing a listed row can answer.
  *
- * PER ROW, not once the page is finished. A ceiling checked between pages
- * bounds nothing about the page being read: one page of a hundred two-mebibyte
- * documents is two hundred mebibytes already assembled, and when the collection
- * ends there the read reports it COMPLETE. The budget has to stop the
- * accumulation rather than describe it afterwards.
- *
- * An unreadable ROW is dropped rather than refusing the whole library, which
- * moves in the same direction the remote-pattern reader moves in: one pattern
- * stops being offered instead of all of them. A row with no id or no title is
- * one the panel could neither key nor label; a row that cannot be serialised is
- * one the response could not carry even if it were kept.
+ * Three outcomes, because two absences mean different things. A row the
+ * listing itself could not shape — no id, no title — is SKIPPED: nothing was
+ * promised. A row the listing showed but which cannot be completed — a by-id
+ * read that answered nothing — is OMITTED, and counted, because the caller saw
+ * that row exist and a library without it is not whole.
  */
-function collectPage(
+type Completed<T> = T | "skip" | "omit";
+
+/**
+ * How many rows are completed at once.
+ *
+ * A component's completion is a database round trip, and a library the
+ * design sizes at three thousand completed one row at a time is three thousand
+ * sequential round trips on every editor open — past any request timeout.
+ * Completed all at once, a page that meets the ceiling at its first row pays
+ * ninety-nine reads it will never admit. Eight at a time bounds both: the
+ * wait is a fraction of the serial one, and at most seven reads past the
+ * ceiling are spent.
+ */
+export const COMPLETION_CONCURRENCY = 8;
+
+/**
+ * How many rows one read of the COMPONENT listing asks for: one completion
+ * batch.
+ *
+ * The listing only names rows; every field of an item comes from the by-id
+ * read that follows, so the content a listed row carries is read for
+ * nothing. And it IS carried: the service reads whole rows however a caller
+ * narrows the answer — `select` projects the rows after they are read, so a
+ * projection would trim the reply and not the read. A page of a hundred rows
+ * held while its batches completed was therefore a hundred documents of
+ * content in memory at once, at the document ceiling roughly two hundred
+ * mebibytes for a listing that keeps two strings of each. Sized to the batch,
+ * what is held is one batch of listed rows and one batch of by-id rows, and
+ * the bound on reads grows to match so the tier still reaches the ceiling.
+ */
+export const COMPONENT_LIST_PAGE_SIZE = COMPLETION_CONCURRENCY;
+
+/**
+ * One page of rows, each completed and then admitted under the ceiling.
+ *
+ * ONE admission for both tiers. The cost, the charge, the verdict and the push
+ * are the ceiling's rule, and the ceiling is one number shared by one response
+ * — two copies of how a row is admitted against it would be two ceilings the
+ * first time either was edited alone. What differs per tier is only how a
+ * listed row becomes an item, and that is the `complete` step handed in: a
+ * pattern is whole from the listing, a component needs a by-id read.
+ *
+ * Completed in bounded batches and admitted IN ORDER: a batch runs its reads
+ * together, and its rows are then judged one after another exactly as a
+ * serial walk would judge them, so the ceiling cuts the same rows whatever the
+ * batch size. A batch is not started once the ceiling has stopped the read.
+ */
+async function collect<T extends LibraryPattern | LibraryComponent>(
   rows: readonly unknown[],
-  into: LibraryPattern[],
+  complete: (row: unknown) => Promise<Completed<T>> | Completed<T>,
+  into: T[],
+  from: number
+): Promise<Collected> {
+  let bytes = from;
+  let omitted = false;
+  for (let start = 0; start < rows.length; start += COMPLETION_CONCURRENCY) {
+    // Each completion wrapped as a promise: a pattern's completes at once and
+    // a component's waits on a read, and the aggregator takes one shape.
+    const batch = await Promise.all(
+      rows
+        .slice(start, start + COMPLETION_CONCURRENCY)
+        .map(async row => complete(row))
+    );
+    const admitted = admitAll(batch, into, bytes);
+    bytes = admitted.bytes;
+    omitted ||= admitted.omitted;
+    if (admitted.full) return { bytes, full: true, omitted };
+  }
+  return { bytes, full: false, omitted };
+}
+
+/** One batch of completed rows, admitted in order until the ceiling says stop. */
+function admitAll<T extends LibraryPattern | LibraryComponent>(
+  batch: readonly Completed<T>[],
+  into: T[],
   from: number
 ): Collected {
   let bytes = from;
   let omitted = false;
-  for (const row of rows) {
-    const pattern = readLibraryRow(row);
-    if (pattern === undefined) continue;
-    const size = rowCost(pattern);
-    // Unsendable, so it is not a question of budget: dropped like a row that
-    // could be neither keyed nor labelled, and the read goes on.
-    if (size === undefined) {
+  for (const item of batch) {
+    if (item === "skip") continue;
+    const size = item === "omit" ? undefined : rowCost(item);
+    if (item === "omit" || size === undefined) {
       omitted = true;
       continue;
     }
@@ -338,7 +776,7 @@ function collectPage(
       omitted = true;
       continue;
     }
-    into.push(pattern);
+    into.push(item);
     bytes += charged;
   }
   return { bytes, full: false, omitted };
@@ -358,6 +796,7 @@ function collectPage(
 function whyStop(at: {
   hasMore: boolean;
   page: number;
+  lastPage: number;
 }): "ended" | "cut" | undefined {
   // The SERVICE's own answer, not a length this recomputes. A page shorter than
   // asked for does not mean the collection ended: an `afterRead` hook may drop
@@ -365,7 +804,7 @@ function whyStop(at: {
   if (!at.hasMore) return "ended";
   // A bound on the READS, which the per-row ceilings cannot supply: they count
   // what was KEPT, and a page whose every row was dropped keeps none.
-  if (at.page >= MAX_LIBRARY_PAGES) return "cut";
+  if (at.page >= at.lastPage) return "cut";
   return undefined;
 }
 
@@ -379,16 +818,9 @@ function whyStop(at: {
  * rather than normalised away. The panel's own reader already expects that.
  */
 function readLibraryRow(row: unknown): LibraryPattern | undefined {
-  if (typeof row !== "object" || row === null) return undefined;
-  const record = row as Record<string, unknown>;
-  const id = record.id;
-  const title = record.title;
-  // Both are required by the collection, so a row missing either is one no
-  // reader downstream can use: the id is what an insert plans against and the
-  // title is the only thing a tile can be found by.
-  if (typeof id !== "string" || id === "") return undefined;
-  if (typeof title !== "string" || title === "") return undefined;
-  return { id, title, ...describedBy(record) };
+  const identity = identityOf(row);
+  if (identity === undefined) return undefined;
+  return { ...identity.named, ...describedBy(identity.record) };
 }
 
 /**
@@ -439,21 +871,24 @@ function optionalText(
   return typeof value === "string" ? { [name]: value } : {};
 }
 
-/**
- * The route declaration, thin on purpose.
- *
- * Everything it decides lives in {@link readPatternLibrary}, which a test can
- * reach without booting a server. What is left here is the shape of the
- * contribution — the method, the path, and the fact that it declares no
- * permission — and that is the part a reader of `contributes.routes` needs to
- * see without following a call.
- */
-export function patternLibraryRoute(): {
+/** The shape of one contributed library route, as `contributes.routes` reads it. */
+interface LibraryRoute {
   method: "GET";
   path: string;
   requiredPermission: (scope: PluginRoutePermissionScope) => string;
-  handler: (req: Request, ctx: LibraryRouteContext) => Promise<Response>;
-} {
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+}
+
+/**
+ * The pattern route declaration, thin on purpose.
+ *
+ * Everything it decides lives in {@link readPatternLibrary}, which a test can
+ * reach without booting a server. What is left here is the shape of the
+ * contribution — the method, the path, and which permission it demands — and
+ * that is the part a reader of `contributes.routes` needs to see without
+ * following a call.
+ */
+export function patternLibraryRoute(): LibraryRoute {
   return {
     method: "GET",
     path: LIBRARY_ROUTE_PATH,
@@ -461,7 +896,51 @@ export function patternLibraryRoute(): {
     // `requiredPermission`, which is what keeps it callable on a site that
     // renamed the collection. See the module docblock.
     requiredPermission: ({ collection }) => collection(PATTERNS_SLUG, "read"),
-    handler: async (_req: Request, ctx: LibraryRouteContext) =>
+    handler: async (_req: Request, ctx: PluginRouteContext) =>
       Response.json(await readPatternLibrary(ctx)),
   };
+}
+
+/**
+ * The component route declaration: the same shape, its own permission.
+ *
+ * `read` on the COMPONENTS collection, resolved the same way — or on the
+ * store the plugin was told components live in, which the scope helper names
+ * as given when the plugin never contributed it. A role that may read
+ * components and not patterns gets its definitions here, which the pattern
+ * route's gate would have refused — and every instance on its pages would
+ * have drawn as a placeholder.
+ */
+export function componentLibraryRoute(
+  store: ComponentStore = DEFAULT_COMPONENT_STORE
+): LibraryRoute {
+  return {
+    method: "GET",
+    path: COMPONENT_LIBRARY_ROUTE_PATH,
+    requiredPermission: ({ collection }) =>
+      collection(store.collection ?? COMPONENTS_SLUG, "read"),
+    handler: async (req: Request, ctx: PluginRouteContext) =>
+      Response.json(
+        await readComponentLibrary({
+          ...ctx,
+          components: directComponentReads(ctx, requestedLocale(req)),
+          store,
+        })
+      ),
+  };
+}
+
+/**
+ * The language the request asks the component tier in, or none.
+ *
+ * Read from the query the client writes through the shared contract
+ * (`componentLibraryPath`). An empty value is none: an empty string handed to
+ * the Direct API is not a language, and it is what a client formatting an
+ * absent code carelessly would send.
+ */
+function requestedLocale(req: Request): string | undefined {
+  const locale = new URL(req.url).searchParams.get(
+    COMPONENT_LIBRARY_LOCALE_PARAM
+  );
+  return locale === null || locale === "" ? undefined : locale;
 }

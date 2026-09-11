@@ -36,7 +36,7 @@ import type { BlockNode } from "./document";
  * tests whether SOME group is empty rather than whether ALL are — `[[], [predicate]]` restricts
  * nobody, exactly as `[[]]` does.
  */
-export function isConditionGated(node: BlockNode): boolean {
+export function isConditionGated(node: Pick<BlockNode, "visibility">): boolean {
   const envelope: unknown = node.visibility;
   // No envelope is no gate. This is the ordinary node, and it must stay the cheapest path.
   if (envelope === undefined || envelope === null) return false;

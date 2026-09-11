@@ -14,10 +14,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   allBlocks,
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
+  DEFAULT_LIMITS,
+  DOCUMENT_FORMAT_VERSION,
+  type DocumentLimits,
   registerBlocks,
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockDocument,
+  type BlockNode,
+  type ComponentDocument,
+  type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -33,9 +40,16 @@ import {
   nodeForEntry,
   patternEntriesFrom,
   PATTERN_ENTRY_PREFIX,
+  COMPONENT_ENTRY_PREFIX,
+  componentEntriesFrom,
+  compositionRefusal,
+  nodeForComponentEntry,
+  placementTypesOf,
   type BlockInsertEntry,
+  type SavedComponent,
   type SavedPattern,
 } from "./inserter";
+import { applyOp, type BuilderOp } from "./ops";
 
 const base = {
   version: 1,
@@ -1276,5 +1290,864 @@ describe("the pattern tier", () => {
       "acme/text",
       `${PATTERN_ENTRY_PREFIX}hero`,
     ]);
+  });
+});
+
+describe("the component tier", () => {
+  /** A component definition, which is what a row in the components collection holds. */
+  function componentOf(nodes: ComponentDocument["nodes"]): ComponentDocument {
+    return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "component", nodes };
+  }
+
+  function stored(overrides: Partial<SavedComponent> = {}): SavedComponent {
+    return {
+      id: "header",
+      title: "Header",
+      document: componentOf([
+        { id: "d1", type: "acme/text", version: 1, props: { text: "Site" } },
+      ]),
+      ...overrides,
+    };
+  }
+
+  /** A host that supplies no lookup: nothing resolves. */
+  const NONE: ComponentLookup = new Map();
+
+  /** An instance node pointing at a definition, as a stored document holds one. */
+  function instanceOf(componentId: string, id = `i-${componentId}`): BlockNode {
+    return {
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    };
+  }
+
+  /** The lookup the canvas would resolve against, holding these definitions. */
+  function lookupOf(...rows: SavedComponent[]): ComponentLookup {
+    return new Map(
+      rows.flatMap(row =>
+        row.document === undefined || row.document === null
+          ? []
+          : [[row.id, row.document] as const]
+      )
+    );
+  }
+
+  it("keys a component out of the block namespace, and apart from patterns", () => {
+    // A definition may be saved under any id. Its catalog key carries the
+    // tier, so it can share an id with a block AND with a pattern without any
+    // two entries answering to one key.
+    const blocks = catalog([{ ...base, name: "acme/text" }]);
+    const row = stored({ id: "acme/text" });
+    const [component] = componentEntriesFrom([row], lookupOf(row));
+
+    expect(component?.id).toBe(`${COMPONENT_ENTRY_PREFIX}acme/text`);
+    expect(component?.id).not.toBe(`${PATTERN_ENTRY_PREFIX}acme/text`);
+    expect(blocks.some(entry => entry.id === component?.id)).toBe(false);
+    expect(component?.componentId).toBe("acme/text");
+  });
+
+  it("offers nothing for a definition the canvas would refuse: another format, or nodes that are not a list", () => {
+    // The tile and the canvas read the same rule for a supplied definition,
+    // the resolver's own. Judged by kind alone, a definition in a format this
+    // build does not read was offered, placed, and drawn as a placeholder;
+    // one whose nodes are not a list crashed the catalogue on `.length`.
+    catalog([{ ...base, name: "acme/text" }]);
+    const stale = stored({
+      id: "stale",
+      document: {
+        ...componentOf([
+          { id: "d1", type: "acme/text", version: 1, props: {} },
+        ]),
+        formatVersion: DOCUMENT_FORMAT_VERSION + 1,
+      } as unknown as ComponentDocument,
+    });
+    const broken = stored({
+      id: "broken",
+      document: {
+        ...componentOf([]),
+        nodes: "oops",
+      } as unknown as ComponentDocument,
+    });
+
+    expect(
+      componentEntriesFrom(
+        [stale, broken, stored()],
+        lookupOf(stale, broken, stored())
+      ).map(e => e.componentId)
+    ).toEqual(["header"]);
+  });
+
+  it("offers nothing for a row with no document, or one that is not a component", () => {
+    // Both are legal stored rows — a published definition saved without
+    // content, and a row a migration left holding a pattern — and both are
+    // rows the palette has nothing to place for. A tile that accepted a click
+    // and then failed would be worse than no tile.
+    const rows = [
+      stored({ id: "empty", document: null }),
+      stored({
+        id: "wrong-kind",
+        // WITH roots, so that only the kind check can exclude it. Given none,
+        // the empty-roots check below would drop it first and this case would
+        // pass whether or not the kind was ever looked at.
+        document: {
+          ...componentOf([
+            { id: "d1", type: "acme/text", version: 1, props: {} },
+          ]),
+          kind: "pattern",
+        } as never,
+      }),
+      stored({ id: "no-roots", document: componentOf([]) }),
+      stored({ id: "fine" }),
+    ];
+    // Every row that has a document is in the lookup, so each is withheld by
+    // the rule its comment names rather than for being absent.
+    const entries = componentEntriesFrom(rows, lookupOf(...rows));
+
+    expect(entries.map(entry => entry.componentId)).toEqual(["fine"]);
+  });
+
+  it("offers a component only when the canvas's lookup holds its definition, and judges the lookup's copy", () => {
+    // The instance a tile places is resolved by the canvas against its
+    // lookup, not against the row the list carried. A tile judged by the
+    // row's own document would place an instance the canvas draws as missing
+    // when the lookup lacks it, and judge the wrong roots when the two differ.
+    catalog([
+      { ...base, name: "acme/text" },
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+    ]);
+    const row = stored();
+
+    expect(componentEntriesFrom([row], NONE)).toEqual([]);
+
+    const drawn = componentOf([
+      { id: "d1", type: "acme/column", version: 1, props: {} },
+    ]);
+    const [offered] = componentEntriesFrom([row], new Map([["header", drawn]]));
+    expect(offered?.roots).toEqual(["acme/column"]);
+    expect(offered?.document).toBe(drawn);
+  });
+
+  it("carries the usage count only when the library supplied one", () => {
+    // A tile saying "used on 0 pages" about a count nobody took would be
+    // stating a fact it does not hold.
+    const rows = [stored({ id: "a", usedOn: 12 }), stored({ id: "b" })];
+    const [counted, uncounted] = componentEntriesFrom(rows, lookupOf(...rows));
+
+    expect(counted?.usedOn).toBe(12);
+    expect(uncounted).not.toHaveProperty("usedOn");
+  });
+
+  it("judges a PATTERN whose root is an instance by the roots that component draws", () => {
+    // Saving a placed component as a pattern stores the instance node itself,
+    // and a pattern is copied into the page as it stands. Judged by that
+    // node's own type — not a registered block, so unrestricted — the pattern
+    // could be placed where the component's own tile is refused.
+    catalog([
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+      { ...base, name: "acme/columns", slots: { children: {} } },
+    ]);
+    const column = stored({
+      id: "column",
+      document: componentOf([
+        { id: "d1", type: "acme/column", version: 1, props: {} },
+      ]),
+    });
+    const wrapping: SavedPattern = {
+      id: "wrapped",
+      title: "Wrapped column",
+      document: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "pattern",
+        nodes: [instanceOf("column", "p1")],
+      } as BlockDocument,
+    };
+    const [entry] = patternEntriesFrom([wrapping], registryNestingSource());
+
+    const atRoot = entryAllowedAt(
+      entry as never,
+      { kind: "root" },
+      registryNestingSource(),
+      lookupOf(column)
+    );
+    expect(atRoot.allowed).toBe(false);
+    expect(atRoot.reason).toBe("restricted-at-root");
+    expect(atRoot.permitted).toEqual(["acme/columns"]);
+
+    // In the container that root belongs to, the same pattern is offered.
+    expect(
+      entryAllowedAt(
+        entry as never,
+        { kind: "slot", parentType: "acme/columns", slot: "children" },
+        registryNestingSource(),
+        lookupOf(column)
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("judges placement by the definition's ROOTS, not by the instance node's type", () => {
+    // The instance node's own type is not a registered block, and the nesting
+    // source answers "no restriction" for a type it cannot resolve. Judged by
+    // that, a component whose root may only live inside columns could be
+    // placed at the page root — and would render there.
+    catalog([{ ...base, name: "acme/column", parent: ["acme/columns"] }]);
+    const columnOnly = stored({
+      document: componentOf([
+        { id: "d1", type: "acme/column", version: 1, props: {} },
+      ]),
+    });
+    const [component] = componentEntriesFrom(
+      [columnOnly],
+      lookupOf(columnOnly)
+    );
+
+    const verdict = entryAllowedAt(
+      component as never,
+      { kind: "root" },
+      registryNestingSource()
+    );
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("restricted-at-root");
+    expect(verdict.permitted).toEqual(["acme/columns"]);
+  });
+
+  it("allows a component whose roots the destination takes", () => {
+    catalog([{ ...base, name: "acme/text" }]);
+    const [component] = componentEntriesFrom([stored()], lookupOf(stored()));
+
+    expect(
+      entryAllowedAt(
+        component as never,
+        { kind: "root" },
+        registryNestingSource()
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("judges a root that is ITSELF an instance by what the canvas will draw there", () => {
+    // A definition may hold instances of other components, at its root
+    // included. The instance node's type is not a registered block, so judged
+    // as stored the root answers "no restriction" and a component whose real
+    // root is confined to columns is offered — and drawn — at the page root.
+    // Resolved through the lookup, the root IS the column.
+    catalog([{ ...base, name: "acme/column", parent: ["acme/columns"] }]);
+    const column = stored({
+      id: "column",
+      document: componentOf([
+        { id: "c1", type: "acme/column", version: 1, props: {} },
+      ]),
+    });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("column")]),
+    });
+
+    const [offered] = componentEntriesFrom(
+      [wrapper],
+      lookupOf(column, wrapper)
+    );
+    const verdict = entryAllowedAt(
+      offered as never,
+      { kind: "root" },
+      registryNestingSource()
+    );
+
+    expect(offered?.componentId).toBe("wrapper");
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("restricted-at-root");
+  });
+
+  it("withholds a component whose root instance the lookup cannot resolve", () => {
+    // Its roots cannot be determined, so its placement cannot be judged, and
+    // the canvas would draw that root as could-not-be-loaded. The lookup is
+    // what decides: the same definition IS offered once the component its root
+    // points at is present.
+    catalog([{ ...base, name: "acme/text" }]);
+    const header = stored({ id: "header" });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("header")]),
+    });
+
+    // The wrapper itself is in both lookups; only what its root names is not.
+    const withheld = componentEntriesFrom([wrapper], lookupOf(wrapper));
+    const offered = componentEntriesFrom([wrapper], lookupOf(header, wrapper));
+
+    expect(withheld).toEqual([]);
+    expect(offered.map(entry => entry.componentId)).toEqual(["wrapper"]);
+    // And judged by the header's root, which the destination takes.
+    expect(
+      entryAllowedAt(
+        offered[0] as never,
+        { kind: "root" },
+        registryNestingSource()
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("withholds a component whose root is an instance of itself", () => {
+    // The resolver detects the cycle and leaves the root standing; nothing
+    // here recurses to find it, and nothing here needs to.
+    catalog([{ ...base, name: "acme/text" }]);
+    const loop = stored({
+      id: "loop",
+      document: componentOf([instanceOf("loop")]),
+    });
+
+    expect(componentEntriesFrom([loop], lookupOf(loop))).toEqual([]);
+  });
+
+  it("withholds a component whose root resolves to NOTHING", () => {
+    // A root that is an instance of a component with no roots resolves to an
+    // empty forest: there is no root type to refuse, so placement would pass
+    // vacuously and the placed node would render nothing. Emptiness has to be
+    // asked of the RESOLVED forest, not only the stored one.
+    catalog([{ ...base, name: "acme/text" }]);
+    const hollow = stored({ id: "hollow", document: componentOf([]) });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("hollow")]),
+    });
+
+    expect(componentEntriesFrom([wrapper], lookupOf(hollow, wrapper))).toEqual(
+      []
+    );
+  });
+
+  it("offers a component on its roots whatever the caps, and leaves room to the click", () => {
+    // Room is a property of the page, asked at the click with the page in
+    // hand: the tile is judged by what its roots ARE, not by whether they fit
+    // a cap. A wrapper whose header has two nodes is offered under a cap of
+    // one, and placing it on any page under that cap is refused for budget
+    // with the sentence — never drawn as could-not-be-loaded, because the
+    // preflight runs before the apply.
+    catalog([{ ...base, name: "acme/text" }]);
+    const header = stored({
+      id: "header",
+      document: componentOf([
+        { id: "d1", type: "acme/text", version: 1, props: {} },
+        { id: "d2", type: "acme/text", version: 1, props: {} },
+      ]),
+    });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("header")]),
+    });
+    const lookup = lookupOf(header, wrapper);
+    const tight = { ...DEFAULT_LIMITS, maxNodes: 1 };
+
+    const [offered] = componentEntriesFrom([wrapper], lookup);
+    expect(offered?.componentId).toBe("wrapper");
+    const empty = documentOf([]);
+    const placed = applyOp(
+      empty,
+      {
+        kind: "insert",
+        node: nodeForComponentEntry(offered!),
+        at: { index: 0 },
+      },
+      tight
+    ).document;
+    expect(compositionRefusal(empty, placed, lookup, tight)?.reason).toBe(
+      "budget"
+    );
+  });
+
+  it("reads a root's types without composing the definition, so a library of wrappers costs its roots", () => {
+    // Three thousand one-node wrappers around one large definition composed
+    // whole, once per wrapper, was fifteen million nodes on opening the
+    // panel. The roots are read through the lookup instead: the large
+    // definition is asked for once per wrapper, never cloned.
+    catalog([
+      { ...base, name: "acme/box", slots: { children: {} } },
+      { ...base, name: "acme/text" },
+    ]);
+    // The large definition's root is a box whose children are behind a
+    // counting accessor: reading the roots never opens it, composing does.
+    let descents = 0;
+    const children = Array.from({ length: 500 }, (_, i) => ({
+      id: `t${String(i)}`,
+      type: "acme/text",
+      version: 1,
+      props: {},
+    }));
+    const box: BlockNode = {
+      id: "b1",
+      type: "acme/box",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(box, "slots", {
+      enumerable: true,
+      get: () => {
+        descents += 1;
+        return { children };
+      },
+    });
+    const big = stored({ id: "big", document: componentOf([box]) });
+    const wrappers = Array.from({ length: 50 }, (_, i) =>
+      stored({
+        id: `w${String(i)}`,
+        document: componentOf([instanceOf("big")]),
+      })
+    );
+
+    const offered = componentEntriesFrom(wrappers, lookupOf(big, ...wrappers));
+
+    expect(offered).toHaveLength(50);
+    expect(offered.every(entry => entry.roots.join() === "acme/box")).toBe(
+      true
+    );
+    expect(descents).toBe(0);
+    // And what each entry carries is the stored one-node wrapper, not a
+    // composed forest.
+    expect(offered.every(entry => entry.document.nodes.length === 1)).toBe(
+      true
+    );
+  });
+
+  it("still offers a component with an unresolvable instance BELOW its root", () => {
+    // What sits inside the definition is the definition's own concern, exactly
+    // as its internal nesting is: the root is a real block the destination can
+    // judge, and the placeholder inside it is what the author saved.
+    catalog([
+      { ...base, name: "acme/box", slots: { children: {} } },
+      { ...base, name: "acme/text" },
+    ]);
+    const boxed = stored({
+      id: "boxed",
+      document: componentOf([
+        {
+          id: "b1",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: { children: [instanceOf("missing")] },
+        },
+      ]),
+    });
+
+    // The instance BELOW the root names a definition the lookup lacks.
+    const [offered] = componentEntriesFrom([boxed], lookupOf(boxed));
+
+    expect(offered?.componentId).toBe("boxed");
+    expect(offered?.roots).toEqual(["acme/box"]);
+  });
+
+  it("hands over the STORED document, by identity, beside the roots it draws", () => {
+    // The catalogue and everything keyed on it would otherwise rebuild for a
+    // document that did not change. The roots are what placement is judged
+    // by; the document is what a preview of the tile would draw.
+    catalog([{ ...base, name: "acme/text" }]);
+    const row = stored();
+
+    const [offered] = componentEntriesFrom([row], lookupOf(row));
+
+    expect(offered?.document).toBe(row.document);
+    expect(offered?.roots).toEqual(["acme/text"]);
+  });
+
+  describe("whether the page has room for it", () => {
+    /** The document an op leaves, under the caps it is applied under. */
+    const after = (
+      document: BlockDocument,
+      op: BuilderOp,
+      limits?: DocumentLimits
+    ): BlockDocument => applyOp(document, op, limits).document;
+    /** A page holding `count` plain text nodes at the root. */
+    function pageWith(count: number): BlockDocument {
+      return documentOf(
+        Array.from({ length: count }, (_, i) => ({
+          id: `p${i}`,
+          type: "acme/text",
+          version: 1,
+          props: {},
+        }))
+      );
+    }
+    const three = stored({
+      id: "three",
+      document: componentOf([
+        { id: "d1", type: "acme/text", version: 1, props: {} },
+        { id: "d2", type: "acme/text", version: 1, props: {} },
+        { id: "d3", type: "acme/text", version: 1, props: {} },
+      ]),
+    });
+    const node = () =>
+      nodeForComponentEntry(componentEntriesFrom([three], lookupOf(three))[0]!);
+
+    it("answers nothing for a page with room", () => {
+      catalog([{ ...base, name: "acme/text" }]);
+      const limits = { ...DEFAULT_LIMITS, maxNodes: 10 };
+
+      expect(
+        compositionRefusal(
+          pageWith(2),
+          after(pageWith(2), {
+            kind: "insert",
+            node: node(),
+            at: { index: 2 },
+          }),
+          lookupOf(three),
+          limits
+        )
+      ).toBeUndefined();
+    });
+
+    it("refuses a page whose composed size would pass the node cap, and says so", () => {
+      // The apply would accept it — one stored node — and the canvas would then
+      // leave it unresolved: the resolver spends one budget across every
+      // instance it inlines. Two stored nodes plus a three-node definition
+      // under a cap of four is the case.
+      catalog([{ ...base, name: "acme/text" }]);
+      const limits = { ...DEFAULT_LIMITS, maxNodes: 4 };
+
+      const refusal = compositionRefusal(
+        pageWith(2),
+        after(pageWith(2), { kind: "insert", node: node(), at: { index: 2 } }),
+        lookupOf(three),
+        limits
+      );
+
+      expect(refusal?.reason).toBe("budget");
+      expect(refusal?.sentence).toMatch(/no room left/);
+    });
+
+    it("asks the resolver, so a definition too deep for the cap is refused as the resolver refuses it", () => {
+      // The resolver judges a definition's own depth from its own root — a
+      // placement's depth in the page is not part of that judgement — so what
+      // this can refuse is exactly what the canvas would leave unresolved,
+      // and nothing more.
+      catalog([
+        { ...base, name: "acme/box", slots: { children: {} } },
+        { ...base, name: "acme/text" },
+      ]);
+      const nested = stored({
+        id: "nested",
+        document: componentOf([
+          {
+            id: "d1",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                { id: "d2", type: "acme/text", version: 1, props: {} },
+              ],
+            },
+          },
+        ]),
+      });
+      const instance = nodeForComponentEntry(
+        componentEntriesFrom([nested], lookupOf(nested))[0]!
+      );
+
+      const tooDeep = compositionRefusal(
+        pageWith(0),
+        after(pageWith(0), {
+          kind: "insert",
+          node: instance,
+          at: { index: 0 },
+        }),
+        lookupOf(nested),
+        { ...DEFAULT_LIMITS, maxDepth: 1 }
+      );
+      const fits = compositionRefusal(
+        pageWith(0),
+        after(pageWith(0), {
+          kind: "insert",
+          node: instance,
+          at: { index: 0 },
+        }),
+        lookupOf(nested),
+        { ...DEFAULT_LIMITS, maxDepth: 2 }
+      );
+
+      expect(tooDeep?.reason).toBe("node-depth");
+      expect(fits).toBeUndefined();
+    });
+
+    describe("an instance the click leaves unresolved that is not the placed one", () => {
+      const wrapper = stored({
+        id: "wrapper",
+        document: componentOf([
+          {
+            id: "w1",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            slots: { children: [instanceOf("three", "w-three")] },
+          },
+        ]),
+      });
+      const one = stored({
+        id: "one",
+        document: componentOf([
+          { id: "o1", type: "acme/text", version: 1, props: {} },
+        ]),
+      });
+      const both = lookupOf(three, wrapper, one);
+      const placed = (row: SavedComponent) =>
+        nodeForComponentEntry(componentEntriesFrom([row], both)[0]!);
+
+      beforeEach(() => {
+        catalog([
+          { ...base, name: "acme/box", slots: { children: {} } },
+          { ...base, name: "acme/text" },
+        ]);
+      });
+
+      it("refuses a definition whose NESTED instance the page has no room for", () => {
+        // The wrapper's own root fits and is inlined; the instance inside it
+        // does not, and the resolver leaves it standing under an id it minted
+        // — never the placed node's. The click would place a component that
+        // draws a placeholder inside itself.
+        const tight = { ...DEFAULT_LIMITS, maxNodes: 5 };
+        const roomy = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+        expect(
+          compositionRefusal(
+            pageWith(2),
+            after(
+              pageWith(2),
+              { kind: "insert", node: placed(wrapper), at: { index: 2 } },
+              tight
+            ),
+            both,
+            tight
+          )?.reason
+        ).toBe("budget");
+        expect(
+          compositionRefusal(
+            pageWith(2),
+            after(
+              pageWith(2),
+              { kind: "insert", node: placed(wrapper), at: { index: 2 } },
+              roomy
+            ),
+            both,
+            roomy
+          )
+        ).toBeUndefined();
+      });
+
+      it("refuses a placement that pushes an instance already on the page past the budget", () => {
+        // The budget is spent in document order. Placed BEFORE an instance
+        // that fitted, the new one takes the room the old one had, and the
+        // page would draw a placeholder where something used to be.
+        const page = documentOf([
+          { id: "p0", type: "acme/text", version: 1, props: {} },
+          instanceOf("three", "old"),
+        ]);
+        const limits = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+        expect(
+          compositionRefusal(
+            page,
+            after(
+              page,
+              { kind: "insert", node: placed(three), at: { index: 1 } },
+              limits
+            ),
+            both,
+            limits
+          )?.reason
+        ).toBe("budget");
+      });
+
+      it("tells instances apart by THEIR ids, not by their definition", () => {
+        // Two instances of one definition are two ids. One the page already
+        // leaves standing does not excuse the next, which is a placeholder
+        // the click would put on the page in its own right.
+        const deep = stored({
+          id: "deep",
+          document: componentOf([
+            {
+              id: "w1",
+              type: "acme/box",
+              version: 1,
+              props: {},
+              slots: {
+                children: [
+                  {
+                    id: "w2",
+                    type: "acme/box",
+                    version: 1,
+                    props: {},
+                    slots: { children: [instanceOf("three", "w-three")] },
+                  },
+                ],
+              },
+            },
+          ]),
+        });
+        const lookup = lookupOf(three, deep);
+        const page = documentOf([
+          instanceOf("deep", "old"),
+          { id: "p0", type: "acme/text", version: 1, props: {} },
+        ]);
+        const limits = { ...DEFAULT_LIMITS, maxDepth: 2 };
+        const instance = nodeForComponentEntry(
+          componentEntriesFrom([deep], lookup)[0]!
+        );
+
+        expect(
+          compositionRefusal(
+            page,
+            after(
+              page,
+              { kind: "insert", node: instance, at: { index: 2 } },
+              limits
+            ),
+            lookup,
+            limits
+          )?.reason
+        ).toBe("node-depth");
+      });
+
+      it("judges a MOVE by the same rule: an instance carried before another takes its budget", () => {
+        // The budget is spent in document order, so moving an instance
+        // ahead of one that fitted can leave that one standing. The same
+        // comparison, with a move op instead of an insert: the preflight
+        // judges what the op leaves standing, whatever the op is.
+        const page = documentOf([
+          { id: "p0", type: "acme/text", version: 1, props: {} },
+          instanceOf("three", "first"),
+          instanceOf("three", "second"),
+        ]);
+        // Room for one of the two, whichever comes first.
+        const limits = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+        expect(
+          compositionRefusal(
+            page,
+            after(
+              page,
+              { kind: "move", id: "second", to: { index: 1 } },
+              limits
+            ),
+            both,
+            limits
+          )?.reason
+        ).toBe("budget");
+        expect(
+          compositionRefusal(
+            page,
+            after(page, { kind: "move", id: "p0", to: { index: 2 } }, limits),
+            both,
+            limits
+          )
+        ).toBeUndefined();
+      });
+
+      it("does not blame the click for an instance the page already could not hold", () => {
+        // Only what the placement INTRODUCES refuses it. An instance refused
+        // for budget before the click is refused after it too, and a one-node
+        // component that fits beside it is placed.
+        const page = documentOf([
+          instanceOf("three", "old"),
+          { id: "p1", type: "acme/text", version: 1, props: {} },
+          { id: "p2", type: "acme/text", version: 1, props: {} },
+        ]);
+        const limits = { ...DEFAULT_LIMITS, maxNodes: 4 };
+
+        expect(
+          compositionRefusal(
+            page,
+            after(
+              page,
+              { kind: "insert", node: placed(one), at: { index: 3 } },
+              limits
+            ),
+            both,
+            limits
+          )
+        ).toBeUndefined();
+      });
+    });
+
+    it("leaves a reason that is not about room to the tile", () => {
+      // A missing definition was the tile's concern when it was offered; the
+      // insert refuses only what the page cannot hold.
+      catalog([{ ...base, name: "acme/text" }]);
+
+      expect(
+        compositionRefusal(
+          pageWith(2),
+          after(pageWith(2), {
+            kind: "insert",
+            node: node(),
+            at: { index: 2 },
+          }),
+          NONE
+        )
+      ).toBeUndefined();
+    });
+  });
+
+  describe("what a node already on the page is judged by when it moves", () => {
+    it("judges a block by its own type", () => {
+      const block: BlockNode = {
+        id: "p0",
+        type: "acme/text",
+        version: 1,
+        props: {},
+      };
+
+      expect(placementTypesOf(block, NONE)).toEqual(["acme/text"]);
+    });
+
+    it("judges an instance by the ROOTS of the definition it draws, resolved as its tile was", () => {
+      // The instance node's own type is not a registered block, and the
+      // nesting source answers "no restriction" for it — so a move judged by
+      // the node's type would let a component whose root belongs only inside
+      // a Columns be dragged into a paragraph after its insert was refused
+      // there. Through the lookup, so a definition whose root is itself an
+      // instance is judged by what that root draws.
+      catalog([
+        { ...base, name: "acme/box", slots: { children: {} } },
+        { ...base, name: "acme/text" },
+      ]);
+      const boxed = stored({
+        id: "boxed",
+        document: componentOf([
+          { id: "d1", type: "acme/box", version: 1, props: {}, slots: {} },
+          instanceOf("header"),
+        ]),
+      });
+      const lookup = lookupOf(stored(), boxed);
+
+      expect(placementTypesOf(instanceOf("boxed"), lookup)).toEqual([
+        "acme/box",
+        "acme/text",
+      ]);
+    });
+
+    it("judges an instance it cannot resolve by its own type, which restricts nothing", () => {
+      // A placeholder is drawn wherever it sits; refusing to move one would
+      // pin it to the spot it was left in.
+      expect(placementTypesOf(instanceOf("missing"), NONE)).toEqual([
+        COMPONENT_INSTANCE_TYPE,
+      ]);
+      expect(placementTypesOf(instanceOf("missing"))).toEqual([
+        COMPONENT_INSTANCE_TYPE,
+      ]);
+    });
+  });
+
+  it("places ONE instance node pointing at the definition, copying nothing", () => {
+    // The whole difference from a pattern. The definition's content is not in
+    // the page; the renderer inlines it at read time, which is what makes an
+    // edit to the definition reach this page later.
+    const [component] = componentEntriesFrom([stored()], lookupOf(stored()));
+    const node = nodeForComponentEntry(component!);
+
+    expect(node.type).toBe(COMPONENT_INSTANCE_TYPE);
+    expect(node.props).toEqual({ componentId: "header" });
+    expect(node.slots).toBeUndefined();
+    // And a fresh id each time, so two placements are two nodes.
+    expect(nodeForComponentEntry(component!).id).not.toBe(node.id);
   });
 });
