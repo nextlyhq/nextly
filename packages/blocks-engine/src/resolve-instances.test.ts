@@ -2915,6 +2915,72 @@ describe("instanceExposure", () => {
     expect(rendered.document.nodes[0]!.props).toEqual({ text: "GOOD" });
   });
 
+  it("reports a cleared visibility as cleared with NO value, not the sentinel", () => {
+    // The winning write on a visibility row IS the `$unset` object. Handing
+    // that back as `value` breaks the promise that a cleared row has none —
+    // and a control drawn from it would show an object where it expects blank.
+    const gated = component([node("d1")], {
+      exposed: [{ ...headline, propPath: "", type: "visibility" }],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { headline: { $unset: true } },
+    });
+
+    const [state] = instanceExposure(gated, node1).properties;
+
+    expect(state?.cleared).toBe(true);
+    expect(state?.value).toBeUndefined();
+  });
+
+  it("marks a row cleared when an ANCESTOR path was cleared by another exposure", () => {
+    // Clearing `a` removes `a.b` with it. The child row's value is gone
+    // because somebody deliberately removed it, and reporting that as merely
+    // superseded would make the removal indistinguishable from a definition
+    // that never held `a.b` at all.
+    const nested = component([node("d1", { props: { a: { b: "base" } } })], {
+      exposed: [
+        { ...headline, id: "parent", propPath: "a" },
+        { ...headline, id: "child", propPath: "a.b" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { parent: { $unset: true } },
+    });
+
+    const [parent, child] = instanceExposure(nested, node1).properties;
+
+    expect(parent?.cleared).toBe(true);
+    expect(child?.cleared).toBe(true);
+    expect(child?.value).toBeUndefined();
+    expect(child?.shadowedBy).toBe("parent");
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: nested })
+    );
+    expect(rendered.document.nodes[0]!.props).toEqual({});
+  });
+
+  it("marks a row cleared when the SAME path was cleared by another exposure", () => {
+    const twoPointers = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        { ...headline, id: "first" },
+        { ...headline, id: "second" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { first: "MINE", second: { $unset: true } },
+    });
+
+    const [first, second] = instanceExposure(twoPointers, node1).properties;
+
+    expect(second?.cleared).toBe(true);
+    // The earlier row's target was erased by the later clear.
+    expect(first?.cleared).toBe(true);
+    expect(first?.value).toBeUndefined();
+    expect(first?.shadowedBy).toBe("second");
+  });
+
   it("has no path value for a visibility exposure", () => {
     // `visibility` decides whether the node is served at all; it names no prop,
     // so reading `propPath` off the definition would report an unrelated value.
