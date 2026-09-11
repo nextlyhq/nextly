@@ -589,6 +589,63 @@ describe("a rename the host refuses", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("says a refusal with an EMPTY reason in the generic words, not in none", async () => {
+    /*
+     * 🔴 The separating input for the guard above, from the other side. This
+     * IS a conforming outcome — `reason: string` admits `""` — so the guard is
+     * right to accept it, and the two silence tests cannot speak for it. But
+     * printing it rendered the same textless alert a non-outcome did, and
+     * silence would be worse: the host DID refuse, and a row that clears with
+     * no notice reports a failed rename as a success.
+     *
+     * The assertion is the generic copy, which separates this from BOTH wrong
+     * answers at once — a blank alert has no text to find, and silence has no
+     * alert.
+     */
+    const onRename = vi.fn(() => ({ ok: false as const, reason: "" }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    expect(
+      await screen.findByText("This class could not be renamed.")
+    ).toBeTruthy();
+  });
+
+  it("treats a whitespace-only reason the same, down the promise path", async () => {
+    // Whitespace is what a template literal with nothing interpolated into it
+    // produces, and it renders exactly as empty does.
+    const onRename = vi.fn(async () => ({
+      ok: false as const,
+      reason: "  \n",
+    }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    expect(
+      await screen.findByText("This class could not be renamed.")
+    ).toBeTruthy();
+  });
+
   it("shows the reason rather than clearing as though it landed", async () => {
     const onRename = vi.fn(async () => ({
       ok: false as const,
