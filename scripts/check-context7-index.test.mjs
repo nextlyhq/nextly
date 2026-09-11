@@ -58,12 +58,18 @@ describe("citationFindings", () => {
   });
 
   it("reports a file under an excluded folder even when a listed folder holds it", () => {
+    // A folder is a path segment: the sibling `docs/internal-notes` shares
+    // the prefix and is not under the entry.
+    const config = {
+      folders: ["docs"],
+      excludeFolders: ["docs/internal"],
+      excludeFiles: [],
+    };
     expect(
-      citationFindings(new Set(["docs/internal/secret.mdx"]), {
-        folders: ["docs"],
-        excludeFolders: ["docs/internal"],
-        excludeFiles: [],
-      })
+      citationFindings(
+        new Set(["docs/internal/secret.mdx", "docs/internal-notes/note.mdx"]),
+        config
+      )
     ).toEqual([
       "docs/internal/secret.mdx is under an excludeFolders entry and was indexed anyway",
     ]);
@@ -274,6 +280,9 @@ describe("witnesses", () => {
     ["AGENTS.md", "# Agents\n\nThe root agent file.\n"],
     ["packages/nextly/AGENTS.md", "# Agents\n\nThe package agent file.\n"],
     ["docs/index.mdx", "# Overview\n\nA docs page, kept.\n"],
+    // A sibling that shares the entry's prefix and sorts before it in git's
+    // order: a prefix read without its slash would make it the witness.
+    ["docs/internal-notes/note.mdx", "# Overview\n\nA page of the sibling folder, kept.\n"],
     ["docs/internal/shared.mdx", "# Overview\n"],
     ["docs/internal/secret.mdx", "# Overview\n\nA sentence of the internal page.\n"],
     ["docs/private/notes.mdx", "# Overview\n\nThe private page.\n"],
