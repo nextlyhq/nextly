@@ -203,7 +203,56 @@ describe("the rows", () => {
       ["select", true],
       ["image", false],
     ]);
-    expect([...EDITABLE_EXPOSED_TYPES]).toEqual(["text", "select"]);
+    expect([...EDITABLE_EXPOSED_TYPES]).toEqual([
+      "text",
+      "select",
+      "link",
+      "visibility",
+    ]);
+  });
+
+  it("carries a link and a visibility row as editable, and a rich text row as not", () => {
+    // A link exposure holds what its url prop holds, a string, and a
+    // visibility exposure a boolean the resolver reads as shown or hidden;
+    // both have a control. Rich text is edited on the canvas, not here.
+    const more = header({
+      exposed: [
+        {
+          id: "cta",
+          label: "Call to action",
+          nodeId: "h1",
+          propPath: "href",
+          type: "link",
+        },
+        {
+          id: "shown",
+          label: "Shown",
+          nodeId: "h1",
+          propPath: "visibility",
+          type: "visibility",
+        },
+        {
+          id: "body",
+          label: "Body",
+          nodeId: "h1",
+          propPath: "body",
+          type: "richText",
+        },
+      ],
+    });
+    const rows =
+      inspectInstance(
+        pageOf(instance()),
+        "i1",
+        lookupOf(["header", more]),
+        LIBRARY
+      )?.rows ?? [];
+
+    expect(rows.map(row => [row.id, row.supported])).toEqual([
+      ["cta", true],
+      ["shown", true],
+      ["body", false],
+    ]);
   });
 
   it("reports a cleared row as cleared, with no value", () => {

@@ -383,6 +383,114 @@ describe("a choice with an empty option", () => {
   });
 });
 
+describe("a link and a visibility exposure", () => {
+  const linked = () =>
+    header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/cta",
+          version: 1,
+          props: { text: "Read more", href: "/docs" },
+        },
+      ],
+      exposed: [
+        {
+          id: "cta",
+          label: "Call to action",
+          nodeId: "h1",
+          propPath: "href",
+          type: "link",
+        },
+        {
+          id: "shown",
+          label: "Newsletter form",
+          nodeId: "h1",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+    });
+
+  it("edits a link as the address it holds, and clears it when emptied", () => {
+    // The same field a url prop gets in the block inspector, keyed for an
+    // address. Emptied, it clears rather than writing "" — an href of ""
+    // points at the page itself.
+    const editor = mount(instance(), linked());
+    const field = screen.getByRole("textbox", {
+      name: "Call to action",
+    }) as HTMLInputElement;
+
+    expect(field.value).toBe("/docs");
+    expect(field.inputMode).toBe("url");
+    fireEvent.change(field, { target: { value: "https://example.test/go" } });
+    fireEvent.blur(field);
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { cta: "https://example.test/go" },
+    });
+    cleanup();
+
+    const emptied = mount(instance({ overrides: { cta: "/go" } }), linked());
+    const again = screen.getByRole("textbox", { name: "Call to action" });
+    fireEvent.change(again, { target: { value: "" } });
+    fireEvent.blur(again);
+    expect(appliedProps(emptied)).toEqual({
+      componentId: "header",
+      overrides: { cta: { $unset: true } },
+    });
+  });
+
+  it("shows an inherited visibility row as shown, and hides it by writing false", () => {
+    // Inherited is the component's own rule, which is shown unless the
+    // definition gates the node itself; the resolver reads `false` as hidden
+    // and `true` as shown, and nothing else.
+    const editor = mount(instance(), linked());
+    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(box);
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { shown: false },
+    });
+  });
+
+  it("shows a hidden row unchecked — cleared included, which the page reads as hidden — and shows it again by writing true", () => {
+    const hidden = mount(instance({ overrides: { shown: false } }), linked());
+    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    expect(box.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(box);
+    expect(appliedProps(hidden)).toEqual({
+      componentId: "header",
+      overrides: { shown: true },
+    });
+    cleanup();
+
+    mount(instance({ overrides: { shown: { $unset: true } } }), linked());
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Newsletter form" })
+        .getAttribute("aria-checked")
+    ).toBe("false");
+    expect(screen.getByText("Cleared")).toBeDefined();
+  });
+
+  it("offers the reset on a visibility override, which returns it to the component's rule", () => {
+    const editor = mount(instance({ overrides: { shown: false } }), linked());
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset Newsletter form to the component's value",
+      })
+    );
+
+    expect(appliedProps(editor)).toStrictEqual({ componentId: "header" });
+  });
+});
+
 describe("rows with no control", () => {
   it("lists a type it cannot edit yet, with its value, rather than hiding it", () => {
     mount(instance());

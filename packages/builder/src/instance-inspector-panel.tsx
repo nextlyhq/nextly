@@ -31,6 +31,7 @@
 import { findNode, type OverrideValue } from "@nextlyhq/blocks-engine";
 import {
   Button,
+  Checkbox,
   Input,
   Label,
   Select,
@@ -310,6 +311,9 @@ function ExposedControl({
       </p>
     );
   }
+  if (row.type === "visibility") {
+    return <ExposedVisibilityField id={id} row={row} onSet={onSet} />;
+  }
   if (row.type === "select") {
     return (
       <Select
@@ -378,6 +382,9 @@ function ExposedTextField({
     <Input
       id={id}
       value={draft}
+      // Keyed for an address when the exposure is one, as the block inspector
+      // keys a url prop: the value is the same string either way.
+      inputMode={row.type === "link" ? "url" : undefined}
       onChange={event => setDraft(event.target.value)}
       onBlur={send}
       // Enter commits as well as blur, as every single-line field here does.
@@ -388,6 +395,39 @@ function ExposedTextField({
         }
       }}
     />
+  );
+}
+
+/**
+ * A visibility exposure: whether the node it aims at is served on this page.
+ *
+ * A checkbox, committed at once — there is nothing to coalesce. It writes
+ * `true` or `false` and nothing else, because those are the two values the
+ * resolver reads there: a cleared override hides, and anything else is
+ * ignored with the component's own rule left in force. So checked means
+ * "shown", and an INHERITED row reads as shown: the component's rule is to
+ * serve the node unless the definition gates it itself, and the source badge
+ * beside the box says which it is.
+ */
+function ExposedVisibilityField({
+  id,
+  row,
+  onSet,
+}: {
+  id: string;
+  row: ExposedRow;
+  onSet: (id: string, value: OverrideValue) => void;
+}): React.JSX.Element {
+  const shown = row.value !== false && !row.cleared;
+  return (
+    <div className="nx-inspector__field--inline">
+      <Checkbox
+        id={id}
+        checked={shown}
+        onCheckedChange={checked => onSet(row.id, checked === true)}
+      />
+      <span className="nx-inspector__note">Shown on this page</span>
+    </div>
   );
 }
 
