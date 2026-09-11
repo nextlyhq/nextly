@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -5,6 +6,8 @@ import {
   citationFindings,
   citedPaths,
   firstHeading,
+  headings,
+  probeMarker,
   REPO_BLOB,
 } from "./check-context7-index.mjs";
 
@@ -106,5 +109,53 @@ describe("firstHeading", () => {
     expect(() => firstHeading("# T\n\ntext\n", "x")).toThrow(
       /no second-level heading/
     );
+  });
+});
+
+describe("probeMarker", () => {
+  it("takes the first heading the documentation does not contain", () => {
+    const file = "# Title\n\n## Overview\n\n## Repository map\n";
+    expect(headings(file)).toEqual(["Title", "Overview", "Repository map"]);
+    // "Overview" is a heading a docs page also uses, so probing for it would
+    // find the docs and report the exclusion as broken.
+    expect(probeMarker(file, "## Overview\n\n## Title of a page")).toBe(
+      "Repository map"
+    );
+  });
+
+  it("reports nothing to probe for a file with no unshared heading", () => {
+    expect(probeMarker("@AGENTS.md\n", "")).toBeNull();
+    expect(probeMarker("## Setup\n", "## Setup")).toBeNull();
+  });
+
+  it("finds a marker in every committed excluded file that has headings", () => {
+    // The real files against the real docs, so the probe has something to ask
+    // for; CLAUDE.md is one line and is the known exception.
+    const config = JSON.parse(readFileSync("context7.json", "utf-8"));
+    const corpus = readdirSync("docs", { recursive: true })
+      .filter(name => String(name).endsWith(".mdx"))
+      .map(name => readFileSync(`docs/${name}`, "utf-8"))
+      .join("\n");
+    expect(corpus.length).toBeGreaterThan(10000);
+    const unprobeable = config.excludeFiles.filter(
+      name => probeMarker(readFileSync(name, "utf-8"), corpus) === null
+    );
+    expect(unprobeable).toEqual(["CLAUDE.md"]);
+  });
+});
+
+describe("when Context7 cannot be reached", () => {
+  it("exits 2, never 1, so an outage is not read as a wrong configuration", () => {
+    // A port nothing listens on: the fetch rejects before any verdict exists.
+    const run = spawnSync(
+      process.execPath,
+      ["scripts/check-context7-index.mjs"],
+      {
+        env: { ...process.env, CONTEXT7_API: "http://127.0.0.1:9" },
+        encoding: "utf-8",
+      }
+    );
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain("cannot answer");
   });
 });

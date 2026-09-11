@@ -21,11 +21,12 @@
  *   node scripts/check-context7-index.mjs
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 export const LIBRARY = "/nextlyhq/nextly";
-const API = "https://context7.com/api/v1";
+/** Overridable so a test can point the script at a port nothing listens on. */
+const API = process.env.CONTEXT7_API ?? "https://context7.com/api/v1";
 export const REPO_BLOB = "https://github.com/nextlyhq/nextly/blob/";
 
 /**
@@ -101,16 +102,62 @@ export function firstHeading(text, name) {
   return match[1].trim();
 }
 
-async function fetchText(url) {
-  const response = await fetch(url, {
-    headers: { accept: "text/plain, application/json" },
-  });
-  return { status: response.status, body: await response.text() };
+/** Every heading in a file, top-level and second-level, in order. */
+export function headings(text) {
+  return [...text.matchAll(/^#{1,2}\s+(.+)$/gm)].map(match => match[1].trim());
+}
+
+/**
+ * A heading of an EXCLUDED file that no documentation page contains.
+ *
+ * The probe asks the index for a heading and requires it absent, so a heading
+ * the docs also use would report an exclusion as broken when the index had
+ * merely answered from the docs: "Overview" and "packages" both do. The first
+ * heading the corpus does not contain is the marker; a file with none, such as
+ * a one-line `CLAUDE.md`, has nothing to probe and says so.
+ */
+export function probeMarker(text, corpus) {
+  return headings(text).find(heading => !corpus.includes(heading)) ?? null;
+}
+
+/** The documentation, concatenated, for deciding what a marker must not share. */
+function docsCorpus(root) {
+  const out = [];
+  const walk = dir => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".mdx"))
+        out.push(readFileSync(full, "utf-8"));
+    }
+  };
+  walk(join(root, "docs"));
+  return out.join("\n");
 }
 
 function unanswerable(message) {
   console.error(`check-context7-index: cannot answer — ${message}`);
   process.exit(2);
+}
+
+/**
+ * Context7's answer, or an exit with the unanswerable status.
+ *
+ * A rejected fetch (DNS, TLS, a proxy, a dropped connection) is not a verdict
+ * about the index. Left to propagate it would exit 1, and a caller would read
+ * a Context7 outage as the configuration being wrong.
+ */
+async function fetchText(url) {
+  try {
+    const response = await fetch(url, {
+      headers: { accept: "text/plain, application/json" },
+    });
+    return { status: response.status, body: await response.text() };
+  } catch (error) {
+    return unanswerable(
+      `${url} could not be fetched: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 const invokedDirectly =
@@ -135,14 +182,16 @@ if (invokedDirectly) {
   if (entry.state !== "finalized")
     unanswerable(`${LIBRARY} is in state "${entry.state}"`);
 
-  // 2. Pull as much of the index as one request returns, and read what it cites.
+  // 2. Read what the index cites, within one response. The documentation is larger
+  //    than one response, so this is a sample of the citations, and it is why the
+  //    exclusions are probed one by one below rather than read off this list.
   const dump = await fetchText(`${API}${LIBRARY}?type=txt&tokens=50000`);
   if (dump.status !== 200) unanswerable(`${LIBRARY} answered ${dump.status}`);
   const cited = citedPaths(dump.body);
   const findings = citationFindings(cited, config);
 
-  // 3. A docs sentence comes back for its own topic; an excluded file's does not. The
-  //    positive half comes first, because the negative half proves nothing without it.
+  // 3. A docs sentence comes back for its own topic. The positive half comes first,
+  //    because every absence below proves nothing without it.
   const docsMarker = firstHeading(
     readFileSync(join(root, "docs", "getting-started", "index.mdx"), "utf-8"),
     "docs/getting-started/index.mdx"
@@ -150,24 +199,34 @@ if (invokedDirectly) {
   const docsAnswer = await fetchText(
     `${API}${LIBRARY}?type=txt&topic=${encodeURIComponent(docsMarker)}&tokens=5000`
   );
-  if (docsAnswer.status !== 200 || !docsAnswer.body.includes(docsMarker)) {
+  const docsRetrievable =
+    docsAnswer.status === 200 && docsAnswer.body.includes(docsMarker);
+  if (!docsRetrievable) {
     findings.push(
       `the index cannot return "${docsMarker}" from docs/getting-started/index.mdx, so an absence would prove nothing`
     );
-  } else {
-    const agentsMarker = firstHeading(
-      readFileSync(join(root, "AGENTS.md"), "utf-8"),
-      "AGENTS.md"
+  }
+
+  // 4. No excluded file's heading comes back. Every excluded file is probed, not a
+  //    sample of them: the dump above is capped at one response, and a file the cap
+  //    left out would otherwise pass by never having been looked at.
+  const corpus = docsCorpus(root);
+  for (const name of listField(config, "excludeFiles")) {
+    if (!docsRetrievable) break;
+    if (!existsSync(join(root, name))) continue;
+    const marker = probeMarker(readFileSync(join(root, name), "utf-8"), corpus);
+    if (marker === null) {
+      console.warn(
+        `check-context7-index: ${name} has no heading the docs lack; not probed`
+      );
+      continue;
+    }
+    const answer = await fetchText(
+      `${API}${LIBRARY}?type=txt&topic=${encodeURIComponent(marker)}&tokens=5000`
     );
-    const agentsAnswer = await fetchText(
-      `${API}${LIBRARY}?type=txt&topic=${encodeURIComponent(agentsMarker)}&tokens=5000`
-    );
-    if (
-      agentsAnswer.status === 200 &&
-      agentsAnswer.body.includes(agentsMarker)
-    ) {
+    if (answer.status === 200 && answer.body.includes(marker)) {
       findings.push(
-        `"${agentsMarker}" from AGENTS.md is retrievable; the exclusion did not take`
+        `"${marker}" from ${name} is retrievable; its exclusion did not take`
       );
     }
   }
@@ -181,6 +240,6 @@ if (invokedDirectly) {
   }
 
   console.log(
-    `check-context7-index: ${LIBRARY} finalized; ${cited.size} cited file(s) all inside the configuration; docs retrievable, AGENTS.md not.`
+    `check-context7-index: ${LIBRARY} finalized; ${cited.size} sampled citation(s) all inside the configuration; docs retrievable, no excluded file's heading is.`
   );
 }
