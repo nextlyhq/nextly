@@ -34,9 +34,9 @@ import {
   makeNode,
   placementVerdict,
   composedRootTypes,
+  readableDefinition,
   resolveComponentInstances,
   COMPONENT_INSTANCE_TYPE,
-  isComponentDocument,
   isComponentInstance,
   type AnyBlockDefinition,
   type BlockDocument,
@@ -563,8 +563,9 @@ export function componentEntriesFrom(
  * What a stored row offers — the definition and the roots it draws — or
  * nothing, when the palette has nothing to offer for the row.
  *
- * Nothing for a row with no document, one whose document is not a component
- * definition, or one with no roots: each is a legal stored row and none can be
+ * Nothing for a row with no document, one whose document the resolver would
+ * not read — not a component definition, another format, nodes that are not a
+ * list — or one with no roots: each is a legal stored row and none can be
  * placed. A definition's INTERNAL nesting is not re-judged here — it was judged
  * when the definition was saved, and it is the definition's own concern rather
  * than the page's.
@@ -596,13 +597,14 @@ function offerableDefinition(
   stored: BlockDocument | null | undefined,
   definitions: ComponentLookup
 ): Pick<ComponentInsertEntry, "document" | "roots"> | undefined {
-  if (stored === undefined || stored === null) return undefined;
-  if (!isComponentDocument(stored) || stored.nodes.length === 0) {
-    return undefined;
-  }
-  const roots = composedRootTypes(stored, definitions);
+  // The resolver's OWN rule for a supplied definition, not the kind alone: a
+  // definition in a format this build does not read is left standing on the
+  // canvas, and a tile for it would place a placeholder.
+  const document = readableDefinition(stored ?? undefined);
+  if (document === undefined || document.nodes.length === 0) return undefined;
+  const roots = composedRootTypes(document, definitions);
   if (roots === undefined || roots.length === 0) return undefined;
-  return { document: stored, roots };
+  return { document, roots };
 }
 
 /**

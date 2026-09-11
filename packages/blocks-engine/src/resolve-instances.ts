@@ -1395,30 +1395,43 @@ function readSuppliedDefinition(
   run: DefinitionReader
 ): ComponentDocument | ComponentUnresolvedReason {
   if (!run.definitions.has(componentId)) return "missing";
-  // Read ONCE and carried out, so expansion never asks again.
-  const definition = run.definitions.get(componentId);
-  if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
-    return "unreadable";
+  // Read ONCE and carried out, so expansion never asks again: the lookup is a
+  // caller's object and nothing in its contract makes it pure, so validating
+  // one `get` and expanding a second means the document that was checked is
+  // not the document that is used.
+  return readableDefinition(run.definitions.get(componentId)) ?? "unreadable";
+}
+
+/**
+ * A supplied definition as this resolver reads it, or nothing when it cannot.
+ *
+ * The one rule for what a lookup's answer has to be before it is inlined.
+ * Published because a surface that draws from the same lookup — the editor's
+ * inspector for a selected instance — has to refuse exactly what the canvas
+ * refuses: accepting more would offer editable rows for a component the page
+ * shows as a placeholder, and read a list of nodes that is not one as though
+ * it were.
+ *
+ * A structural check is not the discrimination. `DefinitionsById` is keyed to
+ * `BlockDocument`, so a page, a region or a template satisfies "has a nodes
+ * array" and would be inlined as though it were a component — content from
+ * another document appearing inside this one, with its exposed properties and
+ * slots meaning nothing. The kind is what the engine already publishes an
+ * answer for. And the FORMAT, on the same read: `unreadable` already means "an
+ * envelope this build does not understand", and a definition written in a
+ * format this build cannot interpret would otherwise be inlined regardless, so
+ * a surface that persists what it inlines wrote content read under the wrong
+ * rules into a page.
+ */
+export function readableDefinition(
+  supplied: BlockDocument | undefined
+): ComponentDocument | undefined {
+  if (!isPlainRecord(supplied) || !Array.isArray(supplied.nodes)) {
+    return undefined;
   }
-  // A structural check is not the discrimination. `DefinitionsById` is keyed to
-  // `BlockDocument`, so a page, a region or a template satisfies "has a nodes
-  // array" and would be inlined as though it were a component — content from
-  // another document appearing inside this one, with its exposed properties
-  // and slots meaning nothing. The kind is what the engine already publishes
-  // an answer for.
-  if (!isComponentDocument(definition)) return "unreadable";
-  // The FORMAT, on the same read. `unreadable` already means "an envelope this
-  // build does not understand" — the reason existed and nothing asked the
-  // question. A definition written in a format this build cannot interpret was
-  // inlined regardless, so a surface that persists what it inlines wrote
-  // content read under the wrong rules into a page.
-  //
-  // Asked HERE rather than by the caller, because the lookup is a caller's
-  // object and nothing in its contract makes it pure: validating one `get` and
-  // expanding a second means the document that was checked is not the document
-  // that is used.
-  if (definition.formatVersion !== DOCUMENT_FORMAT_VERSION) return "unreadable";
-  return definition;
+  if (!isComponentDocument(supplied)) return undefined;
+  if (supplied.formatVersion !== DOCUMENT_FORMAT_VERSION) return undefined;
+  return supplied;
 }
 
 /**

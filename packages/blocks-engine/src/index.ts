@@ -291,6 +291,10 @@ export {
   // own value. Two implementations of that order agree until a variant rule
   // changes in one of them.
   instanceExposure,
+  // What a supplied definition has to be before the resolver inlines it.
+  // Published because the editor's inspector draws from the same lookup the
+  // canvas resolves against, and must refuse exactly what the canvas refuses.
+  readableDefinition,
   resolveComponentInstances,
   // Why an instance was left standing. Published because the surfaces that
   // REPORT one are in other packages — the renderer draws a placeholder, the

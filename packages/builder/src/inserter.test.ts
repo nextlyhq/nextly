@@ -1348,6 +1348,36 @@ describe("the component tier", () => {
     expect(component?.componentId).toBe("acme/text");
   });
 
+  it("offers nothing for a definition the canvas would refuse: another format, or nodes that are not a list", () => {
+    // The tile and the canvas read the same rule for a supplied definition,
+    // the resolver's own. Judged by kind alone, a definition in a format this
+    // build does not read was offered, placed, and drawn as a placeholder;
+    // one whose nodes are not a list crashed the catalogue on `.length`.
+    catalog([{ ...base, name: "acme/text" }]);
+    const stale = stored({
+      id: "stale",
+      document: {
+        ...componentOf([
+          { id: "d1", type: "acme/text", version: 1, props: {} },
+        ]),
+        formatVersion: DOCUMENT_FORMAT_VERSION + 1,
+      } as unknown as ComponentDocument,
+    });
+    const broken = stored({
+      id: "broken",
+      document: {
+        ...componentOf([]),
+        nodes: "oops",
+      } as unknown as ComponentDocument,
+    });
+
+    expect(
+      componentEntriesFrom([stale, broken, stored()], NONE).map(
+        e => e.componentId
+      )
+    ).toEqual(["header"]);
+  });
+
   it("offers nothing for a row with no document, or one that is not a component", () => {
     // Both are legal stored rows — a published definition saved without
     // content, and a row a migration left holding a pattern — and both are
