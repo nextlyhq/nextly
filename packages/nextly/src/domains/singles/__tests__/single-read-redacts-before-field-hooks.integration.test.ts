@@ -14,7 +14,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, group, text } from "../../../config";
+import { defineSingle, group, repeater, text } from "../../../config";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   createTestNextly,
@@ -213,5 +213,171 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     expect(
       (allowed.data as { settings?: { visibility?: string } })?.settings
     ).not.toHaveProperty("visibility");
+  });
+
+  it("keeps the evidence beneath a container the caller may not read at all", async () => {
+    // The first pass removes `vault` whole (its own rule denies), and the
+    // child's redaction was recorded before that on a row the document no
+    // longer holds. A hook flags the document; the judge must still see
+    // `vault.visibility`.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({
+              name: "siteName",
+              hooks: {
+                afterRead: [
+                  ({ value, data }) => {
+                    (data as Record<string, unknown>).flagged = true;
+                    return value;
+                  },
+                ],
+              },
+            }),
+            group({
+              name: "vault",
+              access: { read: () => false },
+              fields: [
+                text({ name: "visibility", access: { read: () => false } }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", vault: { visibility: "private" } },
+      { overrideAccess: true }
+    );
+
+    const denied = await entry.get("branding", {
+      user: { id: "denied-container-aware" },
+      routeAuthorized: true,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it("re-judges a conditional child in a rebuilt group against the sibling it depends on", async () => {
+    // `openTag` may be read only while `visibility` is not private. The first
+    // pass removes both (visibility by its rule, openTag by its condition);
+    // the hook on `settings` returns a fresh group carrying `openTag` back
+    // and no `visibility`. The second pass must judge `openTag` against the
+    // removed `visibility`, which only path-keyed evidence can reach, and
+    // strip it.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({ name: "siteName" }),
+            group({
+              name: "settings",
+              fields: [
+                text({ name: "visibility", access: { read: () => false } }),
+                text({
+                  name: "openTag",
+                  access: {
+                    read: ({ data }) =>
+                      (data as { visibility?: string })?.visibility !==
+                      "private",
+                  },
+                }),
+              ],
+              hooks: {
+                afterRead: [
+                  ({ value }) => ({
+                    ...(value as object),
+                    openTag: "reintroduced",
+                  }),
+                ],
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      { siteName: "Acme", settings: { visibility: "private", openTag: "x" } },
+      { overrideAccess: true }
+    );
+
+    const doc = (await current.nextly.findSingle({
+      slug: "branding",
+      overrideAccess: true,
+      enforceFieldAccess: true,
+      user: NOBODY,
+    })) as { settings?: { openTag?: string; visibility?: string } } | null;
+
+    expect(doc?.settings).not.toHaveProperty("openTag");
+    expect(doc?.settings).not.toHaveProperty("visibility");
+  });
+
+  it("keeps two repeater rows with one id on separate evidence paths", async () => {
+    // The redaction contract permits duplicate ids. Keyed by id alone, the
+    // second row's evidence would overwrite the first's and the judge would
+    // see the private row as public.
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "branding",
+          fields: [
+            text({
+              name: "siteName",
+              hooks: {
+                afterRead: [
+                  ({ value, data }) => {
+                    (data as Record<string, unknown>).flagged = true;
+                    return value;
+                  },
+                ],
+              },
+            }),
+            repeater({
+              name: "entries",
+              fields: [
+                text({ name: "id" }),
+                text({ name: "visibility", access: { read: () => false } }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    await current.adapter.update(
+      "dynamic_singles",
+      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
+      { and: [{ column: "slug", op: "=", value: "branding" }] }
+    );
+    const entry = current.getService("singleEntryService");
+    await entry.update(
+      "branding",
+      {
+        siteName: "Acme",
+        entries: [
+          { id: "dup", visibility: "private" },
+          { id: "dup", visibility: "public" },
+        ],
+      },
+      { overrideAccess: true }
+    );
+
+    const denied = await entry.get("branding", {
+      user: { id: "rows-aware" },
+      routeAuthorized: true,
+    });
+    expect(denied.success).toBe(false);
+    expect(denied.statusCode).toBe(403);
   });
 });

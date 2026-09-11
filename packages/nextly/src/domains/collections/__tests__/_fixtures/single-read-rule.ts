@@ -75,6 +75,24 @@ export default function singleReadRule({
         (data as { settings?: { visibility?: string } })?.settings
           ?.visibility === "private"
       );
+    // Refuses a flagged document when a value nested in a group the caller may
+    // not read AT ALL (the group itself is denied) is private. The evidence for
+    // the child sits beneath a container the pass removed whole.
+    case "denied-container-aware":
+      return !(
+        (data as { flagged?: boolean })?.flagged === true &&
+        (data as { vault?: { visibility?: string } })?.vault?.visibility ===
+          "private"
+      );
+    // Refuses a flagged document when any row of a repeater the caller may read
+    // carries a private value in a child the caller may not.
+    case "rows-aware":
+      return !(
+        (data as { flagged?: boolean })?.flagged === true &&
+        ((data as { entries?: { visibility?: string }[] })?.entries ?? []).some(
+          row => row.visibility === "private"
+        )
+      );
     // Refuses on a value that exists only in the document a first read would
     // create, so the rule can decide correctly only if those defaults are judged
     // before the write that materializes them.

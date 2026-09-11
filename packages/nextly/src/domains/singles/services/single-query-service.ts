@@ -76,6 +76,7 @@ import { detachData } from "../../../shared/lib/detach";
 import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
+  applyFieldReadAccessWithEvidence,
   runFieldHooks,
   captureReadAccessEvidence,
   type ReadAccessRedactions,
@@ -2109,8 +2110,10 @@ export class SingleQueryService extends BaseService {
         if (finalDenial) return finalDenial;
       }
 
-      // 10. The second field-access pass, over the post-hook document.
-      await applyFieldReadAccess(
+      // 10. The second field-access pass, over the post-hook document, with
+      // the path-keyed evidence restored first so a container a hook rebuilt
+      // is judged against what the first pass removed from it.
+      await applyFieldReadAccessWithEvidence(
         {
           kind: "single",
           slug,
@@ -2118,7 +2121,8 @@ export class SingleQueryService extends BaseService {
           user: fieldAccessUser,
           overrideAccess: skipFieldRules,
         },
-        sourceRedactions
+        sourceRedactions,
+        readAccessEvidence
       );
 
       // Defense in depth, after every user callback on this document: hooks,
