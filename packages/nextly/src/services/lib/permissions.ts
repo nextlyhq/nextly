@@ -576,6 +576,20 @@ export async function listEffectivePermissions(
 }
 
 /**
+ * The super-admin answer, cached per user.
+ *
+ * Declared here rather than beside `isSuperAdmin` because
+ * `invalidatePermissionCache` below has to clear it: it is the same question as
+ * the permission caches above, asked of the same rows, and a cache that no
+ * invalidation reaches is one that outlives the change it should have seen.
+ */
+const superAdminCache = new Map<
+  string,
+  { value: boolean; expiresAt: number }
+>();
+const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
+
+/**
  * Invalidate permission cache (both in-memory and database tiers).
  *
  * This function clears cached permissions when user roles or role permissions change.
@@ -597,6 +611,23 @@ export async function invalidatePermissionCache(
   _hint: { userId?: string; roleId?: string } = {}
 ): Promise<void> {
   const { userId, roleId } = _hint || {};
+
+  // The super-admin answer is a cache of its own and has to go with them.
+  //
+  // It is the same question, asked of the same rows, and it was surviving a
+  // role change for its full TTL: a user demoted out of super-admin kept the
+  // session bypass for up to a minute. It reaches further than that now,
+  // because an API key's grants are resolved through this answer and cached
+  // for five minutes of their own, so a stale `true` could be copied into the
+  // key's grants after the demotion and outlive it by both windows together.
+  //
+  // A `roleId` hint clears the whole map rather than a subset: the map does not
+  // record which users a role reaches, the in-memory permission keys only name
+  // users who happen to have a cached entry, and the map is bounded at 1,000
+  // entries with a 60-second life. Re-asking is a single indexed query, and a
+  // role change is rare; guessing at the subset is how a demotion survives.
+  if (userId) superAdminCache.delete(userId);
+  if (roleId) superAdminCache.clear();
 
   // Invalidate in-memory caches (Tier 1)
   if (userId) {
@@ -657,13 +688,6 @@ export async function invalidatePermissionCache(
     }
   }
 }
-
-// ---- Super-admin check with caching ----
-const superAdminCache = new Map<
-  string,
-  { value: boolean; expiresAt: number }
->();
-const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
 
 /**
  * Check if a user has the super-admin role.

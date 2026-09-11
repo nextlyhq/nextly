@@ -40,7 +40,8 @@ import { users } from "../users/postgres";
  *
  * Token types:
  * - "read-only"   — resolves to creator's read-* permissions only
- * - "full-access" — resolves to creator's full permission set (at request time)
+ * - "full-access" — resolves to creator's full permission set (at request time;
+ *   the whole catalogue for a super-admin, whose power is a bypass rather than rows)
  * - "role-based"  — resolves to the referenced role's permissions (at request time)
  *
  * Revocation:
