@@ -660,6 +660,51 @@ describe("reloadNextlyConfig", () => {
     expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", []);
   });
 
+  it("keeps a single the metadata-only sync REFUSED deferred, while the rest of its kind clears", async () => {
+    // 🔴 The scope flag cannot carry this. `syncCodeFirstSingles` reports a
+    // per-slug refusal by RESOLVING with `errors[]`, so the scope stays
+    // "synced" and only the failed slugs say otherwise. Reading the flag alone
+    // emptied the set, and `refreshSingleSources` then republished fields the
+    // registry had just refused to update.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: [
+            ...reservedColumns("single_settings"),
+            { name: "site_name", type: "text", nullable: true },
+          ],
+        },
+        {
+          name: "single_theme",
+          columns: [
+            ...reservedColumns("single_theme"),
+            { name: "accent", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const resolver = buildResolver({
+      singleSyncResult: { errors: [{ slug: "settings" }] },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    // No DDL: every diff was zero-op, which is the branch this guards.
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    // `theme` synced and is absent; `settings` is the one that did not land.
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", ["settings"]);
+  });
+
   it("publishes NOTHING when the reload carries only a refusal", async () => {
     // 🔴 A reload whose only change is refused never reaches the metadata sync:
     // `hasChanges` stays false, and the metadata-only landing is gated on

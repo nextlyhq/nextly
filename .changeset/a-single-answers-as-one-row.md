@@ -84,3 +84,17 @@ Under `next dev`, a single whose fields you edit keeps its source and its
 status card: the reload re-marks an edited single's migration as applied from
 the sync's own report, as it already did for an edited collection, instead of
 leaving the row `pending` for the rest of the session.
+
+A widget query asking for `draft` or `published` from a source that has no
+publish lifecycle is now refused, instead of being accepted and answered as if
+no state had been named. Nothing downstream could apply such a selector, so
+the two mutually exclusive questions came back with one answer and the card
+said nothing about having been ignored. `status: "all"` is unaffected: it
+claims no lifecycle, and it is what the generated count, recent and timeline
+cards send.
+
+A single whose metadata a `next dev` reload could not store now keeps its
+widget sources withheld even when the rest of its kind synced cleanly. The
+singles sync reports a per-single refusal without failing the scope, so a
+reload that refused one single had been clearing the whole deferral set and
+republishing that single's stale field list.

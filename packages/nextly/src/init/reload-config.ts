@@ -2104,11 +2104,21 @@ async function applyReload(opts?: {
       // collection sync that ran says nothing about a single a previous reload
       // refused, and clearing that too would publish a card over a table the
       // single's metadata is still ahead of.
-      const { setDeferredEntities } = await import(
-        "../domains/widgets/deferred-entities"
-      );
-      if (synced.collections) setDeferredEntities("collection", []);
-      if (synced.singles) setDeferredEntities("single", []);
+      // 🔴 The scope flag alone does not say the scope caught up. The singles
+      // sync reports a per-slug refusal by RESOLVING with errors, and
+      // `syncCodeFirstMetadataOnly` keeps those singles' prior snapshot and
+      // leaves `singles` true -- so reading the flag alone cleared the whole
+      // deferral set while a single the sync had just refused still described
+      // itself the old way. `refreshSingleSources` would then republish those
+      // stale fields and its cards would query columns the table does not have.
+      // Published through the same helper the DDL paths use, so the slugs that
+      // stay deferred are the ones this pass could not land rather than a
+      // separate rule maintained here.
+      if (synced.collections)
+        await publishDeferred("collection", deferredEntities);
+      if (synced.singles) {
+        await publishDeferred("single", deferredEntities, synced.failedSingles);
+      }
       // Publish each scope's (possibly toggled) recording policy ONLY when that
       // scope's metadata sync succeeded — a `webhooks` change surfaces as no
       // schema diff, so this is the path a live opt-out/opt-in toggle flows
