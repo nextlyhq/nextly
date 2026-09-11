@@ -30,7 +30,7 @@ Selecting a component instance in the builder now opens its own inspector in
 place of the block tabs: the component's title (and how many pages use it, once
 the library carries that count), then one row per exposed property showing the
 value in force, where it came from (inherited,
-from a variant, overridden, or cleared), and a visible Reset on every override.
+from a variant, overridden, or cleared), and a visible Reset on every override the instance itself holds.
 Text and choice properties are edited in place; rich text, image, link and
 visibility rows show their value and say they are not editable here yet. An
 emptied text field clears the property rather than writing an empty string, a
@@ -39,3 +39,8 @@ for properties the component no longer exposes are listed with a Discard rather
 than dropped. The block inspector's name and lock fields now come from one
 shared module, as does the draft-follows-the-document behaviour of every text
 field.
+
+The blocks engine now publishes `readableDefinition`, the rule the resolver
+applies to a supplied component definition before inlining it, so the inspector
+refuses exactly what the canvas refuses: a definition in another format, or one
+whose nodes are not a list, draws no editable row.

@@ -25,8 +25,8 @@
 import {
   findNode,
   instanceExposure,
-  isComponentDocument,
   isComponentInstance,
+  readableDefinition,
   type BlockDocument,
   type BlockNode,
   type ComponentLookup,
@@ -163,8 +163,12 @@ export function inspectInstance(
 
   const componentId = storedComponentId(node);
   const row = components.find(component => component.id === componentId);
-  const definition = definitions.get(componentId);
-  const found = definition !== undefined && isComponentDocument(definition);
+  // Read under the resolver's OWN rule for a supplied definition, not the
+  // kind alone: what the canvas leaves standing as a placeholder — a format
+  // this build does not read, a list of nodes that is not one — must draw no
+  // editable row here, and must not be handed to the exposure to throw on.
+  const definition = readableDefinition(definitions.get(componentId));
+  const found = definition !== undefined;
   const exposure = found ? instanceExposure(definition, node) : undefined;
 
   return {

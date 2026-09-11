@@ -296,6 +296,40 @@ describe("the rows", () => {
     expect(title).toMatchObject({ source: "definition", ownOverride: false });
   });
 
+  it("refuses a definition the canvas refuses, so no row is drawn for a component the page shows as a placeholder", () => {
+    // The same readability rule the resolver applies, not only the kind: a
+    // definition in a format this build does not read is left standing on the
+    // canvas, and an inspector that read it anyway would offer edits to a
+    // placeholder. And a list of nodes that is not one would throw inside the
+    // exposure rather than answer "not found".
+    // Spelled as what arrives from storage, not as this build's type.
+    const stale = {
+      ...HEADER.get("header")!,
+      formatVersion: DOCUMENT_FORMAT_VERSION + 1,
+    } as unknown as ComponentDocument;
+    const broken = {
+      ...HEADER.get("header")!,
+      nodes: "oops",
+    } as unknown as ComponentDocument;
+    const page = pageOf(instance({ overrides: { title: "Acme" } }));
+
+    const old = inspectInstance(
+      page,
+      "i1",
+      lookupOf(["header", stale]),
+      LIBRARY
+    );
+    const malformed = inspectInstance(
+      page,
+      "i1",
+      lookupOf(["header", broken]),
+      LIBRARY
+    );
+
+    expect(old).toMatchObject({ definitionFound: false, rows: [] });
+    expect(malformed).toMatchObject({ definitionFound: false, rows: [] });
+  });
+
   it("surfaces overrides this instance holds for properties no longer exposed", () => {
     const page = pageOf(
       instance({ overrides: { title: "Acme", subtitle: "Gone now" } })

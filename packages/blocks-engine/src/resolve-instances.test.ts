@@ -21,6 +21,7 @@ import {
   componentIdsIn,
   componentUsageIn,
   instanceExposure,
+  readableDefinition,
   resolveComponentInstances,
   type DefinitionsById,
   type ResolvedBlockNode,
@@ -1597,6 +1598,58 @@ describe("resolveComponentInstances bounds", () => {
     // the instance naming it — the discrimination `malformed` cannot make.
     expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
     expect(idsOf(result.document)).toEqual(["i1"]);
+  });
+
+  describe("what a supplied definition has to be, published for the surfaces that read one", () => {
+    // ONE rule, read by the resolver and by whoever draws an inspector from
+    // the same lookup: a surface accepting what the resolver refuses would
+    // offer editable rows for a component the page shows as a placeholder.
+    // Each refusal below is also what the resolver reports as `unreadable`,
+    // asserted beside it so the two cannot drift.
+    const unreadable = (supplied: unknown) => {
+      const doc = page([instance("i1", "hero")]);
+      const result = resolveComponentInstances(
+        doc,
+        defs({ hero: supplied as BlockDocument })
+      );
+      return result.unresolved.map(e => e.reason);
+    };
+
+    it("reads a component document in this build's format", () => {
+      const definition = component([node("d1")]);
+
+      expect(readableDefinition(definition)).toBe(definition);
+      expect(unreadable(definition)).toEqual([]);
+    });
+
+    it("refuses a document of another kind", () => {
+      const supplied = page([node("d1")]);
+
+      expect(readableDefinition(supplied)).toBeUndefined();
+      expect(unreadable(supplied)).toEqual(["unreadable"]);
+    });
+
+    it("refuses a component in a format this build does not read", () => {
+      // Spelled as what arrives from storage: a record, not this build's type.
+      const supplied = {
+        ...component([node("d1")]),
+        formatVersion: DOCUMENT_FORMAT_VERSION + 1,
+      } as unknown as BlockDocument;
+
+      expect(readableDefinition(supplied)).toBeUndefined();
+      expect(unreadable(supplied)).toEqual(["unreadable"]);
+    });
+
+    it("refuses a value whose nodes are not a list, and nothing at all", () => {
+      const supplied = {
+        ...component([]),
+        nodes: "oops",
+      } as unknown as BlockDocument;
+
+      expect(readableDefinition(supplied)).toBeUndefined();
+      expect(unreadable(supplied)).toEqual(["unreadable"]);
+      expect(readableDefinition(undefined)).toBeUndefined();
+    });
   });
 });
 
