@@ -67,6 +67,22 @@ has to remember: a widget cannot read what its viewer could not have read direct
 
 It also means most widgets need no data-fetching code at all.
 
+### Sources
+
+A query names a source, and the source decides what the query may ask:
+
+| Source | Reads | Supports |
+|---|---|---|
+| `collection:<slug>` | The collection's entries, through the same access-controlled read as the API | `count`, `list`, `groupBy`, and `timeseries` where the collection has a usable date |
+| `single:<slug>` | The single's one document, as a list of one row | `list` only — a single answers a fixed question, so a `where`, a `sort`, a `count` or a bucketing over it is refused rather than answered |
+| `system:…` | A core service — versions, releases, activity and the like — each answering through its own service's rules | Whatever that source declares |
+
+Every collection and every single the install has is published as a source, and the dashboard
+offers a card derived from each: a count, a recent list, a table and a health breakdown per
+collection, and one status card per single showing whether it is published and when it last
+changed. Offered, never placed — nobody's dashboard gains a card because a collection was
+created — and only to a reader who may read that collection or single.
+
 <Callout type="warn">
 Contributing a widget from a plugin works today, but `PluginAdminWidget` is marked
 `@experimental` and its shape may change before it settles. Building on it is reasonable;

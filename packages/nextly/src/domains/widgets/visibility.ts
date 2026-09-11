@@ -108,12 +108,13 @@ async function decide(
     caller
   );
 
-  // 🔴 A GENERATED card is gated on its collection, not on a declared
-  // permission — it carries none. `callerHoldsPermission` judges an API key on
-  // its stamped grant alone, while `canReadEntity` also evaluates the
-  // collection's code-defined rules, and the widget query endpoint asks the
-  // second. A key those rules reject had the card offered here and every query
-  // for it refused. The same question, asked once per collection.
+  // 🔴 A GENERATED card is gated on the entity it reads -- a collection or a
+  // single -- not on a declared permission; it carries none.
+  // `callerHoldsPermission` judges an API key on its stamped grant alone,
+  // while `canReadEntity` also evaluates the entity's code-defined rules, and
+  // the widget query endpoint asks the second. A key those rules reject had
+  // the card offered here and every query for it refused. The same question,
+  // asked once per entity.
   const readable = await readableEntities(
     all
       .map(widget => widget.collection)
@@ -123,10 +124,10 @@ async function decide(
 
   const visible = all.filter(widget => {
     if (widget.generated === true) {
-      // A generated card that names no collection cannot be checked against
-      // one, so it is withheld rather than published. Unreachable today --
-      // every such card is built from a `collection:` source -- and free, since
-      // it decides from a value already in hand.
+      // A generated card that names no entity cannot be checked against one,
+      // so it is withheld rather than published. Unreachable today -- every
+      // such card is built from a `collection:` or `single:` source -- and
+      // free, since it decides from a value already in hand.
       return widget.collection !== undefined && readable.has(widget.collection);
     }
     return holdsWidgetPermission(widget.requiredPermission, verdicts);

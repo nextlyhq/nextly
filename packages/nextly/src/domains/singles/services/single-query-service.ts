@@ -133,6 +133,7 @@ import {
   expandMediaInData,
   getDefaultValue,
   shouldTreatAsJson,
+  singleAbsentResult,
 } from "./single-utils";
 
 /**
@@ -887,11 +888,7 @@ export class SingleQueryService extends BaseService {
         this.logger
       );
       if (!singleMeta) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: `Single "${slug}" not found`,
-        };
+        return singleAbsentResult(slug);
       }
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
@@ -987,11 +984,7 @@ export class SingleQueryService extends BaseService {
           now: readNow,
         }))
       ) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: `Single "${slug}" not found`,
-        };
+        return singleAbsentResult(slug);
       }
 
       // 6.9 - 7.7. Resolve translations and expand uploads, relationships and

@@ -8,4 +8,5 @@ export type {
   PublicData,
   ValidationPublicData,
   RateLimitPublicData,
+  SingleAbsentPublicData,
 } from "./public-data";
