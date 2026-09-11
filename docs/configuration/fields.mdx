@@ -929,12 +929,16 @@ nesting level: for a field inside a group or a repeater, the containing row
 rather than the top-level document.
 
 **Before the write** (`beforeValidate`, `beforeChange`), `data` is the record
-as transformed so far, not a copy of what the caller sent. On a create that
-means the request with field defaults applied and a `slug` and title generated
-before the first hook runs, so a hook can see, and a defaulted field's hook can
-run on, a value nobody submitted. On an update it is the patch, not the stored
-row, so an unchanged sibling reads as `undefined`. Do not read a key's presence
-as proof the caller supplied it. A `beforeChange` handler can read and change
+as transformed so far, not a copy of what the caller sent. On an ordinary
+create that means the request with field defaults applied before any hook
+runs, so a defaulted field's hook runs on a value nobody submitted, and a
+`slug` and title generated after the collection-level `beforeValidate` and
+before the first field-level hook, so a field hook can read them and a
+collection hook in that phase cannot. A bulk create (`createMany`) and a create
+inside a transaction start from the submitted body: no defaults are applied, an
+omitted defaulted field stays absent, and its hooks do not run. On an update it
+is the patch, not the stored row, so an unchanged sibling reads as `undefined`.
+Do not read a key's presence as proof the caller supplied it. A `beforeChange` handler can read and change
 siblings at that level. No collection-level phase runs after it, but a
 sibling's own hook registered later in the same phase still can. Return the
 value you want stored; touch siblings only when that is the intent. These
@@ -943,11 +947,12 @@ it, or an earlier hook that deletes the key, skips them.
 
 **After the write** (`afterChange`) and **on a read** (`afterRead`), `data` is
 the row, persisted or loaded, so a hooked field runs whether or not it changed.
-One exception on a collection create: a `fieldGroup` field is stored in its own
-table and is removed from the row before the insert, and the `afterChange`
-hooks run on the returned row without it, so that field's `afterChange` hook
-does not run there. A value returned from `afterChange` reshapes the response
-and does not change what was stored.
+One exception, on every write to a collection or a Single: a `fieldGroup` field
+is stored in its own table and is removed from the row before the main-table
+write, and the `afterChange` hooks run on the returned row without it, so that
+field's `afterChange` hook never runs. Its `beforeValidate` and `beforeChange`
+do. A value returned from `afterChange` reshapes the response and does not
+change what was stored.
 
 Core still normalises the record between the last pre-write hook and the
 write: passwords are hashed and relationship and upload values reduced to ids
