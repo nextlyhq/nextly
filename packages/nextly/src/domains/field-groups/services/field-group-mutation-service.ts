@@ -759,8 +759,12 @@ export class FieldGroupMutationService extends BaseService {
     } = params;
 
     try {
-      const componentMeta =
-        await this.registryService.getComponent(componentSlug);
+      // On the transaction's own connection: a pooled registry read while the
+      // caller's transaction holds the only connection waits on itself.
+      const componentMeta = await this.registryService.getComponent(
+        componentSlug,
+        tx.getDrizzle()
+      );
       const tableName = componentMeta.tableName;
       const componentFields = componentMeta.fields;
 
@@ -991,8 +995,11 @@ export class FieldGroupMutationService extends BaseService {
     }
 
     try {
-      const componentMeta =
-        await this.registryService.getComponent(componentSlug);
+      // On the transaction's own connection, as in the single-instance save.
+      const componentMeta = await this.registryService.getComponent(
+        componentSlug,
+        tx.getDrizzle()
+      );
       const tableName = componentMeta.tableName;
       const componentFields = componentMeta.fields;
 
@@ -1300,7 +1307,11 @@ export class FieldGroupMutationService extends BaseService {
 
       for (const slug of allowedSlugs) {
         try {
-          const meta = await this.registryService.getComponent(slug);
+          // On the transaction's own connection, as in the single-instance save.
+          const meta = await this.registryService.getComponent(
+            slug,
+            tx.getDrizzle()
+          );
           metaCache.set(slug, meta);
 
           const rows = await this.getExistingInstancesInTx(
