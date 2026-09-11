@@ -360,6 +360,21 @@ describe("the operation context on a query error", () => {
     expect(error.message).toContain("ghost");
   });
 
+  it("adds it when the server's own message names such a relation", () => {
+    // The other shape a PostgreSQL error takes for an unknown column: no SQL,
+    // but the relation named in the server's text. SQLite's message for the
+    // same failure is `no such column: ghost`, with no table in it, which is
+    // why only that dialect kept its context.
+    const error = probe.handle(
+      new Error('column "ghost" of relation "int_update_table" does not exist'),
+      "update",
+      "int_update_table"
+    );
+    expect(error.message).toMatch(
+      /^update operation failed on table 'int_update_table': column "ghost"/
+    );
+  });
+
   it("adds it when a column name contains the operation's word", () => {
     const error = probe.handle(
       new Error('column "updated_at" does not exist'),
