@@ -1,10 +1,4 @@
-import {
-  DndContext,
-  closestCenter,
-  useSensor,
-  useSensors,
-  PointerSensor,
-} from "@dnd-kit/core";
+import { DndContext, closestCenter } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -15,6 +9,11 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Badge, Button } from "@nextlyhq/ui";
 
+import {
+  positionInList,
+  sortableAnnouncements,
+  useSortableSensors,
+} from "@admin/components/features/entries/fields/structured/field-array-helpers";
 import { Edit, Trash } from "@admin/components/icons";
 import type {
   FieldConfig,
@@ -58,7 +57,9 @@ function SortableFieldRow({
           {...attributes}
           {...listeners}
           tabIndex={0}
-          aria-label="Drag handle"
+          // Named per ROW. Every handle labelled alike is N identical buttons to
+          // a reader moving by keyboard, with nothing to say which field is which.
+          aria-label={`Drag to reorder ${field.label}`}
         >
           <svg
             width="16"
@@ -123,11 +124,18 @@ export function SortableFieldsTable({
   onEdit,
   onDeleteRequest,
 }: SortableFieldsTableProps) {
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 8 },
-    })
-  );
+  // Pointer AND keyboard, from the one hook every sortable surface shares. A
+  // pointer-only `useSensors` here is what left this table unreachable from
+  // the keyboard.
+  const sensors = useSortableSensors();
+
+  // Said about the FIELD rather than its name-as-id: a reader hears "Picked up
+  // Title, position 1 of 4", not the sortable key.
+  const names = fields.map(f => f.name);
+  const announcements = sortableAnnouncements({
+    describe: ({ id }) => fields.find(f => f.name === id)?.label,
+    place: ({ id }) => positionInList(names, id),
+  });
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -148,11 +156,9 @@ export function SortableFieldsTable({
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
+        accessibility={{ announcements }}
       >
-        <SortableContext
-          items={fields.map(f => f.name)}
-          strategy={verticalListSortingStrategy}
-        >
+        <SortableContext items={names} strategy={verticalListSortingStrategy}>
           <table className="w-full divide-y divide-border">
             <thead className="bg-primary/5">
               <tr>

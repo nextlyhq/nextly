@@ -1733,20 +1733,45 @@ function exposedState(
     return { property, source: "definition", value, cleared: false };
   }
   const own = winner.property.id === property.id;
-  // Cleared means THIS row's own write is the sentinel. A descendant's `$unset`
-  // deletes only that key — `a.b` cleared leaves `a` holding whatever else it
-  // had — so an ancestor whose winner is a clearing descendant is superseded,
-  // not cleared, and its value is read from what remains rather than assumed
-  // gone. The value already comes from the final props, so a genuinely cleared
-  // path reads as absent without being forced to.
-  const cleared = own && isUnsetOverride(winner.override.value);
+  // Cleared means the winning `$unset` ERASES this row's target — whichever
+  // exposure wrote it. A clear at the row's own path or at an ancestor deletes
+  // what the row reads (clearing `a` removes `a.b` with it), so the row is
+  // cleared even when another exposure did the clearing; reporting it as
+  // merely superseded would make a deliberate removal indistinguishable from
+  // a definition that holds nothing. A clear BELOW the row is the one case
+  // that does not erase it: `a.b` cleared leaves `a` holding whatever else it
+  // had, so the ancestor reads what remains rather than being assumed gone.
+  const cleared =
+    isUnsetOverride(winner.override.value) &&
+    erasesTarget(winner.property, property);
   return {
     property,
     source: winner.override.source,
-    value,
+    // Normalised to `undefined` when cleared, which the contract promises. For
+    // a prop row the final props already read as absent; for a `visibility`
+    // row the winning value IS the sentinel, and handing that object to a
+    // caller expecting a blank would be the contract broken on exactly the
+    // rows a clear is most likely to reach.
+    value: cleared ? undefined : value,
     cleared,
     ...(own ? {} : { shadowedBy: winner.property.id }),
   };
+}
+
+/**
+ * True when clearing `writer`'s target deletes what `row` reads.
+ *
+ * On one node, a `visibility` exposure erases every other visibility exposure
+ * on it, and a prop path erases itself and everything beneath it. It does NOT
+ * erase its ancestors, which is the asymmetry {@link reachesSameTarget} has no
+ * reason to carry: reaching is symmetric, erasing is not.
+ */
+function erasesTarget(writer: ExposedProperty, row: ExposedProperty): boolean {
+  if (writer.nodeId !== row.nodeId) return false;
+  if (writer.type === "visibility" || row.type === "visibility") {
+    return writer.type === row.type;
+  }
+  return isPathPrefix(writer.propPath, row.propPath);
 }
 
 /** The value a row shows: the final props at its path, or a visibility decision. */
