@@ -130,7 +130,18 @@ const context7Finding = (check, message) => ({
  * no description leaves nothing to follow; and a description that merely differs from the
  * core package's is the drift that lets the others happen unnoticed. `undefined` is the
  * untracked file, `null` the unreadable one.
+ *
+ * Last, the exclusions are held to the shapes their readers understand. Context7 matches
+ * `excludeFiles` by filename, so an entry with a path in it excludes nothing; and the
+ * index verifier, `check-context7-index`, reads `excludeFolders` as plain paths, so a
+ * glob there is a rule it could never witness.
  */
+const listOf = value =>
+  Array.isArray(value) ? value.filter(entry => typeof entry === "string") : [];
+const pathEntries = value => listOf(value).filter(entry => entry.includes("/"));
+const patternEntries = value =>
+  listOf(value).filter(entry => /[*?[]|^\.\/|\/$/.test(entry));
+
 const CONTEXT7_RULES = [
   [
     config => config === undefined,
@@ -176,11 +187,27 @@ const CONTEXT7_RULES = [
         `description differs from packages/${CORE_PACKAGE}/package.json; one sentence says what this is`
       ),
   ],
+  [
+    config => pathEntries(config.excludeFiles).length > 0,
+    config =>
+      context7Finding(
+        "context7-exclusion",
+        `excludeFiles names ${pathEntries(config.excludeFiles).join(", ")} with a path; Context7 matches the field by filename, so an entry with a slash excludes nothing`
+      ),
+  ],
+  [
+    config => patternEntries(config.excludeFolders).length > 0,
+    config =>
+      context7Finding(
+        "context7-exclusion",
+        `excludeFolders names ${patternEntries(config.excludeFolders).join(", ")} as a pattern; check-context7-index reads plain paths, docs/archive, and cannot witness a pattern`
+      ),
+  ],
 ];
 
 export function context7Findings(config, coreDescription) {
   const rule = CONTEXT7_RULES.find(([applies]) => applies(config, coreDescription));
-  return rule ? rule[1]() : null;
+  return rule ? rule[1](config) : null;
 }
 
 /**
@@ -503,23 +530,11 @@ const REPO_LINK = /github\.com\/nextlyhq\/nextly\/(?:blob|tree|raw)\/([^\s)\]"'`
 
 const HEX_REF = /^[0-9a-f]{7,40}$/i;
 
-/**
- * Every link destination a file holds, read off its syntax tree.
- *
- * Read off the tree rather than matched in the text, because the text has no end of
- * spellings: `[x](../y.mdx "title")`, `[x](<../y.mdx>)`, a bare `[x](y.mdx)`, and a
- * reference definition `[x]: ../y.mdx` are four the patterns this replaced had learned one
- * at a time, and a fenced sample, an inline code span and an MDX comment were three places
- * the same patterns had to be taught not to look. A `link` node is a rendered link and a
- * `code` node is not, by construction.
- *
- * Frontmatter is taken off first, the way the site's loader takes it off, or the compiler
- * would read the YAML as Markdown. A page the compiler cannot parse yields no links; the
- * compile check reports that page on its own.
- */
-/** Whether a syntax-tree node carries a link destination. */
+/** The syntax-tree nodes that carry a destination: a link, an image, a reference definition. */
+const DESTINATION_NODES = new Set(["link", "image", "definition"]);
+
 function hasDestination(node) {
-  return node.type === "link" || node.type === "definition";
+  return DESTINATION_NODES.has(node.type);
 }
 
 /** Every node under one, itself included, in document order. */
@@ -527,26 +542,68 @@ function nodesOf(node) {
   return [node, ...(node.children ?? []).flatMap(nodesOf)];
 }
 
+/**
+ * Every destination a file holds, read off its syntax tree, with the node that holds it.
+ *
+ * Read off the tree rather than matched in the text, because the text has no end of
+ * spellings: `[x](../y.mdx "title")`, `[x](<../y.mdx>)`, a bare `[x](y.mdx)`, and a
+ * reference definition `[x]: ../y.mdx` are four the patterns this replaced had learned one
+ * at a time, and a fenced sample, an inline code span and an MDX comment were three places
+ * the same patterns had to be taught not to look. A `link` node is a rendered link and a
+ * `code` node is not, by construction. An `image` is a destination too: the patterns saw
+ * `![d](./x.png)` only because it shares `](` with a link, and the tree names it outright.
+ *
+ * Frontmatter is taken off first, the way the site's loader takes it off, or the compiler
+ * would read the YAML as Markdown. A page the compiler cannot parse, or whose frontmatter
+ * is not YAML, yields no destinations; the compile check reports that page on its own.
+ */
 async function linkDestinations(text, mdx) {
   const links = [];
-  const { body, skipped } = splitFrontmatter(text);
-  const collect = () => tree => {
+  const collect = skipped => () => tree => {
     for (const node of nodesOf(tree).filter(hasDestination)) {
-      links.push({ url: node.url, line: (node.position?.start.line ?? 0) + skipped });
+      links.push({
+        url: node.url,
+        type: node.type,
+        line: (node.position?.start.line ?? 0) + skipped,
+      });
     }
   };
   try {
-    await compile(body, { format: mdx ? "mdx" : "md", remarkPlugins: [collect] });
+    const { body, skipped } = splitFrontmatter(text);
+    await compile(body, { format: mdx ? "mdx" : "md", remarkPlugins: [collect(skipped)] });
   } catch {
     return [];
   }
   return links;
 }
 
+/**
+ * How a finding names a destination, by the node that carries it: what the page does with
+ * it, and what the site needs instead. A page is linked by its URL and source by its
+ * GitHub URL; an image has nothing served beside the page, so any relative one is a path.
+ */
+const DESTINATION_WORDING = {
+  link: {
+    verb: "links to",
+    remedy: "a page is linked by its URL, /docs/..., and source by its GitHub URL",
+    relativeIsPath: url => /^\.\.?\//.test(url) || /\.mdx?(?:[#?]|$)/i.test(url),
+  },
+  image: {
+    verb: "embeds",
+    remedy: "the site serves no file beside a page, so an image is embedded by its URL",
+    relativeIsPath: () => true,
+  },
+};
+
+/** The wording for a destination's node; a definition reads as the link it defines. */
+function wordingFor(type) {
+  return DESTINATION_WORDING[type] ?? DESTINATION_WORDING.link;
+}
+
 /** A destination written as a path from the file rather than as a URL. */
-function isFilePath(url) {
+function isFilePath(url, type) {
   if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(url)) return false;
-  return /^\.\.?\//.test(url) || /\.mdx?(?:[#?]|$)/i.test(url);
+  return wordingFor(type).relativeIsPath(url);
 }
 
 /**
@@ -962,22 +1019,23 @@ async function internalLinks(repoRoot, tracked, findings) {
     } catch {
       continue;
     }
-    for (const { url, line } of await linkDestinations(text, rel.endsWith(".mdx"))) {
+    for (const { url, type, line } of await linkDestinations(text, rel.endsWith(".mdx"))) {
+      const { verb, remedy } = wordingFor(type);
       if (url.startsWith("/docs/") && !resolves(url)) {
         findings.push({
           check: "internal-docs-link",
           file: rel,
           line,
-          message: `links to ${url}, which is not a docs page`,
+          message: `${verb} ${url}, which is not a docs page`,
         });
       }
       // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
-      if (pages.has(rel) && isFilePath(url)) {
+      if (pages.has(rel) && isFilePath(url, type)) {
         findings.push({
           check: "internal-docs-link",
           file: rel,
           line,
-          message: `links to ${url} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
+          message: `${verb} ${url} as a file path; ${remedy}`,
         });
       }
     }

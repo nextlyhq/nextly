@@ -301,6 +301,45 @@ describe("context7", () => {
     expect(checks).not.toContain("context7-description");
     expect(checks).not.toContain("context7-unreadable");
     expect(checks).not.toContain("retired-category");
+    expect(checks).not.toContain("context7-exclusion");
+  });
+
+  it("fires on an excludeFiles entry written as a path, which excludes nothing", async () => {
+    // Context7 matches the field by filename. The entry beside it is the
+    // control that a plain name passes.
+    const withPath = JSON.stringify({
+      projectTitle: "Nextly",
+      description: SENTENCE,
+      folders: ["docs"],
+      excludeFiles: ["AGENTS.md", "docs/internal/notes.md"],
+    });
+    const findings = await findingsFor({
+      "packages/nextly/package.json": core(SENTENCE),
+      "context7.json": withPath,
+    });
+    const exclusion = findings.filter(f => f.check === "context7-exclusion");
+    expect(exclusion).toHaveLength(1);
+    expect(exclusion[0].message).toContain("docs/internal/notes.md");
+    expect(exclusion[0].message).not.toContain("AGENTS.md");
+  });
+
+  it("fires on an excludeFolders pattern, which the index verifier cannot witness", async () => {
+    for (const entry of ["**/internal", "./build", "docs/old/"]) {
+      const withPattern = JSON.stringify({
+        projectTitle: "Nextly",
+        description: SENTENCE,
+        folders: ["docs"],
+        excludeFolders: ["docs/archive", entry],
+      });
+      const findings = await findingsFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": withPattern,
+      });
+      const exclusion = findings.filter(f => f.check === "context7-exclusion");
+      expect(exclusion.map(f => f.message), entry).toEqual([
+        expect.stringContaining(`excludeFolders names ${entry} as a pattern`),
+      ]);
+    }
   });
 });
 
@@ -1132,6 +1171,41 @@ describe("internal-docs-link", () => {
         "docs/b.mdx": "# b\n",
       })
     ).not.toContain("internal-docs-link");
+  });
+
+  it("fires on an image embedded by a file path or at a docs URL, and says it is an image", async () => {
+    // The site serves nothing beside a page, so a bare `diagram.png` is as
+    // broken as `./diagram.png`; and `/docs/...` is where pages are, not
+    // files. The two absolute images are the control that an image by URL
+    // passes.
+    const page = [
+      "![d](./missing.png) ![e](diagram.png) ![f](/docs/nope)",
+      "![ok](https://example.com/x.png) ![ok](/images/x.png)",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => f.message)
+    ).toEqual([
+      "embeds ./missing.png as a file path; the site serves no file beside a page, so an image is embedded by its URL",
+      "embeds diagram.png as a file path; the site serves no file beside a page, so an image is embedded by its URL",
+      "embeds /docs/nope, which is not a docs page",
+    ]);
+  });
+
+  it("yields no links for a page whose frontmatter is not YAML, and keeps running", async () => {
+    // The compile check reports that page; this one must neither report its
+    // links nor stop the whole run on it. The second page is the control
+    // that the run went on past it.
+    const checks = await checksFor({
+      "docs/a.mdx": "---\ntitle: [unterminated\n---\n\nSee [gone](/docs/nope).\n",
+      "docs/b.mdx": "See [gone](/docs/nope).\n",
+    });
+    expect(checks).toContain("internal-docs-link");
+    const findings = await findingsFor({
+      "docs/a.mdx": "---\ntitle: [unterminated\n---\n\nSee [gone](/docs/nope).\n",
+    });
+    expect(findings.filter(f => f.check === "internal-docs-link")).toEqual([]);
   });
 });
 

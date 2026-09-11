@@ -9,10 +9,15 @@ import {
   LIBRARY,
   markerFor,
   probeMarker,
+  readCorpus,
   REPO_BLOB,
   Unanswerable,
   verify,
+  witnesses,
 } from "./check-context7-index.mjs";
+
+/** The tracked Markdown, read once for every test that chooses a marker from it. */
+const corpus = readCorpus(".");
 
 /** A dump in the shape Context7 returns, measured on /upstash/context7. */
 const dump = (...paths) =>
@@ -70,8 +75,20 @@ describe("citationFindings", () => {
     ).toEqual(["AGENTS.md is in excludeFiles and was indexed anyway"]);
   });
 
+  it("reads an excludeFiles entry as a filename, wherever the file sits", () => {
+    // Context7 documents the entry as a name, not a path, so a package's
+    // AGENTS.md is excluded by the same entry as the root one.
+    expect(
+      citationFindings(new Set(["packages/nextly/AGENTS.md"]), config)
+    ).toEqual([
+      "packages/nextly/AGENTS.md is in excludeFiles and was indexed anyway",
+    ]);
+  });
+
   it("reports a root file that is neither the README nor excluded", () => {
-    // A CHANGELOG Context7's defaults are trusted to drop, cited anyway.
+    // A root file the configuration never named, cited anyway. Context7's
+    // default exclusions do not cover it: they apply only to a configuration
+    // that names no exclusions of its own.
     expect(citationFindings(new Set(["CHANGELOG.md"]), config)).toEqual([
       'CHANGELOG.md is outside folders ["docs"] and is not the README, and was indexed',
     ]);
@@ -103,20 +120,20 @@ describe("the committed configuration", () => {
     })
       .split("\n")
       .filter(name => name.endsWith(".md") && !name.includes("/"));
-    // Excluded by Context7's defaults, per its documentation.
-    const defaults = new Set([
-      "CHANGELOG.md",
-      "LICENSE.md",
-      "CODE_OF_CONDUCT.md",
-    ]);
+    // Nothing is left to Context7's default exclusions: per its documentation
+    // they apply only to a configuration that names no exclusions of its own,
+    // and this one does, so a LICENSE or CODE_OF_CONDUCT is indexed unless
+    // named here.
     const forReaders = new Set(["README.md"]);
     const unaccounted = rootMarkdown.filter(
-      name =>
-        !config.excludeFiles.includes(name) &&
-        !defaults.has(name) &&
-        !forReaders.has(name)
+      name => !config.excludeFiles.includes(name) && !forReaders.has(name)
     );
     expect(unaccounted).toEqual([]);
+  });
+
+  it("names its exclusions as filenames, which is what Context7 matches", () => {
+    const config = JSON.parse(readFileSync("context7.json", "utf-8"));
+    expect(config.excludeFiles.filter(name => name.includes("/"))).toEqual([]);
   });
 
   it("keeps the README, which is the one root file meant to be indexed", () => {
@@ -137,15 +154,15 @@ describe("probeMarker", () => {
     expect(headings(file)).toEqual(["Title", "Overview", "Repository map"]);
     // "Overview" is a heading a docs page also uses, so probing for it would
     // find the docs and report the exclusion as broken.
-    expect(probeMarker(file, "## Overview\n\n## Title of a page")).toBe(
+    expect(probeMarker(file, ["## Overview\n", "## Title of a page"])).toBe(
       "Repository map"
     );
   });
 
   it("falls back to a line of prose, and reports nothing when every line is shared", () => {
-    expect(probeMarker("@AGENTS.md\n", "")).toBe("@AGENTS.md");
-    expect(probeMarker("## Setup\n", "## Setup")).toBeNull();
-    expect(probeMarker("<p>markup</p>\n- a list\n", "")).toBeNull();
+    expect(probeMarker("@AGENTS.md\n", [])).toBe("@AGENTS.md");
+    expect(probeMarker("## Setup\n", ["## Setup"])).toBeNull();
+    expect(probeMarker("<p>markup</p>\n- a list\n", [])).toBeNull();
   });
 
   it("finds a marker of its own in every committed excluded file", () => {
@@ -153,15 +170,19 @@ describe("probeMarker", () => {
     // sentence no other file the index may hold could answer for. CLAUDE.md
     // is one line, `@AGENTS.md`, and even that is its own.
     const config = JSON.parse(readFileSync("context7.json", "utf-8"));
-    for (const name of config.excludeFiles.filter(name => existsSync(name))) {
-      expect(markerFor(".", name), name).toEqual(expect.any(String));
+    for (const name of config.excludeFiles.filter(name => corpus.has(name))) {
+      expect(markerFor(corpus, name), name).toEqual(expect.any(String));
     }
+  });
+
+  it("refuses a file git does not track, which the index cannot have read", () => {
+    expect(() => markerFor(corpus, "NOTES.md")).toThrow(Unanswerable);
   });
 
   it("chooses a README sentence no package README shares", () => {
     // "Quickstart" heads the root README and two package READMEs; a probe for
     // it could be answered from either, which is a control that never looked.
-    const marker = markerFor(".", "README.md");
+    const marker = markerFor(corpus, "README.md");
     for (const other of [
       "packages/nextly/README.md",
       "packages/create-nextly-app/README.md",
@@ -234,15 +255,117 @@ function context7({
 function realMarkers() {
   const config = JSON.parse(readFileSync("context7.json", "utf-8"));
   return {
-    docs: markerFor(".", "docs/getting-started/index.mdx"),
-    readme: markerFor(".", "README.md"),
+    docs: markerFor(corpus, "docs/getting-started/index.mdx"),
+    readme: markerFor(corpus, "README.md"),
     excluded: Object.fromEntries(
       config.excludeFiles
-        .filter(name => existsSync(name))
-        .map(name => [name, markerFor(".", name)])
+        .filter(name => corpus.has(name))
+        .map(name => [name, markerFor(corpus, name)])
     ),
+    witnesses: witnesses(corpus, config),
   };
 }
+
+describe("witnesses", () => {
+  const files = new Map([
+    ["README.md", "# Nextly\n\nThe README, kept.\n"],
+    ["CHANGELOG.md", "# Changelog\n\nA root file nothing names.\n"],
+    [".changeset/note.md", "A hidden note outside the docs.\n"],
+    ["AGENTS.md", "# Agents\n\nThe root agent file.\n"],
+    ["packages/nextly/AGENTS.md", "# Agents\n\nThe package agent file.\n"],
+    ["docs/index.mdx", "# Overview\n\nA docs page, kept.\n"],
+    ["docs/internal/shared.mdx", "# Overview\n"],
+    ["docs/internal/secret.mdx", "# Overview\n\nA sentence of the internal page.\n"],
+    ["docs/private/notes.mdx", "# Overview\n\nThe private page.\n"],
+    ["docs/archive/old.mdx", "# Overview\n\nThe archived page.\n"],
+    ["apps/playground/CHANGELOG.md", "# playground\n\nThe app's changelog.\n"],
+    ["packages/legacy/README.md", "# legacy\n\nA README under a folder Context7 drops on its own.\n"],
+    ["packages/nextly/README.md", "# Nextly\n\nThe package README, outside the docs.\n"],
+  ]);
+  const config = {
+    folders: ["docs"],
+    excludeFolders: ["docs/internal", "docs/private", "docs/archive", "docs/absent"],
+    excludeFiles: ["AGENTS.md"],
+  };
+
+  it("chooses one file per excluded set, the first in git's order with a sentence of its own", () => {
+    expect(witnesses(files, config)).toEqual([
+      // The root file witnesses the name, before the package's copy.
+      {
+        set: "excludeFiles entry AGENTS.md",
+        name: "AGENTS.md",
+        marker: "The root agent file.",
+      },
+      // `shared.mdx` has nothing of its own, so the next file of the folder witnesses it.
+      {
+        set: "excludeFolders entry docs/internal",
+        name: "docs/internal/secret.mdx",
+        marker: "A sentence of the internal page.",
+      },
+      {
+        set: "excludeFolders entry docs/private",
+        name: "docs/private/notes.mdx",
+        marker: "The private page.",
+      },
+      {
+        set: 'folders ["docs"]',
+        name: "packages/nextly/README.md",
+        marker: "The package README, outside the docs.",
+      },
+    ]);
+  });
+
+  it("never lets a root file, a hidden path or a default-excluded file witness the folders rule", () => {
+    // Context7 holds root Markdown whatever `folders` says, may skip a hidden
+    // path unasked, and may drop a CHANGELOG or a `legacy` folder on its own:
+    // none of those absences could show the rule took. All four sort before
+    // the package README, so the order alone would pick one of them.
+    const names = witnesses(files, config).map(witness => witness.name);
+    for (const name of [
+      "CHANGELOG.md",
+      ".changeset/note.md",
+      "apps/playground/CHANGELOG.md",
+      "packages/legacy/README.md",
+    ]) {
+      expect(names).not.toContain(name);
+    }
+  });
+
+  it("probes nothing for an excluded folder that holds no tracked file, or none that could witness", () => {
+    // `docs/absent` excludes nothing. `docs/archive` is a folder Context7 drops
+    // on its own, so its file's absence could be the defaults' doing and no
+    // probe of it could show the entry took.
+    const sets = witnesses(files, config).map(witness => witness.set);
+    expect(sets).not.toContain("excludeFolders entry docs/absent");
+    expect(sets).not.toContain("excludeFolders entry docs/archive");
+  });
+
+  it("stops rather than passes when a set offers nothing to ask for", () => {
+    const shared = new Map([
+      ["docs/index.mdx", "# Overview\n"],
+      ["docs/internal/a.mdx", "# Overview\n"],
+    ]);
+    expect(() =>
+      witnesses(shared, { folders: ["docs"], excludeFolders: ["docs/internal"] })
+    ).toThrow(Unanswerable);
+  });
+
+  it("finds a witness for every set the committed configuration excludes", () => {
+    // Every excludeFiles entry is witnessed by its root file, and the folders
+    // rule by a file the index would hold without it: not a changeset under
+    // `.changeset/`, and not the playground's CHANGELOG, which sorts first.
+    const config = JSON.parse(readFileSync("context7.json", "utf-8"));
+    const found = witnesses(corpus, config);
+    for (const name of config.excludeFiles) {
+      expect(found).toContainEqual(
+        expect.objectContaining({ set: `excludeFiles entry ${name}`, name })
+      );
+    }
+    const folders = found.find(witness => witness.set === 'folders ["docs"]');
+    expect(folders.name).toContain("/");
+    expect(folders.name).not.toMatch(/^\.|changelog/i);
+  });
+});
 
 describe("verify", () => {
   const markers = realMarkers();
@@ -280,7 +403,26 @@ describe("verify", () => {
       get: context7({ topics: { ...kept, [marker]: name } }),
     });
     expect(status).toBe(1);
-    expect(lines.join("\n")).toContain(`${name} is retrievable`);
+    expect(lines.join("\n")).toContain(
+      `${name} is retrievable ("${marker}" came back, or the file was cited); excludeFiles entry ${name} did not take`
+    );
+  });
+
+  it("fails when a file outside the listed folders is retrievable", async () => {
+    // The folders rule, witnessed by one file it keeps out. The citation
+    // sample cannot see this: a file it happens not to cite is not a file
+    // the index does not hold.
+    const { name, marker } = markers.witnesses.find(
+      witness => witness.set === 'folders ["docs"]'
+    );
+    const { status, lines } = await verify({
+      root: ".",
+      get: context7({ topics: { ...kept, [marker]: name } }),
+    });
+    expect(status).toBe(1);
+    expect(lines.join("\n")).toContain(
+      `${name} is retrievable ("${marker}" came back, or the file was cited); folders ["docs"] did not take`
+    );
   });
 
   it("fails when the README, which the configuration keeps, cannot be retrieved", async () => {
