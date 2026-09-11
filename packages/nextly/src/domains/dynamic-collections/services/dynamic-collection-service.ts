@@ -1057,6 +1057,9 @@ export class DynamicCollectionService extends BaseService {
           {
             wasStatus,
             hasStatus,
+            // The junction tables are decided on the full lists: a localized
+            // many-to-many sits in neither shared list and still has one.
+            junctionFields: { old: oldUserFields, new: userDefinedFields },
             ...(await liveTable()),
             // Strict only when an association rename will occur: the table
             // names are a precondition of THAT migration, and requiring them
@@ -1218,14 +1221,16 @@ export class DynamicCollectionService extends BaseService {
 
   generateDropTableMigration(
     collectionName: string,
-    tableName: string
+    tableName: string,
+    fields: FieldDefinition[] = []
   ): {
     migrationSQL: string;
     migrationFileName: string;
   } {
     return this.schemaService.generateDropTableMigration(
       collectionName,
-      tableName
+      tableName,
+      fields
     );
   }
 

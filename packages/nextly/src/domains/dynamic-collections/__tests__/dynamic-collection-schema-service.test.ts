@@ -172,22 +172,11 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
     expect(warnMessage).toContain("not compatible");
   });
 
-  // The type is `relationship`. `relation` is in NEITHER union -- not
-  // FieldType (collections/fields/types/base.ts) and not DynamicFieldType
-  // (schemas/dynamic-collections/legacy-types.ts, the UI-created shape) -- and
-  // the codebase has no field-type alias map, so it was reaching the
-  // unrecognised-type fallback and being treated as a plain column. That is
-  // why the junction-table guard never fired: `usesJunctionTable` keys on
-  // `type === "relationship"`. Same shape as the `toggle`/`row`/`tabs` cases
-  // in finding:layout-field-type-sets-are-empty-and-dead.
-  it("does NOT auto-rename manyToMany relations (they use junction tables, not columns)", () => {
-    // Old: tags as manyToMany relation, New: categories as same kind.
-    // manyToMany doesn't create a column on the main table — renaming
-    // is a different operation (rename junction table). Bail out so
-    // the user (or a follow-up phase) handles junction-table rename
-    // explicitly. The fallback drops the old junction and creates the
-    // new one — data loss in the join, surfaced via the existing
-    // generate-junction-table path.
+  it("renames a manyToMany relation's junction table, keeping its links, instead of dropping and recreating it", () => {
+    // A many-to-many has no column to rename: its links live in a junction
+    // table whose generated name embeds the field name. The rename is carried
+    // as a table rename, so the links travel with it, and neither loop touches
+    // the pair — no fresh empty junction, no orphaned full one.
     const oldFields: FieldDefinition[] = [
       {
         name: "tags",
@@ -209,8 +198,14 @@ describe("DynamicCollectionSchemaService.generateAlterTableMigration — Phase D
       newFields
     );
 
+    expect(sql).toContain(
+      'ALTER TABLE "dc_posts_dc_tags_tags" RENAME TO "dc_posts_dc_tags_categories";'
+    );
     expect(sql).not.toContain("RENAME COLUMN");
-    expect(warnSpy).toHaveBeenCalled();
+    expect(sql).not.toContain("CREATE TABLE");
+    expect(sql).not.toContain("DROP TABLE");
+    // Not a data loss, so nothing to warn about.
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("auto-renames non-manyToMany relations when target + relationType match", () => {

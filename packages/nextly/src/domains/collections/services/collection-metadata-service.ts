@@ -935,9 +935,11 @@ export class CollectionMetadataService extends BaseService {
         tableName: collection.tableName,
       });
 
+      // With the fields, so the collection's own many-to-many junctions go with it.
       const dropArtifacts = this.collectionService.generateDropTableMigration(
         params.collectionName,
-        collection.tableName
+        collection.tableName,
+        (collection.fields ?? []) as FieldDefinition[]
       );
 
       // Persist the drop migration. It is the durable DDL record applied by
