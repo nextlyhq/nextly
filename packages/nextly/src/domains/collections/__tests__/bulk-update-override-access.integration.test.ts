@@ -68,6 +68,114 @@ describe("bulk update honours overrideAccess (integration)", () => {
     expect((read.data as { title?: string })?.title).toBe("after");
   });
 
+  it("publishes past a refusing publish rule when elevated", async () => {
+    // Passes the collection gate (update allows everyone) so the batch reaches
+    // the transition pre-resolve, which is what must be told about the
+    // elevation; a gate-only forwarding leaves it refusing.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          access: {
+            create: () => true,
+            read: () => true,
+            update: () => true,
+            publish: () => false,
+          },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler = current.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "draft", status: "draft" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const refused = await entries.updateEntries({ collectionName: "posts" }, [
+      { id, data: { status: "published" } },
+    ]);
+    expect(refused.successful).toBe(0);
+    expect(refused.failed).toBe(1);
+
+    const elevated = await entries.updateEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ id, data: { status: "published" } }]
+    );
+    expect(elevated.errors).toEqual([]);
+    expect(elevated.successful).toBe(1);
+    const read = await handler.getEntry({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect((read.data as { status?: string })?.status).toBe("published");
+  });
+
+  it("writes a field whose own rule refuses the caller when elevated", async () => {
+    // Passes the collection gate and the transition; only the per-entry write
+    // judges the field rule. Without the flag reaching the worker the field
+    // is dropped from the write and the row keeps its old value.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "pages",
+          access: { create: () => true, read: () => true, update: () => true },
+          fields: [
+            text({ name: "title" }),
+            text({
+              name: "internalNote",
+              access: { update: ({ req }) => Boolean(req.user) },
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler = current.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+    const created = await handler.createEntry(
+      { collectionName: "pages", overrideAccess: true },
+      { title: "t", internalNote: "before" }
+    );
+    const id = (created.data as { id: string }).id;
+
+    const unelevated = await entries.updateEntries(
+      { collectionName: "pages" },
+      [{ id, data: { internalNote: "after" } }]
+    );
+    // Only what this case is about: the protected field did not change. The
+    // row itself fails here because the stripped patch is empty, and the
+    // transactional update refuses an empty patch where the ordinary one does
+    // not; that is the ledger's transactional-update-with-an-empty-patch-fails,
+    // not this flag.
+    expect(unelevated.successful).toBe(0);
+    let read = await handler.getEntry({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect((read.data as { internalNote?: string })?.internalNote).toBe(
+      "before"
+    );
+
+    const elevated = await entries.updateEntries(
+      { collectionName: "pages", overrideAccess: true },
+      [{ id, data: { internalNote: "after" } }]
+    );
+    expect(elevated.errors).toEqual([]);
+    read = await handler.getEntry({
+      collectionName: "pages",
+      entryId: id,
+      overrideAccess: true,
+    });
+    expect((read.data as { internalNote?: string })?.internalNote).toBe(
+      "after"
+    );
+  });
+
   it("still refuses the same batch without elevation", async () => {
     // The control: an implementation that ignored the gate entirely would
     // pass the case above. The rule wants a user and this call has none.

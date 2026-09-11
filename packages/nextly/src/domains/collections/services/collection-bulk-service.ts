@@ -1555,8 +1555,8 @@ export class CollectionBulkService extends BaseService {
       /**
        * D35 system elevation, as on `createEntries`: the collection gate, the
        * transition pre-resolve and every per-entry write skip access. Without
-       * it a trusted batch update had no trusted path and a plugin's
-       * `updateMany(..., { as: "system" })` was judged as an anonymous caller.
+       * it a trusted batch update had no trusted path: a seed or an internal
+       * caller with no user was judged as an anonymous one at the gate.
        */
       overrideAccess?: boolean;
       authenticatedScope?: AuthenticatedScope;
