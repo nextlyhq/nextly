@@ -152,6 +152,7 @@ import {
 } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
+import { useComponentLibrary } from "./component-library-client";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
@@ -1698,6 +1699,15 @@ function InsertPanelWithLibrary(props: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
   categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
+  /**
+   * The component tier, read by the EDITOR rather than here.
+   *
+   * The canvas needs the same definitions to draw an instance, and it needs
+   * them whether or not this panel is ever opened — so the editor makes that
+   * read once and hands the list down, and the tile an author places is built
+   * from the very document the canvas then resolves the instance against.
+   */
+  components: React.ComponentProps<typeof InsertPanel>["components"];
 }): React.JSX.Element {
   const library = usePatternLibrary();
   return <InsertPanel {...props} patterns={library.patterns} />;
@@ -2159,16 +2169,35 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * beside each pseudo-class rule so it can show an author the state being
    * edited, and a surface showing the page as published must not have one.
    */
+  /*
+   * The site's component definitions, read once per editor and at DRAFT
+   * posture. Without them the renderer draws the could-not-be-loaded marker
+   * for every instance on the page, which is what the editor showed before
+   * this read: a component placed in the builder rendered on the site and
+   * nowhere an author could see while editing.
+   */
+  const componentLibrary = useComponentLibrary();
+
   const canvasRender = useMemo(
-    () =>
-      pageRenderInputs({
+    () => ({
+      ...pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         previewContainer,
         previewStates: true,
         limits: documentLimits,
       }),
-    [canvasSiteStyle, clientConfig, previewContainer, documentLimits]
+      // The map's identity changes only when the read does, so this memo — and
+      // the resolution the canvas runs from it — is not redone per keystroke.
+      definitions: componentLibrary.definitions,
+    }),
+    [
+      canvasSiteStyle,
+      clientConfig,
+      previewContainer,
+      documentLimits,
+      componentLibrary.definitions,
+    ]
   );
 
   /*
@@ -2711,6 +2740,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
+                components={componentLibrary.components}
               />
             ),
             /*

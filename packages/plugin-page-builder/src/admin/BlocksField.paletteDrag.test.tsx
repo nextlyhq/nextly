@@ -23,7 +23,11 @@ import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
-import { CAPABILITY_ROUTE_PATH, LIBRARY_ROUTE_PATH } from "../library-contract";
+import {
+  CAPABILITY_ROUTE_PATH,
+  COMPONENT_LIBRARY_ROUTE_PATH,
+  LIBRARY_ROUTE_PATH,
+} from "../library-contract";
 
 /**
  * What the library route answers, for the one case that cares.
@@ -44,8 +48,11 @@ let capabilityAnswer: { mayCreate: boolean } | undefined;
  */
 let shownPanel = "insert";
 
-/** How many times the LIBRARY was asked for. */
+/** How many times the whole LIBRARY was asked for — the panel's read. */
 let routeReads = 0;
+
+/** How many times the COMPONENT tier alone was asked for — the editor's read. */
+let componentReads = 0;
 
 /** How many times the capability route was asked for. */
 let capabilityReads = 0;
@@ -58,6 +65,7 @@ let capabilityReads = 0;
  */
 const paths = vi.hoisted(() => ({
   library: "/library",
+  components: "/library?tier=components",
   capability: "/capability",
 }));
 
@@ -252,7 +260,15 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
         refetch: () => {},
       };
     }
-    routeReads += 1;
+    // Two readers share the library route and differ in WHEN they read: the
+    // panel reads the whole library only while it is on screen, and the editor
+    // reads the component tier on every mount so the canvas can draw an
+    // instance. Counted apart, so a case about the one does not see the other.
+    if (args.path === paths.components) {
+      componentReads += 1;
+    } else {
+      routeReads += 1;
+    }
     return {
       data: libraryAnswer,
       pending: false,
@@ -315,6 +331,7 @@ afterEach(() => {
   libraryAnswer = undefined;
   shownPanel = "insert";
   routeReads = 0;
+  componentReads = 0;
   capabilityReads = 0;
   capabilityAnswer = { mayCreate: true };
 });
@@ -445,6 +462,7 @@ describe("what the editor reads before anyone asks for it", () => {
     // contract the mock would answer the wrong shape for both reads, and a
     // counter that never incremented would report perfect laziness.
     expect(paths.library).toBe(LIBRARY_ROUTE_PATH);
+    expect(paths.components).toBe(COMPONENT_LIBRARY_ROUTE_PATH);
     expect(paths.capability).toBe(CAPABILITY_ROUTE_PATH);
   });
 
@@ -468,6 +486,19 @@ describe("what the editor reads before anyone asks for it", () => {
 
     openEditor();
 
+    expect(routeReads).toBe(0);
+  });
+
+  it("reads the COMPONENT tier on mount whichever panel is open", () => {
+    // The canvas needs definitions to draw an instance at all, and a page can
+    // hold instances before any panel is opened. This is the one library read
+    // that does not wait for the panel — and it asks for the component tier
+    // alone, so it does not drag the pattern tier along on every editor open.
+    shownPanel = "layers";
+
+    openEditor();
+
+    expect(componentReads).toBeGreaterThan(0);
     expect(routeReads).toBe(0);
   });
 

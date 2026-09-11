@@ -18,7 +18,7 @@
  *
  * @module library-contract
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, ComponentDocument } from "@nextlyhq/blocks-engine";
 import type { SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
@@ -36,6 +36,21 @@ export const PAGE_BUILDER_PLUGIN_NAME = "@nextlyhq/plugin-page-builder";
 
 /** Where the panel finds the library, under this plugin's own namespace. */
 export const LIBRARY_ROUTE_PATH = "/library";
+
+/**
+ * The query that narrows a library read to one tier.
+ *
+ * The insert panel reads the whole library, and only while it is open. The
+ * canvas needs the COMPONENT definitions on every editor mount — an instance
+ * renders as a placeholder without them — and pulling the pattern tier along
+ * on every mount would spend up to the whole byte ceiling to draw a header.
+ * One route with a narrowing query rather than a sibling route, so both
+ * readers agree on what a component row is and share one ceiling.
+ */
+export const LIBRARY_TIER_QUERY = "tier";
+export const LIBRARY_COMPONENTS_TIER = "components";
+/** The path a components-only reader asks for. */
+export const COMPONENT_LIBRARY_ROUTE_PATH = `${LIBRARY_ROUTE_PATH}?${LIBRARY_TIER_QUERY}=${LIBRARY_COMPONENTS_TIER}`;
 
 /**
  * Where the editor asks what the author may do with patterns.
@@ -147,14 +162,53 @@ export interface LibraryPattern extends SavedPattern {
   readonly granularity?: string;
 }
 
+/**
+ * One component definition the editor may place, with its document as the
+ * editor should see it.
+ *
+ * The document is the WORKING DRAFT where the caller may edit the component
+ * and one exists, and the live row otherwise — the posture an editor wants,
+ * since an author placing a component they are also editing should see what
+ * they are editing. Read per id rather than from the listing, because the
+ * draft overlay is reachable only through a by-id read: a listing answers with
+ * live rows, and a definition built from those would render a stale component
+ * beside the draft the author just saved.
+ */
+export interface LibraryComponent {
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly category?: string;
+  /**
+   * The definition, or `null` for a row saved without content.
+   *
+   * Carried as `null` rather than omitted so the shape says the read was made
+   * and found nothing, which a missing key cannot say.
+   */
+  readonly document: ComponentDocument | null;
+}
+
 /** What one library read answers. */
 export interface LibraryResponse {
   readonly items: readonly LibraryPattern[];
+  /**
+   * The site's component definitions, beside the patterns.
+   *
+   * One route for both tiers rather than a sibling, so the panel makes one
+   * read to learn everything it may offer, and so the two tiers share one
+   * byte ceiling — a response is one payload, and two routes each honouring
+   * the ceiling alone could together exceed it.
+   */
+  readonly components: readonly LibraryComponent[];
   readonly meta: {
-    /** How many were returned. */
+    /** How many patterns were returned. */
     readonly count: number;
-    /** Whether the ceiling stopped the read before the collection ended. */
+    /** Whether the ceiling stopped the pattern read before the collection ended. */
     readonly truncated: boolean;
+    readonly components: {
+      readonly count: number;
+      readonly truncated: boolean;
+    };
   };
 }
 

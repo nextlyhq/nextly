@@ -41,23 +41,52 @@ function row(id: string, extra: Record<string, unknown> = {}) {
  */
 function contextOver(
   pages: unknown[][],
-  self: Record<string, string | undefined> = {}
+  self: Record<string, string | undefined> = {},
+  components: {
+    pages?: unknown[][];
+    /** The by-id answer per component id; absent means the read found nothing. */
+    byId?: Record<string, unknown>;
+  } = {}
 ) {
+  const componentPages = components.pages ?? [];
   // `hasMore` comes from the SERVICE, so the stub answers it the way the
   // service does: whether another page exists, which a shortened page cannot be
   // asked about by looking at its length.
-  const listEntries = vi.fn((_slug: string, _options: unknown, _ctx: unknown) =>
-    Promise.resolve({
-      data: pages.shift() ?? [],
-      pagination: { hasMore: pages.length > 0 },
-    })
+  //
+  // Answered PER SLUG. The route reads two collections through this one
+  // function, and a queue that ignored the slug would hand the component read
+  // whatever pattern pages were left — inflating call counts and crediting one
+  // tier with the other's rows.
+  const listEntries = vi.fn(
+    (slug: string, _options: unknown, _ctx: unknown) => {
+      const queue = slug === "components" ? componentPages : pages;
+      return Promise.resolve({
+        data: queue.shift() ?? [],
+        pagination: { hasMore: queue.length > 0 },
+      });
+    }
+  );
+  const readComponent = vi.fn((_slug: string, id: string) =>
+    Promise.resolve(components.byId?.[id])
   );
   const ctx: LibraryRouteContext = {
     self: { collections: self },
     user: { id: "u1" },
     services: { collections: { listEntries } },
+    readComponent,
   };
-  return { ctx, listEntries };
+  return { ctx, listEntries, readComponent };
+}
+
+/**
+ * How many times the PATTERN collection was paged.
+ *
+ * The route also pages the component collection through the same stub, so a
+ * raw call count would move whenever the other tier's paging changed — and
+ * these cases are about pattern paging alone.
+ */
+function patternReads(listEntries: { mock: { calls: unknown[][] } }): number {
+  return listEntries.mock.calls.filter(call => call[0] === "patterns").length;
 }
 
 describe("what the library read asks for", () => {
@@ -185,7 +214,7 @@ describe("how much of the library travels", () => {
 
     const library = await readPatternLibrary(ctx);
 
-    expect(listEntries).toHaveBeenCalledTimes(2);
+    expect(patternReads(listEntries)).toBe(2);
     expect(library.items).toHaveLength(LIBRARY_PAGE_SIZE + 1);
     expect(library.meta.truncated).toBe(false);
   });
@@ -199,7 +228,7 @@ describe("how much of the library travels", () => {
 
     const library = await readPatternLibrary(ctx);
 
-    expect(listEntries).toHaveBeenCalledTimes(2);
+    expect(patternReads(listEntries)).toBe(2);
     expect(library.items.map(p => p.id)).toEqual(["real"]);
   });
 
@@ -231,7 +260,7 @@ describe("how much of the library travels", () => {
 
     const library = await readPatternLibrary(ctx);
 
-    expect(listEntries.mock.calls.length).toBeLessThanOrEqual(
+    expect(patternReads(listEntries)).toBeLessThanOrEqual(
       MAX_LIBRARY_PATTERNS / LIBRARY_PAGE_SIZE
     );
     expect(library.items).toHaveLength(0);
@@ -245,7 +274,7 @@ describe("how much of the library travels", () => {
 
     const library = await readPatternLibrary(ctx);
 
-    expect(library.meta).toEqual({ count: 1, truncated: false });
+    expect(library.meta).toMatchObject({ count: 1, truncated: false });
   });
 });
 
@@ -537,5 +566,144 @@ describe("what the route answers is what the palette can offer", () => {
         parentsOf: () => undefined,
       })
     ).toBeUndefined();
+  });
+});
+
+describe("the component tier", () => {
+  function componentRow(id: string, extra: Record<string, unknown> = {}) {
+    return {
+      id,
+      title: `Component ${id}`,
+      category: "Sections",
+      content: { formatVersion: 1, kind: "component", nodes: [] },
+      ...extra,
+    };
+  }
+  const draft = (text: string) => ({
+    formatVersion: 1,
+    kind: "component",
+    nodes: [{ id: "d1", type: "acme/text", version: 1, props: { text } }],
+  });
+
+  it("takes the document from the BY-ID read, not the listing", async () => {
+    // The listing answers with the live row; the by-id read is the only path
+    // to the working draft. A definition built from the listing would render
+    // the author a stale component beside the draft they just saved.
+    const { ctx, readComponent } = contextOver(
+      [],
+      {},
+      {
+        pages: [[componentRow("header", { content: draft("live") })]],
+        byId: { header: { id: "header", content: draft("draft") } },
+      }
+    );
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(readComponent).toHaveBeenCalledWith("components", "header");
+    expect(library.components).toEqual([
+      {
+        id: "header",
+        title: "Component header",
+        category: "Sections",
+        document: draft("draft"),
+      },
+    ]);
+    expect(library.meta.components).toEqual({ count: 1, truncated: false });
+  });
+
+  it("reads through the host's renamed slug", async () => {
+    const { ctx, listEntries, readComponent } = contextOver(
+      [],
+      { components: "site_components" },
+      {
+        pages: [[componentRow("a")]],
+        byId: { a: { id: "a", content: draft("x") } },
+      }
+    );
+    // The stub keys its component queue on the canonical slug, so this case
+    // asserts on what was ASKED rather than on what came back.
+    await readPatternLibrary(ctx);
+
+    expect(
+      listEntries.mock.calls.some(call => call[0] === "site_components")
+    ).toBe(true);
+    expect(
+      readComponent.mock.calls.every(call => call[0] === "site_components")
+    ).toBe(true);
+  });
+
+  it("carries a null document for a row saved without content, and skips nothing else", async () => {
+    // A legal row the panel will skip. Carried as null rather than omitted so
+    // the shape says the read was made and found nothing.
+    const { ctx } = contextOver(
+      [],
+      {},
+      {
+        pages: [[componentRow("empty")]],
+        byId: { empty: { id: "empty", content: null } },
+      }
+    );
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(library.components[0]?.document).toBeNull();
+    expect(library.meta.components.truncated).toBe(false);
+  });
+
+  it("marks the tier CUT when a listed component's by-id read answers nothing", async () => {
+    // The row vanished between the two reads, or the service declined it. A
+    // library missing a definition the author can see in the collection is
+    // not a whole library, and saying so is what stops the panel presenting
+    // it as one.
+    const { ctx } = contextOver(
+      [],
+      {},
+      {
+        pages: [[componentRow("gone"), componentRow("here")]],
+        byId: { here: { id: "here", content: draft("x") } },
+      }
+    );
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(library.components.map(c => c.id)).toEqual(["here"]);
+    expect(library.meta.components.truncated).toBe(true);
+  });
+
+  it("shares ONE byte ceiling with the patterns, and the patterns spend first", async () => {
+    // One response, one ceiling. A pattern tier that used most of it leaves
+    // the component tier the rest — and a component that no longer fits is
+    // reported as a cut tier, not silently dropped.
+    const huge = "x".repeat(MAX_LIBRARY_BYTES - 4_096);
+    const { ctx } = contextOver(
+      [
+        [
+          row("big", {
+            content: { formatVersion: 1, kind: "pattern", nodes: [], huge },
+          }),
+        ],
+      ],
+      {},
+      {
+        pages: [[componentRow("c")]],
+        byId: { c: { id: "c", content: draft("y".repeat(8_192)) } },
+      }
+    );
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(library.items.map(p => p.id)).toEqual(["big"]);
+    expect(library.components).toEqual([]);
+    expect(library.meta.components.truncated).toBe(true);
+  });
+
+  it("answers an empty tier, not a cut one, for a site with no components", async () => {
+    const { ctx } = contextOver([[row("a")]]);
+
+    const library = await readPatternLibrary(ctx);
+
+    expect(library.components).toEqual([]);
+    expect(library.meta.components).toEqual({ count: 0, truncated: false });
   });
 });
