@@ -908,9 +908,12 @@ Each function receives `{ req, id?, data? }` and returns `boolean | Promise<bool
 ### `hooks`
 
 Field-level lifecycle hooks. Each hook is an array of handlers run in order.
-Each phase runs **after** the collection-level hook of the same name; see the
+On a write and on a direct read, each phase runs **after** the collection-level
+hook of the same name; see the
 [execution order](/docs/configuration/collections#execution-order) for how the
-two levels interleave.
+two levels interleave. A row reached through relationship expansion runs only
+the target's field-level `afterRead`, with no collection-level `afterRead`
+before it.
 
 | Hook | When it runs |
 |---|---|
@@ -919,16 +922,19 @@ two levels interleave.
 | `afterChange` | After the database write. |
 | `afterRead` | After reading from the database. Can transform the returned value. |
 
-Every handler receives its own `value` and, as `data`, **the record at its own
-nesting level**: the whole document for a top-level field, the containing row
-for a field inside a group or a repeater. A `beforeChange` handler can read and
-change sibling fields at that level, and no later hook will put them back.
-Return the value you want stored; touch siblings only when that is the intent.
+Every handler receives its own `value` and, as `data`, **what was submitted at
+its own nesting level**: on a create the submitted document, on an update the
+submitted patch rather than the stored row, and for a field inside a group or a
+repeater the containing row. A `beforeChange` handler can read and change
+siblings at that level. No collection-level phase runs after it, but a sibling's
+own hook registered later in the same phase still can. Return the value you
+want stored; touch siblings only when that is the intent.
 
 A field's hooks run only when that field is present in the data. An update that
 omits it, or an earlier hook that deletes the key, skips them. And core still
-normalises the record after the last hook: slugs are re-sanitised, passwords
-hashed, relationship and upload values reduced to ids. See the
+normalises the record after the last hook: passwords are hashed and relationship
+and upload values reduced to ids on collections and Singles alike, and a
+collection's `slug` is re-sanitised, which a Single's is not. See the
 [execution order](/docs/configuration/collections#execution-order) for what
 runs where.
 
