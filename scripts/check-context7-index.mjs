@@ -112,13 +112,21 @@ function namedByDefaults(path) {
 }
 
 /**
- * Whether a file can witness a rule that excludes a set: it must be a file the index would
- * hold if the rule did not take. A root file is held whatever `folders` says, a hidden
- * path may be skipped unasked, and a file Context7's defaults name may be dropped by them,
- * so none of the three can show that the rule is what kept it out.
+ * How well a file witnesses a rule that excludes a set, lower first.
+ *
+ * The best witness is a file only the rule keeps out: absent, it shows the rule took. A
+ * hidden path may be skipped unasked and a file Context7's defaults name may be dropped by
+ * them, so such a file is asked only when the set holds nothing better; absent, it still
+ * shows the set is out one way or another, and retrievable, it still shows the rule did
+ * not take. A root file is held whatever `folders` says, so under that rule it can only be
+ * retrievable, and naming it in `excludeFiles` is the fix; it never witnesses that rule.
  */
-function canWitness(path) {
-  return !isRoot(path) && !isHidden(path) && !namedByDefaults(path);
+const PREFERRED = 0;
+const FALLBACK = 1;
+const NEVER = null;
+
+function witnessRank(path) {
+  return isHidden(path) || namedByDefaults(path) ? FALLBACK : PREFERRED;
 }
 
 /**
@@ -138,7 +146,10 @@ const EXCLUSION_RULES = [
     applies: (path, config) =>
       listField(config, "excludeFiles").includes(basename(path)),
     indexed: path => `${path} is in excludeFiles and was indexed anyway`,
-    set: path => (isHidden(path) ? null : `excludeFiles entry ${basename(path)}`),
+    set: path => `excludeFiles entry ${basename(path)}`,
+    // The entry names the file, so the root one is the witness and a file of
+    // the same name elsewhere stands in only when there is no root one.
+    rank: path => (isRoot(path) ? PREFERRED : witnessRank(path)),
   },
   {
     applies: (path, config) =>
@@ -146,9 +157,8 @@ const EXCLUSION_RULES = [
     indexed: path =>
       `${path} is under an excludeFolders entry and was indexed anyway`,
     set: (path, config) =>
-      canWitness(path)
-        ? `excludeFolders entry ${folderOf(path, listField(config, "excludeFolders"))}`
-        : null,
+      `excludeFolders entry ${folderOf(path, listField(config, "excludeFolders"))}`,
+    rank: witnessRank,
   },
   {
     applies: (path, config) =>
@@ -156,9 +166,8 @@ const EXCLUSION_RULES = [
     indexed: (path, config) =>
       `${path} is outside folders ${JSON.stringify(listField(config, "folders"))} and is not the README, and was indexed`,
     set: (path, config) =>
-      canWitness(path)
-        ? `folders ${JSON.stringify(listField(config, "folders"))}`
-        : null,
+      `folders ${JSON.stringify(listField(config, "folders"))}`,
+    rank: path => (isRoot(path) ? NEVER : witnessRank(path)),
   },
 ];
 
@@ -344,24 +353,29 @@ export function markerFor(corpus, name) {
  * One tracked file for each set the configuration excludes, with a sentence of its own.
  *
  * A rule takes for its whole set or for none of it, so one file answers for the set, where
- * the sample of citations can miss a small folder entirely. The files are taken in git's
- * order and the first with a sentence of its own is the witness; a set whose files all
- * share every sentence cannot be probed and says so rather than passing. A set with no
- * tracked file excludes nothing, and one with no file that could witness it (all root,
- * hidden, or named by Context7's defaults) offers no probe that could fail; neither is
- * probed.
+ * the sample of citations can miss a small folder entirely. The files are taken by rank,
+ * then in git's order, and the first with a sentence of its own is the witness; a set whose
+ * files all share every sentence cannot be probed and says so rather than passing. A set
+ * with no tracked file excludes nothing, and one whose files can never witness it (root
+ * files under the folders rule) is the citation rule's business; neither is probed.
  */
 export function witnesses(corpus, config) {
   const sets = new Map();
   for (const name of corpus.keys()) {
-    const set = excludingRule(name, config)?.set(name, config);
-    if (!set) continue;
+    const rule = excludingRule(name, config);
+    const rank = rule?.rank(name);
+    if (!rule || rank === NEVER) continue;
+    const set = rule.set(name, config);
     if (!sets.has(set)) sets.set(set, []);
-    sets.get(set).push(name);
+    sets.get(set).push({ name, rank });
   }
-  return [...sets].map(([set, names]) => ({
+  return [...sets].map(([set, files]) => ({
     set,
-    ...witnessOf(corpus, set, names),
+    ...witnessOf(
+      corpus,
+      set,
+      files.sort((a, b) => a.rank - b.rank).map(file => file.name)
+    ),
   }));
 }
 

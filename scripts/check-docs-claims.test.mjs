@@ -304,6 +304,28 @@ describe("context7", () => {
     expect(checks).not.toContain("context7-exclusion");
   });
 
+  it("refuses an exclusion field that is not a list of strings rather than reading it as empty", async () => {
+    for (const [field, value] of [
+      ["excludeFiles", [42]],
+      ["excludeFolders", "docs/internal"],
+      ["folders", { docs: true }],
+    ]) {
+      const findings = await findingsFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": JSON.stringify({
+          projectTitle: "Nextly",
+          description: SENTENCE,
+          folders: ["docs"],
+          [field]: value,
+        }),
+      });
+      expect(
+        findings.filter(f => f.check === "context7-exclusion").map(f => f.message),
+        field
+      ).toEqual([expect.stringContaining(`${field} must be a list of strings`)]);
+    }
+  });
+
   it("fires on an excludeFiles entry written as a path, which excludes nothing", async () => {
     // Context7 matches the field by filename, and either separator makes a
     // path: a backslash is not a filename either. The entry beside them is
@@ -1244,6 +1266,19 @@ describe("internal-docs-link", () => {
     expect(
       findings.filter(f => f.check === "internal-docs-link").map(f => `${f.line} ${f.message.split(";")[0]}`)
     ).toEqual(["3 embeds ./missing.png as a file path", "3 links to ../guide.mdx as a file path"]);
+  });
+
+  it("reads past an element named like an Object.prototype key, and a page that does not parse yields nothing", async () => {
+    // `<toString>` is an intrinsic element with a name every plain object
+    // answers `in` for; the lookup must not find a destination carrier there,
+    // and must not throw inside the compiler, where the catch would read a
+    // fault of this scan as the page not compiling and pass every link in it.
+    const findings = await findingsFor({
+      "docs/a.mdx": "<toString>x</toString> <constructor>y</constructor>\n\nSee [gone](/docs/nope).\n",
+      "docs/b.mdx": "<Callout>\n\n1. one\n   </Callout>\n\nSee [gone](/docs/nope).\n",
+    });
+    const links = findings.filter(f => f.check === "internal-docs-link");
+    expect(links.map(f => f.file)).toEqual(["docs/a.mdx"]);
   });
 
   it("keeps reading links past frontmatter that is not YAML, in a README as in a page", async () => {

@@ -136,10 +136,16 @@ const context7Finding = (check, message) => ({
  * nothing; and the index verifier, `check-context7-index`, reads `excludeFolders` as
  * plain paths, so a pattern there is a rule it could never witness. What is accepted is
  * named rather than what is refused: a list of the metacharacters a pattern may use has
- * no end, and the names in this repository are plain.
+ * no end, and the names in this repository are plain. A field that is present and not a
+ * list of strings is refused first: normalised to an empty list it would read as "nothing
+ * excluded" here while the operator meant the opposite.
  */
-const listOf = value =>
-  Array.isArray(value) ? value.filter(entry => typeof entry === "string") : [];
+const LIST_FIELDS = ["folders", "excludeFolders", "excludeFiles"];
+const isStringList = value =>
+  Array.isArray(value) && value.every(entry => typeof entry === "string");
+const malformedLists = config =>
+  LIST_FIELDS.filter(name => name in config && !isStringList(config[name]));
+const listOf = value => (isStringList(value) ? value : []);
 /** A filename as Context7 matches one, and as git spells one segment of a path. */
 const LITERAL_NAME = /^[A-Za-z0-9._-]+$/;
 const isLiteralName = entry =>
@@ -192,6 +198,14 @@ const CONTEXT7_RULES = [
       context7Finding(
         "context7-description",
         `description differs from packages/${CORE_PACKAGE}/package.json; one sentence says what this is`
+      ),
+  ],
+  [
+    config => malformedLists(config).length > 0,
+    config =>
+      context7Finding(
+        "context7-exclusion",
+        `${malformedLists(config).join(", ")} must be a list of strings; read as empty, the field would exclude nothing`
       ),
   ],
   [
@@ -545,13 +559,17 @@ const DESTINATION_NODES = new Set(["link", "image", "definition"]);
  * each by the attribute that carries it. Only a literal string is read; an expression is a
  * value the page computes, which a scan of the source cannot know.
  */
-const JSX_DESTINATIONS = { img: ["src", "image"], a: ["href", "link"] };
+const JSX_DESTINATIONS = new Map([
+  ["img", ["src", "image"]],
+  ["a", ["href", "link"]],
+]);
 const JSX_NODES = new Set(["mdxJsxFlowElement", "mdxJsxTextElement"]);
 
 /** The destination a JSX element carries, as `{ url, type }`, or `null`. */
 function jsxDestination(node) {
-  if (!JSX_NODES.has(node.type) || !(node.name in JSX_DESTINATIONS)) return null;
-  const [attribute, type] = JSX_DESTINATIONS[node.name];
+  const carried = JSX_NODES.has(node.type) ? JSX_DESTINATIONS.get(node.name) : undefined;
+  if (!carried) return null;
+  const [attribute, type] = carried;
   const found = (node.attributes ?? []).find(
     candidate => candidate.type === "mdxJsxAttribute" && candidate.name === attribute
   );
@@ -624,10 +642,23 @@ async function linkDestinations(text, mdx) {
   const { body, skipped } = frontmatterOrMarkdown(text);
   try {
     await compile(body, { format: mdx ? "mdx" : "md", remarkPlugins: [collect(skipped)] });
-  } catch {
+  } catch (error) {
+    // A parse failure is the compiler's, carries its position, and is the
+    // compile check's to report. Anything else is this scan's own failure, and
+    // read as "no destinations" it would pass every link on the page.
+    if (!isParseFailure(error)) throw error;
     return [];
   }
   return links;
+}
+
+/**
+ * Whether a compile error is the parser refusing the page, as against a fault in a plugin.
+ * The parser's message carries the position and a `reason`, which is what the compile
+ * check reports; its `name` is the position, so it is not the thing to test.
+ */
+function isParseFailure(error) {
+  return typeof error?.reason === "string" && "line" in error;
 }
 
 /** The text with its frontmatter taken off, or the whole text when the block is not YAML. */

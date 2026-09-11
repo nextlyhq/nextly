@@ -298,12 +298,21 @@ describe("witnesses", () => {
   };
 
   it("chooses one file per excluded set, the first in git's order with a sentence of its own", () => {
-    expect(witnesses(files, config)).toEqual([
+    const bySet = (a, b) => a.set.localeCompare(b.set);
+    expect(witnesses(files, config).sort(bySet)).toEqual([
       // The root file witnesses the name, before the package's copy.
       {
         set: "excludeFiles entry AGENTS.md",
         name: "AGENTS.md",
         marker: "The root agent file.",
+      },
+      // `docs/archive` holds only a file Context7's defaults may drop, so that
+      // file stands in: absent, the folder is out one way or another; present,
+      // the entry did not take.
+      {
+        set: "excludeFolders entry docs/archive",
+        name: "docs/archive/old.mdx",
+        marker: "The archived page.",
       },
       // `shared.mdx` has nothing of its own, so the next file of the folder witnesses it.
       {
@@ -321,17 +330,16 @@ describe("witnesses", () => {
         name: "packages/nextly/README.md",
         marker: "The package README, outside the docs.",
       },
-    ]);
+    ].sort(bySet));
   });
 
-  it("never lets a root file, a hidden path or a default-excluded file witness the folders rule", () => {
-    // Context7 holds root Markdown whatever `folders` says, may skip a hidden
-    // path unasked, and may drop a CHANGELOG or a `legacy` folder on its own:
-    // none of those absences could show the rule took. All four sort before
-    // the package README, so the order alone would pick one of them.
+  it("prefers a file only the rule keeps out over one a crawler might drop anyway", () => {
+    // Context7 may skip a hidden path unasked and may drop a CHANGELOG or a
+    // `legacy` folder on its own, so such a file's absence could be their
+    // doing. All three sort before the package README, so the order alone
+    // would pick one of them; the rank does not.
     const names = witnesses(files, config).map(witness => witness.name);
     for (const name of [
-      "CHANGELOG.md",
       ".changeset/note.md",
       "apps/playground/CHANGELOG.md",
       "packages/legacy/README.md",
@@ -340,13 +348,25 @@ describe("witnesses", () => {
     }
   });
 
-  it("probes nothing for an excluded folder that holds no tracked file, or none that could witness", () => {
-    // `docs/absent` excludes nothing. `docs/archive` is a folder Context7 drops
-    // on its own, so its file's absence could be the defaults' doing and no
-    // probe of it could show the entry took.
-    const sets = witnesses(files, config).map(witness => witness.set);
-    expect(sets).not.toContain("excludeFolders entry docs/absent");
-    expect(sets).not.toContain("excludeFolders entry docs/archive");
+  it("never lets a root file witness the folders rule, and probes nothing when only root files are outside", () => {
+    // Context7 holds root Markdown whatever `folders` says, so such a file can
+    // only ever be retrievable, and naming it in excludeFiles is the fix. It
+    // sorts first, so the order alone would pick it.
+    expect(witnesses(files, config).map(witness => witness.name)).not.toContain(
+      "CHANGELOG.md"
+    );
+    const onlyRoot = new Map([
+      ["README.md", "# Nextly\n\nThe README, kept.\n"],
+      ["CHANGELOG.md", "# Changelog\n\nA root file nothing names.\n"],
+      ["docs/index.mdx", "# Overview\n\nA docs page, kept.\n"],
+    ]);
+    expect(witnesses(onlyRoot, { folders: ["docs"] })).toEqual([]);
+  });
+
+  it("probes nothing for an excluded folder that holds no tracked file", () => {
+    expect(
+      witnesses(files, config).map(witness => witness.set)
+    ).not.toContain("excludeFolders entry docs/absent");
   });
 
   it("stops rather than passes when a set offers nothing to ask for", () => {
