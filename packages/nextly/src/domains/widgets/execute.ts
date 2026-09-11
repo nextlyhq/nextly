@@ -304,6 +304,23 @@ const SINGLE_QUERY_FIELD_USE: Record<
  * document -- a draft-only single asked for `published` -- is an empty list,
  * not an error: the card says "Nothing yet", which is true.
  */
+/**
+ * Whether `error` is the singles read saying THIS single answers no document
+ * -- the one `NOT_FOUND` that means an empty list rather than a failed card.
+ *
+ * Read off the `publicData.single` the read attaches to its own refusal, and
+ * matched against the slug this query named. A `NOT_FOUND` raised inside the
+ * read for something else -- a `beforeRead` hook, a related document -- carries
+ * no such claim, or claims another single, and stays the failure it is: the
+ * Direct API surfaces it, and a card drawn over it would say "Nothing yet"
+ * about a document that exists.
+ */
+function singleAnswersNoDocument(error: unknown, slug: string): boolean {
+  if (!NextlyError.is(error) || error.code !== "NOT_FOUND") return false;
+  const about = error.publicData;
+  return about !== undefined && "single" in about && about.single === slug;
+}
+
 async function runSingle(
   slug: string,
   query: WidgetQuery,
@@ -326,7 +343,7 @@ async function runSingle(
       ...(query.status ? { status: query.status } : {}),
     });
   } catch (error) {
-    if (!NextlyError.is(error) || error.code !== "NOT_FOUND") throw error;
+    if (!singleAnswersNoDocument(error, slug)) throw error;
     document = undefined;
   }
   const items =

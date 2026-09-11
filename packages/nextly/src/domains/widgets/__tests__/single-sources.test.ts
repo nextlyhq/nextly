@@ -17,7 +17,12 @@ vi.mock("../../../direct-api/nextly", () => ({
 vi.mock("../../../di/container", () => ({ container: { get: vi.fn() } }));
 
 import { container } from "../../../di/container";
+import { createErrorFromSingleResult } from "../../../direct-api/namespaces/helpers";
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  buildSingleErrorResult,
+  singleAbsentResult,
+} from "../../singles/services/single-utils";
 import { registerBuiltInSingleSources } from "../built-in-sources";
 import { generatedCollectionSlug, singleWidgets } from "../collection-widgets";
 import { setDeferredEntities } from "../deferred-entities";
@@ -142,12 +147,15 @@ describe("what a single executes", () => {
     );
   });
 
-  it("answers an empty list, not a failure, when no document answers the read", async () => {
+  it("answers an empty list, not a failure, when the read says THIS single has no document", async () => {
     // A draft-only single asked for its published state names no document,
-    // and the read says so with a not-found. The card says "Nothing yet",
-    // which is true; a failure would say something is broken.
+    // and the read says so with its own not-found, naming the single. The
+    // card says "Nothing yet", which is true; a failure would say something
+    // is broken.
+    // The read's own refusal, built the way `findSingle` builds it: the
+    // service's envelope through the Direct API's converter.
     findSingle.mockRejectedValue(
-      NextlyError.notFound({ logContext: { entity: "Single" } })
+      createErrorFromSingleResult(singleAbsentResult("site-settings"))
     );
     const q = validateWidgetQuery({
       source: "single:site-settings",
@@ -159,6 +167,42 @@ describe("what a single executes", () => {
     expect(await executeWidgetQuery(q, caller)).toEqual({
       op: "list",
       items: [],
+    });
+  });
+
+  it("fails the query on a not-found raised for something ELSE inside the read", async () => {
+    // 🔴 A `beforeRead` hook or a related read can throw a not-found of its
+    // own, and it reaches the executor with the same code. Read as "no
+    // document", it drew "Nothing yet" over a single that exists and whose
+    // read failed -- the Direct API caller sees the failure, and so must the
+    // card. Only the read's own refusal, naming this single, is an empty list.
+    // A hook's throw, on the path the service and the Direct API give it:
+    // caught into an envelope, then rebuilt for the caller.
+    findSingle.mockRejectedValue(
+      createErrorFromSingleResult(
+        buildSingleErrorResult(
+          NextlyError.notFound({ message: "Author profile not found." }),
+          "Failed to get Single document"
+        )
+      )
+    );
+    const q = validateWidgetQuery({
+      source: "single:site-settings",
+      op: "list",
+      select: ["siteName"],
+    });
+
+    await expect(executeWidgetQuery(q, caller)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+
+    // And the read's own refusal of ANOTHER single -- a nested read's -- is
+    // not this single's absence either.
+    findSingle.mockRejectedValue(
+      createErrorFromSingleResult(singleAbsentResult("author-profile"))
+    );
+    await expect(executeWidgetQuery(q, caller)).rejects.toMatchObject({
+      code: "NOT_FOUND",
     });
   });
 

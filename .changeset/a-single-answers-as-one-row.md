@@ -41,10 +41,24 @@ or a bucketing over it is refused by name rather than answered.
 The dashboard offers one status card per single a reader may read -- whether
 it is published, and when it last changed, linking to the single -- the way it
 offers cards per collection: never placed, only offered. The `singles:present`
-condition now reads the same source registry the collections condition does,
-so the two halves derive from one place. A single whose DDL a reload refused
-is withheld from the sources the way a collection's is, from one shared store
-of deferred entities.
+and `collections:present` conditions now answer from the registries' own
+readable listing -- what the management cards they gate list -- so a
+collection or single whose migration is still pending keeps its card on the
+dashboard instead of disappearing exactly when it needs attention. A single
+whose DDL a reload refused is withheld from the widget sources the way a
+collection's is, from one shared store of deferred entities.
+
+A Single's not-found answer now says which Single it is about: the error's
+`data` carries `{ single: <slug> }`, the slug the caller named. A draft-only
+Single and a nonexistent one still answer identically.
+
+A plugin can no longer contribute a collection, single or field group under a
+slug another kind already holds. Slugs are one namespace across kinds -- as
+`defineConfig` already enforced for an app's own config -- and before, such a
+boot succeeded while the registry silently refused one of the two at sync, so
+an app's single could vanish behind a plugin's collection of the same slug.
+The boot now fails with `NEXTLY_SCHEMA_SLUG_COLLISION`, naming both owners in
+the log.
 
 Under `next dev`, a single whose fields you edit keeps its source and its
 status card: the reload re-marks an edited single's migration as applied from

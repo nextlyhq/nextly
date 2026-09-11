@@ -99,6 +99,28 @@ describe("a single: query against a real instance", () => {
     ]);
   });
 
+  it("answers an empty list for a draft-only single asked for its published state", async () => {
+    // The read's own refusal, through the real service and the real
+    // converter: the document exists as a draft, the published view holds
+    // nothing, and the card says so as an empty list rather than as a
+    // failure -- while a refusal raised for anything else would fail it.
+    current = await boot();
+
+    const result = await executeWidgetQuery(
+      validateWidgetQuery({
+        source: `single:${SETTINGS}`,
+        op: "list",
+        select: ["siteName"],
+        status: "published",
+      }),
+      editor
+    );
+
+    expect(result.op).toBe("list");
+    if (result.op !== "list") return;
+    expect(result.items).toEqual([]);
+  });
+
   it("refuses a reader the single's code rule refuses", async () => {
     // The security property, observed rather than restated: the read path
     // evaluates the rule, and the executor adds nothing that could get past it.

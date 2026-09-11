@@ -1,14 +1,23 @@
 /**
  * What content THIS reader can see, asked once and shared.
  *
- * Three callers ask a version of this question — the `content:empty` and
- * `collections:present` conditions and the onboarding steps — and they must
- * not answer it twice. A second
- * implementation would agree on the day it was written and drift afterwards,
- * silently, because both would look correct in isolation: one counting drafts
- * and the other not, or one reading the source registry and the other the
- * collections registry, produces a dashboard that offers an onboarding card
- * while telling the reader their install has content.
+ * Two questions, and they are kept apart on purpose. Which collections and
+ * singles the reader HAS -- what the `collections:present` and
+ * `singles:present` conditions gate the management cards on, and what the
+ * onboarding steps tick -- is the registries' own readable listing, the same
+ * one the list endpoints scope their rows by, so a card and the condition that
+ * offers it describe one set. Which of those a widget may QUERY is narrower:
+ * a collection whose stored shape is known to be ahead of its table has no
+ * source, and a count over it would throw. The content question walks only
+ * the second set, so an install whose one collection is mid-migration is told
+ * it has a collection and no content, rather than nothing at all.
+ *
+ * Each question has one implementation here because three callers ask them
+ * -- the conditions, the onboarding steps and the dashboard's onboarding
+ * endpoint -- and a second copy would agree on the day it was written and
+ * drift afterwards: one counting drafts and the other not produces a dashboard
+ * that offers an onboarding card while telling the reader their install has
+ * content.
  *
  * Its own module rather than a helper inside either caller, because the two
  * import each other's neighbours: the condition evaluator names the onboarding
@@ -18,13 +27,11 @@
  * @module domains/widgets/reader-content
  */
 
-import {
-  readableEntities,
-  readAccessCaller,
-} from "../../auth/entity-read-access";
+import { readAccessCaller } from "../../auth/entity-read-access";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
+import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
 
@@ -52,53 +59,57 @@ function readArgs(caller: ReadCaller) {
 /**
  * The collections this reader may read, by slug.
  *
- * Taken from the WIDGET SOURCE registry rather than the collections registry
- * directly. That registry excludes a collection whose stored metadata is known
- * to be ahead of its table — a transient reload state — so such a collection is
- * not counted here.
- *
- * Accepted, because the alternative is worse in the case this exists for.
- * Reading straight from the collections registry would query tables that may
- * not exist yet; that count throws, the condition goes unanswered, and an
- * unanswered condition HIDES its widget — so the onboarding card would
- * disappear on exactly the fresh install it is meant to greet.
- *
- * Note what is NOT a gap: a `pending` migration status does not drop a
- * collection. The source builder treats that label as a fast path only and asks
- * the database whether the table exists when the label declines.
+ * 🔴 The REGISTRY'S listing, permission-filtered -- `readableSlugAllowlist`,
+ * the allowlist the collections list endpoint scopes its rows by -- and not
+ * the widget source registry. The sources withhold a collection whose stored
+ * metadata is known to be ahead of its table, and one whose migration label
+ * declines to claim the table at all; derived from them, this answered "no
+ * collections" for an install whose one collection sat `pending` or `failed`,
+ * and the management card that would have listed that collection -- the one
+ * place a reader could see it needed attention -- was withheld with it. A
+ * card that lists registry rows is gated on registry rows.
  */
 export async function readableCollectionSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  const slugs = listSources()
-    .filter(source => sourceKindFromId(source.id) === "collection")
-    .map(source => sourceTarget(source.id));
-
-  // Asked once for the whole set rather than per collection: a permission
-  // decision resolves a session caller through a per-user TTL cache, so asking
-  // separately is one database read per collection for one answer.
-  const readable = await readableEntities(slugs, readAccessCaller(caller));
-  return slugs.filter(slug => readable.has(slug));
+  return (
+    (await readableSlugAllowlist(readAccessCaller(caller), "collection")) ?? []
+  );
 }
 
 /**
  * The singles this reader may read, by slug.
  *
- * The same derivation as {@link readableCollectionSlugs}, from the same
- * registry: a `single:` source is published for every single whose stored
- * metadata is not known to be ahead of its table, so a single the source
- * builder withheld is not counted here either, and the singles card and the
- * cards derived per single agree about which singles exist.
+ * The same listing as {@link readableCollectionSlugs}, of the other registry,
+ * for the same reason: the singles card lists what the singles list endpoint
+ * answers, and this is the allowlist that endpoint scopes by.
  */
 export async function readableSingleSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  const slugs = listSources()
-    .filter(source => sourceKindFromId(source.id) === "single")
-    .map(source => sourceTarget(source.id));
-  // The same batched decision as the collections, for the same reason.
-  const readable = await readableEntities(slugs, readAccessCaller(caller));
-  return slugs.filter(slug => readable.has(slug));
+  return (
+    (await readableSlugAllowlist(readAccessCaller(caller), "single")) ?? []
+  );
+}
+
+/**
+ * Of the reader's collections, the ones a widget may QUERY.
+ *
+ * A published `collection:` source is what says a collection's stored shape is
+ * not known to be ahead of its table: the source builder withholds one whose
+ * DDL a reload refused, and one whose migration label declines to claim the
+ * table. A count over a collection outside this set may throw -- the table
+ * can be absent -- and a condition that throws goes unanswered, which HIDES
+ * its widget; so the walk below stays inside it, and a fresh install whose one
+ * collection is mid-migration keeps its onboarding card.
+ */
+function queryableCollectionSlugs(readable: readonly string[]): string[] {
+  const published = new Set(
+    listSources()
+      .filter(source => sourceKindFromId(source.id) === "collection")
+      .map(source => sourceTarget(source.id))
+  );
+  return readable.filter(slug => published.has(slug));
 }
 
 /**
@@ -129,7 +140,9 @@ export async function readerHasContent(
    */
   resolved?: readonly string[]
 ): Promise<boolean> {
-  const slugs = resolved ?? (await readableCollectionSlugs(caller));
+  const slugs = queryableCollectionSlugs(
+    resolved ?? (await readableCollectionSlugs(caller))
+  );
 
   for (const slug of slugs) {
     const { total } = await requireNextly().count({

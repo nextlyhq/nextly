@@ -10,8 +10,8 @@
  * Slug collisions that involve a plugin-contributed entity are a fail-fast boot
  * error. Pre-existing code-vs-code duplicates are left untouched so the
  * plugin-free path is byte-for-byte unchanged (decisions doc G2). Collections,
- * singles, and components are independent namespaces (distinct table prefixes),
- * so a collection and a single may share a slug.
+ * singles and components share ONE slug namespace, across kinds as well as
+ * within one: see {@link assertOneKindPerSlug}.
  *
  * Called at the same post-`setup` seam by both the runtime boot
  * (`di/register.ts`) and the CLI (`cli/utils/config-loader.ts`), which is what
@@ -379,12 +379,83 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
   };
 }
 
+/** One entity's claim on the slug namespace. */
+interface SlugClaim {
+  slug: string;
+  kind: EntityKind;
+  /** `code` for the config's own entities, else the contributing plugin. */
+  owner: string;
+}
+
+/**
+ * Every claim on the slug namespace, in the order a collision reads naturally:
+ * the config's own entities first, then each plugin's in resolved order --
+ * the order {@link mergeKind} reports one kind in.
+ */
+function slugClaims(
+  config: NextlyServiceConfig,
+  renamed: ReadonlyArray<{ owner: string; contributes: RenamedContributes }>
+): SlugClaim[] {
+  const ofKind = (
+    kind: EntityKind,
+    owner: string,
+    entities: readonly Slugged[] | undefined
+  ): SlugClaim[] =>
+    (entities ?? []).map(entity => ({ slug: entity.slug, kind, owner }));
+  return [
+    ...ofKind("collection", "code", config.collections),
+    ...ofKind("single", "code", config.singles),
+    ...ofKind("component", "code", config.fieldGroups),
+    ...renamed.flatMap(({ owner, contributes }) => [
+      ...ofKind("collection", owner, contributes.collections),
+      ...ofKind("single", owner, contributes.singles),
+      ...ofKind("component", owner, contributes.fieldGroups),
+    ]),
+  ];
+}
+
+/**
+ * One slug, one kind, wherever a plugin is involved.
+ *
+ * 🔴 Collections, singles and components are ONE slug namespace, and the rest
+ * of the platform reads them that way: `defineConfig` refuses a slug two kinds
+ * share in the app's own config, the registries refuse to register a slug the
+ * other kind already holds, a permission is named `read-<slug>` for either
+ * kind, code-defined access is resolved by the slug alone, and an `extend`
+ * target is matched by slug across all three. {@link mergeKind} checks within
+ * a kind, so a plugin contributing a collection under an app single's slug
+ * passed this fold -- and at sync the registry refused the single, the
+ * install booted without it, and its reads answered not-found under the
+ * collection's rule.
+ *
+ * The same scope as `mergeKind`: a clash between two of the config's own
+ * entities is `defineConfig`'s to report, and is left alone here.
+ */
+function assertOneKindPerSlug(claims: readonly SlugClaim[]): void {
+  const first = new Map<string, SlugClaim>();
+  for (const claim of claims) {
+    const earlier = first.get(claim.slug);
+    if (earlier === undefined) {
+      first.set(claim.slug, claim);
+      continue;
+    }
+    // One kind twice is `mergeKind`'s to report; code twice is `defineConfig`'s.
+    if (earlier.kind === claim.kind) continue;
+    if (earlier.owner === "code" && claim.owner === "code") continue;
+    throw slugCollisionError(claim.kind, claim.slug, [
+      `${earlier.owner} (${earlier.kind})`,
+      `${claim.owner} (${claim.kind})`,
+    ]);
+  }
+}
+
 /**
  * Apply each plugin's `renameMap`, then fold the resolved
  * collections/singles/components into the config arrays (config-first, then
  * topo order). Pure. Throws `NEXTLY_SCHEMA_SLUG_COLLISION` on a plugin-involved
- * collision. Shared by the throwing and deferring folds below so both
- * agree on the merged entity set before `extend` is applied.
+ * collision, within a kind or across kinds. Shared by the throwing and
+ * deferring folds below so both agree on the merged entity set before `extend`
+ * is applied.
  */
 function mergeRenamed(
   config: NextlyServiceConfig,
@@ -394,6 +465,7 @@ function mergeRenamed(
     owner: p.name,
     contributes: renamePluginContributes(p),
   }));
+  assertOneKindPerSlug(slugClaims(config, renamed));
   return {
     collections: mergeKind(
       "collection",
