@@ -576,6 +576,31 @@ export async function listEffectivePermissions(
 }
 
 /**
+ * How many times the RBAC rows behind every cache here have been invalidated.
+ *
+ * A DERIVED cache cannot be found from this module. An API key's grants are
+ * resolved through these same rows and cached for five minutes of their own,
+ * keyed by key id, in `domains/auth/services/api-key-service.ts`; that module
+ * already imports this one, so it cannot be imported back without a cycle, and
+ * this module has no way to learn which keys a role reaches.
+ *
+ * So the direction is reversed: this counts, and the deriver checks. An entry
+ * resolved under an older count is not served, which retires every derived
+ * cache on any role or user change without either module enumerating the
+ * other's keys, and covers a path written later without it having to remember.
+ *
+ * Blunt on purpose. A role change is rare and re-resolving a key's grants is a
+ * couple of indexed queries; a stale grant is the whole catalogue in the hands
+ * of somebody who no longer holds the role that granted it.
+ */
+let rbacRevisionCounter = 0;
+
+/** The current count; see {@link invalidatePermissionCache}. */
+export function rbacRevision(): number {
+  return rbacRevisionCounter;
+}
+
+/**
  * The super-admin answer, cached per user.
  *
  * Declared here rather than beside `isSuperAdmin` because
@@ -628,6 +653,9 @@ export async function invalidatePermissionCache(
   // role change is rare; guessing at the subset is how a demotion survives.
   if (userId) superAdminCache.delete(userId);
   if (roleId) superAdminCache.clear();
+
+  // Anything derived from these rows is stale from here, whoever holds it.
+  rbacRevisionCounter += 1;
 
   // Invalidate in-memory caches (Tier 1)
   if (userId) {

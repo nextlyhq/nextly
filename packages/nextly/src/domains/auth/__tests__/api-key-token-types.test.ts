@@ -17,12 +17,22 @@ import {
 // We must mock them so tests do not depend on the runtime database connection.
 // The path the subject imports: `api-key-service` reads `listRoleSlugsForUser`
 // and `isSuperAdmin` from `services/lib/permissions`, and a factory registered
-// against any other specifier leaves the real ones in place. `isSuperAdmin` is
+// against any other specifier leaves the real ones in place.
+//
+// DERIVED from the real module rather than written as a closed literal: the
+// subject imports more from it than these two, and a literal answers
+// `undefined` for whatever it does not name. That has now broken this file
+// twice, once when the facade began resolving roles and once when the key cache
+// began reading the RBAC revision, and in both cases the failure was in a suite
+// that had nothing to do with the change. `isSuperAdmin` is
 // the canonical resolver (inheritance and its cache are proven in its own
 // suite, and end to end in `plugin-route-key-scope.integration.test.ts`); here
 // it answers by id, so what this suite proves is what the service does with
 // the answer.
-vi.mock("../../../services/lib/permissions", () => ({
+vi.mock("../../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../services/lib/permissions")
+  >()),
   isSuperAdmin: vi.fn(),
   listRoleSlugsForUser: vi.fn(),
 }));

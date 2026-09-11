@@ -69,6 +69,7 @@ import { BaseService } from "../../../services/base-service";
 import {
   isSuperAdmin,
   listRoleSlugsForUser,
+  rbacRevision,
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
@@ -264,7 +265,24 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
 // an ApiKeyService instance — same pattern as services/lib/permissions.ts.
 const _apiKeyPermissionsCache = new Map<
   string,
-  { grants: readonly GrantedPermission[]; cachedAt: number }
+  {
+    grants: readonly GrantedPermission[];
+    cachedAt: number;
+    /**
+     * The RBAC revision these grants were resolved under.
+     *
+     * Time alone is not enough. These grants are DERIVED from the same role and
+     * permission rows the RBAC caches hold, and nothing evicted them when a
+     * ROLE changed: `UserRoleService` evicts on assigning or unassigning a role
+     * to a user, and the role services only call `invalidatePermissionCache`,
+     * which knows nothing about keys. So revoking a role's inherited
+     * `super-admin` left a key holding the whole catalogue for the rest of this
+     * TTL, and changing a role's permissions left a role-based key holding the
+     * old set, which the comment in `UserRoleService` said was handled
+     * elsewhere and was not.
+     */
+    revision: number;
+  }
 >();
 const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -733,7 +751,11 @@ export class ApiKeyService extends BaseService {
     const now = Date.now();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
-    if (cached && now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS) {
+    if (
+      cached &&
+      now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS &&
+      cached.revision === rbacRevision()
+    ) {
       return cached.grants;
     }
 
@@ -783,7 +805,11 @@ export class ApiKeyService extends BaseService {
     const grants = Object.freeze(
       dedupeGrants(rows).map(row => Object.freeze(row))
     );
-    _apiKeyPermissionsCache.set(cacheKey, { grants, cachedAt: now });
+    _apiKeyPermissionsCache.set(cacheKey, {
+      grants,
+      cachedAt: now,
+      revision: rbacRevision(),
+    });
     return grants;
   }
 

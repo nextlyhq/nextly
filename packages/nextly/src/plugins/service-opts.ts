@@ -10,7 +10,7 @@ import type {
   CollectionEntry,
   CollectionService,
 } from "../services/collections/collection-service";
-import { listRoleSlugsForUser } from "../services/lib/permissions";
+import { listRoleSlugsForUserStrict } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
@@ -134,7 +134,22 @@ export interface ServiceOptsDeps {
   listRoleSlugs: (userId: string) => Promise<string[]>;
 }
 
-const REAL_DEPS: ServiceOptsDeps = { listRoleSlugs: listRoleSlugsForUser };
+/**
+ * The STRICT resolver, so a lookup that could not run refuses the operation.
+ *
+ * `listRoleSlugsForUser` degrades a failed query to an empty set, which is the
+ * safe direction for a rule that grants on a role and the wrong one for a rule
+ * that withholds on one: `user.role !== "suspended"` admits a caller whose
+ * roles the database declined to answer for. That is the same empty-role grant
+ * this whole change exists to remove, arriving by a different door. Its strict
+ * sibling exists for exactly this and says so in its own documentation.
+ *
+ * A throw here fails the plugin's call. That is the correct direction: an
+ * access decision taken on roles nobody could read is not a decision.
+ */
+const REAL_DEPS: ServiceOptsDeps = {
+  listRoleSlugs: listRoleSlugsForUserStrict,
+};
 
 /**
  * Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`.
