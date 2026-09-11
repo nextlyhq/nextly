@@ -49,7 +49,9 @@ import {
   previewContainerFor,
   isComponentDocument,
   newId,
+  resolveComponentInstances,
   type BlockDocument,
+  type ComponentLookup,
   type DocumentKind,
   type DocumentLimits,
   type BreakpointSet,
@@ -335,7 +337,8 @@ export function documentFrom(
 
 /**
  * The components a field may OFFER: every one the library holds, except the
- * one whose own definition this field is editing.
+ * one whose own definition this field is editing and every one that reaches
+ * it.
  *
  * A component's content field is a blocks field like a page's, and the library
  * it reads includes the very row being edited — whose saved definition does
@@ -343,6 +346,19 @@ export function documentFrom(
  * offer refuses it. Placed, the instance points at the definition it sits in;
  * saved, the resolver reads the loop as a cycle and draws a placeholder. The
  * row is left out here, where the field knows which document it is inside.
+ *
+ * The row itself is the shortest loop, not the only one. A component that
+ * holds an instance of this one, placed here, closes the loop one step out;
+ * one that holds THAT closes it two steps out. None is visible against the
+ * saved map until this row is saved, and then every page placing any of them
+ * draws a placeholder. So a candidate is judged by what DRAWING it reads:
+ * resolved through the canvas's own lookup under the canvas's own caps, the
+ * resolver reports every definition it reached, and a candidate that reached
+ * this row is left out. The resolver's walk rather than one written here,
+ * so the offer and the canvas agree on what a definition reaches — and what
+ * the walk stops short of, a candidate past the node cap or nested past the
+ * composition cap, the insert's own preflight refuses at the click for the
+ * reason the walk stopped.
  *
  * Judged by BOTH facts: the document being edited is a component, and the
  * form names the row. Either alone is not enough — a page's field is never
@@ -354,14 +370,35 @@ export function documentFrom(
 export function withoutSelf(
   components: readonly SavedComponent[],
   editing: BlockDocument,
-  identity: { documentId?: string | undefined } | null
+  identity: { documentId?: string | undefined } | null,
+  definitions: ComponentLookup,
+  limits?: DocumentLimits
 ): readonly SavedComponent[] {
   const self = identity?.documentId;
   if (self === undefined || !isComponentDocument(editing)) return components;
-  const kept = components.filter(component => component.id !== self);
+  const kept = components.filter(
+    component =>
+      component.id !== self && !reaches(component, self, definitions, limits)
+  );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
   return kept.length === components.length ? components : kept;
+}
+
+/** Whether drawing a component's definition reads the definition named. */
+function reaches(
+  component: SavedComponent,
+  id: string,
+  definitions: ComponentLookup,
+  limits: DocumentLimits | undefined
+): boolean {
+  const document = component.document;
+  if (document === undefined || document === null) return false;
+  return resolveComponentInstances(
+    document,
+    definitions,
+    limits === undefined ? {} : { limits }
+  ).referenced.includes(id);
 }
 
 /**
@@ -2369,12 +2406,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     const components = withoutSelf(
       componentLibrary.components,
       initialDocument,
-      identity
+      identity,
+      componentLibrary.definitions,
+      documentLimits
     );
     return components === componentLibrary.components
       ? componentLibrary
       : { ...componentLibrary, components };
-  }, [componentLibrary, initialDocument, identity]);
+  }, [componentLibrary, initialDocument, identity, documentLimits]);
 
   const canvasRender = useMemo(
     () =>

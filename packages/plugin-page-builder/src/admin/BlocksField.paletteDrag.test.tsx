@@ -659,6 +659,48 @@ describe("what a component's own content field may offer", () => {
     ).toBe(true);
   });
 
+  it("leaves out every component that reaches the one being edited, however many steps away", () => {
+    // The direct case above is the shortest cycle, not the only one. Editing
+    // A while B holds an instance of A, placing B makes A → B → A; while C
+    // holds B, placing C makes A → C → B → A. Neither is visible against the
+    // saved map until A is saved, and then every page placing any of them
+    // draws a placeholder. Judged by what drawing each candidate READS
+    // through the canvas's own lookup, so the offer and the canvas agree on
+    // what a definition reaches.
+    const instanceOf = (componentId: string, id: string) => ({
+      id,
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId },
+    });
+    const holding = (node: unknown) => ({
+      formatVersion: 1,
+      kind: "component",
+      nodes: [node],
+    });
+    const library = [
+      { id: "a", title: "A", document: definition },
+      { id: "b", title: "B", document: holding(instanceOf("a", "b-a")) },
+      { id: "c", title: "C", document: holding(instanceOf("b", "c-b")) },
+      { id: "d", title: "D", document: holding(instanceOf("footer", "d-f")) },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    componentAnswer = { items: library, meta: { count: 5, truncated: false } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
+      "d",
+      "footer",
+    ]);
+  });
+
   it("offers every component to a PAGE's field, whatever the page's id", () => {
     // The control, and the rule's second half: a page is never inside a
     // component, however the ids happen to fall.
