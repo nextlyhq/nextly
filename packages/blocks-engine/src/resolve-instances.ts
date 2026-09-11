@@ -808,6 +808,91 @@ function inlineHostSlots(
 }
 
 // ---------------------------------------------------------------------------
+// The roots a document composes to, without composing it
+// ---------------------------------------------------------------------------
+
+/**
+ * The block types at the roots of a document as {@link resolveComponentInstances}
+ * would compose it — read without composing it.
+ *
+ * A palette judges where a component may be placed by the ROOTS of what it
+ * draws, and a library of three thousand definitions asks that of every one
+ * when it opens. Composing each to read its roots clones every definition it
+ * reaches, so a library of small wrappers around one large definition costs
+ * its size per wrapper; this reads the roots and follows a root instance into
+ * the definition it names, reading each definition once, so it costs the
+ * roots.
+ *
+ * `undefined` where the resolver would leave a root STANDING — an instance
+ * it cannot expand — because a root the resolver leaves standing is a
+ * placeholder the palette must not judge as a block. The refusals are the
+ * resolver's own, asked through the same reader: a missing or unreadable
+ * definition, a cycle, the composition cap, and an instance gated by an
+ * entry-field condition, which the resolver returns unexpanded. A gated BLOCK
+ * stays a root, as it does in the composed forest. What is not asked is room:
+ * the node budget and the depth cap are properties of the page the document
+ * is placed on, and the placement's own preflight asks the resolver about
+ * those with the page in hand.
+ *
+ * Empty for a document whose roots compose to nothing, which is a document
+ * with nothing to place.
+ */
+export function composedRootTypes(
+  document: BlockDocument,
+  definitions: ComponentLookup,
+  options: Pick<ResolveComponentOptions, "maxComposedDepth"> = {}
+): readonly string[] | undefined {
+  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
+    return undefined;
+  }
+  const reader: DefinitionReader = {
+    definitions,
+    maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
+    definitionsRead: new Map<
+      string,
+      ComponentDocument | ComponentUnresolvedReason
+    >(),
+  };
+  return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
+}
+
+/** The roots of one forest, or nothing when any root cannot be answered. */
+function rootTypesOf(
+  nodes: readonly unknown[],
+  reader: DefinitionReader,
+  scope: ComposedScope
+): readonly string[] | undefined {
+  const out: string[] = [];
+  for (const node of nodes) {
+    const types = rootTypesOfNode(node, reader, scope);
+    if (types === undefined) return undefined;
+    for (const type of types) out.push(type);
+  }
+  return out;
+}
+
+/** What one root stands for: its own type, or its definition's roots one scope deeper. */
+function rootTypesOfNode(
+  node: unknown,
+  reader: DefinitionReader,
+  scope: ComposedScope
+): readonly string[] | undefined {
+  if (!isPlainRecord(node) || typeof node.type !== "string") return undefined;
+  if (node.type !== COMPONENT_INSTANCE_TYPE) return [node.type];
+  // The resolver's own order: a gated instance is returned standing before
+  // its id is even read, and an instance naming no component is malformed.
+  if (isConditionGated(node)) return undefined;
+  const componentId = componentIdOf(node);
+  if (componentId === undefined) return undefined;
+  const found = definitionFor(componentId, reader, scope);
+  if (typeof found === "string") return undefined;
+  return rootTypesOf(found.nodes, reader, {
+    depth: scope.depth + 1,
+    onPath: new Set(scope.onPath).add(componentId),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Expanding one instance
 // ---------------------------------------------------------------------------
 
@@ -1246,7 +1331,7 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
  */
 function definitionFor(
   componentId: string,
-  run: ResolveRun,
+  run: DefinitionReader,
   scope: ComposedScope
 ): ComponentDocument | ComponentUnresolvedReason {
   if (scope.onPath.has(componentId)) return "cycle";
@@ -1259,6 +1344,20 @@ function definitionFor(
 }
 
 /**
+ * What answering "which definition does this id name here" needs of a run.
+ *
+ * Named apart from {@link ResolveRun} so the roots query below can ask the
+ * same question with the same four refusals — cycle, composition cap,
+ * missing, unreadable — without a budget, ids or a forest to compose into.
+ * A run satisfies it as it is.
+ */
+interface DefinitionReader {
+  definitions: ComponentLookup;
+  maxComposedDepth: number;
+  definitionsRead: Map<string, ComponentDocument | ComponentUnresolvedReason>;
+}
+
+/**
  * What the lookup says about one component, asked once per run.
  *
  * Split from the scope checks above so that only the id-dependent half is
@@ -1267,7 +1366,7 @@ function definitionFor(
  */
 function readDefinition(
   componentId: string,
-  run: ResolveRun
+  run: DefinitionReader
 ): ComponentDocument | ComponentUnresolvedReason {
   // ABSENT from the map is `missing` — nobody supplied one, and the remedy is
   // to publish or restore it. A value that IS supplied and cannot be read is a
@@ -1293,7 +1392,7 @@ function readDefinition(
 /** The lookup's answer for one component, read as the caller supplied it. */
 function readSuppliedDefinition(
   componentId: string,
-  run: ResolveRun
+  run: DefinitionReader
 ): ComponentDocument | ComponentUnresolvedReason {
   if (!run.definitions.has(componentId)) return "missing";
   // Read ONCE and carried out, so expansion never asks again: the lookup is a

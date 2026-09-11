@@ -1,4 +1,5 @@
 import { measureBytes } from "@nextlyhq/blocks-engine";
+import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import type {
   PluginRouteContext,
   PluginRoutePermissionScope,
@@ -278,7 +279,35 @@ export interface ComponentReads {
 /** The capabilities the component route uses. */
 export interface ComponentLibraryContext extends LibraryCaller {
   components: ComponentReads;
+  /** Where the definitions live: the store the plugin was told, or its own. */
+  store: ComponentStore;
 }
+
+/**
+ * Where component definitions are read from.
+ *
+ * `collection` names a store the plugin does NOT own — a host that keeps its
+ * definitions in a collection of its own and renders from it; absent, the
+ * plugin's contributed collection, under whatever name the host gave it.
+ * `field` is the blocks field the definition lives in on that row.
+ *
+ * ONE statement of this, shared with the readiness notice: a host that
+ * redirected the renderer says so once, and the editor's read and the notice
+ * follow it together. An editor reading the plugin's store regardless drew a
+ * different definition for the same id than the page did, or none. A host
+ * that supplies definitions from no collection at all (`resolveComponents`
+ * on its render route) is outside what any collection read can follow, and
+ * the plugin says so where that option is documented.
+ */
+export interface ComponentStore {
+  readonly collection?: string;
+  readonly field: string;
+}
+
+/** The plugin's own store, read from the field the renderer defaults to. */
+export const DEFAULT_COMPONENT_STORE: ComponentStore = {
+  field: COMPONENT_DOCUMENT_FIELD,
+};
 
 /**
  * The component reads the route binds: the Direct API, AS THE USER.
@@ -410,7 +439,10 @@ export async function readPatternLibrary(
 export async function readComponentLibrary(
   ctx: ComponentLibraryContext
 ): Promise<ComponentLibraryResponse> {
-  const slug = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
+  const slug =
+    ctx.store.collection ??
+    ctx.self.collections[COMPONENTS_SLUG] ??
+    COMPONENTS_SLUG;
   return envelope(
     await readTier(
       page => ctx.components.list(slug, page),
@@ -498,7 +530,7 @@ async function completeComponent(
   const listed = identityOf(row);
   if (listed === undefined) return "skip";
   const data = await ctx.components.read(slug, listed.named.id);
-  return withDraftDocument(data) ?? "omit";
+  return withDraftDocument(data, ctx.store.field) ?? "omit";
 }
 
 /** The by-id row as the panel labels it: identity and how it is described. */
@@ -542,10 +574,13 @@ function identityOf(
  * or one without an id or title, which the caller reports as a cut library
  * rather than a missing key.
  */
-function withDraftDocument(data: unknown): LibraryComponent | undefined {
+function withDraftDocument(
+  data: unknown,
+  field: string
+): LibraryComponent | undefined {
   const labelled = readComponentRow(data);
   if (labelled === undefined) return undefined;
-  const content = (data as Record<string, unknown>).content;
+  const content = (data as Record<string, unknown>)[field];
   return {
     ...labelled,
     document:
@@ -829,21 +864,27 @@ export function patternLibraryRoute(): LibraryRoute {
 /**
  * The component route declaration: the same shape, its own permission.
  *
- * `read` on the COMPONENTS collection, resolved the same way. A role that may
- * read components and not patterns gets its definitions here, which the
- * pattern route's gate would have refused — and every instance on its pages
- * would have drawn as a placeholder.
+ * `read` on the COMPONENTS collection, resolved the same way — or on the
+ * store the plugin was told components live in, which the scope helper names
+ * as given when the plugin never contributed it. A role that may read
+ * components and not patterns gets its definitions here, which the pattern
+ * route's gate would have refused — and every instance on its pages would
+ * have drawn as a placeholder.
  */
-export function componentLibraryRoute(): LibraryRoute {
+export function componentLibraryRoute(
+  store: ComponentStore = DEFAULT_COMPONENT_STORE
+): LibraryRoute {
   return {
     method: "GET",
     path: COMPONENT_LIBRARY_ROUTE_PATH,
-    requiredPermission: ({ collection }) => collection(COMPONENTS_SLUG, "read"),
+    requiredPermission: ({ collection }) =>
+      collection(store.collection ?? COMPONENTS_SLUG, "read"),
     handler: async (_req: Request, ctx: PluginRouteContext) =>
       Response.json(
         await readComponentLibrary({
           ...ctx,
           components: directComponentReads(ctx),
+          store,
         })
       ),
   };

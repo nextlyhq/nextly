@@ -27,7 +27,11 @@
  * @module editor-state
  */
 
-import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  type BlockDocument,
+  type DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { applyOps, type BuilderOp } from "./ops";
@@ -80,6 +84,17 @@ export interface EditorState {
   canUndo: boolean;
   canRedo: boolean;
   /**
+   * The caps every edit is judged under: the host's, or the engine's defaults
+   * when the host named none.
+   *
+   * Exposed so a surface that asks the resolver whether a placement fits
+   * BEFORE applying it asks under the same caps the apply will enforce. Two
+   * readings of the site's caps — one here, one handed to the surface — agree
+   * until the day one of them is pointed at a different config; the surface
+   * reading this one cannot disagree with the apply that follows.
+   */
+  limits: DocumentLimits;
+  /**
    * How many edits are on the undo stack.
    *
    * Exported because "did anything change" is not answerable from the document
@@ -108,7 +123,7 @@ export interface UseEditorStateArgs {
  */
 export function useEditorState({
   initialDocument,
-  limits,
+  limits = DEFAULT_LIMITS,
 }: UseEditorStateArgs): EditorState {
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
   const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
@@ -315,8 +330,9 @@ export function useEditorState({
       redo,
       canUndo: depths.undo > 0,
       canRedo: depths.redo > 0,
+      limits,
       undoDepth: depths.undo,
     }),
-    [document, selection, select, apply, applyAll, undo, redo, depths]
+    [document, selection, select, apply, applyAll, undo, redo, depths, limits]
   );
 }

@@ -15,7 +15,11 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { useEditorState, MAX_HISTORY } from "./editor-state";
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 function node(id: string, slots?: Record<string, BlockNode[]>): BlockNode {
   return {
@@ -75,6 +79,25 @@ describe("applying edits", () => {
     // undo replays an edit that never happened.
     expect(result.current.canUndo).toBe(false);
     expect(result.current.undoDepth).toBe(0);
+  });
+});
+
+describe("the caps an editor applies under", () => {
+  it("says which caps it judges edits by, so a preflight can judge by the same ones", () => {
+    // A surface that asks the resolver whether a placement fits has to ask
+    // under the caps the apply will enforce, or the two disagree: a
+    // preflight under the engine's defaults accepts what a raised-cap apply
+    // accepts and refuses what it does not.
+    const raised = { ...DEFAULT_LIMITS, maxNodes: DEFAULT_LIMITS.maxNodes + 1 };
+    const configured = renderHook(() =>
+      useEditorState({ initialDocument: doc([]), limits: raised })
+    );
+    const unconfigured = renderHook(() =>
+      useEditorState({ initialDocument: doc([]) })
+    );
+
+    expect(configured.result.current.limits).toBe(raised);
+    expect(unconfigured.result.current.limits).toBe(DEFAULT_LIMITS);
   });
 });
 

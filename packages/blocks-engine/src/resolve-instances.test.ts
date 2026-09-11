@@ -15,11 +15,16 @@ import {
   type BlockNode,
   type ComponentDocument,
 } from "./document";
-import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import {
+  DEFAULT_LIMITS,
+  MAX_COMPOSED_DEPTH,
+  MAX_ENVELOPE_ENTRIES,
+} from "./limits";
 import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
   componentUsageIn,
+  composedRootTypes,
   instanceExposure,
   readableDefinition,
   resolveComponentInstances,
@@ -3047,5 +3052,126 @@ describe("instanceExposure", () => {
     const [state] = instanceExposure(gated, instance("i1", "hero")).properties;
 
     expect(state?.value).toBeUndefined();
+  });
+});
+
+describe("composedRootTypes", () => {
+  // The types at the roots of a document AS THE RESOLVER WOULD COMPOSE IT,
+  // read without composing it. The resolver is the oracle in every case: the
+  // query must answer what the composed forest's roots would be, or nothing
+  // where the resolver would leave a root standing.
+  const resolvedRoots = (doc: BlockDocument, definitions: DefinitionsById) =>
+    resolveComponentInstances(doc, definitions).document.nodes.map(
+      root => root.type
+    );
+
+  it("answers a block's own type, and a root instance's definition's roots, nested", () => {
+    const definitions = defs({
+      header: component([node("d1"), box("d2", [node("d3")])]),
+      wrapper: component([instance("w1", "header"), node("w2")]),
+    });
+    const doc = component([instance("i1", "wrapper"), node("n1")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual([
+      "core/text",
+      "core/box",
+      "core/text",
+      "core/text",
+    ]);
+    expect(composedRootTypes(doc, definitions)).toEqual(
+      resolvedRoots(doc, definitions)
+    );
+  });
+
+  it("answers nothing for a root the resolver would leave standing: missing, another kind, a cycle, the composition cap", () => {
+    const missing = component([instance("i1", "nobody")]);
+    const wrongKind = component([instance("i1", "page")]);
+    const loop = component([instance("i1", "loop")]);
+    const definitions = defs({
+      page: page([node("p1")]),
+      loop: component([instance("l1", "loop")]),
+    });
+
+    for (const doc of [missing, wrongKind, loop]) {
+      expect(composedRootTypes(doc, definitions)).toBeUndefined();
+      expect(resolvedRoots(doc, definitions)).toEqual([
+        COMPONENT_INSTANCE_TYPE,
+      ]);
+    }
+
+    // A chain one longer than the cap: the resolver refuses the deepest
+    // instance for composed depth, so the outermost root cannot be answered.
+    const chain: Record<string, BlockDocument> = {};
+    for (let level = 0; level <= MAX_COMPOSED_DEPTH; level += 1) {
+      chain[`c${String(level)}`] = component([
+        level === MAX_COMPOSED_DEPTH
+          ? node("leaf")
+          : instance(`i${String(level)}`, `c${String(level + 1)}`),
+      ]);
+    }
+    const deep = component([instance("top", "c0")]);
+    expect(composedRootTypes(deep, defs(chain))).toBeUndefined();
+    expect(
+      resolvedRoots(deep, defs(chain)).includes(COMPONENT_INSTANCE_TYPE)
+    ).toBe(true);
+  });
+
+  it("answers nothing for a gated root instance, which the resolver leaves standing, and keeps a gated block", () => {
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const definitions = defs({ header: component([node("d1")]) });
+    const gatedInstance = component([
+      instance("i1", "header", {}, { visibility: gate } as Partial<BlockNode>),
+    ]);
+    const gatedBlock = component([
+      node("n1", { visibility: gate } as Partial<BlockNode>),
+    ]);
+
+    expect(composedRootTypes(gatedInstance, definitions)).toBeUndefined();
+    expect(resolvedRoots(gatedInstance, definitions)).toEqual([
+      COMPONENT_INSTANCE_TYPE,
+    ]);
+    expect(composedRootTypes(gatedBlock, definitions)).toEqual(["core/text"]);
+    expect(resolvedRoots(gatedBlock, definitions)).toEqual(["core/text"]);
+  });
+
+  it("answers an empty list for a definition whose roots compose to nothing", () => {
+    const definitions = defs({ empty: component([]) });
+
+    expect(
+      composedRootTypes(component([instance("i1", "empty")]), definitions)
+    ).toEqual([]);
+  });
+
+  it("reads each definition once, however many roots point at it", () => {
+    // What makes the query cheap where the resolver is not: a definition is
+    // read once per query rather than cloned once per instance, so a library
+    // of wrappers around one large definition costs its roots, not its size.
+    let reads = 0;
+    const big = component([
+      box(
+        "b1",
+        Array.from({ length: 200 }, (_, i) => node(`n${String(i)}`))
+      ),
+    ]);
+    const lookup: DefinitionsById = new Map([["big", big]]);
+    const counting = {
+      has: (id: string) => lookup.has(id),
+      get: (id: string) => {
+        reads += 1;
+        return lookup.get(id);
+      },
+    };
+    const doc = component([
+      instance("i1", "big"),
+      instance("i2", "big"),
+      instance("i3", "big"),
+    ]);
+
+    expect(composedRootTypes(doc, counting)).toEqual([
+      "core/box",
+      "core/box",
+      "core/box",
+    ]);
+    expect(reads).toBe(1);
   });
 });

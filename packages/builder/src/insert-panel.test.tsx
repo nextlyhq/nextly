@@ -32,6 +32,7 @@ import {
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
+  type DocumentLimits,
   registerBlocks,
   type BlockDocument,
   type ComponentDocument,
@@ -83,13 +84,17 @@ function documentOf(nodes: BlockDocument["nodes"] = []): BlockDocument {
  * site shows up here. A test that rebuilt the expected op from the same inputs
  * would keep passing after someone edited the line it exists to watch.
  */
-function editorSpy(document: BlockDocument): EditorState & {
+function editorSpy(
+  document: BlockDocument,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): EditorState & {
   apply: ReturnType<typeof vi.fn>;
   applyAll: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
 } {
   return {
     document,
+    limits,
     selectedId: null,
     selection: EMPTY_SELECTION,
     select: vi.fn(),
@@ -1492,7 +1497,9 @@ describe("the component tier", () => {
         { id: "p2", type: "acme/text", version: 1, props: {} },
       ],
     } as unknown as BlockDocument;
-    const editor = editorSpy(page);
+    // The caps are the EDITOR's: the panel asks under the ones the apply
+    // will enforce, so a second reading of the site's caps cannot disagree.
+    const editor = editorSpy(page, { ...DEFAULT_LIMITS, maxNodes: 4 });
     const raise = vi.fn();
     render(
       <NoticeSinkProvider raise={raise}>
@@ -1500,7 +1507,6 @@ describe("the component tier", () => {
           editor={editor}
           components={[three]}
           componentDefinitions={new Map([["three", three.document]])}
-          documentLimits={{ ...DEFAULT_LIMITS, maxNodes: 4 }}
         />
       </NoticeSinkProvider>
     );

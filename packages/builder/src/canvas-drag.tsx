@@ -44,7 +44,6 @@
 import type {
   BlockNode,
   ComponentLookup,
-  DocumentLimits,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { findNode } from "@nextlyhq/blocks-engine";
@@ -52,6 +51,7 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import { autoscrollStep } from "./autoscroll";
+import { useNoticeSink } from "./builder-notices";
 import {
   isOutermostForAddress,
   nodeAddressOf,
@@ -76,9 +76,13 @@ import {
   scrollableAncestor,
   type CanvasPointerPoints,
 } from "./geometry-dom";
-import { placementTypesOf, type SlotSource } from "./inserter";
+import {
+  compositionRefusal,
+  placementTypesOf,
+  type SlotSource,
+} from "./inserter";
 import { lockBlockingMove } from "./locking";
-import type { OpPosition } from "./ops";
+import type { BuilderOp, OpPosition } from "./ops";
 import {
   nextTargetSwitchState,
   NO_TARGET,
@@ -140,6 +144,13 @@ export type DragSubject =
        */
       readonly onInserted?: (node: BlockNode) => void;
     };
+
+/**
+ * What a host that supplies no definitions is judged under: nothing resolves,
+ * so the room question has no instance to answer for. One shared instance
+ * rather than a fresh map per drop.
+ */
+const NO_DEFINITIONS: ComponentLookup = new Map();
 
 /**
  * What a palette hands the drag when a row is pressed.
@@ -229,8 +240,6 @@ export interface UseCanvasDragOptions {
    * anywhere — the posture of a host that resolves nothing.
    */
   definitions?: ComponentLookup;
-  /** The caps the canvas resolves under, so those roots are judged as drawn. */
-  limits?: DocumentLimits;
   /**
    * The canvas root, for a drag that begins outside it.
    *
@@ -460,12 +469,14 @@ export function useCanvasDrag({
   slots,
   nesting,
   definitions,
-  limits,
   canvasRoot,
   activationPx = DEFAULT_ACTIVATION_PX,
   switchPx = DEFAULT_SWITCH_PX,
 }: UseCanvasDragOptions): CanvasDrag {
   const gesture = React.useRef<Gesture | null>(null);
+  // A no-op outside a shell, so a host that mounts the canvas without one
+  // loses the sentence and nothing else.
+  const raise = useNoticeSink();
   const [state, setState] = React.useState<CanvasDragState>({
     draggingId: null,
     draggingBlockName: null,
@@ -475,8 +486,8 @@ export function useCanvasDrag({
 
   // Read at event time rather than closed over, so a handler bound on one render
   // never patches a document that a later edit has already replaced.
-  const latest = React.useRef({ editor, slots, nesting, definitions, limits });
-  latest.current = { editor, slots, nesting, definitions, limits };
+  const latest = React.useRef({ editor, slots, nesting, definitions });
+  latest.current = { editor, slots, nesting, definitions };
 
   /**
    * Undo the document-level listening an insert-drag needs, or nothing.
@@ -566,11 +577,7 @@ export function useCanvasDrag({
         rects,
         forbiddenParents: movingSubtree(current.document, nodeId),
         blockName: node.type,
-        blockNames: placementTypesOf(
-          node,
-          latest.current.definitions,
-          latest.current.limits
-        ),
+        blockNames: placementTypesOf(node, latest.current.definitions),
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
@@ -857,7 +864,26 @@ export function useCanvasDrag({
     (subject: DragSubject, at: OpPosition) => {
       const { editor: current } = latest.current;
       if (subject.kind === "move") {
-        current.apply({ kind: "move", id: subject.nodeId, to: at });
+        const move: BuilderOp = { kind: "move", id: subject.nodeId, to: at };
+        // Whether the PAGE still composes with the node there, asked of the
+        // resolver with the move applied — the one refusal the nesting rule
+        // cannot make, because room moves with every edit: an instance
+        // carried ahead of another takes the budget that one had, and one
+        // carried into another's slot content nests a composition deeper.
+        // Under the editor's own caps, which are the ones the apply enforces.
+        // Said to the author rather than swallowed, for the reason the insert
+        // says it: this refusal is about their page and has a remedy.
+        const refusal = compositionRefusal(
+          current.document,
+          move,
+          latest.current.definitions ?? NO_DEFINITIONS,
+          current.limits
+        );
+        if (refusal !== undefined) {
+          raise(refusal.sentence);
+          return;
+        }
+        current.apply(move);
         return;
       }
 
@@ -887,7 +913,7 @@ export function useCanvasDrag({
       // block arrived.
       subject.onInserted?.(node);
     },
-    []
+    [raise]
   );
 
   /**

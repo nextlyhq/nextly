@@ -55,7 +55,6 @@ import {
   type AnyBlockDefinition,
   type BlockNode,
   type ComponentLookup,
-  type DocumentLimits,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -168,13 +167,6 @@ export interface InsertPanelProps {
    * cannot be determined, so it cannot be judged.
    */
   componentDefinitions?: ComponentLookup;
-  /**
-   * The document caps the CANVAS resolves under, so a definition is judged
-   * offerable under the bounds it will actually be drawn under. Omitted, the
-   * engine's defaults apply — which is also what the canvas does when given
-   * none.
-   */
-  documentLimits?: DocumentLimits;
   /**
    * Where each tier of the host's library read stands, when it is not simply
    * here.
@@ -657,7 +649,6 @@ export function InsertPanel({
   patterns,
   components,
   componentDefinitions,
-  documentLimits,
   library,
   nesting,
   categoryOrder,
@@ -706,18 +697,10 @@ export function InsertPanel({
       ...patternEntriesFrom(patterns ?? [], source),
       ...componentEntriesFrom(
         components ?? [],
-        componentDefinitions ?? NO_DEFINITIONS,
-        documentLimits
+        componentDefinitions ?? NO_DEFINITIONS
       ),
     ],
-    [
-      palette,
-      patterns,
-      components,
-      componentDefinitions,
-      documentLimits,
-      source,
-    ]
+    [palette, patterns, components, componentDefinitions, source]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather
@@ -883,12 +866,13 @@ export function InsertPanel({
     // every edit. Said to the author rather than swallowed: unlike a refusal
     // from a document that moved, this one is about their page and has a
     // remedy they can act on.
+    // Under the editor's own caps: the ones its apply will enforce, so the
+    // preflight and the apply cannot disagree about what fits.
     const refusal = compositionRefusal(
       editor.document,
-      node,
-      point.at,
+      { kind: "insert", node, at: point.at },
       componentDefinitions ?? NO_DEFINITIONS,
-      documentLimits
+      editor.limits
     );
     if (refusal !== undefined) {
       raise(refusal.sentence);

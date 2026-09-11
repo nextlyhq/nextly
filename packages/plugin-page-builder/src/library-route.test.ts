@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   COMPLETION_CONCURRENCY,
   COMPONENT_LIST_PAGE_SIZE,
+  DEFAULT_COMPONENT_STORE,
   LIBRARY_PAGE_SIZE,
   MAX_LIBRARY_BYTES,
   MAX_LIBRARY_PATTERNS,
@@ -104,6 +105,7 @@ function componentContext(
     self: { collections: self },
     user: { id: "u1" },
     components: { list, read },
+    store: DEFAULT_COMPONENT_STORE,
   };
   return { ctx, list, read, inFlight };
 }
@@ -830,6 +832,26 @@ describe("the component tier", () => {
 
     expect(list.mock.calls.map(call => call[1])).toEqual([1, 2]);
     expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("reads the store the plugin was told components live in, collection and field alike", async () => {
+    // A host may keep its definitions in a collection of its own and render
+    // from it; an editor reading the plugin's store regardless would draw a
+    // different definition for the same id, or none. The same statement the
+    // readiness notice follows, so one setting redirects both.
+    const { ctx, list, read } = componentContext({
+      pages: [[{ id: "a", title: "A" }]],
+      byId: {
+        a: { id: "a", title: "A", blocks: draft("a"), content: "not this" },
+      },
+    });
+    ctx.store = { collection: "site_components", field: "blocks" };
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(list.mock.calls.map(call => call[0])).toEqual(["site_components"]);
+    expect(read.mock.calls.map(call => call[0])).toEqual(["site_components"]);
+    expect(library.items[0]?.document).toEqual(draft("a"));
   });
 
   it("reads through the host's renamed slug", async () => {
