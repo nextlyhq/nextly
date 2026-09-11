@@ -879,6 +879,52 @@ describe("what a component's own content field may offer", () => {
     ]);
   });
 
+  it("leaves out a candidate reaching a component the library could not load whole, and keeps it when the library was whole", () => {
+    // A cut read leaves out rows the store holds, so a reference the canvas's
+    // lookup cannot follow may name the definition being edited; the field
+    // passes whether its read was whole, and the walk fails closed on a cut.
+    const library = [
+      { id: "a", title: "A", document: definition },
+      {
+        id: "c",
+        title: "C",
+        document: {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "c-b",
+              type: "nextly/component-instance",
+              version: 1,
+              props: { componentId: "omitted" },
+            },
+          ],
+        },
+      },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+
+    componentAnswer = { items: library, meta: { count: 3, truncated: true } };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+    expect(
+      (recorded("insertPanel").components as { id: string }[]).map(c => c.id)
+    ).toEqual(["footer"]);
+    cleanup();
+
+    componentAnswer = { items: library, meta: { count: 3, truncated: false } };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+    expect(
+      (recorded("insertPanel").components as { id: string }[]).map(c => c.id)
+    ).toEqual(["c", "footer"]);
+  });
+
   it("offers every component to a PAGE's field, whatever the page's id", () => {
     // The control, and the rule's second half: a page is never inside a
     // component, however the ids happen to fall.

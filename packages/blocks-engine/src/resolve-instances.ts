@@ -916,8 +916,15 @@ function rootTypesOfNode(
   reader: RootsReader,
   scope: ComposedScope
 ): readonly string[] | undefined {
-  if (!isPlainRecord(node)) return undefined;
+  // A root the INLINER would drop stands for nothing: `cloneDefinitionForest`
+  // skips a node that is not a record or whose id is not a string, so it never
+  // lands on the page. Counted, a component would be judged by the type of a
+  // root the page never gets — and one whose every root is dropped would be
+  // offered as placing something and place nothing.
+  if (!isPlainRecord(node) || typeof node.id !== "string") return [];
   const { type } = node;
+  // A node the inliner keeps and this cannot name: the nesting rule has no
+  // type to judge, so the caller is told nothing rather than a guess.
   if (typeof type !== "string") return undefined;
   if (type !== COMPONENT_INSTANCE_TYPE) return [type];
   // The resolver's own order: a gated instance is returned standing before

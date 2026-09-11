@@ -1370,6 +1370,82 @@ describe("the component tier", () => {
     };
   }
 
+  /** The canvas's lookup, holding these rows' definitions. */
+  function lookupFor(
+    ...rows: { id: string; document: ComponentDocument }[]
+  ): Map<string, ComponentDocument> {
+    return new Map(rows.map(row => [row.id, row.document]));
+  }
+
+  it("withholds a PATTERN whose root is an instance the destination refuses", () => {
+    // A pattern is copied in as it stands, so a saved-from-a-component pattern
+    // carries the instance node; judged by that node's own type it was offered
+    // at the root while the component's own tile was refused there.
+    registerBlocks(
+      [
+        { ...base, name: "acme/column", parent: ["acme/columns"] },
+        { ...base, name: "acme/columns", slots: { children: {} } },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const column = {
+      id: "column",
+      title: "Column",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/column", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+    const wrapping = {
+      id: "wrapped",
+      title: "Wrapped column",
+      document: {
+        formatVersion: 1,
+        kind: "pattern",
+        nodes: [
+          {
+            id: "p1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "column" },
+          },
+        ],
+      } as unknown as BlockDocument,
+    };
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        patterns={[wrapping]}
+        componentDefinitions={lookupFor(column)}
+      />
+    );
+
+    expect(screen.getByRole("option", { name: /Text/ })).toBeDefined();
+    expect(screen.queryByRole("option", { name: /Wrapped column/ })).toBeNull();
+  });
+
+  it("offers no component for which the host supplied no definition", () => {
+    // A tile places an instance the canvas resolves against its lookup; with
+    // no definition there, the instance would be drawn as missing the moment
+    // it landed. The row alone is not enough to offer it.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[headerComponent()]}
+      />
+    );
+
+    // The block tier is drawn — the control that the panel rendered at all.
+    expect(screen.getByRole("option", { name: /Text/ })).toBeDefined();
+    expect(screen.queryByRole("option", { name: /Header/ })).toBeNull();
+  });
+
   it("offers a supplied component beside the blocks, marked as LINKED", () => {
     registerBlocks(
       [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
@@ -1379,6 +1455,7 @@ describe("the component tier", () => {
       <InsertPanel
         editor={editorSpy(documentOf())}
         components={[headerComponent()]}
+        componentDefinitions={lookupFor(headerComponent())}
       />
     );
 
@@ -1410,6 +1487,7 @@ describe("the component tier", () => {
       <InsertPanel
         editor={editor}
         components={[headerComponent()]}
+        componentDefinitions={lookupFor(headerComponent())}
         onInsert={onInsert}
       />
     );
@@ -1459,6 +1537,7 @@ describe("the component tier", () => {
       <InsertPanel
         editor={editorSpy(documentOf())}
         components={[columnOnly, headerComponent()]}
+        componentDefinitions={lookupFor(columnOnly, headerComponent())}
       />
     );
 
@@ -1546,7 +1625,12 @@ describe("the component tier", () => {
     };
 
     const { unmount } = render(
-      <InsertPanel editor={editorSpy(documentOf())} components={[wrapper]} />
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[wrapper]}
+        // The wrapper is in the lookup; only what its root names is not.
+        componentDefinitions={lookupFor(wrapper)}
+      />
     );
     expect(screen.queryByRole("option", { name: /Wrapped header/ })).toBeNull();
     unmount();
@@ -1555,7 +1639,7 @@ describe("the component tier", () => {
       <InsertPanel
         editor={editorSpy(documentOf())}
         components={[wrapper]}
-        componentDefinitions={new Map([["header", header.document]])}
+        componentDefinitions={lookupFor(header, wrapper)}
       />
     );
     expect(screen.getByRole("option", { name: /Wrapped header/ })).toBeTruthy();

@@ -701,15 +701,45 @@ describe("the component tier", () => {
     expect(library.meta.truncated).toBe(false);
   });
 
-  it("still omits a listed component whose by-id row has no id, and says the tier was cut", async () => {
-    // The control for the case above: an id is what keys the row, and a row
-    // the read answered without one cannot be the one the listing named.
+  it("keys a component by the id the LISTING named, whatever the by-id row says its id is", async () => {
+    /*
+     * The by-id row is a PRESENTATION of the same row — an `afterRead` hook
+     * can rewrite or drop its `id` — while stored instances reference the id
+     * the collection holds, which is the one the listing named. Re-derived
+     * from the presentation, the client keyed its definitions by a name no
+     * instance uses, or dropped the component, and every instance of it drew
+     * as missing.
+     */
     const { ctx } = componentContext({
       pages: [[componentRow("a"), componentRow("b")]],
       byId: {
-        a: { title: "A", content: draft("x") },
-        b: { id: "b", title: "B", content: draft("y") },
+        a: { id: "renamed", title: "A", content: draft("x") },
+        b: { title: "B", content: draft("y") },
       },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
+    expect(library.items[0]).toMatchObject({
+      title: "A",
+      document: draft("x"),
+    });
+    // The second row lost its id AND its title in presentation: labelled by
+    // the id the listing named, as a row with no title is.
+    expect(library.items[1]).toMatchObject({
+      title: "B",
+      document: draft("y"),
+    });
+    expect(library.meta.truncated).toBe(false);
+  });
+
+  it("omits a listed component the by-id read answered nothing for, and says the tier was cut", async () => {
+    // The row vanished between the two reads, or this caller may not read it:
+    // there is no draft to overlay and nothing to offer.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: { b: { id: "b", title: "B", content: draft("y") } },
     });
 
     const library = await readComponentLibrary(ctx);

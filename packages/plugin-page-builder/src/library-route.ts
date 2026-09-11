@@ -556,20 +556,7 @@ async function completeComponent(
   const listed = identityOf(row);
   if (listed === undefined) return "skip";
   const data = await ctx.components.read(slug, listed.named.id);
-  return withDraftDocument(data, ctx.store.field) ?? "omit";
-}
-
-/** The by-id row as the panel labels it: identity and how it is described. */
-function readComponentRow(
-  row: unknown
-): Omit<LibraryComponent, "document"> | undefined {
-  const identity = identityOf(row);
-  if (identity === undefined) return undefined;
-  return {
-    ...identity.named,
-    ...optionalText(identity.record.description, "description"),
-    ...optionalText(identity.record.category, "category"),
-  };
+  return withDraftDocument(data, ctx.store.field, listed.named.id) ?? "omit";
 }
 
 /**
@@ -608,20 +595,34 @@ function identityOf(
  * The by-id row as one item: how the panel labels it, and the document as the
  * caller should see it.
  *
+ * The id is the LISTING's, never the by-id row's. That row is a presentation
+ * of the same record — an `afterRead` hook may rewrite or drop its `id` —
+ * while stored instances reference the id the collection holds, which is the
+ * one the listing named. Keyed by the presentation, the client's definitions
+ * answer to a name no instance uses and every instance of it draws as
+ * missing. Everything else — the title, the category, the description and the
+ * content — is the by-id row's, because that is the one carrying the draft.
+ *
  * `document: null` for a row the read found but which holds no content — a
  * legal row, and one the panel will skip — and `undefined` for no row at all,
- * or one without an id, which the caller reports as a cut library rather than
- * a missing key.
+ * which the caller reports as a cut library rather than a missing key.
  */
 function withDraftDocument(
   data: unknown,
-  field: string
+  field: string,
+  id: string
 ): LibraryComponent | undefined {
-  const labelled = readComponentRow(data);
-  if (labelled === undefined) return undefined;
-  const content = (data as Record<string, unknown>)[field];
+  if (typeof data !== "object" || data === null) return undefined;
+  const record = data as Record<string, unknown>;
+  const title = record.title;
+  const content = record[field];
   return {
-    ...labelled,
+    id,
+    // Labelled by the id where the row has no readable title, as `identityOf`
+    // labels a listing row: the id is the one name it is sure to have.
+    title: typeof title === "string" && title !== "" ? title : id,
+    ...optionalText(record.description, "description"),
+    ...optionalText(record.category, "category"),
     document:
       content === undefined || content === null
         ? null
