@@ -40,7 +40,6 @@ function dbRow(
     description: null,
     fields: JSON.stringify([]),
     admin: null,
-    access_rules: null,
     source: "code",
     locked: 1,
     status: 0,

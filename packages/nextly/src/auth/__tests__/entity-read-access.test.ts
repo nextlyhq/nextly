@@ -21,16 +21,26 @@ vi.mock("../../di/container", () => ({
   },
 }));
 
+import { apiKeyScope } from "../authenticated-scope";
 import {
   canReadEntity,
+  readAccessCaller,
   readableEntities,
   type ReadAccessCaller,
 } from "../entity-read-access";
 
+/**
+ * A key caller holding `permissions` in the stored spelling, with the rule
+ * spelling derived beside it the way `readAccessCaller` derives it.
+ */
 const apiKey = (permissions: string[]): ReadAccessCaller => ({
   userId: "owner-1",
   authMethod: "api-key",
   permissions,
+  rulePermissions: permissions.map(slug => {
+    const [action, ...resource] = slug.split("-");
+    return `${resource.join("-")}:${action}`;
+  }),
   roles: ["editor"],
 });
 
@@ -38,6 +48,7 @@ const session: ReadAccessCaller = {
   userId: "u1",
   authMethod: "session",
   permissions: [],
+  rulePermissions: [],
   roles: ["editor"],
 };
 
@@ -101,9 +112,12 @@ describe("canReadEntity — API key callers", () => {
     await expect(canReadEntity("posts", apiKey(["read-posts"]))).resolves.toBe(
       true
     );
+    // The RULE spelling, not the stored slug the coarse check compared. A rule
+    // written `permissions.includes("posts:read")` — the documented form — was
+    // handed `read-posts` here and denied every key.
     expect(read).toHaveBeenCalledWith(
       expect.objectContaining({
-        permissions: ["read-posts"],
+        permissions: ["posts:read"],
         roles: ["editor"],
         operation: "read",
         collection: "posts",
@@ -131,6 +145,37 @@ describe("canReadEntity — API key callers", () => {
     await expect(canReadEntity("posts", apiKey(["read-posts"]))).resolves.toBe(
       true
     );
+  });
+});
+
+describe("readAccessCaller", () => {
+  it("derives the rule spelling from the key's grants by the canonical conversion", () => {
+    // One scope, both spellings: the stored slugs for coarse checks and the
+    // `resource:action` form for rules, from the same rows. A caller that
+    // copied the stored list into both would answer a rule's predicate
+    // differently here than the direct api-key gate does.
+    const scope = apiKeyScope(
+      [
+        { slug: "read-posts", action: "read", resource: "posts" },
+        { slug: "update-posts", action: "update", resource: "posts" },
+      ],
+      ["editor"]
+    );
+    const caller = readAccessCaller({
+      user: { id: "owner-1", roles: ["editor"] },
+      authenticatedScope: scope,
+    });
+
+    expect(caller.authMethod).toBe("api-key");
+    expect(caller.permissions).toEqual(["read-posts", "update-posts"]);
+    expect(caller.rulePermissions).toEqual(["posts:read", "posts:update"]);
+  });
+
+  it("gives a session caller no grants in either spelling", () => {
+    const caller = readAccessCaller({ user: { id: "u1", roles: ["editor"] } });
+    expect(caller.authMethod).toBe("session");
+    expect(caller.permissions).toEqual([]);
+    expect(caller.rulePermissions).toBeUndefined();
   });
 });
 

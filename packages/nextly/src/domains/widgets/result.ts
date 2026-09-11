@@ -57,9 +57,9 @@ export type WidgetResult =
        * Whether `total` is a FLOOR rather than the whole answer.
        *
        * 🔴 Present because some counts cannot be computed in the database. Where
-       * a source's rows are filtered by a rule the query cannot express — a
-       * stored `owner-only` or `custom` read rule lives on the collection, not
-       * on the sidecar table being counted — the only honest count walks
+       * a source's rows are filtered by something the query cannot express — the
+       * collection's own lifecycle lives on its table, not on the sidecar table
+       * being counted — the only honest count walks
        * candidates and authorizes them, which is bounded work. Past that bound
        * the choice is to refuse, to publish a number that is quietly too small,
        * or to say plainly that there are at least this many.

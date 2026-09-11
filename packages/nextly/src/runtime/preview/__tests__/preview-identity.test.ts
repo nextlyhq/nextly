@@ -37,8 +37,8 @@ describe("the identity a previewed draft is rendered as", () => {
     getCachedNextly.mockResolvedValue({});
   });
 
-  // A role-based rule reads `roles`; an owner-only rule compares the document's
-  // owner against `id`; a rule keyed on an email domain reads `email`. All of
+  // A role-based rule reads `roles`; a rule keyed on the caller reads `id`; one
+  // keyed on an email domain reads `email`. All of
   // them have to be present or the rules answer about nobody — which strips
   // more than the sharer would lose and looks like a broken page.
   it("is the sharer, with the identity their own request would carry", async () => {

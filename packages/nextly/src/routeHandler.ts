@@ -767,10 +767,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * Read methods that still need resolved role slugs, even though reads normally
  * skip the lookup.
  *
- * Every method here evaluates the caller's stored access rules through
- * `checkCollectionAccess`, which reads roles twice over: the super-admin bypass
- * is keyed on the role set (`isSuperAdminContext`), and stored role-based rules
- * match against the roles forwarded in the request context. A caller arriving
+ * Every method here runs the caller through `checkCollectionAccess`, which
+ * reads roles twice over: the super-admin bypass is keyed on the role set
+ * (`isSuperAdminContext`), and the RBAC gate matches the caller's permissions
+ * against the roles forwarded in the request context. A caller arriving
  * without roles is therefore treated as a non-super-admin holding no roles, so
  * a role-based rule denies a legitimately permitted reader and a super-admin
  * loses the bypass and gets owner-filtered instead.
@@ -786,10 +786,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * silently ignores the rule it was configured with is the worse tradeoff.
  */
 const ROLE_AWARE_READ_METHODS = new Set([
-  // The autosave reads evaluate the document's stored access rules through the
-  // same gate the version reads use, so they need resolved roles for the same
-  // reason: without them a caller arrives as a non-super-admin holding no
-  // roles, and a role-based rule answers not-found for the author whose own
+  // The autosave reads run through the same gate the version reads use, so
+  // they need resolved roles for the same reason: without them a caller arrives
+  // as a non-super-admin holding no roles, and the gate answers not-found for
+  // the author whose own
   // recovery point it is.
   "getEntryAutosave",
   "getSingleAutosave",
@@ -810,8 +810,8 @@ const ROLE_AWARE_READ_METHODS = new Set([
  *
  * Resolving roles costs a permissions query for session auth, so it is opt-in:
  * collection and single mutations consume them for hook context and access
- * rules, and the reads in {@link ROLE_AWARE_READ_METHODS} consume them to
- * evaluate stored rules. Every other route reads no roles and must not pay for
+ * rules, and the reads in {@link ROLE_AWARE_READ_METHODS} consume them to run
+ * the access gate. Every other route reads no roles and must not pay for
  * the lookup.
  */
 function needsResolvedRoles(

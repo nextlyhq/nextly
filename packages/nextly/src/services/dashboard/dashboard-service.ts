@@ -546,13 +546,12 @@ export class DashboardService extends BaseService {
    *
    * This used to be `countTable`, a bare `SELECT COUNT(*)` over the physical
    * table. The read SCOPE decides whether a collection appears here at all; it
-   * says nothing about which rows inside it the caller may read, so a
-   * collection with an owner-only or custom stored read rule reported every
-   * author's rows to every reader who could open it -- the count disclosing
-   * exactly what the row read withholds.
+   * says nothing about which rows inside it the caller may read, so the count
+   * reported rows the row read withholds -- unpublished ones a public reader
+   * never sees among them.
    *
    * `overrideAccess: false` plus `user` is what closes it: `countEntries` runs
-   * `checkCollectionAccess` and then applies `getAccessQueryConstraint`, which
+   * `checkCollectionAccess`, which
    * is the same WHERE predicate the list read applies. `getRecentEntries` takes
    * the identical path for the same reason.
    *
@@ -611,10 +610,9 @@ export class DashboardService extends BaseService {
    * access-enforced path as the per-collection totals beside it.
    *
    * This used to be a raw `SELECT ... GROUP BY status` over the physical
-   * table -- ignoring both the collection's access rule and its stored
-   * row-level constraint, so a collection with an owner-only read rule
-   * reported every author's rows split by lifecycle to a reader who could see
-   * only a fraction of them. That number both disclosed rows the read access
+   * table -- ignoring the collection's access gate entirely, so it reported
+   * every row split by lifecycle to a reader who could see only a fraction of
+   * them. That number both disclosed rows the read access
    * withholds and disagreed with `content.totalEntries`, computed beside it
    * from the access-controlled count.
    *

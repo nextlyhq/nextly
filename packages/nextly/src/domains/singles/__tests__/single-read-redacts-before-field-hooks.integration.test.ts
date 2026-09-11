@@ -9,26 +9,17 @@
  * since it existed. Both now do: the first pass hides, the second re-judges
  * the post-hook document and catches a value a hook put back.
  *
- * A Single also has a document-level read rule. It is judged on the assembled
- * stored document before any afterRead hook and before field access, so it
- * sees every stored value and nothing a hook produced.
- *
  * Asserted through a booted instance and `findSingle`, with a hook that records
  * what it was handed, because the failure was in what reached app code.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, group, text } from "../../../config";
+import { defineSingle, text } from "../../../config";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-
-const RULE_PATH = new URL(
-  "../../collections/__tests__/_fixtures/single-read-rule.ts",
-  import.meta.url
-).pathname;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -146,107 +137,5 @@ describe("a Single read redacts before its field hooks (integration)", () => {
     // The `leak` hook's reassignment is judged like anything else: allowed
     // for this user, so the post-hook value stands.
     expect(doc?.apiToken).toBe("reintroduced");
-  });
-
-  it("judges the document rule on the stored document, denied fields included", async () => {
-    // The rule reads a nested value the caller may not read. It is judged
-    // before field read access removes that value, so it sees it.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          fields: [
-            text({ name: "siteName" }),
-            group({
-              name: "settings",
-              fields: [
-                text({ name: "visibility", access: { read: () => false } }),
-              ],
-            }),
-          ],
-        }),
-      ],
-    });
-    await current.adapter.update(
-      "dynamic_singles",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "branding" }] }
-    );
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      { siteName: "Acme", settings: { visibility: "private" } },
-      { overrideAccess: true }
-    );
-
-    const denied = await entry.get("branding", {
-      user: { id: "nested-aware" },
-      routeAuthorized: true,
-    });
-    expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
-
-    // The mirror: a public value passes, and never reaches the response.
-    await entry.update(
-      "branding",
-      { settings: { visibility: "public" } },
-      { overrideAccess: true }
-    );
-    const allowed = await entry.get("branding", {
-      user: { id: "nested-aware" },
-      routeAuthorized: true,
-    });
-    expect(allowed.success).toBe(true);
-    expect(
-      (allowed.data as { settings?: { visibility?: string } })?.settings
-    ).not.toHaveProperty("visibility");
-  });
-
-  it("does not let an afterRead hook change the access decision", async () => {
-    // The design this file protects, pinned so it is changed on purpose or
-    // not at all. The rule refuses a flagged document, and only a hook sets
-    // the flag. Access is decided on the stored document before any hook
-    // runs, so the read is allowed; judging after the hooks would need every
-    // value field access removed reconstructed onto whatever the hooks
-    // returned, which cannot be done soundly.
-    current = await createTestNextly({
-      singles: [
-        defineSingle({
-          slug: "branding",
-          fields: [
-            text({
-              name: "siteName",
-              hooks: {
-                afterRead: [
-                  ({ value, data }) => {
-                    (data as Record<string, unknown>).flagged = true;
-                    return value;
-                  },
-                ],
-              },
-            }),
-          ],
-        }),
-      ],
-    });
-    await current.adapter.update(
-      "dynamic_singles",
-      { access_rules: { read: { type: "custom", functionPath: RULE_PATH } } },
-      { and: [{ column: "slug", op: "=", value: "branding" }] }
-    );
-    const entry = current.getService("singleEntryService");
-    await entry.update(
-      "branding",
-      { siteName: "Acme" },
-      { overrideAccess: true }
-    );
-
-    const result = await entry.get("branding", {
-      user: { id: "flag-aware" },
-      routeAuthorized: true,
-    });
-    expect(result.success).toBe(true);
-    // The hook ran, so the response carries what it set.
-    expect((result.data as { flagged?: boolean })?.flagged).toBe(true);
   });
 });

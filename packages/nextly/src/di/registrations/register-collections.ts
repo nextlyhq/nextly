@@ -29,7 +29,6 @@ import {
 } from "../../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type { CacheRevalidator } from "../../revalidation/types";
-import { AccessControlService } from "../../services/access";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";
@@ -156,9 +155,6 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       );
     }
 
-    // UI-stored access rules (separate from the RBAC service).
-    const accessControlService = new AccessControlService();
-
     const rbacAccessControlService = container.get<RBACAccessControlService>(
       "rbacAccessControlService"
     );
@@ -175,7 +171,6 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       dynamicCollectionService,
       relationshipService,
       hookRegistry ?? createNoOpHookRegistry(),
-      accessControlService,
       fieldGroupDataService,
       rbacAccessControlService,
       // i18n M4: forward normalized localization config so localized reads resolve

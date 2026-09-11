@@ -26,4 +26,4 @@
 "@nextlyhq/ui": patch
 ---
 
-A Single read now applies field-level `access.read` rules before its field-level `afterRead` hooks, and again after them, the way a collection read always has. Before, a denied field's own hook ran and saw the value, and a hook on an allowed sibling could read the denied value; the response was redacted, but app code had already seen it. A Single's custom document-level read rule is now judged on the assembled stored document before any `afterRead` hook runs, rather than after them: it still sees fields the caller may not read, and a hook can no longer change whether the caller is allowed. Access decides on what is stored; hooks shape what is returned.
+A Single read now applies field-level `access.read` rules before its field-level `afterRead` hooks, and again after them, the way a collection read always has. Before, a denied field's own hook ran and saw the value, and a hook on an allowed sibling could read the denied value; the response was redacted, but app code had already seen it. Access decides on what is stored; hooks shape what is returned.

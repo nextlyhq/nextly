@@ -315,7 +315,6 @@ const SQLITE_SQL = {
       "schema_version" INTEGER NOT NULL DEFAULT 1,
       "migration_status" TEXT NOT NULL DEFAULT 'pending',
       "last_migration_id" TEXT,
-      "access_rules" TEXT,
       "hooks" TEXT,
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),

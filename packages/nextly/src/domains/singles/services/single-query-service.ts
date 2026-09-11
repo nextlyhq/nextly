@@ -24,7 +24,6 @@ import {
   apiKeyWriteAllowed,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
-import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
@@ -50,12 +49,7 @@ import {
 } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import type { CollectionAccessRules } from "../../../services/access";
-import {
-  AccessControlService,
-  isSuperAdminContext,
-} from "../../../services/access";
-import { GENERIC_DEFAULT_OWNER_FIELD } from "../../../services/access/types";
+import { isSuperAdminContext } from "../../../services/access";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import {
@@ -72,7 +66,6 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
-import { detachData } from "../../../shared/lib/detach";
 import { cloneDefault } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
@@ -86,7 +79,6 @@ import {
   stripPasswordFieldValues,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
-import { relationKey } from "../../collections/services/collection-relationship-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -171,248 +163,6 @@ type DefaultDocumentDraft = {
  */
 const DEFAULT_READ_DEPTH = 2;
 
-/**
- * A relationship field's configured population limit, when it declares one.
- * `0` means the reference is meant to stay a reference.
- */
-function relationshipMaxDepth(field: FieldConfig): number | undefined {
-  const config = field as {
-    maxDepth?: number;
-    options?: { maxDepth?: number };
-  };
-  return config.options?.maxDepth ?? config.maxDepth;
-}
-
-/** Marks a stored value whose JSON could not be read. */
-const UNREADABLE_CONTAINER = Symbol("unreadable-container");
-
-/**
- * Parse a group or repeater that may still be a JSON string (SQLite's shape).
- *
- * A string here is always meant to be JSON, so failing to read it is not the
- * same as holding nothing: it hides whatever the container held, and treating
- * it as empty would walk past every relationship inside it.
- */
-function parseContainer(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return UNREADABLE_CONTAINER;
-  }
-}
-
-/**
- * Parse a relationship or upload value that may hold one reference or a list.
- *
- * Unlike a container, a bare string here is an ordinary id rather than JSON, so
- * only a value that announces itself as a list is parsed — and only that case
- * can be unreadable.
- */
-function parseReferenceValue(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  if (!value.trimStart().startsWith("[")) return value;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return UNREADABLE_CONTAINER;
-  }
-}
-
-/** The rows of a group (one) or repeater (many), whatever form they arrive in. */
-/**
- * Whether a stored container holds something other than the shape its field
- * declares — a group arriving as a list, say, or as a scalar.
- *
- * Read as zero rows, such a value walks the check past every relationship
- * inside it, which is the same blind spot as JSON that would not parse. An
- * absent container is not this: nothing was stored, so there is nothing to
- * miss.
- */
-function isMisshapenContainer(
-  value: unknown,
-  type: "group" | "repeater"
-): boolean {
-  if (value === null || value === undefined || value === "") return false;
-  const parsed = parseContainer(value);
-  if (parsed === UNREADABLE_CONTAINER) return true;
-  if (parsed === null || parsed === undefined) return false;
-  if (type !== "repeater") {
-    return typeof parsed !== "object" || Array.isArray(parsed);
-  }
-  if (!Array.isArray(parsed)) return true;
-  // A row that is not an object is as unreadable as the whole container being
-  // the wrong shape: it becomes no row at all, and the walk steps over every
-  // relationship it was supposed to hold. An absent row is not this — nothing
-  // was stored there.
-  return parsed.some(
-    row =>
-      row !== null &&
-      row !== undefined &&
-      (typeof row !== "object" || Array.isArray(row))
-  );
-}
-
-function containerRows(
-  value: unknown,
-  type: "group" | "repeater"
-): (Record<string, unknown> | undefined)[] {
-  const parsed = parseContainer(value);
-  if (parsed === UNREADABLE_CONTAINER) return [];
-  if (type === "repeater") {
-    return Array.isArray(parsed)
-      ? parsed.map(row =>
-          row && typeof row === "object"
-            ? (row as Record<string, unknown>)
-            : undefined
-        )
-      : [];
-  }
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? [parsed as Record<string, unknown>]
-    : [];
-}
-
-/** Whether a field holds nothing at all. */
-function isEmptyValue(value: unknown): boolean {
-  return value === null || value === undefined || value === "";
-}
-
-/**
- * Whether a value is an expanded document rather than a reference to one.
- *
- * The `id` is what distinguishes them. A polymorphic reference is stored as
- * `{ relationTo, value }` — an object, and so indistinguishable from a row by
- * shape alone, which would let an unexpanded reference pass for evidence.
- */
-function isExpandedRow(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  // Tested before the wrapper shape, not after: a row carries an id and a
-  // wrapper never does, while a row from a collection that happens to define
-  // fields called `relationTo` and `value` looks exactly like one. Unwrapping
-  // such a row would judge one of its own field values instead of the row.
-  if ("id" in value) return true;
-  // A reference that names its own collection keeps that shape when it is
-  // populated, with the row under `value` — so the row is what has to be
-  // judged. Unpopulated, `value` is still the bare id and fails the same test.
-  if ("relationTo" in value && "value" in value) {
-    return isExpandedRow((value as Record<string, unknown>).value);
-  }
-  return false;
-}
-
-/**
- * Whether a relationship arrived as documents rather than references.
- *
- * Judged on the ASSEMBLED value first, because that is the only place a
- * localized reference appears at all: it lives in the companion table and is
- * overlaid after the main row is read, so comparing against the stored row
- * would skip the field entirely.
- *
- * Cardinality is the second half: a `hasMany` expansion drops the entries it
- * could not fetch, so a shorter list — or an empty one — is evidence that went
- * missing rather than evidence that says nothing is there.
- */
-/** The id a stored reference points at, in either shape it is stored in. */
-function referenceId(reference: unknown): string {
-  if (typeof reference === "string") return reference;
-  if (reference !== null && typeof reference === "object") {
-    const { value, id } = reference as Record<string, unknown>;
-    if (typeof value === "string") return value;
-    if (typeof id === "string") return id;
-  }
-  return "";
-}
-
-/**
- * The collection a stored reference points at.
- *
- * A field naming several targets records the collection on the value itself;
- * anything else belongs to the field's declared target. Needed because a
- * withheld row is recorded per collection — an id alone is only unique within
- * one, so a refusal in one target would otherwise excuse a lost row in another.
- */
-/** A relationship field's declared target, in either shape it is declared in. */
-function singleFieldTarget(field: FieldConfig): string {
-  const config = field as {
-    relationTo?: unknown;
-    options?: { target?: unknown };
-  };
-  if (typeof config.relationTo === "string") return config.relationTo;
-  if (Array.isArray(config.relationTo)) return "";
-  const target = config.options?.target;
-  return typeof target === "string" ? target : "";
-}
-
-function referenceCollection(
-  reference: unknown,
-  fallbackCollection: string
-): string {
-  if (reference !== null && typeof reference === "object") {
-    const { relationTo } = reference as Record<string, unknown>;
-    if (typeof relationTo === "string") return relationTo;
-  }
-  return fallbackCollection;
-}
-
-function referencesExpanded(
-  stored: unknown,
-  assembled: unknown,
-  /**
-   * Ids the target collection's own rules refused this caller.
-   *
-   * Such a reference is absent on purpose. Counting it as evidence that went
-   * missing would refuse a document the caller may read because something it
-   * points at is something they may not.
-   */
-  withheldByAccess?: Set<string>,
-  /** The field's declared target, for references that do not name their own. */
-  fieldTarget = ""
-): boolean {
-  const parsedStored = parseReferenceValue(stored);
-  if (parsedStored === UNREADABLE_CONTAINER) return false;
-  const storedList = parsedStored;
-  // References the target's own rules refused are absent on purpose, so they
-  // are removed from what has to have arrived. A `hasMany` holding both
-  // readable and refused rows therefore compares the shortened list against
-  // the references that were actually expandable, rather than against every
-  // reference the row stored.
-  const withheld = (ref: unknown): boolean =>
-    Boolean(
-      withheldByAccess?.has(
-        relationKey(referenceCollection(ref, fieldTarget), referenceId(ref))
-      )
-    );
-  const expectable = (ref: unknown): boolean => !withheld(ref);
-  if (withheldByAccess?.size) {
-    const refusedEveryReference = (
-      Array.isArray(storedList) ? storedList : [storedList]
-    )
-      .filter(ref => !isEmptyValue(ref))
-      .every(ref => withheld(ref));
-    if (refusedEveryReference) return true;
-  }
-  const storedRefs = Array.isArray(storedList)
-    ? storedList.filter(id => !isEmptyValue(id)).filter(expectable)
-    : undefined;
-
-  if (Array.isArray(assembled)) {
-    if (!assembled.every(isExpandedRow)) return false;
-    return storedRefs === undefined || assembled.length === storedRefs.length;
-  }
-
-  // Nothing in the view is only honest when nothing was referenced.
-  if (isEmptyValue(assembled)) {
-    return storedRefs !== undefined
-      ? storedRefs.length === 0
-      : isEmptyValue(stored);
-  }
-
-  return isExpandedRow(assembled);
-}
-
 /** Whether these fields hold a relationship, optionally looking inside containers. */
 function containsRelationField(
   fields: FieldConfig[],
@@ -481,16 +231,16 @@ export function buildSingleHookContext<T>(
  * Evaluation order:
  * 1. `overrideAccess` bypass → null (allow)
  * 2. Super-admin (by authorized role) bypass → null (allow)
- * 3. Stored access rules (`accessRules[operation]`: public / authenticated /
- *    role-based / owner-only / custom) — denies with 403 when they fail. UI
- *    Singles persist these, so they must be enforced on every transport, not
- *    just the coarse RBAC permission.
- * 4. `routeAuthorized` with a verified user → null: the route middleware
- *    already ran the RBAC gate, so skip only that redundant re-check (the
- *    stored rules above still ran).
- * 5. No RBAC service or no user → null (skip)
- * 6. RBAC check (super-admin → code-defined → DB permissions)
- * 7. Fail-secure on unexpected errors
+ * 3. `routeAuthorized` with a verified user → null: the route middleware
+ *    already ran the RBAC gate, so skip that redundant re-check.
+ * 4. Anonymous publish/unpublish → 403, whatever any rule says.
+ * 5. No user → the Single's own code-defined rule decides, handed a real
+ *    anonymous context; a rule that names nothing lets the request through
+ *    to the public default. The DB-permission half needs a user and does not
+ *    run. Mirrors the collection gate, so one rule gives one answer.
+ * 6. No RBAC service → null (skip)
+ * 7. RBAC check (super-admin → code-defined → DB permissions)
+ * 8. Fail-secure on unexpected errors
  *
  * @returns `null` if access is allowed, `SingleResult` if denied
  */
@@ -511,26 +261,6 @@ export async function checkSingleAccess(params: {
   // The caller's authenticated scope. A scoped API key is judged on its OWN
   // stamped grants for the publish/unpublish transition, not the owner's RBAC.
   authenticatedScope?: AuthenticatedScope;
-  /** Evaluator for the Single's stored access rules. */
-  accessControlService?: AccessControlService;
-  /** The Single's stored access rules (from the registry metadata). */
-  accessRules?: CollectionAccessRules;
-  /**
-   * The current Single document, when loaded. Owner-only rules need it to
-   * compare ownership; without it they allow (deferring to the DB-level check).
-   */
-  document?: Record<string, unknown>;
-  /**
-   * Skip the stored-rule evaluation and return after only the RBAC/permission
-   * gate. The publish-transition pre-resolve sets this when the operation's
-   * stored rule is document-dependent (owner-only/custom), so that rule is NOT
-   * judged against the pre-transaction document here — it is re-evaluated against
-   * the row-locked document inside the write transaction instead (see
-   * `evaluateTransitionDocumentRule` on the mutation service). Non-dependent
-   * rules (public/authenticated/role-based) are fully decidable without the row,
-   * so callers leave this false and let them run here.
-   */
-  deferStoredRuleEval?: boolean;
   logger: Logger;
 }): Promise<SingleResult | null> {
   const {
@@ -541,10 +271,6 @@ export async function checkSingleAccess(params: {
     routeAuthorized,
     rbacAccessControlService,
     authenticatedScope,
-    accessControlService,
-    accessRules,
-    document,
-    deferStoredRuleEval,
     logger,
   } = params;
 
@@ -552,7 +278,7 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  // Super-admins bypass the stored rules on every transport — EXCEPT via a
+  // Super-admins bypass the RBAC gate on every transport — EXCEPT via a
   // scoped API key. The bypass belongs to the session path: a key is
   // authoritative on its OWN stamped scope, never on the owner's roles, so a
   // read/update-only key issued by an admin is not equivalent to their full
@@ -562,76 +288,21 @@ export async function checkSingleAccess(params: {
     return null;
   }
 
-  // Evaluate the Single's stored access rules (owner-only is degenerate for a
-  // single global document; public / authenticated / role-based / custom all
-  // apply). This runs for both route-authorized and Direct API callers so a
-  // caller holding the coarse `update-<single>` permission but failing a
-  // stored rule is still denied. Skipped when `deferStoredRuleEval` is set: the
-  // transition pre-resolve defers a document-dependent (owner-only/custom) rule
-  // to the under-lock re-check so it is not judged against a stale document.
-  if (accessControlService && accessRules && !deferStoredRuleEval) {
-    // Owner-only with no loaded document: ownership cannot be evaluated (there
-    // is nothing to compare against), and evaluateOwnerAccess would otherwise
-    // ALLOW the write for lack of a document — letting a caller with only the
-    // coarse permission perform the first PATCH to an owner-only Single without
-    // any ownership check. Fail closed; a legitimate first write goes through a
-    // trusted `overrideAccess` seed.
-    if (accessRules[operation]?.type === "owner-only" && !document) {
-      return {
-        success: false,
-        statusCode: 403,
-        message: `Access denied: ${operation} on single "${slug}" requires an existing owned document`,
-      };
-    }
-    // A stored `custom` rule may key on the document id, so forward it (from
-    // the loaded document) alongside the document itself.
-    const documentId =
-      typeof document?.id === "string" ? document.id : undefined;
-    const result = await accessControlService.evaluateAccess(
-      accessRules,
-      operation,
-      {
-        // Spread rather than rebuild: a `custom` rule may decide on a claim
-        // this framework does not know about, and copying named fields drops
-        // every one of them.
-        user: user ? { ...user } : undefined,
-      },
-      documentId,
-      document
-    );
-    if (!result.allowed) {
-      return {
-        success: false,
-        statusCode: 403,
-        message:
-          result.reason ??
-          `Access denied: ${operation} on single "${slug}" is not permitted`,
-      };
-    }
-  }
-
   // The route middleware already ran this exact RBAC gate; skip the redundant
   // re-check — but only when a verified user is present, so a caller that sets
   // routeAuthorized without authenticating cannot silently allow an anonymous
-  // write. The stored rules above already ran; field-level write access still
-  // applies downstream (overrideAccess is false).
+  // write. Field-level write access still applies downstream (overrideAccess is
+  // false).
   if (routeAuthorized && user) {
     return null;
   }
 
-  // Secure-by-default publish gate (Option A): publishing/unpublishing changes a
-  // document's privileged published state, so an anonymous caller may do it ONLY
-  // when an explicit rule grants it. With no explicit publish/unpublish rule the
-  // operation would otherwise fall through to the rule-less public default below
+  // Secure-by-default publish gate: publishing/unpublishing changes a document's
+  // privileged published state, so an anonymous caller may never do it. Without
+  // this the operation falls through to the permission-less public default below
   // (`!user` → allow), letting an unauthenticated caller publish a
-  // publicly-writable Single. An explicit stored rule was evaluated above and
-  // allowed if we reach here, so a developer who deliberately opened publishing
-  // (e.g. a public `publish` rule) is respected; only the implicit default denies.
-  if (
-    !user &&
-    (operation === "publish" || operation === "unpublish") &&
-    !accessRules?.[operation]
-  ) {
+  // publicly-writable Single.
+  if (!user && (operation === "publish" || operation === "unpublish")) {
     return {
       success: false,
       statusCode: 403,
@@ -640,6 +311,27 @@ export async function checkSingleAccess(params: {
   }
 
   if (!user) {
+    // A caller with NO session, judged against the Single's own code-defined
+    // rule. Everything below resolves roles and permissions from a user id, so
+    // without one the DB-permission half has nothing to check — but the rule
+    // reads nothing off the caller, and `read: false` or
+    // `read: ({ user }) => !!user` on a Single describes this caller most
+    // clearly of all. Left unasked here, the same rule refused an anonymous
+    // reader on a collection and admitted one on a Single.
+    //
+    // `undefined` means no code-defined rule governs the operation, and the
+    // request falls through to the public default. A boolean is the verdict.
+    const allowed = await rbacAccessControlService?.checkAnonymousCodeAccess({
+      operation,
+      resource: slug,
+    });
+    if (allowed === false) {
+      return {
+        success: false,
+        statusCode: 403,
+        message: `Access denied: insufficient permissions for ${operation} on single "${slug}"`,
+      };
+    }
     return null;
   }
 
@@ -789,7 +481,6 @@ export class SingleQueryService extends BaseService {
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
     private readonly localization?: SanitizedLocalizationConfig,
-    accessControlService?: AccessControlService,
     /**
      * What a due release makes visible.
      *
@@ -799,16 +490,7 @@ export class SingleQueryService extends BaseService {
     private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
   ) {
     super(adapter, logger);
-    // Evaluates the Single's stored access rules. Defaulted rather than
-    // required so every existing construction site keeps working, mirroring
-    // how the mutation service resolves the same dependency: without one the
-    // read gate would silently skip the stored rules it is handed.
-    this.accessControlService =
-      accessControlService ?? new AccessControlService();
   }
-
-  /** Resolves stored `accessRules` for the read gate. */
-  private readonly accessControlService: AccessControlService;
 
   /**
    * Build the document a caller would receive from a stored row.
@@ -899,16 +581,56 @@ export class SingleQueryService extends BaseService {
     const updateDenied = await checkSingleAccess({
       slug,
       operation: "update",
-      accessRules: singleMeta.accessRules,
       user: options.user,
       overrideAccess: false,
       routeAuthorized: false,
       rbacAccessControlService: this.rbacAccessControlService,
-      accessControlService: this.accessControlService,
       authenticatedScope: options.authenticatedScope,
       logger: this.logger,
     });
     return !updateDenied;
+  }
+
+  /**
+   * The access context a related row is read under on this Single's read path.
+   *
+   * ONE builder for every expansion the read performs — the live document and
+   * the working-draft overlay that replaces it — because the two used to
+   * assemble their own contexts and the overlay's set neither enforcement
+   * flag. An incomplete context is a VALID one describing a different caller,
+   * so the overlay silently read every target fully trusted: a relationship in
+   * a pending draft exposed rows from a target whose rule refuses this caller,
+   * while the live relationship and a direct read of the target withheld them.
+   */
+  private relatedRowAccess(
+    options: GetSingleOptions,
+    enforceRelatedFieldAccess: boolean,
+    readLocale: string | undefined
+  ): RelatedRowReadContext {
+    return {
+      enforceFieldAccess: enforceRelatedFieldAccess,
+      // Beside the flag, never folded into `user`: a preview judges a related
+      // row's fields as the sharer while every hook goes on seeing the
+      // anonymous visitor who is actually asking.
+      fieldAccessUser: options.fieldAccessUser,
+      // Always on, unlike field redaction: a related row the target collection
+      // refuses this caller must not reach the response.
+      enforceCollectionAccess: true,
+      user: options.user,
+      overrideAccess: options.overrideAccess,
+      // Narrows that bypass per RELATED collection. Absent means unchanged;
+      // dropping it here would silently restore the full bypass.
+      trusted: assumedBound(options.trusted),
+      authenticatedScope: options.authenticatedScope,
+      locale: readLocale,
+      // Only "read everything" propagates, and only when asked for: the
+      // admin sends it on every read, a public caller never does.
+      status: expansionStatusScope({
+        status: options.status,
+        overrideAccess: options.overrideAccess,
+        bounded: narrows(options.trusted),
+      }),
+    };
   }
 
   /**
@@ -923,8 +645,11 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord;
     doc: SingleDocument;
     options: GetSingleOptions;
+    /** As handed to the live assembly this overlay replaces. */
+    enforceRelatedFieldAccess: boolean;
   }): Promise<SingleDocument> {
-    const { slug, singleMeta, doc, options } = params;
+    const { slug, singleMeta, doc, options, enforceRelatedFieldAccess } =
+      params;
 
     const entryId = (doc as { id?: string }).id;
     if (entryId === undefined) return doc;
@@ -968,11 +693,25 @@ export class SingleQueryService extends BaseService {
       singleMeta.fields,
       expansionAccess(options)
     );
+    // The SAME context the live document's relationships were read under,
+    // so a related row is judged identically whether it arrived through the
+    // live row or through the draft that replaces it.
     overlaid = await this.expandRelationshipFields(
       overlaid,
       singleMeta.fields,
       options.depth,
-      expansionAccess(options)
+      this.relatedRowAccess(
+        options,
+        enforceRelatedFieldAccess,
+        resolveLocaleChain(
+          this.localization,
+          options.locale,
+          options.fallbackLocale
+        )?.[0]
+      ),
+      // As the live read does: the caller is threaded, so nested targets can
+      // be judged too.
+      true
     );
     // Component POPULATION is deliberately NOT re-run, mirroring the collection
     // overlay. The snapshot already carries the draft's own component values;
@@ -999,27 +738,6 @@ export class SingleQueryService extends BaseService {
      * where the document holds something reads that absence as permission.
      */
     enforceRelatedFieldAccess: boolean;
-    /** Skip the companion overlay for a draft that carries its defaults inline. */
-    skipLocalizedOverlay?: boolean;
-    /**
-     * Called with the document once translations are overlaid and JSON is
-     * decoded, but before anything is expanded — the point at which every
-     * reference the read will try to resolve is visible, and the only place a
-     * LOCALIZED reference appears at all.
-     */
-    captureReferences?: (doc: SingleDocument) => void;
-    /**
-     * Fail rather than degrade. The response assembly is best-effort by design
-     * — a relationship that cannot be expanded is returned unexpanded, and a
-     * component table that cannot be read yields empty values. Neither is safe
-     * for a document an access rule is about to be judged on.
-     */
-    strict?: boolean;
-    /**
-     * Collects references a target collection refused, so the completeness
-     * check can tell a refusal from a load that failed.
-     */
-    withheldByAccess?: Set<string>;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -1027,7 +745,6 @@ export class SingleQueryService extends BaseService {
       options,
       statusFilterValues,
       enforceRelatedFieldAccess,
-      strict = false,
     } = params;
     let doc = params.doc;
 
@@ -1036,36 +753,31 @@ export class SingleQueryService extends BaseService {
     // expansion — the companion stores JSON/upload/relationship values in their raw storage form,
     // so the overlay must land before those transforms run (matching the collection read path).
     // No-op when localization is off or the single isn't localized.
-    if (!params.skipLocalizedOverlay) {
-      try {
-        await this.populateLocalized(
-          slug,
-          singleMeta,
-          doc,
-          options.locale,
-          options.fallbackLocale,
-          statusFilterValues
-        );
-      } catch (error) {
-        // Normalized whether or not the caller is judging an access rule on the result. A
-        // companion read failure propagates, and the result builder puts a bare Error's own
-        // message on the wire — the failed query, with companion table and column names in it.
-        throw NextlyError.is(error)
-          ? error
-          : NextlyError.internal({
-              cause: error instanceof Error ? error : undefined,
-              logContext: {
-                single: slug,
-                reason: strict
-                  ? "translation-load-failed-during-authorization"
-                  : "translation-load-failed",
-              },
-            });
-      }
+    try {
+      await this.populateLocalized(
+        slug,
+        singleMeta,
+        doc,
+        options.locale,
+        options.fallbackLocale,
+        statusFilterValues
+      );
+    } catch (error) {
+      // A companion read failure propagates, and the result builder puts a bare
+      // Error's own message on the wire — the failed query, with companion table
+      // and column names in it.
+      throw NextlyError.is(error)
+        ? error
+        : NextlyError.internal({
+            cause: error instanceof Error ? error : undefined,
+            logContext: {
+              single: slug,
+              reason: "translation-load-failed",
+            },
+          });
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
-    params.captureReferences?.(doc);
     doc = await this.expandUploadFields(
       doc,
       singleMeta.fields,
@@ -1082,65 +794,11 @@ export class SingleQueryService extends BaseService {
       doc,
       singleMeta.fields,
       options.depth,
-      {
-        enforceFieldAccess: enforceRelatedFieldAccess,
-        // Beside the flag, never folded into `user`: a preview judges a related
-        // row's fields as the sharer while every hook goes on seeing the
-        // anonymous visitor who is actually asking.
-        fieldAccessUser: options.fieldAccessUser,
-        // Always on, unlike field redaction: the authorization view must not be
-        // shown a related row the response is going to withhold, or its rule
-        // approves the document and the read's side effects run before the
-        // final check discovers the row is gone.
-        enforceCollectionAccess: true,
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        // Narrows that bypass per RELATED collection. Absent means unchanged;
-        // dropping it here would silently restore the full bypass.
-        trusted: assumedBound(options.trusted),
-        authenticatedScope: options.authenticatedScope,
-        // Collects the references a target collection refused, so the
-        // completeness check below reads them as absent on purpose.
-        withheldByAccess: params.withheldByAccess,
-        // A target collection's read rule may filter on one of its own
-        // localized fields, which is a companion lookup rather than a column.
-        locale: readLocale,
-        // Only "read everything" propagates, and only when asked for: the
-        // admin sends it on every read, a public caller never does.
-        status: expansionStatusScope({
-          status: options.status,
-          overrideAccess: options.overrideAccess,
-          bounded: narrows(options.trusted),
-        }),
-      },
-      strict,
+      this.relatedRowAccess(options, enforceRelatedFieldAccess, readLocale),
       // The read path threads a caller, so the target collection's field rules
       // can be evaluated for the rows this pulls in.
       true
     );
-
-    // A strict pass is the authorization view, and its whole contract is that a
-    // rule is judged on complete data or not at all. Field-group values live in
-    // their own tables, so without the service that loads them the rule reads
-    // the fields as empty — the same "absence looks like permission" failure the
-    // depth floor and the relationship completeness check exist to prevent, and
-    // it would silently admit callers a rule inspecting those values refuses.
-    // Only a Single that actually declares field-group fields is affected; the
-    // service is always wired in the DI graph, so this guards the seam rather
-    // than a reachable configuration.
-    if (!this.fieldGroupDataService && strict) {
-      const declaresFieldGroups = singleMeta.fields.some(field =>
-        isFieldGroupField(field)
-      );
-      if (declaresFieldGroups) {
-        throw NextlyError.internal({
-          logContext: {
-            single: slug,
-            reason: "field-group-data-service-unavailable-during-authorization",
-          },
-        });
-      }
-    }
 
     if (this.fieldGroupDataService) {
       try {
@@ -1170,12 +828,10 @@ export class SingleQueryService extends BaseService {
             // Narrows that bypass per RELATED collection. Absent means unchanged;
             // dropping it here would silently restore the full bypass.
             trusted: assumedBound(options.trusted),
-            // A relationship inside a component is populated by the same
-            // service, so a refusal there has to reach the completeness check
-            // too, and the rows of one population share a policy cache.
-            withheldByAccess: params.withheldByAccess,
+            // The rows of one population share a policy cache.
             targetPolicies: new Map(),
             targetCompanions: new Map(),
+            targetVerdicts: new Map(),
             authenticatedScope: options.authenticatedScope,
             locale: readLocale,
             status: expansionStatusScope({
@@ -1184,455 +840,23 @@ export class SingleQueryService extends BaseService {
               bounded: narrows(options.trusted),
             }),
           },
-          // Read errors otherwise become empty component values, which reads to a
-          // rule exactly like a component that holds nothing.
-          strict,
         })) as SingleDocument;
       } catch (error) {
-        // Only strict asks for a throw, and the result builder puts a bare
-        // Error's own message on the wire — component table and column names
-        // the caller has no business seeing.
-        if (!strict) throw error;
+        // The result builder puts a bare Error's own message on the wire —
+        // component table and column names the caller has no business seeing.
         throw NextlyError.is(error)
           ? error
           : NextlyError.internal({
               cause: error instanceof Error ? error : undefined,
               logContext: {
                 single: slug,
-                reason: "component-population-failed-during-authorization",
+                reason: "component-population-failed",
               },
             });
       }
     }
 
     return doc;
-  }
-
-  /**
-   * Build the copy of a document that an access rule is judged on.
-   *
-   * Two things separate it from the response. Related rows keep the fields the
-   * target collection would hide from this caller, because a rule reading one
-   * must see the stored value rather than the hole redaction leaves — the same
-   * "absence means allowed" reading that admits a caller the rule exists to
-   * refuse. And it is detached, so a rule that writes to its `data` argument
-   * changes nothing the caller receives: a rule is a decision, not a
-   * transformation.
-   */
-  /**
-   * Refuse an authorization view whose relationship evidence is incomplete.
-   *
-   * Expansion is best-effort several layers down: a related table that cannot
-   * be read is logged and yields nothing, so the field comes back as the bare
-   * id it started as, and a `hasMany` list quietly loses the entries that could
-   * not be fetched. That is a fine response and a dangerous thing to judge — a
-   * rule reading into a related row sees nothing there, and an absence-tolerant
-   * one reads that as permission. Rather than thread a strict flag through a
-   * service shared with the collection paths, the property that actually
-   * matters is checked directly: every stored reference that should have become
-   * a row did, and none went missing on the way.
-   *
-   * Many-to-many relations are not covered, having no id on the main row to
-   * compare against.
-   */
-  private assertRelationshipsExpanded(
-    slug: string,
-    fields: FieldConfig[],
-    stored: Record<string, unknown> | undefined,
-    assembled: Record<string, unknown> | undefined,
-    /**
-     * Whether relationships were expanded for this document at all. A read at
-     * `depth: 0` asks for references and gets them, so requiring documents
-     * there refuses a response that is exactly what was requested. Uploads are
-     * unaffected: they populate whatever depth is asked for.
-     */
-    expandsRelationships = true,
-    path = "",
-    /**
-     * Ids a target collection's rules refused this caller, so an absence they
-     * caused is not read as evidence that failed to load.
-     */
-    withheldByAccess?: Set<string>
-  ): void {
-    if (!assembled) return;
-
-    for (const field of fields) {
-      if (!("name" in field) || !field.name) continue;
-      const name = field.name;
-      const type = field.type as string;
-      // `stored` may not carry the field at all: a localized value lives in the
-      // companion table and only reaches the document once it is overlaid.
-      const before = stored?.[name];
-      const after = assembled[name];
-      if (isEmptyValue(before) && isEmptyValue(after)) continue;
-      const where = path ? `${path}.${name}` : name;
-
-      // `relation` is deliberately absent: the relationship service matches
-      // `relationship` only, so a field declared with the legacy alias is never
-      // expanded for anyone, and requiring a document for it would refuse every
-      // read of a Single that uses one. A rule reading into such a field sees
-      // the reference — a limitation of the alias, not of this check.
-      if (type === "relationship" || type === "upload") {
-        if (type !== "upload" && !expandsRelationships) continue;
-        // `maxDepth: 0` asks for the reference itself, so an unexpanded id is
-        // the configured outcome rather than a failure to expand. Uploads are
-        // populated whatever depth is configured, so the same exemption would
-        // skip their only check.
-        if (type !== "upload" && relationshipMaxDepth(field) === 0) continue;
-        if (
-          !referencesExpanded(
-            before,
-            after,
-            withheldByAccess,
-            singleFieldTarget(field)
-          )
-        ) {
-          this.logger.error(
-            "Refusing a single read: relationship evidence could not be assembled",
-            { single: slug, field: where }
-          );
-          throw NextlyError.internal({
-            logContext: {
-              single: slug,
-              field: where,
-              reason: "incomplete-authorization-view",
-            },
-          });
-        }
-        continue;
-      }
-
-      // A relationship nested in a container is expanded too, so the same
-      // guarantee has to reach it.
-      if (type !== "group" && type !== "repeater") continue;
-      const nested = "fields" in field ? (field.fields as FieldConfig[]) : [];
-      if (!nested || nested.length === 0) continue;
-
-      // A container that cannot be read, or that holds the wrong shape, is not
-      // a container that holds nothing. Its relationships are unreachable
-      // either way, so the walk below would step over them and the document
-      // would be judged on what it could not see.
-      if (
-        isMisshapenContainer(before, type) ||
-        isMisshapenContainer(after, type)
-      ) {
-        this.logger.error(
-          "Refusing a single read: a container could not be read while authorizing",
-          { single: slug, field: where }
-        );
-        throw NextlyError.internal({
-          logContext: {
-            single: slug,
-            field: where,
-            reason: "unreadable-container-during-authorization",
-          },
-        });
-      }
-
-      const storedRows = containerRows(before, type);
-      const assembledRows = containerRows(after, type);
-      // Bounded by the longer side: a localized container reaches the document
-      // only through the overlay, so the reference snapshot may hold rows the
-      // stored row never had — and the reverse for one that failed to load.
-      const rowCount = Math.max(storedRows.length, assembledRows.length);
-      for (let index = 0; index < rowCount; index += 1) {
-        this.assertRelationshipsExpanded(
-          slug,
-          nested,
-          storedRows[index],
-          assembledRows[index],
-          expandsRelationships,
-          type === "repeater" ? `${where}[${index}]` : where,
-          withheldByAccess
-        );
-      }
-    }
-  }
-
-  private async buildAuthorizationView(params: {
-    slug: string;
-    singleMeta: DynamicSingleRecord;
-    doc: SingleDocument;
-    options: GetSingleOptions;
-    statusFilterValues: readonly string[] | undefined;
-    skipLocalizedOverlay?: boolean;
-  }): Promise<SingleDocument> {
-    let references: SingleDocument | undefined;
-    // Rows the targets' own rules refused while assembling this view.
-    const viewWithheld = new Set<string>();
-    const assembled = await this.assembleStoredDocument({
-      ...params,
-      // Every reference the read will resolve, including the localized ones the
-      // stored row never carries. Detached so later stages cannot rewrite the
-      // record of what was supposed to be there.
-      captureReferences: doc => {
-        references = detachData(doc);
-      },
-      // Assembled from a copy of the row: the transforms mutate what they are
-      // given, and the response is assembled from the same row afterwards.
-      doc: { ...params.doc },
-      enforceRelatedFieldAccess: false,
-      // Depth is the caller's preference about the SHAPE of the response, and
-      // must not be able to shrink the evidence a rule is judged on: at
-      // `depth: 0` a relationship stays an id, and a rule reading into the
-      // related row would be handed nothing and read that as permission. The
-      // view expands at least as far as an unqualified read would, and further
-      // when the caller asked for more. It does NOT expand without limit — a
-      // rule reaching past the requested depth is not covered, and cannot be
-      // without paying an unbounded fan-out on every restricted read.
-      options: {
-        ...params.options,
-        depth: Math.max(params.options.depth ?? 0, DEFAULT_READ_DEPTH),
-      },
-      // Judged on complete data or not at all.
-      strict: true,
-      // The view withholds a target this caller may not read, exactly as the
-      // response will, so the check below has to know which absences that
-      // accounts for — otherwise the refusal it was asked to make reads back to
-      // it as evidence that failed to load.
-      withheldByAccess: viewWithheld,
-    });
-    this.assertRelationshipsExpanded(
-      params.slug,
-      params.singleMeta.fields,
-      references ?? params.doc,
-      assembled,
-      true,
-      "",
-      viewWithheld
-    );
-    // The response carries the per-locale overview when it is asked for, so a
-    // rule deciding on translation state has to see it here too, or the two
-    // decisions are made about documents that differ in what the rule reads.
-    if (params.options.translationStatus) {
-      await this.attachTranslationOverview(
-        params.slug,
-        params.singleMeta,
-        assembled,
-        true
-      );
-    }
-    return detachData(assembled);
-  }
-
-  /**
-   * Decide a `custom` read rule before the read causes anything to happen.
-   *
-   * The rule is shown the document a caller would receive, assembled from the
-   * stored row: a rule reading `data` decides on translations and component
-   * values that the bare main-table row does not carry, so judging the row alone
-   * refuses callers the rule admits and admits callers it refuses. Assembling
-   * first costs a second pass over the read-only stages, and buys a decision
-   * made on the same evidence the caller would get.
-   *
-   * Deciding here, rather than only on the way out, is what keeps a refused
-   * caller from reaching user hooks or from materializing a Single that has
-   * never been written — both permanent effects of a read that is about to be
-   * denied.
-   *
-   * A rule that answers with a query constraint is refused. A constraint
-   * narrows a result set, and a Single's document is assembled from several
-   * tables, so no single row remains for the database to test the predicate
-   * against; approximating it in memory would mean a second evaluator drifting
-   * from the one collection lists compile.
-   */
-  private async evaluateCustomRead(params: {
-    slug: string;
-    singleMeta: DynamicSingleRecord;
-    accessRules: CollectionAccessRules | undefined;
-    options: GetSingleOptions;
-    statusFilterValues: readonly string[] | undefined;
-    /** The stored row, already loaded and already screened for visibility. */
-    row: SingleDocument | null;
-  }): Promise<{
-    denied?: SingleResult;
-    /**
-     * The document this read would create, when the Single has no row yet. The
-     * caller hands it back to the insert so the row that gets written is the one
-     * the rule was shown, down to its id.
-     */
-    prospective?: DefaultDocumentDraft;
-  }> {
-    const { slug, singleMeta, accessRules, options, statusFilterValues, row } =
-      params;
-    if (!accessRules) return {};
-
-    const denied: SingleResult = {
-      success: false,
-      statusCode: 403,
-      message: `Access denied: read on single "${slug}" is not permitted`,
-    };
-
-    // A Single that has never been written still has the document this read
-    // would create: its declared field defaults. Judging those is what keeps a
-    // rule such as `data.secret !== true` from admitting the read that
-    // materializes a document the rule refuses — a permanent write (the row, its
-    // first version, its localized defaults) driven by a caller about to be
-    // denied. Built in memory; nothing is persisted here, and the row the read
-    // goes on to create is judged again on the way out.
-    const prospective = row
-      ? undefined
-      : await this.buildDefaultDocument(singleMeta);
-    // Either way the rule is shown the document as the read would render it.
-    // A draft's stored form is not that: `buildDefaultDocument` leaves group,
-    // repeater and JSON defaults in their serialized form, so a rule reading
-    // `data.settings.private` would be handed a string. Its localized defaults
-    // are already inline, which is why the companion overlay is skipped.
-    const document = await this.buildAuthorizationView({
-      slug,
-      singleMeta,
-      doc: row ?? prospective!.document,
-      options,
-      statusFilterValues,
-      skipLocalizedOverlay: !row,
-    });
-
-    const result = await this.accessControlService.evaluateAccess(
-      accessRules,
-      "read",
-      {
-        // Spread rather than rebuild: `UserContext` carries arbitrary extra
-        // claims, and a rule reading one (a tenant id, a plan) sees undefined
-        // if the object is reconstructed from the canonical fields alone,
-        // which can allow a caller it was written to deny.
-        user: options.user ? { ...options.user } : undefined,
-        // Part of the documented rule context: a rule keyed on the requested
-        // language sees `undefined` without them, which can turn an
-        // absence-tolerant check into an unintended allow.
-        locale: options.locale,
-        fallbackLocale: options.fallbackLocale,
-      },
-      // The same identity the rule sees in `data`: the stored row's id, or the
-      // one the prospective insert will carry.
-      typeof document.id === "string" ? document.id : undefined,
-      document
-    );
-
-    if (!result.allowed) {
-      return {
-        denied: { ...denied, message: result.reason ?? denied.message },
-      };
-    }
-    if (result.query !== undefined && result.query !== null) {
-      this.logger.warn("Refused a constraint returned for a single", { slug });
-      return { denied };
-    }
-    return { prospective };
-  }
-
-  /**
-   * The authoritative read decision, made on the fully assembled document.
-   *
-   * A document-dependent rule is only as good as the data it is shown. The
-   * earlier gate necessarily runs on the bare main-table row, because it has to
-   * refuse a caller BEFORE the stages that would materialize, translate and
-   * populate the document on their behalf. Those stages then change what `data`
-   * contains, so the rule is asked again here, about the object the caller would
-   * actually receive.
-   *
-   * A constraint returned at this point cannot be handed to the database — the
-   * document has already been assembled from several tables and no longer
-   * corresponds to a single row — so a constraint is refused rather than
-   * approximated in memory.
-   *
-   * Only a `custom` rule is asked again. Ownership is settled once, against the
-   * stored row: none of the assembly stages can transfer a document to a
-   * different owner, while a hook is free to drop or rewrite the owner value in
-   * the response — so asking again here could only refuse the caller the first
-   * check already recognised as the owner.
-   */
-  private async judgeAssembledDocument(params: {
-    slug: string;
-    accessRules: CollectionAccessRules | undefined;
-    user?: UserContext;
-    locale?: string;
-    fallbackLocale?: string | false;
-    document: SingleDocument;
-  }): Promise<SingleResult | null> {
-    const { slug, accessRules, user, locale, fallbackLocale, document } =
-      params;
-    if (!accessRules) return null;
-
-    const denied: SingleResult = {
-      success: false,
-      statusCode: 403,
-      message: `Access denied: read on single "${slug}" is not permitted`,
-    };
-
-    const result = await this.accessControlService.evaluateAccess(
-      accessRules,
-      "read",
-      { user: user ? { ...user } : undefined, locale, fallbackLocale },
-      typeof document.id === "string" ? document.id : undefined,
-      document
-    );
-    if (!result.allowed) {
-      return { ...denied, message: result.reason ?? denied.message };
-    }
-    if (result.query !== undefined && result.query !== null) {
-      // The assembled document spans several tables, so there is no single row
-      // for the database to re-check this against.
-      this.logger.warn(
-        "Refused a constraint returned for an assembled single",
-        {
-          single: slug,
-        }
-      );
-      return denied;
-    }
-    return null;
-  }
-
-  /**
-   * Decide an `owner-only` read against the loaded row.
-   *
-   * `checkSingleAccess` runs before the row is fetched and fails an owner-only
-   * rule closed for lack of a document, so the rule is skipped there and
-   * settled here — the same split the mutation service uses for publish
-   * transitions.
-   *
-   * Ownership is compared directly rather than through the access service. For
-   * a read that service does not decide at all: it reports `allowed: true` for
-   * any authenticated caller and returns the predicate a LIST would have
-   * filtered by, which one document has no query to apply. Comparing the owner
-   * column here keeps the check to the one thing owner-only actually asserts,
-   * with no filter grammar to re-implement.
-   */
-  private evaluateOwnerOnlyRead(params: {
-    slug: string;
-    rule: { ownerField?: string } | undefined;
-    user?: UserContext;
-    document: Record<string, unknown> | null;
-  }): SingleResult | null {
-    const { slug, rule, user, document } = params;
-    const denied: SingleResult = {
-      success: false,
-      statusCode: 403,
-      message: `Access denied: read on single "${slug}" is not permitted`,
-    };
-
-    // Ownership presupposes an identity.
-    if (!user?.id) return denied;
-
-    // No row means ownership cannot be established. Denying also stops
-    // auto-create from materializing an unowned document for a caller who may
-    // not be entitled to it — a write triggered by a read about to be refused.
-    if (!document) return denied;
-
-    // Singles default the owner column to camelCase `createdBy` while the row
-    // may carry the snake_case column the database stores, so both spellings of
-    // the same column are accepted rather than denying the real owner.
-    const ownerField = rule?.ownerField ?? GENERIC_DEFAULT_OWNER_FIELD;
-    const camel = ownerField.replace(/_([a-z])/g, (_m: string, c: string) =>
-      c.toUpperCase()
-    );
-    const snake = ownerField.replace(
-      /[A-Z]/g,
-      (c: string) => `_${c.toLowerCase()}`
-    );
-    const owner = document[ownerField] ?? document[camel] ?? document[snake];
-
-    return owner === user.id ? null : denied;
   }
 
   // ============================================================
@@ -1673,44 +897,13 @@ export class SingleQueryService extends BaseService {
       }
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
-      // The Single's stored read rule is evaluated here against the caller the
-      // route forwards. It is the same rule the admin configures and the same
-      // one the write paths already honor, so a `read: authenticated` or
-      // role-based rule now holds over HTTP instead of only inside the Direct
-      // API.
-      // An owner-only or custom read rule can only be judged against the row,
-      // and the row is not loaded yet. Defer those to the re-check below: the
-      // gate fails an owner-only rule closed when it has no document, which
-      // would deny every non-super-admin read of an owner-only Single.
-      const readRule = (singleMeta.accessRules as CollectionAccessRules)
-        ?.read as { type?: string } | undefined;
-      const isSuperAdminSession =
-        isSuperAdminContext(options.user) &&
-        options.authenticatedScope?.actorType !== "apiKey";
-      // Both kinds are skipped at the gate, which has no row to judge them
-      // against, and each is settled below: an owner-only rule by comparing the
-      // owner column on the stored row, a custom rule by judging the document
-      // that row assembles into.
-      const skipRuleAtGate =
-        !isSuperAdminSession &&
-        (readRule?.type === "owner-only" || readRule?.type === "custom");
-      const deferDocumentRule =
-        !isSuperAdminSession && readRule?.type === "owner-only";
-      const deferCustomRule =
-        !isSuperAdminSession && readRule?.type === "custom";
-
       const accessDenied = await checkSingleAccess({
         slug,
         operation: "read",
-        accessRules: singleMeta.accessRules,
-        deferStoredRuleEval: skipRuleAtGate,
         user: options.user,
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
-        // Without this the gate has rules but nothing to evaluate them with, and
-        // silently skips them.
-        accessControlService: this.accessControlService,
         // A scoped API key is judged on its OWN read grant, so a super-admin-owned
         // key does not skip the read gate via the owner's roles.
         authenticatedScope: options.authenticatedScope,
@@ -1720,80 +913,12 @@ export class SingleQueryService extends BaseService {
         return accessDenied;
       }
 
-      // The draft/published filter is resolved here rather than after the read
-      // because a deferred rule is judged on the assembled document, and the
-      // translation overlay it runs needs the same status the response will be
-      // built under.
       const statusFilter = resolveStatusFilter({
         collectionHasStatus:
           (singleMeta as { status?: boolean }).status === true,
         overrideAccess: options.overrideAccess === true,
         explicit: options.status,
       });
-
-      // 1.55. Load the row once for whichever deferred rule needs it, and screen
-      // it for visibility first. A draft Single answers 404 to an untrusted
-      // caller so its existence stays hidden; deciding a stored rule before that
-      // would answer 403 instead, which tells the caller both that the row is
-      // there and what the rule made of them.
-      let storedRow: SingleDocument | null = null;
-      if ((deferDocumentRule || deferCustomRule) && !options.overrideAccess) {
-        storedRow = await this.adapter.selectOne<SingleDocument>(
-          singleMeta.tableName,
-          {}
-        );
-        if (
-          storedRow &&
-          statusFilter &&
-          !(await this.isSingleVisible({
-            slug,
-            documentId: (storedRow as { id?: unknown }).id,
-            storedStatus: (storedRow as { status?: string }).status,
-            statusFilter,
-            now: readNow,
-          }))
-        ) {
-          return {
-            success: false,
-            statusCode: 404,
-            message: `Single "${slug}" not found`,
-          };
-        }
-      }
-
-      // 1.6. Settle a deferred document rule BEFORE any read side effect. Hooks
-      // are user code and auto-create permanently materializes the document
-      // (with its first version and localized defaults), so a caller the rule
-      // denies must not reach either by issuing a read it is not allowed to
-      // make.
-      if (deferDocumentRule && !options.overrideAccess) {
-        // Ownership lives on the stored row, so the bare row settles it; none of
-        // the stages that assemble the document can move a Single to a different
-        // owner.
-        const documentRuleDenied = this.evaluateOwnerOnlyRead({
-          slug,
-          rule: readRule as { ownerField?: string } | undefined,
-          user: options.user,
-          document: storedRow,
-        });
-        if (documentRuleDenied) return documentRuleDenied;
-      }
-
-      // 1.7. Settle a custom rule the same way, and before the same side
-      // effects.
-      let prospectiveDefault: DefaultDocumentDraft | undefined;
-      if (deferCustomRule && !options.overrideAccess) {
-        const custom = await this.evaluateCustomRead({
-          slug,
-          singleMeta,
-          accessRules: singleMeta.accessRules,
-          options,
-          statusFilterValues: statusFilter ? statusFilter.values : undefined,
-          row: storedRow,
-        });
-        if (custom.denied) return custom.denied;
-        prospectiveDefault = custom.prospective;
-      }
 
       // 2. Build shared context for hooks (seed with caller-provided context)
       const sharedContext: Record<string, unknown> = { ...options.context };
@@ -1839,51 +964,13 @@ export class SingleQueryService extends BaseService {
         {}
       );
 
-      // 5.5. Ownership was established on the row loaded before the hooks, and
-      // this is a different read of it. A `beforeRead` hook may write, and
-      // another writer may reassign the owner column between the two, so the row
-      // actually being returned is checked as well. This judges the stored row,
-      // not the response: hooks and field rules transform the owner value on the
-      // way out, and a check made after them refuses the real owner.
-      if (deferDocumentRule && !options.overrideAccess) {
-        const ownershipLapsed = this.evaluateOwnerOnlyRead({
-          slug,
-          rule: readRule as { ownerField?: string } | undefined,
-          user: options.user,
-          document: doc,
-        });
-        if (ownershipLapsed) return ownershipLapsed;
-      }
-
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
-        // The row that was authorized is gone — a `beforeRead` hook or another
-        // writer removed it between the two fetches — so what would be created
-        // here is a default document no rule has seen. Judge it before writing
-        // it, the same way a first read of a Single that never existed is
-        // judged, rather than persisting the row, its localized defaults and
-        // its first version and refusing afterwards.
-        if (deferCustomRule && !options.overrideAccess && !prospectiveDefault) {
-          const lateDraft = await this.evaluateCustomRead({
-            slug,
-            singleMeta,
-            accessRules: singleMeta.accessRules,
-            options,
-            statusFilterValues: statusFilter ? statusFilter.values : undefined,
-            row: null,
-          });
-          if (lateDraft.denied) return lateDraft.denied;
-          prospectiveDefault = lateDraft.prospective;
-        }
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocument(singleMeta, {
           captureInitialVersion: true,
-          // The draft an access decision already judged, so the row written is
-          // the one the rule was shown. Building a second one would give the
-          // final check a different id than the rule was asked about.
-          draft: prospectiveDefault,
         });
       }
 
@@ -1912,20 +999,11 @@ export class SingleQueryService extends BaseService {
       // 6.9 - 7.7. Resolve translations and expand uploads, relationships and
       // components into the document.
       //
-      // Related rows are redacted HERE rather than after the decision below,
+      // Related rows are redacted HERE rather than after the response is built,
       // unlike this Single's own fields. A related row's chosen label is a copy
       // of one of its field values, derived while the row is expanded, so
       // redacting afterwards would leave a withheld value standing in the label
-      // it was copied into. The rule still sees related fields unredacted: the
-      // decision that governs them is the one made before any of this ran, on
-      // an unredacted assembly of the stored row.
-      // Whether a stored rule will be judged on what this assembly produces.
-      const judgedRead = deferCustomRule && !options.overrideAccess;
-      let responseReferences: SingleDocument | undefined;
-      // References a target collection refuses this caller. Collected during
-      // the response assembly so the completeness check can tell an absence
-      // the rules caused from one a failed load caused.
-      const responseWithheld = new Set<string>();
+      // it was copied into.
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
@@ -1933,45 +1011,7 @@ export class SingleQueryService extends BaseService {
         options,
         statusFilterValues: statusFilter ? statusFilter.values : undefined,
         enforceRelatedFieldAccess: true,
-        // An ordinary read is still served when a companion query fails, but a
-        // read about to be judged cannot be: the rule would decide on values
-        // the failure removed rather than on what is stored.
-        strict: judgedRead,
-        // Recorded only so the decision below can be held to the same
-        // completeness bar as the earlier one; the response itself stays
-        // best-effort.
-        captureReferences: captured => {
-          responseReferences = detachData(captured);
-        },
-        withheldByAccess: responseWithheld,
       });
-
-      // The response assembly is best-effort, and the decision below is made on
-      // what it produced, so it is held to the same completeness bar as the
-      // authorization view: expansion that succeeded for that earlier pass can
-      // fail here after a hook writes or another writer moves the data.
-      //
-      // Checked HERE, before any response-shaping hook. A hook may legitimately
-      // drop or replace a relationship, and nothing distinguishes that from an
-      // expansion that failed — so a later check would read a deliberate
-      // transformation as a fault and refuse a read that is fine.
-      if (deferCustomRule && !options.overrideAccess) {
-        this.assertRelationshipsExpanded(
-          slug,
-          singleMeta.fields,
-          responseReferences ?? doc,
-          doc,
-          // The response honours the caller's depth, and `0` means "give me
-          // references". The authorization view has already judged the same
-          // relationships at the full read depth.
-          (options.depth ?? DEFAULT_READ_DEPTH) > 0,
-          "",
-          // A relationship the target's own rules refused is absent because the
-          // caller may not read it, not because the read failed. Refusing the
-          // document over it would deny a Single they are allowed to see.
-          responseWithheld
-        );
-      }
 
       // On a trusted draft-view read, surface this Single's pending change in
       // place of the live document. Placed AFTER the live assembly, so
@@ -1988,12 +1028,13 @@ export class SingleQueryService extends BaseService {
         singleMeta,
         doc,
         options,
+        enforceRelatedFieldAccess: true,
       });
 
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
-        await this.attachTranslationOverview(slug, singleMeta, doc, judgedRead);
+        await this.attachTranslationOverview(slug, singleMeta, doc);
       }
 
       // Redact password hashes BEFORE any afterRead hook runs (a hook could
@@ -2002,40 +1043,6 @@ export class SingleQueryService extends BaseService {
       const singleHasPassword = hasPasswordField(singleMeta.fields);
       if (singleHasPassword) {
         stripPasswordFieldValues(doc, singleMeta.fields);
-      }
-
-      // 7.5. Judge the document the read ASSEMBLED, not the row it started
-      // from, and before any afterRead hook runs. A document-dependent rule
-      // reads `data`, and `data` is assembled in stages after the earlier gate:
-      // defaults on auto-create, translations from the companion table,
-      // component rows from their own tables, a held working draft. A rule such
-      // as `data?.secret !== true` sees none of that on the bare main-table row
-      // and admits a caller the assembled document denies. The earlier gate
-      // stays because it refuses callers before those stages run any side
-      // effects.
-      //
-      // Before the hooks, not after them: access decides on what is stored,
-      // and a hook shapes what is returned. Judged here the rule sees every
-      // stored value, including fields the caller may not read, with nothing
-      // yet redacted, so no redacted value has to be reconstructed for it; and
-      // no hook or field rule has run yet that could change the document or
-      // the caller it is judged against.
-      if (deferCustomRule && !options.overrideAccess) {
-        const denial = await this.judgeAssembledDocument({
-          slug,
-          accessRules: singleMeta.accessRules,
-          user: options.user,
-          locale: options.locale,
-          fallbackLocale: options.fallbackLocale,
-          // A detached copy, so the rule decides rather than edits. `data` is
-          // handed to user code, and passing the response object itself would
-          // let a rule that assigns to it rewrite what the caller receives,
-          // including putting back a value a later stage is meant to withhold.
-          // Deep, because a shallow copy still shares every nested component,
-          // repeater and expanded relation with the response.
-          document: detachData(doc),
-        });
-        if (denial) return denial;
       }
 
       // 8. Execute afterRead hooks
@@ -2185,8 +1192,7 @@ export class SingleQueryService extends BaseService {
   private async attachTranslationOverview(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>,
-    strict: boolean
+    doc: Record<string, unknown>
   ): Promise<void> {
     try {
       await this.populateTranslationMeta(slug, singleMeta, doc);
@@ -2199,9 +1205,7 @@ export class SingleQueryService extends BaseService {
             cause: error instanceof Error ? error : undefined,
             logContext: {
               single: slug,
-              reason: strict
-                ? "translation-overview-failed-during-authorization"
-                : "translation-overview-failed",
+              reason: "translation-overview-failed",
             },
           });
     }
@@ -2807,7 +1811,7 @@ export class SingleQueryService extends BaseService {
    * Recursively handles upload fields nested inside repeater and group fields.
    *
    * The caller travels with the fetch because media is a system table with no
-   * stored rules: a trusted read that bounded its bypass has refused this
+   * collection config: a trusted read that bounded its bypass has refused this
    * target like any other, and only the caller can say what it may still see.
    * Required rather than defaulted — a default here is indistinguishable from
    * a caller that forgot, and the two want opposite outcomes, so the omission
@@ -2856,14 +1860,6 @@ export class SingleQueryService extends BaseService {
     // supplied a user is indistinguishable from an anonymous one here, and
     // enforcing for the former strips protected fields from everybody.
     access: RelatedRowReadContext = { trusted: TRUSTS_EVERY_COLLECTION },
-    /**
-     * Propagate expansion failures instead of returning the document
-     * unexpanded. A response is better served incomplete than not at all, but a
-     * document being judged is not: an access rule reading a related value that
-     * a transient failure removed decides on its absence, and an
-     * absence-tolerant rule reads that as permission.
-     */
-    strict = false,
     /**
      * Whether to expand relationships nested inside a group or repeater.
      *
@@ -2927,19 +1923,8 @@ export class SingleQueryService extends BaseService {
       this.logger.error("Failed to expand relationship fields for Single", {
         error,
       });
-      if (strict) {
-        // Wrapped rather than rethrown: the result builder puts a bare Error's
-        // own message on the wire, which for a driver failure is schema detail
-        // the caller has no business seeing.
-        throw NextlyError.is(error)
-          ? error
-          : NextlyError.internal({
-              cause: error instanceof Error ? error : undefined,
-              logContext: {
-                reason: "relationship-expansion-failed-during-authorization",
-              },
-            });
-      }
+      // A response is better served incomplete than not at all: one relationship
+      // that could not be expanded is returned as its stored reference.
       return doc;
     }
   }
