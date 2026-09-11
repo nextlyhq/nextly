@@ -88,6 +88,57 @@ describe("the cascade fetched for the panel", () => {
     expect(cascade?.entries.map(entry => entry.property)).toContain("color");
   });
 
+  it("resolves component instances through the definitions it is handed, so a composed node's declarations are in the cascade", () => {
+    // The canvas draws the definition's nodes in the instance's place; a
+    // trace compiled without the map leaves the instance standing and reports
+    // nothing for what is actually on screen. The control is the same page
+    // traced without the map.
+    register();
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          styles: { base: { base: { color: "crimson" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "i1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const definitions = new Map([["header", definition]]);
+
+    const composed = pageStyleTrace(
+      page,
+      { breakpoints: BREAKPOINTS },
+      undefined,
+      { definitions }
+    );
+    const unresolved = pageStyleTrace(
+      page,
+      { breakpoints: BREAKPOINTS },
+      undefined
+    );
+
+    const colours = (cascade: typeof composed) =>
+      (cascade?.entries ?? []).filter(entry => entry.property === "color");
+    expect(colours(composed)).not.toHaveLength(0);
+    expect(colours(unresolved)).toHaveLength(0);
+  });
+
   it("reports a breakpoint's own entry, which is what a badge names", () => {
     register();
     const cascade = pageStyleTrace(

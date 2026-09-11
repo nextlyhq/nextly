@@ -418,7 +418,7 @@ describe("resolveDrop", () => {
       short: { x: 0, y: 300, width: 400, height: 20 },
     }),
     nesting: PERMISSIVE,
-    blockName: "core/heading",
+    blockNames: ["core/heading"],
     forbiddenParents: new Set<string>(),
   };
 
@@ -471,7 +471,7 @@ describe("resolveDrop", () => {
 
     const resolution = resolveDrop(
       {
-        blockName: "core/heading",
+        blockNames: ["core/heading"],
         forbiddenParents: new Set(),
         regions,
         rects: rectsOf({}),
@@ -510,7 +510,7 @@ describe("resolveDrop", () => {
     // from a refusal an author can fix by aiming somewhere else.
     const resolution = resolveDrop(
       {
-        blockName: "core/accordion-item",
+        blockNames: ["core/accordion-item"],
         forbiddenParents: new Set(),
         regions: [
           {
@@ -551,7 +551,7 @@ describe("resolveDrop", () => {
     // anything and the block itself declares where it belongs.
     const resolution = resolveDrop(
       {
-        blockName: "core/accordion-item",
+        blockNames: ["core/accordion-item"],
         forbiddenParents: new Set(),
         regions: [rootRegion([])],
         rects: rectsOf({}),
@@ -569,6 +569,30 @@ describe("resolveDrop", () => {
     });
   });
 
+  it("judges a placement by EVERY type it carries, refusing on the first the target refuses", () => {
+    // An instance moves as one node and is judged by its definition's roots,
+    // which may be several. The verdict is the first refusal, with its
+    // reason, for the same reason a pattern's is at the insert.
+    const resolution = resolveDrop(
+      {
+        blockNames: ["core/heading", "core/accordion-item"],
+        forbiddenParents: new Set(),
+        regions: [rootRegion([])],
+        rects: rectsOf({}),
+        nesting: {
+          parentsOf: type =>
+            type === "core/accordion-item" ? ["core/accordion"] : undefined,
+        },
+      },
+      { x: 100, y: 100 }
+    );
+
+    expect(resolution).toMatchObject({
+      kind: "refused",
+      refusal: { reason: "restricted-at-root", permitted: ["core/accordion"] },
+    });
+  });
+
   it("reports nothing when the pointer is off the canvas", () => {
     expect(resolveDrop(unequal, { x: 200, y: 5000 })).toEqual({ kind: "none" });
   });
@@ -580,7 +604,7 @@ describe("resolveDrop", () => {
     // aimed before.
     const resolution = resolveDrop(
       {
-        blockName: "core/heading",
+        blockNames: ["core/heading"],
         forbiddenParents: new Set(),
         regions: [rootRegion(["zero"])],
         rects: rectsOf({ zero: { x: 0, y: 100, width: 400, height: 0 } }),
@@ -606,7 +630,7 @@ describe("resolveDrop", () => {
 
     const resolution = resolveDrop(
       {
-        blockName: "core/heading",
+        blockNames: ["core/heading"],
         forbiddenParents: new Set(),
         regions,
         rects,
