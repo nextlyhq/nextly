@@ -305,13 +305,14 @@ describe("context7", () => {
   });
 
   it("fires on an excludeFiles entry written as a path, which excludes nothing", async () => {
-    // Context7 matches the field by filename. The entry beside it is the
-    // control that a plain name passes.
+    // Context7 matches the field by filename, and either separator makes a
+    // path: a backslash is not a filename either. The entry beside them is
+    // the control that a plain name passes.
     const withPath = JSON.stringify({
       projectTitle: "Nextly",
       description: SENTENCE,
       folders: ["docs"],
-      excludeFiles: ["AGENTS.md", "docs/internal/notes.md"],
+      excludeFiles: ["AGENTS.md", "docs/internal/notes.md", "docs\\internal\\draft.md"],
     });
     const findings = await findingsFor({
       "packages/nextly/package.json": core(SENTENCE),
@@ -319,12 +320,14 @@ describe("context7", () => {
     });
     const exclusion = findings.filter(f => f.check === "context7-exclusion");
     expect(exclusion).toHaveLength(1);
-    expect(exclusion[0].message).toContain("docs/internal/notes.md");
+    expect(exclusion[0].message).toContain("docs/internal/notes.md, docs\\internal\\draft.md");
     expect(exclusion[0].message).not.toContain("AGENTS.md");
   });
 
   it("fires on an excludeFolders pattern, which the index verifier cannot witness", async () => {
-    for (const entry of ["**/internal", "./build", "docs/old/"]) {
+    // A glob, a root anchor, a trailing slash, and a backslash path, which
+    // git's POSIX paths never match.
+    for (const entry of ["**/internal", "./build", "docs/old/", "docs\\internal"]) {
       const withPattern = JSON.stringify({
         projectTitle: "Nextly",
         description: SENTENCE,
@@ -1175,37 +1178,57 @@ describe("internal-docs-link", () => {
 
   it("fires on an image embedded by a file path or at a docs URL, and says it is an image", async () => {
     // The site serves nothing beside a page, so a bare `diagram.png` is as
-    // broken as `./diagram.png`; and `/docs/...` is where pages are, not
-    // files. The two absolute images are the control that an image by URL
-    // passes.
+    // broken as `./diagram.png`; and `/docs/...` is where pages are served,
+    // not files, so an image there is wrong whether a page answers (`/docs/b`
+    // does) or not. The two absolute images are the control that an image by
+    // URL passes.
     const page = [
-      "![d](./missing.png) ![e](diagram.png) ![f](/docs/nope)",
+      "![d](./missing.png) ![e](diagram.png) ![f](/docs/nope) ![g](/docs/b)",
       "![ok](https://example.com/x.png) ![ok](/images/x.png)",
       "",
     ].join("\n");
-    const findings = await findingsFor({ "docs/a.mdx": page });
+    const findings = await findingsFor({ "docs/a.mdx": page, "docs/b.mdx": "# b\n" });
     expect(
       findings.filter(f => f.check === "internal-docs-link").map(f => f.message)
     ).toEqual([
       "embeds ./missing.png as a file path; the site serves no file beside a page, so an image is embedded by its URL",
       "embeds diagram.png as a file path; the site serves no file beside a page, so an image is embedded by its URL",
-      "embeds /docs/nope, which is not a docs page",
+      "embeds /docs/nope, which is where pages are served, not files",
+      "embeds /docs/b, which is where pages are served, not files",
     ]);
   });
 
-  it("yields no links for a page whose frontmatter is not YAML, and keeps running", async () => {
-    // The compile check reports that page; this one must neither report its
-    // links nor stop the whole run on it. The second page is the control
-    // that the run went on past it.
-    const checks = await checksFor({
-      "docs/a.mdx": "---\ntitle: [unterminated\n---\n\nSee [gone](/docs/nope).\n",
-      "docs/b.mdx": "See [gone](/docs/nope).\n",
-    });
-    expect(checks).toContain("internal-docs-link");
+  it("reads a reference-style image as an image, by the reference that uses its definition", async () => {
+    // `[pic]: diagram.png` is an image when `![d][pic]` uses it, and the link
+    // heuristic would let a bare `diagram.png` through. The link reference
+    // beside it is the control that a definition a link uses keeps link wording.
+    const page = [
+      "![d][pic] and [g][guide]",
+      "",
+      "[pic]: diagram.png",
+      "[guide]: guide.mdx",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => f.message.split(";")[0])
+    ).toEqual([
+      "embeds diagram.png as a file path",
+      "links to guide.mdx as a file path",
+    ]);
+  });
+
+  it("keeps reading links past frontmatter that is not YAML, in a README as in a page", async () => {
+    // The compile check reports a docs page's frontmatter, but nothing else
+    // reads a README's links, so the block is read as Markdown and the link
+    // after it is still held. The line is the file's own, since nothing was
+    // taken off.
     const findings = await findingsFor({
+      "README.md": "---\ntitle: [unterminated\n---\n\nSee [gone](/docs/nope).\n",
       "docs/a.mdx": "---\ntitle: [unterminated\n---\n\nSee [gone](/docs/nope).\n",
     });
-    expect(findings.filter(f => f.check === "internal-docs-link")).toEqual([]);
+    const links = findings.filter(f => f.check === "internal-docs-link");
+    expect(links.map(f => `${f.file}:${f.line}`)).toEqual(["README.md:5", "docs/a.mdx:5"]);
   });
 });
 

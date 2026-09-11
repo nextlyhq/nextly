@@ -138,9 +138,11 @@ const context7Finding = (check, message) => ({
  */
 const listOf = value =>
   Array.isArray(value) ? value.filter(entry => typeof entry === "string") : [];
-const pathEntries = value => listOf(value).filter(entry => entry.includes("/"));
+// Either separator: Context7 sees a filename, git supplies POSIX paths, and a
+// backslash satisfies neither.
+const pathEntries = value => listOf(value).filter(entry => /[\\/]/.test(entry));
 const patternEntries = value =>
-  listOf(value).filter(entry => /[*?[]|^\.\/|\/$/.test(entry));
+  listOf(value).filter(entry => /[*?[\\]|^\.\/|\/$/.test(entry));
 
 const CONTEXT7_RULES = [
   [
@@ -537,6 +539,26 @@ function hasDestination(node) {
   return DESTINATION_NODES.has(node.type);
 }
 
+/**
+ * What a destination is, for the wording and the rule it is held to.
+ *
+ * A definition carries no kind of its own: `[pic]: diagram.png` is an image when
+ * `![d][pic]` uses it and a link when `[d][pic]` does. Read as an image whenever an
+ * image reference uses it, since that is the reading under which a relative
+ * destination is broken.
+ */
+function destinationKind(node, imageIds) {
+  if (node.type === "definition" && imageIds.has(node.identifier)) return "image";
+  return node.type;
+}
+
+/** The identifiers every image reference in a tree uses. */
+function imageReferenceIds(nodes) {
+  return new Set(
+    nodes.filter(node => node.type === "imageReference").map(node => node.identifier)
+  );
+}
+
 /** Every node under one, itself included, in document order. */
 function nodesOf(node) {
   return [node, ...(node.children ?? []).flatMap(nodesOf)];
@@ -554,27 +576,41 @@ function nodesOf(node) {
  * `![d](./x.png)` only because it shares `](` with a link, and the tree names it outright.
  *
  * Frontmatter is taken off first, the way the site's loader takes it off, or the compiler
- * would read the YAML as Markdown. A page the compiler cannot parse, or whose frontmatter
- * is not YAML, yields no destinations; the compile check reports that page on its own.
+ * would read the YAML as Markdown. A block that is not YAML is left in and read as
+ * Markdown instead, a rule and a paragraph, so the links after it are still read: the
+ * compile check reports a docs page's frontmatter, but a README is not a docs page and
+ * this is the only check that reads its links. A page the compiler cannot parse yields no
+ * destinations; the compile check reports that one.
  */
 async function linkDestinations(text, mdx) {
   const links = [];
   const collect = skipped => () => tree => {
-    for (const node of nodesOf(tree).filter(hasDestination)) {
+    const nodes = nodesOf(tree);
+    const imageIds = imageReferenceIds(nodes);
+    for (const node of nodes.filter(hasDestination)) {
       links.push({
         url: node.url,
-        type: node.type,
+        type: destinationKind(node, imageIds),
         line: (node.position?.start.line ?? 0) + skipped,
       });
     }
   };
+  const { body, skipped } = frontmatterOrMarkdown(text);
   try {
-    const { body, skipped } = splitFrontmatter(text);
     await compile(body, { format: mdx ? "mdx" : "md", remarkPlugins: [collect(skipped)] });
   } catch {
     return [];
   }
   return links;
+}
+
+/** The text with its frontmatter taken off, or the whole text when the block is not YAML. */
+function frontmatterOrMarkdown(text) {
+  try {
+    return splitFrontmatter(text);
+  } catch {
+    return { body: text, skipped: 0 };
+  }
 }
 
 /**
@@ -587,11 +623,15 @@ const DESTINATION_WORDING = {
     verb: "links to",
     remedy: "a page is linked by its URL, /docs/..., and source by its GitHub URL",
     relativeIsPath: url => /^\.\.?\//.test(url) || /\.mdx?(?:[#?]|$)/i.test(url),
+    // A docs URL is right when a page answers there.
+    docsUrlFinding: resolves => (resolves ? null : "which is not a docs page"),
+    // Nothing under /docs is an image, whatever answers there.
   },
   image: {
     verb: "embeds",
     remedy: "the site serves no file beside a page, so an image is embedded by its URL",
     relativeIsPath: () => true,
+    docsUrlFinding: () => "which is where pages are served, not files",
   },
 };
 
@@ -1020,13 +1060,14 @@ async function internalLinks(repoRoot, tracked, findings) {
       continue;
     }
     for (const { url, type, line } of await linkDestinations(text, rel.endsWith(".mdx"))) {
-      const { verb, remedy } = wordingFor(type);
-      if (url.startsWith("/docs/") && !resolves(url)) {
+      const { verb, remedy, docsUrlFinding } = wordingFor(type);
+      const docsUrl = url.startsWith("/docs/") ? docsUrlFinding(resolves(url)) : null;
+      if (docsUrl) {
         findings.push({
           check: "internal-docs-link",
           file: rel,
           line,
-          message: `${verb} ${url}, which is not a docs page`,
+          message: `${verb} ${url}, ${docsUrl}`,
         });
       }
       // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
