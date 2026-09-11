@@ -86,6 +86,7 @@ import {
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
+import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { describeError } from "../errors/index";
 import { NextlyError } from "../errors/nextly-error";
 import { getActiveHookRegistry } from "../hooks/hook-registry";
@@ -225,6 +226,127 @@ function rewrittenSlugs(result: unknown): string[] {
   const updated = (result as { updated?: unknown }).updated;
   if (!Array.isArray(updated)) return [];
   return updated.filter((slug): slug is string => typeof slug === "string");
+}
+
+/**
+ * The slugs of one kind whose registry row may now say `applied`.
+ *
+ * 🔴 A successful apply leaves a row saying `pending` in TWO ways, and the
+ * pre-apply snapshot only sees one of them. The registry defaults a NEW row to
+ * `pending`, which the absent-table half below catches. But the update ALSO
+ * RESETS an EXISTING row to `pending` whenever the fields or the status flag
+ * change -- and the DDL for that change is precisely what the apply just
+ * performed. Such a table was present before the apply, so `!liveByTable.has`
+ * skips it, and the row goes on reporting an outstanding migration for a table
+ * already at the new shape until a restart re-marks it.
+ *
+ * That row is not merely cosmetic. Anything deciding whether an entity's table
+ * can be queried reads it -- the widget source refresh does -- so a field edit
+ * under `next dev` silently withdrew that entity's generated cards from the
+ * dashboard for the rest of the session.
+ *
+ * The edited set is taken from the SYNC'S OWN REPORT rather than from the
+ * snapshot, because the snapshot answers "did this table exist before the
+ * apply": the right question for a table the pipeline CREATED and the wrong
+ * one for a table it ALTERED.
+ *
+ * 🔴 A DEFERRED entity is excluded from BOTH halves, and the metadata sync
+ * cannot tell you which those are. `deferredEntities` holds a target whose
+ * diff threw -- omitted from the desired schema outright, so the apply never
+ * carried its DDL -- and one whose change classified unsafe, where auto-apply
+ * is deliberately skipped and the terminal says so. In both cases the reload
+ * SAW the entity and decided not to migrate it.
+ *
+ * The sync payload, though, is built from every configured entity, so a
+ * deferred one whose fields changed still comes back in `updated`. Marking
+ * that `applied` would state the opposite of what the reload just decided --
+ * and, through the same queryability check this feeds, publish cards against
+ * the shape the reload explicitly declined to apply.
+ *
+ * One function for both kinds of content, because the two registries reset
+ * and report the same way and a single's row was re-marked from the snapshot
+ * half alone: an edited single stayed `pending`, and its source and card were
+ * withdrawn for the rest of the dev session.
+ */
+function migratedSlugs(
+  kind: DeferrableEntityKind,
+  syncResult: unknown,
+  targets: ReadonlyArray<{ slug: string; tableName: string }>,
+  liveByTable: ReadonlyMap<string, unknown>,
+  deferredEntities: ReadonlySet<string>
+): Set<string> {
+  const isDeferred = (slug: string): boolean =>
+    deferredEntities.has(`${kind}:${slug}`);
+  const migrated = new Set<string>(
+    rewrittenSlugs(syncResult).filter(slug => !isDeferred(slug))
+  );
+  for (const target of targets) {
+    if (!liveByTable.has(target.tableName) && !isDeferred(target.slug)) {
+      migrated.add(target.slug);
+    }
+  }
+  return migrated;
+}
+
+/**
+ * Records that each row's migration is done. Non-fatal per slug: migration
+ * status is metadata only, and one row's failed write must not stop the next.
+ */
+async function markApplied(
+  registry: {
+    updateMigrationStatus(slug: string, status: string): Promise<unknown>;
+  },
+  slugs: Iterable<string>
+): Promise<void> {
+  for (const slug of slugs) {
+    try {
+      await registry.updateMigrationStatus(slug, "applied");
+    } catch {
+      // Non-fatal: migration status is metadata only.
+    }
+  }
+}
+
+/**
+ * Publishes, for one kind, the slugs whose registry description and table this
+ * reload knows to DISAGREE -- what a consumer deciding what a query may NAME
+ * has to be told.
+ *
+ * Two ways to disagree, and both withhold. A refused DDL leaves metadata AHEAD
+ * of the table: the sync writes the new field list for every configured entity
+ * and the apply carried none of it. A per-entity metadata FAILURE leaves it
+ * behind: the DDL applied and the registry kept the old field list, so a
+ * source built from it names columns a confirmed rename has already moved.
+ * Either way a card drawn from that source queries a shape the table does not
+ * have, and a missing card is the better answer.
+ *
+ * 🔴 Called from THAT KIND'S OWN metadata sync path, after its sync ran, and
+ * never from the other kind's. The two syncs succeed or fail on their own: a
+ * collection sync that threw says nothing about the singles sync beside it,
+ * which still writes a refused single's new fields -- so a publication gated
+ * on the collection path left that single's deferral unrecorded and its
+ * source advertising columns its table does not have.
+ *
+ * Replacing the set is what lets a later reload lift a refusal: every entity
+ * of the kind not named here had its DDL applied and its metadata stored in
+ * the same pass.
+ */
+async function publishDeferred(
+  kind: DeferrableEntityKind,
+  deferredEntities: ReadonlySet<string>,
+  metadataFailed: Iterable<string> = []
+): Promise<void> {
+  const { setDeferredEntities } = await import(
+    "../domains/widgets/deferred-entities"
+  );
+  setDeferredEntities(kind, [
+    ...new Set([
+      ...[...deferredEntities]
+        .filter(entity => entity.startsWith(`${kind}:`))
+        .map(entity => entity.slice(`${kind}:`.length)),
+      ...metadataFailed,
+    ]),
+  ]);
 }
 
 // Minimal duck-typed surfaces of registry services used here.
@@ -1978,12 +2100,15 @@ async function applyReload(opts?: {
       // and nothing landed either. Replacing the set there would clear a
       // refusal an earlier reload correctly recorded, and take working cards
       // away for the rest of the session.
-      if (synced.collections) {
-        const { setDeferredCollections } = await import(
-          "../domains/widgets/collection-sources"
-        );
-        setDeferredCollections([]);
-      }
+      // Per kind, because each kind's sync succeeds or fails on its own: a
+      // collection sync that ran says nothing about a single a previous reload
+      // refused, and clearing that too would publish a card over a table the
+      // single's metadata is still ahead of.
+      const { setDeferredEntities } = await import(
+        "../domains/widgets/deferred-entities"
+      );
+      if (synced.collections) setDeferredEntities("collection", []);
+      if (synced.singles) setDeferredEntities("single", []);
       // Publish each scope's (possibly toggled) recording policy ONLY when that
       // scope's metadata sync succeeded — a `webhooks` change surfaces as no
       // schema diff, so this is the path a live opt-out/opt-in toggle flows
@@ -2307,83 +2432,18 @@ async function applyReload(opts?: {
       const collectionSync =
         await registry.syncCodeFirstCollections(codeFirstConfigs);
 
-      // registerCollection defaults migration_status to 'pending'; the pipeline
-      // just created any missing tables, so mark them 'applied' (mirrors the
-      // singles branch / di/register.ts). Without this a code collection added
-      // after initial setup shows "pending" forever. Absent in the pre-pipeline
-      // liveByTable snapshot ⇒ just created.
-      //
-      // 🔴 A successful apply leaves a row saying `pending` in TWO ways, and the
-      // pre-apply snapshot only sees one of them. `registerCollection` defaults a
-      // NEW row to `pending`, which the absent-table check below catches. But
-      // `updateCollection` ALSO RESETS an EXISTING row to `pending` whenever the
-      // fields, status or localized flag change -- and the DDL for that change is
-      // precisely what the apply above just performed. Such a collection's table
-      // was present before the apply, so `!liveByTable.has` skips it, and the row
-      // goes on reporting an outstanding migration for a table already at the new
-      // shape until a restart re-marks it.
-      //
-      // That row is not merely cosmetic. Anything deciding whether a collection's
-      // table can be queried reads it -- the widget source refresh does -- so a
-      // field edit under `next dev` silently withdrew that collection's generated
-      // cards from the dashboard for the rest of the session.
-      //
-      // The edited set is taken from the SYNC'S OWN REPORT rather than from the
-      // snapshot, because the snapshot answers "did this table exist before the
-      // apply": the right question for a table the pipeline CREATED and the wrong
-      // one for a table it ALTERED.
-      //
-      // 🔴 A DEFERRED collection is excluded from BOTH halves, and the metadata
-      // sync cannot tell you which those are. `deferredEntities` holds a target
-      // whose diff threw -- omitted from `desiredCollections` outright, so the
-      // apply never carried its DDL -- and one whose change classified unsafe,
-      // where auto-apply is deliberately skipped and the terminal says so. In
-      // both cases the reload SAW the collection and decided not to migrate it.
-      //
-      // The sync payload, though, is built from every configured collection, so
-      // a deferred collection whose fields changed still comes back in
-      // `updated`. Marking that `applied` would state the opposite of what the
-      // reload just decided -- and, through the same queryability check this
-      // commit exists to feed, publish cards against the shape the reload
-      // explicitly declined to apply.
-      const isDeferred = (slug: string): boolean =>
-        deferredEntities.has(`collection:${slug}`);
-      const migrated = new Set<string>(
-        rewrittenSlugs(collectionSync).filter(slug => !isDeferred(slug))
-      );
-      for (const target of targets) {
-        if (!liveByTable.has(target.tableName) && !isDeferred(target.slug)) {
-          migrated.add(target.slug);
-        }
-      }
-      for (const slug of migrated) {
-        try {
-          await registry.updateMigrationStatus(slug, "applied");
-        } catch {
-          // Non-fatal: migration status is metadata only.
-        }
-      }
-
-      // 🔴 Published HERE, on the path where the metadata sync actually ran,
-      // and not before the branch above. The sync writes the new field list for
-      // every configured collection, so a collection whose DDL this reload
-      // refused now has metadata its table never received -- that, and only
-      // that, is what a consumer deciding what a query may NAME has to be told.
-      //
-      // Computing it earlier looked equivalent and was not: a reload carrying
-      // ONLY a refused change never reaches this sync at all, so its registry
-      // still describes the unchanged table, and announcing a deferral for it
-      // would withhold cards that work.
-      //
-      // Replacing the set is what lets a later reload lift a refusal: every
-      // collection not named here had its DDL applied in the same pass.
-      const { setDeferredCollections } = await import(
-        "../domains/widgets/collection-sources"
-      );
-      setDeferredCollections(
-        [...deferredEntities]
-          .filter(entity => entity.startsWith("collection:"))
-          .map(entity => entity.slice("collection:".length))
+      // The pipeline just created any missing tables and altered the edited
+      // ones, and the registry's rows still say `pending` for both; see
+      // `migratedSlugs` for the two ways that happens and what is excluded.
+      await markApplied(
+        registry,
+        migratedSlugs(
+          "collection",
+          collectionSync,
+          targets,
+          liveByTable,
+          deferredEntities
+        )
       );
 
       // 🔴 The same reading the metadata-only landing makes, because this is
@@ -2394,6 +2454,16 @@ async function applyReload(opts?: {
       // policies, and the hook publication below. Both would then run against a
       // field tree that is not the one stored.
       const failedCollections = syncFailedSlugs(collectionSync);
+
+      // 🔴 Published HERE, on the path where the metadata sync actually ran,
+      // and not before the branch above. Computing it earlier looked equivalent
+      // and was not: a reload carrying ONLY a refused change never reaches this
+      // sync at all, so its registry still describes the unchanged table, and
+      // announcing a deferral for it would withhold cards that work. The slugs
+      // this sync could not store travel with the refused ones: their tables
+      // moved and their metadata did not.
+      await publishDeferred("collection", deferredEntities, failedCollections);
+
       if (failedCollections.length > 0) {
         collectionSynced = false;
         logger?.warn(
@@ -2420,26 +2490,33 @@ async function applyReload(opts?: {
         // syncCodeFirstSingles resolves with an errors[] rather than rejecting;
         // a per-single failure means its serialized metadata is stale, so that
         // slug keeps its prior default snapshot below rather than the new fields.
-        failedSlugs = failedSingleSlugs(
-          await singleReg.syncCodeFirstSingles(codeFirstSingleConfigs)
+        const singleSync = await singleReg.syncCodeFirstSingles(
+          codeFirstSingleConfigs
         );
+        failedSlugs = failedSingleSlugs(singleSync);
         failedSingleMetadata = failedSlugs;
 
-        // registerSingle defaults migration_status to 'pending'. The
-        // pipeline above just created any missing physical tables, so
-        // mark them 'applied'. We use the pre-pipeline liveByTable
-        // snapshot: any single whose table was absent before the
-        // pipeline ran is now on-disk — no extra DB query needed.
-        for (const target of singleTargets) {
-          if (!liveByTable.has(target.tableName)) {
-            try {
-              await singleReg.updateMigrationStatus(target.slug, "applied");
-            } catch {
-              // Non-fatal: migration status is metadata only.
-            }
-          }
-        }
+        // The same two-way re-marking as the collections', from the same
+        // report: a single's row is reset to `pending` by an edit exactly as
+        // a collection's is, and the snapshot half alone saw only the created
+        // tables.
+        await markApplied(
+          singleReg,
+          migratedSlugs(
+            "single",
+            singleSync,
+            singleTargets,
+            liveByTable,
+            deferredEntities
+          )
+        );
       }
+      // On the singles' own sync path, whatever the collection sync did: a
+      // refused single is ahead of its table exactly as a collection is, and
+      // this sync is the one that put it there. A single whose metadata this
+      // sync could not store is withheld with them -- its table moved and its
+      // field list did not.
+      await publishDeferred("single", deferredEntities, failedSlugs);
       // Refresh the live default source after the sync: successful singles adopt
       // the new config; a single whose sync failed keeps its prior snapshot so
       // its new fields never pair with stale serialized metadata.

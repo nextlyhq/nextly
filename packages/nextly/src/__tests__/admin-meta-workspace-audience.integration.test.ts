@@ -136,6 +136,7 @@ interface WorkspaceDeclaration {
 interface WorkspaceBody {
   widgets?: WorkspaceDeclaration[];
   plugins?: { name: string; widgets?: WorkspaceDeclaration[] }[];
+  widgetAudience?: string;
 }
 
 async function workspace(headers: Record<string, string>): Promise<Response> {
@@ -161,6 +162,25 @@ async function workspaceFor(key: string): Promise<WorkspaceBody> {
   const res = await workspace({ authorization: `Bearer ${key}` });
   expect(res.status).toBe(200);
   return (await res.json()) as WorkspaceBody;
+}
+
+/** The layout read, through the same catch-all and the same stored config. */
+async function layoutFor(key: string): Promise<{ audience?: string }> {
+  const handlers = createDynamicHandlers({
+    config: sanitizeConfig({
+      collections: [],
+      plugins: [contributor, impostor],
+    }),
+  });
+  const res = await handlers.GET(
+    new Request("http://localhost/api/dashboard/layout", {
+      method: "GET",
+      headers: { authorization: `Bearer ${key}` },
+    }),
+    { params: Promise.resolve({ params: ["dashboard", "layout"] }) }
+  );
+  expect(res.status).toBe(200);
+  return (await res.json()) as { audience?: string };
 }
 
 let handle: TestNextly | undefined;
@@ -475,6 +495,36 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(ids(everyDeclaration(body))).toEqual(
       expect.arrayContaining(["notes/welcome", "app/board"])
     );
+  });
+
+  it("carries the audience token the layout read reports for the same reader", async () => {
+    // 🔴 The admin holds this payload for minutes, and compares its token
+    // with the layout's to learn the payload was built for a different
+    // audience -- a grant landed, a role changed. That only works if the two
+    // responses report ONE token for one reader.
+    const reader = await keyHolding([`read-${NOTES}`]);
+    const [body, layout] = [
+      await workspaceFor(reader),
+      await layoutFor(reader),
+    ];
+    expect(body.widgetAudience).toEqual(expect.any(String));
+    expect(body.widgetAudience).toBe(layout.audience);
+  });
+
+  it("carries a different token for a reader told about different cards, or only different shortcuts", async () => {
+    // The must-differ controls: a token that never moved would satisfy the
+    // equality above. The second key differs from the first only in a
+    // SHORTCUT's grant -- the same cards -- which is the change a token of the
+    // cards alone could not report.
+    const base = await workspaceFor(await keyHolding([`read-${NOTES}`]));
+    const moreCards = await workspaceFor(
+      await keyHolding([`read-${NOTES}`, `create-${NOTES}`])
+    );
+    const moreShortcuts = await workspaceFor(
+      await keyHolding([`read-${NOTES}`, `publish-${NOTES}`])
+    );
+    expect(moreCards.widgetAudience).not.toBe(base.widgetAudience);
+    expect(moreShortcuts.widgetAudience).not.toBe(base.widgetAudience);
   });
 
   it("still refuses an unauthenticated caller", async () => {

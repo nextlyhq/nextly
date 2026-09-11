@@ -50,6 +50,7 @@ import {
   applyPluginSchemaContributionsDeferred,
   type BuilderEntities,
   type DeferredExtend,
+  assertRegisteredKeepTheirKind,
   resolveBuilderExtends,
 } from "../../plugins/schema/apply-contributions";
 import {
@@ -632,6 +633,10 @@ async function loadConfigInternal(
         // A malformed ui-schema is surfaced by migrate-create/-check (which
         // re-load it); loading config for other commands shouldn't hard-fail here.
       }
+      // One slug, one kind, now that the Builder's entities are readable: the
+      // fold could not see them, and the runtime boot makes the same check
+      // against the registry rows (register.ts), so the two paths agree (D50).
+      assertRegisteredKeepTheirKind(config, builderEntities);
       resolveBuilderExtends(folded.deferredExtends, builderEntities);
       finalizeRelationTargets(
         collectUnresolvedRelationTargets(

@@ -7,7 +7,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PageBuilderCard } from "./PageBuilderCard";
@@ -34,6 +34,7 @@ function doc(count: number): BlockDocument {
 const base = {
   siteStyles: undefined,
   styleState: "ready" as const,
+  components: { state: "ready" as const, retry: () => {} },
   // Built through the real derivation, so the fixture cannot describe a bundle
   // the product never produces.
   render: pageRenderInputs({
@@ -41,6 +42,7 @@ const base = {
     clientConfig: undefined,
     previewContainer: undefined,
     limits: DEFAULT_LIMITS,
+    definitions: new Map(),
   }),
   canEdit: true,
   onOpen: () => {},
@@ -154,6 +156,74 @@ describe("PageBuilderCard", () => {
     expect(
       screen.getByRole("button", { name: /open page builder/i })
     ).toBeDefined();
+  });
+
+  /*
+   * The component read gates the miniature the way the style read does, and
+   * for the same reason: drawn without definitions, every instance on the page
+   * is the could-not-be-loaded marker, which is the picture of a different
+   * problem. The one difference is the remedy — a failed read can be asked
+   * again from here.
+   */
+  it("draws no page while the component definitions are still arriving", () => {
+    const { container } = render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        components={{ state: "pending", retry: () => {} }}
+      />
+    );
+
+    expect(container.querySelector(MINIATURE)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("still draws the page when the components could not be loaded, and says so beneath it", () => {
+    // Unlike a failed style read, a failed component read does not refuse the
+    // page: the route refuses a role that may edit pages but not read
+    // components, and such an author would otherwise see every card refuse
+    // forever. The sentence beneath is what tells the marker apart from a
+    // deleted component, with the one remedy reachable from here.
+    const retry = vi.fn();
+    const { container } = render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        components={{ state: "unavailable", retry }}
+      />
+    );
+
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(
+      /components could not be loaded/i
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: /open page builder/i })
+    ).toBeDefined();
+  });
+
+  it("draws the page from cached definitions when the read failed to refresh, and says they may be out of date", () => {
+    // Told apart from a read that never answered: the miniature is drawn from
+    // what the read last held, so "draw as missing" would be false beneath
+    // it. The remedy is the same.
+    const retry = vi.fn();
+    const { container } = render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        components={{ state: "stale", retry }}
+      />
+    );
+
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(
+      /could not be reloaded/i
+    );
+    expect(screen.getByRole("status").textContent).not.toMatch(/missing/i);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   /*
