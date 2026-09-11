@@ -1689,6 +1689,187 @@ describe("the component tier", () => {
       expect(fits).toBeUndefined();
     });
 
+    it("judges the dry run under the SITE's limits, so the resolver reaches a page legal only under a raised cap", () => {
+      // The apply is the first stage of the preflight and takes limits of its
+      // own. A page longer than the engine's default cap is legal on a site
+      // that raised it; judged by the default, the dry run refuses it before
+      // the resolver ever runs, and the click then fails on a page the editor
+      // and the canvas both accept. The RESOLVER's verdict is what proves it
+      // ran: under a cap with room for one more node but not for three, the
+      // placement is refused for budget; with room for three, it is placed.
+      catalog([{ ...base, name: "acme/text" }]);
+      const page = pageWith(DEFAULT_LIMITS.maxNodes);
+      const at = { index: page.nodes.length };
+      const lookup = lookupOf(three);
+      const tight = {
+        ...DEFAULT_LIMITS,
+        maxNodes: DEFAULT_LIMITS.maxNodes + 2,
+      };
+      const roomy = {
+        ...DEFAULT_LIMITS,
+        maxNodes: DEFAULT_LIMITS.maxNodes + 4,
+      };
+
+      expect(compositionRefusal(page, node(), at, lookup, tight)?.reason).toBe(
+        "budget"
+      );
+      expect(
+        compositionRefusal(page, node(), at, lookup, roomy)
+      ).toBeUndefined();
+    });
+
+    it("leaves a refusal the apply itself makes to the apply, rather than throwing", () => {
+      // A page already at the stored-node cap cannot take the one instance
+      // node either. That is the editor's own refusal, made the same way for
+      // a block, and not a sentence about composition: nothing here throws,
+      // and nothing here answers for it.
+      catalog([{ ...base, name: "acme/text" }]);
+      const full = { ...DEFAULT_LIMITS, maxNodes: 2 };
+
+      expect(
+        compositionRefusal(
+          pageWith(2),
+          node(),
+          { index: 2 },
+          lookupOf(three),
+          full
+        )
+      ).toBeUndefined();
+    });
+
+    describe("an instance the click leaves unresolved that is not the placed one", () => {
+      const wrapper = stored({
+        id: "wrapper",
+        document: componentOf([
+          {
+            id: "w1",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            slots: { children: [instanceOf("three", "w-three")] },
+          },
+        ]),
+      });
+      const one = stored({
+        id: "one",
+        document: componentOf([
+          { id: "o1", type: "acme/text", version: 1, props: {} },
+        ]),
+      });
+      const both = lookupOf(three, wrapper, one);
+      const placed = (row: SavedComponent) =>
+        nodeForComponentEntry(componentEntriesFrom([row], both)[0]!);
+
+      beforeEach(() => {
+        catalog([
+          { ...base, name: "acme/box", slots: { children: {} } },
+          { ...base, name: "acme/text" },
+        ]);
+      });
+
+      it("refuses a definition whose NESTED instance the page has no room for", () => {
+        // The wrapper's own root fits and is inlined; the instance inside it
+        // does not, and the resolver leaves it standing under an id it minted
+        // — never the placed node's. The click would place a component that
+        // draws a placeholder inside itself.
+        const tight = { ...DEFAULT_LIMITS, maxNodes: 5 };
+        const roomy = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+        expect(
+          compositionRefusal(
+            pageWith(2),
+            placed(wrapper),
+            { index: 2 },
+            both,
+            tight
+          )?.reason
+        ).toBe("budget");
+        expect(
+          compositionRefusal(
+            pageWith(2),
+            placed(wrapper),
+            { index: 2 },
+            both,
+            roomy
+          )
+        ).toBeUndefined();
+      });
+
+      it("refuses a placement that pushes an instance already on the page past the budget", () => {
+        // The budget is spent in document order. Placed BEFORE an instance
+        // that fitted, the new one takes the room the old one had, and the
+        // page would draw a placeholder where something used to be.
+        const page = documentOf([
+          { id: "p0", type: "acme/text", version: 1, props: {} },
+          instanceOf("three", "old"),
+        ]);
+        const limits = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+        expect(
+          compositionRefusal(page, placed(three), { index: 1 }, both, limits)
+            ?.reason
+        ).toBe("budget");
+      });
+
+      it("tells instances apart by THEIR ids, not by their definition", () => {
+        // Two instances of one definition are two ids. One the page already
+        // leaves standing does not excuse the next, which is a placeholder
+        // the click would put on the page in its own right.
+        const deep = stored({
+          id: "deep",
+          document: componentOf([
+            {
+              id: "w1",
+              type: "acme/box",
+              version: 1,
+              props: {},
+              slots: {
+                children: [
+                  {
+                    id: "w2",
+                    type: "acme/box",
+                    version: 1,
+                    props: {},
+                    slots: { children: [instanceOf("three", "w-three")] },
+                  },
+                ],
+              },
+            },
+          ]),
+        });
+        const lookup = lookupOf(three, deep);
+        const page = documentOf([
+          instanceOf("deep", "old"),
+          { id: "p0", type: "acme/text", version: 1, props: {} },
+        ]);
+        const limits = { ...DEFAULT_LIMITS, maxDepth: 2 };
+        const instance = nodeForComponentEntry(
+          componentEntriesFrom([deep], lookup)[0]!
+        );
+
+        expect(
+          compositionRefusal(page, instance, { index: 2 }, lookup, limits)
+            ?.reason
+        ).toBe("node-depth");
+      });
+
+      it("does not blame the click for an instance the page already could not hold", () => {
+        // Only what the placement INTRODUCES refuses it. An instance refused
+        // for budget before the click is refused after it too, and a one-node
+        // component that fits beside it is placed.
+        const page = documentOf([
+          instanceOf("three", "old"),
+          { id: "p1", type: "acme/text", version: 1, props: {} },
+          { id: "p2", type: "acme/text", version: 1, props: {} },
+        ]);
+        const limits = { ...DEFAULT_LIMITS, maxNodes: 4 };
+
+        expect(
+          compositionRefusal(page, placed(one), { index: 3 }, both, limits)
+        ).toBeUndefined();
+      });
+    });
+
     it("leaves a reason that is not about room to the tile", () => {
       // A missing definition was the tile's concern when it was offered; the
       // insert refuses only what the page cannot hold.

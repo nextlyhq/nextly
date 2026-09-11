@@ -50,7 +50,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
-import { applyOp, positionOf, type OpPosition } from "./ops";
+import { applyOp, OpError, positionOf, type OpPosition } from "./ops";
 
 /**
  * The category an entry falls under when its block declares none.
@@ -620,17 +620,34 @@ function offerableDefinition(
  * stored instance node and then leave it unresolved when it renders. The
  * apply cannot see that (it counts stored nodes, and an instance is one), so
  * the insert asks the RESOLVER ITSELF: the candidate document is composed the
- * way the canvas will compose it, and the reason the resolver gives for
- * leaving the new instance standing is the reason the author is told.
+ * way the canvas will compose it, and the reason the resolver gives is the
+ * reason the author is told.
+ *
+ * What refuses is every instance the placement LEAVES STANDING that stood
+ * before it — the placed one, but also an instance nested inside its
+ * definition, which the resolver reports under an id it minted rather than
+ * the placed node's, and an instance already on the page that the new one
+ * takes the budget from, because the budget is spent in document order. Each
+ * is a placeholder the click would put on the page. An instance the page
+ * could not hold BEFORE the click is not the click's doing, so the two
+ * compositions are compared rather than the second read alone; the resolver
+ * mints an instance's ids from what it derives them from, so the same
+ * instance answers to the same id in both.
  *
  * Asked at the insert rather than of every tile per keystroke, for the reason
  * the pattern planner leaves the machine caps to the apply: room is a property
- * of the page that moves with every edit, and one composition per click is
+ * of the page that moves with every edit, and two compositions per click are
  * cheap where one per tile per keystroke is not.
  *
  * `undefined` for "it composes", and for a reason that is not about room —
  * a missing definition is the tile's concern and was judged when it was
- * offered — so this refuses only what the page cannot hold.
+ * offered — so this refuses only what the page cannot hold. The dry run is
+ * judged under the same `limits` the composition is, since the editor and the
+ * canvas both run under the site's: a page legal only under a raised cap
+ * would otherwise be refused here by the engine's default before the resolver
+ * ran. And a refusal the apply itself makes — a page already at the stored
+ * cap, a target that is gone — is left to the editor's own apply, which
+ * refuses it the same way for a block; it is not a sentence about composition.
  */
 export function compositionRefusal(
   document: BlockDocument,
@@ -639,17 +656,35 @@ export function compositionRefusal(
   definitions: ComponentLookup,
   limits?: DocumentLimits
 ): CompositionRefusal | undefined {
-  const candidate = applyOp(document, { kind: "insert", node, at });
-  if (candidate === null) return undefined;
-  const { unresolved } = resolveComponentInstances(
-    candidate.document,
-    definitions,
-    limits === undefined ? {} : { limits }
+  let candidate: BlockDocument;
+  try {
+    candidate = applyOp(
+      document,
+      { kind: "insert", node, at },
+      limits
+    ).document;
+  } catch (error) {
+    if (error instanceof OpError) return undefined;
+    throw error;
+  }
+  const options = limits === undefined ? {} : { limits };
+  const standing = new Set(
+    resolveComponentInstances(document, definitions, options).unresolved.map(
+      entry => entry.instanceId
+    )
   );
-  const own = unresolved.find(entry => entry.instanceId === node.id);
-  if (own === undefined) return undefined;
-  const sentence = ROOM_REFUSALS[own.reason];
-  return sentence === undefined ? undefined : { reason: own.reason, sentence };
+  const introduced = resolveComponentInstances(
+    candidate,
+    definitions,
+    options
+  ).unresolved.find(
+    entry => !standing.has(entry.instanceId) && entry.reason in ROOM_REFUSALS
+  );
+  if (introduced === undefined) return undefined;
+  const sentence = ROOM_REFUSALS[introduced.reason];
+  return sentence === undefined
+    ? undefined
+    : { reason: introduced.reason, sentence };
 }
 
 /** A refusal about room: the resolver's reason, and the words an author reads. */
