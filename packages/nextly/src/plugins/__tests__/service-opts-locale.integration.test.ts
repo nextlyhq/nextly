@@ -40,6 +40,20 @@ const pages = () =>
     fields: [text({ name: "title", localized: true })],
   });
 
+/**
+ * A collection with no localization, for the bulk-create control below.
+ *
+ * On a localized collection every field lives on the companion table, and the
+ * bulk pipeline writes the main table only — so a bulk create there fails
+ * each row whatever the locale, and a control that failed for that reason
+ * would say nothing about the locale it exists to control for.
+ */
+const notes = () =>
+  defineCollection({
+    slug: "notes",
+    fields: [text({ name: "body" })],
+  });
+
 /** Boot a localized site with a probe plugin that keeps its services. */
 async function boot(): Promise<PluginServices> {
   let services: PluginServices | undefined;
@@ -52,7 +66,7 @@ async function boot(): Promise<PluginServices> {
     },
   });
   current = await createTestNextly({
-    collections: [pages()],
+    collections: [pages(), notes()],
     plugins: [probe],
     localization: { locales: ["en", "de", "fr"], defaultLocale: "en" },
   });
@@ -154,5 +168,65 @@ describe("a plugin reading and writing in a named locale", () => {
       fallbackLocale: false,
     });
     expect(titleOf(exact)).not.toBe("Page EN");
+  });
+});
+
+describe("what the pair refuses", () => {
+  it("refuses a write in a locale the site does not have, rather than writing the default", async () => {
+    // A READ resolves an unconfigured code to the default so a page still
+    // shows; a WRITE must not, or a typo overwrites the default language's
+    // content. The services already refuse it with a 400; this pins that the
+    // refusal reaches a plugin as a rejection instead of a quiet default write.
+    const services = await boot();
+    const id = await pageInTwoLanguages(services);
+
+    await expect(
+      services.collections.updateEntry(
+        "pages",
+        id,
+        { title: "Typo" },
+        { as: "system", locale: "xx" }
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    // The row is exactly as it was: nothing landed under any language.
+    const unnamed = await services.collections.findEntryById("pages", id, {
+      as: "system",
+    });
+    expect(titleOf(unnamed)).toBe("Page EN");
+  });
+
+  it("refuses a locale on createMany by name, rather than dropping it", async () => {
+    // The bulk pipeline cannot perform the localized split, so a locale it
+    // accepted would file every row under the default language and report
+    // success. Refused before any row is written, naming the write that does
+    // honour it.
+    const services = await boot();
+
+    await expect(
+      services.collections.createMany("notes", [{ body: "Notiz" }], {
+        as: "system",
+        locale: "de",
+      })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    // Nothing was written.
+    const listed = await services.collections.listEntries(
+      "notes",
+      {},
+      { as: "system" }
+    );
+    expect(listed.data).toEqual([]);
+  });
+
+  it("still bulk-creates when no locale is named", async () => {
+    // The control: the refusal is about a locale, not about createMany.
+    const services = await boot();
+    const result = await services.collections.createMany(
+      "notes",
+      [{ body: "one" }, { body: "two" }],
+      { as: "system" }
+    );
+    expect(result.successful).toBe(2);
   });
 });

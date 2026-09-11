@@ -34,7 +34,11 @@ now the request context could hold the pair and every read accepted it, but
 nothing on the plugin path could say it and the facade's forwarding seam
 dropped it even when a context did: every plugin read and write on a localized
 site was in the default language, silently. A code that is not a configured
-locale resolves to the default rather than failing, as it does on the wire.
+locale resolves to the default on a read, as it does on the wire, and is
+refused on a write, so a typo cannot overwrite the default language's
+content. `createMany` refuses any locale by name rather than filing the rows
+under the default language silently; its bulk pipeline cannot store a
+translation yet.
 
 The form builder uses it for the one place a visitor could see the gap. A
 form that redirects to a picked page read that page with no locale, so a page
@@ -42,4 +46,8 @@ whose slug is `thanks` in English and `merci` in French sent every visitor to
 `/thanks`. `submitForm` takes `locale`, and the built-in
 `POST /api/forms/:slug/submit` reads it from `?locale=` — the same place
 core's own routes take a locale — so a French submission is answered with the
-French URL, and one that names no language is answered as before.
+French URL, and one that names no language is answered as before. The target
+is read as the visitor rather than as the system, so a translation still in
+draft is never the URL a visitor is sent to; the published default answers
+until it is published. The read wildcards (`all`, `*`) are not a language and
+read as none.

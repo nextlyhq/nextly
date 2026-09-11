@@ -88,7 +88,10 @@ export interface SubmitFormOptions {
    *
    * A code that is not a configured locale reads as the default rather than
    * failing the submission, which the collection services decide. Absent means
-   * the default, as it always has.
+   * the default, as it always has. The read wildcards (`all`, `*`) are not a
+   * language a visitor can have submitted in and are treated as absent: a read
+   * in "every language" answers a localized URL field with one value per
+   * language, which no URL pattern can be filled from.
    */
   locale?: string;
 }
@@ -247,8 +250,9 @@ export async function submitForm(
   options: SubmitFormOptions,
   context: SubmitFormContext
 ): Promise<SubmitFormResult> {
-  const { formSlug, data, metadata, request, locale } = options;
+  const { formSlug, data, metadata, request } = options;
   const access: SubmissionAccess = options.access ?? { as: "system" };
+  const locale = visitorLocale(options.locale);
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
   const { logger } = pluginContext;
@@ -274,7 +278,7 @@ export async function submitForm(
     // — and two call sites naming the inputs separately is how one of them
     // comes to be answered in the wrong language while the other is right.
     const redirectFor = () =>
-      resolveRedirectUrl(form, pluginConfig, pluginContext, locale);
+      resolveRedirectUrl(form, pluginConfig, pluginContext, { access, locale });
 
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
     // so what a visitor is told does not depend on which entry point their
@@ -604,7 +608,7 @@ async function resolveRedirectUrl(
   form: FormDocument,
   pluginConfig: ResolvedFormBuilderConfig,
   pluginContext: PluginContext,
-  locale: string | undefined
+  read: TargetRead
 ): Promise<string | undefined> {
   const settings = form.settings;
   if (!settings) return undefined;
@@ -628,7 +632,7 @@ async function resolveRedirectUrl(
     form,
     pluginConfig,
     pluginContext,
-    locale
+    read
   );
 }
 
@@ -645,7 +649,7 @@ async function urlForPickedDocument(
   form: FormDocument,
   pluginConfig: ResolvedFormBuilderConfig,
   pluginContext: PluginContext,
-  locale: string | undefined
+  read: TargetRead
 ): Promise<string | undefined> {
   const { logger } = pluginContext;
   const patterns = pluginConfig.redirectRelationships;
@@ -667,7 +671,7 @@ async function urlForPickedDocument(
     return undefined;
   }
 
-  const target = await readTarget(reference, form, pluginContext, locale);
+  const target = await readTarget(reference, form, pluginContext, read);
   if (!target) return undefined;
 
   // Reachability is re-decided HERE, not inherited from the save. Nothing runs
@@ -733,11 +737,47 @@ function buildUrl(
 }
 
 /** The target row, or undefined — a deleted target and a failed read differ. */
+/**
+ * How the redirect target is read: as whom, and in which language.
+ *
+ * As whom is the submission's own `access`, because the destination is a page
+ * the VISITOR is about to be sent to, and the visitor's view of it is the one
+ * that decides whether it is there. A public submission reads the target as a
+ * public caller, which is scoped to published rows and — the part the locale
+ * makes matter — to published TRANSLATIONS: a companion row still in draft is
+ * withheld and the field falls back to the published default. Read as the
+ * system instead, the trusted read admits every draft, and a French slug that
+ * nobody has published yet becomes the URL a French visitor is sent to.
+ *
+ * A host that elevated the submission to `system` keeps the trusted read it
+ * asked for, as before this carried a language.
+ */
+interface TargetRead {
+  access: SubmissionAccess;
+  locale: string | undefined;
+}
+
+/**
+ * The language a visitor submitted in, or nothing.
+ *
+ * The read wildcards are not one: `all` and `*` ask the collection services
+ * for every translation at once, which answers a localized URL field with one
+ * value per language — a shape no URL pattern can be filled from, so a valid
+ * redirect would resolve to nothing after the submission succeeded. Neither
+ * is a language a form was filled in, so both read as no language named.
+ */
+function visitorLocale(locale: string | undefined): string | undefined {
+  if (locale === undefined || locale === "all" || locale === "*") {
+    return undefined;
+  }
+  return locale;
+}
+
 async function readTarget(
   reference: { collection: string; id: string },
   form: FormDocument,
   pluginContext: PluginContext,
-  locale: string | undefined
+  read: TargetRead
 ): Promise<RedirectTargetDocument | undefined> {
   const { logger } = pluginContext;
   const context = {
@@ -748,15 +788,16 @@ async function readTarget(
 
   let row: unknown;
   try {
-    // Read in the visitor's language, so a localized URL field answers with
-    // the slug that page has THERE. The fallback chain stays in force: a page
-    // with no translation for this locale still has a URL, in the language
-    // the site falls back to, and sending the visitor there beats sending
-    // them nowhere.
+    // In the visitor's language, so a localized URL field answers with the
+    // slug that page has THERE, and as the visitor, so it answers only with a
+    // translation they can reach (see {@link TargetRead}). The fallback chain
+    // stays in force: a page with no published translation for this locale
+    // still has a URL, in the language the site falls back to, and sending
+    // the visitor there beats sending them nowhere.
     row = await pluginContext.services.collections.findEntryById(
       reference.collection,
       reference.id,
-      { as: "system", locale }
+      { ...read.access, locale: read.locale }
     );
   } catch (error) {
     // The submission already succeeded, so this degrades to "no redirect"

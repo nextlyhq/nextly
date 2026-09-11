@@ -597,6 +597,25 @@ export class CollectionService extends BaseService {
     data: Record<string, unknown>[],
     context: RequestContext
   ): Promise<BatchOperationResult> {
+    // The bulk pipeline writes its rows in one pass and does not perform the
+    // localized split a single create does, so it cannot store a row in a
+    // named language. A locale it accepted and could not honour would file
+    // every row under the default language and report success — a caller
+    // told nothing, which is worse than being told no. Refused up front, by
+    // name, with the write that does honour it; a bulk create is one
+    // statement, so there is no per-row failure to report it through.
+    if (context.locale !== undefined) {
+      throw NextlyError.invalidInput({
+        message:
+          "createMany cannot write in a locale; create the rows one at a time with createEntry.",
+        logContext: {
+          reason: "create-many-locale-unsupported",
+          collectionName,
+          locale: context.locale,
+        },
+      });
+    }
+
     this.logger.debug("Creating entries (bulk)", {
       collectionName,
       count: data.length,

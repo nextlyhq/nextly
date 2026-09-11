@@ -91,9 +91,13 @@ export interface ServiceOpts {
    * `/thanks` for a visitor who was on `/merci`.
    *
    * The same spelling as `RequestContext` and the wire's `?locale=`, so a
-   * route can hand through what it was given. A code that is not a configured
-   * locale resolves to the default rather than failing: the collection
-   * services decide that, and this does not second-guess them.
+   * route can hand through what it was given. The collection services decide
+   * what an unconfigured code means, and they decide it differently by verb:
+   * a READ resolves it to the default, so a wrong query string still shows a
+   * page; a WRITE is refused (`400`), so a typo cannot overwrite the default
+   * language's content. `createMany` refuses any locale at all, by name — its
+   * bulk pipeline cannot perform the localized split, and accepting a value it
+   * could not honour would file the rows under the default language silently.
    */
   locale?: string;
 

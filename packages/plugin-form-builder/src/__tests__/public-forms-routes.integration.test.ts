@@ -343,4 +343,12 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     const handlers = await bootLocalizedRedirect();
     expect((await submitAt(handlers, "")).redirect).toBe("/thanks");
   });
+
+  it("does not let the read wildcard through as a language", async () => {
+    // `?locale=all` is what a client can send; it is not a language, and
+    // forwarded as one it would answer the slug per language and drop the
+    // redirect after the submission succeeded.
+    const handlers = await bootLocalizedRedirect();
+    expect((await submitAt(handlers, "?locale=all")).redirect).toBe("/thanks");
+  });
 });

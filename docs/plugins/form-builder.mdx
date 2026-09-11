@@ -364,7 +364,7 @@ The honeypot and the rate limit are facts about an HTTP REQUEST rather than abou
 
 You do not need a route of your own to get any of it. `POST /api/forms/:slug/submit` is contributed by this plugin and calls `submitForm`, so a browser posting to it meets the honeypot and the rate limit exactly as one posting to a route you host yourself would. Host your own when you want a different response shape or extra work around the submission, not to obtain spam protection.
 
-On a localized site, post to `/api/forms/:slug/submit?locale=fr` from a French page. The locale decides which translation the redirect target is read in, so the visitor lands on that page's French URL; a submission that names none is answered in the default language. A code the site does not have reads as the default rather than refusing the submission — the visitor filled the form in, and a wrong query string is not a reason to lose it.
+On a localized site, post to `/api/forms/:slug/submit?locale=fr` from a French page. The locale decides which translation the redirect target is read in, so the visitor lands on that page's French URL; a submission that names none is answered in the default language. A code the site does not have reads as the default rather than refusing the submission — the visitor filled the form in, and a wrong query string is not a reason to lose it. The target is read as the visitor, so a translation that is still a draft is not where they are sent: the published default answers until the translation is published.
 
 You can validate data without creating a submission:
 
