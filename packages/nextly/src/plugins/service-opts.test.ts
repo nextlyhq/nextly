@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../errors/nextly-error";
 import {
   listRoleSlugsForUser,
   listRoleSlugsForUserStrict,
@@ -143,7 +144,34 @@ describe("resolveServiceOpts", () => {
     // never read is not a decision.
     await expect(
       resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
-    ).rejects.toThrow("the roles query did not run");
+    ).rejects.toThrow();
+  });
+
+  it("refuses with a typed error, not the driver's own", async () => {
+    // Everything a plugin reaches through this facade answers in the typed
+    // envelope, and the strict resolver propagates the driver's exception by
+    // design. A raw error here would reach a plugin route with no `code` to
+    // branch on. The refusal is unchanged; only its shape is.
+    await expect(
+      resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        NextlyError.is(error) &&
+        (error as NextlyError).code === "INTERNAL_ERROR"
+    );
+  });
+
+  it("keeps the cause, so the driver's message is not lost", async () => {
+    // The control on the wrapping: an implementation that threw a fresh
+    // NextlyError and discarded the original passes the case above and leaves
+    // an operator with nothing to diagnose.
+    const error = await resolve({
+      as: "user",
+      user: { id: "u1", email: "u@e.com" },
+    }).catch((thrown: unknown) => thrown);
+    expect((error as { cause?: Error }).cause?.message).toBe(
+      "the roles query did not run"
+    );
   });
 
   it("asks the strict resolver and not the one that swallows", async () => {

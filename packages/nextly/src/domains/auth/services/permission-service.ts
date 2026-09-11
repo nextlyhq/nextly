@@ -17,6 +17,7 @@ import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isSystemResource } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
+import { invalidateAllPermissionCaches } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 
@@ -705,6 +706,14 @@ export class PermissionService extends BaseService {
         .update(this.tables.permissions)
         .set(updateData)
         .where(eq(this.tables.permissions.id, permissionId));
+
+      // What this slug means has changed, so every answer resolved from it is
+      // stale — including an API key's grants, which are copied from these very
+      // rows and cached for five minutes under the key's id. Nothing here
+      // invalidated anything before, so a role-based key kept the old spelling
+      // and a super-admin's key kept the old catalogue until they aged out.
+      // No id scopes this: a permission belongs to no user and no role.
+      await invalidateAllPermissionCaches();
     } catch (err) {
       // Re-throw NextlyError instances unchanged (e.g. our notFound above);
       // map raw DB errors via fromDatabaseError. The legacy override message
@@ -781,6 +790,11 @@ export class PermissionService extends BaseService {
       await (this.db as RBACDatabaseInstance)
         .delete(this.tables.permissions)
         .where(eq(this.tables.permissions.id, permissionId));
+
+      // The row is gone, so every answer copied from it is wrong — a
+      // super-admin's key holds the catalogue by copy, and kept a deleted
+      // grant until its entry aged out.
+      await invalidateAllPermissionCaches();
     } catch (err) {
       // Normalise raw driver errors so fk-violation / etc. produce the
       // right NextlyError instead of collapsing to INTERNAL_ERROR.
@@ -844,6 +858,10 @@ export class PermissionService extends BaseService {
       await (this.db as RBACDatabaseInstance)
         .delete(this.tables.permissions)
         .where(eq(this.tables.permissions.id, permissionId));
+
+      // Same reason as the delete above: a row nothing declares any more must
+      // not survive in a copy of it.
+      await invalidateAllPermissionCaches();
     } catch (err) {
       // Normalise raw driver errors so the kind is mapped correctly
       // instead of collapsing to INTERNAL_ERROR.

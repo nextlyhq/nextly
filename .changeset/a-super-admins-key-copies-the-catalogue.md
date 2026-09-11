@@ -45,8 +45,14 @@ the same caller's own request passed it, and a negative rule granted what it
 was written to refuse. The roles are resolved and the caller is built by the
 one constructor every other authenticated path uses.
 
+Editing or deleting a permission now retires the cached answers derived from
+it. `PermissionService`'s update and delete called no invalidation at all, and
+neither of the existing ones can express the change: a permission row belongs to
+no user and no role. So a role-based key kept a renamed slug and a Super Admin's
+key kept a deleted grant until their entries aged out.
+
 A plugin call whose caller's roles could not be read is refused rather than run
-as a caller with none. The resolver behind it degraded a failed query to an
+as a caller with none, with a typed error rather than the driver's own. The resolver behind it degraded a failed query to an
 empty set, which is safe for a rule that grants on a role and wrong for one that
 withholds on it: `user.role !== "suspended"` admitted a caller the database
 declined to answer for.

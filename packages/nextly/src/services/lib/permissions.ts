@@ -632,6 +632,44 @@ const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
  * invalidatePermissionCache({ roleId: 'admin-role-id' });
  * ```
  */
+/**
+ * Retire EVERY cached permission answer, for a change that has no id to scope by.
+ *
+ * A permission ROW belongs to no user and no role: editing what a slug means, or
+ * deleting it, changes what every role granting it confers and what the
+ * catalogue contains. `invalidatePermissionCache` takes a `userId` or a
+ * `roleId` and can express neither, so the permission service's own mutations
+ * reached no cache at all — a role-based key kept a renamed slug and a
+ * super-admin's key kept a deleted grant until their entries aged out.
+ *
+ * Clears the process-local tiers, tombstones the shared one, and advances the
+ * revision so derived caches in this process retire with them.
+ */
+export async function invalidateAllPermissionCaches(): Promise<void> {
+  cache.clear();
+  keyToRoleIds.clear();
+  roleIdToKeys.clear();
+  userIdToKeys.clear();
+  superAdminCache.clear();
+  rbacRevisionCounter += 1;
+
+  if (CACHE_ENABLED) {
+    try {
+      await new PermissionCacheService(getAdapter(), getLogger(), {
+        cacheTtlSeconds: CACHE_TTL_SECONDS,
+      }).invalidateAll();
+    } catch (error) {
+      getAuthLogger()?.log?.("error", {
+        category: "auth",
+        op: "cache",
+        message: "DB cache invalidation failed",
+        error: String(error),
+      });
+      // Don't throw - cache invalidation failures should not break operations
+    }
+  }
+}
+
 export async function invalidatePermissionCache(
   _hint: { userId?: string; roleId?: string } = {}
 ): Promise<void> {

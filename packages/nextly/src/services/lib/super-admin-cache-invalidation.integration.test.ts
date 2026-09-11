@@ -25,7 +25,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getDialectTables } from "../../database/index";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 
-import { invalidatePermissionCache, isSuperAdmin } from "./permissions";
+import {
+  invalidateAllPermissionCaches,
+  invalidatePermissionCache,
+  isSuperAdmin,
+} from "./permissions";
 
 let harness: TestNextly | undefined;
 
@@ -314,6 +318,68 @@ describe("an API key's grants are retired when the roles behind them change", ()
       after,
       "their own role's grant survives, so this is a re-resolve and not a wipe"
     ).toEqual(["read-notes"]);
+  });
+
+  it("loses it when a PERMISSION row changes, which names neither", async () => {
+    // A permission belongs to no user and no role, so neither hint above can
+    // express it, and `PermissionService`'s own update and delete called
+    // nothing at all. A role-based key kept a renamed slug and a super-admin's
+    // key kept a deleted grant until their entries aged out.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+
+    await invalidateAllPermissionCaches();
+
+    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("does not file a resolution that raced an invalidation as current", async () => {
+    // The revision is read BEFORE the queries. Were it read after, an
+    // invalidation landing while they are in flight would be stamped onto rows
+    // read under the old one, and the next request would reuse grants the
+    // change was meant to retire for the whole TTL.
+    //
+    // Observed on the CATALOGUE rather than on the super-admin answer, which
+    // has a cache of its own: a new permission row is added after the raced
+    // resolution, and whether the next read sees it says whether that entry
+    // was served or re-resolved.
+    await seedDeputy();
+    const inFlight = grants();
+    await invalidateAllPermissionCaches();
+    await inFlight;
+
+    const tables = getDialectTables();
+    await rawDb().insert(tables.permissions).values({
+      id: "perm-extra",
+      name: "Read extra",
+      slug: "read-extra",
+      action: "read",
+      resource: "extra",
+    });
+
+    expect(
+      await grants(),
+      "the raced entry was served back, so this row is missing"
+    ).toContain("read-extra");
+  });
+
+  it("serves the cache when nothing raced it, which is what makes that a race", async () => {
+    // The control. If every read re-resolved, the case above would pass on an
+    // implementation that caches nothing at all.
+    await seedDeputy();
+    await grants();
+
+    const tables = getDialectTables();
+    await rawDb().insert(tables.permissions).values({
+      id: "perm-later",
+      name: "Read later",
+      slug: "read-later",
+      action: "read",
+      resource: "later",
+    });
+
+    expect(await grants()).not.toContain("read-later");
   });
 
   it("loses it on a userId invalidation too, which names no role", async () => {

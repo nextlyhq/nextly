@@ -148,7 +148,21 @@ export interface ServiceOptsDeps {
  * access decision taken on roles nobody could read is not a decision.
  */
 const REAL_DEPS: ServiceOptsDeps = {
-  listRoleSlugs: listRoleSlugsForUserStrict,
+  listRoleSlugs: async userId => {
+    try {
+      return await listRoleSlugsForUserStrict(userId);
+    } catch (cause) {
+      // The refusal stands; only its SHAPE changes. The strict resolver
+      // propagates the driver's own exception by design, and everything a
+      // plugin reaches through this facade answers in the typed envelope, so
+      // letting a raw database error through would hand a plugin route an
+      // error it has no way to read and no `code` to branch on.
+      throw NextlyError.internal({
+        ...(cause instanceof Error ? { cause } : {}),
+        logContext: { reason: "service-opts-roles-unreadable", userId },
+      });
+    }
+  },
 };
 
 /**

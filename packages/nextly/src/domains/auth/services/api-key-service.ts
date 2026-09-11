@@ -749,12 +749,19 @@ export class ApiKeyService extends BaseService {
   ): Promise<readonly GrantedPermission[]> {
     const cacheKey = `apikey:${keyId}`;
     const now = Date.now();
+    // Read BEFORE the queries below, never after. An invalidation that lands
+    // while they are in flight would otherwise be stamped onto the result they
+    // return: the rows were read under the old revision and would be filed
+    // under the new one, so the next request reuses grants the change was
+    // meant to retire, for the whole TTL. Captured here, that entry is already
+    // behind when it is written and the next read re-resolves.
+    const resolvedUnder = rbacRevision();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
     if (
       cached &&
       now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS &&
-      cached.revision === rbacRevision()
+      cached.revision === resolvedUnder
     ) {
       return cached.grants;
     }
@@ -808,7 +815,7 @@ export class ApiKeyService extends BaseService {
     _apiKeyPermissionsCache.set(cacheKey, {
       grants,
       cachedAt: now,
-      revision: rbacRevision(),
+      revision: resolvedUnder,
     });
     return grants;
   }
