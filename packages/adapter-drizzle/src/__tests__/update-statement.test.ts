@@ -206,7 +206,7 @@ describe("buildUpdateStatement — how a declared column binds", () => {
   });
 });
 
-describe("buildUpdateStatement — WHERE and RETURNING", () => {
+describe("buildUpdateStatement — WHERE, and no RETURNING", () => {
   it("renders the where through the shared builder, params after the SET", () => {
     const { sql, params } = compile({
       data: { slug: "a", title: "b" },
@@ -228,14 +228,11 @@ describe("buildUpdateStatement — WHERE and RETURNING", () => {
     expect(sql).toBe('UPDATE "dc_pages" SET "slug" = $1');
   });
 
-  it("appends the RETURNING list it is handed, verbatim", () => {
-    // A raw fragment, which is what the adapters pass: they spell the list
-    // with their own identifier escaping and wall-clock aliases.
-    const { sql } = compile({
-      data: { slug: "a" },
-      returning: rawSql.raw('"id", "slug"'),
-    });
-    expect(sql).toMatch(/ RETURNING "id", "slug"$/);
+  it("returns nothing itself: no RETURNING, whatever the caller asked for", () => {
+    // The rows a caller asked for come from a read on the same transaction,
+    // decoded as every read is, so the statement never carries a list.
+    const { sql } = compile({ data: { slug: "a" } });
+    expect(sql).not.toMatch(/RETURNING/i);
   });
 });
 

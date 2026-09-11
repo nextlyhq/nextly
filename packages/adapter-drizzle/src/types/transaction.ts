@@ -201,12 +201,18 @@ export interface TransactionContext {
    * `undefined` is not written, `null` is, and an update naming nothing to
    * write is refused.
    *
+   * When `options.returning` asks for rows, they come from a read of the same
+   * `where` on this transaction, decoded as every read is — the model's view
+   * of the row, whatever columns were named. An update whose own write
+   * falsifies its `where` therefore reads back nothing; a fenced
+   * compare-and-set wants `updateCount`.
+   *
    * @param table - Table name
    * @param data - Data to update, keyed by SQL column name; Drizzle property
    *   names are accepted as well
    * @param where - Conditions for records to update
    * @param options - Update options
-   * @returns Updated records (with RETURNING columns if specified)
+   * @returns The updated rows when `returning` asked for them, else `[]`
    */
   update<T = unknown>(
     table: string,

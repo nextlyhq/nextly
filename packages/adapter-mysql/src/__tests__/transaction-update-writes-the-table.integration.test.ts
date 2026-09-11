@@ -218,23 +218,36 @@ describe("MySQL transaction update writes the physical table", async () => {
     expect((await stored("a"))?.slug).toBe("first");
   });
 
-  it("selects the updated rows back when asked, and returns nothing when not", async () => {
-    const [none, requested] = await adapter.transaction(async ctx => [
-      await ctx.update(TABLE, { slug: "n" }, byId("a")),
-      await ctx.update<{ id: string; slug: string; updatedAt: Date }>(
-        TABLE,
-        { slug: "r", updated_at: AT },
-        byId("a"),
-        { returning: "*" }
-      ),
-    ]);
+  it("reads the rows back decoded when asked, and returns nothing when not", async () => {
+    const [none, requested, everything] = await adapter.transaction(
+      async ctx => [
+        await ctx.update(TABLE, { slug: "n" }, byId("a")),
+        await ctx.update<{ id: string }>(TABLE, { slug: "r" }, byId("a"), {
+          returning: ["id"],
+        }),
+        await ctx.update<Record<string, unknown>>(
+          TABLE,
+          { updated_at: AT, published: true, title: "T" },
+          byId("a"),
+          { returning: "*" }
+        ),
+      ]
+    );
     expect(none).toEqual([]);
-    // MySQL has no RETURNING, so the rows come from a select-back on the
-    // transaction's own executor: the model's view of the row, decoded as a
-    // read decodes it, and read inside the transaction so it sees the write.
     expect(requested).toHaveLength(1);
-    expect(requested[0]).toMatchObject({ id: "a", slug: "r" });
-    expect(requested[0].updatedAt).toBeInstanceOf(Date);
+    expect(requested[0]).toMatchObject({ id: "a" });
+    // The rows are a read of the same WHERE on this transaction, decoded as
+    // every read is: the model's property names, the instant that was bound
+    // rather than the driver's local reading of the wall clock, a boolean for
+    // the flag — and only the model's columns, so the physical-only `title`
+    // is not among them even though the write above stored it (the raw read
+    // proves that).
+    expect(everything).toHaveLength(1);
+    expect(everything[0]).toMatchObject({ id: "a", published: true });
+    expect(everything[0].updatedAt).toBeInstanceOf(Date);
+    expect((everything[0].updatedAt as Date).getTime()).toBe(AT.getTime());
+    expect(Object.hasOwn(everything[0], "title")).toBe(false);
+    expect((await stored("a"))?.title).toBe("T");
   });
 
   it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {

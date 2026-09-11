@@ -875,32 +875,21 @@ export class SqliteAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        const tableObj = this.getTableObject(table);
-        const returning = this.returningColumns(tableObj, options?.returning);
         try {
-          const statement = this.buildTransactionUpdate(
-            table,
-            data,
-            where,
-            sanitizeSqliteValue,
-            returning
-          );
-          if (returning === undefined) {
-            // `run`, not `all`: better-sqlite3 throws on a statement that
-            // returns no rows, which is what an UPDATE without RETURNING is.
-            txDb().run(statement);
-            return Promise.resolve([]);
-          }
-          return Promise.resolve(
-            txDb()
-              .all<T>(statement)
-              .map(r => this.mapRowFromRawSql(tableObj, r))
+          // `run`, not `all`: better-sqlite3 throws on a statement that
+          // returns no rows, which is what this UPDATE is.
+          txDb().run(
+            this.buildTransactionUpdate(table, data, where, sanitizeSqliteValue)
           );
         } catch (error) {
           // Classified with the operation and table named, as the pooled
           // `update` classifies its failures.
           return Promise.reject(this.handleQueryError(error, "update", table));
         }
+        // The rows read back on this transaction, decoded as any read is.
+        return this.updateReturnsRows(options?.returning)
+          ? this.select<T>(table, { where }, txDb())
+          : Promise.resolve([]);
       },
 
       ...this.createTransactionForwarders(txDb),

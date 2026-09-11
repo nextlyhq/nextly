@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import { count, getColumns, sql } from "drizzle-orm";
+import { count, getColumns } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleOrderBy } from "./drizzle-order";
@@ -2304,12 +2304,11 @@ export abstract class DrizzleAdapter {
    * does not exist yet. The INSERT half of every transaction context already
    * builds its own statement for that reason; `update-statement.ts` is the
    * UPDATE half, spelled once for the three adapters. Each adapter runs the
-   * statement itself, because how a RETURNING list is spelled and how a row
-   * comes back are the parts that differ by dialect.
+   * statement itself on its transaction executor, and reads the rows back
+   * through `select` when asked (`updateReturnsRows`).
    *
    * @param bindUnmodeled - how a value binds when the model declares no
    *   column for it; a declared column binds through its own encoder.
-   * @param returning - the rendered RETURNING list, on a dialect that has one.
    * @throws when the table is not in the registry, or when nothing would be
    *   written — every key `undefined`, or none at all. The query builder
    *   refused that too ("No values to set"), and a patch that names nothing
@@ -2319,8 +2318,7 @@ export abstract class DrizzleAdapter {
     table: string,
     data: Record<string, unknown>,
     where: WhereClause,
-    bindUnmodeled: (value: unknown) => unknown,
-    returning?: SQL
+    bindUnmodeled: (value: unknown) => unknown
   ): SQL {
     const tableObj = this.getTableObject(table);
     if (!tableObj || typeof tableObj !== "object") {
@@ -2336,7 +2334,6 @@ export abstract class DrizzleAdapter {
       data,
       where,
       bindUnmodeled,
-      returning,
     });
     if (!statement) {
       throw this.createDatabaseError(
@@ -2349,26 +2346,18 @@ export abstract class DrizzleAdapter {
   }
 
   /**
-   * The columns a transaction's `update` returns, as the RETURNING list:
-   * `*`, or the requested columns as SQL names — each an identifier the
-   * dialect quotes, never a string this class escaped.
-   *
-   * @returns `undefined` when the caller asked for nothing back — `update`
-   *   returns `[]` then, as it always has.
+   * Whether a transaction's `update` reads the rows it changed back: the
+   * caller named columns, or `*`. An empty list, like no option at all, asks
+   * for nothing and `update` answers `[]`, as it always has. The rows come
+   * from a read of the update's own WHERE on its own transaction, so they are
+   * the model's view of the row, decoded as every read is decoded — which is
+   * what the query-builder update returned for them, and why the named list
+   * selects nothing narrower.
    */
-  protected returningColumns(
-    tableObj: unknown,
-    returning: UpdateOptions["returning"]
-  ): SQL | undefined {
-    if (!returning || (Array.isArray(returning) && returning.length === 0)) {
-      return undefined;
-    }
-    if (returning === "*") return sql`*`;
-    return sql.join(
-      this.mapColumnNamesToSql(tableObj, returning).map(col =>
-        sql.identifier(col)
-      ),
-      sql`, `
+  protected updateReturnsRows(returning: UpdateOptions["returning"]): boolean {
+    return (
+      returning !== undefined &&
+      !(Array.isArray(returning) && returning.length === 0)
     );
   }
 

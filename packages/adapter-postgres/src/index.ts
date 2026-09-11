@@ -89,7 +89,6 @@ import {
   isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
-import { sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
@@ -240,7 +239,7 @@ function applyHappyEyeballsTimeoutOnce(): void {
 /**
  * How a date column's wall clock is spelled out when a write reads its row
  * back: the stored value to the millisecond, with no zone for the driver to
- * shift. One spelling for the string statements and the Drizzle-rendered one.
+ * shift.
  */
 const PG_WALL_CLOCK_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.MS';
 
@@ -945,7 +944,7 @@ export class PostgresAdapter extends DrizzleAdapter {
    * The RETURNING entries that spell each date column's wall clock out as
    * text, one per alias `dateWallClockAliases` chose. `to_char` renders the
    * stored value without a zone, which is the only form node-postgres cannot
-   * shift on the way back. For the string statements the inserts build.
+   * shift on the way back.
    */
   private wallClockSpelling(
     aliases: ReadonlyArray<{ sqlName: string; alias: string }>
@@ -956,20 +955,6 @@ export class PostgresAdapter extends DrizzleAdapter {
           `to_char(${this.escapeIdentifier(a.sqlName)}, '${PG_WALL_CLOCK_FORMAT}') AS ${this.escapeIdentifier(a.alias)}`
       )
       .join(", ");
-  }
-
-  /**
-   * The same entries as `wallClockSpelling`, as fragments for a statement
-   * Drizzle renders: the identifiers are the dialect's to quote and the
-   * format is bound, so nothing here is text this class escaped.
-   */
-  private wallClockFragments(
-    aliases: ReadonlyArray<{ sqlName: string; alias: string }>
-  ): SQL[] {
-    return aliases.map(
-      a =>
-        sql`to_char(${sql.identifier(a.sqlName)}, ${PG_WALL_CLOCK_FORMAT}) AS ${sql.identifier(a.alias)}`
-    );
   }
 
   private createTransactionContext(client: PoolClient): TransactionContext {
@@ -1108,37 +1093,19 @@ export class PostgresAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        const tableObj = this.getTableObject(table);
-        const returning = this.returningColumns(tableObj, options?.returning);
-        // Each returned timestamp's wall clock, spelled out by the database,
-        // for the reason `insert` gives.
-        const aliases =
-          returning === undefined
-            ? []
-            : this.dateWallClockAliases(tableObj, options?.returning);
         try {
-          const statement = this.buildTransactionUpdate(
-            table,
-            data,
-            where,
-            value => value,
-            returning === undefined
-              ? undefined
-              : sql.join(
-                  [returning, ...this.wallClockFragments(aliases)],
-                  sql`, `
-                )
-          );
-          const result = await txDb().execute(statement);
-          if (returning === undefined) return [];
-          return (result.rows as T[]).map(r =>
-            this.mapRowFromRawSql(tableObj, r, aliases)
+          await txDb().execute(
+            this.buildTransactionUpdate(table, data, where, value => value)
           );
         } catch (error) {
           // Classified with the operation and table named, as the pooled
           // `update` classifies its failures.
           throw this.handleQueryError(error, "update", table);
         }
+        // The rows read back on this transaction, decoded as any read is.
+        return this.updateReturnsRows(options?.returning)
+          ? this.select<T>(table, { where }, txDb())
+          : [];
       },
 
       ...this.createTransactionForwarders(txDb),

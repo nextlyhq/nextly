@@ -18,6 +18,10 @@
  * quotes identifiers and numbers placeholders its own way, and the WHERE is
  * the `buildDrizzleWhere` every other read and write goes through — the raw
  * where builders were removed on purpose and this does not bring one back.
+ * It writes and returns nothing: a caller who asked for the rows back gets
+ * them from a read of the same WHERE on the same transaction, decoded the way
+ * every read is decoded, rather than from a RETURNING list this module would
+ * have to decode a second way.
  *
  * A value binds in one of three ways, decided per column:
  *  - a column the model DECLARES binds through that column's own encoder.
@@ -75,8 +79,6 @@ export interface UpdateStatementInput {
   where: WhereClause;
   /** How a value binds when the model declares no column for it. */
   bindUnmodeled: (value: unknown) => unknown;
-  /** The rendered RETURNING list, on a dialect that has one, when asked. */
-  returning?: SQL;
 }
 
 function isBindableColumn(value: unknown): value is BindableColumn {
@@ -190,6 +192,5 @@ export function buildUpdateStatement(input: UpdateStatementInput): SQL | null {
   const statement = sql`UPDATE ${sql.identifier(input.table)} SET ${sql.join(assignments, sql`, `)}`;
   const condition = buildDrizzleWhere(input.tableObj, input.where);
   if (condition) statement.append(sql` WHERE ${condition}`);
-  if (input.returning) statement.append(sql` RETURNING ${input.returning}`);
   return statement;
 }

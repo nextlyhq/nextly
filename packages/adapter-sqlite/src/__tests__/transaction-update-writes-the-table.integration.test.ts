@@ -159,7 +159,7 @@ describe("SQLite transaction update writes the physical table", () => {
     ).rejects.toThrow(/No values to set/);
   });
 
-  it("returns the requested columns decoded, and nothing when nothing was requested", async () => {
+  it("reads the rows back decoded when asked, and returns nothing when not", async () => {
     const at = new Date("2026-09-11T10:00:00.000Z");
     const [none, requested, everything] = await adapter.transaction(
       async ctx => [
@@ -167,23 +167,28 @@ describe("SQLite transaction update writes the physical table", () => {
         await ctx.update<{ id: string }>(TABLE, { slug: "r" }, byId("a"), {
           returning: ["id"],
         }),
-        await ctx.update<{ id: string; updatedAt: Date; title: string }>(
+        await ctx.update<Record<string, unknown>>(
           TABLE,
-          { updated_at: at, title: "T" },
+          { updated_at: at, published: true, title: "T" },
           byId("a"),
           { returning: "*" }
         ),
       ]
     );
     expect(none).toEqual([]);
-    expect(requested).toEqual([{ id: "a" }]);
-    // Decoded the way a read of the same row decodes it: the model's property
-    // names, and a `Date` for the timestamp column rather than the integer.
+    expect(requested).toHaveLength(1);
+    expect(requested[0]).toMatchObject({ id: "a" });
+    // The rows are a read of the same WHERE on this transaction, decoded as
+    // every read is: the model's property names, a `Date` for the timestamp
+    // rather than the integer, a boolean for the flag rather than 0/1 — and
+    // only the model's columns, so the physical-only `title` is not among
+    // them even though the write above stored it (the raw read proves that).
     expect(everything).toHaveLength(1);
-    expect(everything[0].id).toBe("a");
+    expect(everything[0]).toMatchObject({ id: "a", published: true });
     expect(everything[0].updatedAt).toBeInstanceOf(Date);
-    expect(everything[0].updatedAt.getTime()).toBe(at.getTime());
-    expect(everything[0].title).toBe("T");
+    expect((everything[0].updatedAt as Date).getTime()).toBe(at.getTime());
+    expect(Object.hasOwn(everything[0], "title")).toBe(false);
+    expect((await stored("a"))?.title).toBe("T");
   });
 
   it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {
