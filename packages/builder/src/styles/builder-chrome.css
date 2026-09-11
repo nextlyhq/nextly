@@ -222,6 +222,15 @@
 }
 
 /*
+ * The library-cut notice sits between the placement line and the tiles, and
+ * closes with the same rule the placement line does, so the list below starts
+ * under one divider whichever of the two comes last.
+ */
+.nx-insert-panel__cut {
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/*
  * Tiles, three to a row.
  *
  * The count comes from the panel as `--nx-insert-columns` rather than being

@@ -152,7 +152,10 @@ import {
 } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
-import { useComponentLibrary } from "./component-library-client";
+import {
+  useComponentLibrary,
+  type ComponentLibraryRead,
+} from "./component-library-client";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
@@ -1695,7 +1698,10 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
  * registry and a list, and asking for its own data would make every host that
  * renders it depend on this plugin's route.
  */
-function InsertPanelWithLibrary(props: {
+function InsertPanelWithLibrary({
+  components,
+  ...props
+}: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
   categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
@@ -1704,13 +1710,25 @@ function InsertPanelWithLibrary(props: {
    *
    * The canvas needs the same definitions to draw an instance, and it needs
    * them whether or not this panel is ever opened — so the editor makes that
-   * read once and hands the list down, and the tile an author places is built
-   * from the very document the canvas then resolves the instance against.
+   * read once and hands it down WHOLE: the list the tiles are built from, the
+   * lookup the canvas resolves against — so a tile's roots are the roots the
+   * canvas will draw — and whether the read was cut, which the panel says.
    */
-  components: React.ComponentProps<typeof InsertPanel>["components"];
+  components: ComponentLibraryRead;
 }): React.JSX.Element {
   const library = usePatternLibrary();
-  return <InsertPanel {...props} patterns={library.patterns} />;
+  return (
+    <InsertPanel
+      {...props}
+      patterns={library.patterns}
+      components={components.components}
+      componentDefinitions={components.definitions}
+      truncated={{
+        patterns: library.truncated,
+        components: components.truncated,
+      }}
+    />
+  );
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
@@ -2179,18 +2197,18 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const componentLibrary = useComponentLibrary();
 
   const canvasRender = useMemo(
-    () => ({
-      ...pageRenderInputs({
+    () =>
+      pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         previewContainer,
         previewStates: true,
         limits: documentLimits,
+        // The map's identity changes only when the read does, so this memo —
+        // and the resolution the canvas runs from it — is not redone per
+        // keystroke.
+        definitions: componentLibrary.definitions,
       }),
-      // The map's identity changes only when the read does, so this memo — and
-      // the resolution the canvas runs from it — is not redone per keystroke.
-      definitions: componentLibrary.definitions,
-    }),
     [
       canvasSiteStyle,
       clientConfig,
@@ -2740,7 +2758,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
-                components={componentLibrary.components}
+                components={componentLibrary}
               />
             ),
             /*

@@ -48,7 +48,7 @@ import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
-import { patternLibraryRoute } from "./library-route";
+import { componentLibraryRoute, patternLibraryRoute } from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
@@ -578,8 +578,14 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // the planner's answer and the planner needs the server's block
       // registry — the browser holds the core blocks and not the ones another
       // plugin declared.
+      //
+      // And the component definitions, on a route of their own: the canvas
+      // needs them on every editor mount to draw an instance at all, and a
+      // plugin route declares one permission, so the tier a role may read
+      // without the other has to be reachable without the other's gate.
       routes: [
         patternLibraryRoute(),
+        componentLibraryRoute(),
         savePatternRoute(),
         patternCapabilityRoute(),
       ],

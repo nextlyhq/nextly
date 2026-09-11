@@ -41,6 +41,15 @@ let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
 let capabilityAnswer: { mayCreate: boolean } | undefined;
 
 /**
+ * What the component route answers.
+ *
+ * Its own answer rather than the pattern library's: the two routes carry
+ * different rows under the same envelope, and a mock handing the pattern rows
+ * to the component read would put pattern documents in the definitions map.
+ */
+let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
+
+/**
  * Which panel the shell stub asks for.
  *
  * The real shell draws one at a time and calls `renderPanel` only for that one,
@@ -65,7 +74,7 @@ let capabilityReads = 0;
  */
 const paths = vi.hoisted(() => ({
   library: "/library",
-  components: "/library?tier=components",
+  components: "/library/components",
   capability: "/capability",
 }));
 
@@ -266,9 +275,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     // instance. Counted apart, so a case about the one does not see the other.
     if (args.path === paths.components) {
       componentReads += 1;
-    } else {
-      routeReads += 1;
+      return {
+        data: componentAnswer,
+        pending: false,
+        error: null,
+        refetch: () => {},
+      };
     }
+    routeReads += 1;
     return {
       data: libraryAnswer,
       pending: false,
@@ -329,6 +343,7 @@ afterEach(() => {
   // A leaked answer would make the next case's palette offer a pattern it was
   // not written for.
   libraryAnswer = undefined;
+  componentAnswer = undefined;
   shownPanel = "insert";
   routeReads = 0;
   componentReads = 0;
@@ -510,5 +525,34 @@ describe("what the editor reads before anyone asks for it", () => {
     openEditor();
 
     expect(routeReads).toBeGreaterThan(0);
+  });
+
+  it("hands the canvas and the panel ONE definitions map, and the panel the rows and the cut", () => {
+    // Three props from one read, asserted by identity where identity is the
+    // point: the map the panel resolves a tile's roots through must be the
+    // map the canvas draws with, or the two can judge one definition from two
+    // different documents. The rows are what the tiles are built from, and
+    // the cut is what the panel says beside them.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    const items = [{ id: "header", title: "Header", document: definition }];
+    componentAnswer = { items, meta: { count: 1, truncated: true } };
+    libraryAnswer = { items: [], meta: { count: 0, truncated: false } };
+
+    openEditor();
+
+    const render = seen.canvas?.render as
+      | { definitions?: Map<string, unknown> }
+      | undefined;
+    expect(render?.definitions?.get("header")).toBe(definition);
+    expect(seen.insertPanel?.componentDefinitions).toBe(render?.definitions);
+    expect(seen.insertPanel?.components).toBe(items);
+    expect(seen.insertPanel?.truncated).toEqual({
+      patterns: false,
+      components: true,
+    });
   });
 });

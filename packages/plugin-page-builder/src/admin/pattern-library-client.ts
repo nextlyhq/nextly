@@ -34,12 +34,13 @@ import {
 /**
  * What the panel needs to know about the library.
  *
- * The patterns and NOTHING else, because the panel offers a list and has no
- * surface for anything more yet. The route reports whether it truncated, and
- * `usePluginRoute` reports whether the read is still in flight — both are worth
- * drawing and neither is drawn today, so neither is carried here. A field
- * nothing reads is a promise about a surface that does not exist, and the
- * reader after this one cannot tell it from one that quietly stopped working.
+ * The patterns, the categories they use, and whether the read was cut — and
+ * NOTHING else, because each of those has a surface that draws it and nothing
+ * more does. `usePluginRoute` also reports whether the read is still in
+ * flight, which is worth drawing and is not drawn today, so it is not carried:
+ * a field nothing reads is a promise about a surface that does not exist, and
+ * the reader after this one cannot tell it from one that quietly stopped
+ * working.
  */
 export interface PatternLibraryRead {
   /**
@@ -66,6 +67,15 @@ export interface PatternLibraryRead {
    * a name before the suggestions land and gains them when they do.
    */
   readonly categories: readonly string[];
+  /**
+   * Whether the ceiling cut the read short.
+   *
+   * Carried because the insert panel says so beside the tiles it offers, which
+   * is where an author searches for the pattern that was left out. `false`
+   * until the read arrives: a library that has not answered yet is not one
+   * that was cut.
+   */
+  readonly truncated: boolean;
 }
 
 /**
@@ -102,7 +112,11 @@ export function usePatternLibrary(): PatternLibraryRead {
     return insertable.length === all.length ? all : insertable;
   }, [read.data]);
   const categories = useMemo(() => categoriesOf(read.data?.items), [read.data]);
-  return { patterns, categories };
+  return {
+    patterns,
+    categories,
+    truncated: read.data?.meta.truncated === true,
+  };
 }
 
 /**

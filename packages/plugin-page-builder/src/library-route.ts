@@ -5,7 +5,9 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 import { requireNextly } from "nextly/runtime";
 /**
- * The one read the insert panel makes to find out what it may offer.
+ * The two reads the editor makes to find out what it may offer and draw: the
+ * pattern library for the insert panel, and the component definitions for the
+ * canvas, the panel and the inspector.
  *
  * ## Why a route rather than the collection API
  *
@@ -19,7 +21,16 @@ import { requireNextly } from "nextly/runtime";
  * surface this package may import from, so a browser-side read of the
  * collection is not merely worse here — it does not exist.
  *
- * ## Published only, and NOT by saying so
+ * ## Two routes, one walk
+ *
+ * A route of its own per tier, because a plugin route declares ONE permission
+ * and the tiers are read under different grants, and because each then answers
+ * the canonical list envelope. What the two share is everything about HOW a
+ * collection is paged and admitted under a ceiling — one walk and one
+ * admission, below — so a tier is a completion function and a permission, not
+ * a copy of the loop.
+ *
+ * ## Patterns: published only, and NOT by saying so
  *
  * A draft pattern is one being worked on, and offering it would put a
  * half-built starting point in front of every author on the site. The read is
@@ -35,15 +46,23 @@ import { requireNextly } from "nextly/runtime";
  * else matches nothing, and the library comes back empty with no error. The
  * service asks the workflow which states are public; this cannot.
  *
- * ## No declared permission, deliberately
+ * ## Components: every state the caller may read, with the draft overlaid
  *
- * The route is authenticated — a plugin route without `public: true` is — and
- * the read runs AS THE USER, so core enforces whatever read permission the
- * `patterns` collection actually seeded. Naming one here would have to spell
- * the collection slug, and a host may rename that collection: the permission
- * would then be seeded under the new name and refused under the old one, which
- * is a route nobody can call. The service knows the resolved name; this does
- * not.
+ * The opposite posture, because the reader is different. The editor is where a
+ * component is placed, and a component created as a draft and never published
+ * is exactly the one an author building a draft page reaches for — listing
+ * only public states would make it unplaceable until it was published, which
+ * is the wrong way round. So the listing asks for every lifecycle state, and
+ * the service still decides which ROWS this caller may see. The document then
+ * comes from a by-id read that can overlay the working draft, which a listing
+ * cannot — see {@link ComponentReads}.
+ *
+ * ## The permission follows the collection
+ *
+ * Each route demands the read permission of the collection it serves, COMPUTED
+ * from the resolved slug rather than spelled: a host may rename a collection,
+ * and a permission naming the declared slug would then be seeded under the new
+ * name and refused under the old one, which is a route nobody can call.
  *
  * @module library-route
  */
@@ -51,10 +70,11 @@ import { requireNextly } from "nextly/runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
-  LIBRARY_COMPONENTS_TIER,
+  COMPONENT_LIBRARY_ROUTE_PATH,
   LIBRARY_ROUTE_PATH,
-  LIBRARY_TIER_QUERY,
+  type ComponentLibraryResponse,
   type LibraryComponent,
+  type LibraryListResponse,
   type LibraryPattern,
   type LibraryResponse,
 } from "./library-contract";
@@ -163,13 +183,8 @@ function rowCost(row: LibraryPattern | LibraryComponent): number | undefined {
 const RESPONSE_FRAMING_BYTES = measureBytes(
   {
     items: [],
-    components: [],
-    meta: {
-      count: MAX_LIBRARY_PATTERNS,
-      truncated: false,
-      components: { count: MAX_LIBRARY_PATTERNS, truncated: false },
-    },
-  },
+    meta: { count: MAX_LIBRARY_PATTERNS, truncated: false },
+  } satisfies LibraryListResponse<never>,
   Number.MAX_SAFE_INTEGER
 ).bytes;
 
@@ -183,37 +198,27 @@ const RESPONSE_FRAMING_BYTES = measureBytes(
 const ROW_SEPARATOR_BYTES = 1;
 
 /**
- * The by-id component read the route binds: the Direct API, AS THE USER, with
- * the working draft overlaid.
+ * One page of one collection, as the walk consumes it.
  *
- * No `overrideAccess`: the collection's access rules decide what this caller
- * may read, exactly as the listing beside it. `draft: true` is the opt-in the
- * service gates on the caller being allowed to EDIT the row, so an author who
- * may only read a component sees its live definition and never a draft. And
- * `disableErrors`, so a row the caller may not read answers nothing rather
- * than failing the whole library — the caller reports the gap.
- *
- * `requireNextly` per call rather than captured: it refuses until services
- * are registered, and a route handler runs only after that, so the refusal
- * can only fire on a misconfigured boot — where failing loudly is right.
+ * `hasMore` is the SERVICE's answer to whether more rows exist. A page can come
+ * back shorter than asked for without the collection ending — an `afterRead`
+ * hook may drop rows — so a length check stops early and every row on later
+ * pages disappears. It also cannot tell a library that ends exactly at the
+ * ceiling from one that does not.
  */
-function draftComponentReader(
-  user: unknown
-): LibraryRouteContext["readComponent"] {
-  return async (slug, id) =>
-    requireNextly().findByID({
-      collection: slug,
-      id,
-      draft: true,
-      disableErrors: true,
-      user: (user ?? undefined) as never,
-    });
+export interface CollectionPage {
+  readonly data: readonly unknown[];
+  readonly hasMore: boolean;
 }
 
-/** The capabilities this route uses, named rather than imported whole. */
-export interface LibraryRouteContext {
+/** Who is asking, and which collections the host actually has. */
+interface LibraryCaller {
   self: { collections: Record<string, string | undefined> };
   user: unknown;
+}
+
+/** The capabilities the pattern route uses, named rather than imported whole. */
+export interface PatternLibraryContext extends LibraryCaller {
   services: {
     collections: {
       listEntries(
@@ -222,34 +227,116 @@ export interface LibraryRouteContext {
         context: unknown
       ): Promise<{
         data: unknown[];
-        // The SERVICE's answer to whether more rows exist. A page can come back
-        // shorter than asked for without the collection ending — an `afterRead`
-        // hook may drop rows — so a length check stops early and every pattern
-        // on later pages disappears. It also cannot tell a library that ends
-        // exactly at the ceiling from one that does not.
         pagination?: { hasMore?: boolean };
       }>;
     };
   };
-  /**
-   * The by-id read of one component, at the posture the editor wants.
-   *
-   * A listing answers with LIVE rows: the working-draft overlay lives in the
-   * by-id path and nowhere else, so a definition read from the listing would
-   * show an editor a stale component beside the draft they just saved. The
-   * plugin-facing collection service forwards no draft flag on its by-id
-   * read, so this comes from the Direct API's `findByID({ draft: true })` —
-   * injected here rather than reached for, so the reader is a value a test
-   * can supply and the route declaration is the one place that binds it.
-   *
-   * Answers the ROW (whatever shape the read returns) or nothing; the caller
-   * reads the content field off it.
-   */
-  readComponent(slug: string, id: string): Promise<unknown>;
 }
 
 /**
- * Read the library, as the user asking for it.
+ * The two reads of the components collection the plugin-facing service cannot
+ * make, injected so the route declaration is the one place that binds them and
+ * a test can supply a value.
+ *
+ * Both reach the Direct API, and both must read AS THE USER — see
+ * {@link directComponentReads} for what that takes.
+ */
+export interface ComponentReads {
+  /**
+   * One page of the collection at the EDITOR's lifecycle scope: every state,
+   * with the service deciding which rows this caller may see.
+   *
+   * The plugin-facing listing forwards no lifecycle scope, and an untrusted
+   * read that states none is bounded to public states — so a draft-only
+   * component would never be listed and never be placeable. Deterministically
+   * ordered by `id`, because these are independent offset queries: the service
+   * adds `ORDER BY` only when a sort is asked for, and an unordered offset read
+   * is free to return rows in a different order per page, so one row can arrive
+   * twice and another never at all.
+   */
+  list(slug: string, page: number): Promise<CollectionPage>;
+  /**
+   * One component by id, with its working draft overlaid where this caller may
+   * edit it, or nothing.
+   *
+   * A listing answers with LIVE rows: the working-draft overlay lives in the
+   * by-id path and nowhere else, so a definition read from the listing would
+   * show an editor a stale component beside the draft they just saved. Answers
+   * the ROW (whatever shape the read returns); the caller reads the content
+   * field off it.
+   */
+  read(slug: string, id: string): Promise<unknown>;
+}
+
+/** The capabilities the component route uses. */
+export interface ComponentLibraryContext extends LibraryCaller {
+  components: ComponentReads;
+}
+
+/**
+ * The component reads the route binds: the Direct API, AS THE USER.
+ *
+ * `overrideAccess: false` is the whole of "as the user", and it has to be
+ * SAID. `requireNextly()` is the trusted server handle and defaults every
+ * call to `overrideAccess: true`; passing `user` beside that default names a
+ * caller and narrows nothing. On the by-id read the difference is the draft:
+ * `draft: true` is an opt-in the service grants outright to an overriding
+ * caller and, for everyone else, only after probing whether THIS caller may
+ * update THIS row — so without the `false`, an author who may merely read a
+ * component was handed its pending draft, and every field-level read rule was
+ * skipped on the way. With it, a read-only caller sees the live definition.
+ *
+ * The caller's own authorization scope travels too. An API key is judged on
+ * the grants stamped on IT rather than on the roles of whoever minted it, and
+ * `user` alone names the minter.
+ *
+ * `disableErrors` on the by-id read, so a row the caller may not read answers
+ * nothing rather than failing the whole library — the walk reports the gap.
+ *
+ * `requireNextly` per call rather than captured: it refuses until services
+ * are registered, and a route handler runs only after that, so the refusal
+ * can only fire on a misconfigured boot — where failing loudly is right.
+ */
+function directComponentReads(
+  ctx: Pick<PluginRouteContext, "user" | "authenticatedScope">
+): ComponentReads {
+  const asUser = {
+    overrideAccess: false as const,
+    // The identity the service authorizes by. Email travels so an email-based
+    // access rule matches; roles are resolved from the account by the service.
+    user:
+      ctx.user === null
+        ? undefined
+        : { id: ctx.user.id, email: ctx.user.email },
+    ...(ctx.authenticatedScope === undefined
+      ? {}
+      : { actor: ctx.authenticatedScope }),
+  };
+  return {
+    list: async (slug, page) => {
+      const result = await requireNextly().find({
+        collection: slug,
+        ...asUser,
+        status: "all",
+        sort: "id",
+        page,
+        limit: LIBRARY_PAGE_SIZE,
+      });
+      return { data: result.items, hasMore: result.meta.hasNext };
+    },
+    read: (slug, id) =>
+      requireNextly().findByID({
+        collection: slug,
+        id,
+        ...asUser,
+        draft: true,
+        disableErrors: true,
+      }),
+  };
+}
+
+/**
+ * Read the pattern library, as the user asking for it.
  *
  * Separate from the route declaration so it can be tested against a stub
  * without a server: what this decides — which rows travel, how many, and what
@@ -257,57 +344,38 @@ export interface LibraryRouteContext {
  * inside `contributes.routes` can only be tested by booting one.
  */
 export async function readPatternLibrary(
-  ctx: LibraryRouteContext,
-  options: { tier?: string | null } = {}
+  ctx: PatternLibraryContext
 ): Promise<LibraryResponse> {
-  // Components only, for the canvas: an empty pattern tier that spent nothing,
-  // so the components get the whole ceiling. Any other value — absent, or one
-  // this route does not know — reads everything, which is the panel's read and
-  // the safe answer to a tier nobody asked for.
-  const patterns =
-    options.tier === LIBRARY_COMPONENTS_TIER
-      ? { items: [], truncated: false, bytes: RESPONSE_FRAMING_BYTES }
-      : await readPatterns(ctx);
-  // Components AFTER patterns, under whatever the patterns left of the one
-  // ceiling. The order is a choice: a library big enough to crowd the other
-  // tier out is a library that was already truncated, and the panel names
-  // the pattern tier first.
-  const components = await readComponents(ctx, patterns.bytes);
-  return {
-    items: patterns.items,
-    components: components.items,
-    meta: {
-      count: patterns.items.length,
-      truncated: patterns.truncated,
-      components: {
-        count: components.items.length,
-        truncated: components.truncated,
+  const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
+  // AS THE USER. A route reading with the instance's own identity would answer
+  // every caller with every row, whatever the collection's permissions say.
+  // NO status predicate, deliberately — see the module docblock. And the same
+  // deterministic order the component listing asks for, for the same reason.
+  const asUser = { as: "user" as const, user: ctx.user ?? undefined };
+  return envelope(
+    await readTier(
+      async page => {
+        const result = await ctx.services.collections.listEntries(
+          slug,
+          {
+            sort: { field: "id", direction: "asc" as const },
+            pagination: { limit: LIBRARY_PAGE_SIZE, page },
+          },
+          asUser
+        );
+        return {
+          data: result.data,
+          hasMore: result.pagination?.hasMore === true,
+        };
       },
-    },
-  };
-}
-
-/** One tier's read: what it kept, whether it was cut, and the bytes it spent. */
-interface TierRead<T> {
-  readonly items: T[];
-  readonly truncated: boolean;
-  readonly bytes: number;
-}
-
-async function readPatterns(
-  ctx: LibraryRouteContext
-): Promise<TierRead<LibraryPattern>> {
-  return readTier(
-    ctx,
-    ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
-    row => readLibraryRow(row) ?? "skip",
-    RESPONSE_FRAMING_BYTES
+      row => readLibraryRow(row) ?? "skip"
+    )
   );
 }
 
 /**
- * The component tier: metadata from the listing, the document from a by-id
- * read that can see the working draft.
+ * Read the component library: metadata from the listing, the document from a
+ * by-id read that can see the working draft.
  *
  * Two reads per component rather than one, and the second is the point. The
  * listing is what pages the collection deterministically and applies the
@@ -317,58 +385,56 @@ async function readPatterns(
  * a library missing a definition the author can see in the collection is not
  * a whole library.
  */
-async function readComponents(
-  ctx: LibraryRouteContext,
-  from: number
-): Promise<TierRead<LibraryComponent>> {
+export async function readComponentLibrary(
+  ctx: ComponentLibraryContext
+): Promise<ComponentLibraryResponse> {
   const slug = ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG;
-  return readTier(ctx, slug, row => completeComponent(ctx, slug, row), from);
+  return envelope(
+    await readTier(
+      page => ctx.components.list(slug, page),
+      row => completeComponent(ctx, slug, row)
+    )
+  );
+}
+
+/** One tier's read: what it kept, and whether it was cut. */
+interface TierRead<T> {
+  readonly items: T[];
+  readonly truncated: boolean;
+}
+
+/** The canonical list envelope, built in one place so neither route drifts. */
+function envelope<T>(tier: TierRead<T>): LibraryListResponse<T> {
+  return {
+    items: tier.items,
+    meta: { count: tier.items.length, truncated: tier.truncated },
+  };
 }
 
 /**
- * Page one collection, as the user, completing and admitting each row.
+ * Page one collection, completing and admitting each row.
  *
- * ONE walk for both tiers. The order, the page size, the stop rule and the
- * ceiling are properties of the RESPONSE, not of either collection, and two
- * walks would let one tier's paging drift from the other's the first time
- * either was edited alone.
- *
- * AS THE USER. A route reading with the instance's own identity would answer
- * every caller with every row, whatever the collection's permissions say.
- *
- * NO status predicate, deliberately — see the module docblock. And a
- * DETERMINISTIC order, because these are independent offset queries: the
- * service adds `ORDER BY` only when a sort is asked for, and an unordered
- * offset read is free to return rows in a different order per page — so one
- * row can arrive twice and another never at all. `id` is the unique key,
- * which is what makes it a tie-breaker rather than another ambiguity; the
- * panel decides how to PRESENT them.
+ * ONE walk for both tiers. The page size, the stop rule and the ceiling are
+ * properties of a RESPONSE, not of either collection, and two walks would let
+ * one tier's paging drift from the other's the first time either was edited
+ * alone. What differs per tier is only where a page comes from and how a
+ * listed row becomes an item, and both are handed in.
  */
 async function readTier<T extends LibraryPattern | LibraryComponent>(
-  ctx: LibraryRouteContext,
-  slug: string,
-  complete: (row: unknown) => Promise<Completed<T>> | Completed<T>,
-  from: number
+  pageAt: (page: number) => Promise<CollectionPage>,
+  complete: (row: unknown) => Promise<Completed<T>> | Completed<T>
 ): Promise<TierRead<T>> {
-  const asUser = { as: "user" as const, user: ctx.user ?? undefined };
   const items: T[] = [];
   let truncated = false;
   // Accumulated rather than assigned, unlike `truncated`: an oversized row on
   // page one is a cut library even when page nine simply ends, and the stop
   // reason below overwrites what it knows nothing about.
   let omitted = false;
-  // Seeded with what has already been spent, so the ceiling bounds the ANSWER
-  // rather than the rows inside it.
-  let bytes = from;
+  // Seeded with the framing, so the ceiling bounds the ANSWER rather than the
+  // rows inside it.
+  let bytes = RESPONSE_FRAMING_BYTES;
   for (let page = 1; ; page += 1) {
-    const result = await ctx.services.collections.listEntries(
-      slug,
-      {
-        sort: { field: "id", direction: "asc" as const },
-        pagination: { limit: LIBRARY_PAGE_SIZE, page },
-      },
-      asUser
-    );
+    const result = await pageAt(page);
     const page_ = await collect(result.data, complete, items, bytes);
     bytes = page_.bytes;
     omitted ||= page_.omitted;
@@ -376,15 +442,12 @@ async function readTier<T extends LibraryPattern | LibraryComponent>(
       truncated = true;
       break;
     }
-    const stop = whyStop({
-      hasMore: result.pagination?.hasMore === true,
-      page,
-    });
+    const stop = whyStop({ hasMore: result.hasMore, page });
     if (stop === undefined) continue;
     truncated = stop === "cut";
     break;
   }
-  return { items, truncated: truncated || omitted, bytes };
+  return { items, truncated: truncated || omitted };
 }
 
 /**
@@ -394,7 +457,7 @@ async function readTier<T extends LibraryPattern | LibraryComponent>(
  * the listing showed it but the by-id read found nothing.
  */
 async function completeComponent(
-  ctx: LibraryRouteContext,
+  ctx: ComponentLibraryContext,
   slug: string,
   row: unknown
 ): Promise<Completed<LibraryComponent>> {
@@ -443,11 +506,11 @@ function identityOf(
  * all, which the caller reports as a cut library rather than a missing key.
  */
 async function withDraftDocument(
-  ctx: LibraryRouteContext,
+  ctx: ComponentLibraryContext,
   slug: string,
   listed: Omit<LibraryComponent, "document">
 ): Promise<LibraryComponent | undefined> {
-  const data = await ctx.readComponent(slug, listed.id);
+  const data = await ctx.components.read(slug, listed.id);
   if (typeof data !== "object" || data === null) return undefined;
   const content = (data as Record<string, unknown>).content;
   return {
@@ -645,21 +708,24 @@ function optionalText(
   return typeof value === "string" ? { [name]: value } : {};
 }
 
-/**
- * The route declaration, thin on purpose.
- *
- * Everything it decides lives in {@link readPatternLibrary}, which a test can
- * reach without booting a server. What is left here is the shape of the
- * contribution — the method, the path, and the fact that it declares no
- * permission — and that is the part a reader of `contributes.routes` needs to
- * see without following a call.
- */
-export function patternLibraryRoute(): {
+/** The shape of one contributed library route, as `contributes.routes` reads it. */
+interface LibraryRoute {
   method: "GET";
   path: string;
   requiredPermission: (scope: PluginRoutePermissionScope) => string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
-} {
+}
+
+/**
+ * The pattern route declaration, thin on purpose.
+ *
+ * Everything it decides lives in {@link readPatternLibrary}, which a test can
+ * reach without booting a server. What is left here is the shape of the
+ * contribution — the method, the path, and which permission it demands — and
+ * that is the part a reader of `contributes.routes` needs to see without
+ * following a call.
+ */
+export function patternLibraryRoute(): LibraryRoute {
   return {
     method: "GET",
     path: LIBRARY_ROUTE_PATH,
@@ -667,12 +733,30 @@ export function patternLibraryRoute(): {
     // `requiredPermission`, which is what keeps it callable on a site that
     // renamed the collection. See the module docblock.
     requiredPermission: ({ collection }) => collection(PATTERNS_SLUG, "read"),
-    handler: async (req: Request, ctx: PluginRouteContext) =>
+    handler: async (_req: Request, ctx: PluginRouteContext) =>
+      Response.json(await readPatternLibrary(ctx)),
+  };
+}
+
+/**
+ * The component route declaration: the same shape, its own permission.
+ *
+ * `read` on the COMPONENTS collection, resolved the same way. A role that may
+ * read components and not patterns gets its definitions here, which the
+ * pattern route's gate would have refused — and every instance on its pages
+ * would have drawn as a placeholder.
+ */
+export function componentLibraryRoute(): LibraryRoute {
+  return {
+    method: "GET",
+    path: COMPONENT_LIBRARY_ROUTE_PATH,
+    requiredPermission: ({ collection }) => collection(COMPONENTS_SLUG, "read"),
+    handler: async (_req: Request, ctx: PluginRouteContext) =>
       Response.json(
-        await readPatternLibrary(
-          { ...ctx, readComponent: draftComponentReader(ctx.user) },
-          { tier: new URL(req.url).searchParams.get(LIBRARY_TIER_QUERY) }
-        )
+        await readComponentLibrary({
+          ...ctx,
+          components: directComponentReads(ctx),
+        })
       ),
   };
 }

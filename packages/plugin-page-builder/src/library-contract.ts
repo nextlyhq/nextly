@@ -19,7 +19,7 @@
  * @module library-contract
  */
 import type { BlockDocument, ComponentDocument } from "@nextlyhq/blocks-engine";
-import type { SavedPattern } from "@nextlyhq/builder";
+import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 /**
@@ -34,23 +34,27 @@ import type { HookWarning } from "nextly/config";
  */
 export const PAGE_BUILDER_PLUGIN_NAME = "@nextlyhq/plugin-page-builder";
 
-/** Where the panel finds the library, under this plugin's own namespace. */
+/** Where the panel finds the pattern library, under this plugin's own namespace. */
 export const LIBRARY_ROUTE_PATH = "/library";
 
 /**
- * The query that narrows a library read to one tier.
+ * Where the editor finds the site's component definitions.
  *
- * The insert panel reads the whole library, and only while it is open. The
- * canvas needs the COMPONENT definitions on every editor mount — an instance
- * renders as a placeholder without them — and pulling the pattern tier along
- * on every mount would spend up to the whole byte ceiling to draw a header.
- * One route with a narrowing query rather than a sibling route, so both
- * readers agree on what a component row is and share one ceiling.
+ * A route of its own rather than a tier of the pattern route, for two reasons
+ * that point the same way. A plugin route declares ONE permission, and the two
+ * tiers are read under different grants: a role that may read components and
+ * not patterns must still get its definitions, or every instance on its pages
+ * draws as a placeholder. And each route answers the canonical list envelope,
+ * `{ items, meta }`, which one route carrying two tiers could not without
+ * inventing a shape of its own.
+ *
+ * The two reads are also made at different moments. The panel reads patterns
+ * only while it is open; the canvas needs definitions on every editor mount,
+ * and an instance renders as a placeholder without them. Reading the pattern
+ * tier along with them would spend up to the whole byte ceiling to draw a
+ * header.
  */
-export const LIBRARY_TIER_QUERY = "tier";
-export const LIBRARY_COMPONENTS_TIER = "components";
-/** The path a components-only reader asks for. */
-export const COMPONENT_LIBRARY_ROUTE_PATH = `${LIBRARY_ROUTE_PATH}?${LIBRARY_TIER_QUERY}=${LIBRARY_COMPONENTS_TIER}`;
+export const COMPONENT_LIBRARY_ROUTE_PATH = `${LIBRARY_ROUTE_PATH}/components`;
 
 /**
  * Where the editor asks what the author may do with patterns.
@@ -166,6 +170,12 @@ export interface LibraryPattern extends SavedPattern {
  * One component definition the editor may place, with its document as the
  * editor should see it.
  *
+ * DERIVED from `SavedComponent` — the shape the panel reads — for the reason
+ * `LibraryPattern` derives from `SavedPattern`: described twice, the two
+ * drift, and the drift compiles. Extending the published type is what makes a
+ * field the panel gains and the wire never carries a compile error rather than
+ * a tile missing something nobody notices.
+ *
  * The document is the WORKING DRAFT where the caller may edit the component
  * and one exists, and the live row otherwise — the posture an editor wants,
  * since an author placing a component they are also editing should see what
@@ -174,43 +184,40 @@ export interface LibraryPattern extends SavedPattern {
  * live rows, and a definition built from those would render a stale component
  * beside the draft the author just saved.
  */
-export interface LibraryComponent {
-  readonly id: string;
-  readonly title: string;
-  readonly description?: string;
-  readonly category?: string;
+export interface LibraryComponent extends SavedComponent {
   /**
    * The definition, or `null` for a row saved without content.
    *
-   * Carried as `null` rather than omitted so the shape says the read was made
-   * and found nothing, which a missing key cannot say.
+   * REQUIRED here where `SavedComponent` leaves it optional, and `null` rather
+   * than omitted, so the shape says the read was made and found nothing —
+   * which a missing key cannot say.
    */
   readonly document: ComponentDocument | null;
 }
 
-/** What one library read answers. */
-export interface LibraryResponse {
-  readonly items: readonly LibraryPattern[];
-  /**
-   * The site's component definitions, beside the patterns.
-   *
-   * One route for both tiers rather than a sibling, so the panel makes one
-   * read to learn everything it may offer, and so the two tiers share one
-   * byte ceiling — a response is one payload, and two routes each honouring
-   * the ceiling alone could together exceed it.
-   */
-  readonly components: readonly LibraryComponent[];
+/**
+ * What one list read from this plugin answers.
+ *
+ * The CANONICAL list envelope — `{ items, meta }`, the shape every list in
+ * this codebase answers with — carrying one tier per route. A route inventing
+ * a second vocabulary for "here is a page of rows, and whether it is all of
+ * them" would be the one list a shared client could not read.
+ */
+export interface LibraryListResponse<TItem> {
+  readonly items: readonly TItem[];
   readonly meta: {
-    /** How many patterns were returned. */
+    /** How many rows were returned. */
     readonly count: number;
-    /** Whether the ceiling stopped the pattern read before the collection ended. */
+    /** Whether the ceiling stopped the read before the collection ended. */
     readonly truncated: boolean;
-    readonly components: {
-      readonly count: number;
-      readonly truncated: boolean;
-    };
   };
 }
+
+/** What the pattern library route answers. */
+export type LibraryResponse = LibraryListResponse<LibraryPattern>;
+
+/** What the component library route answers. */
+export type ComponentLibraryResponse = LibraryListResponse<LibraryComponent>;
 
 /**
  * Where the editor sends a selection to be stored as a pattern.

@@ -17,8 +17,11 @@ import {
   LIBRARY_PAGE_SIZE,
   MAX_LIBRARY_BYTES,
   MAX_LIBRARY_PATTERNS,
+  readComponentLibrary,
   readPatternLibrary,
-  type LibraryRouteContext,
+  type CollectionPage,
+  type ComponentLibraryContext,
+  type PatternLibraryContext,
 } from "./library-route";
 
 /** A stored row as the collection hands one back. */
@@ -33,7 +36,7 @@ function row(id: string, extra: Record<string, unknown> = {}) {
 }
 
 /**
- * A context whose service answers with the pages given, in order.
+ * A pattern-route context whose service answers with the pages given, in order.
  *
  * The spy is the point: what this route decides is WHICH read it makes, so the
  * arguments it passed are the observable behaviour rather than an
@@ -41,52 +44,63 @@ function row(id: string, extra: Record<string, unknown> = {}) {
  */
 function contextOver(
   pages: unknown[][],
-  self: Record<string, string | undefined> = {},
+  self: Record<string, string | undefined> = {}
+) {
+  const queue = [...pages];
+  // `hasMore` comes from the SERVICE, so the stub answers it the way the
+  // service does: whether another page exists, which a shortened page cannot be
+  // asked about by looking at its length.
+  const listEntries = vi.fn((_slug: string, _options: unknown, _ctx: unknown) =>
+    Promise.resolve({
+      data: queue.shift() ?? [],
+      pagination: { hasMore: queue.length > 0 },
+    })
+  );
+  const ctx: PatternLibraryContext = {
+    self: { collections: self },
+    user: { id: "u1" },
+    services: { collections: { listEntries } },
+  };
+  return { ctx, listEntries };
+}
+
+/**
+ * A component-route context over the injected reads: a listing that answers
+ * the pages given, and a by-id read that answers per id.
+ *
+ * The two spies are what the route is judged by, for the reason the pattern
+ * stub's is: which reads it makes, against which slug, are the behaviour.
+ */
+function componentContext(
   components: {
     pages?: unknown[][];
     /** The by-id answer per component id; absent means the read found nothing. */
     byId?: Record<string, unknown>;
-  } = {}
+  } = {},
+  self: Record<string, string | undefined> = {}
 ) {
-  const componentPages = components.pages ?? [];
-  // `hasMore` comes from the SERVICE, so the stub answers it the way the
-  // service does: whether another page exists, which a shortened page cannot be
-  // asked about by looking at its length.
-  //
-  // Answered PER SLUG. The route reads two collections through this one
-  // function, and a queue that ignored the slug would hand the component read
-  // whatever pattern pages were left — inflating call counts and crediting one
-  // tier with the other's rows.
-  const listEntries = vi.fn(
-    (slug: string, _options: unknown, _ctx: unknown) => {
-      const queue = slug === "components" ? componentPages : pages;
-      return Promise.resolve({
+  const queue = [...(components.pages ?? [])];
+  const list = vi.fn(
+    (_slug: string, _page: number): Promise<CollectionPage> =>
+      Promise.resolve({
         data: queue.shift() ?? [],
-        pagination: { hasMore: queue.length > 0 },
-      });
-    }
+        hasMore: queue.length > 0,
+      })
   );
-  const readComponent = vi.fn((_slug: string, id: string) =>
+  const read = vi.fn((_slug: string, id: string) =>
     Promise.resolve(components.byId?.[id])
   );
-  const ctx: LibraryRouteContext = {
+  const ctx: ComponentLibraryContext = {
     self: { collections: self },
     user: { id: "u1" },
-    services: { collections: { listEntries } },
-    readComponent,
+    components: { list, read },
   };
-  return { ctx, listEntries, readComponent };
+  return { ctx, list, read };
 }
 
-/**
- * How many times the PATTERN collection was paged.
- *
- * The route also pages the component collection through the same stub, so a
- * raw call count would move whenever the other tier's paging changed — and
- * these cases are about pattern paging alone.
- */
+/** How many times the pattern collection was paged. */
 function patternReads(listEntries: { mock: { calls: unknown[][] } }): number {
-  return listEntries.mock.calls.filter(call => call[0] === "patterns").length;
+  return listEntries.mock.calls.length;
 }
 
 describe("what the library read asks for", () => {
@@ -589,19 +603,15 @@ describe("the component tier", () => {
     // The listing answers with the live row; the by-id read is the only path
     // to the working draft. A definition built from the listing would render
     // the author a stale component beside the draft they just saved.
-    const { ctx, readComponent } = contextOver(
-      [],
-      {},
-      {
-        pages: [[componentRow("header", { content: draft("live") })]],
-        byId: { header: { id: "header", content: draft("draft") } },
-      }
-    );
+    const { ctx, read } = componentContext({
+      pages: [[componentRow("header", { content: draft("live") })]],
+      byId: { header: { id: "header", content: draft("draft") } },
+    });
 
-    const library = await readPatternLibrary(ctx);
+    const library = await readComponentLibrary(ctx);
 
-    expect(readComponent).toHaveBeenCalledWith("components", "header");
-    expect(library.components).toEqual([
+    expect(read).toHaveBeenCalledWith("components", "header");
+    expect(library.items).toEqual([
       {
         id: "header",
         title: "Component header",
@@ -609,46 +619,74 @@ describe("the component tier", () => {
         document: draft("draft"),
       },
     ]);
-    expect(library.meta.components).toEqual({ count: 1, truncated: false });
+    expect(library.meta).toEqual({ count: 1, truncated: false });
+  });
+
+  it("answers the CANONICAL list envelope, and nothing beside it", async () => {
+    // `{ items, meta }` is what every list in this codebase answers with, and
+    // the shape a shared client reads. A second field beside them — a tier
+    // carried on the pattern response, say — is a second vocabulary.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a")]],
+      byId: { a: { id: "a", content: draft("x") } },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(Object.keys(library).sort()).toEqual(["items", "meta"]);
+    expect(Object.keys(library.meta).sort()).toEqual(["count", "truncated"]);
+  });
+
+  it("pages the listing through the INJECTED read, deterministically, by page", async () => {
+    // The plugin-facing listing cannot ask for every lifecycle state, so the
+    // route reads through a lister the declaration binds — and it walks it
+    // the way it walks the pattern listing: page after page, in order, until
+    // the service says there is no more.
+    const { ctx, list } = componentContext({
+      pages: [[componentRow("a")], [componentRow("b")]],
+      byId: {
+        a: { id: "a", content: draft("a") },
+        b: { id: "b", content: draft("b") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(list.mock.calls.map(call => call[1])).toEqual([1, 2]);
+    expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
   });
 
   it("reads through the host's renamed slug", async () => {
-    const { ctx, listEntries, readComponent } = contextOver(
-      [],
-      { components: "site_components" },
+    const { ctx, list, read } = componentContext(
       {
         pages: [[componentRow("a")]],
         byId: { a: { id: "a", content: draft("x") } },
-      }
+      },
+      { components: "site_components" }
     );
-    // The stub keys its component queue on the canonical slug, so this case
-    // asserts on what was ASKED rather than on what came back.
-    await readPatternLibrary(ctx);
 
-    expect(
-      listEntries.mock.calls.some(call => call[0] === "site_components")
-    ).toBe(true);
-    expect(
-      readComponent.mock.calls.every(call => call[0] === "site_components")
-    ).toBe(true);
+    await readComponentLibrary(ctx);
+
+    expect(list.mock.calls.every(call => call[0] === "site_components")).toBe(
+      true
+    );
+    expect(read.mock.calls.every(call => call[0] === "site_components")).toBe(
+      true
+    );
   });
 
   it("carries a null document for a row saved without content, and skips nothing else", async () => {
     // A legal row the panel will skip. Carried as null rather than omitted so
     // the shape says the read was made and found nothing.
-    const { ctx } = contextOver(
-      [],
-      {},
-      {
-        pages: [[componentRow("empty")]],
-        byId: { empty: { id: "empty", content: null } },
-      }
-    );
+    const { ctx } = componentContext({
+      pages: [[componentRow("empty")]],
+      byId: { empty: { id: "empty", content: null } },
+    });
 
-    const library = await readPatternLibrary(ctx);
+    const library = await readComponentLibrary(ctx);
 
-    expect(library.components[0]?.document).toBeNull();
-    expect(library.meta.components.truncated).toBe(false);
+    expect(library.items[0]?.document).toBeNull();
+    expect(library.meta.truncated).toBe(false);
   });
 
   it("marks the tier CUT when a listed component's by-id read answers nothing", async () => {
@@ -656,54 +694,41 @@ describe("the component tier", () => {
     // library missing a definition the author can see in the collection is
     // not a whole library, and saying so is what stops the panel presenting
     // it as one.
-    const { ctx } = contextOver(
-      [],
-      {},
-      {
-        pages: [[componentRow("gone"), componentRow("here")]],
-        byId: { here: { id: "here", content: draft("x") } },
-      }
-    );
+    const { ctx } = componentContext({
+      pages: [[componentRow("gone"), componentRow("here")]],
+      byId: { here: { id: "here", content: draft("x") } },
+    });
 
-    const library = await readPatternLibrary(ctx);
+    const library = await readComponentLibrary(ctx);
 
-    expect(library.components.map(c => c.id)).toEqual(["here"]);
-    expect(library.meta.components.truncated).toBe(true);
+    expect(library.items.map(c => c.id)).toEqual(["here"]);
+    expect(library.meta.truncated).toBe(true);
   });
 
-  it("shares ONE byte ceiling with the patterns, and the patterns spend first", async () => {
-    // One response, one ceiling. A pattern tier that used most of it leaves
-    // the component tier the rest — and a component that no longer fits is
-    // reported as a cut tier, not silently dropped.
-    const huge = "x".repeat(MAX_LIBRARY_BYTES - 4_096);
-    const { ctx } = contextOver(
-      [
-        [
-          row("big", {
-            content: { formatVersion: 1, kind: "pattern", nodes: [], huge },
-          }),
-        ],
-      ],
-      {},
-      {
-        pages: [[componentRow("c")]],
-        byId: { c: { id: "c", content: draft("y".repeat(8_192)) } },
-      }
-    );
+  it("honours the byte ceiling on its own response, and says when it cut", async () => {
+    // Its own route, its own payload, the same ceiling: a definition that does
+    // not fit is left out and reported, exactly as a pattern is.
+    const huge = "x".repeat(MAX_LIBRARY_BYTES);
+    const { ctx } = componentContext({
+      pages: [[componentRow("big"), componentRow("small")]],
+      byId: {
+        big: { id: "big", content: { ...draft("y"), huge } },
+        small: { id: "small", content: draft("z") },
+      },
+    });
 
-    const library = await readPatternLibrary(ctx);
+    const library = await readComponentLibrary(ctx);
 
-    expect(library.items.map(p => p.id)).toEqual(["big"]);
-    expect(library.components).toEqual([]);
-    expect(library.meta.components.truncated).toBe(true);
+    expect(library.items.map(c => c.id)).toEqual(["small"]);
+    expect(library.meta.truncated).toBe(true);
   });
 
   it("answers an empty tier, not a cut one, for a site with no components", async () => {
-    const { ctx } = contextOver([[row("a")]]);
+    const { ctx } = componentContext();
 
-    const library = await readPatternLibrary(ctx);
+    const library = await readComponentLibrary(ctx);
 
-    expect(library.components).toEqual([]);
-    expect(library.meta.components).toEqual({ count: 0, truncated: false });
+    expect(library.items).toEqual([]);
+    expect(library.meta).toEqual({ count: 0, truncated: false });
   });
 });

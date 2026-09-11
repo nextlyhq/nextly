@@ -29,7 +29,14 @@
 The insert panel offers the site's components beside its blocks and patterns,
 and placing one writes a single instance node that keeps pointing at the
 definition — nothing is copied into the page. Component definitions now reach
-the editor: the library route carries them at draft posture, read per id so a
-working draft is what an author who may edit it sees, and the canvas resolves
-instances against them, so a placed component renders in the builder rather
-than as a could-not-be-loaded placeholder.
+the editor through a route of their own, `GET …/library/components`, gated by
+the components collection's read permission and answering the canonical
+`{ items, meta }` envelope. It lists every lifecycle state the caller may read,
+so a never-published component can be placed on a draft page, and reads each
+definition by id AS THE USER so an author who may edit a component sees its
+working draft while one who may only read it sees the live definition. The
+canvas and the entry form's resting miniature both resolve instances against
+them, so a placed component renders in the builder — and stays rendered after
+Done — rather than as a could-not-be-loaded placeholder. A definition whose own
+root is another component is judged for placement by what that component
+draws, and the panel says when the library was too large to load whole.

@@ -54,6 +54,7 @@ import {
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockNode,
+  type ComponentLookup,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -136,6 +137,33 @@ export interface InsertPanelProps {
    * definition is copied into the page.
    */
   components?: readonly SavedComponent[];
+  /**
+   * The lookup the CANVAS resolves instances against, keyed by definition id.
+   *
+   * A definition may itself hold instances of other components, at its root
+   * included, and the panel judges where a tile may go from the block types
+   * that will actually land — so each offered definition is first resolved
+   * through this, exactly as the canvas resolves the page. The canvas's own
+   * lookup rather than one rebuilt from `components`, so the tile and the
+   * drawing cannot read two different maps. Defaults to an empty lookup, under
+   * which a definition whose root is an instance is withheld: its roots
+   * cannot be determined, so it cannot be judged.
+   */
+  componentDefinitions?: ComponentLookup;
+  /**
+   * Which tiers the host's library read could not carry whole.
+   *
+   * A library has a ceiling, and a read that reached it left rows out. The
+   * panel SAYS so beside the tiles it offers, because the alternative is
+   * silence in two places at once: an author searching here for a component
+   * that is not offered, and an instance of it on the canvas drawn as
+   * could-not-be-loaded with nothing to say the library was cut rather than
+   * the component deleted.
+   */
+  truncated?: {
+    readonly patterns?: boolean;
+    readonly components?: boolean;
+  };
   /** How nesting is resolved. Defaults to the live registry. */
   nesting?: NestingSource;
   /**
@@ -395,6 +423,55 @@ function tierSentence(entry: InsertEntry): string {
   return "";
 }
 
+/**
+ * The lookup a host that supplies none is judged under: nothing resolves.
+ *
+ * One shared instance rather than a `new Map()` per render, because the
+ * catalogue memo is keyed on it and a fresh empty map each render would
+ * rebuild the catalogue on every keystroke of the filter.
+ */
+const NO_DEFINITIONS: ComponentLookup = new Map();
+
+/**
+ * That the library was cut, said once and where an author looks for what is
+ * missing.
+ *
+ * A `status` region rather than an alert: it is a standing fact about this
+ * read, present from the moment the panel opens, and an alert would interrupt
+ * a screen reader mid-sentence to announce something that is not an event.
+ * Drawn above the tiles so it is read BEFORE an author searches in vain — a
+ * note at the end of a long list is one they reach after giving up.
+ *
+ * Named per tier, because the remedy the author reaches for differs: a pattern
+ * left out is one they cannot insert, while a component left out is also one
+ * already on the page drawing as could-not-be-loaded, and that second half is
+ * the sentence nothing else says.
+ */
+function LibraryCutNotice({
+  truncated,
+}: {
+  truncated: InsertPanelProps["truncated"];
+}): React.JSX.Element | null {
+  const patterns = truncated?.patterns === true;
+  const components = truncated?.components === true;
+  if (!patterns && !components) return null;
+  const tiers =
+    patterns && components
+      ? "patterns and components"
+      : patterns
+        ? "patterns"
+        : "components";
+  return (
+    <p role="status" className="nx-insert-panel__note nx-insert-panel__cut">
+      The library is larger than the editor can load at once, so some {tiers}{" "}
+      are not offered here.
+      {components
+        ? " A component left out shows as “could not be loaded” on the page."
+        : null}
+    </p>
+  );
+}
+
 function TouchGestureHint({
   shown,
 }: {
@@ -461,6 +538,8 @@ export function InsertPanel({
   definitions,
   patterns,
   components,
+  componentDefinitions,
+  truncated,
   nesting,
   categoryOrder,
   onInsert,
@@ -503,9 +582,12 @@ export function InsertPanel({
     () => [
       ...catalogFrom(palette),
       ...patternEntriesFrom(patterns ?? [], source),
-      ...componentEntriesFrom(components ?? []),
+      ...componentEntriesFrom(
+        components ?? [],
+        componentDefinitions ?? NO_DEFINITIONS
+      ),
     ],
-    [palette, patterns, components, source]
+    [palette, patterns, components, componentDefinitions, source]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather
@@ -731,6 +813,7 @@ export function InsertPanel({
         <p className="nx-insert-panel__placement" aria-live="polite">
           {placementLabel(point)}
         </p>
+        <LibraryCutNotice truncated={truncated} />
         <CommandList>
           <CommandEmpty>
             {query.trim() === ""

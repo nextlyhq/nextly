@@ -21,29 +21,22 @@ import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import {
   COMPONENT_LIBRARY_ROUTE_PATH,
-  type LibraryResponse,
+  LIBRARY_ROUTE_PATH,
+  type ComponentLibraryResponse,
 } from "../library-contract";
 import { useComponentLibrary } from "./component-library-client";
 
 const read = vi.mocked(usePluginRoute);
 
 function answering(
-  components: LibraryResponse["components"],
+  items: ComponentLibraryResponse["items"],
   truncated = false
 ): void {
   read.mockReturnValue({
-    data: {
-      items: [],
-      components,
-      meta: {
-        count: 0,
-        truncated: false,
-        components: { count: components.length, truncated },
-      },
-    },
+    data: { items, meta: { count: items.length, truncated } },
     error: null,
     pending: false,
-  } as unknown as ReturnType<typeof usePluginRoute<LibraryResponse>>);
+  } as unknown as ReturnType<typeof usePluginRoute<ComponentLibraryResponse>>);
 }
 
 function pending(): void {
@@ -51,22 +44,25 @@ function pending(): void {
     data: undefined,
     error: null,
     pending: true,
-  } as unknown as ReturnType<typeof usePluginRoute<LibraryResponse>>);
+  } as unknown as ReturnType<typeof usePluginRoute<ComponentLibraryResponse>>);
 }
 
 const header = {
   formatVersion: 1,
   kind: "component",
   nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
-} as unknown as NonNullable<LibraryResponse["components"][number]["document"]>;
+} as unknown as NonNullable<
+  ComponentLibraryResponse["items"][number]["document"]
+>;
 
 describe("the component read", () => {
-  it("asks for the COMPONENT tier alone, fresh on every mount", () => {
+  it("asks the COMPONENT route, not the pattern library's, fresh on every mount", () => {
     // The pattern tier can run to the whole byte ceiling, and this read runs
-    // on every editor open — asking for both would spend that to draw a
-    // header. And `staleTime: 0` for the reason the pattern read gives: a
-    // definition is edited through its own screen, which invalidates nothing
-    // here.
+    // on every surface that draws the page — asking the pattern route would
+    // spend that to draw a header, and would be refused for a role that may
+    // read components and not patterns. And `staleTime: 0` for the reason the
+    // pattern read gives: a definition is edited through its own screen,
+    // which invalidates nothing here.
     answering([]);
 
     renderHook(() => useComponentLibrary());
@@ -77,7 +73,7 @@ describe("the component read", () => {
         staleTime: 0,
       })
     );
-    expect(COMPONENT_LIBRARY_ROUTE_PATH).toContain("tier=components");
+    expect(COMPONENT_LIBRARY_ROUTE_PATH).not.toBe(LIBRARY_ROUTE_PATH);
   });
 
   it("hands the canvas a map by id and the panel a list, from ONE response", () => {
@@ -99,6 +95,26 @@ describe("the component read", () => {
       { id: "header", title: "Header", category: "Sections", document: header },
       { id: "footer", title: "Footer", document: header },
     ]);
+  });
+
+  it("hands the panel the rows AS RECEIVED, so a field the wire carries reaches a tile", () => {
+    // The wire shape extends the panel's own, so nothing is translated on the
+    // way — and a translation was where a field went missing: the route could
+    // carry search terms or a usage count and the tile would never see them.
+    const rows = [
+      {
+        id: "header",
+        title: "Header",
+        keywords: "nav, top",
+        usedOn: 12,
+        document: header,
+      },
+    ];
+    answering(rows);
+
+    const { result } = renderHook(() => useComponentLibrary());
+
+    expect(result.current.components).toBe(rows);
   });
 
   it("keeps a row saved without content OUT of the map, and in the list as null", () => {

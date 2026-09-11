@@ -33,12 +33,14 @@ import {
   locateNode,
   makeNode,
   placementVerdict,
+  resolveComponentInstances,
   COMPONENT_INSTANCE_TYPE,
   isComponentDocument,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type ComponentLookup,
   type NestingSource,
   type NestingVerdict,
   type PlacementTarget,
@@ -275,6 +277,18 @@ export interface ComponentInsertEntry {
   readonly category: string;
   readonly keywords: readonly string[];
   readonly icon?: string;
+  /**
+   * The definition AS THE CANVAS WILL DRAW IT: its own component instances
+   * inlined through the same lookup the canvas resolves against.
+   *
+   * A definition may hold instances of other components, at its root included,
+   * and an instance node's type is not a registered block — the nesting rule
+   * answers "no restriction" for a type it cannot resolve. Judging placement
+   * from the STORED roots would therefore offer a component whose real root is
+   * confined to one parent at any destination, and the canvas would then draw
+   * that root where it does not belong. Resolving first makes the roots here
+   * the block types that actually land.
+   */
   readonly document: ComponentDocument;
   readonly usedOn?: number;
 }
@@ -501,23 +515,20 @@ export const COMPONENT_ENTRY_PREFIX = "component:";
 /**
  * The component entries a library of stored definitions yields.
  *
- * Skipped, never refused: a row with no document, or one whose document is
- * not a component definition, is a row the palette has nothing to offer for,
- * and offering it would be a tile that accepts a click and then fails. A
- * definition's INTERNAL nesting is not re-judged here — it was judged when the
- * definition was saved, and it is the definition's own concern rather than the
- * page's. Where its roots may sit on THIS page is asked per placement, by
+ * Skipped, never refused: a row the palette has nothing to offer for — see
+ * {@link offerableDefinition} for which — produces no entry, because a tile
+ * that accepts a click and then fails is worse than no tile. Where a
+ * definition's roots may sit on THIS page is asked per placement, by
  * {@link entryAllowedAt}, exactly as a pattern's are.
  */
 export function componentEntriesFrom(
-  components: readonly SavedComponent[]
+  components: readonly SavedComponent[],
+  definitions: ComponentLookup
 ): ComponentInsertEntry[] {
   const entries: ComponentInsertEntry[] = [];
   for (const component of components) {
-    const document = component.document;
-    if (document === undefined || document === null) continue;
-    if (!isComponentDocument(document)) continue;
-    if (document.nodes.length === 0) continue;
+    const document = offerableDefinition(component.document, definitions);
+    if (document === undefined) continue;
     entries.push({
       kind: "component",
       id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
@@ -531,6 +542,49 @@ export function componentEntriesFrom(
     });
   }
   return entries;
+}
+
+/**
+ * The definition a stored row offers, AS THE CANVAS WILL DRAW IT — or nothing,
+ * when the palette has nothing to offer for the row.
+ *
+ * Nothing for a row with no document, one whose document is not a component
+ * definition, or one with no roots: each is a legal stored row and none can be
+ * placed. A definition's INTERNAL nesting is not re-judged here — it was judged
+ * when the definition was saved, and it is the definition's own concern rather
+ * than the page's.
+ *
+ * The rest is resolved through `definitions` — the lookup the canvas resolves
+ * against, handed in rather than rebuilt from the list so the tile and the
+ * canvas cannot read two different maps — and one whose ROOT the resolver had
+ * to leave standing is withheld. That is a root the canvas would draw as a
+ * placeholder and the nesting rule cannot judge: the component it points at is
+ * missing from the lookup, is this definition itself, or nests past the
+ * composition cap. The resolver already bounds that descent and detects the
+ * cycle, so nothing here recurses. An unresolvable instance BELOW the root is
+ * the definition's own concern, exactly as its internal nesting is, and does
+ * not withhold the tile.
+ *
+ * Resolved ONCE per row here rather than per placement inside
+ * {@link entryAllowedAt}, for the reason a pattern's preflight is: per target
+ * it would re-walk every definition on each keystroke of a filter.
+ */
+function offerableDefinition(
+  stored: SavedComponent["document"],
+  definitions: ComponentLookup
+): ComponentDocument | undefined {
+  if (stored === undefined || stored === null) return undefined;
+  if (!isComponentDocument(stored) || stored.nodes.length === 0) {
+    return undefined;
+  }
+  const resolved = resolveComponentInstances(stored, definitions).document;
+  if (resolved.nodes.some(root => root.type === COMPONENT_INSTANCE_TYPE)) {
+    return undefined;
+  }
+  // The stored envelope over the resolved forest. The resolver hands the
+  // document back UNCHANGED when it held no instance, and that identity is
+  // kept: a fresh object per row would rebuild what every consumer keys on.
+  return resolved === stored ? stored : { ...stored, nodes: resolved.nodes };
 }
 
 /**

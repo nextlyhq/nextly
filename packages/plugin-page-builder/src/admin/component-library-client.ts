@@ -9,14 +9,17 @@
  * so the tile an author places and the definition the canvas then draws are
  * the same document rather than two reads that could disagree.
  *
- * ## Why this reads on every editor mount
+ * ## Why this reads on every mount of a surface that draws the page
  *
  * `usePatternLibrary` is mounted only while the insert panel is open, which
  * keeps a library nobody is looking at from being fetched. Definitions cannot
  * wait for a panel: a page that already holds instances needs them the moment
- * the canvas draws. So this reads on mount, and asks for the COMPONENT tier
- * alone — the pattern tier can run to the whole byte ceiling, and dragging it
- * along to draw a header would spend that on every editor open.
+ * it is drawn — on the editor's canvas, and in the miniature the entry form
+ * shows at rest, which is the same page drawn by the same renderer. So every
+ * surface that draws the page reads this on mount, from its own route rather
+ * than the pattern library's: the pattern tier can run to the whole byte
+ * ceiling, and dragging it along to draw a header would spend that on every
+ * form open.
  *
  * ## Staleness
  *
@@ -39,7 +42,7 @@ import { useMemo } from "react";
 import {
   COMPONENT_LIBRARY_ROUTE_PATH,
   PAGE_BUILDER_PLUGIN_NAME,
-  type LibraryResponse,
+  type ComponentLibraryResponse,
 } from "../library-contract";
 
 /** What one component read hands the editor. */
@@ -57,16 +60,19 @@ export interface ComponentLibraryRead {
   /**
    * Whether the ceiling cut the read short.
    *
-   * Carried so a surface can say the library is incomplete. A definition left
-   * out by the ceiling still renders as a placeholder, which is the honest
-   * answer for a definition the editor did not receive.
+   * Carried because the insert panel SAYS so beside the tiles it offers. A
+   * definition left out by the ceiling still renders as a placeholder on the
+   * canvas, which is the honest answer for a definition the editor did not
+   * receive — and the sentence in the panel is what tells the author that the
+   * placeholder is a library too large to load whole rather than a component
+   * somebody deleted.
    */
   readonly truncated: boolean;
 }
 
 /** Read this site's component definitions, at the editor's posture. */
 export function useComponentLibrary(): ComponentLibraryRead {
-  const read = usePluginRoute<LibraryResponse>({
+  const read = usePluginRoute<ComponentLibraryResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: COMPONENT_LIBRARY_ROUTE_PATH,
     staleTime: 0,
@@ -76,32 +82,25 @@ export function useComponentLibrary(): ComponentLibraryRead {
   // between reads hands the canvas the same map identity, which is what keeps
   // it from re-resolving every instance on every keystroke.
   return useMemo(() => {
-    const items = read.data?.components;
-    if (items === undefined) return NOTHING_YET;
+    const data = read.data;
+    if (data === undefined) return NOTHING_YET;
     // Built mutable, published read-only: the map's type is what the renderer
     // takes, and a consumer must not be able to add a definition the read did
     // not return.
     const definitions = new Map<string, BlockDocument>();
-    const components: SavedComponent[] = [];
-    for (const item of items) {
-      components.push({
-        id: item.id,
-        title: item.title,
-        ...(item.description === undefined
-          ? {}
-          : { description: item.description }),
-        ...(item.category === undefined ? {} : { category: item.category }),
-        document: item.document,
-      });
+    for (const item of data.items) {
       // A row saved without content is offered nowhere and resolves nothing:
       // the panel skips a null document, and the renderer draws its
       // placeholder for an id the map does not hold.
       if (item.document !== null) definitions.set(item.id, item.document);
     }
+    // The rows travel to the panel AS RECEIVED. The wire shape extends the
+    // panel's own, so there is nothing to translate — and a translation here
+    // was where a field the wire carried went missing on its way to a tile.
     return {
       definitions,
-      components,
-      truncated: read.data?.meta.components.truncated === true,
+      components: data.items,
+      truncated: data.meta.truncated,
     };
   }, [read.data]);
 }

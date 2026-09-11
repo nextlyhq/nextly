@@ -1458,4 +1458,121 @@ describe("the component tier", () => {
     expect(screen.getByRole("option", { name: /Header/ })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /Column card/ })).toBeNull();
   });
+
+  it("resolves a definition's own instances through the CANVAS's lookup before offering it", () => {
+    // A definition whose root is an instance of another component is judged by
+    // what that instance draws — and can only be once the lookup the canvas
+    // resolves against is handed in. Without it the root cannot be determined
+    // and the tile is withheld; with it, the root is the header's text and the
+    // page root takes it.
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const header = headerComponent();
+    const wrapper = {
+      ...headerComponent(),
+      id: "wrapper",
+      title: "Wrapped header",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [
+          {
+            id: "w1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "header" },
+          },
+        ],
+      } as unknown as ComponentDocument,
+    };
+
+    const { unmount } = render(
+      <InsertPanel editor={editorSpy(documentOf())} components={[wrapper]} />
+    );
+    expect(screen.queryByRole("option", { name: /Wrapped header/ })).toBeNull();
+    unmount();
+
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[wrapper]}
+        componentDefinitions={new Map([["header", header.document]])}
+      />
+    );
+    expect(screen.getByRole("option", { name: /Wrapped header/ })).toBeTruthy();
+  });
+});
+
+describe("when the library was cut", () => {
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  /** The notice, or nothing: it is a status region, so that is how it is found. */
+  function notice(): HTMLElement | null {
+    return screen.queryByRole("status");
+  }
+
+  it("says nothing when every tier arrived whole", () => {
+    // The control for the cases below, and the ordinary state: a notice that
+    // was always on screen would be one an author learns to read past.
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    expect(notice()).toBeNull();
+
+    cleanup();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        truncated={{ patterns: false, components: false }}
+      />
+    );
+    expect(notice()).toBeNull();
+  });
+
+  it("names the component tier, and says what a left-out component looks like on the page", () => {
+    // The second sentence is the one nothing else says: an instance of a
+    // component the read left out draws as could-not-be-loaded, which without
+    // this reads as a component somebody deleted.
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        truncated={{ components: true }}
+      />
+    );
+
+    const status = notice();
+    expect(status?.textContent).toContain("some components are not offered");
+    expect(status?.textContent).toContain("could not be loaded");
+    expect(status?.textContent).not.toContain("patterns");
+  });
+
+  it("names the pattern tier without the sentence about the page", () => {
+    // A pattern left out is one the author cannot insert and nothing more: it
+    // was copied into the page when placed, so no instance of it can be
+    // waiting on the library.
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        truncated={{ patterns: true }}
+      />
+    );
+
+    const status = notice();
+    expect(status?.textContent).toContain("some patterns are not offered");
+    expect(status?.textContent).not.toContain("could not be loaded");
+  });
+
+  it("names both tiers in one sentence when both were cut", () => {
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        truncated={{ patterns: true, components: true }}
+      />
+    );
+
+    expect(notice()?.textContent).toContain(
+      "some patterns and components are not offered"
+    );
+  });
 });

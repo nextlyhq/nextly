@@ -20,7 +20,9 @@ import {
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockDocument,
+  type BlockNode,
   type ComponentDocument,
+  type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -1303,12 +1305,39 @@ describe("the component tier", () => {
     };
   }
 
+  /** A host that supplies no lookup: nothing resolves. */
+  const NONE: ComponentLookup = new Map();
+
+  /** An instance node pointing at a definition, as a stored document holds one. */
+  function instanceOf(componentId: string, id = `i-${componentId}`): BlockNode {
+    return {
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    };
+  }
+
+  /** The lookup the canvas would resolve against, holding these definitions. */
+  function lookupOf(...rows: SavedComponent[]): ComponentLookup {
+    return new Map(
+      rows.flatMap(row =>
+        row.document === undefined || row.document === null
+          ? []
+          : [[row.id, row.document] as const]
+      )
+    );
+  }
+
   it("keys a component out of the block namespace, and apart from patterns", () => {
     // A definition may be saved under any id. Its catalog key carries the
     // tier, so it can share an id with a block AND with a pattern without any
     // two entries answering to one key.
     const blocks = catalog([{ ...base, name: "acme/text" }]);
-    const [component] = componentEntriesFrom([stored({ id: "acme/text" })]);
+    const [component] = componentEntriesFrom(
+      [stored({ id: "acme/text" })],
+      NONE
+    );
 
     expect(component?.id).toBe(`${COMPONENT_ENTRY_PREFIX}acme/text`);
     expect(component?.id).not.toBe(`${PATTERN_ENTRY_PREFIX}acme/text`);
@@ -1321,23 +1350,26 @@ describe("the component tier", () => {
     // content, and a row a migration left holding a pattern — and both are
     // rows the palette has nothing to place for. A tile that accepted a click
     // and then failed would be worse than no tile.
-    const entries = componentEntriesFrom([
-      stored({ id: "empty", document: null }),
-      stored({
-        id: "wrong-kind",
-        // WITH roots, so that only the kind check can exclude it. Given none,
-        // the empty-roots check below would drop it first and this case would
-        // pass whether or not the kind was ever looked at.
-        document: {
-          ...componentOf([
-            { id: "d1", type: "acme/text", version: 1, props: {} },
-          ]),
-          kind: "pattern",
-        } as never,
-      }),
-      stored({ id: "no-roots", document: componentOf([]) }),
-      stored({ id: "fine" }),
-    ]);
+    const entries = componentEntriesFrom(
+      [
+        stored({ id: "empty", document: null }),
+        stored({
+          id: "wrong-kind",
+          // WITH roots, so that only the kind check can exclude it. Given none,
+          // the empty-roots check below would drop it first and this case would
+          // pass whether or not the kind was ever looked at.
+          document: {
+            ...componentOf([
+              { id: "d1", type: "acme/text", version: 1, props: {} },
+            ]),
+            kind: "pattern",
+          } as never,
+        }),
+        stored({ id: "no-roots", document: componentOf([]) }),
+        stored({ id: "fine" }),
+      ],
+      NONE
+    );
 
     expect(entries.map(entry => entry.componentId)).toEqual(["fine"]);
   });
@@ -1345,10 +1377,10 @@ describe("the component tier", () => {
   it("carries the usage count only when the library supplied one", () => {
     // A tile saying "used on 0 pages" about a count nobody took would be
     // stating a fact it does not hold.
-    const [counted, uncounted] = componentEntriesFrom([
-      stored({ id: "a", usedOn: 12 }),
-      stored({ id: "b" }),
-    ]);
+    const [counted, uncounted] = componentEntriesFrom(
+      [stored({ id: "a", usedOn: 12 }), stored({ id: "b" })],
+      NONE
+    );
 
     expect(counted?.usedOn).toBe(12);
     expect(uncounted).not.toHaveProperty("usedOn");
@@ -1360,13 +1392,16 @@ describe("the component tier", () => {
     // that, a component whose root may only live inside columns could be
     // placed at the page root — and would render there.
     catalog([{ ...base, name: "acme/column", parent: ["acme/columns"] }]);
-    const [component] = componentEntriesFrom([
-      stored({
-        document: componentOf([
-          { id: "d1", type: "acme/column", version: 1, props: {} },
-        ]),
-      }),
-    ]);
+    const [component] = componentEntriesFrom(
+      [
+        stored({
+          document: componentOf([
+            { id: "d1", type: "acme/column", version: 1, props: {} },
+          ]),
+        }),
+      ],
+      NONE
+    );
 
     const verdict = entryAllowedAt(
       component as never,
@@ -1381,7 +1416,7 @@ describe("the component tier", () => {
 
   it("allows a component whose roots the destination takes", () => {
     catalog([{ ...base, name: "acme/text" }]);
-    const [component] = componentEntriesFrom([stored()]);
+    const [component] = componentEntriesFrom([stored()], NONE);
 
     expect(
       entryAllowedAt(
@@ -1392,11 +1427,121 @@ describe("the component tier", () => {
     ).toBe(true);
   });
 
+  it("judges a root that is ITSELF an instance by what the canvas will draw there", () => {
+    // A definition may hold instances of other components, at its root
+    // included. The instance node's type is not a registered block, so judged
+    // as stored the root answers "no restriction" and a component whose real
+    // root is confined to columns is offered — and drawn — at the page root.
+    // Resolved through the lookup, the root IS the column.
+    catalog([{ ...base, name: "acme/column", parent: ["acme/columns"] }]);
+    const column = stored({
+      id: "column",
+      document: componentOf([
+        { id: "c1", type: "acme/column", version: 1, props: {} },
+      ]),
+    });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("column")]),
+    });
+
+    const [offered] = componentEntriesFrom([wrapper], lookupOf(column));
+    const verdict = entryAllowedAt(
+      offered as never,
+      { kind: "root" },
+      registryNestingSource()
+    );
+
+    expect(offered?.componentId).toBe("wrapper");
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("restricted-at-root");
+  });
+
+  it("withholds a component whose root instance the lookup cannot resolve", () => {
+    // Its roots cannot be determined, so its placement cannot be judged, and
+    // the canvas would draw that root as could-not-be-loaded. The lookup is
+    // what decides: the same definition IS offered once the component its root
+    // points at is present.
+    catalog([{ ...base, name: "acme/text" }]);
+    const header = stored({ id: "header" });
+    const wrapper = stored({
+      id: "wrapper",
+      document: componentOf([instanceOf("header")]),
+    });
+
+    const withheld = componentEntriesFrom([wrapper], NONE);
+    const offered = componentEntriesFrom([wrapper], lookupOf(header));
+
+    expect(withheld).toEqual([]);
+    expect(offered.map(entry => entry.componentId)).toEqual(["wrapper"]);
+    // And judged by the header's root, which the destination takes.
+    expect(
+      entryAllowedAt(
+        offered[0] as never,
+        { kind: "root" },
+        registryNestingSource()
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("withholds a component whose root is an instance of itself", () => {
+    // The resolver detects the cycle and leaves the root standing; nothing
+    // here recurses to find it, and nothing here needs to.
+    catalog([{ ...base, name: "acme/text" }]);
+    const loop = stored({
+      id: "loop",
+      document: componentOf([instanceOf("loop")]),
+    });
+
+    expect(componentEntriesFrom([loop], lookupOf(loop))).toEqual([]);
+  });
+
+  it("still offers a component with an unresolvable instance BELOW its root", () => {
+    // What sits inside the definition is the definition's own concern, exactly
+    // as its internal nesting is: the root is a real block the destination can
+    // judge, and the placeholder inside it is what the author saved.
+    catalog([
+      { ...base, name: "acme/box", slots: { children: {} } },
+      { ...base, name: "acme/text" },
+    ]);
+    const boxed = stored({
+      id: "boxed",
+      document: componentOf([
+        {
+          id: "b1",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: { children: [instanceOf("missing")] },
+        },
+      ]),
+    });
+
+    const [offered] = componentEntriesFrom([boxed], NONE);
+
+    expect(offered?.componentId).toBe("boxed");
+    expect(offered?.document.nodes.map(root => root.type)).toEqual([
+      "acme/box",
+    ]);
+  });
+
+  it("hands over the STORED document, by identity, when it holds no instance", () => {
+    // The catalogue and everything keyed on it would otherwise rebuild for a
+    // document that did not change: the resolver returns its input when there
+    // was nothing to inline, and that identity is kept rather than re-wrapped.
+    catalog([{ ...base, name: "acme/text" }]);
+    const row = stored();
+
+    const [offered] = componentEntriesFrom([row], NONE);
+
+    expect(offered?.document).toBe(row.document);
+  });
+
   it("places ONE instance node pointing at the definition, copying nothing", () => {
     // The whole difference from a pattern. The definition's content is not in
     // the page; the renderer inlines it at read time, which is what makes an
     // edit to the definition reach this page later.
-    const [component] = componentEntriesFrom([stored()]);
+    const [component] = componentEntriesFrom([stored()], NONE);
     const node = nodeForComponentEntry(component!);
 
     expect(node.type).toBe(COMPONENT_INSTANCE_TYPE);
