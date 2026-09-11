@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   COMPLETION_CONCURRENCY,
+  COMPONENT_LIST_PAGE_SIZE,
   LIBRARY_PAGE_SIZE,
   MAX_LIBRARY_BYTES,
   MAX_LIBRARY_PATTERNS,
@@ -756,6 +757,60 @@ describe("the component tier", () => {
 
     expect(Object.keys(library).sort()).toEqual(["items", "meta"]);
     expect(Object.keys(library.meta).sort()).toEqual(["count", "truncated"]);
+  });
+
+  it("lists in pages of one completion batch, so the rows held at once are two batches", async () => {
+    // Every listed row is read again by id, so the listing's content is
+    // never used — and the service reads whole rows whatever a caller
+    // selects. A page of a hundred rows held while its batches complete was
+    // a hundred documents of content in memory for nothing; a page of one
+    // batch holds one batch of listed rows and one of by-id rows.
+    expect(COMPONENT_LIST_PAGE_SIZE).toBeLessThanOrEqual(
+      COMPLETION_CONCURRENCY
+    );
+    expect(COMPONENT_LIST_PAGE_SIZE).toBeGreaterThan(0);
+  });
+
+  it("bounds its READS under its own page size, so the smaller page does not shrink the library", async () => {
+    // The bound on reads is derived from the page size, so a tier listing in
+    // smaller pages is allowed proportionally more of them: the library it
+    // can return is the same size, and a listing every row of which is
+    // dropped still stops.
+    const unreadable = () =>
+      Array.from({ length: COMPONENT_LIST_PAGE_SIZE }, () => ({
+        title: "no id",
+      }));
+    const { ctx, list } = componentContext({
+      pages: Array.from({ length: 1000 }, unreadable),
+      byId: {},
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(list.mock.calls.length).toBe(
+      Math.ceil(MAX_LIBRARY_PATTERNS / COMPONENT_LIST_PAGE_SIZE)
+    );
+    expect(library.items).toHaveLength(0);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("still reaches the item ceiling through its smaller pages", async () => {
+    const pages = Array.from(
+      { length: MAX_LIBRARY_PATTERNS / COMPONENT_LIST_PAGE_SIZE + 1 },
+      (_, page) =>
+        Array.from({ length: COMPONENT_LIST_PAGE_SIZE }, (_, i) =>
+          componentRow(`c${String(page * COMPONENT_LIST_PAGE_SIZE + i)}`)
+        )
+    );
+    const byId = Object.fromEntries(
+      pages.flat().map(row => [row.id, { ...row, content: draft(row.id) }])
+    );
+    const { ctx } = componentContext({ pages, byId });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items).toHaveLength(MAX_LIBRARY_PATTERNS);
+    expect(library.meta.truncated).toBe(true);
   });
 
   it("pages the listing through the INJECTED read, deterministically, by page", async () => {
