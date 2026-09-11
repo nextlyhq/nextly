@@ -77,14 +77,14 @@ pnpm run build
 # asking. A dependent TEST sweep is the expensive one and stays in CI, where
 # nobody is waiting on it.
 #
-# ADVISORY, not blocking. This is the one gate here whose scope is the whole
+# ADVISORY here, not blocking. This is the one gate whose scope is the whole
 # repository, so it can be red for a package the author never touched — and a
 # hook that refuses a push over someone else's broken package is a hook people
 # learn to pass `--no-verify` to, which costs every gate rather than this one.
 #
-# Reported instead, with the packages named, so an author can see at a glance
-# whether the failure is theirs. CI blocks on the same command; this is the
-# early warning, not the enforcement.
+# The packages this push CHANGES are held to it below, once the scope is
+# derived: a type error there is the author's whichever commit introduced it,
+# because the push carries it. Reported with the packages named either way.
 set +e
 pnpm turbo check-types --continue
 TYPES_STATUS=$?
@@ -131,11 +131,32 @@ elif [ -n "$GATE_FILTERS" ]; then
   pnpm turbo test --continue $GATE_FILTERS
 fi
 
+# The TYPES of the packages this push changes, blocking.
+#
+# The repo-wide run above already compiled them, and `check-types` is a cached
+# task, so this re-run replays from cache and costs seconds. What it adds is
+# the verdict: a type error in a package this push changes goes out under this
+# author's name, and one merge went red on `main` with the error printed here
+# as a note nobody read, on a day CI's queue could not report it either.
+# Failures in packages the push does not touch stay a note, for the reason
+# given above.
 if [ "$TYPES_STATUS" -ne 0 ]; then
+  if [ "$GATE_STATUS" -eq 2 ]; then
+    echo "pre-push: the diff redefines the workspace or task graph and the typecheck is red; refusing." >&2
+    exit 1
+  elif [ -n "$GATE_FILTERS" ]; then
+    # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
+    if ! pnpm turbo check-types --continue $GATE_FILTERS; then
+      echo "" >&2
+      echo "pre-push: the typecheck is red in a package this push changes; refusing." >&2
+      echo "  Fix it here, or if it came in with a merge from main, fix it here anyway:" >&2
+      echo "  the push carries it." >&2
+      exit 1
+    fi
+  fi
   echo ""
-  echo "pre-push: NOTE — the repo-wide typecheck failed. Check whether the"
-  echo "  failing package is one you changed: this gate covers every package,"
-  echo "  so it can be red for someone else's work. CI blocks on it either way."
+  echo "pre-push: NOTE — the repo-wide typecheck failed outside the packages this"
+  echo "  push changes. CI blocks on it for whoever owns that package."
 fi
 
 # Last, so it is the line still on screen when the push proceeds.
