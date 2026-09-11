@@ -389,7 +389,8 @@ interleave. On a write:
 5. `beforeChange` (collection)
 6. `beforeChange` (each field that declares one)
 7. **Database write**
-8. `afterChange` (collection), then `afterChange` (fields)
+8. `afterChange` (collection), then `afterChange` (fields). On a **Single** this
+   pair is reversed: the field hooks run first, then the entity hook.
 
 A direct read runs `beforeOperation`, `beforeRead`, the query, then `afterRead`
 at the collection level and then per field. A row reached through relationship

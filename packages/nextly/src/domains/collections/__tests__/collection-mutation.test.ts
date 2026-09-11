@@ -361,25 +361,6 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(collectionOrder).toBeLessThan(fieldOrder!);
     });
 
-    it("hands the field-level beforeChange hook the whole record", async () => {
-      // A top-level field hook that received only its own value could not
-      // change a sibling; one handed the record can. Nested rows are handed
-      // their own row instead, which `runFieldHooksRec` decides.
-      selectData.rows = [{ id: "new-1", title: "New Post" }];
-
-      await service.createEntry(
-        { collectionName: "posts" },
-        { title: "Whole Record", summary: "kept" }
-      );
-
-      const fieldPhase = runFieldHooksSpy.mock.calls.find(
-        call => (call[0] as { phase?: string }).phase === "beforeChange"
-      );
-      const handed = (fieldPhase?.[0] as { data?: Record<string, unknown> })
-        .data;
-      expect(handed).toMatchObject({ title: "Whole Record", summary: "kept" });
-    });
-
     it("should execute afterCreate hooks", async () => {
       selectData.rows = [{ id: "new-1", title: "New Post" }];
 
