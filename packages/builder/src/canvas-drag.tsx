@@ -47,7 +47,11 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import { autoscrollStep } from "./autoscroll";
-import { nodeIdFromEvent } from "./canvas";
+import {
+  isOutermostForAddress,
+  nodeAddressOf,
+  nodeIdFromEvent,
+} from "./canvas";
 import {
   collectRegions,
   movingSubtree,
@@ -389,8 +393,25 @@ function snapshotRects(root: HTMLElement): RectSource {
   // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
   // that declares its iterator, and this package compiles without one.
   root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    const id = element.getAttribute(NODE_ID_ATTRIBUTE);
-    if (id !== null) measured.set(id, canvasContentRect(element, root));
+    // The ADDRESS a drag asks by, not the raw attribute. `collectRegions`
+    // requests rectangles by the id the document holds, and a definition-owned
+    // element carries a re-minted one — so keying by the attribute leaves every
+    // child of a component unmeasured. `targetsInRegion` then reads a root with
+    // no measured children and collapses it to one index-0 midpoint, so
+    // releasing a drag moves the component to the start whatever was under the
+    // pointer.
+    //
+    // Reachable only since the hit test began answering with instance ids: the
+    // drag used to bail before this, because `findNode` could not resolve the
+    // re-minted id. Making that path work is what exposed this.
+    const id = nodeAddressOf(element);
+    // OUTERMOST only, so an instance is measured as its own box rather than as
+    // whichever element its definition contributed last. A node a block
+    // rendered more than once still measures every copy, because sibling copies
+    // are each outermost — the last one wins there exactly as it did before.
+    if (id !== null && isOutermostForAddress(element, id, root)) {
+      measured.set(id, canvasContentRect(element, root));
+    }
   });
   // The canvas's own box, measured through the SAME reader as the blocks
   // inside it. `scrollWidth`/`scrollHeight` describe the whole content rather
