@@ -11,8 +11,13 @@ import { describe, expect, it } from "vitest";
 
 import { applyOps } from "./ops";
 import { planInsertPattern, type StoredPattern } from "./composition-planners";
-import { DOCUMENT_FORMAT_VERSION } from "./document";
-import type { BlockDocument, BlockNode } from "./document";
+import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
+import type {
+  BlockDocument,
+  BlockNode,
+  ComponentDocument,
+  ComponentLookup,
+} from "./document";
 import { walkNodes } from "./tree";
 
 function node(
@@ -877,5 +882,140 @@ describe("which DOM ids an insert steers around", () => {
     );
     expect(placed).toHaveLength(1);
     expect(placed[0].cssId).toBe("hero");
+  });
+});
+
+describe("a composed root is judged by what it draws", () => {
+  const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes,
+  });
+  const instance = (id: string, componentId: string): BlockNode => ({
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId },
+  });
+  /** A column belongs in a Columns and nowhere else; no slot lists its admissions. */
+  const columnsOnly = {
+    parentsOf: (type: string) =>
+      type === "core/column" ? ["core/columns"] : undefined,
+  };
+  /** A slot that admits text and nothing else; no type is parent-restricted. */
+  const headerTakesText = {
+    parentsOf: () => undefined,
+    slotAllowOf: (parentType: string, slot: string) =>
+      parentType === "core/box" && slot === "header"
+        ? ["core/text"]
+        : undefined,
+  };
+  const definitions: ComponentLookup = new Map([
+    ["col", componentOf([node("c", { type: "core/column" })])],
+    ["quote", componentOf([node("t", { type: "core/text" })])],
+    // Present, readable, and STANDING: its own root points at a component
+    // nobody supplied, so the resolver leaves it unexpanded and the roots
+    // query answers nothing rather than a type.
+    ["standing", componentOf([instance("s", "nobody")])],
+  ]);
+
+  it("refuses a pattern whose ROOT instance draws a block that may not sit there", () => {
+    const plan = planInsertPattern(
+      page([]),
+      pattern([instance("i", "col")]),
+      "document",
+      columnsOnly,
+      definitions
+    );
+
+    expect(plan.problem).toBe("restricted-at-root");
+  });
+
+  it("refuses a pattern whose NESTED instance draws a block barred from its parent", () => {
+    // The under-refusal: `nextly/component-instance` is not a registered type,
+    // so the parent rule answers "no restriction" for it and an edge the
+    // rules forbid is saved into the page.
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("wrap", {}, { body: [instance("i", "col")] })]),
+      { index: 1 },
+      columnsOnly,
+      definitions
+    );
+
+    expect(plan.problem).toBe("wrong-parent");
+    expect(plan.permitted).toEqual(["core/columns"]);
+  });
+
+  it("PLACES an instance into a slot whose admissions list what it draws", () => {
+    // The over-refusal, the same mistake from the other side: a slot naming
+    // what it admits does not name the instance type, so every component was
+    // barred from every slot that lists its contents — including the ones
+    // drawing exactly what the slot asks for.
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("wrap", {}, { header: [instance("i", "quote")] })]),
+      { index: 1 },
+      headerTakesText,
+      definitions
+    );
+
+    expect(plan.problem).toBeUndefined();
+  });
+
+  it("still refuses an instance drawing what the slot does not admit", () => {
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("wrap", {}, { header: [instance("i", "col")] })]),
+      { index: 1 },
+      headerTakesText,
+      definitions
+    );
+
+    expect(plan.problem).toBe("not-allowed-in-slot");
+    expect(plan.permitted).toEqual(["core/text"]);
+  });
+
+  it("judges an instance by its own type when no lookup is supplied", () => {
+    // The published signature is reached by callers holding no library, and
+    // their answer is stated here so that adding the lookup cannot quietly
+    // change it.
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("wrap", {}, { body: [instance("i", "col")] })]),
+      { index: 1 },
+      columnsOnly
+    );
+
+    expect(plan.problem).toBeUndefined();
+  });
+
+  it("judges an instance whose definition composes to NOTHING by its own type", () => {
+    // Not as an empty list of types, which a slot naming its admissions
+    // accepts vacuously — that would let a placeholder into the one place the
+    // rules were explicit about.
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("wrap", {}, { header: [instance("i", "standing")] })]),
+      { index: 1 },
+      headerTakesText,
+      definitions
+    );
+
+    expect(plan.problem).toBe("not-allowed-in-slot");
+  });
+
+  it("judges an instance the lookup cannot resolve by its own type, not as nothing", () => {
+    // A missing definition draws as a placeholder wherever it sits; refusing
+    // the insert would make a pattern unplaceable because one row is gone.
+    const plan = planInsertPattern(
+      page([node("a")]),
+      pattern([node("wrap", {}, { body: [instance("i", "gone")] })]),
+      { index: 1 },
+      columnsOnly,
+      definitions
+    );
+
+    expect(plan.problem).toBeUndefined();
   });
 });

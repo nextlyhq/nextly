@@ -48,6 +48,7 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   isComponentDocument,
+  isComponentInstance,
   isUnsetOverride,
   renderedDomId,
   type BlockDocument,
@@ -867,6 +868,51 @@ export function composedRootTypes(
     rootsRead: new Map<string, RememberedRoots>(),
   };
   return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
+}
+
+/**
+ * The block types a NODE is judged by when the nesting rule is asked about it.
+ *
+ * A block answers with its own type. A component instance answers with the
+ * ROOTS of the definition it draws, read through the same lookup the canvas
+ * resolves against — because `nextly/component-instance` is not a registered
+ * block, and every rule spelled over types gets the wrong answer for it in
+ * both directions. A parent rule finds no restriction on the instance type and
+ * admits a component whose root belongs only inside a Columns; a slot naming
+ * what it admits does not name the instance type and bars every component from
+ * it, including the ones drawing exactly what the slot asks for.
+ *
+ * One rule and one implementation, because the palette, the keyboard move and
+ * the planners all ask it, and an offer that resolves against a forest the
+ * mutation does not resolve is an offer the click then refuses — or worse,
+ * accepts.
+ *
+ * An instance that does not resolve — no definition, an unreadable one, a
+ * definition composing to nothing, a root the resolver would leave standing —
+ * is judged by its own type, which is to say not at all. It draws as a
+ * placeholder wherever it sits, and refusing to carry one would pin a
+ * placeholder to the spot it was left in, or make a whole pattern unplaceable
+ * because one row of the library is gone.
+ *
+ * Without a lookup every node is judged by its own type. That is the answer a
+ * caller holding no library gets, and it is the behaviour every caller had
+ * before the lookup existed.
+ */
+export function placementTypesOf(
+  node: BlockNode,
+  definitions?: ComponentLookup
+): readonly string[] {
+  if (definitions === undefined || !isComponentInstance(node)) {
+    return [node.type];
+  }
+  const componentId = node.props.componentId;
+  if (typeof componentId !== "string") return [node.type];
+  const document = readableDefinition(definitions.get(componentId));
+  if (document === undefined || document.nodes.length === 0) {
+    return [node.type];
+  }
+  const roots = composedRootTypes(document, definitions);
+  return roots === undefined || roots.length === 0 ? [node.type] : roots;
 }
 
 /** A definition's root types as answered once, and how deep an instance they hold for. */
