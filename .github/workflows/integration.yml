@@ -103,7 +103,13 @@ jobs:
   integration-postgres:
     name: Integration (postgres)
     needs: supersession
-    if: needs.supersession.outputs.superseded != 'true'
+    # `!cancelled()` so a supersession job that FAILED (checkout, the
+    # action, its timeout) does not skip this leg: with no `always()`-style
+    # override, GitHub skips every dependent of a failed job, `skipped` passes
+    # the merge gate, and three required checks would read as acceptable
+    # with nothing run. A failed question falls open to running the suite;
+    # only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
     runs-on: ubuntu-latest
     # A BACKSTOP now, not the bound that should ever fire.
     #
@@ -194,7 +200,13 @@ jobs:
   integration-mysql:
     name: Integration (mysql)
     needs: supersession
-    if: needs.supersession.outputs.superseded != 'true'
+    # `!cancelled()` so a supersession job that FAILED (checkout, the
+    # action, its timeout) does not skip this leg: with no `always()`-style
+    # override, GitHub skips every dependent of a failed job, `skipped` passes
+    # the merge gate, and three required checks would read as acceptable
+    # with nothing run. A failed question falls open to running the suite;
+    # only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
     runs-on: ubuntu-latest
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
@@ -250,7 +262,13 @@ jobs:
   integration-sqlite:
     name: Integration (sqlite)
     needs: supersession
-    if: needs.supersession.outputs.superseded != 'true'
+    # `!cancelled()` so a supersession job that FAILED (checkout, the
+    # action, its timeout) does not skip this leg: with no `always()`-style
+    # override, GitHub skips every dependent of a failed job, `skipped` passes
+    # the merge gate, and three required checks would read as acceptable
+    # with nothing run. A failed question falls open to running the suite;
+    # only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
     runs-on: ubuntu-latest
     # A BACKSTOP, for the same reason as the database legs above: the bound that
     # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as
