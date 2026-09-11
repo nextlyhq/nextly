@@ -449,3 +449,74 @@ export function registerBuiltInSources(
 ): void {
   replaceSourcesOfKind("collection", collections.map(collectionSource));
 }
+
+/** One single, in the shape a widget source is built from. */
+export interface WidgetSourceSingle {
+  slug: string;
+  /** The same field contract a collection source is built from. */
+  fields: WidgetSourceCollection["fields"];
+  /** What a human calls this single -- the registry's label. */
+  label?: string;
+  /**
+   * Whether the single has the Draft/Published `status` column. Absent means
+   * OFF, for the reason a collection's does: the registry stores `false` for
+   * an ordinary single.
+   */
+  status?: boolean;
+}
+
+/**
+ * The widget source a single exposes: ONE document, read as a one-row list.
+ *
+ * A single is its document, so the source answers a fixed question -- the
+ * document's fields -- and supports `list` alone. `count` over one row is a
+ * constant, and `groupBy` and `timeseries` bucket rows a single does not
+ * have; a card built on any of them would be a card built on nothing, so none
+ * is advertised and validation refuses them by name. `where`, `sort` and
+ * `limit` are refused at execution for the same reason.
+ *
+ * The system columns are the ones a single's table carries: `id`, the two
+ * timestamps -- a single has no timestamps toggle -- and, with the publish
+ * lifecycle on, `status` and `firstPublishedAt`. No title field: a single is
+ * named by its label, not by a field of its document.
+ */
+function singleSource(single: WidgetSourceSingle): WidgetSource {
+  const declared = exposedFields(single.fields);
+  const seen = new Set(declared.map(f => f.name));
+  const systemFields: WidgetSourceField[] = [
+    IDENTITY_FIELD,
+    ...TIMESTAMP_FIELDS,
+  ];
+  if (single.status === true) {
+    systemFields.push(STATUS_FIELD, FIRST_PUBLISHED_FIELD);
+  }
+  const id = `single:${single.slug}`;
+  return {
+    id,
+    lifecycleStatus: single.status === true,
+    label: single.label ?? single.slug,
+    // Derived from the id, as the collection source derives it, so the kind
+    // and the namespace cannot disagree.
+    kind: sourceKindFromId(id),
+    // The same advisory spelling the collection source carries; the read path
+    // is the gate.
+    requiredPermission: `read-${single.slug}`,
+    supports: ["list"],
+    fields: [
+      ...declared,
+      ...systemFields.filter(field => !seen.has(field.name)),
+    ],
+  };
+}
+
+/**
+ * Publish exactly these singles as the install's single sources.
+ *
+ * A replacement, for the reason the collection publication is one: the set is
+ * derived from a registry that changes while the process runs.
+ */
+export function registerBuiltInSingleSources(
+  singles: WidgetSourceSingle[]
+): void {
+  replaceSourcesOfKind("single", singles.map(singleSource));
+}

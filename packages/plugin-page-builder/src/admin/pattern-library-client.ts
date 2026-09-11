@@ -34,12 +34,13 @@ import {
 /**
  * What the panel needs to know about the library.
  *
- * The patterns and NOTHING else, because the panel offers a list and has no
- * surface for anything more yet. The route reports whether it truncated, and
- * `usePluginRoute` reports whether the read is still in flight — both are worth
- * drawing and neither is drawn today, so neither is carried here. A field
- * nothing reads is a promise about a surface that does not exist, and the
- * reader after this one cannot tell it from one that quietly stopped working.
+ * The patterns, the categories they use, and whether the read was cut — and
+ * NOTHING else, because each of those has a surface that draws it and nothing
+ * more does. `usePluginRoute` also reports whether the read is still in
+ * flight, which is worth drawing and is not drawn today, so it is not carried:
+ * a field nothing reads is a promise about a surface that does not exist, and
+ * the reader after this one cannot tell it from one that quietly stopped
+ * working.
  */
 export interface PatternLibraryRead {
   /**
@@ -66,6 +67,25 @@ export interface PatternLibraryRead {
    * a name before the suggestions land and gains them when they do.
    */
   readonly categories: readonly string[];
+  /**
+   * Whether the ceiling cut the read short.
+   *
+   * Carried because the insert panel says so beside the tiles it offers, which
+   * is where an author searches for the pattern that was left out. `false`
+   * until the read arrives: a library that has not answered yet is not one
+   * that was cut.
+   */
+  readonly truncated: boolean;
+  /**
+   * Where the read stands: still in flight, answered, or failed.
+   *
+   * Carried for the reason the component read carries it: a failed read and
+   * an empty library both offer no patterns, and only one of them is a state
+   * the panel should say — with the retry beside it.
+   */
+  readonly state: LibraryReadState;
+  /** Ask again, ignoring anything cached. */
+  readonly retry: () => void;
 }
 
 /**
@@ -77,6 +97,37 @@ export interface PatternLibraryRead {
  * is the signal, and a second way to say it would be a second thing to get
  * wrong.
  */
+/**
+ * Where a library read stands, for either tier.
+ *
+ * Four states rather than "data or not", because the empty ones ask for
+ * opposite things and the failed ones say different things. A pending read
+ * wants a moment. A read that failed with nothing to show wants a retry and a
+ * sentence — every instance drawn as could-not-be-loaded says neither, and
+ * reads as a site whose components were deleted. And a read that failed to
+ * REFRESH what it had is not that: the route hook reads afresh on every mount
+ * and keeps its last answer while it does, so the tiles still stand and the
+ * page still draws, from an answer an edit elsewhere may have overtaken. That
+ * one is `stale`, so a surface can say "may be out of date" rather than
+ * "none are offered" beside tiles that are.
+ */
+export type LibraryReadState = "pending" | "ready" | "stale" | "unavailable";
+
+/** The state a read is in, from what the route hook reports of it. */
+export function libraryReadState(read: {
+  data: unknown;
+  pending: boolean;
+  error: Error | null;
+}): LibraryReadState {
+  // The failed states named FIRST, so neither can fold into the pending one:
+  // a failed read and a pending one both have no data, and only one of them
+  // ever will. What tells the two failures apart is what is still held.
+  if (read.error !== null) {
+    return read.data === undefined ? "unavailable" : "stale";
+  }
+  return read.pending ? "pending" : "ready";
+}
+
 export function usePatternLibrary(): PatternLibraryRead {
   const read = usePluginRoute<LibraryResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -102,7 +153,13 @@ export function usePatternLibrary(): PatternLibraryRead {
     return insertable.length === all.length ? all : insertable;
   }, [read.data]);
   const categories = useMemo(() => categoriesOf(read.data?.items), [read.data]);
-  return { patterns, categories };
+  return {
+    patterns,
+    categories,
+    truncated: read.data?.meta.truncated === true,
+    state: libraryReadState(read),
+    retry: read.refetch,
+  };
 }
 
 /**

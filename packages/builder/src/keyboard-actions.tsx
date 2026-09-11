@@ -24,6 +24,7 @@ import {
   findNode,
   registryNestingSource,
   saveAsPatternRefusal,
+  type ComponentLookup,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
@@ -300,6 +301,17 @@ export interface BlockKeyboardActionsOptions {
    */
   nesting?: NestingSource;
   /**
+   * The component definitions the canvas draws, for judging a moved instance.
+   *
+   * An instance node's own type is not a registered block, so the nesting
+   * rule restricts it nowhere; a move is judged by the ROOTS of the definition
+   * it draws instead, resolved through this map as a drop of the same instance
+   * is (`placementTypesOf`). Optional, because a host whose library has not
+   * loaded has nothing to resolve against — an unresolvable instance is judged
+   * by its own type, which is how a placeholder stays movable.
+   */
+  definitions?: ComponentLookup;
+  /**
    * Begin storing the selection in the library, when the author asks to.
    *
    * Supplied by the host because everything the gesture needs is the host's:
@@ -389,6 +401,7 @@ export function useBlockKeyboardActions({
   enabled = true,
   onEditText,
   nesting,
+  definitions,
   onSaveAsPattern,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   /*
@@ -578,7 +591,8 @@ export function useBlockKeyboardActions({
         editorNow.document,
         selectedId,
         move.to,
-        nestingSource
+        nestingSource,
+        definitions
       );
       if (refusal !== null) {
         announce(refusalAnnouncement(refusal));
@@ -616,7 +630,7 @@ export function useBlockKeyboardActions({
       // the block still selected, so a second press continues moving the
       // same block — which is what makes a run of presses walk it across the
     },
-    [announce, moveSet, nestingSource]
+    [announce, moveSet, nestingSource, definitions]
   );
 
   /**
@@ -955,6 +969,7 @@ export function BlockKeyboardActions({
   enabled,
   onEditText,
   nesting,
+  definitions,
   onSaveAsPattern,
   mayCreatePattern,
   children,
@@ -973,6 +988,7 @@ export function BlockKeyboardActions({
     ...(mayCreatePattern === undefined ? {} : { mayCreatePattern }),
     ...(onEditText === undefined ? {} : { onEditText }),
     ...(nesting === undefined ? {} : { nesting }),
+    ...(definitions === undefined ? {} : { definitions }),
   });
 
   // `polite`, not `assertive`: a move is the author's own action and its result

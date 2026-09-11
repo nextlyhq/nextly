@@ -18,15 +18,19 @@
  * `/`, `.` or `#`. ASCII control characters and whitespace are stripped
  * before either is read, because browsers strip them when parsing, and
  * `java\nscript:` reads as no scheme here while reading as `javascript:`
- * there.
+ * there. And a web destination is admitted only where the browser's URL
+ * parser sends a click where the written form says it goes, so a backslash
+ * -- which the parser reads as a slash -- cannot turn a path on this site
+ * into another site that opens in this tab.
  *
  * 🔴 A numeric character reference no code point can hold is decoded before
- * the library sees it. The library decodes `&#N;` with `String.fromCodePoint`
- * in every text node, a link's title and its destination alike, and past
- * `0x10FFFF` that throws inside the conversion of the whole card -- an editor
- * whose initial state threw commits nothing, so one such reference blanked
- * every other line. It becomes U+FFFD here, which is what a browser shows for
- * the same reference, and the card draws whole.
+ * the library sees it, however it is escaped. The library decodes `&#N;` with
+ * `String.fromCodePoint` in every text node, a link's title and its
+ * destination alike, and past `0x10FFFF` that throws inside the conversion
+ * of the whole card -- an editor whose initial state threw commits nothing,
+ * so one such reference blanked every other line. It becomes U+FFFD here,
+ * which is what a browser shows for the same reference, and the card draws
+ * whole. A conversion that throws anyway draws the card's text as written.
  *
  * Raw HTML needs no guard: no transformer parses it, so a `<script>` in the
  * markdown is a text node whose text is `<script>`.
@@ -42,7 +46,13 @@ import {
   type TextMatchTransformer,
   type Transformer,
 } from "@lexical/markdown";
-import { $nodesOfType, type TextNode } from "lexical";
+import {
+  $createParagraphNode,
+  $createTextNode,
+  $getRoot,
+  $nodesOfType,
+  type TextNode,
+} from "lexical";
 
 import { RICH_TEXT_THEME } from "@admin/components/features/entries/fields/special/rich-text-kit";
 
@@ -60,8 +70,22 @@ const LAST_CODE_POINT = 0x10ffff;
 const REPLACEMENT_CHARACTER = "\uFFFD";
 
 /**
+ * A numeric reference as the library's DECODER will see it, or a markdown
+ * escape pair, whichever starts here.
+ *
+ * The library drops a backslash before ASCII punctuation BEFORE it decodes
+ * references, and `&`, `#` and `;` are all punctuation -- so `&\#1114112;`
+ * and `&#1114112\;` reach its decoder as `&#1114112;`. The reference
+ * alternative takes those optional backslashes into the match; the escape
+ * alternative consumes every other pair whole, in the same left-to-right
+ * scan, so a backslash that is itself escaped (`\\&#N;`) is read the way the
+ * library reads it and never mistaken for the start of an escaped reference.
+ */
+const REFERENCE_OR_ESCAPE = /(\\?&\\?#(\d+)\\?;)|\\[!-/:-@[-`{-~]/g;
+
+/**
  * `markdown` with every numeric character reference no code point can hold
- * replaced by U+FFFD.
+ * replaced by U+FFFD, however it is escaped.
  *
  * HTML's own rule for the same reference: a character reference outside the
  * Unicode range is a parse error whose result is U+FFFD, so `&#1114112;` in a
@@ -71,8 +95,12 @@ const REPLACEMENT_CHARACTER = "\uFFFD";
  * card; decoded here first, nothing it is handed can throw.
  */
 export function representableMarkdown(markdown: string): string {
-  return markdown.replace(/&#(\d+);/g, (reference, codePoint: string) =>
-    Number(codePoint) > LAST_CODE_POINT ? REPLACEMENT_CHARACTER : reference
+  return markdown.replace(
+    REFERENCE_OR_ESCAPE,
+    (match, reference: string | undefined, codePoint: string | undefined) =>
+      reference !== undefined && Number(codePoint) > LAST_CODE_POINT
+        ? REPLACEMENT_CHARACTER
+        : match
   );
 }
 
@@ -93,27 +121,63 @@ function unescapedByMarkdown(raw: string): string {
 }
 
 /**
+ * Two pages a destination is resolved against, as a browser resolves an
+ * `href` against the page it is on: different schemes, hosts and paths, so a
+ * reading that depends on the page comes out as two readings. `.invalid` is
+ * reserved (RFC 2606), so no destination names either host.
+ */
+const PROBE_PAGES: readonly URL[] = [
+  new URL("https://admin.nextly.invalid/admin/dashboard"),
+  new URL("http://other.nextly.invalid/a/b/"),
+];
+
+/**
+ * Whether the browser's URL parser takes a click on `destination` off the
+ * site of the page it is on: one answer when every page agrees, `undefined`
+ * when it depends on the page, or when the parser refuses the value.
+ */
+function browserLeavesSite(destination: string): boolean | undefined {
+  const answers = PROBE_PAGES.map(page => {
+    try {
+      return new URL(destination, page).origin !== page.origin;
+    } catch {
+      return undefined;
+    }
+  });
+  return answers.every(answer => answer === answers[0])
+    ? answers[0]
+    : undefined;
+}
+
+/**
  * The destination a link written with `raw` will FOLLOW, or `undefined` when
  * it may not become a link.
  *
- * 🔴 Three transformations sit between the captured text and the `href` a
- * click follows, and a judgement made before any of them is a judgement of
+ * 🔴 Four transformations sit between the captured text and the page a
+ * click reaches, and a judgement made before any of them is a judgement of
  * a different string. The markdown transformer unescapes the capture, so
  * `javascript\:x` and `javascript&#58;x` both become `javascript:x`. The
  * browser discards ASCII whitespace and control characters while parsing,
- * so `java\nscript:` reads as `javascript:` there. And the link node
- * formats a scheme-less destination before rendering it: `posts?status=x`
- * becomes `https://posts?status=x`, `me@example.com` becomes a `mailto:`,
- * and only a path starting with `/`, `.` or `#` is left as written. Each is
- * applied here, in that order, and the scheme is read off the result.
+ * so `java\nscript:` reads as `javascript:` there. The link node formats a
+ * scheme-less destination before rendering it: `posts?status=x` becomes
+ * `https://posts?status=x`, `me@example.com` becomes a `mailto:`, and only a
+ * path starting with `/`, `.` or `#` is left as written. And the browser's
+ * URL parser resolves what the node renders: for `http` and `https` it reads
+ * a backslash as a slash, so `/\evil.example` -- a path, as written -- is
+ * the host `evil.example`, and it reads `https:evil.example` as a path on an
+ * `https` page and as a host on an `http` one.
  *
- * A destination the link node would REWRITE is refused rather than
- * admitted as what it becomes. `[posts](posts?status=draft)` reads as a
- * path on this site and would render as a link to a host called `posts`,
- * opening a new tab; leaving it as markdown is a refusal the author can
- * see, and `./posts?status=draft` says what they meant. Decided by asking
- * the node's own formatter whether it keeps the value, not by restating
- * which prefixes it keeps.
+ * A destination any of them would REWRITE is refused rather than admitted as
+ * what it becomes. `[posts](posts?status=draft)` reads as a path on this
+ * site and would render as a link to a host called `posts`; leaving it as
+ * markdown is a refusal the author can see, and `./posts?status=draft` says
+ * what they meant. Decided by asking each transformation itself -- the node's
+ * own formatter whether it keeps the value, the browser's parser where the
+ * value goes -- not by restating which prefixes or characters they treat
+ * specially. The last question is the one {@link externalHref} answers from
+ * the written form, so a destination is admitted only where the two agree:
+ * then the promise the written form makes -- a path stays on this site, an
+ * address opens in a new tab -- is the one the click keeps.
  *
  * Whitespace and the control category together cover more than a browser
  * strips, and the excess can only REFUSE a destination a browser would
@@ -124,6 +188,12 @@ export function destinationOf(raw: string): string | undefined {
   if (stripped === "" || formatUrl(stripped) !== stripped) return undefined;
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(stripped);
   if (scheme && !SAFE_SCHEMES.has(scheme[1].toLowerCase())) return undefined;
+  // `mailto:` and `tel:` hand the address to another application; there is no
+  // page they navigate to, so there is no site for them to leave.
+  const navigates = !scheme || /^https?$/i.test(scheme[1]);
+  if (navigates && browserLeavesSite(stripped) !== externalHref(stripped)) {
+    return undefined;
+  }
   return stripped;
 }
 
@@ -197,17 +267,47 @@ function $openExternalLinksInNewTab(): void {
 }
 
 /**
+ * A card's markdown drawn as the text it was written in, one paragraph per
+ * line.
+ */
+function $drawAsWritten(content: string): void {
+  const root = $getRoot();
+  root.clear();
+  for (const line of content.split("\n")) {
+    const paragraph = $createParagraphNode();
+    if (line !== "") paragraph.append($createTextNode(line));
+    root.append(paragraph);
+  }
+}
+
+/**
  * Build a card's nodes from its markdown, inside an editor update.
  *
  * The ONE way a card's markdown becomes nodes, so no caller can hand the
  * library a card without the decoding the conversion depends on, or convert
  * without the link guard, or leave an external link opening in this tab.
+ *
+ * 🔴 And a conversion that throws draws the card's text as written rather
+ * than nothing. An editor whose initial state threw commits an empty one, so
+ * a single malformed construct the library cannot convert blanked every other
+ * line of the card -- a numeric reference past Unicode did it three ways
+ * before {@link representableMarkdown} closed each. That is decoding a known
+ * input; this is the boundary for the next one nobody has met, and it says so
+ * in the console where Lexical's own errors go.
  */
 export function $importTextWidgetMarkdown(content: string): void {
-  $convertFromMarkdownString(representableMarkdown(content), [
-    ...TEXT_WIDGET_TRANSFORMERS,
-  ]);
-  $openExternalLinksInNewTab();
+  try {
+    $convertFromMarkdownString(representableMarkdown(content), [
+      ...TEXT_WIDGET_TRANSFORMERS,
+    ]);
+    $openExternalLinksInNewTab();
+  } catch (error) {
+    console.error(
+      "[TextMarkdown] markdown conversion failed; drawing the text as written:",
+      error
+    );
+    $drawAsWritten(content);
+  }
 }
 
 /**

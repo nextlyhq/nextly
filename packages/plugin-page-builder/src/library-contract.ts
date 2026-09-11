@@ -18,8 +18,8 @@
  *
  * @module library-contract
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import type { SavedPattern } from "@nextlyhq/builder";
+import type { BlockDocument, ComponentDocument } from "@nextlyhq/blocks-engine";
+import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
 /**
@@ -34,8 +34,58 @@ import type { HookWarning } from "nextly/config";
  */
 export const PAGE_BUILDER_PLUGIN_NAME = "@nextlyhq/plugin-page-builder";
 
-/** Where the panel finds the library, under this plugin's own namespace. */
+/** Where the panel finds the pattern library, under this plugin's own namespace. */
 export const LIBRARY_ROUTE_PATH = "/library";
+
+/**
+ * Where the editor finds the site's component definitions.
+ *
+ * A route of its own rather than a tier of the pattern route, for two reasons
+ * that point the same way. A plugin route declares ONE permission, and the two
+ * tiers are read under different grants: a role that may read components and
+ * not patterns must still get its definitions, or every instance on its pages
+ * draws as a placeholder. And each route answers the canonical list envelope,
+ * `{ items, meta }`, which one route carrying two tiers could not without
+ * inventing a shape of its own.
+ *
+ * The two reads are also made at different moments. The panel reads patterns
+ * only while it is open; the canvas needs definitions on every editor mount,
+ * and an instance renders as a placeholder without them. Reading the pattern
+ * tier along with them would spend up to the whole byte ceiling to draw a
+ * header.
+ */
+export const COMPONENT_LIBRARY_ROUTE_PATH = `${LIBRARY_ROUTE_PATH}/components`;
+
+/**
+ * The query parameter naming the language the component tier is read in.
+ *
+ * A component's document field can be localized, and the public renderer
+ * reads definitions in the page's locale; the editor asks for the language
+ * the surrounding document is being edited in, so the canvas draws what the
+ * page will. ONE spelling, here, for the client that writes it and the route
+ * that reads it — two spellings agree until one of them is renamed.
+ */
+export const COMPONENT_LIBRARY_LOCALE_PARAM = "locale";
+
+/**
+ * The component route's path for one language, as the client requests it.
+ *
+ * `null` or `undefined` is the app's default language, which the admin
+ * addresses everywhere by an ABSENT `?locale=` — so the path carries no
+ * parameter rather than an empty one, and the read hook's cache key, which
+ * is the path, differs between languages and is shared within one.
+ */
+export function componentLibraryPath(
+  locale: string | null | undefined
+): string {
+  if (locale === null || locale === undefined || locale === "") {
+    return COMPONENT_LIBRARY_ROUTE_PATH;
+  }
+  const query = new URLSearchParams({
+    [COMPONENT_LIBRARY_LOCALE_PARAM]: locale,
+  });
+  return `${COMPONENT_LIBRARY_ROUTE_PATH}?${query.toString()}`;
+}
 
 /**
  * Where the editor asks what the author may do with patterns.
@@ -147,16 +197,58 @@ export interface LibraryPattern extends SavedPattern {
   readonly granularity?: string;
 }
 
-/** What one library read answers. */
-export interface LibraryResponse {
-  readonly items: readonly LibraryPattern[];
+/**
+ * One component definition the editor may place, with its document as the
+ * editor should see it.
+ *
+ * DERIVED from `SavedComponent` — the shape the panel reads — for the reason
+ * `LibraryPattern` derives from `SavedPattern`: described twice, the two
+ * drift, and the drift compiles. Extending the published type is what makes a
+ * field the panel gains and the wire never carries a compile error rather than
+ * a tile missing something nobody notices.
+ *
+ * The document is the WORKING DRAFT where the caller may edit the component
+ * and one exists, and the live row otherwise — the posture an editor wants,
+ * since an author placing a component they are also editing should see what
+ * they are editing. Read per id rather than from the listing, because the
+ * draft overlay is reachable only through a by-id read: a listing answers with
+ * live rows, and a definition built from those would render a stale component
+ * beside the draft the author just saved.
+ */
+export interface LibraryComponent extends SavedComponent {
+  /**
+   * The definition, or `null` for a row saved without content.
+   *
+   * REQUIRED here where `SavedComponent` leaves it optional, and `null` rather
+   * than omitted, so the shape says the read was made and found nothing —
+   * which a missing key cannot say.
+   */
+  readonly document: ComponentDocument | null;
+}
+
+/**
+ * What one list read from this plugin answers.
+ *
+ * The CANONICAL list envelope — `{ items, meta }`, the shape every list in
+ * this codebase answers with — carrying one tier per route. A route inventing
+ * a second vocabulary for "here is a page of rows, and whether it is all of
+ * them" would be the one list a shared client could not read.
+ */
+export interface LibraryListResponse<TItem> {
+  readonly items: readonly TItem[];
   readonly meta: {
-    /** How many were returned. */
+    /** How many rows were returned. */
     readonly count: number;
     /** Whether the ceiling stopped the read before the collection ended. */
     readonly truncated: boolean;
   };
 }
+
+/** What the pattern library route answers. */
+export type LibraryResponse = LibraryListResponse<LibraryPattern>;
+
+/** What the component library route answers. */
+export type ComponentLibraryResponse = LibraryListResponse<LibraryComponent>;
 
 /**
  * Where the editor sends a selection to be stored as a pattern.

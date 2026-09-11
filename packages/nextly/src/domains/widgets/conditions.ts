@@ -86,8 +86,9 @@ async function collectionsArePresent(probe: ConditionProbe): Promise<boolean> {
 /**
  * Whether this reader may read at least one single.
  *
- * The same question of the other registry. Why it is answered from a different
- * place than the collections is set out on `readableSingleSlugs`.
+ * The same question of the other registry, answered from the same listing:
+ * the singles card lists registry rows, so a single whose migration is still
+ * pending is present here exactly as it is on the card.
  */
 async function singlesArePresent(probe: ConditionProbe): Promise<boolean> {
   return (await probe.readableSingles()).length > 0;

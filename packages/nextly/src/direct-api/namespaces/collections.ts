@@ -130,6 +130,10 @@ export async function findByID<TSlug extends CollectionSlug>(
       // Overlay the pending working draft when the caller opts in; the service
       // still gates it on an update-capability probe.
       includeWorkingDraft: args.draft,
+      // The lifecycle scope, forwarded for the reason `find` forwards it: left
+      // out, an untrusted by-id read is bounded to public states and a row that
+      // was never published answers 404 -- the overlay above never reaches it.
+      status: args.status,
       // i18n M4: forward the content locale + fallback so localized fields resolve.
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,

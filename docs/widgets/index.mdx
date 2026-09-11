@@ -49,7 +49,8 @@ it: headings, paragraphs, lists, emphasis, inline code, block quotes and links.
 Three things the markdown cannot do, by design. Raw HTML is shown as the text it is. A link
 may point at `http`, `https`, `mailto`, `tel`, or a path on this site written as `/...`,
 `./...` or `#...`; a link to anything else — a bare `posts?status=draft`, an address with no
-scheme — is left on screen as the markdown you wrote it in, so you can see it was refused. And the
+scheme, or a path a browser would read as another site, such as `/\example.com` — is left on
+screen as the markdown you wrote it in, so you can see it was refused. And the
 content is bounded — it travels inside every dashboard load for every reader who is offered
 the card, so it is for notes and a pointer to a runbook, not for the runbook itself. An
 external link opens in a new tab.
@@ -66,6 +67,22 @@ it. That is what makes permission scoping reliable rather than something each wi
 has to remember: a widget cannot read what its viewer could not have read directly.
 
 It also means most widgets need no data-fetching code at all.
+
+### Sources
+
+A query names a source, and the source decides what the query may ask:
+
+| Source | Reads | Supports |
+|---|---|---|
+| `collection:<slug>` | The collection's entries, through the same access-controlled read as the API | `count`, `list`, `groupBy`, and `timeseries` where the collection has a usable date |
+| `single:<slug>` | The single's one document, as a list of one row | `list` only — a single answers a fixed question, so a `where`, a `sort`, a `count` or a bucketing over it is refused rather than answered |
+| `system:…` | A core service — versions, releases, activity and the like — each answering through its own service's rules | Whatever that source declares |
+
+Every collection and every single the install has is published as a source, and the dashboard
+offers a card derived from each: a count, a recent list, a table and a health breakdown per
+collection, and one status card per single showing whether it is published and when it last
+changed. Offered, never placed — nobody's dashboard gains a card because a collection was
+created — and only to a reader who may read that collection or single.
 
 <Callout type="warn">
 Contributing a widget from a plugin works today, but `PluginAdminWidget` is marked

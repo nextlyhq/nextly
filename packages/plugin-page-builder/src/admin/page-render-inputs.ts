@@ -28,6 +28,7 @@
 import {
   DEFAULT_LIMITS,
   isPlainRecord,
+  type DefinitionsById,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
@@ -51,6 +52,17 @@ export interface PageRenderInputs {
   styleContext: NonNullable<PageRendererProps["styleContext"]>;
   hostPolicy?: PageRendererProps["hostPolicy"];
   limits?: PageRendererProps["limits"];
+  /**
+   * The component definitions the page's instances resolve against.
+   *
+   * REQUIRED on the way in and always present on the way out, unlike on the
+   * renderer, where an absent map is legal and draws a placeholder for every
+   * instance. That default is exactly the plausible wrong page this module
+   * exists to prevent: a surface that forgot the map rendered every component
+   * as could-not-be-loaded and looked like a site whose components were
+   * broken. A surface has to say which definitions it drew with.
+   */
+  definitions: DefinitionsById;
 }
 
 export interface PageRenderInputsOptions {
@@ -82,6 +94,14 @@ export interface PageRenderInputsOptions {
   previewStates?: boolean;
   /** The site's document caps, already read from the config. */
   limits: DocumentLimits;
+  /**
+   * The site's component definitions, at the posture this surface draws at.
+   *
+   * Read by the surface rather than here, because a read is a hook and this is
+   * a derivation — but demanded here, so that no surface drawing the page can
+   * leave them out and draw placeholders that look like broken components.
+   */
+  definitions: DefinitionsById;
 }
 
 /**
@@ -96,6 +116,7 @@ export function pageRenderInputs({
   previewContainer,
   previewStates,
   limits,
+  definitions,
 }: PageRenderInputsOptions): PageRenderInputs {
   /*
    * ONE read of the breakpoints, feeding both the compile and the decision
@@ -137,6 +158,12 @@ export function pageRenderInputs({
      * refuses.
      */
     limits,
+    /*
+     * Passed through as the SAME map the surface read, so the renderer resolves
+     * against the identity the surface memoised on: a copy taken here would
+     * re-resolve every instance on every render of the surface.
+     */
+    definitions,
   };
 }
 

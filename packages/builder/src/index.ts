@@ -217,6 +217,9 @@ export {
   // two absences that are not interchangeable, `keywords` and `content`, each
   // of which arrives as `null` from a stored row rather than missing.
   type SavedPattern,
+  // The same contract for the component tier, published with it rather than
+  // after, so the host filling `components` never has to infer it.
+  type SavedComponent,
   type SlotSource,
 } from "./inserter";
 

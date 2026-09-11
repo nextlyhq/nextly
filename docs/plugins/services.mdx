@@ -48,7 +48,7 @@ site's default, which is what every call has always meant.
 
 ```ts
 // A French visitor's page reads French content.
-const page = await ctx.services.collections.findEntryById("pages", id, {
+const frenchPage = await ctx.services.collections.findEntryById("pages", id, {
   as: "system",
   locale: "fr",
 });
