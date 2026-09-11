@@ -46,8 +46,10 @@ outputs:
   last-tested-sha:
     description: >
       The head commit of the newest completed run of this workflow on `main`
-      whose substantive job reached a verdict. Empty when none is found, in
-      which case a caller should fall back to `github.event.before`.
+      whose substantive job reached a verdict. Empty when none is found or the
+      history could not be read, in which case a caller that narrows its work
+      by diff should run everything: diffing against `github.event.before`
+      instead would reopen the hole this output closes.
     value: ${{ steps.ask.outputs.last_tested_sha }}
 
 runs:
@@ -135,5 +137,5 @@ runs:
         if [ -n "$last" ]; then
           echo "last commit $WORKFLOW actually tested on main: $last"
         else
-          echo "::notice::no earlier tested commit found for $WORKFLOW; caller falls back to event.before"
+          echo "::notice::no earlier tested commit found for $WORKFLOW; a caller that diffs should run everything"
         fi

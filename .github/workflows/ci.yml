@@ -101,8 +101,10 @@ jobs:
           # actually TESTED, not merely the previous commit. A README-only push
           # landing after a superseded code push would otherwise diff against
           # that code push alone, read as inert, and leave the code untested.
-          # Falls back to `before` when no tested commit is known.
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.newer.outputs.last-tested-sha || github.event.before }}
+          # No fallback to `before` when no tested commit is known: that is
+          # the same hole with the history lookup failed, and an empty base
+          # below runs everything instead.
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.newer.outputs.last-tested-sha }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           SUPERSEDED: ${{ steps.newer.outputs.superseded }}
         run: |
@@ -128,7 +130,7 @@ jobs:
           }
 
           if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
-            fail_open "no base or head SHA for ${{ github.event_name }}; running everything."
+            fail_open "no tested base or no head SHA for ${{ github.event_name }}; running everything."
           fi
           # A first push to a branch reports an all-zero `before`, and a force
           # push can leave a base that is no longer fetchable.
@@ -243,7 +245,13 @@ jobs:
     name: Comment convention (describes code, not process)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
+    needs: changes
+    # Gated on supersession ALONE. A superseded run's newer sibling scans a
+    # tree that includes this commit, and a job that is skipped at the job
+    # level holds no runner, which is the point of skipping: this job was the
+    # one runner an overtaken run kept, for up to its timeout, while the gate
+    # waited on it.
+    #
     # Deliberately NOT gated on the inert decision, and not a dependent of the
     # build job. Its scope is DEFAULT_ROOTS in the script, which starts at the
     # repository root, so it covers paths the inert filter treats as unable to
@@ -252,7 +260,8 @@ jobs:
     # skipped, which is coverage on paper only.
     #
     # It needs no build and no database: the scan reads tracked files and one
-    # JSON record, so running it unconditionally costs seconds.
+    # JSON record, so running it on every non-superseded run costs seconds.
+    if: needs.changes.outputs.superseded != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

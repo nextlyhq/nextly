@@ -779,7 +779,9 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     // `ci.yml`, hanging off nothing, so removing or renaming it produces no
     // check-run for a failure check to reject - the control would disappear in
     // the same change it exists to judge, and the verdict would stay green.
-    // Ungated and unfiltered, on both triggers, so it is always due to report.
+    // Unfiltered, on both triggers, and gated on supersession alone, so it is
+    // always due to report: run, or skipped because a newer commit's run
+    // covers this one.
     { name: "Comment convention (describes code, not process)", pathsIgnore: [] },
     // The only coverage any dialect-specific behaviour has: the unit suites
     // mock the drivers and the browser tests run on sqlite alone.
