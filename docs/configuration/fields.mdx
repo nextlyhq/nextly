@@ -958,7 +958,10 @@ whose key is absent from the row when the hooks run has no hook run, and these
 are the things that remove a key first.
 
 - **Password fields** are stripped from every read before `afterRead`, on
-  collections and Singles alike, so a password field's `afterRead` never runs.
+  collections and Singles alike, so a password field's `afterRead` does not
+  run. A collection- or Single-level `afterRead` hook that puts the key back
+  runs before the field hooks, so then it does, and the response is stripped
+  again afterwards.
 - **Denied fields.** On a collection read, field-level `access.read` rules are
   applied before the hooks, so a field the caller may not read is gone by then.
   A Single read currently runs the hooks first and redacts afterwards, so there
@@ -967,6 +970,9 @@ are the things that remove a key first.
 - **Localized fields** live in the companion table and are merged into the
   `afterChange` row only when the write carried them, so a localized field
   omitted from a create, or unchanged on an update, has no `afterChange` run.
+  The working-draft update described under field groups is the exception
+  here too: its assembled draft carries the locale's full companion values,
+  unchanged fields included, so their hooks run.
 - **Field groups** are stored in their own table and removed from the row before
   the main-table write, and `afterChange` runs on the returned row without them,
   on collections and Singles and inside a caller's transaction. Their
