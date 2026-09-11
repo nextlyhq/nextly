@@ -499,6 +499,67 @@ describe("a sweep of permission writes", () => {
     expect(await isSuperAdmin(userId)).toBe(false);
   });
 
+  it("retires a revocation raised OUTSIDE the batch without waiting for it", async () => {
+    // The batch belongs to the operation that opened it, not to the process.
+    // Counted for the process, an unrelated revocation raised while any seeder
+    // happened to be awaiting was read as part of that seeder's batch and held
+    // until it finished — so a permission revoked during a long seed went on
+    // authorizing requests for as long as the seed took.
+    const userId = `outside-${randomUUID()}`;
+    await seedSuperAdminRole().catch(() => {});
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+    await demote(userId);
+
+    // Held open so the revocation lands while the batch is genuinely running.
+    let releaseBatch: () => void = () => {};
+    const batchRunning = new Promise<void>(resolve => {
+      releaseBatch = resolve;
+    });
+    const batch = inPermissionSweep(async () => {
+      await invalidateAllPermissionCaches();
+      await batchRunning;
+    });
+
+    // The revocation, from outside the batch.
+    await invalidateAllPermissionCaches();
+
+    // Answered while the batch is still open. Deferred, this is still `true`.
+    const duringBatch = await isSuperAdmin(userId);
+
+    releaseBatch();
+    await batch;
+
+    expect(duringBatch).toBe(false);
+  });
+
+  it("still defers the batch's OWN writes, which is what the batch is for", async () => {
+    // The control. Without it the case above is satisfied by a sweep that
+    // defers nothing at all, which would pass it while removing the batching
+    // this exists to provide.
+    const userId = `inside-${randomUUID()}`;
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+    await demote(userId);
+
+    let releaseBatch: () => void = () => {};
+    const batchRunning = new Promise<void>(resolve => {
+      releaseBatch = resolve;
+    });
+    const batch = inPermissionSweep(async () => {
+      // This one IS the batch's own, so it waits for the batch to end.
+      await invalidateAllPermissionCaches();
+      const answeredInside = await isSuperAdmin(userId);
+      await batchRunning;
+      return answeredInside;
+    });
+
+    releaseBatch();
+    // The batch's own write cleared nothing while the batch was open, so the
+    // demoted user still reads as a super admin from cache inside it.
+    expect(await batch).toBe(true);
+  });
+
   it("flushes even when the batch throws, since a partial write still changed rows", async () => {
     const userId = `sweep-throw-${randomUUID()}`;
     await promote(userId, `${userId}@example.com`);
