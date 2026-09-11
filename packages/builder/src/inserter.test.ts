@@ -1339,10 +1339,8 @@ describe("the component tier", () => {
     // tier, so it can share an id with a block AND with a pattern without any
     // two entries answering to one key.
     const blocks = catalog([{ ...base, name: "acme/text" }]);
-    const [component] = componentEntriesFrom(
-      [stored({ id: "acme/text" })],
-      NONE
-    );
+    const row = stored({ id: "acme/text" });
+    const [component] = componentEntriesFrom([row], lookupOf(row));
 
     expect(component?.id).toBe(`${COMPONENT_ENTRY_PREFIX}acme/text`);
     expect(component?.id).not.toBe(`${PATTERN_ENTRY_PREFIX}acme/text`);
@@ -1374,9 +1372,10 @@ describe("the component tier", () => {
     });
 
     expect(
-      componentEntriesFrom([stale, broken, stored()], NONE).map(
-        e => e.componentId
-      )
+      componentEntriesFrom(
+        [stale, broken, stored()],
+        lookupOf(stale, broken, stored())
+      ).map(e => e.componentId)
     ).toEqual(["header"]);
   });
 
@@ -1385,37 +1384,56 @@ describe("the component tier", () => {
     // content, and a row a migration left holding a pattern — and both are
     // rows the palette has nothing to place for. A tile that accepted a click
     // and then failed would be worse than no tile.
-    const entries = componentEntriesFrom(
-      [
-        stored({ id: "empty", document: null }),
-        stored({
-          id: "wrong-kind",
-          // WITH roots, so that only the kind check can exclude it. Given none,
-          // the empty-roots check below would drop it first and this case would
-          // pass whether or not the kind was ever looked at.
-          document: {
-            ...componentOf([
-              { id: "d1", type: "acme/text", version: 1, props: {} },
-            ]),
-            kind: "pattern",
-          } as never,
-        }),
-        stored({ id: "no-roots", document: componentOf([]) }),
-        stored({ id: "fine" }),
-      ],
-      NONE
-    );
+    const rows = [
+      stored({ id: "empty", document: null }),
+      stored({
+        id: "wrong-kind",
+        // WITH roots, so that only the kind check can exclude it. Given none,
+        // the empty-roots check below would drop it first and this case would
+        // pass whether or not the kind was ever looked at.
+        document: {
+          ...componentOf([
+            { id: "d1", type: "acme/text", version: 1, props: {} },
+          ]),
+          kind: "pattern",
+        } as never,
+      }),
+      stored({ id: "no-roots", document: componentOf([]) }),
+      stored({ id: "fine" }),
+    ];
+    // Every row that has a document is in the lookup, so each is withheld by
+    // the rule its comment names rather than for being absent.
+    const entries = componentEntriesFrom(rows, lookupOf(...rows));
 
     expect(entries.map(entry => entry.componentId)).toEqual(["fine"]);
+  });
+
+  it("offers a component only when the canvas's lookup holds its definition, and judges the lookup's copy", () => {
+    // The instance a tile places is resolved by the canvas against its
+    // lookup, not against the row the list carried. A tile judged by the
+    // row's own document would place an instance the canvas draws as missing
+    // when the lookup lacks it, and judge the wrong roots when the two differ.
+    catalog([
+      { ...base, name: "acme/text" },
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+    ]);
+    const row = stored();
+
+    expect(componentEntriesFrom([row], NONE)).toEqual([]);
+
+    const drawn = componentOf([
+      { id: "d1", type: "acme/column", version: 1, props: {} },
+    ]);
+    const [offered] = componentEntriesFrom([row], new Map([["header", drawn]]));
+    expect(offered?.roots).toEqual(["acme/column"]);
+    expect(offered?.document).toBe(drawn);
   });
 
   it("carries the usage count only when the library supplied one", () => {
     // A tile saying "used on 0 pages" about a count nobody took would be
     // stating a fact it does not hold.
-    const [counted, uncounted] = componentEntriesFrom(
-      [stored({ id: "a", usedOn: 12 }), stored({ id: "b" })],
-      NONE
-    );
+    const rows = [stored({ id: "a", usedOn: 12 }), stored({ id: "b" })];
+    const [counted, uncounted] = componentEntriesFrom(rows, lookupOf(...rows));
 
     expect(counted?.usedOn).toBe(12);
     expect(uncounted).not.toHaveProperty("usedOn");
@@ -1427,15 +1445,14 @@ describe("the component tier", () => {
     // that, a component whose root may only live inside columns could be
     // placed at the page root — and would render there.
     catalog([{ ...base, name: "acme/column", parent: ["acme/columns"] }]);
+    const columnOnly = stored({
+      document: componentOf([
+        { id: "d1", type: "acme/column", version: 1, props: {} },
+      ]),
+    });
     const [component] = componentEntriesFrom(
-      [
-        stored({
-          document: componentOf([
-            { id: "d1", type: "acme/column", version: 1, props: {} },
-          ]),
-        }),
-      ],
-      NONE
+      [columnOnly],
+      lookupOf(columnOnly)
     );
 
     const verdict = entryAllowedAt(
@@ -1451,7 +1468,7 @@ describe("the component tier", () => {
 
   it("allows a component whose roots the destination takes", () => {
     catalog([{ ...base, name: "acme/text" }]);
-    const [component] = componentEntriesFrom([stored()], NONE);
+    const [component] = componentEntriesFrom([stored()], lookupOf(stored()));
 
     expect(
       entryAllowedAt(
@@ -1480,7 +1497,10 @@ describe("the component tier", () => {
       document: componentOf([instanceOf("column")]),
     });
 
-    const [offered] = componentEntriesFrom([wrapper], lookupOf(column));
+    const [offered] = componentEntriesFrom(
+      [wrapper],
+      lookupOf(column, wrapper)
+    );
     const verdict = entryAllowedAt(
       offered as never,
       { kind: "root" },
@@ -1504,8 +1524,9 @@ describe("the component tier", () => {
       document: componentOf([instanceOf("header")]),
     });
 
-    const withheld = componentEntriesFrom([wrapper], NONE);
-    const offered = componentEntriesFrom([wrapper], lookupOf(header));
+    // The wrapper itself is in both lookups; only what its root names is not.
+    const withheld = componentEntriesFrom([wrapper], lookupOf(wrapper));
+    const offered = componentEntriesFrom([wrapper], lookupOf(header, wrapper));
 
     expect(withheld).toEqual([]);
     expect(offered.map(entry => entry.componentId)).toEqual(["wrapper"]);
@@ -1543,7 +1564,9 @@ describe("the component tier", () => {
       document: componentOf([instanceOf("hollow")]),
     });
 
-    expect(componentEntriesFrom([wrapper], lookupOf(hollow))).toEqual([]);
+    expect(componentEntriesFrom([wrapper], lookupOf(hollow, wrapper))).toEqual(
+      []
+    );
   });
 
   it("offers a component on its roots whatever the caps, and leaves room to the click", () => {
@@ -1659,7 +1682,8 @@ describe("the component tier", () => {
       ]),
     });
 
-    const [offered] = componentEntriesFrom([boxed], NONE);
+    // The instance BELOW the root names a definition the lookup lacks.
+    const [offered] = componentEntriesFrom([boxed], lookupOf(boxed));
 
     expect(offered?.componentId).toBe("boxed");
     expect(offered?.roots).toEqual(["acme/box"]);
@@ -1672,7 +1696,7 @@ describe("the component tier", () => {
     catalog([{ ...base, name: "acme/text" }]);
     const row = stored();
 
-    const [offered] = componentEntriesFrom([row], NONE);
+    const [offered] = componentEntriesFrom([row], lookupOf(row));
 
     expect(offered?.document).toBe(row.document);
     expect(offered?.roots).toEqual(["acme/text"]);
@@ -2070,7 +2094,7 @@ describe("the component tier", () => {
     // The whole difference from a pattern. The definition's content is not in
     // the page; the renderer inlines it at read time, which is what makes an
     // edit to the definition reach this page later.
-    const [component] = componentEntriesFrom([stored()], NONE);
+    const [component] = componentEntriesFrom([stored()], lookupOf(stored()));
     const node = nodeForComponentEntry(component!);
 
     expect(node.type).toBe(COMPONENT_INSTANCE_TYPE);

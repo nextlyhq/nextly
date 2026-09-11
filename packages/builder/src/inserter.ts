@@ -281,7 +281,10 @@ export interface ComponentInsertEntry {
   readonly category: string;
   readonly keywords: readonly string[];
   readonly icon?: string;
-  /** The definition as stored, by identity: what a preview of the tile draws. */
+  /**
+   * The definition the canvas resolves the placed instance against — the
+   * lookup's, by identity — which is what a preview of the tile draws.
+   */
   readonly document: ComponentDocument;
   /**
    * The block types at the roots of the definition AS THE CANVAS WILL DRAW
@@ -526,8 +529,10 @@ export const COMPONENT_ENTRY_PREFIX = "component:";
  * The component entries a library of stored definitions yields.
  *
  * Skipped, never refused: a row the palette has nothing to offer for — see
- * {@link offerableDefinition} for which — produces no entry, because a tile
- * that accepts a click and then fails is worse than no tile. Where a
+ * {@link offerableDefinition} for which, and a row whose definition the
+ * canvas's lookup does not hold — produces no entry, because a tile that
+ * accepts a click and then fails is worse than no tile. The row supplies the
+ * label, category and usage; the definition judged and drawn is the lookup's. Where a
  * definition's roots may sit on THIS page is asked per placement, by
  * {@link entryAllowedAt}, exactly as a pattern's are.
  */
@@ -537,7 +542,14 @@ export function componentEntriesFrom(
 ): ComponentInsertEntry[] {
   const entries: ComponentInsertEntry[] = [];
   for (const component of components) {
-    const offered = offerableDefinition(component.document, definitions);
+    // The LOOKUP's definition, not the row's copy: it is what the canvas will
+    // resolve the placed instance against, so a row the lookup does not hold
+    // would place an instance drawn as missing, and a row whose copy differs
+    // would be judged by roots the canvas does not draw.
+    const offered = offerableDefinition(
+      definitions.get(component.id),
+      definitions
+    );
     if (offered === undefined) continue;
     entries.push({
       kind: "component",
