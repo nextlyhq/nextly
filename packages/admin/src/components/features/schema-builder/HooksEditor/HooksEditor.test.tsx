@@ -53,4 +53,36 @@ describe("the hooks editor", () => {
     );
     expect(heard.join(" ")).not.toContain("draggable item");
   });
+  it("counts only the hooks it draws", async () => {
+    // 🔴 A saved hook whose id the catalogue no longer knows renders no card.
+    // Counted anyway, the one visible card was announced as "position 2 of
+    // 2" -- a place in a list the reader cannot see.
+    render(
+      <HooksEditor
+        hooks={[
+          { id: "h0", hookId: "retired-hook", config: {}, enabled: true },
+          { id: "h1", hookId: "auto-slug", config: {}, enabled: true },
+        ]}
+        onHooksChange={() => {}}
+        fieldNames={["title"]}
+        isExpanded
+      />
+    );
+    const handles = screen.getAllByRole("button", { name: /^Reorder / });
+    expect(handles).toHaveLength(1);
+    layOutStacked(
+      handles.map(
+        h => h.closest("[class*='rounded']") ?? (h.parentElement as Element)
+      ),
+      { height: 80 }
+    );
+    const heard = recordDragRegion();
+
+    handles[0].focus();
+    fireEvent.keyDown(handles[0], { code: "Space", key: " " });
+
+    await waitFor(() =>
+      expect(heard).toContain("Picked up Auto-generate Slug, position 1 of 1.")
+    );
+  });
 });

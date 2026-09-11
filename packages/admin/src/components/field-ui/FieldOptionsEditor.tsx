@@ -307,7 +307,9 @@ export function FieldOptionsEditor({
   const announcements = sortableAnnouncements({
     describe: ({ id }) => {
       const option = options.find(o => o.id === id);
-      return option ? option.label || option.value : undefined;
+      // The same fallback the handle uses, so an option added and dragged
+      // before it has a label or value is still "option" and not a blank.
+      return option ? option.label || option.value || "option" : undefined;
     },
     place: ({ id }) => positionInList(optionIds, id),
   });

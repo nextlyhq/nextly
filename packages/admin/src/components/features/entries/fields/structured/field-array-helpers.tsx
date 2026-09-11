@@ -380,12 +380,13 @@ export interface SortableFieldArrayContainerProps<T extends { id: string }> {
   disabled?: boolean;
   readOnly?: boolean;
   /**
-   * What one row is called when a drag announces it, singular: "Gallery
-   * item", "Author". Rows in a repeater carry no label of their own, so the
-   * field's is borrowed and numbered -- "Picked up Gallery item 2, position
-   * 2 of 4". Absent, a row is "Item".
+   * What one row is called when a drag announces it -- the same words its
+   * own drag handle is named with, so the sentence a reader hears matches the
+   * control they are holding: "Gallery item 2" for a repeater row, "Hero 2"
+   * for a component row whose type the row itself resolved. Absent, a row is
+   * "Item N".
    */
-  itemLabel?: string;
+  describeItem?: (item: T, index: number) => string;
   children: React.ReactNode;
 }
 
@@ -399,14 +400,14 @@ export function SortableFieldArrayContainer<T extends { id: string }>({
   isSortable,
   disabled,
   readOnly,
-  itemLabel = "Item",
+  describeItem = (_, index) => `Item ${index + 1}`,
   children,
 }: SortableFieldArrayContainerProps<T>) {
   const ids = items.map(item => item.id);
   const announcements = sortableAnnouncements({
     describe: ({ id }) => {
       const index = ids.indexOf(String(id));
-      return index === -1 ? undefined : `${itemLabel} ${index + 1}`;
+      return index === -1 ? undefined : describeItem(items[index], index);
     },
     place: ({ id }) => positionInList(ids, id),
   });

@@ -317,4 +317,29 @@ describe("FieldOptionsEditor row wiring", () => {
     );
     expect(heard.join(" ")).not.toContain("draggable item");
   });
+  it("still names an option that has no label or value yet", async () => {
+    // 🔴 Add, then drag before typing: both strings are empty, and an empty
+    // string is not nullish, so the sentence came out as "Picked up ,". The
+    // announcement falls back the way the handle does.
+    render(
+      <FieldOptionsEditor
+        options={[
+          ...optionsOf(["Draft", "draft"]),
+          { id: "id_blank", label: "", value: "" },
+        ]}
+        onOptionsChange={() => {}}
+      />
+    );
+    const handles = screen.getAllByRole("button", { name: /^Reorder / });
+    expect(handles[1]).toHaveAttribute("aria-label", "Reorder option");
+    layOutStacked(handles.map(h => h.parentElement as Element));
+    const heard = recordDragRegion();
+
+    handles[1].focus();
+    fireEvent.keyDown(handles[1], { code: "Space", key: " " });
+
+    await waitFor(() =>
+      expect(heard).toContain("Picked up option, position 2 of 2.")
+    );
+  });
 });

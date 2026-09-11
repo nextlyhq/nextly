@@ -782,7 +782,20 @@ function RepeatableComponent<TFieldValues extends FieldValues = FieldValues>({
       {/* Sortable List */}
       <SortableFieldArrayContainer
         items={items}
-        itemLabel={singularLabel}
+        // The words each row's handle is named with: the row resolves its own
+        // label -- a multi-component field's rows are "Hero 2" and "CTA 3", not
+        // "Sections 2" and "Sections 3" -- so a drag names the same thing.
+        describeItem={(item, index) =>
+          `${
+            resolveRepeatableRowData(
+              item,
+              isMultiMode,
+              componentSchemas,
+              singleComponentFields,
+              singularLabel
+            ).rowLabel
+          } ${index + 1}`
+        }
         sensors={sensors}
         handleDragEnd={handleDragEnd}
         isSortable={isSortable}
