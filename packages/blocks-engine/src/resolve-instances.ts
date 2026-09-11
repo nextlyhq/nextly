@@ -808,6 +808,165 @@ function inlineHostSlots(
 }
 
 // ---------------------------------------------------------------------------
+// The roots a document composes to, without composing it
+// ---------------------------------------------------------------------------
+
+/**
+ * The block types at the roots of a document as {@link resolveComponentInstances}
+ * would compose it — read without composing it. Each type ONCE, in the order
+ * it is first met.
+ *
+ * A palette judges where a component may be placed by the ROOTS of what it
+ * draws, and a library of three thousand definitions asks that of every one
+ * when it opens. Composing each to read its roots clones every definition it
+ * reaches, so a library of small wrappers around one large definition costs
+ * its size per wrapper; this reads the roots and follows a root instance into
+ * the definition it names, reading each definition once, so it costs the
+ * roots.
+ *
+ * The types rather than the roots, because the question asked of the answer
+ * — may every one of these sit here — reads each type once, and the composed
+ * forest can be far wider than the set of types at its roots: a definition
+ * whose roots are two hundred instances of another whose roots are two
+ * hundred more composes to forty thousand roots of one type. Answering the
+ * forest's width would cost that per query; answering its types costs the
+ * registry's. For the same reason a definition's roots are answered once per
+ * query and remembered, whatever number of instances point at it and at
+ * whatever depth — with one care, in {@link rootTypesOfNode}: what fits at
+ * the surface may not fit at the composition cap.
+ *
+ * `undefined` where the resolver would leave a root STANDING — an instance
+ * it cannot expand — because a root the resolver leaves standing is a
+ * placeholder the palette must not judge as a block. The refusals are the
+ * resolver's own, asked through the same reader: a missing or unreadable
+ * definition, a cycle, the composition cap, and an instance gated by an
+ * entry-field condition, which the resolver returns unexpanded. A gated BLOCK
+ * stays a root, as it does in the composed forest. What is not asked is room:
+ * the node budget and the depth cap are properties of the page the document
+ * is placed on, and the placement's own preflight asks the resolver about
+ * those with the page in hand.
+ *
+ * Empty for a document whose roots compose to nothing, which is a document
+ * with nothing to place.
+ */
+export function composedRootTypes(
+  document: BlockDocument,
+  definitions: ComponentLookup,
+  options: Pick<ResolveComponentOptions, "maxComposedDepth"> = {}
+): readonly string[] | undefined {
+  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
+    return undefined;
+  }
+  const reader: RootsReader = {
+    definitions,
+    maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
+    definitionsRead: new Map<
+      string,
+      ComponentDocument | ComponentUnresolvedReason
+    >(),
+    rootsRead: new Map<string, RememberedRoots>(),
+  };
+  return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
+}
+
+/** A definition's root types as answered once, and how deep an instance they hold for. */
+interface RememberedRoots {
+  readonly types: readonly string[];
+  /**
+   * The depth of the deepest instance these were answered at.
+   *
+   * The composition cap refuses by depth, so an answer is a fact about the
+   * definition only down to here: what fit under an instance at depth one can
+   * be refused under one at depth four, where the cap is met sooner. An
+   * answer holds for every shallower instance — the same walk, with more
+   * room — and is reused there; a deeper one is walked afresh.
+   */
+  readonly depth: number;
+}
+
+/** What the roots query needs of a run: the reader, and the answers it has already given. */
+interface RootsReader extends DefinitionReader {
+  rootsRead: Map<string, RememberedRoots>;
+}
+
+/**
+ * The types at the roots of one forest, each once, or nothing when any root
+ * cannot be answered.
+ */
+function rootTypesOf(
+  nodes: readonly unknown[],
+  reader: RootsReader,
+  scope: ComposedScope
+): readonly string[] | undefined {
+  // A set kept in insertion order, so the answer lists types as the composed
+  // forest would first meet them and a verdict's first refusal is the
+  // forest's first.
+  const out = new Set<string>();
+  for (const node of nodes) {
+    const types = rootTypesOfNode(node, reader, scope);
+    if (types === undefined) return undefined;
+    for (const type of types) out.add(type);
+  }
+  return [...out];
+}
+
+/** What one root stands for: its own type, or its definition's root types one scope deeper. */
+function rootTypesOfNode(
+  node: unknown,
+  reader: RootsReader,
+  scope: ComposedScope
+): readonly string[] | undefined {
+  // A root the INLINER would drop stands for nothing: `cloneDefinitionForest`
+  // skips a node that is not a record or whose id is not a string, so it never
+  // lands on the page. Counted, a component would be judged by the type of a
+  // root the page never gets — and one whose every root is dropped would be
+  // offered as placing something and place nothing.
+  if (!isPlainRecord(node) || typeof node.id !== "string") return [];
+  const { type } = node;
+  // A node the inliner keeps and this cannot name: the nesting rule has no
+  // type to judge, so the caller is told nothing rather than a guess.
+  if (typeof type !== "string") return undefined;
+  if (type !== COMPONENT_INSTANCE_TYPE) return [type];
+  // The resolver's own order: a gated instance is returned standing before
+  // its id is even read, and an instance naming no component is malformed.
+  if (isConditionGated(node)) return undefined;
+  const componentId = componentIdOf(node);
+  if (componentId === undefined) return undefined;
+  // The refusals first, and the resolver's own — a cycle or the cap refuses
+  // THIS instance whatever was answered for its definition elsewhere.
+  const found = definitionFor(componentId, reader, scope);
+  if (typeof found === "string") return undefined;
+  return definitionRootTypes(componentId, found, reader, scope);
+}
+
+/**
+ * A definition's root types for an instance at this scope: the answer already
+ * given for it at this depth or a deeper one, or walked and remembered.
+ */
+function definitionRootTypes(
+  componentId: string,
+  definition: ComponentDocument,
+  reader: RootsReader,
+  scope: ComposedScope
+): readonly string[] | undefined {
+  const remembered = reader.rootsRead.get(componentId);
+  if (remembered !== undefined && scope.depth <= remembered.depth) {
+    return remembered.types;
+  }
+  const types = rootTypesOf(definition.nodes, reader, {
+    depth: scope.depth + 1,
+    onPath: new Set(scope.onPath).add(componentId),
+  });
+  // Only an ANSWER is remembered. A refusal under this instance can be a
+  // property of where it sits — the cap, or a loop closed through the path
+  // above — and the same definition may answer under the next.
+  if (types !== undefined) {
+    reader.rootsRead.set(componentId, { types, depth: scope.depth });
+  }
+  return types;
+}
+
+// ---------------------------------------------------------------------------
 // Expanding one instance
 // ---------------------------------------------------------------------------
 
@@ -1246,7 +1405,7 @@ function rollback(run: ResolveRun, mark: Savepoint): void {
  */
 function definitionFor(
   componentId: string,
-  run: ResolveRun,
+  run: DefinitionReader,
   scope: ComposedScope
 ): ComponentDocument | ComponentUnresolvedReason {
   if (scope.onPath.has(componentId)) return "cycle";
@@ -1259,6 +1418,20 @@ function definitionFor(
 }
 
 /**
+ * What answering "which definition does this id name here" needs of a run.
+ *
+ * Named apart from {@link ResolveRun} so the roots query below can ask the
+ * same question with the same four refusals — cycle, composition cap,
+ * missing, unreadable — without a budget, ids or a forest to compose into.
+ * A run satisfies it as it is.
+ */
+interface DefinitionReader {
+  definitions: ComponentLookup;
+  maxComposedDepth: number;
+  definitionsRead: Map<string, ComponentDocument | ComponentUnresolvedReason>;
+}
+
+/**
  * What the lookup says about one component, asked once per run.
  *
  * Split from the scope checks above so that only the id-dependent half is
@@ -1267,7 +1440,7 @@ function definitionFor(
  */
 function readDefinition(
   componentId: string,
-  run: ResolveRun
+  run: DefinitionReader
 ): ComponentDocument | ComponentUnresolvedReason {
   // ABSENT from the map is `missing` — nobody supplied one, and the remedy is
   // to publish or restore it. A value that IS supplied and cannot be read is a
@@ -1293,33 +1466,46 @@ function readDefinition(
 /** The lookup's answer for one component, read as the caller supplied it. */
 function readSuppliedDefinition(
   componentId: string,
-  run: ResolveRun
+  run: DefinitionReader
 ): ComponentDocument | ComponentUnresolvedReason {
   if (!run.definitions.has(componentId)) return "missing";
-  // Read ONCE and carried out, so expansion never asks again.
-  const definition = run.definitions.get(componentId);
-  if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
-    return "unreadable";
+  // Read ONCE and carried out, so expansion never asks again: the lookup is a
+  // caller's object and nothing in its contract makes it pure, so validating
+  // one `get` and expanding a second means the document that was checked is
+  // not the document that is used.
+  return readableDefinition(run.definitions.get(componentId)) ?? "unreadable";
+}
+
+/**
+ * A supplied definition as this resolver reads it, or nothing when it cannot.
+ *
+ * The one rule for what a lookup's answer has to be before it is inlined.
+ * Published because a surface that draws from the same lookup — the editor's
+ * inspector for a selected instance — has to refuse exactly what the canvas
+ * refuses: accepting more would offer editable rows for a component the page
+ * shows as a placeholder, and read a list of nodes that is not one as though
+ * it were.
+ *
+ * A structural check is not the discrimination. `DefinitionsById` is keyed to
+ * `BlockDocument`, so a page, a region or a template satisfies "has a nodes
+ * array" and would be inlined as though it were a component — content from
+ * another document appearing inside this one, with its exposed properties and
+ * slots meaning nothing. The kind is what the engine already publishes an
+ * answer for. And the FORMAT, on the same read: `unreadable` already means "an
+ * envelope this build does not understand", and a definition written in a
+ * format this build cannot interpret would otherwise be inlined regardless, so
+ * a surface that persists what it inlines wrote content read under the wrong
+ * rules into a page.
+ */
+export function readableDefinition(
+  supplied: BlockDocument | undefined
+): ComponentDocument | undefined {
+  if (!isPlainRecord(supplied) || !Array.isArray(supplied.nodes)) {
+    return undefined;
   }
-  // A structural check is not the discrimination. `DefinitionsById` is keyed to
-  // `BlockDocument`, so a page, a region or a template satisfies "has a nodes
-  // array" and would be inlined as though it were a component — content from
-  // another document appearing inside this one, with its exposed properties
-  // and slots meaning nothing. The kind is what the engine already publishes
-  // an answer for.
-  if (!isComponentDocument(definition)) return "unreadable";
-  // The FORMAT, on the same read. `unreadable` already means "an envelope this
-  // build does not understand" — the reason existed and nothing asked the
-  // question. A definition written in a format this build cannot interpret was
-  // inlined regardless, so a surface that persists what it inlines wrote
-  // content read under the wrong rules into a page.
-  //
-  // Asked HERE rather than by the caller, because the lookup is a caller's
-  // object and nothing in its contract makes it pure: validating one `get` and
-  // expanding a second means the document that was checked is not the document
-  // that is used.
-  if (definition.formatVersion !== DOCUMENT_FORMAT_VERSION) return "unreadable";
-  return definition;
+  if (!isComponentDocument(supplied)) return undefined;
+  if (supplied.formatVersion !== DOCUMENT_FORMAT_VERSION) return undefined;
+  return supplied;
 }
 
 /**

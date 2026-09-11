@@ -957,11 +957,10 @@ are the things that remove a key first.
 
 - **Password fields** are stripped from every read before `afterRead`, on
   collections and Singles alike, so a password field's `afterRead` never runs.
-- **Denied fields.** On a collection read, field-level `access.read` rules are
-  applied before the hooks, so a field the caller may not read is gone by then.
-  A Single read currently runs the hooks first and redacts afterwards, so there
-  a denied field's `afterRead` does run and sees the value, and only the
-  response is redacted.
+- **Denied fields.** On a read, collection or Single, field-level
+  `access.read` rules are applied before the hooks, so a field the caller may
+  not read is gone by then, and again after them, so a value a hook put back
+  is removed.
 - **Localized fields** live in the companion table and are merged into the
   `afterChange` row only when the write carried them, so a localized field
   omitted from a create, or unchanged on an update, has no `afterChange` run.

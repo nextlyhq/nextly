@@ -12,6 +12,7 @@ import type { PluginDefinition } from "../plugin-context";
 import {
   applyPluginSchemaContributions,
   applyPluginSchemaContributionsDeferred,
+  assertRegisteredKeepTheirKind,
   finalizeDeferredExtendTargets,
   resolveBuilderExtends,
 } from "./apply-contributions";
@@ -146,15 +147,134 @@ describe("applyPluginSchemaContributions (slug collisions — D13)", () => {
     );
   });
 
-  it("does NOT treat a collection and a single sharing a slug as a collision (separate namespaces)", () => {
-    expect(() =>
-      applyPluginSchemaContributions(cfg({}), [
-        plugin("plugin-a", {
-          collections: [coll("shared")],
-          singles: [single("shared")],
-        }),
-      ])
-    ).not.toThrow();
+  describe("across kinds, which are one slug namespace", () => {
+    // 🔴 A collection, a single and a component share one slug namespace: the
+    // registries refuse a slug the other kind holds, a permission is named
+    // `read-<slug>` for either kind, and code access resolves by slug alone.
+    // Checked per kind, a plugin collection under an app single's slug passed
+    // this fold, the app's single was then silently refused at sync, and the
+    // install booted without it -- its reads answering not-found under the
+    // collection's rule.
+
+    it("throws when a plugin collection takes an app single's slug", () => {
+      const err = collisionError(() =>
+        applyPluginSchemaContributions(cfg({ singles: [single("shared")] }), [
+          plugin("plugin-a", { collections: [coll("shared")] }),
+        ])
+      );
+      expect(err.logContext?.reason).toBe("slug-collision");
+      expect(err.logContext?.slug).toBe("shared");
+      expect(err.logContext?.owners).toEqual([
+        "code (single)",
+        "plugin-a (collection)",
+      ]);
+    });
+
+    it("throws when a plugin single takes an app collection's slug", () => {
+      const err = collisionError(() =>
+        applyPluginSchemaContributions(cfg({ collections: [coll("shared")] }), [
+          plugin("plugin-a", { singles: [single("shared")] }),
+        ])
+      );
+      expect(err.logContext?.owners).toEqual([
+        "code (collection)",
+        "plugin-a (single)",
+      ]);
+    });
+
+    it("throws when one plugin contributes two kinds under one slug", () => {
+      collisionError(() =>
+        applyPluginSchemaContributions(cfg({}), [
+          plugin("plugin-a", {
+            collections: [coll("shared")],
+            singles: [single("shared")],
+          }),
+        ])
+      );
+    });
+
+    it("throws when two plugins claim one slug as different kinds", () => {
+      const err = collisionError(() =>
+        applyPluginSchemaContributions(cfg({}), [
+          plugin("plugin-a", { singles: [single("shared")] }),
+          plugin("plugin-b", { fieldGroups: [comp("shared")] }),
+        ])
+      );
+      expect(err.logContext?.owners).toEqual([
+        "plugin-a (single)",
+        "plugin-b (component)",
+      ]);
+    });
+
+    it("throws from the fold the runtime boots through, too", () => {
+      // `di/register.ts` and the CLI call the deferring fold, not this one.
+      collisionError(() =>
+        applyPluginSchemaContributionsDeferred(
+          cfg({ singles: [single("shared")] }),
+          [plugin("plugin-a", { collections: [coll("shared")] })]
+        )
+      );
+    });
+
+    it("still merges two kinds under DIFFERENT slugs", () => {
+      // The control: a check that refused every cross-kind contribution
+      // would satisfy every case above.
+      const merged = applyPluginSchemaContributions(
+        cfg({ singles: [single("settings")] }),
+        [
+          plugin("plugin-a", {
+            collections: [coll("posts")],
+            singles: [single("hero")],
+          }),
+        ]
+      );
+      expect(merged.collections?.map(c => c.slug)).toEqual(["posts"]);
+      expect(merged.singles?.map(s => s.slug)).toEqual(["settings", "hero"]);
+    });
+
+    it("refuses a configured entity whose slug a REGISTERED entity of another kind holds", () => {
+      // The Builder's entities are unknown at fold time -- they live in the
+      // `dynamic_*` tables -- so this is the same rule run once they are
+      // readable, at the runtime boot and on the CLI.
+      const err = collisionError(() =>
+        assertRegisteredKeepTheirKind(cfg({ collections: [coll("shared")] }), {
+          singles: [{ slug: "shared" }],
+        })
+      );
+      expect(err.logContext?.reason).toBe("slug-collision");
+      expect(err.logContext?.owners).toEqual([
+        "code (collection)",
+        "registered (single)",
+      ]);
+
+      collisionError(() =>
+        assertRegisteredKeepTheirKind(cfg({ singles: [single("shared")] }), {
+          collections: [{ slug: "shared" }],
+        })
+      );
+    });
+
+    it("says nothing about a registered entity of the SAME kind, which is that entity's own row", () => {
+      // The control, twice over: a code-first entity IS a registry row, so
+      // refusing a same-kind pair would refuse every boot that has one -- and
+      // an unrelated Builder entity is no one's business.
+      expect(() =>
+        assertRegisteredKeepTheirKind(cfg({ collections: [coll("posts")] }), {
+          collections: [{ slug: "posts" }],
+          singles: [{ slug: "homepage" }],
+          components: [{ slug: "hero" }],
+        })
+      ).not.toThrow();
+    });
+
+    it("leaves a code-vs-code clash across kinds to defineConfig (G2 -- plugin-free path unchanged)", () => {
+      expect(() =>
+        applyPluginSchemaContributions(
+          cfg({ collections: [coll("shared")], singles: [single("shared")] }),
+          []
+        )
+      ).not.toThrow();
+    });
   });
 
   it("does NOT newly throw on pre-existing code-vs-code duplicate slugs (G2 — plugin-free path unchanged)", () => {

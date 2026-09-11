@@ -289,6 +289,14 @@ export interface AdminBranding {
    */
   widgets?: RegisteredWidgetMeta[];
 
+  /**
+   * An opaque token for the audience `widgets` and each plugin's widgets were
+   * filtered for, from the session-gated half alone. The dashboard layout read
+   * reports the same token as `audience`, and a difference means this payload
+   * was built for a different reader state than the layout being drawn.
+   */
+  widgetAudience?: string;
+
   /** Custom sidebar groups created by the user for organizing collections/singles. */
   customGroups?: Array<{ slug: string; name: string; icon?: string }>;
 

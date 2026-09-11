@@ -3,11 +3,11 @@
  *
  * What the pure tests in `conditions.test.ts` cannot ask is whether each
  * evaluator reaches the right REGISTRY and applies the reader's permission to
- * it. The two answer from different places — the collections from the widget
- * source registry, the singles from the singles registry, because no `single:`
- * source is published yet — and each can be wrong in a way that returns a
- * plausible boolean. An evaluator reading the wrong registry answers `false`
- * on every install, and `false` is also the right answer for the empty one.
+ * it. Both answer from the registries' own readable listing -- what the
+ * management cards they gate list -- and each can be wrong in a way that
+ * returns a plausible boolean. An evaluator reading the wrong registry answers
+ * `false` on every install, and `false` is also the right answer for the
+ * empty one.
  *
  * So every case here has a must-differ partner: an install that answers `true`
  * beside one that answers `false`, and a readable entity beside an unreadable
@@ -24,9 +24,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshCollectionSources } from "../collection-sources";
+import { refreshCollectionWidgets } from "../collection-widgets";
 import { evaluateConditions } from "../conditions";
 import type { WidgetCondition } from "../lifecycle";
+import { listSources } from "../sources";
 
 /** An admin: may read everything a code rule does not refuse. */
 const admin: ReadCaller = {
@@ -54,8 +55,8 @@ async function boot(options: {
   });
   current = t;
   // The same call the layout endpoint makes before resolving anything. Boot
-  // does not publish the sources, and the collections half reads them.
-  await refreshCollectionSources();
+  // does not publish the sources, and both halves read them.
+  await refreshCollectionWidgets();
   return t;
 }
 
@@ -86,6 +87,31 @@ describe("collections:present against a real instance", () => {
       ],
     });
     expect(await holds("collections:present")).toBe(false);
+  });
+
+  it("holds for a collection whose migration is still pending, which the card lists", async () => {
+    // 🔴 A pending or failed migration label withholds the collection's
+    // widget SOURCE, and derived from the sources this condition answered
+    // "no collections" for exactly the install whose one collection needed
+    // attention -- while the collections card it gates lists registry rows
+    // and would have shown it. The source is withheld (the control), and the
+    // condition holds regardless.
+    const t = await boot({
+      collections: [
+        { slug: "notes", access: readable, fields: [text({ name: "title" })] },
+      ],
+    });
+    await (
+      t.getService("collectionRegistryService") as {
+        updateMigrationStatus: (slug: string, status: string) => Promise<void>;
+      }
+    ).updateMigrationStatus("notes", "pending");
+    await refreshCollectionWidgets();
+    expect(listSources().some(source => source.id === "collection:notes")).toBe(
+      false
+    );
+
+    expect(await holds("collections:present")).toBe(true);
   });
 
   it("is not moved by a single", async () => {
@@ -122,13 +148,32 @@ describe("singles:present against a real instance", () => {
     expect(await holds("singles:present")).toBe(false);
   });
 
+  it("holds for a single whose migration is still pending, which the card lists", async () => {
+    // The same property of the other registry: the singles card lists what
+    // the singles list endpoint answers, and that listing carries no
+    // migration filter. The withheld source is the control.
+    const t = await boot({
+      singles: [
+        { slug: "homepage", access: readable, fields: [text({ name: "h" })] },
+      ],
+    });
+    await (
+      t.getService("singleRegistryService") as {
+        updateMigrationStatus: (slug: string, status: string) => Promise<void>;
+      }
+    ).updateMigrationStatus("homepage", "pending");
+    await refreshCollectionWidgets();
+    expect(listSources().some(source => source.id === "single:homepage")).toBe(
+      false
+    );
+
+    expect(await holds("singles:present")).toBe(true);
+  });
+
   it("is not moved by a collection", async () => {
-    // 🔴 The registry control, and the one that matters most. The singles
-    // half does NOT read the widget source registry, because nothing publishes
-    // a `single:` source yet -- an evaluator that did would answer `false` on
-    // every install and pass the two refusal cases above. This case, beside
-    // the holding one, is what shows it reads the singles registry: a
-    // collection is present and the answer still moves only with singles.
+    // The registry control: this is what shows the singles half reads the
+    // singles registry rather than every registry. A collection is present,
+    // and the answer still moves only with singles.
     await boot({
       collections: [
         { slug: "notes", access: readable, fields: [text({ name: "title" })] },

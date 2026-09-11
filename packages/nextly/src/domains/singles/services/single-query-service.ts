@@ -73,7 +73,9 @@ import {
 } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
+  readAccessGrants,
   runFieldHooks,
+  type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
@@ -138,6 +140,7 @@ import {
   expandMediaInData,
   getDefaultValue,
   shouldTreatAsJson,
+  singleAbsentResult,
 } from "./single-utils";
 
 /**
@@ -911,11 +914,7 @@ export class SingleQueryService extends BaseService {
         this.logger
       );
       if (!singleMeta) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: `Single "${slug}" not found`,
-        };
+        return singleAbsentResult(slug);
       }
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
@@ -1011,11 +1010,7 @@ export class SingleQueryService extends BaseService {
           now: readNow,
         }))
       ) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: `Single "${slug}" not found`,
-        };
+        return singleAbsentResult(slug);
       }
 
       // 6.9 - 7.7. Resolve translations and expand uploads, relationships and
@@ -1088,9 +1083,36 @@ export class SingleQueryService extends BaseService {
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
-      // Field-level afterRead hooks (functions resolved via the field-level
-      // registry). Field read access runs further down, once the document-level
-      // decision has been made.
+      // Field read access, then the field-level afterRead hooks, then field
+      // read access AGAIN, sharing one redactions store: the two passes the
+      // collection read runs. The first hides a denied field from the hooks,
+      // so a hook on an allowed field cannot read a denied sibling and copy it
+      // onto its own value; the second re-judges the post-hook document, with
+      // the first pass's removals restored as evidence where the rows still
+      // stand, so a denied field a hook reintroduced is caught. Document trust
+      // and FIELD trust are separate questions and this read may answer them
+      // differently: `overrideAccess` alone means both; a caller that asked for
+      // field rules to be enforced keeps its document bypass and gives up only
+      // the field one.
+      const skipFieldRules =
+        options.enforceFieldAccess === true ? false : options.overrideAccess;
+      // The field-access identity, never the hook one. A preview judges these
+      // fields as the sharer while the hooks go on seeing the anonymous bearer
+      // who is actually asking.
+      const fieldAccessUser = options.fieldAccessUser ?? options.user;
+      const fieldAccess = {
+        kind: "single" as const,
+        slug,
+        entry: doc,
+        user: fieldAccessUser,
+        overrideAccess: skipFieldRules,
+        // One grants resolver for both passes, so the caller's roles and
+        // permissions are read once and both passes judge with one authority.
+        grants: readAccessGrants(fieldAccessUser),
+      };
+      const sourceRedactions: ReadAccessRedactions = new WeakMap();
+      await applyFieldReadAccess(fieldAccess, sourceRedactions);
+
       await runFieldHooks({
         kind: "single",
         slug,
@@ -1100,22 +1122,7 @@ export class SingleQueryService extends BaseService {
         user: options.user,
       });
 
-      // 9. Redact fields the caller may not read.
-      // Document trust and FIELD trust are separate questions and this read may
-      // answer them differently. `overrideAccess` alone means both; a caller
-      // that asked for field rules to be enforced keeps its document bypass and
-      // gives up only the field one. Mirrors the collection read path.
-      await applyFieldReadAccess({
-        kind: "single",
-        slug,
-        entry: doc,
-        // The field-access identity, never the hook one. A preview judges these
-        // fields as the sharer while the hooks above go on seeing the anonymous
-        // bearer who is actually asking.
-        user: options.fieldAccessUser ?? options.user,
-        overrideAccess:
-          options.enforceFieldAccess === true ? false : options.overrideAccess,
-      });
+      await applyFieldReadAccess(fieldAccess, sourceRedactions);
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last

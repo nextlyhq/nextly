@@ -119,6 +119,9 @@ beforeEach(() => {
     if (name === "collectionRegistryService") {
       return { getAllCollections: async () => registeredCollections };
     }
+    if (name === "singleRegistryService") {
+      return { getAllSingles: async () => registeredSingles };
+    }
     throw new Error(`unexpected container.get("${name}") in this test`);
   });
   // The endpoint derives its collection sources from the live collection
@@ -131,6 +134,7 @@ beforeEach(() => {
       timestamps: true,
     },
   ];
+  registeredSingles = [];
 });
 
 /** What the live collection registry answers with for the case under test. */
@@ -138,6 +142,13 @@ let registeredCollections: Array<{
   slug: string;
   fields: Array<{ name: string; type: string }>;
   timestamps: boolean;
+}> = [];
+
+/** What the live singles registry answers with; the same seam, other kind. */
+let registeredSingles: Array<{
+  slug: string;
+  fields: Array<{ name: string; type: string }>;
+  status?: boolean;
 }> = [];
 
 afterEach(() => {
@@ -529,6 +540,148 @@ describe("POST /api/dashboard/query", () => {
       expect(absent.ok).toBe(false);
       expect(forbidden.ok).toBe(false);
       expect(absent.error).toBe(forbidden.error);
+    });
+  });
+
+  describe("a single source is admitted the way a collection is", () => {
+    // 🔴 The domain made `single` executable while this endpoint -- the only
+    // production caller -- went on refusing every `single:` query as "not
+    // executable yet", because the gate restated the kinds it would admit
+    // instead of asking the executor. Three properties, each of which the
+    // collection path already has, each of which the single path lacked.
+    beforeEach(() => {
+      registeredSingles = [
+        {
+          slug: "settings",
+          fields: [{ name: "siteName", type: "text" }],
+          status: true,
+        },
+      ];
+      executeWidgetQuery.mockResolvedValue({
+        op: "list",
+        items: [{ siteName: "Acme" }],
+      });
+    });
+
+    it("reaches execution when the caller may read the single", async () => {
+      const res = await postWidgetQuery(
+        makeReq({
+          queries: [
+            { source: "single:settings", op: "list", select: ["siteName"] },
+          ],
+        })
+      );
+
+      const [slot] = await slotsOf(res);
+      expect(slot.error).toBeUndefined();
+      expect(slot.ok).toBe(true);
+      expect(executeWidgetQuery).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "single:settings" }),
+        expect.anything()
+      );
+    });
+
+    it("is published by the batch's OWN refresh, from the live singles registry", async () => {
+      // 🔴 Boot publishes no source, and the endpoint refreshed the
+      // collections alone -- so a `single:` query was answered "unknown
+      // source" on a cold process unless some earlier layout request had
+      // happened to refresh the singles. Seeded with a STALE single the
+      // registry no longer holds: a refresh that replaces the kind from the
+      // registry drops it and publishes the live one; a refresh of the
+      // collections alone leaves the stale entry standing and never learns of
+      // the live one.
+      registerSource({
+        id: "single:stale",
+        label: "Stale",
+        kind: "single",
+        supports: ["list"],
+        fields: [{ name: "siteName", type: "string" }],
+      });
+
+      const res = await postWidgetQuery(
+        makeReq({
+          queries: [
+            { source: "single:settings", op: "list", select: ["siteName"] },
+            { source: "single:stale", op: "list", select: ["siteName"] },
+          ],
+        })
+      );
+
+      const [live, stale] = await slotsOf(res);
+      expect(live.ok).toBe(true);
+      expect(stale.ok).toBe(false);
+    });
+
+    it("refuses a caller who may not read the single, indistinguishably from an unknown source", async () => {
+      // The same entity read decision a collection is gated on, put to the
+      // same seam with the single's slug -- and the same one shared sentence
+      // when it refuses, so "not yours" cannot be told from "not there".
+      canReadEntity.mockResolvedValue(false);
+
+      const res = await postWidgetQuery(
+        makeReq({
+          queries: [
+            { source: "single:settings", op: "list", select: ["siteName"] },
+            { source: "single:nope", op: "list", select: ["siteName"] },
+          ],
+        })
+      );
+
+      const [forbidden, unknown] = await slotsOf(res);
+      expect(forbidden.ok).toBe(false);
+      expect(unknown.ok).toBe(false);
+      expect(forbidden.error).toBe(unknown.error);
+      expect(forbidden.error).not.toContain("settings");
+      expect(canReadEntity).toHaveBeenCalledWith(
+        "settings",
+        expect.objectContaining({ userId: "user-1" })
+      );
+      expect(executeWidgetQuery).not.toHaveBeenCalled();
+    });
+
+    it("takes the singles' read decisions in the same bounded rounds as the collections'", async () => {
+      // The warm-up collected the collections alone, so a batch of distinct
+      // singles reached `mayRead` from the slots -- every cold decision at
+      // once, around the bound `authorizationGroups` prescribes. The same
+      // grouping assertion as the collection case: counts climb 1, 9, 17, 25,
+      // 30, and the unbounded build's first observable count is 30.
+      registeredSingles = Array.from({ length: 30 }, (_, i) => ({
+        slug: `s${i}`,
+        fields: [{ name: "title", type: "text" }],
+      }));
+
+      const release: Array<(allowed: boolean) => void> = [];
+      canReadEntity.mockImplementation(
+        () => new Promise<boolean>(resolve => release.push(resolve))
+      );
+
+      const pending = postWidgetQuery(
+        makeReq({
+          queries: registeredSingles.map(single => ({
+            source: `single:${single.slug}`,
+            op: "list",
+            select: ["title"],
+          })),
+        })
+      );
+
+      function answerEveryDecisionSoFar(): void {
+        for (const resolve of release.splice(0, release.length)) resolve(true);
+      }
+
+      await vi.waitFor(() => expect(canReadEntity).toHaveBeenCalledTimes(1));
+      for (const expected of [9, 17, 25, 30]) {
+        answerEveryDecisionSoFar();
+        await vi.waitFor(() =>
+          expect(canReadEntity).toHaveBeenCalledTimes(expected)
+        );
+      }
+      expect(new Set(canReadEntity.mock.calls.map(c => c[0])).size).toBe(30);
+
+      answerEveryDecisionSoFar();
+      const slots = await slotsOf(await pending);
+      expect(slots).toHaveLength(30);
+      expect(slots.every(slot => slot.ok)).toBe(true);
     });
   });
 

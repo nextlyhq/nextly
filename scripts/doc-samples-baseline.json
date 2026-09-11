@@ -1,7 +1,7 @@
 {
   "coverage": {
-    "pages": 50,
-    "samples": 343,
+    "pages": 51,
+    "samples": 345,
     "compiled": 210
   },
   "samplesPerPage": {
@@ -186,7 +186,7 @@
       "compiled": 4
     },
     "docs/plugins/services.mdx": {
-      "samples": 4,
+      "samples": 5,
       "compiled": 0
     },
     "docs/plugins/testing.mdx": {
@@ -204,6 +204,10 @@
     "docs/webhooks/retention.mdx": {
       "samples": 2,
       "compiled": 1
+    },
+    "docs/widgets/index.mdx": {
+      "samples": 1,
+      "compiled": 0
     }
   },
   "pages": {

@@ -67,13 +67,13 @@ const {
   errorSpy: vi.fn(),
 }));
 
-const setDeferredCollectionsSpy = vi.fn();
-// The reload PUBLISHES which collections it refused, and the widget source
-// refresh is the consumer. Mocked here so this file can assert the call
-// without pulling the DI container in through the widgets domain.
-vi.mock("../../domains/widgets/collection-sources", () => ({
-  setDeferredCollections: (slugs: readonly string[]) =>
-    setDeferredCollectionsSpy(slugs),
+const setDeferredEntitiesSpy = vi.fn();
+// The reload PUBLISHES which entities it refused, per kind, and the widget
+// source refresh is the consumer. Mocked here so this file can assert the
+// call without pulling the DI container in through the widgets domain.
+vi.mock("../../domains/widgets/deferred-entities", () => ({
+  setDeferredEntities: (kind: string, slugs: readonly string[]) =>
+    setDeferredEntitiesSpy(kind, slugs),
 }));
 
 vi.mock("../../cli/utils/config-loader", () => ({
@@ -123,7 +123,7 @@ describe("reloadNextlyConfig", () => {
     // Its call history is what several assertions read, and it lives at module
     // scope: without this, one test's publish satisfies the next one's
     // expectation and a "not called" assertion can never hold.
-    setDeferredCollectionsSpy.mockReset();
+    setDeferredEntitiesSpy.mockReset();
     pipelineApplySpy.mockResolvedValue({
       success: true,
       statementsExecuted: 1,
@@ -161,6 +161,8 @@ describe("reloadNextlyConfig", () => {
     }>;
     /** Force the metadata-only collection sync to reject, so its scope is unsynced. */
     failCollectionMetaSync?: boolean;
+    /** Force the single metadata sync to reject, so its scope is unsynced. */
+    failSingleMetaSync?: boolean;
     /** Force the component field-tree sync to reject, so its scope is unsynced. */
     failComponentSync?: boolean;
     /** Seed a `nextly_meta` migration marker the storage guard will read. */
@@ -174,6 +176,8 @@ describe("reloadNextlyConfig", () => {
      * so a test about an EDITED collection has to state the report.
      */
     collectionSyncResult?: unknown;
+    /** What the single metadata sync REPORTS it rewrote; same shape and reason. */
+    singleSyncResult?: unknown;
   }) {
     const withAdapter = opts?.withAdapter ?? true;
     const lockDouble = createLockingAdapter({
@@ -187,6 +191,7 @@ describe("reloadNextlyConfig", () => {
     const updateCollectionMigrationStatusSpy = vi
       .fn()
       .mockResolvedValue(undefined);
+    const updateSingleMigrationStatusSpy = vi.fn().mockResolvedValue(undefined);
     const setCodeFirstSinglesSpy = vi.fn();
     const pruneCodeFirstSinglesSpy = vi.fn();
     const services: Record<string, unknown> = {
@@ -226,10 +231,13 @@ describe("reloadNextlyConfig", () => {
         updateMigrationStatus: updateCollectionMigrationStatusSpy,
       },
       singleRegistryService: {
-        syncCodeFirstSingles: vi.fn().mockResolvedValue({}),
+        syncCodeFirstSingles: opts?.failSingleMetaSync
+          ? vi.fn().mockRejectedValue(new Error("single meta sync failed"))
+          : vi.fn().mockResolvedValue(opts?.singleSyncResult ?? {}),
         getAllSingles: vi.fn().mockResolvedValue(opts?.allSingles ?? []),
         setCodeFirstSingles: setCodeFirstSinglesSpy,
         pruneCodeFirstSingles: pruneCodeFirstSinglesSpy,
+        updateMigrationStatus: updateSingleMigrationStatusSpy,
       },
       fieldGroupRegistryService: {
         syncCodeFirstComponents: syncCodeFirstComponentsSpy,
@@ -244,6 +252,7 @@ describe("reloadNextlyConfig", () => {
       syncCodeFirstComponentsSpy,
       registerDynamicSchemaSpy,
       updateCollectionMigrationStatusSpy,
+      updateSingleMigrationStatusSpy,
       setCodeFirstSinglesSpy,
       pruneCodeFirstSinglesSpy,
     });
@@ -554,7 +563,9 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith(["books"]);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", [
+      "books",
+    ]);
   });
 
   it("does NOT clear refusals when the metadata sync reports per-slug errors", async () => {
@@ -601,7 +612,10 @@ describe("reloadNextlyConfig", () => {
 
     // The control that this reload took the no-DDL landing at all.
     expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(setDeferredCollectionsSpy).not.toHaveBeenCalled();
+    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
+      "collection",
+      expect.anything()
+    );
   });
 
   it("DOES clear refusals when that same sync reports no errors", async () => {
@@ -643,7 +657,7 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver });
 
     expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", []);
   });
 
   it("publishes NOTHING when the reload carries only a refusal", async () => {
@@ -683,7 +697,10 @@ describe("reloadNextlyConfig", () => {
 
     // The control that this reload took the no-DDL path rather than applying.
     expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(setDeferredCollectionsSpy).not.toHaveBeenCalled();
+    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
+      "collection",
+      expect.anything()
+    );
   });
 
   it("publishes an EMPTY refusal set when everything applied", async () => {
@@ -709,7 +726,7 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", []);
   });
 
   it("marks an EDITED code-first collection as 'applied' after a successful apply", async () => {
@@ -867,6 +884,339 @@ describe("reloadNextlyConfig", () => {
     expect(
       resolver.updateCollectionMigrationStatusSpy
     ).not.toHaveBeenCalledWith("authors", "applied");
+  });
+
+  it("marks an EDITED code-first single as 'applied' after a successful apply", async () => {
+    // The singles half of the edited-row bug. `updateSingle` resets an
+    // existing row to 'pending' when its fields change, the apply performs
+    // that change, and the table was present before the apply -- so the
+    // snapshot half cannot see that the migration is done. Re-marked from the
+    // absent-table snapshot alone, an edited single stayed 'pending', and the
+    // source refresh (which reads that label) withdrew its source and its card
+    // for the rest of the dev session.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+        ],
+      },
+    });
+    // single_settings ALREADY EXISTS and is missing the new column.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: reservedColumns("single_settings"),
+        },
+      ])
+    );
+
+    const resolver = buildResolver({
+      singleSyncResult: { created: [], updated: ["settings"], unchanged: [] },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateSingleMigrationStatusSpy).toHaveBeenCalledWith(
+      "settings",
+      "applied"
+    );
+  });
+
+  it("does NOT mark a DEFERRED single 'applied' in a mixed batch", async () => {
+    // The sync payload is every configured single, so a refused one whose
+    // fields changed still comes back in `updated`; marking it from that list
+    // would publish its card against the shape the reload declined to apply.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          // REFUSED: live `active` is text, the config declares a checkbox.
+          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // APPLIED: additive, so the reload reaches the post-DDL commit.
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: [
+            ...reservedColumns("single_settings"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "single_theme", columns: reservedColumns("single_theme") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      singleSyncResult: {
+        created: [],
+        updated: ["settings", "theme"],
+        unchanged: [],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    // The control that this reload reached the post-DDL commit at all.
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateSingleMigrationStatusSpy).toHaveBeenCalledWith(
+      "theme",
+      "applied"
+    );
+    expect(resolver.updateSingleMigrationStatusSpy).not.toHaveBeenCalledWith(
+      "settings",
+      "applied"
+    );
+  });
+
+  it("leaves an UNCHANGED single's migration status alone", async () => {
+    // The control the assertion above needs: marking every single 'applied'
+    // would pass that test too, and would overwrite a status that legitimately
+    // says a migration is outstanding. Only the rows the sync REPORTS it
+    // rewrote are re-marked.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    // BOTH tables already exist, so neither is caught by the snapshot half.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: reservedColumns("single_settings"),
+        },
+        { name: "single_theme", columns: reservedColumns("single_theme") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      singleSyncResult: {
+        created: [],
+        updated: ["settings"],
+        unchanged: ["theme"],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(resolver.updateSingleMigrationStatusSpy).toHaveBeenCalledWith(
+      "settings",
+      "applied"
+    );
+    expect(resolver.updateSingleMigrationStatusSpy).not.toHaveBeenCalledWith(
+      "theme",
+      "applied"
+    );
+  });
+
+  it("withholds a single whose metadata sync could not store its new fields", async () => {
+    // 🔴 The other direction of disagreement. A per-single failure RESOLVES in
+    // `errors[]`, so the DDL applied while the registry kept the OLD field
+    // list -- and a source built from it names columns a confirmed rename has
+    // already moved, so every card over it fails against the table.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    // Both tables are new, so nothing is DDL-deferred and the only reason to
+    // withhold is the failed metadata write.
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({
+        singleSyncResult: {
+          created: ["settings"],
+          updated: [],
+          unchanged: [],
+          errors: [{ slug: "theme", error: "write failed" }],
+        },
+      }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", ["theme"]);
+  });
+
+  it("withholds a collection whose metadata sync could not store its new fields", async () => {
+    // The same rule for the other kind, from the same sync report.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "title", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({
+        collectionSyncResult: {
+          created: [],
+          updated: [],
+          unchanged: [],
+          errors: [{ slug: "books", error: "write failed" }],
+        },
+      }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", [
+      "books",
+    ]);
+  });
+
+  it("withholds a single its DDL refused BESIDE one its metadata sync could not store", async () => {
+    // The two reasons are one set: a consumer asks whether the registry and
+    // the table agree, not why they do not.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          // REFUSED: live `active` is text, the config declares a checkbox.
+          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // APPLIED, but its metadata write fails below.
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: [
+            ...reservedColumns("single_settings"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({
+        singleSyncResult: {
+          created: ["theme"],
+          updated: [],
+          unchanged: [],
+          errors: [{ slug: "theme", error: "write failed" }],
+        },
+      }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", [
+      "settings",
+      "theme",
+    ]);
+  });
+
+  it("PUBLISHES the singles it refused even when the collection metadata sync throws", async () => {
+    // 🔴 The two metadata syncs succeed or fail on their own. Published from
+    // the collection sync's path, a refused single's deferral was skipped
+    // whenever that sync threw -- while the singles sync beside it still wrote
+    // the single's new field list, so its source went on advertising columns
+    // its table never received.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          // APPLIED: additive, so the reload reaches the post-DDL commit.
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+        singles: [
+          // REFUSED: live `active` is text, the config declares a checkbox.
+          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+        {
+          name: "single_settings",
+          columns: [
+            ...reservedColumns("single_settings"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({ failCollectionMetaSync: true }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", ["settings"]);
+    // The collection sync threw, so nothing may claim to know what it wrote.
+    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
+      "collection",
+      expect.anything()
+    );
+  });
+
+  it("leaves the single refusal set standing when the single metadata sync throws", async () => {
+    // The other direction of the same separation: a singles sync that threw
+    // wrote nothing, so the registry still describes what an earlier reload
+    // recorded, and replacing the set from here would clear a refusal that
+    // reload correctly made. The collection sync ran, so its kind is still
+    // published.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+        {
+          name: "single_settings",
+          columns: reservedColumns("single_settings"),
+        },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({ failSingleMetaSync: true }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", []);
+    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
+      "single",
+      expect.anything()
+    );
   });
 
   it("preserves UI-created singles (registry-only) in the desired schema", async () => {
