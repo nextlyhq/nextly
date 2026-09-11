@@ -955,8 +955,8 @@ it, or an earlier hook that deletes the key, skips them.
 the row, persisted or loaded, so a hooked field runs whether or not it changed.
 Two qualifications. On a localized collection or Single, a translated field
 lives in the companion table and is merged into the `afterChange` row only
-when the patch carried it, so an unchanged localized field's `afterChange`
-does not run on an update. On a collection read, field-level `access.read`
+when the write carried it, so a localized field omitted from a create, or
+unchanged on an update, has no `afterChange` run. On a collection read, field-level `access.read`
 rules are applied before the hooks, so a field the caller may not read is gone
 from the row by then and its `afterRead` does not run; a Single read runs the
 hooks first and redacts afterwards, so there a denied field's `afterRead` does
@@ -1020,8 +1020,10 @@ text({
 Static value or `(data) => value` function. The function form receives the document data being created so you can compute defaults from sibling fields. Each field type's signature accepts the value type appropriate for that field.
 
 The two forms do not reach every write. On an ordinary collection create
-through the REST or Direct API, a constant default is applied before any hook
-runs; a function default is not, because a collection's fields reach that
+through the REST or Direct API, a constant default on a column-backed field
+of the collection is applied before any hook runs (a default declared on a
+field inside a reusable field group is not applied on that write, so an
+omitted child stays absent there); a function default is not, because a collection's fields reach that
 write path from their stored definition, which a function does not survive,
 so an omitted field with a function default is treated as absent: written
 without a value, or refused by validation if the field is also `required`. A
