@@ -256,6 +256,50 @@ describe("the component route reads AS THE USER", () => {
     ).rejects.toBeInstanceOf(NextlyError);
   });
 
+  it("reads both the listing and the by-id row in the locale the request names, and in none when it names none", async () => {
+    /*
+     * A component's document field can be localized, and the public renderer
+     * reads definitions in the page's locale. A route that read them in the
+     * default locale would draw an author editing German a canvas of English
+     * components, and the miniature at rest too. The locale travels as the
+     * request's `locale` query — the same spelling the client writes through
+     * the shared contract — and reaches BOTH reads, because a listing in one
+     * language completed by rows in another labels one version and draws
+     * the other. Absent, neither read names a locale at all: the Direct API
+     * then reads the app default, which is what an absent `?locale=` means
+     * everywhere in the admin.
+     */
+    await componentLibraryRoute().handler(
+      new Request("http://nextly.test/library/components?locale=de"),
+      contextAs({ id: "u1", email: "u1@example.test" } as never)
+    );
+
+    expect(nextly.find.mock.calls[0]?.[0]).toMatchObject({ locale: "de" });
+    expect(nextly.findByID.mock.calls[0]?.[0]).toMatchObject({ locale: "de" });
+
+    nextly.find.mockClear();
+    nextly.findByID.mockClear();
+    await componentLibraryRoute().handler(
+      request,
+      contextAs({ id: "u1", email: "u1@example.test" } as never)
+    );
+
+    expect(nextly.find.mock.calls[0]?.[0]).not.toHaveProperty("locale");
+    expect(nextly.findByID.mock.calls[0]?.[0]).not.toHaveProperty("locale");
+  });
+
+  it("treats an empty locale as none", async () => {
+    // `?locale=` is what a client that formats a null code carelessly would
+    // send; an empty string handed to the Direct API is not a language.
+    await componentLibraryRoute().handler(
+      new Request("http://nextly.test/library/components?locale="),
+      contextAs({ id: "u1", email: "u1@example.test" } as never)
+    );
+
+    expect(nextly.find.mock.calls[0]?.[0]).not.toHaveProperty("locale");
+    expect(nextly.findByID.mock.calls[0]?.[0]).not.toHaveProperty("locale");
+  });
+
   it("answers the canonical list envelope, with the document under the name the panel reads", async () => {
     const response = await componentLibraryRoute().handler(
       request,

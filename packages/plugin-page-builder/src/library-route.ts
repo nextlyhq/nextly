@@ -72,6 +72,7 @@ import { requireNextly } from "nextly/runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
+  COMPONENT_LIBRARY_LOCALE_PARAM,
   COMPONENT_LIBRARY_ROUTE_PATH,
   LIBRARY_ROUTE_PATH,
   type ComponentLibraryResponse,
@@ -344,10 +345,21 @@ export const DEFAULT_COMPONENT_STORE: ComponentStore = {
  * `requireNextly` per call rather than captured: it refuses until services
  * are registered, and a route handler runs only after that, so the refusal
  * can only fire on a misconfigured boot — where failing loudly is right.
+ *
+ * Both reads name the LOCALE the request asked for, when it asked for one. A
+ * component's document field can be localized, and the public renderer reads
+ * definitions in the page's locale; an editor whose reads named none would
+ * draw an author editing German a canvas of English components. Both reads,
+ * because a listing in one language completed by rows in another labels one
+ * version and draws the other. None named is the app default, as an absent
+ * `?locale=` is everywhere in the admin — and an unknown code resolves to the
+ * default in the Direct API, so nothing here has to know the site's languages.
  */
 function directComponentReads(
-  ctx: Pick<PluginRouteContext, "caller">
+  ctx: Pick<PluginRouteContext, "caller">,
+  locale?: string
 ): ComponentReads {
+  const inLocale = locale === undefined ? {} : { locale };
   // Resolved once for both reads, and lazily: the caller resolves its own
   // identity once per request, and a route with nothing to read never asks.
   // A public route has no caller; this one is gated, so the anonymous branch
@@ -367,6 +379,7 @@ function directComponentReads(
       const result = await requireNextly().find({
         collection: slug,
         ...(await asUser()),
+        ...inLocale,
         status: "all",
         sort: "id",
         page,
@@ -380,6 +393,7 @@ function directComponentReads(
           collection: slug,
           id,
           ...(await asUser()),
+          ...inLocale,
           // Every lifecycle state HERE TOO. The listing asked for every state
           // and got the never-published row; a by-id read that stated none is
           // bounded back to public states and answers 404 for that same row —
@@ -904,13 +918,28 @@ export function componentLibraryRoute(
     path: COMPONENT_LIBRARY_ROUTE_PATH,
     requiredPermission: ({ collection }) =>
       collection(store.collection ?? COMPONENTS_SLUG, "read"),
-    handler: async (_req: Request, ctx: PluginRouteContext) =>
+    handler: async (req: Request, ctx: PluginRouteContext) =>
       Response.json(
         await readComponentLibrary({
           ...ctx,
-          components: directComponentReads(ctx),
+          components: directComponentReads(ctx, requestedLocale(req)),
           store,
         })
       ),
   };
+}
+
+/**
+ * The language the request asks the component tier in, or none.
+ *
+ * Read from the query the client writes through the shared contract
+ * (`componentLibraryPath`). An empty value is none: an empty string handed to
+ * the Direct API is not a language, and it is what a client formatting an
+ * absent code carelessly would send.
+ */
+function requestedLocale(req: Request): string | undefined {
+  const locale = new URL(req.url).searchParams.get(
+    COMPONENT_LIBRARY_LOCALE_PARAM
+  );
+  return locale === null || locale === "" ? undefined : locale;
 }

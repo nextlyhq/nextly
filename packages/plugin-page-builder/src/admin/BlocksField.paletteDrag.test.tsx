@@ -297,6 +297,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // Which document the field sits in. Mutable so one case can put the
   // field inside a component's own row.
   useDocumentIdentity: () => documentIdentity,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change

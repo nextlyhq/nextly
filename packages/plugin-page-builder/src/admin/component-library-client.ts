@@ -21,6 +21,18 @@
  * ceiling, and dragging it along to draw a header would spend that on every
  * form open.
  *
+ * ## The language it reads in
+ *
+ * The one the surrounding document is being edited in, from the form's own
+ * locale context. A component's document field can be localized, and the
+ * public renderer reads definitions in the page's locale; a read that named
+ * none would draw an author editing German a canvas of English components,
+ * and the miniature at rest too. The language travels in the route's path,
+ * which is the read hook's cache key, so switching language is a different
+ * read rather than the last language's definitions served from cache. A
+ * field that cannot know its language — outside any form — reads the app
+ * default, which is what an absent `?locale=` means everywhere in the admin.
+ *
  * ## Staleness
  *
  * Fresh on every mount, as the pattern read is and for the same reason: a
@@ -34,13 +46,13 @@
  */
 import type { BlockDocument, DefinitionsById } from "@nextlyhq/blocks-engine";
 import type { SavedComponent } from "@nextlyhq/builder";
-import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { useDocumentLocale, usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 // The CONTRACT, not the route, for the reason the pattern client gives: the
 // route reaches the collection through server-only modules.
 import {
-  COMPONENT_LIBRARY_ROUTE_PATH,
+  componentLibraryPath,
   PAGE_BUILDER_PLUGIN_NAME,
   type ComponentLibraryResponse,
 } from "../library-contract";
@@ -97,9 +109,10 @@ export interface ComponentLibraryRead {
 
 /** Read this site's component definitions, at the editor's posture. */
 export function useComponentLibrary(): ComponentLibraryRead {
+  const locale = useDocumentLocale();
   const read = usePluginRoute<ComponentLibraryResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: COMPONENT_LIBRARY_ROUTE_PATH,
+    path: componentLibraryPath(locale?.code),
     staleTime: 0,
   });
   const { data, pending, error, refetch } = read;
