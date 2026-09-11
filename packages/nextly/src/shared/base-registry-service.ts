@@ -268,6 +268,29 @@ export abstract class BaseRegistryService<
   }
 
   /**
+   * Every registered slug, as a slug-only projection.
+   *
+   * For a caller that needs the registry as a CANDIDATE LIST -- names to
+   * authorize one by one, a scope to bound a cross-entity read by -- and
+   * nothing else about the records. `getAllRecords` selects and deserializes
+   * every column, the fields JSON included, so a caller that wanted the names
+   * alone materialized the whole registry on every request, ahead of the
+   * paginated query it was scoping.
+   */
+  async getAllSlugs(): Promise<string[]> {
+    try {
+      const rows = await this.adapter.select<{ slug: string }>(
+        await this.resolveRegistryTableName(),
+        { columns: ["slug"] }
+      );
+      return rows.map(row => row.slug);
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /**
    * List records with pagination, search, and total count.
    */
   protected async listRecords(

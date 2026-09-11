@@ -728,10 +728,16 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     // `ci.yml`, hanging off nothing, so removing or renaming it produces no
     // check-run for a failure check to reject - the control would disappear in
     // the same change it exists to judge, and the verdict would stay green.
-    // Ungated and unfiltered, on both triggers, so it is always due to report.
+    // Unfiltered, on both triggers, and gated on supersession alone, so it is
+    // always due to report: run, or skipped because a newer commit's run
+    // covers this one.
     { name: "Comment convention (describes code, not process)", pathsIgnore: [] },
     // The only coverage any dialect-specific behaviour has: the unit suites
-    // mock the drivers and the browser tests run on sqlite alone.
+    // mock the drivers and the browser tests run on sqlite alone. Three
+    // literal-named jobs rather than a matrix, and that is load-bearing here:
+    // a matrix job skipped at the job level reports ONE check named with its
+    // unevaluated name expression, so on a superseded `main` push these three
+    // names would be absent and this floor would call the commit untested.
     { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
