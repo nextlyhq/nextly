@@ -8,7 +8,7 @@ import {
   STYLE_STATES,
   isReservedOperationName,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { blockDocumentJsonSchema, parseBlockDocument } from "../block-document";
 
@@ -482,6 +482,38 @@ describe("block document schema", () => {
         expect(parseBlockDocument(doc).success).toBe(false);
       }
     );
+  });
+
+  it("answers rather than throws when the derivation is refused before the field list exists", async () => {
+    // The field list is derived once and cached, and every test above runs
+    // against a warm cache. Cold, the corrupted emission is refused inside
+    // the check itself, and the check must turn that into the same answer a
+    // shorter emission gets: a document it cannot check, not an exception.
+    //
+    // A fresh module loaded WHILE the prototype carries `id` is the cold
+    // cache: loaded before the pollution, its load-time snapshot would refuse
+    // first and this path would never run.
+    vi.resetModules();
+    Object.defineProperty(Object.prototype, "id", {
+      value: "spoofed",
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    try {
+      const polluted = await import("../block-document");
+      const result = polluted.parseBlockDocument(emptyPage());
+      expect(result.success).toBe(false);
+      expect(result.success ? [] : result.issues).toEqual([
+        "The published schema could not be derived, so this document cannot be checked against it.",
+      ]);
+    } finally {
+      delete (Object.prototype as Record<string, unknown>).id;
+    }
+    // The control: a fresh module loaded clean checks the same document.
+    vi.resetModules();
+    const clean = await import("../block-document");
+    expect(clean.parseBlockDocument(emptyPage()).success).toBe(true);
   });
 
   it("refuses once anything is added to Object.prototype at all", () => {

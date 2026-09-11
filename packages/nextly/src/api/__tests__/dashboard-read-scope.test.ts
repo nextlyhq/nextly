@@ -86,8 +86,8 @@ const asMock = (fn: unknown): ReturnType<typeof vi.fn> =>
   fn as ReturnType<typeof vi.fn>;
 
 /** Two collections and one single, standing in for a real registry. */
-const COLLECTIONS = [{ slug: "posts" }, { slug: "pages" }];
-const SINGLES = [{ slug: "site-settings" }];
+const COLLECTIONS = ["posts", "pages"];
+const SINGLES = ["site-settings"];
 
 let rbac: RBACAccessControlService;
 
@@ -121,9 +121,9 @@ beforeEach(() => {
       case "rbacAccessControlService":
         return rbac;
       case "collectionRegistryService":
-        return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+        return { getAllSlugs: vi.fn().mockResolvedValue(COLLECTIONS) };
       case "singleRegistryService":
-        return { getAllSingles: vi.fn().mockResolvedValue(SINGLES) };
+        return { getAllSlugs: vi.fn().mockResolvedValue(SINGLES) };
       case "dashboardService":
         return { getStats };
       case "activityLogService":

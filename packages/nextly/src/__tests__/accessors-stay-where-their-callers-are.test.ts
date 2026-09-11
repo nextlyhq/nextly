@@ -82,51 +82,21 @@ describe("instance accessors are published where their callers can reach them", 
     expect(doc).toContain("plugin code doing server work outside a route");
   });
 
-  it("does not forbid the callers it names, however the prohibition is worded", () => {
-    // A list of forbidden phrasings is the wrong shape for this. "must not
-    // call" was covered and "should not call" was not, and the next wording
-    // nobody anticipates passes just as easily. So it is structural instead.
-    //
-    // Two properties, checked separately because either alone can be
-    // satisfied by a docblock that contradicts itself. The audience must be
-    // named, so the positive claim exists to contradict. And NO sentence may
-    // forbid use, whether or not it names who: "Internal use only." names
-    // nobody and forbids everybody, so filtering to audience sentences first
-    // would discard it unexamined.
+  it("marks the async accessor public, and never internal", () => {
+    // Whether a SENTENCE forbids the callers the block names is a question
+    // about English: a pattern asked it misses the next wording ("must never
+    // be used by") or catches a description ("is never used before boot"). The
+    // TSDoc release tag is the same statement as data. `@internal` is how this
+    // repository says "not for consumers", so the block carries `@public` and
+    // must not carry `@internal`, and a reader who adds a prose ban beside a
+    // `@public` tag has written a contradiction the tag decides.
     const doc = docblockFor(
       initSource,
       "export async function getCachedNextly"
     );
 
-    const sentences = doc
-      .replace(/^\s*\*+ ?/gm, "")
-      .split(/(?<=[.:])\s+/)
-      .map(line => line.trim())
-      .filter(line => line.length > 0);
-
-    const namesAudience = sentences.filter(line =>
-      /plugin|user code|caller/i.test(line)
-    );
-    // The control. With no audience sentence the check below has nothing to
-    // contradict, and would stay green through a docblock that never says who
-    // this is for.
-    expect(namesAudience.length).toBeGreaterThan(0);
-
-    // A prohibition is a negation attached to USING this function, or one of
-    // the stock phrasings that forbid without a verb. The verb is what
-    // matters, not the negation: "it cannot wait" describes the synchronous
-    // sibling and forbids nothing, while "callers cannot use this" forbids
-    // exactly what this docblock promises. So `cannot` stays in the list and
-    // is disarmed by the verb requirement, not by its absence.
-    const prohibits = (line: string) =>
-      /\b(do not|don't|must not|should not|cannot|can't|never|not)\s+(be\s+)?(use|call|invoke|reach for|rely on)\b/i.test(
-        line
-      ) ||
-      /\b(internal use only|not for (user|plugin|application|external)|not intended for)\b/i.test(
-        line
-      );
-
-    expect(sentences.filter(prohibits)).toEqual([]);
+    expect(doc).toMatch(/^\s*\*\s*@public\s*$/m);
+    expect(doc).not.toMatch(/@internal\b/);
   });
 
   it("does not claim the root avoids the Next peer dependency", () => {
