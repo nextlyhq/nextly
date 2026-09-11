@@ -13,14 +13,11 @@
  * issues and must not change the data it is given, and rather than as a column
  * DEFAULT, which cannot express a function or reach a JSON-backed value.
  *
- * KNOWN LIMIT: a collection's fields reach this point from its stored
- * definition, and a function does not survive being stored, so only a constant
- * default can be applied here. A function default is not an error — it is
- * simply absent by the time the write runs, and the field behaves as though
- * none was declared. Honouring it would mean reading the in-memory code-first
- * config on the write path, which is a separate piece of plumbing. A single's
- * first-read auto-create holds the config object directly and does resolve
- * functions.
+ * A collection's fields reach this point from its stored definition, and a
+ * function does not survive being stored. So a function default is read from
+ * the field-level registry, which captures the function-bearing part of the
+ * live code-first config at boot (the same place a field's hooks, access rules
+ * and validators come from), and handed in beside the stored fields.
  *
  * @module shared/lib/field-defaults
  */
@@ -28,6 +25,21 @@
 import { fieldGroupFieldTypes } from "../../domains/field-groups/storage/field-group-field-type";
 
 import type { ValidatableField } from "./entry-validation";
+
+/**
+ * The function-bearing part of a code-first field list, by field name, as the
+ * field-level registry holds it: a function `defaultValue` for the field
+ * itself, and the same shape again for a group's or a repeater's children.
+ * Structural rather than imported, so this module does not depend on the
+ * registry and the registry's other members stay its own concern.
+ */
+export type DefaultFunctions = Record<
+  string,
+  {
+    defaultValue?: (data: Record<string, unknown>) => unknown;
+    fields?: DefaultFunctions;
+  }
+>;
 
 /**
  * A field whose value is stored somewhere other than its own column, so a
@@ -49,19 +61,24 @@ const NON_COLUMN_TYPES: ReadonlySet<string> = new Set(fieldGroupFieldTypes);
  */
 export function applyFieldDefaults(
   data: Record<string, unknown>,
-  fields: readonly ValidatableField[]
+  fields: readonly ValidatableField[],
+  functions?: DefaultFunctions
 ): void {
   for (const field of fields) {
     // A layout container (row, tabs, collapsible) groups fields visually
     // without holding a value: its children are stored on the parent, so they
     // are filled against the same object.
     if (!field.name) {
-      if (field.fields) applyFieldDefaults(data, field.fields);
+      if (field.fields) applyFieldDefaults(data, field.fields, functions);
       continue;
     }
     if (NON_COLUMN_TYPES.has(field.type)) continue;
 
-    const declared = (field as { defaultValue?: unknown }).defaultValue;
+    // The stored definition's constant first; a function only the live config
+    // could hold second, since storage dropped it.
+    const own = functions?.[field.name];
+    const declared =
+      (field as { defaultValue?: unknown }).defaultValue ?? own?.defaultValue;
     // Read as an OWN property: a field named after something on
     // `Object.prototype` — `constructor`, `toString`, `valueOf` — would
     // otherwise resolve through the prototype chain, so an empty request body
@@ -86,9 +103,9 @@ export function applyFieldDefaults(
     // before it runs or a required child fails on an entry the caller could
     // not have satisfied.
     if (field.type === "group") {
-      fillGroup(data, field.name, field.fields);
+      fillGroup(data, field.name, field.fields, own?.fields);
     } else if (field.type === "repeater") {
-      fillRepeaterRows(data, field.name, field.fields);
+      fillRepeaterRows(data, field.name, field.fields, own?.fields);
     }
   }
 }
@@ -125,7 +142,8 @@ export function cloneDefault(value: unknown): unknown {
 function fillGroup(
   data: Record<string, unknown>,
   name: string,
-  fields: readonly ValidatableField[]
+  fields: readonly ValidatableField[],
+  functions: DefaultFunctions | undefined
 ): void {
   const existing = Object.prototype.hasOwnProperty.call(data, name)
     ? data[name]
@@ -136,7 +154,7 @@ function fillGroup(
     // A shallow copy per level is enough, because each level down copies again
     // before it writes.
     const filled = { ...existing };
-    applyFieldDefaults(filled, fields);
+    applyFieldDefaults(filled, fields, functions);
     data[name] = filled;
     return;
   }
@@ -145,7 +163,7 @@ function fillGroup(
   if (existing !== undefined) return;
 
   const seeded: Record<string, unknown> = {};
-  applyFieldDefaults(seeded, fields);
+  applyFieldDefaults(seeded, fields, functions);
   if (Object.keys(seeded).length > 0) data[name] = seeded;
 }
 
@@ -159,7 +177,8 @@ function fillGroup(
 function fillRepeaterRows(
   data: Record<string, unknown>,
   name: string,
-  fields: readonly ValidatableField[]
+  fields: readonly ValidatableField[],
+  functions: DefaultFunctions | undefined
 ): void {
   const value = data[name];
   if (!Array.isArray(value)) return;
@@ -169,7 +188,7 @@ function fillRepeaterRows(
   const rows = value.map(row => {
     if (!isPlainObject(row)) return row;
     const filled = { ...row };
-    applyFieldDefaults(filled, fields);
+    applyFieldDefaults(filled, fields, functions);
     changed = true;
     return filled;
   });
@@ -193,8 +212,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  *
  * A function default is treated as no default at all. It cannot be stored, so
  * the config side would otherwise differ from the stored side forever and
- * re-sync the registry on every boot — and it is not applied by this path
- * either, so there is nothing about it for the stored definitions to carry.
+ * re-sync the registry on every boot. The write path reads it from the
+ * field-level registry instead, which is filled from the live config on every
+ * boot, so there is nothing about it for the stored definitions to carry.
  */
 export function fieldDefaultsSignature(
   fields: readonly ValidatableField[] | undefined

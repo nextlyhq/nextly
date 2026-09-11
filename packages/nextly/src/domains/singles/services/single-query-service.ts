@@ -73,7 +73,10 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { detachData } from "../../../shared/lib/detach";
-import { cloneDefault } from "../../../shared/lib/field-defaults";
+import {
+  applyFieldDefaults,
+  cloneDefault,
+} from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   runFieldHooks,
@@ -133,6 +136,7 @@ import { resolveSingleForRequest } from "./ensure-runtime-table";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
+  assertNoNestedPasswordDefault,
   assertNoPasswordDefault,
   assertValidPluginDefault,
   buildSingleErrorResult,
@@ -2462,6 +2466,30 @@ export class SingleQueryService extends BaseService {
         defaults[field.name] = getDefaultValue(field);
         logicalDefaults[field.name] = toLogical(field, defaults[field.name]);
       }
+    }
+
+    // A group's children and a repeater row's children declare defaults of
+    // their own, and the loop above resolves top-level fields only. Filled
+    // through the same walk a collection create uses, over the live code-first
+    // field where there is one (its children still carry function defaults),
+    // so a nested default reaches the first-read row the way it reaches a
+    // created entry. A group whose children declare nothing stays absent
+    // rather than becoming an empty object.
+    for (const field of singleMeta.fields) {
+      if (!("name" in field) || !field.name) continue;
+      if (field.type !== "group" && field.type !== "repeater") continue;
+      const source = codeFirstFieldByName?.get(field.name) ?? field;
+      // A nested password default would be written in plaintext on this
+      // direct insert, exactly as a top-level one would.
+      assertNoNestedPasswordDefault(source, singleMeta.slug);
+      const before = logicalDefaults[field.name];
+      applyFieldDefaults(logicalDefaults, [source]);
+      const after = logicalDefaults[field.name];
+      if (after === before) continue;
+      defaults[field.name] =
+        shouldTreatAsJson(field) && after !== undefined
+          ? JSON.stringify(after)
+          : after;
     }
 
     // A date default resolves to a string (e.g. `() => new Date().toISOString()`),

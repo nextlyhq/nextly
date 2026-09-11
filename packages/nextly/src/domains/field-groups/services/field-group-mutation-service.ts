@@ -18,6 +18,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
+import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
@@ -1626,6 +1627,13 @@ export class FieldGroupMutationService extends BaseService {
           },
         ],
       });
+    }
+    // A new instance takes its declared defaults before validation, as a new
+    // entry does, so a required child with a default is not refused on an
+    // instance the caller could not have completed. An existing instance is
+    // left alone: its absent keys are the caller's patch, not missing values.
+    if (mode === "create") {
+      applyFieldDefaults(instance, componentFields);
     }
     // Reduced in place, and before validation, because both halves of the write
     // depend on it. A validator is written against a field's public value, the

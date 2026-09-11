@@ -135,6 +135,12 @@ type FieldHookFn = FieldHookHandler;
 
 export interface FieldFunctions {
   validate?: ValidatableField["validate"];
+  /**
+   * A `defaultValue` declared as a function. Only the function form lives
+   * here: a constant default survives the stored definition and is read from
+   * it, while a function does not survive storage at all.
+   */
+  defaultValue?: (data: Record<string, unknown>) => unknown;
   access?: {
     create?: FieldAccessFn;
     read?: FieldAccessFn;
@@ -172,6 +178,10 @@ function extractFieldFunctions(
   const out: FieldFunctions = {};
   let hasAny = false;
 
+  if (typeof field.defaultValue === "function") {
+    out.defaultValue = field.defaultValue as FieldFunctions["defaultValue"];
+    hasAny = true;
+  }
   if (typeof field.validate === "function") {
     out.validate = field.validate as FieldFunctions["validate"];
     hasAny = true;
