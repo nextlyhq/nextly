@@ -18,10 +18,11 @@
  * quotes identifiers and numbers placeholders its own way, and the WHERE is
  * the `buildDrizzleWhere` every other read and write goes through — the raw
  * where builders were removed on purpose and this does not bring one back.
- * It writes and returns nothing: a caller who asked for the rows back gets
- * them from a read of the same WHERE on the same transaction, decoded the way
- * every read is decoded, rather than from a RETURNING list this module would
- * have to decode a second way.
+ * It returns at most the rows' identity: a caller who asked for the rows back
+ * gets them from a read on the same transaction, decoded the way every read
+ * is decoded, rather than from a RETURNING list this module would have to
+ * decode a second way — and on a dialect with RETURNING that read is by the
+ * identities this statement reports, so it is exactly the rows it changed.
  *
  * A value binds in one of three ways, decided per column:
  *  - a column the model DECLARES binds through that column's own encoder.
@@ -40,10 +41,13 @@
  * update it builds.
  *
  * A key whose value is `undefined` is not written at all — JSON's meaning of
- * an absent key, and what the builder's `mapUpdateSet` did with it. `null` is
- * written as NULL. A key naming no column on the physical table is a SQL
- * error from the database: the query builder was the one path that could not
- * say so, which is the defect the transition window was hiding behind.
+ * an absent key, and what the builder's `mapUpdateSet` did with it; under
+ * both spellings of one column the later key decides, undefined included.
+ * `null` is written as NULL. A key naming no column on the physical table is
+ * a SQL error from the database: the query builder was the one path that
+ * could not say so, which is the defect the transition window was hiding
+ * behind. A patch that names nothing is refused before any `$onUpdate`
+ * column is considered, as the query builder refused it.
  *
  * @module update-statement
  */
@@ -82,6 +86,12 @@ export interface UpdateStatementInput {
   where: WhereClause;
   /** How a value binds when the model declares no column for it. */
   bindUnmodeled: (value: unknown) => unknown;
+  /**
+   * Columns to return from the statement, on a dialect with RETURNING: the
+   * row's identity, so the caller can read exactly the rows it changed back
+   * through the query API rather than re-run its predicate.
+   */
+  returning?: SQL[];
 }
 
 function isBindableColumn(value: unknown): value is BindableColumn {
@@ -177,14 +187,22 @@ export function buildUpdateStatement(input: UpdateStatementInput): SQL | null {
   const assignments = new Map<string, SQL>();
 
   for (const [key, value] of Object.entries(input.data)) {
-    if (value === undefined) continue;
     const column = byName.get(key);
     const name = column?.name ?? key;
+    // Resolved before the undefined test, so a later `undefined` under the
+    // other spelling withdraws the earlier value, as the collapsed object did.
+    if (value === undefined) {
+      assignments.delete(name);
+      continue;
+    }
     assignments.set(
       name,
       sql`${sql.identifier(name)} = ${boundValue(value, column, input.bindUnmodeled)}`
     );
   }
+  // Refused on what the caller named, before any column adds itself: a
+  // patch of nothing must not become an update that bumps a timestamp.
+  if (assignments.size === 0) return null;
   // The columns the caller left unnamed that update themselves.
   for (const column of declared) {
     if (assignments.has(column.name) || column.onUpdateFn === undefined) {
@@ -196,7 +214,6 @@ export function buildUpdateStatement(input: UpdateStatementInput): SQL | null {
       sql`${sql.identifier(column.name)} = ${boundValue(value, column, input.bindUnmodeled)}`
     );
   }
-  if (assignments.size === 0) return null;
 
   // The target is the table object, not the caller's string: a table declared
   // in a schema renders as `"schema"."table"`, which is how the WHERE below
@@ -204,5 +221,8 @@ export function buildUpdateStatement(input: UpdateStatementInput): SQL | null {
   const statement = sql`UPDATE ${input.tableObj} SET ${sql.join([...assignments.values()], sql`, `)}`;
   const condition = buildDrizzleWhere(input.tableObj, input.where);
   if (condition) statement.append(sql` WHERE ${condition}`);
+  if (input.returning && input.returning.length > 0) {
+    statement.append(sql` RETURNING ${sql.join(input.returning, sql`, `)}`);
+  }
   return statement;
 }

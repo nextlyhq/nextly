@@ -201,11 +201,15 @@ export interface TransactionContext {
    * `undefined` is not written, `null` is, and an update naming nothing to
    * write is refused.
    *
-   * When `options.returning` asks for rows, they come from a read of the same
-   * `where` on this transaction, decoded as every read is — the model's view
-   * of the row, whatever columns were named. An update whose own write
-   * falsifies its `where` therefore reads back nothing; a fenced
-   * compare-and-set wants `updateCount`.
+   * When `options.returning` asks for rows, they come from a read on this
+   * transaction, decoded as every read is — the model's view of the row,
+   * whatever columns were named. On PostgreSQL and SQLite that read is by the
+   * identities the statement reported through RETURNING, so it is exactly the
+   * rows this update changed. MySQL has no RETURNING, so there the read
+   * re-runs `where`, as it always has on that dialect: an update whose own
+   * write falsifies its `where` reads back nothing, and a row another
+   * transaction adds under the predicate meanwhile is included. A fenced
+   * compare-and-set wants `updateCount` on every dialect.
    *
    * @param table - Table name
    * @param data - Data to update, keyed by SQL column name; Drizzle property

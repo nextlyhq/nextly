@@ -953,7 +953,12 @@ export class MySqlAdapter extends DrizzleAdapter {
       // on this path's insert does.
       update: this.transactionUpdate(
         txDb,
-        statement => txDb().execute(statement),
+        async statement => {
+          // No RETURNING on MySQL: nothing to report, the read-back is by
+          // the caller's predicate.
+          await txDb().execute(statement);
+          return undefined;
+        },
         value => value
       ),
 

@@ -1087,7 +1087,7 @@ export class PostgresAdapter extends DrizzleAdapter {
       // on this path's insert does.
       update: this.transactionUpdate(
         txDb,
-        statement => txDb().execute(statement),
+        async statement => (await txDb().execute(statement)).rows,
         value => value
       ),
 

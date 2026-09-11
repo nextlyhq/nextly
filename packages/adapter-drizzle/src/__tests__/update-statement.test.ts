@@ -108,6 +108,24 @@ describe("buildUpdateStatement — which columns are written", () => {
     expect(js.params).toEqual(sqlName.params);
   });
 
+  it("withdraws a column when its later spelling is undefined", () => {
+    // `{ updated_at: date, updatedAt: undefined }` after a merge of records:
+    // the collapsed object the query builder saw ended with undefined, and
+    // omitted the column. Resolving the name before the undefined test keeps
+    // that; testing undefined first would keep the earlier value.
+    const { sql, params } = compile({
+      data: {
+        updated_at: new Date("2026-09-11T10:00:00.000Z"),
+        slug: "s",
+        updatedAt: undefined,
+      },
+    });
+    expect(sql).toBe(
+      'UPDATE "dc_pages" SET "slug" = $1 WHERE "dc_pages"."id" = $2'
+    );
+    expect(params).toEqual(["s", "p1"]);
+  });
+
   it("assigns a column named under both spellings once, the later value winning", () => {
     // One SET target per column is what the database accepts; the query
     // builder's key normalization collapsed the pair the same way.
@@ -226,6 +244,18 @@ describe("buildUpdateStatement — how a declared column binds", () => {
       "p1",
     ]);
 
+    // A patch naming nothing is refused BEFORE the callbacks are considered:
+    // an empty update must not become one that bumps the counter.
+    expect(
+      buildUpdateStatement({
+        table: "dc_counted",
+        tableObj: counted,
+        data: { slug: undefined },
+        where: byId("p1"),
+        bindUnmodeled: tagged,
+      })
+    ).toBeNull();
+
     // Named by the caller, the caller's value wins and the callback is not run.
     const named = new PgDialect().sqlToQuery(
       buildUpdateStatement({
@@ -245,7 +275,7 @@ describe("buildUpdateStatement — how a declared column binds", () => {
   });
 });
 
-describe("buildUpdateStatement — WHERE, and no RETURNING", () => {
+describe("buildUpdateStatement — WHERE and RETURNING", () => {
   it("renders the where through the shared builder, params after the SET", () => {
     const { sql, params } = compile({
       data: { slug: "a", title: "b" },
@@ -267,11 +297,16 @@ describe("buildUpdateStatement — WHERE, and no RETURNING", () => {
     expect(sql).toBe('UPDATE "dc_pages" SET "slug" = $1');
   });
 
-  it("returns nothing itself: no RETURNING, whatever the caller asked for", () => {
+  it("carries RETURNING only when handed the identity to report, and only that", () => {
     // The rows a caller asked for come from a read on the same transaction,
-    // decoded as every read is, so the statement never carries a list.
-    const { sql } = compile({ data: { slug: "a" } });
-    expect(sql).not.toMatch(/RETURNING/i);
+    // decoded as every read is; the statement reports at most which rows
+    // that read should ask for.
+    expect(compile({ data: { slug: "a" } }).sql).not.toMatch(/RETURNING/i);
+    const { sql } = compile({
+      data: { slug: "a" },
+      returning: [rawSql`${rawSql.identifier("id")}`],
+    });
+    expect(sql).toMatch(/ RETURNING "id"$/);
   });
 });
 

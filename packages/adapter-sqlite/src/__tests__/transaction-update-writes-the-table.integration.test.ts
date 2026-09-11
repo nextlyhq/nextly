@@ -30,6 +30,7 @@ const TABLE_DEFINITION: TableDefinition = {
     { name: "published_at", type: "integer" },
     { name: "updated_at", type: "integer" },
     { name: "published", type: "integer" },
+    { name: "cover", type: "blob" },
   ],
 };
 
@@ -189,6 +190,37 @@ describe("SQLite transaction update writes the physical table", () => {
     expect((everything[0].updatedAt as Date).getTime()).toBe(at.getTime());
     expect(Object.hasOwn(everything[0], "title")).toBe(false);
     expect((await stored("a"))?.title).toBe("T");
+  });
+
+  it("reads back exactly the rows it changed, even when its own write falsifies its predicate", async () => {
+    // Read back by the identity RETURNING reported, not by re-running the
+    // predicate: `slug = 'first'` is false of the row once the write lands,
+    // and a read by predicate would answer nothing.
+    const rows = await adapter.transaction(ctx =>
+      ctx.update<{ id: string; slug: string }>(
+        TABLE,
+        { slug: "renamed" },
+        { and: [{ column: "slug", op: "=", value: "first" }] },
+        { returning: "*" }
+      )
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "a", slug: "renamed" });
+  });
+
+  it("binds a Buffer as binary on an undeclared BLOB column", async () => {
+    // The sanitizer's object branch would spell a Buffer out as JSON text;
+    // better-sqlite3 takes the bytes as they are.
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    await adapter.transaction(async ctx => {
+      await ctx.update(TABLE, { cover: bytes }, byId("a"));
+    });
+    const stored = await adapter.executeQuery<{ cover: Buffer }>(
+      `SELECT cover FROM ${TABLE} WHERE id = ?`,
+      ["a"]
+    );
+    expect(Buffer.isBuffer(stored[0]?.cover)).toBe(true);
+    expect(Buffer.compare(stored[0]!.cover, bytes)).toBe(0);
   });
 
   it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {

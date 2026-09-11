@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import { count, getColumns } from "drizzle-orm";
+import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleOrderBy } from "./drizzle-order";
@@ -24,6 +24,7 @@ import type {
   SupportedDialect,
   SqlParam,
   WhereClause,
+  WhereCondition,
   CountOptions,
   SelectOptions,
   InsertOptions,
@@ -2308,16 +2309,32 @@ export abstract class DrizzleAdapter {
    * as the pooled `update` classifies its failures, and read back through
    * `select` on the same executor when the caller asked for rows.
    *
+   * That read is by the rows' IDENTITY where the dialect can report it: on
+   * PostgreSQL and SQLite the statement carries `RETURNING <primary key>`, and
+   * the read-back asks for exactly those rows — so a row another transaction
+   * adds under the same predicate meanwhile is not among them, and an update
+   * whose own write falsifies its predicate still reads its rows back. MySQL
+   * has no RETURNING, so there the read re-runs the predicate, as the pooled
+   * `update` always has on that dialect; a table with no primary key in its
+   * model reads back the same way.
+   *
    * @param txDb - thunk returning the transaction-bound Drizzle instance
-   * @param run - how this dialect runs a statement on that instance:
-   *   better-sqlite3 answers synchronously, the pooled drivers do not
+   * @param run - how this dialect runs a statement on that instance, and the
+   *   rows it returns when the statement carries RETURNING: better-sqlite3
+   *   answers synchronously, the pooled drivers do not
    * @param bindUnmodeled - how a value binds when the model declares no
    *   column for it; a declared column binds through its own encoder
    * @returns the context's `update` method
    */
   protected transactionUpdate(
     txDb: () => unknown,
-    run: (statement: SQL) => unknown,
+    run: (
+      statement: SQL,
+      returnsRows: boolean
+    ) =>
+      | Promise<Record<string, unknown>[] | undefined>
+      | Record<string, unknown>[]
+      | undefined,
     bindUnmodeled: (value: unknown) => unknown
   ): TransactionContext["update"] {
     return async <T = unknown>(
@@ -2326,35 +2343,39 @@ export abstract class DrizzleAdapter {
       where: WhereClause,
       options?: UpdateOptions
     ): Promise<T[]> => {
+      const wantsRows = this.updateReturnsRows(options?.returning);
+      const tableObj = this.resolvedTableObject(table);
+      const identity =
+        wantsRows && this.getCapabilities().supportsReturning
+          ? primaryKeyColumns(tableObj)
+          : [];
+      let reported: Record<string, unknown>[] | undefined;
       try {
-        await run(
-          this.buildTransactionUpdate(table, data, where, bindUnmodeled)
+        reported = await run(
+          this.buildTransactionUpdate(tableObj, table, data, where, {
+            bindUnmodeled,
+            returning: identity.map(name => sql`${sql.identifier(name)}`),
+          }),
+          identity.length > 0
         );
       } catch (error) {
         throw this.handleQueryError(error, "update", table);
       }
-      return this.updateReturnsRows(options?.returning)
-        ? this.select<T>(table, { where }, txDb())
-        : [];
+      if (!wantsRows) return [];
+      if (identity.length > 0 && Array.isArray(reported)) {
+        if (reported.length === 0) return [];
+        return this.select<T>(
+          table,
+          { where: rowsByIdentity(identity, reported) },
+          txDb()
+        );
+      }
+      return this.select<T>(table, { where }, txDb());
     };
   }
 
-  /**
-   * The statement `transactionUpdate` runs.
-   *
-   * @param bindUnmodeled - how a value binds when the model declares no
-   *   column for it; a declared column binds through its own encoder.
-   * @throws when the table is not in the registry, or when nothing would be
-   *   written — every key `undefined`, or none at all. The query builder
-   *   refused that too ("No values to set"), and a patch that names nothing
-   *   is a caller's mistake rather than a write of nothing.
-   */
-  private buildTransactionUpdate(
-    table: string,
-    data: Record<string, unknown>,
-    where: WhereClause,
-    bindUnmodeled: (value: unknown) => unknown
-  ): SQL {
+  /** The registered table object, or the error every CRUD method throws without one. */
+  private resolvedTableObject(table: string): Record<string, unknown> {
     const tableObj = this.getTableObject(table);
     if (!tableObj || typeof tableObj !== "object") {
       throw this.createDatabaseError(
@@ -2363,12 +2384,34 @@ export abstract class DrizzleAdapter {
         undefined
       );
     }
+    return tableObj as Record<string, unknown>;
+  }
+
+  /**
+   * The statement `transactionUpdate` runs.
+   *
+   * @throws when nothing would be written — every key `undefined`, or none at
+   *   all. The query builder refused that too ("No values to set"), and a
+   *   patch that names nothing is a caller's mistake rather than a write of
+   *   nothing.
+   */
+  private buildTransactionUpdate(
+    tableObj: Record<string, unknown>,
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause,
+    binding: {
+      bindUnmodeled: (value: unknown) => unknown;
+      returning: SQL[];
+    }
+  ): SQL {
     const statement = buildUpdateStatement({
       table,
-      tableObj: tableObj as Record<string, unknown>,
+      tableObj,
       data,
       where,
-      bindUnmodeled,
+      bindUnmodeled: binding.bindUnmodeled,
+      returning: binding.returning,
     });
     if (!statement) {
       throw this.createDatabaseError(
@@ -2455,6 +2498,46 @@ export abstract class DrizzleAdapter {
 
     return dbError;
   }
+}
+
+/**
+ * The SQL names of a table's primary key columns, read off the model. Empty
+ * when the model declares none, which is when a read-back cannot be by
+ * identity.
+ */
+function primaryKeyColumns(tableObj: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  for (const column of Object.values(getColumns(tableObj as never))) {
+    const candidate = column as { name?: unknown; primary?: unknown };
+    if (candidate.primary === true && typeof candidate.name === "string") {
+      names.push(candidate.name);
+    }
+  }
+  return names;
+}
+
+/**
+ * The predicate that names exactly the rows a statement reported: one
+ * `and` of every key column per row, `or`-ed together, so a composite key is
+ * matched as a whole rather than column by column.
+ */
+function rowsByIdentity(
+  identity: string[],
+  rows: Record<string, unknown>[]
+): WhereClause {
+  return {
+    or: rows.map(
+      (row): WhereClause => ({
+        and: identity.map(
+          (column): WhereCondition => ({
+            column,
+            op: "=",
+            value: row[column] as WhereCondition["value"],
+          })
+        ),
+      })
+    ),
+  };
 }
 
 /**

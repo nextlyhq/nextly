@@ -150,6 +150,10 @@ const DEFAULT_CONFIG = {
 function sanitizeSqliteValue(v: unknown): unknown {
   if (v === undefined) return null;
   if (typeof v === "boolean") return v ? 1 : 0;
+  // Binary is bound as binary: better-sqlite3 takes a Buffer or a typed
+  // array for a BLOB as it is, and the object branch below would spell it
+  // out as JSON text instead.
+  if (Buffer.isBuffer(v) || ArrayBuffer.isView(v)) return v;
   // Seconds, not an ISO string. SQLite stores whatever it is given regardless
   // of the declared type, so a string lands in the column without complaint
   // and only fails on the way back out, where the timestamp decoder reads it
@@ -867,12 +871,15 @@ export class SqliteAdapter extends DrizzleAdapter {
 
       // Adapter-built, as `insert` above is; `transactionUpdate` says why.
       // A column the model does not declare binds as every other value on
-      // this path does, through `sanitizeSqliteValue`. `run`, not `all`:
-      // better-sqlite3 throws on a statement that returns no rows, which is
-      // what this UPDATE is.
+      // this path does, through `sanitizeSqliteValue`. `all` only when the
+      // statement carries RETURNING: better-sqlite3 throws on `all` for a
+      // statement that returns no rows, and on `run` for one that does.
       update: this.transactionUpdate(
         txDb,
-        statement => txDb().run(statement),
+        (statement, returnsRows) =>
+          returnsRows
+            ? txDb().all<Record<string, unknown>>(statement)
+            : (txDb().run(statement), undefined),
         sanitizeSqliteValue
       ),
 

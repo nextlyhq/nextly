@@ -230,6 +230,22 @@ describe.skipIf(!TEST_DB_URL)(
       expect((await stored("a"))?.title).toBe("T");
     });
 
+    it("reads back exactly the rows it changed, even when its own write falsifies its predicate", async () => {
+      // Read back by the identity RETURNING reported, not by re-running the
+      // predicate: `slug = 'first'` is false of the row once the write
+      // lands, and a read by predicate would answer nothing.
+      const rows = await adapter.transaction(ctx =>
+        ctx.update<{ id: string; slug: string }>(
+          TABLE,
+          { slug: "renamed" },
+          { and: [{ column: "slug", op: "=", value: "first" }] },
+          { returning: "*" }
+        )
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: "a", slug: "renamed" });
+    });
+
     it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {
       await expect(
         adapter.transaction(async ctx => {
