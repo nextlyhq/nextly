@@ -2538,9 +2538,15 @@ export abstract class DrizzleAdapter {
   ): DatabaseError {
     const dbError = this.classifyError(error);
 
-    // Add operation context if not already present
-    if (!dbError.message.includes(operation)) {
-      dbError.message = `${operation} operation failed on table '${table}': ${dbError.message}`;
+    // Add the operation context unless THIS prefix is already on the message,
+    // which it is when an error is handled twice on its way out. Checked as
+    // the exact prefix: a driver's message carries the failed SQL, and a table
+    // or column name that merely contains the operation's word (a table named
+    // `int_update_table`, a column `updated_at`) would otherwise read as the
+    // context being present and leave the message without it.
+    const prefix = `${operation} operation failed on table '${table}': `;
+    if (!dbError.message.startsWith(prefix)) {
+      dbError.message = `${prefix}${dbError.message}`;
     }
 
     if (!dbError.table) {

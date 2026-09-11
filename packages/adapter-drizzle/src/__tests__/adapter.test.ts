@@ -334,3 +334,48 @@ describe("DrizzleAdapter", () => {
     });
   });
 });
+
+describe("the operation context on a query error", () => {
+  // `handleQueryError` is protected; exposed here to judge its message alone.
+  class ErrorProbe extends MockAdapter {
+    handle(error: unknown, operation: string, table: string) {
+      return this.handleQueryError(error, operation, table);
+    }
+  }
+  const probe = new ErrorProbe();
+
+  it("adds it when the driver's message names a table containing the operation's word", () => {
+    // A driver's message carries the failed SQL. A table named
+    // `int_update_table` put "update" in the message, which a check for the
+    // bare word read as the context already being there, so PostgreSQL and
+    // MySQL errors on such a table arrived without it.
+    const error = probe.handle(
+      new Error('Failed query: update "int_update_table" set "ghost" = $1'),
+      "update",
+      "int_update_table"
+    );
+    expect(error.message).toMatch(
+      /^update operation failed on table 'int_update_table': Failed query/
+    );
+    expect(error.message).toContain("ghost");
+  });
+
+  it("adds it when a column name contains the operation's word", () => {
+    const error = probe.handle(
+      new Error('column "updated_at" does not exist'),
+      "update",
+      "pages"
+    );
+    expect(error.message).toBe(
+      `update operation failed on table 'pages': column "updated_at" does not exist`
+    );
+  });
+
+  it("does not add it twice to an error handled on its way out twice", () => {
+    const once = probe.handle(new Error("boom"), "update", "pages");
+    const twice = probe.handle(once, "update", "pages");
+    expect(twice.message).toBe(
+      "update operation failed on table 'pages': boom"
+    );
+  });
+});
