@@ -369,7 +369,8 @@ export function documentFrom(
  *
  * Every read of the graph is bounded by the SITE's node cap, and a read the
  * cap ends early is not "names nothing" — it is unread, and the candidate is
- * left out (`reaches`).
+ * left out; so is one whose graph reaches an id the lookup does not hold out
+ * of a library that was not read whole (`namedBy`).
  *
  * Exported for its own test, for the reason `documentFrom` is.
  */
@@ -377,63 +378,81 @@ export function withoutSelf(
   components: readonly SavedComponent[],
   editing: BlockDocument,
   identity: { documentId?: string | undefined } | null,
-  definitions: ComponentLookup,
-  limits: DocumentLimits
+  graph: ComponentGraph
 ): readonly SavedComponent[] {
   const self = identity?.documentId;
   if (self === undefined || !isComponentDocument(editing)) return components;
   const kept = components.filter(
-    component =>
-      component.id !== self &&
-      !reaches(component, self, definitions, limits.maxNodes)
+    component => component.id !== self && !reaches(component.id, self, graph)
   );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
   return kept.length === components.length ? components : kept;
 }
 
+/** What judging a candidate's graph reads. */
+export interface ComponentGraph {
+  /** The lookup the canvas resolves against; each walk starts from its copy. */
+  readonly definitions: ComponentLookup;
+  /** The site's caps: every read of a definition is bounded by its node cap. */
+  readonly limits: DocumentLimits;
+  /**
+   * Whether the library read was WHOLE. A read the ceiling or a permission
+   * cut leaves out rows the store holds, so an id the lookup does not hold
+   * may be one of them — and may name the definition being edited.
+   */
+  readonly whole: boolean;
+}
+
 /**
- * Whether a component's stored graph names the definition given, at any
- * depth, through the lookup — or cannot be shown not to.
+ * Whether a component's graph names the definition given, at any depth,
+ * through the lookup — or cannot be shown not to.
  *
- * Each definition is read once per question — a loop among other rows ends
- * where it began rather than running on — and one the lookup does not hold
- * names nothing further, which is the honest answer for a reference nothing
- * here can follow.
- *
- * Every read is bounded by the cap given, and a read the cap ends early has
- * answered with a PREFIX: a reference past it is invisible, so "names nothing"
- * is what an unread definition looks like too, and a candidate cleared on that
- * answer can close the loop through the part nobody read. So an incomplete
- * read counts as reaching, and the candidate is left out. That refuses no
- * legitimate offer — a definition the cap cannot read whole is one the
- * resolver cannot inline under that cap either — and it is the direction to
- * err in, because the other one is a saved loop every page then draws as a
- * placeholder.
+ * Each definition is read once per question, the candidate's own included —
+ * a loop among other rows ends where it began rather than running on — and
+ * from the lookup's copy, which is what the canvas will draw.
  */
 function reaches(
-  component: SavedComponent,
+  candidate: string,
   id: string,
-  definitions: ComponentLookup,
-  maxNodes: number
+  graph: ComponentGraph
 ): boolean {
-  const document = component.document;
-  if (document === undefined || document === null) return false;
-  const own = componentUsageIn(document.nodes, maxNodes);
-  if (!own.complete) return true;
-  const pending = own.ids;
+  const pending = [candidate];
   const followed = new Set<string>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    if (next === id) return true;
     if (followed.has(next)) continue;
     followed.add(next);
-    const definition = definitions.get(next);
-    if (definition === undefined) continue;
-    const named = componentUsageIn(definition.nodes, maxNodes);
-    if (!named.complete) return true;
-    pending.push(...named.ids);
+    const named = namedBy(next, graph);
+    if (named === undefined || named.includes(id)) return true;
+    pending.push(...named);
   }
   return false;
+}
+
+/**
+ * The components one definition names, or `undefined` when that cannot be
+ * told — which counts as reaching, and leaves the candidate out.
+ *
+ * Two reads cannot tell. One the node cap ended early answered with a
+ * PREFIX: a reference past it is invisible, so "names nothing" is what an
+ * unread definition looks like too. And an id the lookup does not hold, out
+ * of a library that was not read whole, may be a component the cut left out.
+ * Out of a WHOLE library the same id is one nobody supplied: it names nothing
+ * further, and the resolver draws it as missing. Failing closed refuses no
+ * legitimate offer — a definition the cap cannot read whole is one the
+ * resolver cannot inline under it either, and an author editing a component
+ * against a cut library is told the library was cut — and it is the
+ * direction to err in, because the other one is a saved loop every page then
+ * draws as a placeholder.
+ */
+function namedBy(
+  id: string,
+  { definitions, limits, whole }: ComponentGraph
+): readonly string[] | undefined {
+  const definition = definitions.get(id);
+  if (definition === undefined) return whole ? [] : undefined;
+  const usage = componentUsageIn(definition.nodes, limits.maxNodes);
+  return usage.complete ? usage.ids : undefined;
 }
 
 /**
@@ -2465,8 +2484,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       componentLibrary.components,
       initialDocument,
       identity,
-      componentLibrary.definitions,
-      documentLimits
+      {
+        definitions: componentLibrary.definitions,
+        limits: documentLimits,
+        whole: !componentLibrary.truncated,
+      }
     );
     return components === componentLibrary.components
       ? componentLibrary

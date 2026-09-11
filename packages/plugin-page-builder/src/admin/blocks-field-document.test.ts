@@ -13,11 +13,18 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type ComponentLookup,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import type { SavedComponent } from "@nextlyhq/builder";
 import { describe, expect, it } from "vitest";
 
-import { canEditBlocks, documentFrom, withoutSelf } from "./BlocksField";
+import {
+  canEditBlocks,
+  documentFrom,
+  withoutSelf,
+  type ComponentGraph,
+} from "./BlocksField";
 
 describe("documentFrom", () => {
   it("keeps a document that already has nodes", () => {
@@ -122,6 +129,12 @@ describe("withoutSelf", () => {
   });
   const editing: BlockDocument = componentOf([text("own")]);
   const identity = { documentId: "a" };
+  /** What the walk reads: the canvas's lookup, the site's caps, and whether the library read was whole. */
+  const graphOf = (
+    definitions: ComponentLookup,
+    limits: DocumentLimits = DEFAULT_LIMITS,
+    whole = true
+  ): ComponentGraph => ({ definitions, limits, whole });
 
   it("leaves out the row being edited and every row that reaches it, at any depth", () => {
     const a = row("a", componentOf([text("t")]));
@@ -133,9 +146,12 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
-        r => r.id
-      )
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS)
+      ).map(r => r.id)
     ).toEqual(["d", "footer"]);
   });
 
@@ -170,7 +186,7 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS)
+      withoutSelf(library, editing, identity, graphOf(lookup, DEFAULT_LIMITS))
     ).toEqual([]);
   });
 
@@ -194,12 +210,17 @@ describe("withoutSelf", () => {
     };
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
-        r => r.id
-      )
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS)
+      ).map(r => r.id)
     ).toEqual(["x", "y", "s"]);
-    // x's question reads y then x; y's reads x then y; s's reads nobody.
-    expect(reads).toBe(5);
+    // Each question reads the candidate's own definition through the lookup,
+    // then what it names, once each: x reads x then y; y reads y then x; s
+    // reads s then nobody.
+    expect(reads).toBe(6);
   });
 
   it("leaves out a candidate whose graph could not be read whole under the site's cap, whether or not the readable prefix names the row", () => {
@@ -237,14 +258,19 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, limits).map(r => r.id)
+      withoutSelf(library, editing, identity, graphOf(lookup, limits)).map(
+        r => r.id
+      )
     ).toEqual(["small"]);
     // The SITE's cap, not the engine's default: under the default all three
     // are read whole, and only the one that names the row goes.
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
-        r => r.id
-      )
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS)
+      ).map(r => r.id)
     ).toEqual(["wide", "small"]);
   });
 
@@ -262,8 +288,35 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, limits).map(r => r.id)
+      withoutSelf(library, editing, identity, graphOf(lookup, limits)).map(
+        r => r.id
+      )
     ).toEqual([]);
+  });
+
+  it("fails closed on a reference the lookup cannot follow when the library read was cut, and follows nothing from it when it was whole", () => {
+    // A library the ceiling or a permission cut leaves out rows the store
+    // holds, so an id the lookup does not hold may be one of them — and may
+    // name the row being edited, closing the loop once saved. Read whole, the
+    // same id is one nobody supplied: it names nothing further, and the
+    // resolver draws it as missing.
+    const a = row("a", componentOf([text("t")]));
+    const viaOmitted = row("c", componentOf([instanceOf("b", "c-b")]));
+    const plain = row("p", componentOf([text("p1")]));
+    const library = [a, viaOmitted, plain];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS, false)
+      ).map(r => r.id)
+    ).toEqual(["p"]);
+    expect(
+      withoutSelf(library, editing, identity, graphOf(lookup)).map(r => r.id)
+    ).toEqual(["c", "p"]);
   });
 
   it("reads each definition's references once per row, never its subtree", () => {
@@ -285,7 +338,7 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS)
+      withoutSelf(library, editing, identity, graphOf(lookup, DEFAULT_LIMITS))
     ).toEqual([]);
     // One walk of the holder's own forest reads its slots once; a
     // composition would clone them.
