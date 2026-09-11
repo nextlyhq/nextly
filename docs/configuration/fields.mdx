@@ -954,11 +954,13 @@ One exception, on every write to a collection or a Single: a `fieldGroup` field
 is stored in its own table and is removed from the row before the main-table
 write, and the `afterChange` hooks run on the returned row without it, so that
 field's `afterChange` hook does not run. Its `beforeValidate` and `beforeChange`
-do. The one write where it does run is a working-draft update: on a collection
-with `versions: { drafts: true }`, an update to a published entry that names no
-`status` is held as a draft, and `afterChange` runs over that assembled draft,
-field groups included. A value returned from `afterChange` reshapes the
-response and does not change what was stored.
+do. The one write where it does run is a working-draft update through the
+ordinary update path: on a collection with `versions: { drafts: true }`, an
+update to a published entry that names no `status` is held as a draft, and
+`afterChange` runs over that assembled draft, field groups included. An update
+made inside a caller's transaction runs `afterChange` over the main row and
+skips the field group there too. A value returned from `afterChange` reshapes
+the response and does not change what was stored.
 
 Core still normalises the record between the last pre-write hook and the
 write: passwords are hashed and relationship and upload values reduced to ids
