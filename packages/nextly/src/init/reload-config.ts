@@ -308,10 +308,17 @@ async function markApplied(
 }
 
 /**
- * Publishes, for one kind, the slugs this reload refused DDL for -- what a
- * consumer deciding what a query may NAME has to be told, because the metadata
- * sync writes the new field list for every configured entity and a refused
- * one now has metadata its table never received.
+ * Publishes, for one kind, the slugs whose registry description and table this
+ * reload knows to DISAGREE -- what a consumer deciding what a query may NAME
+ * has to be told.
+ *
+ * Two ways to disagree, and both withhold. A refused DDL leaves metadata AHEAD
+ * of the table: the sync writes the new field list for every configured entity
+ * and the apply carried none of it. A per-entity metadata FAILURE leaves it
+ * behind: the DDL applied and the registry kept the old field list, so a
+ * source built from it names columns a confirmed rename has already moved.
+ * Either way a card drawn from that source queries a shape the table does not
+ * have, and a missing card is the better answer.
  *
  * 🔴 Called from THAT KIND'S OWN metadata sync path, after its sync ran, and
  * never from the other kind's. The two syncs succeed or fail on their own: a
@@ -321,21 +328,25 @@ async function markApplied(
  * source advertising columns its table does not have.
  *
  * Replacing the set is what lets a later reload lift a refusal: every entity
- * of the kind not named here had its DDL applied in the same pass.
+ * of the kind not named here had its DDL applied and its metadata stored in
+ * the same pass.
  */
 async function publishDeferred(
   kind: DeferrableEntityKind,
-  deferredEntities: ReadonlySet<string>
+  deferredEntities: ReadonlySet<string>,
+  metadataFailed: Iterable<string> = []
 ): Promise<void> {
   const { setDeferredEntities } = await import(
     "../domains/widgets/deferred-entities"
   );
-  setDeferredEntities(
-    kind,
-    [...deferredEntities]
-      .filter(entity => entity.startsWith(`${kind}:`))
-      .map(entity => entity.slice(`${kind}:`.length))
-  );
+  setDeferredEntities(kind, [
+    ...new Set([
+      ...[...deferredEntities]
+        .filter(entity => entity.startsWith(`${kind}:`))
+        .map(entity => entity.slice(`${kind}:`.length)),
+      ...metadataFailed,
+    ]),
+  ]);
 }
 
 // Minimal duck-typed surfaces of registry services used here.
@@ -2435,13 +2446,6 @@ async function applyReload(opts?: {
         )
       );
 
-      // 🔴 Published HERE, on the path where the metadata sync actually ran,
-      // and not before the branch above. Computing it earlier looked equivalent
-      // and was not: a reload carrying ONLY a refused change never reaches this
-      // sync at all, so its registry still describes the unchanged table, and
-      // announcing a deferral for it would withhold cards that work.
-      await publishDeferred("collection", deferredEntities);
-
       // 🔴 The same reading the metadata-only landing makes, because this is
       // the same sync answering the same way. A per-collection failure RESOLVES
       // with `errors[]` rather than rejecting, so a `catch` alone sees a partial
@@ -2450,6 +2454,16 @@ async function applyReload(opts?: {
       // policies, and the hook publication below. Both would then run against a
       // field tree that is not the one stored.
       const failedCollections = syncFailedSlugs(collectionSync);
+
+      // 🔴 Published HERE, on the path where the metadata sync actually ran,
+      // and not before the branch above. Computing it earlier looked equivalent
+      // and was not: a reload carrying ONLY a refused change never reaches this
+      // sync at all, so its registry still describes the unchanged table, and
+      // announcing a deferral for it would withhold cards that work. The slugs
+      // this sync could not store travel with the refused ones: their tables
+      // moved and their metadata did not.
+      await publishDeferred("collection", deferredEntities, failedCollections);
+
       if (failedCollections.length > 0) {
         collectionSynced = false;
         logger?.warn(
@@ -2499,8 +2513,10 @@ async function applyReload(opts?: {
       }
       // On the singles' own sync path, whatever the collection sync did: a
       // refused single is ahead of its table exactly as a collection is, and
-      // this sync is the one that put it there.
-      await publishDeferred("single", deferredEntities);
+      // this sync is the one that put it there. A single whose metadata this
+      // sync could not store is withheld with them -- its table moved and its
+      // field list did not.
+      await publishDeferred("single", deferredEntities, failedSlugs);
       // Refresh the live default source after the sync: successful singles adopt
       // the new config; a single whose sync failed keeps its prior snapshot so
       // its new fields never pair with stale serialized metadata.

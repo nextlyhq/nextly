@@ -1017,6 +1017,116 @@ describe("reloadNextlyConfig", () => {
     );
   });
 
+  it("withholds a single whose metadata sync could not store its new fields", async () => {
+    // 🔴 The other direction of disagreement. A per-single failure RESOLVES in
+    // `errors[]`, so the DDL applied while the registry kept the OLD field
+    // list -- and a source built from it names columns a confirmed rename has
+    // already moved, so every card over it fails against the table.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    // Both tables are new, so nothing is DDL-deferred and the only reason to
+    // withhold is the failed metadata write.
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({
+        singleSyncResult: {
+          created: ["settings"],
+          updated: [],
+          unchanged: [],
+          errors: [{ slug: "theme", error: "write failed" }],
+        },
+      }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", ["theme"]);
+  });
+
+  it("withholds a collection whose metadata sync could not store its new fields", async () => {
+    // The same rule for the other kind, from the same sync report.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "title", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({
+        collectionSyncResult: {
+          created: [],
+          updated: [],
+          unchanged: [],
+          errors: [{ slug: "books", error: "write failed" }],
+        },
+      }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", [
+      "books",
+    ]);
+  });
+
+  it("withholds a single its DDL refused BESIDE one its metadata sync could not store", async () => {
+    // The two reasons are one set: a consumer asks whether the registry and
+    // the table agree, not why they do not.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          // REFUSED: live `active` is text, the config declares a checkbox.
+          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // APPLIED, but its metadata write fails below.
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: [
+            ...reservedColumns("single_settings"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({
+      resolver: buildResolver({
+        singleSyncResult: {
+          created: ["theme"],
+          updated: [],
+          unchanged: [],
+          errors: [{ slug: "theme", error: "write failed" }],
+        },
+      }),
+    });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", [
+      "settings",
+      "theme",
+    ]);
+  });
+
   it("PUBLISHES the singles it refused even when the collection metadata sync throws", async () => {
     // 🔴 The two metadata syncs succeed or fail on their own. Published from
     // the collection sync's path, a refused single's deferral was skipped

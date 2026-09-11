@@ -56,6 +56,8 @@ beforeEach(() => {
         { name: "siteName", type: "text", label: "Site name" },
         { name: "tagline", type: "text" },
         { name: "secret", type: "password" },
+        // A legal field name that `Object.prototype` also answers for.
+        { name: "toString", type: "text" },
       ],
     },
     { slug: "homepage", fields: [{ name: "headline", type: "text" }] },
@@ -76,6 +78,7 @@ describe("what a single publishes", () => {
     expect(source?.fields.map(field => field.name)).toEqual([
       "siteName",
       "tagline",
+      "toString",
       "id",
       "createdAt",
       "updatedAt",
@@ -127,6 +130,28 @@ describe("what a single executes", () => {
         { name: "updatedAt", type: "date" },
       ],
     });
+  });
+
+  it("projects OWN properties, so a field the read removed stays removed", async () => {
+    // 🔴 `name in document` walks the prototype chain, and `toString` is a
+    // field name the validator permits. A field the read stripped for this
+    // caller therefore read as present, and the projection answered with
+    // `Object.prototype.toString` -- a function a direct caller received, and
+    // a column `fields` advertised while HTTP's JSON dropped the value.
+    findSingle.mockResolvedValue({ siteName: "Acme" });
+    const q = validateWidgetQuery({
+      source: "single:site-settings",
+      op: "list",
+      select: ["siteName", "toString"],
+      status: "all",
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result.op).toBe("list");
+    if (result.op !== "list") return;
+    expect(Object.keys(result.items[0])).toEqual(["siteName"]);
+    expect(result.fields?.map(field => field.name)).toEqual(["siteName"]);
   });
 
   it("hands an API key's own scope to the read, the way a collection read does", async () => {

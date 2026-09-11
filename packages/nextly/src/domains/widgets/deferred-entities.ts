@@ -1,5 +1,5 @@
 /**
- * Content entities whose stored metadata is known to be AHEAD of their table.
+ * Content entities whose stored metadata and table are known to DISAGREE.
  *
  * 🔴 The one thing table existence cannot tell you, and the reason existence
  * alone is not enough. A reload writes the new field list to the registry for
@@ -7,6 +7,11 @@
  * and knows nothing about what applied -- while refusing the DDL for an entity
  * whose change it classified unsafe. That entity then keeps its OLD table,
  * which exists, alongside a NEW field list that the table never received.
+ *
+ * The reload records the other direction here too: an entity whose DDL applied
+ * while its metadata write failed keeps the OLD field list over a table that
+ * has already moved. A source built from either describes a shape the database
+ * does not have.
  *
  * Verified structurally, such an entity publishes a widget source naming
  * columns the database does not have, and a widget query validates against
@@ -40,7 +45,7 @@ function store(): Map<DeferrableEntityKind, Set<string>> {
   return globalForDeferred.__nextly_widgetDeferredEntities;
 }
 
-/** The slugs of one kind a reload declined to apply DDL for. */
+/** The slugs of one kind whose stored description the reload knows to be wrong. */
 export function deferredEntities(
   kind: DeferrableEntityKind
 ): ReadonlySet<string> {

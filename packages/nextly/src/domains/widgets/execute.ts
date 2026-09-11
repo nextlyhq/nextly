@@ -352,14 +352,26 @@ async function runSingle(
   return { op: "list", items, ...(fields && { fields }) };
 }
 
-/** The document reduced to the selected names; the whole document for none. */
+/**
+ * The document reduced to the selected names; the whole document for none.
+ *
+ * 🔴 OWN properties. `name in document` walks the prototype chain, and a
+ * single may declare a field the validator permits and `Object.prototype`
+ * also answers for -- `toString`, `constructor`. A field the READ removed for
+ * this caller then read as present, and the projection answered with the
+ * inherited function: a direct caller received it, and `describeSelectedFields`
+ * advertised the column from it while HTTP's JSON dropped the value, so the
+ * card was told to expect a field it would never be sent.
+ */
 function projectedTo(
   document: Record<string, unknown>,
   select: readonly string[] | undefined
 ): Record<string, unknown> {
   if (!select || select.length === 0) return document;
   return Object.fromEntries(
-    select.filter(name => name in document).map(name => [name, document[name]])
+    select
+      .filter(name => Object.prototype.hasOwnProperty.call(document, name))
+      .map(name => [name, document[name]])
   );
 }
 

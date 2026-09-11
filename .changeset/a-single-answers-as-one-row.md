@@ -52,6 +52,22 @@ A Single's not-found answer now says which Single it is about: the error's
 `data` carries `{ single: <slug> }`, the slug the caller named. A draft-only
 Single and a nonexistent one still answer identically.
 
+A single's widget query projects OWN properties, so a field the read removed
+for a caller -- one named `toString` or `constructor`, which a single may
+legally declare -- stays removed instead of answering with the value
+`Object.prototype` carries.
+
+A collection or single whose metadata sync could not store its new field list
+is withheld from the widget sources for the rest of the process, beside the
+ones whose DDL a reload refused: in both cases the registry's description and
+the table are known to disagree, and a card drawn from one queries a shape the
+database does not have.
+
+A single the boot cannot register -- because a collection already holds its
+slug, say -- now fails the boot naming it, as a collection in the same state
+already did, instead of leaving the app running without a single its config
+declares.
+
 A plugin can no longer contribute a collection, single or field group under a
 slug another kind already holds. Slugs are one namespace across kinds -- as
 `defineConfig` already enforced for an app's own config -- and before, such a
