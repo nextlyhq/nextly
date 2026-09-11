@@ -75,8 +75,16 @@ name: its bulk pipeline writes rows in one pass and cannot store a translation, 
 option it accepted but could not honour would file every row under the default language
 and report success. Create the rows one at a time with `createEntry` instead.
 
-The pair is spelled exactly as it is on the request context and on the wire, so a route
-can pass through what it was given.
+`locale` names **one** language. The selectors the core understands elsewhere — `*`,
+which moves every translation's lifecycle in one write, and `all`, which answers a read
+with one value per language — are refused here with a `400`, so a value forwarded from a
+query string can never publish every translation of a document by accident. A plugin
+that needs the every-locale sweep needs a surface that says so by name; there is none
+yet.
+
+With that, the pair is spelled exactly as it is on the request context and on the wire,
+and a route can pass through what it was given: a wrong code shows the default on a
+read and is refused on a write, and a selector is refused on both.
 
 ## Collection methods
 

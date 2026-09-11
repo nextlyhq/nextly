@@ -2,6 +2,7 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
+import { EVERY_LOCALE } from "../domains/i18n/locale-selector";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
 import type {
@@ -91,13 +92,22 @@ export interface ServiceOpts {
    * `/thanks` for a visitor who was on `/merci`.
    *
    * The same spelling as `RequestContext` and the wire's `?locale=`, so a
-   * route can hand through what it was given. The collection services decide
-   * what an unconfigured code means, and they decide it differently by verb:
-   * a READ resolves it to the default, so a wrong query string still shows a
-   * page; a WRITE is refused (`400`), so a typo cannot overwrite the default
-   * language's content. `createMany` refuses any locale at all, by name — its
-   * bulk pipeline cannot perform the localized split, and accepting a value it
-   * could not honour would file the rows under the default language silently.
+   * route can hand through what it was given, and what it was given is judged
+   * here and below rather than trusted. One language code, only. The
+   * selectors the core understands elsewhere — `*`, which moves every
+   * translation's lifecycle in one write, and `all`, which answers a read
+   * with one value per language — are refused at this boundary, because a
+   * value forwarded from a query string must never be able to publish every
+   * translation of a document, and no plugin has a designed use for either;
+   * a plugin that needs the sweep needs a surface that says so by name.
+   *
+   * The collection services decide what an unconfigured code means, and they
+   * decide it differently by verb: a READ resolves it to the default, so a
+   * wrong query string still shows a page; a WRITE is refused (`400`), so a
+   * typo cannot overwrite the default language's content. `createMany`
+   * refuses any locale at all, by name — its bulk pipeline cannot perform the
+   * localized split, and accepting a value it could not honour would file the
+   * rows under the default language silently.
    */
   locale?: string;
 
@@ -112,6 +122,18 @@ export interface ServiceOpts {
   fallbackLocale?: string | false;
 }
 
+/**
+ * Whether a `locale` value is one of the core's selectors rather than a code.
+ *
+ * Named after what they are rather than spelled inline, so the refusal above
+ * and the wire vocabulary it guards against cannot drift apart: `*` is
+ * `EVERY_LOCALE` in `domains/i18n/locale-selector`, and `all` is the read
+ * wildcard the query service honours.
+ */
+function isLocaleSelector(locale: string): boolean {
+  return locale === EVERY_LOCALE || locale === "all";
+}
+
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
 export function resolveServiceOpts(opts: ServiceOpts): {
   user?: RequestContext["user"];
@@ -123,6 +145,24 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   fallbackLocale?: string | false;
 } {
   const { as, user } = opts;
+  // A selector is not a language. `*` is the every-locale lifecycle sweep
+  // and `all` the every-translation read; both are core vocabulary a plugin
+  // has no designed use for, and a route forwarding `?locale=` must not be
+  // able to reach the sweep by accident. Refused before any branch, so no
+  // branch can carry one.
+  if (opts.locale !== undefined && isLocaleSelector(opts.locale)) {
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      statusCode: 400,
+      publicMessage: "locale must name one language.",
+      logMessage:
+        "ServiceOpts.locale received a selector; `*` and `all` are not available through the plugin services",
+      logContext: {
+        reason: "service-opts-locale-selector",
+        locale: opts.locale,
+      },
+    });
+  }
   // What travels whatever the caller is, built once. Each branch below used to
   // write its own literal of these, and a literal drops whatever it does not
   // name: that is how the locale a plugin could not say stayed unsayable —

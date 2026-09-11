@@ -305,9 +305,9 @@ describe("a form submitted in the visitor's language", () => {
       getService,
       current.hooks as never
     );
-    return (locale?: string) =>
+    return (locale?: string, request?: Request) =>
       submitForm(
-        { formSlug: "contact", data: { message: "bonjour" }, locale },
+        { formSlug: "contact", data: { message: "bonjour" }, locale, request },
         { pluginContext, pluginConfig: config }
       );
   }
@@ -335,6 +335,46 @@ describe("a form submitted in the visitor's language", () => {
     const result = await submit("xx");
     expect(result.success).toBe(true);
     expect(result.redirect).toBe("/thanks");
+  });
+
+  it("reads the target on the request the host handed over", async () => {
+    /*
+     * A hook on the target collection that selects content by a header, or
+     * applies only to a browser, reads `ctx.req.http` and stands down when it
+     * is absent. A host route hands its request to `submitForm`, and the
+     * target read is the visitor's read — so the hook must see the request
+     * there. Observed from the hook itself: nothing else can tell a read that
+     * carried the request from one that ran as a job.
+     *
+     * Through the handler rather than the built-in route on purpose. Inside a
+     * route the core pins the request for the whole handler, so a hook sees
+     * it whether or not this read forwarded it, and a test there passed with
+     * the forward removed. A host calling the handler outside a route has no
+     * such scope, which is exactly where the forward decides the answer.
+     */
+    const submit = await bootLocalized();
+    let sawRequest: boolean | undefined;
+    current!.hooks.register("beforeRead", "pages", ctx => {
+      sawRequest = ctx.req?.http !== undefined;
+    });
+    const result = await submit(
+      "fr",
+      new Request("http://localhost/contact", { method: "POST" })
+    );
+    expect(result.redirect).toBe("/merci");
+    expect(sawRequest).toBe(true);
+  });
+
+  it("reads the target as background work when no request was given", async () => {
+    // The control: a host calling the handler with no request is a server,
+    // and the target read must look like one to a hook scoped to a visitor.
+    const submit = await bootLocalized();
+    let sawRequest: boolean | undefined;
+    current!.hooks.register("beforeRead", "pages", ctx => {
+      sawRequest = ctx.req?.http !== undefined;
+    });
+    expect((await submit("fr")).redirect).toBe("/merci");
+    expect(sawRequest).toBe(false);
   });
 
   it("treats the read wildcard as no language, not as every language", async () => {

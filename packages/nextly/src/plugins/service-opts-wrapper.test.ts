@@ -227,6 +227,27 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
       });
     });
 
+    it.each(["*", "all"])(
+      "refuses the selector %j before delegating — it is not a language",
+      async selector => {
+        // `*` moves every translation's lifecycle in one write and `all`
+        // answers a read per language. A route forwarding `?locale=` must
+        // not be able to reach either by accident, and no plugin has a
+        // designed use for them, so the boundary refuses both. Before
+        // delegating: the facade never sees the call.
+        const m = mockCollections();
+        await expect(
+          wrapCollectionsForPlugin(m as never).updateEntry(
+            "vault",
+            "1",
+            { status: "published" },
+            { as: "system", locale: selector }
+          )
+        ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+        expect(m.updateEntry).not.toHaveBeenCalled();
+      }
+    );
+
     it("says nothing about locale when the plugin said nothing", async () => {
       // The control: absent stays absent, so the facade keeps deciding the
       // default rather than being handed an explicit `undefined` to interpret.

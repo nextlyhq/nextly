@@ -253,6 +253,7 @@ export async function submitForm(
   const { formSlug, data, metadata, request } = options;
   const access: SubmissionAccess = options.access ?? { as: "system" };
   const locale = visitorLocale(options.locale);
+  const targetRead: TargetRead = { access, locale, request };
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
   const { logger } = pluginContext;
@@ -278,7 +279,7 @@ export async function submitForm(
     // — and two call sites naming the inputs separately is how one of them
     // comes to be answered in the wrong language while the other is right.
     const redirectFor = () =>
-      resolveRedirectUrl(form, pluginConfig, pluginContext, { access, locale });
+      resolveRedirectUrl(form, pluginConfig, pluginContext, targetRead);
 
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
     // so what a visitor is told does not depend on which entry point their
@@ -738,7 +739,8 @@ function buildUrl(
 
 /** The target row, or undefined — a deleted target and a failed read differ. */
 /**
- * How the redirect target is read: as whom, and in which language.
+ * How the redirect target is read: as whom, in which language, and on which
+ * request.
  *
  * As whom is the submission's own `access`, because the destination is a page
  * the VISITOR is about to be sent to, and the visitor's view of it is the one
@@ -751,10 +753,18 @@ function buildUrl(
  *
  * A host that elevated the submission to `system` keeps the trusted read it
  * asked for, as before this carried a language.
+ *
+ * The request travels for the same reason the access does: a read that is
+ * the visitor's should look like the visitor's to every hook on the target
+ * collection. One that selects content by a tenant header, or applies only
+ * to a browser, reads `ctx.req.http` — and a read carrying no request runs
+ * those hooks as background work and builds a URL the visitor was never
+ * meant to get.
  */
 interface TargetRead {
   access: SubmissionAccess;
   locale: string | undefined;
+  request: Request | undefined;
 }
 
 /**
@@ -797,7 +807,7 @@ async function readTarget(
     row = await pluginContext.services.collections.findEntryById(
       reference.collection,
       reference.id,
-      { ...read.access, locale: read.locale }
+      { ...read.access, locale: read.locale, request: read.request }
     );
   } catch (error) {
     // The submission already succeeded, so this degrades to "no redirect"

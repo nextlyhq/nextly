@@ -38,7 +38,9 @@ locale resolves to the default on a read, as it does on the wire, and is
 refused on a write, so a typo cannot overwrite the default language's
 content. `createMany` refuses any locale by name rather than filing the rows
 under the default language silently; its bulk pipeline cannot store a
-translation yet.
+translation yet. The selectors `*` and `all` are refused outright: a value
+forwarded from a query string must never be able to publish every
+translation of a document.
 
 The form builder uses it for the one place a visitor could see the gap. A
 form that redirects to a picked page read that page with no locale, so a page
