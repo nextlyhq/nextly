@@ -1649,6 +1649,43 @@ describe("when the library was cut, or could not be read", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
+  it("says when a tier could not be RE-read, apart from one never read, and offers the retry", () => {
+    // A third sentence for a third state. The tiles are the last answer the
+    // host holds, so "none are offered" would be false beside them; what is
+    // true is that they may be out of date, and that a component on the page
+    // draws as it was rather than as it is.
+    const retry = vi.fn();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "stale", components: "stale", retry }}
+      />
+    );
+
+    const [stale] = notices();
+    expect(stale?.textContent).toContain(
+      "patterns and components could not be reloaded, so those offered may be out of date"
+    );
+    expect(stale?.textContent).toContain("draws as it was");
+    expect(stale?.textContent).not.toContain("none are offered");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the page sentence off a stale pattern tier", () => {
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "stale" }}
+      />
+    );
+
+    expect(notices()[0]?.textContent).toContain(
+      "patterns could not be reloaded"
+    );
+    expect(notices()[0]?.textContent).not.toContain("draws as it was");
+  });
+
   it("offers no retry when the host supplied none", () => {
     render(
       <InsertPanel
