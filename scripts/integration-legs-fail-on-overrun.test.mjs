@@ -46,7 +46,12 @@ import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { jobIds, jobTimeouts, workflowSteps } from "./workflow-run-blocks.mjs";
+import {
+  jobIds,
+  jobsMentioning,
+  jobTimeouts,
+  workflowSteps,
+} from "./workflow-run-blocks.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WORKFLOW = path.join(
@@ -180,18 +185,30 @@ describe("integration.yml", () => {
     const floor =
       Number(budget[1]) + escalationMinutes(script) + SETUP_MINUTES;
     const ceilings = jobTimeouts(workflow);
-    const ids = jobIds(workflow);
 
-    // Non-empty, or "every job clears the floor" is true of no jobs at all.
-    expect(ids.length).toBeGreaterThan(0);
+    // The jobs that RUN the budgeted step are the ones that owe the floor. A
+    // job that only asks the API a question before the legs run has no suite
+    // under it, and holding it to an hour's ceiling would let a hung request
+    // keep a runner for an hour.
+    const legs = jobsMentioning(workflow, WRAPPER);
 
-    // Per job, by id. One list of every number in the file is satisfied by the
-    // siblings of a job whose own ceiling was deleted.
-    for (const id of ids) {
+    // Non-empty, or "every leg clears the floor" is true of no legs at all. And
+    // not the whole file, so this cannot pass by every job having stopped
+    // invoking the wrapper.
+    expect(legs.length).toBeGreaterThan(0);
+    expect(jobIds(workflow).length).toBeGreaterThanOrEqual(legs.length);
+
+    // Every job still needs SOME ceiling; only the legs need one this tall.
+    for (const id of jobIds(workflow)) {
       expect(
         ceilings.get(id),
         `${id} declares no timeout-minutes`
       ).toBeDefined();
+    }
+
+    // Per leg, by id. One list of every number in the file is satisfied by the
+    // siblings of a job whose own ceiling was deleted.
+    for (const id of legs) {
       expect(
         ceilings.get(id),
         `${id} leaves no room above the budget`

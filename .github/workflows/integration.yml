@@ -42,13 +42,53 @@ env:
 # `github.ref` group cancelled the previous commit's run on every merge, and
 # switching cancellation off is not enough — a group holds one running and one
 # pending run, so a third merge displaces the second while it is still queued.
+#
+# That every commit keeps its own group does not mean every commit does the
+# work. The `supersession` job asks first, and a run a newer push has overtaken
+# skips its legs; queued runs therefore start, ask and stop within seconds, and
+# only the newest tests. The queue stays short without anything being cancelled.
 concurrency:
   group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
+  # Whether a newer push to `main` already has a run of this workflow. If so
+  # every leg below is skipped rather than repeated: the newer run's verdict
+  # includes this commit, and a skipped job is how this repository says "this
+  # commit cannot affect me". Nothing is cancelled, so `cancelled` keeps its
+  # plain meaning. `.github/actions/superseded-on-main` carries the reasoning.
+  #
+  # No change-detection here, unlike CI: this workflow's trigger already
+  # ignores docs and markdown, so a docs push has no run and cannot supersede
+  # anything, and every run that does exist tests everything. So only the
+  # `superseded` answer is used; `last-tested-sha` is for a workflow that
+  # narrows its work by diff.
+  supersession:
+    name: Ask whether a newer push already covers this one
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      superseded: ${{ steps.newer.outputs.superseded }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Ask
+        id: newer
+        uses: ./.github/actions/superseded-on-main
+        with:
+          workflow: integration.yml
+          substantive-job: Integration (postgres)
+          token: ${{ github.token }}
+
   integration:
     name: Integration (${{ matrix.dialect }})
+    needs: supersession
+    if: needs.supersession.outputs.superseded != 'true'
     runs-on: ubuntu-latest
     # A BACKSTOP now, not the bound that should ever fire.
     #
@@ -221,6 +261,8 @@ jobs:
   # check keeps its identity.
   integration-sqlite:
     name: Integration (sqlite)
+    needs: supersession
+    if: needs.supersession.outputs.superseded != 'true'
     runs-on: ubuntu-latest
     # A BACKSTOP, for the same reason as the matrix legs above: the bound that
     # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as
