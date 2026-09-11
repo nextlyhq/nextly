@@ -18,7 +18,7 @@
  *
  * @module library-route.binding.test
  */
-import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** The Direct API handle the route reaches, with both reads recorded. */
@@ -27,9 +27,9 @@ const nextly = vi.hoisted(() => ({
   findByID: vi.fn(),
 }));
 
-// The handle is replaced; everything else — `buildUserContext` above all — is
-// the real module, because what the route hands the handle has to be the
-// identity core builds, not one this file restates.
+// The handle is replaced and nothing else is: the identity the route hands it
+// is the caller's own answer (`caller.identity()`), modelled by `contextAs`
+// below, not one this file restates.
 vi.mock("nextly/runtime", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   requireNextly: () => nextly,
@@ -56,19 +56,30 @@ function listed(...ids: string[]) {
   };
 }
 
-/** A route context: who is asking, and which collections the host has. */
+/**
+ * A route context: who is asking, as the dispatcher's caller resolves them,
+ * and which collections the host has.
+ *
+ * The identity is the CALLER's answer — the user context with the roles a
+ * stored rule reads, and the key's scope when there is one — because that is
+ * what the route reads; `user` on the context names the account and nothing
+ * a rule can decide on.
+ */
 function contextAs(
   user: PluginRouteContext["user"],
-  authenticatedScope?: PluginRouteContext["authenticatedScope"],
-  claims?: Record<string, unknown>
+  identity: {
+    user: Record<string, unknown>;
+    authenticatedScope?: PluginRouteContext["authenticatedScope"];
+  } = { user: { id: "u1", email: "u1@example.test" } }
 ): PluginRouteContext {
   return {
     self: { collections: {} },
     user,
-    ...(authenticatedScope === undefined ? {} : { authenticatedScope }),
-    ...(claims === undefined
-      ? {}
-      : { caller: { authMethod: "session", claims, can: async () => true } }),
+    caller: {
+      authMethod: "session",
+      can: async () => true,
+      identity: async () => identity,
+    },
   } as unknown as PluginRouteContext;
 }
 
@@ -105,7 +116,6 @@ describe("the component route reads AS THE USER", () => {
       overrideAccess: false,
       user: { id: "u1", email: "u1@example.test" },
       draft: true,
-      disableErrors: true,
     });
   });
 
@@ -122,23 +132,29 @@ describe("the component route reads AS THE USER", () => {
     expect(nextly.findByID.mock.calls[0]?.[0]).toMatchObject({ status: "all" });
   });
 
-  it("carries the caller's verified claims into the identity, and lets the identity win", async () => {
-    // A rule written against a tenant claim reads it off the user; built as
-    // `{ id, email }` alone, the same caller who passed the route gate reads
-    // as having no tenant inside, and gets an empty library. The canonical
-    // fields are spread LAST, so a token cannot restate `id` as a claim.
+  it("reads with the identity the CALLER resolved — roles and claims included — on both reads", async () => {
+    // A stored role-based rule reads `user.roles`, and a rule written against
+    // a tenant claim reads that off the user too. Built from `ctx.user` alone
+    // the context carries neither, and the same caller who passed the route's
+    // gate is refused by the collection's rule and gets an empty library. So
+    // the user handed to the reads is the one the dispatcher resolved, as it
+    // resolved it.
+    const resolved = {
+      id: "u1",
+      email: "u1@example.test",
+      roles: ["editor"],
+      role: "editor",
+      tenant: "acme",
+    };
     await componentLibraryRoute().handler(
       request,
-      contextAs({ id: "u1", email: "u1@example.test" } as never, undefined, {
-        tenant: "acme",
-        id: "somebody-else",
+      contextAs({ id: "u1", email: "u1@example.test" } as never, {
+        user: resolved,
       })
     );
 
     for (const call of [nextly.find, nextly.findByID]) {
-      expect(call.mock.calls[0]?.[0]).toMatchObject({
-        user: { id: "u1", email: "u1@example.test", tenant: "acme" },
-      });
+      expect(call.mock.calls[0]?.[0].user).toBe(resolved);
     }
   });
 
@@ -173,7 +189,10 @@ describe("the component route reads AS THE USER", () => {
 
     await componentLibraryRoute().handler(
       request,
-      contextAs({ id: "u1", email: "u1@example.test" } as never, scope as never)
+      contextAs({ id: "u1", email: "u1@example.test" } as never, {
+        user: { id: "u1", email: "u1@example.test" },
+        authenticatedScope: scope as never,
+      })
     );
 
     expect(nextly.find.mock.calls[0]?.[0]).toMatchObject({ actor: scope });
@@ -191,6 +210,50 @@ describe("the component route reads AS THE USER", () => {
 
     expect(nextly.find.mock.calls[0]?.[0]).not.toHaveProperty("actor");
     expect(nextly.findByID.mock.calls[0]?.[0]).not.toHaveProperty("actor");
+  });
+
+  it("leaves out a row the caller may not read or that is gone, and lets any other failure fail the route", async () => {
+    // Two expected answers on the by-id read are the walk's to report as a
+    // cut library: the row vanished between the two reads, or this caller may
+    // not read it. A transient failure — the database, a hook — is neither,
+    // and reported as a cut it would read as a static ceiling with no retry
+    // while every instance on the page draws as missing. The route fails
+    // instead, which the client reads as unavailable, with the retry.
+    nextly.find.mockResolvedValue(listed("gone", "kept", "secret"));
+    nextly.findByID.mockImplementation(async ({ id }: { id: string }) => {
+      if (id === "gone") throw NextlyError.notFound();
+      if (id === "secret") throw NextlyError.forbidden();
+      return {
+        id,
+        title: `Component ${id}`,
+        content: { formatVersion: 1, kind: "component", nodes: [] },
+      };
+    });
+    const answered = await componentLibraryRoute().handler(
+      request,
+      contextAs({ id: "u1", email: "u1@example.test" } as never)
+    );
+    const body = (await answered.json()) as {
+      items: { id: string }[];
+      meta: { truncated: boolean };
+    };
+    expect(body.items.map(item => item.id)).toEqual(["kept"]);
+    expect(body.meta.truncated).toBe(true);
+    // Not asked to swallow: the read's own switch would turn EVERY failure
+    // into a missing row, which is what this case exists to refuse.
+    expect(nextly.findByID.mock.calls[0]?.[0]).not.toHaveProperty(
+      "disableErrors"
+    );
+
+    nextly.findByID.mockRejectedValue(
+      NextlyError.internal({ logMessage: "db" })
+    );
+    await expect(
+      componentLibraryRoute().handler(
+        request,
+        contextAs({ id: "u1", email: "u1@example.test" } as never)
+      )
+    ).rejects.toBeInstanceOf(NextlyError);
   });
 
   it("answers the canonical list envelope, with the document under the name the panel reads", async () => {
