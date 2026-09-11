@@ -195,6 +195,50 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       expect(withoutRenames.join("\n")).not.toContain(from);
     });
 
+    it("rebuilds the foreign keys, not renames them, when the same save edited the referential actions", () => {
+      // A renamed constraint keeps its actions: the registry would record
+      // `restrict` while the database went on cascading. PostgreSQL can rename
+      // a foreign key and so must be told not to; MySQL re-declares one in any
+      // case; SQLite cannot alter a constraint, so the links keep the table
+      // they are in and the old actions with it, which is stated where the
+      // statements are written.
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany("tags")],
+        [manyToMany("categories", "tags", { onDelete: "restrict" })]
+      );
+      const from = junction("tags");
+      const to = junction("categories");
+      const expected: Record<Dialect, string[]> = {
+        postgresql: [
+          `ALTER TABLE "${to}" DROP CONSTRAINT "fk_${from}_posts", ADD CONSTRAINT "fk_${to}_posts" FOREIGN KEY ("posts_id") REFERENCES "dc_posts"("id") ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          `ALTER TABLE "${to}" DROP CONSTRAINT "fk_${from}_tags", ADD CONSTRAINT "fk_${to}_tags" FOREIGN KEY ("tags_id") REFERENCES "dc_tags"("id") ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          // The unique pair carries no action and is still renamed in place.
+          `ALTER TABLE "${to}" RENAME CONSTRAINT "uq_${from}_pair" TO "uq_${to}_pair";`,
+        ],
+        mysql: [
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_posts\`, ADD CONSTRAINT \`fk_${to}_posts\` FOREIGN KEY (\`posts_id\`) REFERENCES \`dc_posts\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_tags\`, ADD CONSTRAINT \`fk_${to}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
+          `ALTER TABLE \`${to}\` RENAME INDEX \`uq_${from}_pair\` TO \`uq_${to}_pair\`;`,
+        ],
+        sqlite: [`ALTER TABLE "${from}" RENAME TO "${to}";`],
+      };
+      const forbidden: Record<Dialect, string[]> = {
+        postgresql: [`RENAME CONSTRAINT "fk_`, "ON DELETE CASCADE"],
+        mysql: ["ON DELETE CASCADE"],
+        sqlite: ["CONSTRAINT"],
+      };
+      for (const statement of expected[dialect]) {
+        expect(sql).toContain(statement);
+      }
+      for (const fragment of forbidden[dialect]) {
+        expect(sql).not.toContain(fragment);
+      }
+      // Still a rename: the links stay where they are on every dialect.
+      expect(sql).not.toContain("CREATE TABLE");
+      expect(sql).not.toContain("DROP TABLE");
+    });
+
     it("is two drops and a create, not an ambiguous rename, when nothing pairs", () => {
       // Two removed, one added, and the added one points elsewhere: no
       // compatible pair exists, so nothing is renamed and nothing is refused.

@@ -1907,9 +1907,11 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
    * ones: MySQL refuses the duplicate foreign-key symbol, and PostgreSQL and
    * SQLite let `CREATE INDEX IF NOT EXISTS` find the index on THIS table and
    * leave the new junction unindexed. Each dialect renames what it can rename
-   * and rebuilds what it cannot; SQLite cannot touch a table's constraints and
-   * does not need to, since its constraint names are not shared across tables.
-   * Nothing is emitted for a name that did not change.
+   * and rebuilds what it cannot, and a foreign key whose referential actions
+   * the same save edited is rebuilt rather than renamed, so the database
+   * carries the actions the registry records; SQLite cannot touch a table's
+   * constraints and does not need to, since its constraint names are not
+   * shared across tables. Nothing is emitted for a name that did not change.
    */
   renameJunctionStatements(from: JunctionShape, to: JunctionShape): string[] {
     const q = (name: string) => this.quoteIdentifier(name);
@@ -1956,43 +1958,64 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
   /**
    * The constraint half of {@link renameJunctionStatements}. PostgreSQL
    * renames a constraint in place; MySQL renames the unique pair as the
-   * index it is and re-declares each foreign key under its new name, since
-   * a foreign key cannot be renamed there; SQLite's constraint names are not
-   * shared across tables, so a new junction may spell the old ones freely.
+   * index it is; SQLite's constraint names are not shared across tables, so
+   * a new junction may spell the old ones freely. The foreign keys are
+   * {@link renameJunctionForeignKeys}'.
    */
   private renameJunctionConstraints(
     from: JunctionShape,
     to: JunctionShape
   ): string[] {
+    if (this.dialect === "sqlite") return [];
     const q = (name: string) => this.quoteIdentifier(name);
-    if (this.dialect === "postgresql") {
-      const constraints: Array<[string, string]> = [
-        [from.fkSource, to.fkSource],
-        [from.fkTarget, to.fkTarget],
-        [from.uqPair, to.uqPair],
-      ];
-      return constraints
-        .filter(([was, is]) => was !== is)
-        .map(
-          ([was, is]) =>
-            `ALTER TABLE ${q(to.table)} RENAME CONSTRAINT ${q(was)} TO ${q(is)};`
-        );
-    }
-    if (this.dialect !== "mysql") return [];
     const out: string[] = [];
     if (from.uqPair !== to.uqPair) {
+      const verb =
+        this.dialect === "postgresql" ? "RENAME CONSTRAINT" : "RENAME INDEX";
       out.push(
-        `ALTER TABLE ${q(to.table)} RENAME INDEX ${q(from.uqPair)} TO ${q(to.uqPair)};`
+        `ALTER TABLE ${q(to.table)} ${verb} ${q(from.uqPair)} TO ${q(to.uqPair)};`
       );
     }
+    return [...out, ...this.renameJunctionForeignKeys(from, to)];
+  }
+
+  /**
+   * The two foreign keys, carried to their new names. A foreign key is
+   * renamed in place only where the dialect can rename one AND the save left
+   * its referential actions alone: PostgreSQL can, MySQL cannot. Everywhere
+   * else it is dropped and declared again under the new name with the NEW
+   * actions, in the one statement both dialects accept — a rename would keep
+   * the old actions in the database while the registry recorded the new,
+   * and a later delete would cascade, or be refused, against the saved
+   * schema. SQLite cannot alter a constraint at all, so edited actions do
+   * not reach a SQLite junction without the table rebuild the Builder does
+   * not perform; nothing is emitted there, as nothing is for any SQLite
+   * constraint. An edit to the actions of a field whose NAME is unchanged
+   * is not a rename and is not handled here, on any dialect — the column
+   * diff has never emitted one for a relationship either.
+   */
+  private renameJunctionForeignKeys(
+    from: JunctionShape,
+    to: JunctionShape
+  ): string[] {
+    const q = (name: string) => this.quoteIdentifier(name);
+    const renameable =
+      this.dialect === "postgresql" &&
+      from.onDelete === to.onDelete &&
+      from.onUpdate === to.onUpdate;
+    const drop =
+      this.dialect === "postgresql" ? "DROP CONSTRAINT" : "DROP FOREIGN KEY";
     const foreignKeys: Array<[string, string, string, string]> = [
       [from.fkSource, to.fkSource, to.sourceColumn, to.sourceTable],
       [from.fkTarget, to.fkTarget, to.targetColumn, to.targetTable],
     ];
+    const out: string[] = [];
     for (const [was, is, column, references] of foreignKeys) {
       if (was === is) continue;
       out.push(
-        `ALTER TABLE ${q(to.table)} DROP FOREIGN KEY ${q(was)}, ADD CONSTRAINT ${q(is)} FOREIGN KEY (${q(column)}) REFERENCES ${q(references)}(${q("id")}) ON DELETE ${to.onDelete} ON UPDATE ${to.onUpdate};`
+        renameable
+          ? `ALTER TABLE ${q(to.table)} RENAME CONSTRAINT ${q(was)} TO ${q(is)};`
+          : `ALTER TABLE ${q(to.table)} ${drop} ${q(was)}, ADD CONSTRAINT ${q(is)} FOREIGN KEY (${q(column)}) REFERENCES ${q(references)}(${q("id")}) ON DELETE ${to.onDelete} ON UPDATE ${to.onUpdate};`
       );
     }
     return out;

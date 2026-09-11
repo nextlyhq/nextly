@@ -52,12 +52,22 @@ describe("junction table lifecycle on a real SQLite database", () => {
 
   beforeEach(() => {
     db = new Database(":memory:");
-    db.exec("CREATE TABLE dc_posts (id text PRIMARY KEY NOT NULL, title text)");
-    db.exec("CREATE TABLE dc_tags (id text PRIMARY KEY NOT NULL)");
-    db.exec("INSERT INTO dc_posts (id, title) VALUES ('p1', 'one')");
-    db.exec("INSERT INTO dc_tags (id) VALUES ('t1'), ('t2')");
-    // The field's junction, created exactly as the ADD path creates it.
-    apply(service.generateJunctionTable("dc_posts", manyToMany("tags")));
+    // The adapter runs every migration with foreign keys enforced; so does
+    // this, or the junction's constraints would be text the test never meets.
+    db.pragma("foreign_keys = ON");
+    // Both collections from the production create path, which builds the
+    // many-to-many field's junction along with its table — the same columns,
+    // keys and foreign keys a deployment has, not a sketch of them.
+    apply(service.generateMigrationSQL("dc_tags", []));
+    apply(
+      service.generateMigrationSQL("dc_posts", [title, manyToMany("tags")])
+    );
+    db.exec(
+      "INSERT INTO dc_tags (id, title, slug) VALUES ('t1', 'one', 'one'), ('t2', 'two', 'two')"
+    );
+    db.exec(
+      "INSERT INTO dc_posts (id, slug, title) VALUES ('p1', 'one', 'one')"
+    );
     db.exec(
       "INSERT INTO dc_posts_dc_tags_tags (id, posts_id, tags_id) VALUES ('l1', 'p1', 't1'), ('l2', 'p1', 't2')"
     );
@@ -108,7 +118,7 @@ describe("junction table lifecycle on a real SQLite database", () => {
     );
     const indexes = db
       .prepare(
-        "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%' ORDER BY name"
+        "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_dc_posts_dc_tags_%' ORDER BY name"
       )
       .all() as { name: string; tbl_name: string }[];
     expect(indexes).toEqual([
