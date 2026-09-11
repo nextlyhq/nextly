@@ -156,6 +156,23 @@ describe("what is inspected", () => {
     expect(inspection?.orphaned).toEqual([]);
   });
 
+  it("describes an instance whose props are missing or not a record as naming no component, rather than throwing", () => {
+    // A stored document can hold such a node — an import, a hook, a hand
+    // edit — and the canvas draws it as a malformed placeholder. Selecting
+    // that placeholder must describe it, not take the inspector down: the
+    // props are read through one guard, as the resolver reads them.
+    for (const props of [null, undefined, "junk", ["a"]]) {
+      const node = { ...instance(), props } as unknown as BlockNode;
+
+      const inspection = inspectInstance(pageOf(node), "i1", HEADER, LIBRARY);
+
+      expect(inspection?.componentId).toBe("");
+      expect(inspection?.definitionFound).toBe(false);
+      expect(inspection?.rows).toEqual([]);
+      expect(inspection?.orphaned).toEqual([]);
+    }
+  });
+
   it("reads a componentId that is not a string as naming no component", () => {
     // A stored document can hold anything; a non-string must not reach the
     // lookup as a key.
@@ -296,6 +313,63 @@ describe("the rows", () => {
     expect(title).toMatchObject({ source: "definition", ownOverride: false });
   });
 
+  it("hands the panel only options a select can draw — string values and labels, each value once — whatever the definition stored", () => {
+    // The resolver checks the fields its own writer reads (id, node, path,
+    // type); `options` and `label` reach the inspector as a stored or
+    // hook-shaped definition left them. A panel mapping over a non-list,
+    // keying two items by one value, or drawing an object as a label fails
+    // the moment the instance is selected, while the canvas renders it fine.
+    const withTone = (options: unknown, label: unknown = "Tone") =>
+      header({
+        exposed: [
+          {
+            id: "tone",
+            label,
+            nodeId: "h1",
+            propPath: "tone",
+            type: "select",
+            options,
+          },
+        ],
+      } as unknown as Partial<ComponentDocument>);
+    const toneRow = (definition: ComponentDocument) =>
+      inspectInstance(
+        pageOf(instance()),
+        "i1",
+        lookupOf(["header", definition]),
+        LIBRARY
+      )?.rows[0];
+
+    expect(toneRow(withTone("light"))?.options).toEqual([]);
+    expect(toneRow(withTone({ value: "a", label: "A" }))?.options).toEqual([]);
+    expect(
+      toneRow(
+        withTone([
+          { value: "a", label: "A" },
+          { value: 1, label: "One" },
+          { label: "No value" },
+          null,
+          "b",
+          { value: "a", label: "A again" },
+          { value: "", label: "None" },
+        ])
+      )?.options
+    ).toEqual([
+      { value: "a", label: "A" },
+      { value: "", label: "None" },
+    ]);
+    // A label that is not a string is read as the property's id — the one
+    // name it is sure to have — rather than drawn as an object.
+    expect(toneRow(withTone([], { text: "Tone" }))?.label).toBe("tone");
+    // The control: a well-formed definition passes through untouched.
+    expect(toneRow(withTone([{ value: "dark", label: "Dark" }]))).toMatchObject(
+      {
+        label: "Tone",
+        options: [{ value: "dark", label: "Dark" }],
+      }
+    );
+  });
+
   it("refuses a definition the canvas refuses, so no row is drawn for a component the page shows as a placeholder", () => {
     // The same readability rule the resolver applies, not only the kind: a
     // definition in a format this build does not read is left standing on the
@@ -431,6 +505,18 @@ describe("the patch that changes an override", () => {
       kind: "update",
       id: "i1",
       patch: { props: { componentId: "header" } },
+    });
+  });
+
+  it("builds a patch for an instance whose props are not a record from an empty record", () => {
+    // The same guard the inspection reads through: a patch spread from `null`
+    // would throw where the inspection answered.
+    const node = { ...instance(), props: null } as unknown as BlockNode;
+
+    expect(setOverrideOp(node, "title", "Acme")).toEqual({
+      kind: "update",
+      id: "i1",
+      patch: { props: { overrides: { title: "Acme" } } },
     });
   });
 
