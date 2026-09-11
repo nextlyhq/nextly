@@ -301,7 +301,11 @@ const migratesActivityLogActor = (stmt: string): boolean => {
  * admits `actor_type_backup`, so a schema that accidentally renamed the column
  * would push its ALTER through, apply cleanly, and leave pass 2 silent — the
  * sim green while the column it promises was never added. The closing quote
- * or a word boundary is required after the name for that reason.
+ * or a word boundary is required after the name for that reason. And the
+ * statement must be ONE statement: only a trailing semicolon is stripped, so a
+ * second statement after an inner one would ride through on the first —
+ * `... ADD actor_type text; DROP TABLE users` — which is why a semicolon is
+ * refused along with a comma.
  *
  * Tolerant of pg/MySQL quoting and the optional COLUMN keyword, like every
  * predicate above.
@@ -311,7 +315,7 @@ const addsOnlyColumn =
   (stmt: string): boolean => {
     const s = stmt.trim().replace(/;$/, "");
     return new RegExp(
-      `^ALTER TABLE [\`"]?${escapeRegExp(table)}[\`"]? ADD (COLUMN )?[\`"]?${escapeRegExp(column)}(?:[\`"]|\\b)[^,]*$`,
+      `^ALTER TABLE [\`"]?${escapeRegExp(table)}[\`"]? ADD (COLUMN )?[\`"]?${escapeRegExp(column)}(?:[\`"]|\\b)[^,;]*$`,
       "i"
     ).test(s);
   };
