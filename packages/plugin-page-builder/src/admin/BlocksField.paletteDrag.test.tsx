@@ -56,6 +56,8 @@ let documentIdentity: {
  * to the component read would put pattern documents in the definitions map.
  */
 let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
+/** What the component read reports beside its answer: a failed refresh keeps the answer. */
+let componentError: Error | null = null;
 
 /**
  * Which panel the shell stub asks for.
@@ -289,7 +291,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       return {
         data: componentAnswer,
         pending: false,
-        error: null,
+        error: componentError,
         refetch: () => {},
       };
     }
@@ -368,6 +370,7 @@ afterEach(() => {
   // not written for.
   libraryAnswer = undefined;
   componentAnswer = undefined;
+  componentError = null;
   documentIdentity = null;
   shownPanel = "insert";
   routeReads = 0;
@@ -587,6 +590,35 @@ describe("what the editor reads before anyone asks for it", () => {
     // And the caps the canvas resolves under, so a tile is judged under the
     // same bounds the instance is drawn under.
     expect(panel.documentLimits).toBe(render.limits);
+  });
+});
+
+describe("what the panel is told of a read that failed to refresh", () => {
+  it("names the tier stale, ahead of the cut its last answer carried", () => {
+    // The tiles stand — they are the last answer — so the panel is told they
+    // may be out of date rather than that none are offered. Ahead of the
+    // cut, because the cut describes the answer the retry replaces: a
+    // library reloaded whole is reported cut again.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: true },
+    };
+    componentError = new Error("Forbidden");
+    libraryAnswer = { items: [], meta: { count: 0, truncated: false } };
+
+    openEditor();
+
+    const panel = recorded("insertPanel");
+    expect(panel.library).toMatchObject({
+      patterns: "ready",
+      components: "stale",
+    });
+    expect((panel.componentDefinitions as Map<string, unknown>).size).toBe(1);
   });
 });
 

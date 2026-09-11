@@ -58,6 +58,44 @@ function failed(refetch: () => void): void {
   } as unknown as ReturnType<typeof usePluginRoute<ComponentLibraryResponse>>);
 }
 
+/**
+ * A read whose refetch failed AFTER an earlier answer: the data the query
+ * cached stays, and the error is set beside it.
+ */
+function failedWithCached(
+  items: ComponentLibraryResponse["items"],
+  refetch: () => void
+): void {
+  read.mockReturnValue({
+    data: { items, meta: { count: items.length, truncated: false } },
+    error: new Error("Forbidden"),
+    pending: false,
+    refetch,
+  } as unknown as ReturnType<typeof usePluginRoute<ComponentLibraryResponse>>);
+}
+
+/**
+ * A read answering the SAME data on every render, with a refetch wrapper
+ * minted per render — which is what the route hook hands back.
+ */
+function answeringEachRender(
+  items: ComponentLibraryResponse["items"],
+  refetches: Array<() => void>
+): void {
+  const data = { items, meta: { count: items.length, truncated: false } };
+  read.mockImplementation(
+    () =>
+      ({
+        data,
+        error: null,
+        pending: false,
+        refetch: refetches.shift() ?? (() => {}),
+      }) as unknown as ReturnType<
+        typeof usePluginRoute<ComponentLibraryResponse>
+      >
+  );
+}
+
 const header = {
   formatVersion: 1,
   kind: "component",
@@ -182,6 +220,56 @@ describe("the component read", () => {
     expect(result.current.definitions.size).toBe(0);
     result.current.retry();
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a read that failed with an earlier answer still cached is STALE, and keeps what it had", () => {
+    // The route hook reads fresh on every mount and keeps the cached answer
+    // while it does. A refetch that fails leaves that answer in place with the
+    // error beside it — and a state read off the data alone calls that ready,
+    // so the canvas draws definitions an edit may have changed, with no
+    // sentence and no retry. Its own state rather than `unavailable`: the map
+    // stays, so the page still draws and the tiles still stand, and the
+    // sentences for a read that answered nothing would be false beside them.
+    const refetch = vi.fn();
+    failedWithCached(
+      [{ id: "header", title: "Header", document: header }],
+      refetch
+    );
+
+    const { result } = renderHook(() => useComponentLibrary());
+
+    expect(result.current.state).toBe("stale");
+    expect(result.current.definitions.size).toBe(1);
+    expect(result.current.components).toHaveLength(1);
+    result.current.retry();
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the map, the list and the retry across renders that hand it a new refetch wrapper", () => {
+    // The route hook mints its refetch closure per render. Keyed on it, the
+    // memo runs every render and hands the canvas a NEW map each time, which
+    // is what the canvas re-resolves every instance on — per keystroke,
+    // since the editor re-renders the field on every edit.
+    const first = vi.fn();
+    const second = vi.fn();
+    answeringEachRender(
+      [{ id: "header", title: "Header", document: header }],
+      [first, second]
+    );
+
+    const { result, rerender } = renderHook(() => useComponentLibrary());
+    const before = result.current;
+    rerender();
+    const after = result.current;
+
+    expect(after.definitions).toBe(before.definitions);
+    expect(after.components).toBe(before.components);
+    expect(after.retry).toBe(before.retry);
+    // And the retry asks the read as it stands NOW, not as it stood when the
+    // wrapper was first taken.
+    after.retry();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
   });
 
   it("is ready once the read has answered", () => {

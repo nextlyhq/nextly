@@ -166,7 +166,10 @@ import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { useMayCreatePattern } from "./pattern-capability-client";
-import { usePatternLibrary } from "./pattern-library-client";
+import {
+  usePatternLibrary,
+  type LibraryReadState,
+} from "./pattern-library-client";
 import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
@@ -1747,8 +1750,9 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
  * out when the read lands. A FAILED component read must not gate it: the
  * route refuses a role that may edit pages but not read components, and a
  * least-privilege page editor would otherwise lose the canvas for every page,
- * block-only pages included. That state is said beside the canvas instead —
- * see {@link ComponentsUnavailableNote}.
+ * block-only pages included. That state, and a read that failed to refresh
+ * what it had, are said beside the canvas instead — see
+ * {@link ComponentsUnavailableNote}.
  *
  * Only the canvas waits: the shell, the rail and the inspector are about the
  * DOCUMENT, which is already in hand.
@@ -1784,24 +1788,47 @@ function CanvasGate({
  * component, and the one remedy reachable from here.
  */
 function ComponentsUnavailableNote({
+  state,
   retry,
 }: {
+  state: LibraryReadState;
   retry: () => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  const sentence = COMPONENT_READ_NOTES[state];
+  if (sentence === undefined) return null;
   return (
     <p
       className="nx-inspector__note"
       role="status"
-      data-canvas-state="components-unavailable"
+      data-canvas-state={`components-${state}`}
     >
-      This site’s components could not be loaded, so any placed on this page
-      draw as missing.{" "}
+      {sentence}{" "}
       <Button type="button" variant="ghost" size="sm" onClick={retry}>
         Try again
       </Button>
     </p>
   );
 }
+
+/**
+ * What is said beside the canvas of a component read that failed, by how it
+ * failed. Nothing for a read in flight or one that answered: the canvas
+ * waits on the first and draws from the second.
+ *
+ * The two sentences differ in what is true of the instances on the page. A
+ * read that never answered leaves them drawn as missing. One that answered
+ * once and could not answer again leaves them drawn from that answer, which
+ * an edit elsewhere may since have overtaken — so not missing, but possibly
+ * out of date.
+ */
+const COMPONENT_READ_NOTES: Readonly<
+  Partial<Record<LibraryReadState, string>>
+> = {
+  unavailable:
+    "This site’s components could not be loaded, so any placed on this page draw as missing.",
+  stale:
+    "This site’s components could not be reloaded, so any placed on this page may draw out of date.",
+};
 
 function InsertPanelWithLibrary({
   components,
@@ -1854,10 +1881,13 @@ function InsertPanelWithLibrary({
  * is not one to explain.
  */
 function tierStateOf(read: {
-  state: "pending" | "ready" | "unavailable";
+  state: LibraryReadState;
   truncated: boolean;
 }): LibraryTierState {
   if (read.state === "unavailable") return "unavailable";
+  // A failed refresh before a cut: the answer the cut describes is the one
+  // the retry replaces, and a library reloaded whole is reported cut again.
+  if (read.state === "stale") return "stale";
   return read.truncated ? "cut" : "ready";
 }
 
@@ -3061,9 +3091,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             the read is cached, so this is one brief state per session rather
             than one per opening.
           */}
-          {componentLibrary.state === "unavailable" ? (
-            <ComponentsUnavailableNote retry={componentLibrary.retry} />
-          ) : null}
+          <ComponentsUnavailableNote
+            state={componentLibrary.state}
+            retry={componentLibrary.retry}
+          />
           {siteStylePending ||
           siteStyleError !== null ||
           componentLibrary.state === "pending" ? (

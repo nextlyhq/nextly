@@ -401,6 +401,36 @@ describe("what the canvas waits for, the component read", () => {
   });
 });
 
+describe("what the canvas says of a component read that failed to refresh", () => {
+  it("draws the canvas from the cached definitions and says they may be out of date", () => {
+    // A read that answered once and then could not answer again keeps its
+    // last answer, so the canvas draws — from definitions an edit elsewhere
+    // may have changed. Said as that, with the retry, and not as the
+    // never-read sentence, which would claim instances draw as missing while
+    // they are drawn.
+    const refetch = vi.fn();
+    componentRead = {
+      data: { items: [], meta: { count: 0, truncated: false } },
+      pending: false,
+      error: new Error("Forbidden"),
+      refetch,
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeDefined();
+    expect(
+      document.querySelector('[data-canvas-state="components-unavailable"]')
+    ).toBeNull();
+    const note = document.querySelector(
+      '[data-canvas-state="components-stale"]'
+    );
+    expect(note?.textContent).toContain("could not be reloaded");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("what the token picker waits for", () => {
   /**
    * A site whose config defines a colour token.

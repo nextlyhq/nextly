@@ -35,7 +35,7 @@
 import type { BlockDocument, DefinitionsById } from "@nextlyhq/blocks-engine";
 import type { SavedComponent } from "@nextlyhq/builder";
 import { usePluginRoute } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 // The CONTRACT, not the route, for the reason the pattern client gives: the
 // route reaches the collection through server-only modules.
@@ -45,15 +45,18 @@ import {
   type ComponentLibraryResponse,
 } from "../library-contract";
 
+import {
+  libraryReadState,
+  type LibraryReadState,
+} from "./pattern-library-client";
+
 /**
- * Where the read stands: still in flight, answered, or failed.
+ * Where the read stands: in flight, answered, failed to refresh, or failed.
  *
- * Three states rather than "data or not", because the two empty ones ask for
- * opposite things. A pending read wants a moment; a failed one wants a retry
- * and a sentence, and every instance on the page drawn as could-not-be-loaded
- * says neither — it reads as a site whose components were deleted.
+ * The pattern read's states, by the same name, so the two tiers cannot come
+ * to mean different things by "stale".
  */
-export type ComponentLibraryState = "pending" | "ready" | "unavailable";
+export type ComponentLibraryState = LibraryReadState;
 
 /** What one component read hands the editor. */
 export interface ComponentLibraryRead {
@@ -78,7 +81,15 @@ export interface ComponentLibraryRead {
    * somebody deleted.
    */
   readonly truncated: boolean;
-  /** Where the read stands. The map and the list are empty unless `ready`. */
+  /**
+   * Where the read stands.
+   *
+   * The map and the list are empty until the read first answers. A read that
+   * answered once and then failed to answer again keeps what it had and is
+   * `stale`: the page still draws, from definitions an edit elsewhere may
+   * since have changed, and the surfaces say so and offer the retry rather
+   * than presenting the last answer as the current one.
+   */
   readonly state: ComponentLibraryState;
   /** Ask again, ignoring anything cached. What a surface offers on `unavailable`. */
   readonly retry: () => void;
@@ -92,21 +103,14 @@ export function useComponentLibrary(): ComponentLibraryRead {
     staleTime: 0,
   });
   const { data, pending, error, refetch } = read;
-  // One memo for both shapes, keyed on the read's data, so the map and the
-  // list are always derived from the same response — and so a re-render
-  // between reads hands the canvas the same map identity, which is what keeps
-  // it from re-resolving every instance on every keystroke.
-  return useMemo(() => {
-    if (data === undefined) {
-      // The failed state is named FIRST, so it cannot fold into the pending
-      // one: both have no data, and only one of them will ever have any. A
-      // read that answered with nothing at all is neither, and is ready.
-      return {
-        ...NOTHING_YET,
-        state: error !== null ? "unavailable" : pending ? "pending" : "ready",
-        retry: refetch,
-      };
-    }
+  // One memo for both shapes, keyed on the read's DATA and nothing else, so
+  // the map and the list are always derived from the same response — and so
+  // a re-render between reads hands the canvas the same map identity, which
+  // is what keeps it from re-resolving every instance on every keystroke.
+  // The route hook mints its `refetch` wrapper per render, so a memo keyed on
+  // that too runs on every render, and rebuilt the map on each one.
+  const shapes = useMemo(() => {
+    if (data === undefined) return NOTHING_YET;
     // Built mutable, published read-only: the map's type is what the renderer
     // takes, and a consumer must not be able to add a definition the read did
     // not return.
@@ -124,10 +128,24 @@ export function useComponentLibrary(): ComponentLibraryRead {
       definitions,
       components: data.items,
       truncated: data.meta.truncated,
-      state: "ready",
-      retry: refetch,
     };
-  }, [data, pending, error, refetch]);
+  }, [data]);
+  // Read off the error and the data TOGETHER, not the data alone: the query
+  // keeps its last answer when a refetch fails, and a state that called that
+  // ready left the page drawn from definitions an edit elsewhere may have
+  // changed, with nothing saying so and no retry.
+  const state = libraryReadState({ data, pending, error });
+  // One retry for the life of the hook, asking whatever the read's refetch is
+  // NOW. Handing the wrapper out as it arrives would change the retry's
+  // identity every render, and with it everything keyed on this read.
+  const latest = useRef(refetch);
+  useEffect(() => {
+    latest.current = refetch;
+  }, [refetch]);
+  const retry = useCallback(() => {
+    latest.current();
+  }, []);
+  return useMemo(() => ({ ...shapes, state, retry }), [shapes, state, retry]);
 }
 
 /**
