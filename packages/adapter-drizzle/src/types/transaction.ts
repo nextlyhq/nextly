@@ -190,8 +190,20 @@ export interface TransactionContext {
   /**
    * Update records.
    *
+   * @remarks
+   * Built by the adapter rather than by the Drizzle query builder, as `insert`
+   * is: the statement writes the columns the PHYSICAL table has, where the
+   * pooled `update` writes the ones the runtime model declares. A column the
+   * model declares binds through its own encoder, exactly as the query builder
+   * binds it; one it does not declare binds the way this adapter's
+   * transactional insert binds every value; a key naming no column on the
+   * table is a database error rather than a silent drop. A key whose value is
+   * `undefined` is not written, `null` is, and an update naming nothing to
+   * write is refused.
+   *
    * @param table - Table name
-   * @param data - Data to update
+   * @param data - Data to update, keyed by SQL column name; Drizzle property
+   *   names are accepted as well
    * @param where - Conditions for records to update
    * @param options - Update options
    * @returns Updated records (with RETURNING columns if specified)

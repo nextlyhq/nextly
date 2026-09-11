@@ -948,6 +948,38 @@ export class MySqlAdapter extends DrizzleAdapter {
         return [];
       },
 
+      // Adapter-built, as `insert` above is, and for the same reason: the
+      // statement reaches the columns the physical table has, where the query
+      // builder writes only the ones the runtime model declares. A column the
+      // model knows binds through its own encoder; one it does not binds
+      // natively, as every value on this path's insert does.
+      update: async <T = unknown>(
+        table: string,
+        data: Record<string, unknown>,
+        where: WhereClause,
+        options?: UpdateOptions
+      ): Promise<T[]> => {
+        const statement = this.buildTransactionUpdate(
+          table,
+          data,
+          where,
+          value => value
+        );
+        await txDb().execute(statement);
+        // MySQL has no RETURNING. Select the updated rows back on the same
+        // executor by the same WHERE, as the pooled update does — and only
+        // when asked, which is the same test the dialects with RETURNING make.
+        if (
+          this.returningColumns(
+            this.getTableObject(table),
+            options?.returning
+          ) === undefined
+        ) {
+          return [];
+        }
+        return this.select<T>(table, { where }, txDb());
+      },
+
       ...this.createTransactionForwarders(txDb),
 
       // Savepoints disabled per approved approach

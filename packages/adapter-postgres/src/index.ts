@@ -78,6 +78,8 @@ import type {
   TransactionOptions,
   SqlParam,
   InsertOptions,
+  UpdateOptions,
+  WhereClause,
   DatabaseError,
   DatabaseErrorKind,
 } from "@nextlyhq/adapter-drizzle/types";
@@ -87,6 +89,7 @@ import {
   isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
+import { sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PoolClient, PoolConfig } from "pg";
@@ -931,6 +934,23 @@ export class PostgresAdapter extends DrizzleAdapter {
   /**
    * Creates a TransactionContext for the given client.
    */
+  /**
+   * The RETURNING entries that spell each date column's wall clock out as
+   * text, one per alias `dateWallClockAliases` chose. `to_char` renders the
+   * stored value without a zone, which is the only form node-postgres cannot
+   * shift on the way back.
+   */
+  private wallClockSpelling(
+    aliases: ReadonlyArray<{ sqlName: string; alias: string }>
+  ): string {
+    return aliases
+      .map(
+        a =>
+          `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
+      )
+      .join(", ");
+  }
+
   private createTransactionContext(client: PoolClient): TransactionContext {
     // Bind a Drizzle instance to this transaction's checked-out client so the
     // delegated CRUD methods run inside the transaction and see its uncommitted
@@ -1002,12 +1022,7 @@ export class PostgresAdapter extends DrizzleAdapter {
               : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
-          const spelled = aliases
-            .map(
-              a =>
-                `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
-            )
-            .join(", ");
+          const spelled = this.wallClockSpelling(aliases);
           sql += ` RETURNING ${returning}${spelled ? `, ${spelled}` : ""}`;
         }
 
@@ -1053,16 +1068,47 @@ export class PostgresAdapter extends DrizzleAdapter {
               : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
-          const spelled = aliases
-            .map(
-              a =>
-                `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
-            )
-            .join(", ");
+          const spelled = this.wallClockSpelling(aliases);
           sql += ` RETURNING ${returning}${spelled ? `, ${spelled}` : ""}`;
         }
 
         const result = await client.query(sql, params);
+        return (result.rows as T[]).map(r =>
+          this.mapRowFromRawSql(tableObj, r, aliases)
+        );
+      },
+
+      // Adapter-built, as `insert` above is, and for the same reason: the
+      // statement reaches the columns the physical table has, where the query
+      // builder writes only the ones the runtime model declares. A column the
+      // model knows binds through its own encoder; one it does not binds
+      // natively, as every value on this path's insert does.
+      update: async <T = unknown>(
+        table: string,
+        data: Record<string, unknown>,
+        where: WhereClause,
+        options?: UpdateOptions
+      ): Promise<T[]> => {
+        const tableObj = this.getTableObject(table);
+        const returning = this.returningColumns(tableObj, options?.returning);
+        // Each returned timestamp's wall clock, spelled out by the database,
+        // for the reason `insert` gives.
+        const aliases =
+          returning === undefined
+            ? []
+            : this.dateWallClockAliases(tableObj, options?.returning);
+        const spelled = this.wallClockSpelling(aliases);
+        const statement = this.buildTransactionUpdate(
+          table,
+          data,
+          where,
+          value => value,
+          returning === undefined
+            ? undefined
+            : sql.raw(`${returning}${spelled ? `, ${spelled}` : ""}`)
+        );
+        const result = await txDb().execute(statement);
+        if (returning === undefined) return [];
         return (result.rows as T[]).map(r =>
           this.mapRowFromRawSql(tableObj, r, aliases)
         );

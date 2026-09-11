@@ -63,6 +63,7 @@ import {
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
+import { sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import {
   drizzle,
@@ -863,6 +864,38 @@ export class SqliteAdapter extends DrizzleAdapter {
         return (stmt.all(...allValues) as T[]).map(r =>
           this.mapRowFromRawSql(tableObj, r)
         );
+      },
+
+      // Adapter-built, as `insert` above is, and for the same reason: the
+      // statement reaches the columns the physical table has, where the query
+      // builder writes only the ones the runtime model declares. A column the
+      // model knows binds through its own encoder; one it does not binds as
+      // every other value on this path does, through `sanitizeSqliteValue`.
+      // eslint-disable-next-line @typescript-eslint/require-await
+      update: async <T = unknown>(
+        table: string,
+        data: Record<string, unknown>,
+        where: WhereClause,
+        options?: UpdateOptions
+      ): Promise<T[]> => {
+        const tableObj = this.getTableObject(table);
+        const returning = this.returningColumns(tableObj, options?.returning);
+        const statement = this.buildTransactionUpdate(
+          table,
+          data,
+          where,
+          sanitizeSqliteValue,
+          returning === undefined ? undefined : sql.raw(returning)
+        );
+        if (returning === undefined) {
+          // `run`, not `all`: better-sqlite3 throws on a statement that
+          // returns no rows, which is what an UPDATE without RETURNING is.
+          txDb().run(statement);
+          return [];
+        }
+        return txDb()
+          .all<T>(statement)
+          .map(r => this.mapRowFromRawSql(tableObj, r));
       },
 
       ...this.createTransactionForwarders(txDb),

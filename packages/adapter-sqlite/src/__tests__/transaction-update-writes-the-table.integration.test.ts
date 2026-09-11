@@ -1,0 +1,182 @@
+// A transaction's `update` is built by the adapter, as its `insert` is, so it
+// reaches the columns the PHYSICAL table has. The pooled `update` goes through
+// the Drizzle query builder, which writes only the columns the runtime MODEL
+// declares and drops the rest without a word. The localization transition
+// window depends on the difference: `localized` has been flipped, the model has
+// moved a translatable column to a companion table that does not exist yet,
+// and the default locale must keep writing the column the main table still
+// has. The table here has `title` and `published_at` and the model declares
+// neither, which is that window in miniature.
+//
+// Every stored value is read back with a raw SELECT rather than through the
+// model, since the model cannot see the column whose write is in question.
+
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import { createSqliteAdapter } from "../index";
+
+const TABLE = "int_txsqlite_update_table";
+
+// The runtime model: `title` and `published_at` are deliberately absent.
+const pages = sqliteTable(TABLE, {
+  id: text("id").primaryKey(),
+  slug: text("slug").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp" }),
+  published: integer("published", { mode: "boolean" }),
+});
+
+const byId = (id: string) => ({
+  and: [{ column: "id", op: "=" as const, value: id }],
+});
+
+interface StoredRow {
+  id: string;
+  slug: string;
+  title: string | null;
+  published_at: number | null;
+  updated_at: number | null;
+  published: number | null;
+}
+
+describe("SQLite transaction update writes the physical table", () => {
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  const stored = async (id: string): Promise<StoredRow | undefined> => {
+    const rows = await adapter.executeQuery<StoredRow>(
+      `SELECT id, slug, title, published_at, updated_at, published FROM ${TABLE} WHERE id = ?`,
+      [id]
+    );
+    return rows[0];
+  };
+
+  beforeAll(async () => {
+    adapter = createSqliteAdapter({ memory: true });
+    await adapter.connect();
+    await adapter.executeQuery(
+      `CREATE TABLE ${TABLE} (id text PRIMARY KEY, slug text NOT NULL, title text, published_at integer, updated_at integer, published integer)`
+    );
+    adapter.setTableResolver({
+      getTable: (name: string) => (name === TABLE ? pages : null),
+    });
+  });
+
+  beforeEach(async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    await adapter.executeQuery(
+      `INSERT INTO ${TABLE} (id, slug, title, updated_at, published) VALUES ('a', 'first', 'First', 0, 0)`
+    );
+  });
+
+  afterAll(async () => {
+    await adapter.disconnect();
+  });
+
+  it("writes a column the model does not declare; the pooled builder update drops it", async () => {
+    // The control first, and it must come out DIFFERENT: the same write
+    // through the query builder stores the declared column and leaves the
+    // undeclared one as it was, without a word — the silence this path
+    // exists to replace. A declared column rides along in both writes
+    // because that is the shape of every entry update (`updated_at` is
+    // always in it); with nothing declared at all the builder emits an empty
+    // SET and the database refuses the syntax, which is a different failure.
+    await adapter.update(
+      TABLE,
+      { slug: "pooled", title: "Dropped" },
+      byId("a")
+    );
+    expect(await stored("a")).toMatchObject({ slug: "pooled", title: "First" });
+
+    await adapter.transaction(async ctx => {
+      await ctx.update(TABLE, { slug: "tx", title: "Written" }, byId("a"));
+    });
+    expect(await stored("a")).toMatchObject({ slug: "tx", title: "Written" });
+  });
+
+  it("binds a declared date and boolean as the query builder would, and an undeclared date as the insert would", async () => {
+    const at = new Date("2026-09-11T10:00:00.000Z");
+    await adapter.transaction(async ctx => {
+      await ctx.update(
+        TABLE,
+        { updated_at: at, published: true, published_at: at },
+        byId("a")
+      );
+    });
+    const row = await stored("a");
+    // The declared timestamp column stores unix seconds, its boolean 0/1 —
+    // the encodings `integer({ mode })` reads back — and the undeclared
+    // integer column takes the same seconds `sanitizeSqliteValue` gives every
+    // value the transactional insert binds, so a translatable date written
+    // during the window reads back through the companion's own column mode.
+    expect(row?.updated_at).toBe(Math.floor(at.getTime() / 1000));
+    expect(row?.published).toBe(1);
+    expect(row?.published_at).toBe(Math.floor(at.getTime() / 1000));
+  });
+
+  it("leaves a column alone for undefined and clears it for null", async () => {
+    await adapter.transaction(async ctx => {
+      await ctx.update(TABLE, { slug: "second", title: undefined }, byId("a"));
+    });
+    expect(await stored("a")).toMatchObject({ slug: "second", title: "First" });
+
+    await adapter.transaction(async ctx => {
+      await ctx.update(TABLE, { title: null }, byId("a"));
+    });
+    expect((await stored("a"))?.title).toBeNull();
+  });
+
+  it("refuses a column the table does not have, rather than dropping it", async () => {
+    await expect(
+      adapter.transaction(async ctx => {
+        await ctx.update(TABLE, { ghost: "x" }, byId("a"));
+      })
+    ).rejects.toThrow(/ghost/);
+    // The refused statement wrote nothing else either.
+    expect((await stored("a"))?.title).toBe("First");
+  });
+
+  it("refuses an update that names nothing to write", async () => {
+    await expect(
+      adapter.transaction(async ctx => {
+        await ctx.update(TABLE, { title: undefined }, byId("a"));
+      })
+    ).rejects.toThrow(/No values to set/);
+  });
+
+  it("returns the requested columns decoded, and nothing when nothing was requested", async () => {
+    const at = new Date("2026-09-11T10:00:00.000Z");
+    const [none, requested, everything] = await adapter.transaction(
+      async ctx => [
+        await ctx.update(TABLE, { slug: "n" }, byId("a")),
+        await ctx.update<{ id: string }>(TABLE, { slug: "r" }, byId("a"), {
+          returning: ["id"],
+        }),
+        await ctx.update<{ id: string; updatedAt: Date; title: string }>(
+          TABLE,
+          { updated_at: at, title: "T" },
+          byId("a"),
+          { returning: "*" }
+        ),
+      ]
+    );
+    expect(none).toEqual([]);
+    expect(requested).toEqual([{ id: "a" }]);
+    // Decoded the way a read of the same row decodes it: the model's property
+    // names, and a `Date` for the timestamp column rather than the integer.
+    expect(everything).toHaveLength(1);
+    expect(everything[0].id).toBe("a");
+    expect(everything[0].updatedAt).toBeInstanceOf(Date);
+    expect(everything[0].updatedAt.getTime()).toBe(at.getTime());
+    expect(everything[0].title).toBe("T");
+  });
+
+  it("runs inside the transaction: a rolled-back update leaves the row untouched", async () => {
+    await expect(
+      adapter.transaction(async ctx => {
+        await ctx.update(TABLE, { title: "Uncommitted" }, byId("a"));
+        throw new Error("roll it back");
+      })
+    ).rejects.toThrow("roll it back");
+    expect((await stored("a"))?.title).toBe("First");
+  });
+});

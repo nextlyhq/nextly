@@ -46,6 +46,7 @@ import type {
   TableResolver,
 } from "./types";
 import { createDatabaseError, isDatabaseError } from "./types";
+import { buildUpdateStatement } from "./update-statement";
 
 /**
  * A Drizzle column that decodes its own driver representation.
@@ -2290,6 +2291,82 @@ export abstract class DrizzleAdapter {
     txDb: () => unknown
   ): TransactionCrudForwarders {
     return createTransactionForwarders(this, txDb);
+  }
+
+  /**
+   * The statement behind a transaction context's `update`.
+   *
+   * Not forwarded to the pooled `update` the way `select` and `delete` are:
+   * that one goes through the Drizzle query builder, which writes the columns
+   * the runtime MODEL declares, and a transaction's update must reach the
+   * columns the physical TABLE has — the localization transition window
+   * writes a column the model has already moved to a companion table that
+   * does not exist yet. The INSERT half of every transaction context already
+   * builds its own statement for that reason; `update-statement.ts` is the
+   * UPDATE half, spelled once for the three adapters. Each adapter runs the
+   * statement itself, because how a RETURNING list is spelled and how a row
+   * comes back are the parts that differ by dialect.
+   *
+   * @param bindUnmodeled - how a value binds when the model declares no
+   *   column for it; a declared column binds through its own encoder.
+   * @param returning - the rendered RETURNING list, on a dialect that has one.
+   * @throws when the table is not in the registry, or when nothing would be
+   *   written — every key `undefined`, or none at all. The query builder
+   *   refused that too ("No values to set"), and a patch that names nothing
+   *   is a caller's mistake rather than a write of nothing.
+   */
+  protected buildTransactionUpdate(
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause,
+    bindUnmodeled: (value: unknown) => unknown,
+    returning?: SQL
+  ): SQL {
+    const tableObj = this.getTableObject(table);
+    if (!tableObj || typeof tableObj !== "object") {
+      throw this.createDatabaseError(
+        "query",
+        `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
+        undefined
+      );
+    }
+    const statement = buildUpdateStatement({
+      table,
+      tableObj: tableObj as Record<string, unknown>,
+      data,
+      where,
+      bindUnmodeled,
+      returning,
+    });
+    if (!statement) {
+      throw this.createDatabaseError(
+        "query",
+        `No values to set: the update of "${table}" names no column with a defined value.`,
+        undefined
+      );
+    }
+    return statement;
+  }
+
+  /**
+   * The columns a transaction's `update` returns, spelled for a RETURNING
+   * list or a select-back: `*`, or the requested columns as SQL names.
+   *
+   * @returns `undefined` when the caller asked for nothing back — `update`
+   *   returns `[]` then, as it always has.
+   */
+  protected returningColumns(
+    tableObj: unknown,
+    returning: UpdateOptions["returning"]
+  ): string | undefined {
+    if (!returning || (Array.isArray(returning) && returning.length === 0)) {
+      return undefined;
+    }
+    return returning === "*"
+      ? "*"
+      : this.mapColumnNamesToSql(tableObj, returning)
+          .map(col => this.escapeIdentifier(col))
+          .join(", ");
   }
 
   /**
