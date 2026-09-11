@@ -78,13 +78,17 @@ import {
   filterEntries,
   groupByCategory,
   insertionPointFor,
+  componentEntriesFrom,
+  nodeForComponentEntry,
   nodeForEntry,
   patternEntriesFrom,
   registrySlotSource,
+  type ComponentInsertEntry,
   type InsertGroup,
   type InsertionPoint,
   type InsertEntry,
   type PatternInsertEntry,
+  type SavedComponent,
   type SavedPattern,
 } from "./inserter";
 import type { BuilderOp } from "./ops";
@@ -123,6 +127,15 @@ export interface InsertPanelProps {
    * so a caller may hand over whatever its query returned.
    */
   patterns?: readonly SavedPattern[];
+  /**
+   * The site's component definitions to offer beside the blocks. Defaults to
+   * none.
+   *
+   * Supplied rather than fetched, for the reason `patterns` is. Placing one
+   * writes a single instance node pointing at the definition; nothing from the
+   * definition is copied into the page.
+   */
+  components?: readonly SavedComponent[];
   /** How nesting is resolved. Defaults to the live registry. */
   nesting?: NestingSource;
   /**
@@ -332,6 +345,56 @@ function DescriptionStrip({
  * name is for. The block's description reaches them through each tile's own
  * `aria-describedby` regardless.
  */
+/**
+ * What placing this tile DOES, for the two tiers where that is not obvious.
+ *
+ * A block tile carries no badge: inserting a block is the panel's ordinary
+ * act. A pattern is inserted as a COPY that forgets its source, and a
+ * component as a LINK that keeps pointing back — and those are opposite
+ * promises about what happens the next time the source is edited. An author
+ * choosing between two tiles that look alike is choosing between them, so the
+ * tile says which.
+ *
+ * `aria-hidden`, because the tile's accessible NAME is pinned to exactly its
+ * visible label so a spoken command matches what is written on it. The same
+ * promise reaches a screen reader through the tile's description instead —
+ * see {@link tierSentence} — which is read right after the name, before the
+ * press.
+ */
+function TierBadge({
+  entry,
+}: {
+  entry: InsertEntry;
+}): React.JSX.Element | null {
+  if (entry.kind === "block") return null;
+  return (
+    <span
+      className="nx-insert-panel__tier"
+      data-tier={entry.kind}
+      aria-hidden="true"
+    >
+      {entry.kind === "pattern" ? "Copy" : "Linked"}
+    </span>
+  );
+}
+
+/**
+ * The tier's promise as a sentence, for the description a screen reader hears.
+ *
+ * Empty for a block, whose description already says what it is. Leads the
+ * description rather than trailing it, because it is the part that decides
+ * whether to press: an author who hears "Header. A site header with
+ * navigation." learns what it draws; one who hears "placed as a link" first
+ * learns what pressing commits them to.
+ */
+function tierSentence(entry: InsertEntry): string {
+  if (entry.kind === "pattern") return "Placed as a copy that keeps no link. ";
+  if (entry.kind === "component") {
+    return "Placed as a link, so an edit to the component changes this page too. ";
+  }
+  return "";
+}
+
 function TouchGestureHint({
   shown,
 }: {
@@ -397,6 +460,7 @@ export function InsertPanel({
   editor,
   definitions,
   patterns,
+  components,
   nesting,
   categoryOrder,
   onInsert,
@@ -439,8 +503,9 @@ export function InsertPanel({
     () => [
       ...catalogFrom(palette),
       ...patternEntriesFrom(patterns ?? [], source),
+      ...componentEntriesFrom(components ?? []),
     ],
-    [palette, patterns, source]
+    [palette, patterns, components, source]
   );
 
   // Recomputed from the CURRENT document and selection on every render rather
@@ -553,6 +618,10 @@ export function InsertPanel({
       insertPattern(entry);
       return;
     }
+    if (entry.kind === "component") {
+      insertComponent(entry);
+      return;
+    }
     // `nesting` rather than `source`. They differ exactly when the caller
     // supplied no rules: `source` has already defaulted to the REGISTRY, which
     // knows nothing about a supplied definition and so reports every one of its
@@ -585,6 +654,23 @@ export function InsertPanel({
    * several inserts would come back one root at a time, which is not what the
    * author did.
    */
+  /**
+   * Place a component: ONE insert of an instance node.
+   *
+   * No planner, because there is nothing to plan — a pattern is a forest that
+   * has to be re-identified and judged root by root against the destination,
+   * while an instance is a single node whose content lives in the definition.
+   * The placement was judged when the tile was offered, by the definition's
+   * roots, so a refusal here means the document moved underneath the panel.
+   */
+  const insertComponent = (entry: ComponentInsertEntry) => {
+    if (point === null) return;
+    const node = nodeForComponentEntry(entry);
+    if (editor.apply({ kind: "insert", node, at: point.at }) === null) return;
+    editor.select(node.id);
+    onInsert?.(node);
+  };
+
   const insertPattern = (entry: PatternInsertEntry) => {
     if (point === null) return;
     const plan = planInsertPattern(
@@ -734,6 +820,7 @@ export function InsertPanel({
                 >
                   <BlockIconMark icon={entry.icon} />
                   <span className="nx-insert-panel__label">{entry.label}</span>
+                  <TierBadge entry={entry} />
                   {/* Kept in the tile and no longer drawn: `aria-describedby`
                       needs an element to point at, and keeping it here is what
                       stops a tile and the sentence describing it from being
@@ -742,6 +829,7 @@ export function InsertPanel({
                     className="nx-insert-panel__description"
                     id={tokens.get(entry.id)}
                   >
+                    {tierSentence(entry)}
                     {entry.description}
                   </span>
                 </CommandItem>

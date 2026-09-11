@@ -30,8 +30,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   registerBlocks,
   type BlockDocument,
+  type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
 import { InsertPanel } from "./insert-panel";
@@ -1340,5 +1342,120 @@ describe("InsertPanel and the pattern tier", () => {
 
     expect(tile("Hero")).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Broken" })).toBeNull();
+  });
+});
+
+describe("the component tier", () => {
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  function headerComponent() {
+    return {
+      id: "header",
+      title: "Header",
+      category: "Sections",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/text", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+  }
+
+  it("offers a supplied component beside the blocks, marked as LINKED", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[headerComponent()]}
+      />
+    );
+
+    expect(tile("Text")).toBeTruthy();
+    const header = tile("Header");
+    // The visible badge, for a sighted author choosing between look-alikes.
+    expect(header.querySelector(".nx-insert-panel__tier")?.textContent).toBe(
+      "Linked"
+    );
+    // And the same promise where a screen reader hears it: in the description
+    // read after the name, NOT in the name — which stays exactly the visible
+    // label so a spoken command still matches what is written on the tile.
+    expect(header.getAttribute("aria-label")).toBe("Header");
+    const described = document.getElementById(
+      header.getAttribute("aria-describedby") ?? ""
+    );
+    expect(described?.textContent).toMatch(/^Placed as a link/);
+    // A block tile carries no such promise, visible or spoken.
+    expect(tile("Text").querySelector(".nx-insert-panel__tier")).toBeNull();
+  });
+
+  it("places a chosen component as ONE instance node, copying nothing", () => {
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const editor = editorSpy(documentOf());
+    const onInsert = vi.fn();
+    render(
+      <InsertPanel
+        editor={editor}
+        components={[headerComponent()]}
+        onInsert={onInsert}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("option", { name: /Header/ }));
+
+    // `apply` and not `applyAll`: an instance is one node, not a forest, and
+    // there is nothing to plan — the definition's content stays where it is.
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    const op = editor.apply.mock.calls[0][0] as {
+      kind: string;
+      node: { id: string; type: string; props: unknown; slots?: unknown };
+    };
+    expect(op.kind).toBe("insert");
+    expect(op.node.type).toBe(COMPONENT_INSTANCE_TYPE);
+    expect(op.node.props).toEqual({ componentId: "header" });
+    // Nothing of the definition's tree travelled into the page.
+    expect(op.node.slots).toBeUndefined();
+    expect(op.node.id).not.toBe("d1");
+    expect(editor.select).toHaveBeenCalledWith(op.node.id);
+    expect(onInsert).toHaveBeenCalledWith(op.node);
+  });
+
+  it("offers nothing for a component the destination could not take", () => {
+    // Judged by the definition's ROOT. A column may only live inside columns,
+    // and this page's insertion point is the root — so the tile is withheld
+    // rather than offered and refused on click.
+    registerBlocks(
+      [
+        { ...base, name: "acme/text" },
+        { ...base, name: "acme/column", parent: ["acme/columns"] },
+      ] as never,
+      { source: "acme" }
+    );
+    const columnOnly = {
+      ...headerComponent(),
+      id: "col",
+      title: "Column card",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/column", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[columnOnly, headerComponent()]}
+      />
+    );
+
+    expect(screen.getByRole("option", { name: /Header/ })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Column card/ })).toBeNull();
   });
 });

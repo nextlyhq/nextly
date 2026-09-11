@@ -250,6 +250,37 @@
   padding: 0.125rem 0.5rem 0.5rem;
 }
 
+/*
+ * The tier badge: what placing the tile does, where that is not obvious.
+ *
+ * Small and quiet, because it is a qualifier on the label rather than a second
+ * label — the same weight the description strip uses, so the tile's hierarchy
+ * stays name first. Token colours only, so it reads in both themes.
+ */
+.nx-insert-panel__tier {
+  display: inline-block;
+  margin-top: 0.125rem;
+  padding: 0 0.3125rem;
+  border-radius: 999px;
+  font-size: 0.5625rem;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+/*
+ * A component is a LINK, which is the tier an author most needs to notice:
+ * editing the definition later changes this page too. The accent tint says
+ * "this one is different" without making the tile itself louder.
+ */
+.nx-insert-panel__tier[data-tier="component"] {
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
 .nx-insert-panel__label {
   display: block;
   font-size: 0.6875rem;

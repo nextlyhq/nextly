@@ -14,10 +14,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   allBlocks,
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
   registerBlocks,
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockDocument,
+  type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -33,7 +36,11 @@ import {
   nodeForEntry,
   patternEntriesFrom,
   PATTERN_ENTRY_PREFIX,
+  COMPONENT_ENTRY_PREFIX,
+  componentEntriesFrom,
+  nodeForComponentEntry,
   type BlockInsertEntry,
+  type SavedComponent,
   type SavedPattern,
 } from "./inserter";
 
@@ -1276,5 +1283,126 @@ describe("the pattern tier", () => {
       "acme/text",
       `${PATTERN_ENTRY_PREFIX}hero`,
     ]);
+  });
+});
+
+describe("the component tier", () => {
+  /** A component definition, which is what a row in the components collection holds. */
+  function componentOf(nodes: ComponentDocument["nodes"]): ComponentDocument {
+    return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "component", nodes };
+  }
+
+  function stored(overrides: Partial<SavedComponent> = {}): SavedComponent {
+    return {
+      id: "header",
+      title: "Header",
+      document: componentOf([
+        { id: "d1", type: "acme/text", version: 1, props: { text: "Site" } },
+      ]),
+      ...overrides,
+    };
+  }
+
+  it("keys a component out of the block namespace, and apart from patterns", () => {
+    // A definition may be saved under any id. Its catalog key carries the
+    // tier, so it can share an id with a block AND with a pattern without any
+    // two entries answering to one key.
+    const blocks = catalog([{ ...base, name: "acme/text" }]);
+    const [component] = componentEntriesFrom([stored({ id: "acme/text" })]);
+
+    expect(component?.id).toBe(`${COMPONENT_ENTRY_PREFIX}acme/text`);
+    expect(component?.id).not.toBe(`${PATTERN_ENTRY_PREFIX}acme/text`);
+    expect(blocks.some(entry => entry.id === component?.id)).toBe(false);
+    expect(component?.componentId).toBe("acme/text");
+  });
+
+  it("offers nothing for a row with no document, or one that is not a component", () => {
+    // Both are legal stored rows — a published definition saved without
+    // content, and a row a migration left holding a pattern — and both are
+    // rows the palette has nothing to place for. A tile that accepted a click
+    // and then failed would be worse than no tile.
+    const entries = componentEntriesFrom([
+      stored({ id: "empty", document: null }),
+      stored({
+        id: "wrong-kind",
+        // WITH roots, so that only the kind check can exclude it. Given none,
+        // the empty-roots check below would drop it first and this case would
+        // pass whether or not the kind was ever looked at.
+        document: {
+          ...componentOf([
+            { id: "d1", type: "acme/text", version: 1, props: {} },
+          ]),
+          kind: "pattern",
+        } as never,
+      }),
+      stored({ id: "no-roots", document: componentOf([]) }),
+      stored({ id: "fine" }),
+    ]);
+
+    expect(entries.map(entry => entry.componentId)).toEqual(["fine"]);
+  });
+
+  it("carries the usage count only when the library supplied one", () => {
+    // A tile saying "used on 0 pages" about a count nobody took would be
+    // stating a fact it does not hold.
+    const [counted, uncounted] = componentEntriesFrom([
+      stored({ id: "a", usedOn: 12 }),
+      stored({ id: "b" }),
+    ]);
+
+    expect(counted?.usedOn).toBe(12);
+    expect(uncounted).not.toHaveProperty("usedOn");
+  });
+
+  it("judges placement by the definition's ROOTS, not by the instance node's type", () => {
+    // The instance node's own type is not a registered block, and the nesting
+    // source answers "no restriction" for a type it cannot resolve. Judged by
+    // that, a component whose root may only live inside columns could be
+    // placed at the page root — and would render there.
+    catalog([{ ...base, name: "acme/column", parent: ["acme/columns"] }]);
+    const [component] = componentEntriesFrom([
+      stored({
+        document: componentOf([
+          { id: "d1", type: "acme/column", version: 1, props: {} },
+        ]),
+      }),
+    ]);
+
+    const verdict = entryAllowedAt(
+      component as never,
+      { kind: "root" },
+      registryNestingSource()
+    );
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("restricted-at-root");
+    expect(verdict.permitted).toEqual(["acme/columns"]);
+  });
+
+  it("allows a component whose roots the destination takes", () => {
+    catalog([{ ...base, name: "acme/text" }]);
+    const [component] = componentEntriesFrom([stored()]);
+
+    expect(
+      entryAllowedAt(
+        component as never,
+        { kind: "root" },
+        registryNestingSource()
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("places ONE instance node pointing at the definition, copying nothing", () => {
+    // The whole difference from a pattern. The definition's content is not in
+    // the page; the renderer inlines it at read time, which is what makes an
+    // edit to the definition reach this page later.
+    const [component] = componentEntriesFrom([stored()]);
+    const node = nodeForComponentEntry(component!);
+
+    expect(node.type).toBe(COMPONENT_INSTANCE_TYPE);
+    expect(node.props).toEqual({ componentId: "header" });
+    expect(node.slots).toBeUndefined();
+    // And a fresh id each time, so two placements are two nodes.
+    expect(nodeForComponentEntry(component!).id).not.toBe(node.id);
   });
 });

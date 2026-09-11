@@ -33,9 +33,12 @@ import {
   locateNode,
   makeNode,
   placementVerdict,
+  COMPONENT_INSTANCE_TYPE,
+  isComponentDocument,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
   type NestingSource,
   type NestingVerdict,
   type PlacementTarget,
@@ -216,7 +219,65 @@ export interface PatternInsertEntry {
  * both halves optional and every consumer would branch on which half was
  * filled in — the branch this union makes the compiler check.
  */
-export type InsertEntry = BlockInsertEntry | PatternInsertEntry;
+export type InsertEntry =
+  | BlockInsertEntry
+  | PatternInsertEntry
+  | ComponentInsertEntry;
+
+/**
+ * A stored component definition, as the library hands it to the palette.
+ *
+ * The same shape and the same caveats as {@link SavedPattern}, because it is
+ * the same kind of row from a sibling collection: `keywords` is one stored
+ * string, and `document` may be `null` for a published row saved without
+ * content. Carried separately rather than widened onto `SavedPattern` because
+ * what the two are FOR differs — a pattern is copied in and forgets its source,
+ * a component is placed as one node that keeps pointing back — and a reader
+ * should be able to tell from the type which it holds.
+ */
+export interface SavedComponent {
+  /** The stored row's id, which an instance node points at. */
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly category?: string;
+  readonly keywords?: string | null;
+  readonly document?: ComponentDocument | null;
+  /**
+   * How many pages currently place it, when the library can say.
+   *
+   * Optional because the count is a separate read the library may not have
+   * made, and a tile that showed "used on 0 pages" for a count nobody took
+   * would be stating a fact it does not hold.
+   */
+  readonly usedOn?: number;
+}
+
+/**
+ * One offerable COMPONENT: a definition placed as a single instance node that
+ * keeps pointing back at it.
+ *
+ * The document travels with the entry for the reason a pattern's does — the
+ * palette judges placement from its roots — but what inserting it does is the
+ * opposite of a pattern: nothing from the document is copied into the page.
+ * One node is written, carrying the definition's id, and the renderer inlines
+ * the definition at read time. That is what makes an edit to the definition
+ * reach every page that placed it.
+ */
+export interface ComponentInsertEntry {
+  readonly kind: "component";
+  /** Prefixed, for the reason {@link PatternInsertEntry.id} is. */
+  readonly id: string;
+  /** The definition's stored id, which the instance node will point at. */
+  readonly componentId: string;
+  readonly label: string;
+  readonly description: string;
+  readonly category: string;
+  readonly keywords: readonly string[];
+  readonly icon?: string;
+  readonly document: ComponentDocument;
+  readonly usedOn?: number;
+}
 
 /**
  * How a caller answers for a block's declared child regions.
@@ -434,6 +495,59 @@ export function patternEntriesFrom(
  */
 export const PATTERN_ENTRY_PREFIX = "pattern:";
 
+/** The same rule for a component's catalog id, in its own namespace. */
+export const COMPONENT_ENTRY_PREFIX = "component:";
+
+/**
+ * The component entries a library of stored definitions yields.
+ *
+ * Skipped, never refused: a row with no document, or one whose document is
+ * not a component definition, is a row the palette has nothing to offer for,
+ * and offering it would be a tile that accepts a click and then fails. A
+ * definition's INTERNAL nesting is not re-judged here — it was judged when the
+ * definition was saved, and it is the definition's own concern rather than the
+ * page's. Where its roots may sit on THIS page is asked per placement, by
+ * {@link entryAllowedAt}, exactly as a pattern's are.
+ */
+export function componentEntriesFrom(
+  components: readonly SavedComponent[]
+): ComponentInsertEntry[] {
+  const entries: ComponentInsertEntry[] = [];
+  for (const component of components) {
+    const document = component.document;
+    if (document === undefined || document === null) continue;
+    if (!isComponentDocument(document)) continue;
+    if (document.nodes.length === 0) continue;
+    entries.push({
+      kind: "component",
+      id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
+      componentId: component.id,
+      label: component.title,
+      description: component.description ?? "",
+      category: component.category ?? UNCATEGORISED,
+      keywords: keywordsOf(component.keywords),
+      document,
+      ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
+    });
+  }
+  return entries;
+}
+
+/**
+ * The single node placing a component writes.
+ *
+ * ONE node, carrying the definition's id and nothing of its content. The
+ * renderer inlines the definition at read time, which is the whole point of
+ * placing a component rather than copying a pattern: an edit to the definition
+ * reaches this page without this page being touched. No variant and no
+ * overrides yet — an instance freshly placed inherits everything.
+ */
+export function nodeForComponentEntry(entry: ComponentInsertEntry): BlockNode {
+  return makeNode(COMPONENT_INSTANCE_TYPE, 1, {
+    componentId: entry.componentId,
+  });
+}
+
 /**
  * The author's stored search terms, as the list the palette matches.
  *
@@ -525,8 +639,13 @@ export function entryAllowedAt(
   target: PlacementTarget,
   source: NestingSource
 ): NestingVerdict {
-  if (entry.kind === "pattern") {
-    return patternAllowedAt(entry.document, target, source);
+  // A pattern and a component are both judged by their ROOTS. The instance
+  // node's own type is not a registered block, and the nesting source answers
+  // "no restriction" for a type it cannot resolve — so judging the instance by
+  // its type would let a component whose root is a section be placed inside a
+  // paragraph. The definition's roots are what will actually render there.
+  if (entry.kind === "pattern" || entry.kind === "component") {
+    return rootsAllowedAt(entry.document, target, source);
   }
   return blockAllowedAt(entry.blockName, target, source);
 }
@@ -551,7 +670,7 @@ export function entryAllowedAt(
  * it belongs to whatever judges the pattern itself, not to a question about
  * this target.
  */
-function patternAllowedAt(
+function rootsAllowedAt(
   document: BlockDocument,
   target: PlacementTarget,
   source: NestingSource
