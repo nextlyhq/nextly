@@ -18,6 +18,7 @@
  * @module admin/BlocksField.paletteDrag.test
  */
 
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
@@ -39,6 +40,13 @@ let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
 
 /** What the capability route answers. Mutable so a case can withhold the grant. */
 let capabilityAnswer: { mayCreate: boolean } | undefined;
+
+/** Which document the field is inside, or none. */
+let documentIdentity: {
+  kind: "collection" | "single";
+  slug: string;
+  documentId?: string;
+} | null = null;
 
 /**
  * What the component route answers.
@@ -245,6 +253,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    */
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
+  // Which document the field sits in. Mutable so one case can put the
+  // field inside a component's own row.
+  useDocumentIdentity: () => documentIdentity,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change
@@ -316,9 +327,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { BlocksField } = await import("./BlocksField");
 
 /** A form around the field, since it reads its value through a form control. */
-function Host(): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: undefined } });
+function Host({
+  document,
+}: {
+  document?: BlockDocument;
+} = {}): React.JSX.Element {
+  const { control } = useForm({ defaultValues: { body: document } });
   return <BlocksField name="body" control={control} />;
+}
+
+/** A component's own content, as its content field holds it. */
+function componentDocument(): BlockDocument {
+  return {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [],
+  } as unknown as BlockDocument;
 }
 
 /** Mount the field and open the editor, which is where the two surfaces live. */
@@ -344,6 +368,7 @@ afterEach(() => {
   // not written for.
   libraryAnswer = undefined;
   componentAnswer = undefined;
+  documentIdentity = null;
   shownPanel = "insert";
   routeReads = 0;
   componentReads = 0;
@@ -571,6 +596,69 @@ describe("what the editor reads before anyone asks for it", () => {
     };
     expect(library.definitions).toBe(render.definitions);
     expect(library.components).toBe(items);
+  });
+});
+
+describe("what a component's own content field may offer", () => {
+  const definition = {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+  };
+  const rows = [
+    { id: "header", title: "Header", document: definition },
+    { id: "footer", title: "Footer", document: definition },
+  ];
+
+  it("leaves out the definition the field is editing, and keeps the map whole", () => {
+    // Placed, an instance of the definition inside itself is a cycle the
+    // resolver draws as a placeholder; the offer is where the field knows
+    // which row it is inside. The canvas still resolves every OTHER instance
+    // against the whole map.
+    componentAnswer = { items: rows, meta: { count: 2, truncated: false } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "header",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
+      "footer",
+    ]);
+    const canvas = recorded("canvas");
+    expect(
+      (canvas.render as { definitions: Map<string, unknown> }).definitions.has(
+        "header"
+      )
+    ).toBe(true);
+  });
+
+  it("offers every component to a PAGE's field, whatever the page's id", () => {
+    // The control, and the rule's second half: a page is never inside a
+    // component, however the ids happen to fall.
+    componentAnswer = { items: rows, meta: { count: 2, truncated: false } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "pages",
+      documentId: "header",
+    };
+
+    openEditor();
+
+    const panel = recorded("insertPanel");
+    expect(panel.components).toBe(rows);
+  });
+
+  it("offers every component to a component's field on a create form, which names no row", () => {
+    componentAnswer = { items: rows, meta: { count: 2, truncated: false } };
+    documentIdentity = { kind: "collection", slug: "components" };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    expect(recorded("insertPanel").components).toBe(rows);
   });
 });
 

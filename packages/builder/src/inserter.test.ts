@@ -41,6 +41,7 @@ import {
   PATTERN_ENTRY_PREFIX,
   COMPONENT_ENTRY_PREFIX,
   componentEntriesFrom,
+  compositionRefusal,
   nodeForComponentEntry,
   type BlockInsertEntry,
   type SavedComponent,
@@ -1580,6 +1581,123 @@ describe("the component tier", () => {
     const [offered] = componentEntriesFrom([row], NONE);
 
     expect(offered?.document).toBe(row.document);
+  });
+
+  describe("whether the page has room for it", () => {
+    /** A page holding `count` plain text nodes at the root. */
+    function pageWith(count: number): BlockDocument {
+      return documentOf(
+        Array.from({ length: count }, (_, i) => ({
+          id: `p${i}`,
+          type: "acme/text",
+          version: 1,
+          props: {},
+        }))
+      );
+    }
+    const three = stored({
+      id: "three",
+      document: componentOf([
+        { id: "d1", type: "acme/text", version: 1, props: {} },
+        { id: "d2", type: "acme/text", version: 1, props: {} },
+        { id: "d3", type: "acme/text", version: 1, props: {} },
+      ]),
+    });
+    const node = () =>
+      nodeForComponentEntry(componentEntriesFrom([three], lookupOf(three))[0]!);
+
+    it("answers nothing for a page with room", () => {
+      catalog([{ ...base, name: "acme/text" }]);
+      const limits = { ...DEFAULT_LIMITS, maxNodes: 10 };
+
+      expect(
+        compositionRefusal(
+          pageWith(2),
+          node(),
+          { index: 2 },
+          lookupOf(three),
+          limits
+        )
+      ).toBeUndefined();
+    });
+
+    it("refuses a page whose composed size would pass the node cap, and says so", () => {
+      // The apply would accept it — one stored node — and the canvas would then
+      // leave it unresolved: the resolver spends one budget across every
+      // instance it inlines. Two stored nodes plus a three-node definition
+      // under a cap of four is the case.
+      catalog([{ ...base, name: "acme/text" }]);
+      const limits = { ...DEFAULT_LIMITS, maxNodes: 4 };
+
+      const refusal = compositionRefusal(
+        pageWith(2),
+        node(),
+        { index: 2 },
+        lookupOf(three),
+        limits
+      );
+
+      expect(refusal?.reason).toBe("budget");
+      expect(refusal?.sentence).toMatch(/no room left/);
+    });
+
+    it("asks the resolver, so a definition too deep for the cap is refused as the resolver refuses it", () => {
+      // The resolver judges a definition's own depth from its own root — a
+      // placement's depth in the page is not part of that judgement — so what
+      // this can refuse is exactly what the canvas would leave unresolved,
+      // and nothing more.
+      catalog([
+        { ...base, name: "acme/box", slots: { children: {} } },
+        { ...base, name: "acme/text" },
+      ]);
+      const nested = stored({
+        id: "nested",
+        document: componentOf([
+          {
+            id: "d1",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                { id: "d2", type: "acme/text", version: 1, props: {} },
+              ],
+            },
+          },
+        ]),
+      });
+      const instance = nodeForComponentEntry(
+        componentEntriesFrom([nested], lookupOf(nested))[0]!
+      );
+
+      const tooDeep = compositionRefusal(
+        pageWith(0),
+        instance,
+        { index: 0 },
+        lookupOf(nested),
+        { ...DEFAULT_LIMITS, maxDepth: 1 }
+      );
+      const fits = compositionRefusal(
+        pageWith(0),
+        instance,
+        { index: 0 },
+        lookupOf(nested),
+        { ...DEFAULT_LIMITS, maxDepth: 2 }
+      );
+
+      expect(tooDeep?.reason).toBe("node-depth");
+      expect(fits).toBeUndefined();
+    });
+
+    it("leaves a reason that is not about room to the tile", () => {
+      // A missing definition was the tile's concern when it was offered; the
+      // insert refuses only what the page cannot hold.
+      catalog([{ ...base, name: "acme/text" }]);
+
+      expect(
+        compositionRefusal(pageWith(2), node(), { index: 2 }, NONE)
+      ).toBeUndefined();
+    });
   });
 
   it("places ONE instance node pointing at the definition, copying nothing", () => {

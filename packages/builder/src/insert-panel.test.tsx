@@ -31,11 +31,13 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
+  DEFAULT_LIMITS,
   registerBlocks,
   type BlockDocument,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
+import { NoticeSinkProvider } from "./builder-notices";
 import { InsertPanel } from "./insert-panel";
 import type { EditorState } from "./editor-state";
 import { EMPTY_SELECTION } from "./selection";
@@ -1457,6 +1459,56 @@ describe("the component tier", () => {
 
     expect(screen.getByRole("option", { name: /Header/ })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /Column card/ })).toBeNull();
+  });
+
+  it("refuses to place a component the page has no room for, and says so", () => {
+    // The tile is offered — room is a property of the page, not of the
+    // definition — and the insert asks the resolver with the node in place.
+    // A page of two nodes under a cap of four cannot hold a three-node
+    // definition composed, so nothing is applied and the author is told.
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const three = {
+      ...headerComponent(),
+      id: "three",
+      title: "Three up",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [1, 2, 3].map(n => ({
+          id: `d${n}`,
+          type: "acme/text",
+          version: 1,
+          props: {},
+        })),
+      } as unknown as ComponentDocument,
+    };
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "p1", type: "acme/text", version: 1, props: {} },
+        { id: "p2", type: "acme/text", version: 1, props: {} },
+      ],
+    } as unknown as BlockDocument;
+    const editor = editorSpy(page);
+    const raise = vi.fn();
+    render(
+      <NoticeSinkProvider raise={raise}>
+        <InsertPanel
+          editor={editor}
+          components={[three]}
+          componentDefinitions={new Map([["three", three.document]])}
+          documentLimits={{ ...DEFAULT_LIMITS, maxNodes: 4 }}
+        />
+      </NoticeSinkProvider>
+    );
+
+    fireEvent.click(screen.getByRole("option", { name: /Three up/ }));
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(raise).toHaveBeenCalledWith(expect.stringMatching(/no room left/));
   });
 
   it("resolves a definition's own instances through the CANVAS's lookup before offering it", () => {

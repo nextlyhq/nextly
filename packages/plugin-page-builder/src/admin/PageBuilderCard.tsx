@@ -139,12 +139,12 @@ export interface PageBuilderCardProps {
  * The miniature, or what stands in for it while a read it cannot draw
  * without is still coming or has failed.
  *
- * Two reads gate it, and both fail in the same direction: without the site's
- * sheet the page draws a plausible design the site does not have, and without
- * the component definitions every instance draws as could-not-be-loaded. The
- * two failures are told apart because their remedies differ — a failed style
- * read is fixed by reloading, a failed component read can be asked again from
- * here.
+ * Two reads are waited for, because both fail in the same direction while
+ * they are pending: without the site's sheet the page draws a plausible design
+ * the site does not have, and without the component definitions every
+ * instance draws as could-not-be-loaded and re-lays out when they land. Only
+ * the style's FAILURE refuses the page; a failed component read draws it and
+ * says so beneath, for the reason given there.
  */
 function Preview({
   document,
@@ -179,39 +179,41 @@ function Preview({
       </div>
     );
   }
-  if (components.state === "unavailable") {
-    /*
-     * The same refusal for the same reason, with the one remedy the author
-     * can reach from here: the read can be asked again without leaving the
-     * form. Drawing anyway would show every component as could-not-be-loaded,
-     * which is the picture of a different problem.
-     */
-    return (
-      <div
-        className="flex aspect-[16/10] w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground"
-        role="status"
-      >
-        <span>
-          This page cannot be previewed right now — the site&apos;s components
-          could not be loaded.
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={components.retry}
-        >
-          Try again
-        </Button>
-      </div>
-    );
-  }
+  /*
+   * A failed COMPONENT read does not refuse the page. The route refuses a role
+   * that may edit pages but not read components, and such an author would
+   * otherwise see every page card refuse to preview, forever. The page is
+   * drawn — its instances as the could-not-be-loaded marker — and the sentence
+   * beneath is what tells that marker apart from a deleted component, with
+   * the one remedy reachable from here.
+   */
   return (
-    <PageMiniature
-      document={document}
-      siteStyles={siteStyles}
-      render={render}
-    />
+    <>
+      <PageMiniature
+        document={document}
+        siteStyles={siteStyles}
+        render={render}
+      />
+      {components.state === "unavailable" ? (
+        <p
+          className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground"
+          role="status"
+        >
+          <span>
+            The site&apos;s components could not be loaded, so any on this page
+            draw as missing.
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={components.retry}
+          >
+            Try again
+          </Button>
+        </p>
+      ) : null}
+    </>
   );
 }
 

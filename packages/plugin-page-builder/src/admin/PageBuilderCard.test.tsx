@@ -178,7 +178,12 @@ describe("PageBuilderCard", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("says the components could not be loaded, and offers to try again", () => {
+  it("still draws the page when the components could not be loaded, and says so beneath it", () => {
+    // Unlike a failed style read, a failed component read does not refuse the
+    // page: the route refuses a role that may edit pages but not read
+    // components, and such an author would otherwise see every card refuse
+    // forever. The sentence beneath is what tells the marker apart from a
+    // deleted component, with the one remedy reachable from here.
     const retry = vi.fn();
     const { container } = render(
       <PageBuilderCard
@@ -188,14 +193,12 @@ describe("PageBuilderCard", () => {
       />
     );
 
-    expect(container.querySelector(MINIATURE)).toBeNull();
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
     expect(screen.getByRole("status").textContent).toMatch(
       /components could not be loaded/i
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retry).toHaveBeenCalledTimes(1);
-    // And the way into the builder survives it, as it survives a failed
-    // style read.
     expect(
       screen.getByRole("button", { name: /open page builder/i })
     ).toBeDefined();
