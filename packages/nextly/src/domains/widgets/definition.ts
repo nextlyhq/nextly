@@ -586,7 +586,9 @@ export function widgetValueProblem(
  * SHAPE. `resolveOne` calls `readableActions` for every archetype whatever its
  * name, and that immediately calls `.filter`, so a non-array `actions` throws
  * during resolution and takes the whole grid down before the unknown-card
- * fallback can draw. Container shape is version-independent; placement is not.
+ * fallback can draw. Container shape is version-independent; placement is not,
+ * and the two live in their own functions below so that each reads as the one
+ * rule it is.
  */
 function archetypeRelatedProblem(
   widget: Record<string, unknown>
@@ -597,12 +599,33 @@ function archetypeRelatedProblem(
     return "archetype, when given, must be a string";
   }
 
-  // Shape first, and for every standing including a newer core's -- one level
-  // in, not just the container. `readableActions` runs for every archetype and
-  // reads `action.requiredPermission` off each item, so a `null` or `undefined`
-  // entry throws exactly as a non-array `actions` does. A newer core may add
-  // FIELDS to an action; it cannot make an action stop being an object, so this
-  // is version-independent while "must have a label and href" is not.
+  // Shape first, and for every standing including a newer core's.
+  const shapeProblem = payloadShapeProblem(widget);
+  if (shapeProblem !== undefined) return shapeProblem;
+
+  // Placement is a vocabulary judgement, so a newer core's archetype is exempt.
+  // An ABSENT one is not: resolution supplies `custom`, which is a name this
+  // core knows perfectly well, so the rule applies as it would to any other.
+  if (standing.kind === "newer") return undefined;
+  const effective =
+    standing.kind === "resolved-custom" ? "custom" : standing.name;
+  return payloadPlacementProblem(widget, effective);
+}
+
+/**
+ * Why an archetype's payload is the wrong SHAPE, or `undefined` -- one level
+ * in, not just the container.
+ *
+ * `readableActions` runs for every archetype and reads
+ * `action.requiredPermission` off each item, so a `null` or `undefined` entry
+ * throws exactly as a non-array `actions` does. A newer core may add FIELDS to
+ * an action; it cannot make an action stop being an object, nor `content` stop
+ * being a string, so these hold for every standing while "must have a label
+ * and href" does not.
+ */
+function payloadShapeProblem(
+  widget: Record<string, unknown>
+): string | undefined {
   if (widget.actions !== undefined) {
     if (!Array.isArray(widget.actions)) {
       return "actions, when given, must be an array";
@@ -614,26 +637,28 @@ function archetypeRelatedProblem(
       return `actions[${badIndex}] must be an object`;
     }
   }
-
-  // The same shape rule for prose: a newer core cannot make `content` stop
-  // being a string, so this holds for every standing.
   if (widget.content !== undefined && typeof widget.content !== "string") {
     return "content, when given, must be a string";
   }
-  // Placement is a vocabulary judgement, so a newer core's archetype is exempt.
-  // An ABSENT one is not: resolution supplies `custom`, which is a name this
-  // core knows perfectly well, so the rule applies as it would to any other.
-  if (standing.kind === "newer") return undefined;
-  const effective =
-    standing.kind === "resolved-custom" ? "custom" : standing.name;
+  return undefined;
+}
 
-  if (widget.actions !== undefined && effective !== "actions") {
+/**
+ * Why a payload sits on an archetype it does not belong to, or `undefined`.
+ *
+ * A vocabulary judgement: which field each archetype carries is a fact about
+ * THIS core's names, which is why the caller never asks it of a newer core's.
+ */
+function payloadPlacementProblem(
+  widget: Record<string, unknown>,
+  archetype: string
+): string | undefined {
+  if (widget.actions !== undefined && archetype !== "actions") {
     return 'actions are only valid for archetype "actions"';
   }
-  if (widget.content !== undefined && effective !== "text") {
+  if (widget.content !== undefined && archetype !== "text") {
     return 'content is only valid for archetype "text"';
   }
-
   return undefined;
 }
 
