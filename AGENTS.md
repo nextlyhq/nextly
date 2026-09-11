@@ -38,7 +38,9 @@ for all published packages. Status: alpha, all packages version in lockstep.
   `packages/telemetry` - shared tooling and support packages.
 - `apps/playground` - contributor dev harness (not published).
 - `e2e/` - Playwright suite. `docs/` - user docs (MDX, deployed to
-  nextlyhq.com/docs).
+  nextlyhq.com/docs). Nothing here renders them: the site fetches and
+  compiles them at its build, so `pnpm check:docs-compile` compiles every page
+  with the same MDX compiler and CI refuses one that does not parse.
 
 Before editing a package, read its README.md and check for a nested AGENTS.md.
 
