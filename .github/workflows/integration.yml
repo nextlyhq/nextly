@@ -42,13 +42,74 @@ env:
 # `github.ref` group cancelled the previous commit's run on every merge, and
 # switching cancellation off is not enough — a group holds one running and one
 # pending run, so a third merge displaces the second while it is still queued.
+#
+# That every commit keeps its own group does not mean every commit does the
+# work. The `supersession` job asks first, and a run a newer push has overtaken
+# skips its legs; queued runs therefore start, ask and stop within seconds, and
+# only the newest tests. The queue stays short without anything being cancelled.
 concurrency:
   group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
-  integration:
-    name: Integration (${{ matrix.dialect }})
+  # Whether a newer push to `main` already has a run of this workflow. If so
+  # every leg below is skipped rather than repeated: the newer run's verdict
+  # includes this commit, and a skipped job is how this repository says "this
+  # commit cannot affect me". Nothing is cancelled, so `cancelled` keeps its
+  # plain meaning. `.github/actions/superseded-on-main` carries the reasoning.
+  #
+  # No change-detection here, unlike CI: this workflow's trigger already
+  # ignores docs and markdown, so a docs push has no run and cannot supersede
+  # anything, and every run that does exist tests everything. So only the
+  # `superseded` answer is used; `last-tested-sha` is for a workflow that
+  # narrows its work by diff.
+  supersession:
+    name: Ask whether a newer push already covers this one
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      superseded: ${{ steps.newer.outputs.superseded }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Ask
+        id: newer
+        uses: ./.github/actions/superseded-on-main
+        with:
+          workflow: integration.yml
+          substantive-job: Integration (postgres)
+          token: ${{ github.token }}
+
+  # One job per dialect, each with a literal name and only its own database.
+  #
+  # These were one matrix job. A job-level `if` is applied BEFORE the matrix
+  # expands, so a run this workflow skips (a newer push to `main` already has
+  # one) reported a single skipped check whose name was the unevaluated
+  # expression text, and no `Integration (postgres)` or `Integration (mysql)`
+  # at all; `scripts/verify-merge.mjs` requires those names on a merge commit.
+  # Measured on a probe run: a skipped matrix job's `name` is not evaluated,
+  # `needs` included. A literal name survives a skip, so each leg now reports
+  # under its own name, `skipped`, which is what the gate already accepts.
+  #
+  # The split also ends both databases booting for both legs: a `services:`
+  # entry could not be chosen per matrix value, so the postgres leg started
+  # mysql and vice versa. Each job below declares the one it connects to.
+  # The setup the legs share lives in `.github/actions/integration-setup`.
+  integration-postgres:
+    name: Integration (postgres)
+    needs: supersession
+    # `!cancelled()` so a supersession job that FAILED (checkout, the
+    # action, its timeout) does not skip this leg: with no `always()`-style
+    # override, GitHub skips every dependent of a failed job, `skipped` passes
+    # the merge gate, and three required checks would read as acceptable
+    # with nothing run. A failed question falls open to running the suite;
+    # only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
     runs-on: ubuntu-latest
     # A BACKSTOP now, not the bound that should ever fire.
     #
@@ -73,20 +134,6 @@ jobs:
     # a hang somewhere else in the job, which nothing else would end.
     timeout-minutes: 75
 
-    strategy:
-      # One dialect failing must not cancel the others: seeing that a change
-      # breaks only MySQL (and not all three) is exactly the signal that
-      # locates the bug.
-      fail-fast: false
-      matrix:
-        dialect: [postgres, mysql]
-
-    # Both databases boot for both legs: GitHub cannot attach a `services:`
-    # entry conditionally per matrix value, so the postgres leg also starts
-    # mysql and vice versa. Each leg connects only to the one its dialect
-    # needs. sqlite is a separate job below precisely because it needs
-    # neither, and starting containers for it made an unrelated registry
-    # outage able to fail a leg with no database dependency.
     services:
       postgres:
         image: postgres:17
@@ -103,6 +150,68 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        uses: ./.github/actions/integration-setup
+
+      # The adapter suites read TEST_POSTGRES_URL / TEST_MYSQL_URL and fail
+      # (rather than skip) when their database is unreachable, so each leg
+      # runs only the packages its dialect covers. `test:integration`
+      # declares `dependsOn: ^build`, so turbo builds prerequisites itself.
+      #
+      # The core `nextly` integration suite is gated on every leg. Its
+      # in-memory-SQLite suites (createTestNextly) run on all legs; its
+      # dialect-gated files self-skip unless the matching URL is set, so the
+      # pushschema / notifications / drizzle-v1 pg suites run on the postgres
+      # leg and the mysql suites on the mysql leg. nextly's database/factory.ts
+      # references @nextlyhq/adapter-{postgres,mysql,sqlite}, which are optional
+      # peers. Turbo's `^build` does not traverse peerDependencies, so nextly
+      # also lists them as devDependencies purely to give the build graph that
+      # edge; without it `nextly#build` can start before the adapters emit their
+      # declarations and fails on TS7016. They stay in the filter list so each
+      # leg still builds all three regardless of which suites it runs.
+      - name: Run integration tests (postgres)
+        run: |
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder
+          scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
+            "the PostgreSQL integration suite" \
+            pnpm lane:test:integration:postgres
+        env:
+          TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
+          TURBO_CACHE_DIR: .turbo
+
+      # Only a job that finished its work publishes what it learned. A cancelled or
+      # failed run leaves the cache as it found it — `actions/cache` saves in a post
+      # step that runs however the job ended, and splitting restore from save is the
+      # supported way to make that conditional (`save-always` was deprecated for it).
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  integration-mysql:
+    name: Integration (mysql)
+    needs: supersession
+    # `!cancelled()` so a supersession job that FAILED (checkout, the
+    # action, its timeout) does not skip this leg: with no `always()`-style
+    # override, GitHub skips every dependent of a failed job, `skipped` passes
+    # the merge gate, and three required checks would read as acceptable
+    # with nothing run. A failed question falls open to running the suite;
+    # only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
+    runs-on: ubuntu-latest
+    # The same backstop as the postgres leg, for the same reasons.
+    timeout-minutes: 75
+
+    services:
       mysql:
         image: mysql:8.4
         env:
@@ -122,77 +231,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - name: Setup
+        uses: ./.github/actions/integration-setup
 
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      # Scoped to the JOB, which is the part that matters. Six jobs across four
-      # workflows cache `.turbo`, they run concurrently on the same commit, and
-      # they build different filter sets — this one builds every package and app,
-      # `preview` builds only packages, `integration` builds five of them. Keyed on
-      # the commit alone they all wrote one entry, so whichever finished first
-      # decided what every later reader got.
-      #
-      # A reader then restores a `.turbo` shaped by someone else's build, reports
-      # `cache hit, replaying logs`, and lays down a `dist/` that does not contain
-      # what its own tests import. The symptom is `Cannot find module
-      # '.../dist/chunk-<hash>.mjs'` in a package the pull request never touched.
-      # Re-running cannot clear it: the key is the commit, so a second attempt
-      # scores an exact hit on the same foreign entry.
-      #
-      # `github.job` gives each job its own lineage. Nothing is lost — a job's own
-      # previous runs are what its cache was ever useful for, and turbo entries are
-      # content-addressed, so a narrower cache is a slower run and never a wrong
-      # one.
-      #
-      # The `v2-` prefix retires every entry written under the shared scheme in one
-      # step. Cache keys are immutable and `restore-keys` prefers the newest match,
-      # so the entries already written would otherwise keep being selected.
-      - name: Restore Turbo cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .turbo
-          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-          restore-keys: |
-            turbo-v2-${{ runner.os }}-${{ github.job }}-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # The adapter suites read TEST_POSTGRES_URL / TEST_MYSQL_URL and fail
-      # (rather than skip) when their database is unreachable, so each leg
-      # runs only the packages its dialect covers. `test:integration`
-      # declares `dependsOn: ^build`, so turbo builds prerequisites itself.
-      #
-      # The core `nextly` integration suite is now gated on every leg. Its
-      # in-memory-SQLite suites (createTestNextly) run on all legs; its
-      # dialect-gated files self-skip unless the matching URL is set, so the
-      # pushschema / notifications / drizzle-v1 pg suites run on the postgres
-      # leg and the mysql suites on the mysql leg. nextly's database/factory.ts
-      # references @nextlyhq/adapter-{postgres,mysql,sqlite}, which are optional
-      # peers. Turbo's `^build` does not traverse peerDependencies, so nextly
-      # also lists them as devDependencies purely to give the build graph that
-      # edge; without it `nextly#build` can start before the adapters emit their
-      # declarations and fails on TS7016. They stay in the filter list so each
-      # leg still builds all three regardless of which suites it runs.
-      - name: Run integration tests (postgres)
-        if: matrix.dialect == 'postgres'
-        run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder
-          scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
-            "the PostgreSQL integration suite" \
-            pnpm lane:test:integration:postgres
-        env:
-          TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
-          TURBO_CACHE_DIR: .turbo
-
+      # See the postgres leg for why every adapter is built on every leg.
       - name: Run integration tests (mysql)
-        if: matrix.dialect == 'mysql'
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
@@ -214,15 +257,20 @@ jobs:
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
   # sqlite runs in-process against a throwaway file, so this job declares no
-  # `services:` at all. Keeping it out of the matrix above means it never pulls
-  # the postgres/mysql images it would not connect to, which removes its only
-  # external network dependency: a container-registry outage can no longer fail
-  # a leg that needs no database. The job name matches the old matrix leg so the
-  # check keeps its identity.
+  # `services:` at all and has no external network dependency: a
+  # container-registry outage cannot fail a leg that needs no database.
   integration-sqlite:
     name: Integration (sqlite)
+    needs: supersession
+    # `!cancelled()` so a supersession job that FAILED (checkout, the
+    # action, its timeout) does not skip this leg: with no `always()`-style
+    # override, GitHub skips every dependent of a failed job, `skipped` passes
+    # the merge gate, and three required checks would read as acceptable
+    # with nothing run. A failed question falls open to running the suite;
+    # only a cancelled workflow stays cancelled.
+    if: ${{ !cancelled() && needs.supersession.outputs.superseded != 'true' }}
     runs-on: ubuntu-latest
-    # A BACKSTOP, for the same reason as the matrix legs above: the bound that
+    # A BACKSTOP, for the same reason as the database legs above: the bound that
     # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as
     # a failure. This one passed at 22m18s, so it has the most room of the
     # three, and it moves with its siblings so there is one rule to reason about
@@ -235,49 +283,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - name: Setup
+        uses: ./.github/actions/integration-setup
 
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      # Scoped to the JOB, which is the part that matters. Six jobs across four
-      # workflows cache `.turbo`, they run concurrently on the same commit, and
-      # they build different filter sets — this one builds every package and app,
-      # `preview` builds only packages, `integration` builds five of them. Keyed on
-      # the commit alone they all wrote one entry, so whichever finished first
-      # decided what every later reader got.
-      #
-      # A reader then restores a `.turbo` shaped by someone else's build, reports
-      # `cache hit, replaying logs`, and lays down a `dist/` that does not contain
-      # what its own tests import. The symptom is `Cannot find module
-      # '.../dist/chunk-<hash>.mjs'` in a package the pull request never touched.
-      # Re-running cannot clear it: the key is the commit, so a second attempt
-      # scores an exact hit on the same foreign entry.
-      #
-      # `github.job` gives each job its own lineage. Nothing is lost — a job's own
-      # previous runs are what its cache was ever useful for, and turbo entries are
-      # content-addressed, so a narrower cache is a slower run and never a wrong
-      # one.
-      #
-      # The `v2-` prefix retires every entry written under the shared scheme in one
-      # step. Cache keys are immutable and `restore-keys` prefers the newest match,
-      # so the entries already written would otherwise keep being selected.
-      - name: Restore Turbo cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .turbo
-          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-          restore-keys: |
-            turbo-v2-${{ runner.os }}-${{ github.job }}-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Builds all three adapters for the same reason the database job does:
+      # Builds all three adapters for the same reason the database legs do:
       # nextly's database/factory.ts references them as optional peers, and
       # turbo's `^build` does not traverse peerDependencies.
       # `plugin-seo` and `plugin-form-builder` run on THIS leg only, unlike the

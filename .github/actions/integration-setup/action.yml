@@ -1,0 +1,50 @@
+name: Integration leg setup
+description: >
+  The steps every integration leg runs before its suite: pnpm, Node, the
+  job-scoped Turbo cache, and an install. One copy, so the three legs cannot
+  drift apart in the part that is not about their dialect.
+
+# Checkout is the caller's: a local action cannot run until the repository it
+# lives in is present. Saving the cache is the caller's too, because it must
+# come AFTER the suite and only on success, and a composite action cannot wrap
+# around a step it does not contain.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+    - name: Setup Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version-file: .nvmrc
+        cache: pnpm
+
+    # Scoped to the JOB, which is the part that matters. Six jobs across four
+    # workflows cache `.turbo`, they run concurrently on the same commit, and
+    # they build different filter sets. Keyed on the commit alone they all
+    # wrote one entry, so whichever finished first decided what every later
+    # reader got: a `.turbo` shaped by someone else's build, `cache hit,
+    # replaying logs`, and a `dist/` that does not contain what its own tests
+    # import (`Cannot find module '.../dist/chunk-<hash>.mjs'` in a package
+    # the pull request never touched). Re-running cannot clear it, since the
+    # key is the commit.
+    #
+    # `github.job` gives each job its own lineage. Nothing is lost: a job's own
+    # previous runs are what its cache was ever useful for, and turbo entries
+    # are content-addressed, so a narrower cache is a slower run and never a
+    # wrong one. The `v2-` prefix retires every entry written under the shared
+    # scheme in one step; cache keys are immutable and `restore-keys` prefers
+    # the newest match, so the old entries would otherwise keep being selected.
+    - name: Restore Turbo cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .turbo
+        key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+        restore-keys: |
+          turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile

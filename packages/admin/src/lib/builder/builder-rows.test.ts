@@ -113,8 +113,9 @@ describe("what a drag on the canvas says", () => {
     data: { current: undefined },
     rect: { current: { initial: null, translated: null } },
   });
-  // A droppable carries a resolved rect where a draggable carries a ref to
-  // one; the sentences read neither, so both are empty here.
+  // A drop target is an `Over`, a different shape from the `Active` being
+  // dragged: it carries a resolved rect and a `disabled` flag, neither of
+  // which the announcement reads.
   const over = (id: string): Over => ({
     id,
     data: { current: undefined },
