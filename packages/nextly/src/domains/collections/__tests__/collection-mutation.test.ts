@@ -341,6 +341,8 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "Ordered Post" }
       );
 
+      // The registry mock is an untyped record, so its call list is too;
+      // the parameter is named as what a recorded call is.
       const collectionPhase = mockHookRegistry.execute.mock.calls.findIndex(
         (call: unknown[]) => call[0] === "beforeChange"
       );
