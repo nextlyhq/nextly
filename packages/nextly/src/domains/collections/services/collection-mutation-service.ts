@@ -1478,6 +1478,60 @@ export class CollectionMutationService extends BaseService {
    * write. `manyToManyFields` is passed in rather than recomputed because the
    * caller reuses the same list for the junction rewrite later in the write.
    */
+  /**
+   * Field-group values, removed from a write payload for their own tables.
+   *
+   * Mutates `data` in place, since it is the object that continues to the
+   * main-row write, and returns what was taken out keyed by field name. The
+   * ordinary create and update each do this inline; the transactional writes
+   * did not, and the difference was an insert that failed on the first field
+   * group and an update that dropped it without a word.
+   */
+  private extractComponentFieldData(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Record<string, unknown> {
+    const componentFieldData: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (isFieldGroupField(field) && data[field.name] !== undefined) {
+        componentFieldData[field.name] = data[field.name];
+        delete data[field.name];
+      }
+    }
+    return componentFieldData;
+  }
+
+  /**
+   * Write extracted field-group values on the caller's transaction.
+   *
+   * No locale: the transactional writes take none, so a localized component
+   * writes the default locale, as the rest of that path does. Readiness is
+   * read rather than resolved here, which is why a caller that opens its own
+   * transaction warms it first (`warmLocalizedReadiness`).
+   */
+  private async saveComponentFieldDataInTx(
+    tx: TransactionContext,
+    args: {
+      parentId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      data: Record<string, unknown>;
+      user?: UserContext;
+    }
+  ): Promise<void> {
+    if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
+      return;
+    }
+    await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+      parentId: args.parentId,
+      parentTable: args.tableName,
+      fields: args.fields as unknown as FieldConfig[],
+      data: args.data,
+      locale: undefined,
+      req: args.user ? { user: args.user } : {},
+    });
+  }
+
   private shapeWriteParts(
     data: Record<string, unknown>,
     fields: FieldDefinition[],
@@ -8359,7 +8413,6 @@ export class CollectionMutationService extends BaseService {
       let currentData: Record<string, unknown> = options.shapeCallerObject
         ? body
         : { ...body };
-
       // Shared context between all hooks in this request
       // Seeded from the caller, like the non-transactional pipelines. An
       // empty literal here meant a hook context reached every write EXCEPT
@@ -8584,6 +8637,14 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-group values live in their own comp_{slug} tables and have no
+      // column on the main row; left in place, the insert fails on the first
+      // one. Written after the row exists, below.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
+
       this.serializeHasManyRelationships(finalData, fields);
 
       // Convert date-field strings into `Date` objects so Drizzle can bind
@@ -8661,6 +8722,14 @@ export class CollectionMutationService extends BaseService {
       // Insert using transaction context
       const entry = await tx.insert<unknown>(tableName, entryData, {
         returning: "*",
+      });
+
+      await this.saveComponentFieldDataInTx(tx, {
+        parentId: (entry as { id: string }).id,
+        tableName,
+        fields,
+        data: componentFieldData,
+        user: params.user,
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -9156,6 +9225,14 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-group values have no column on the main row. Left in place they
+      // were dropped by the UPDATE without an error, so the row reported
+      // success and the component table kept its old value.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
+
       this.serializeHasManyRelationships(finalData, fields);
 
       // Convert date-field strings into `Date` objects so Drizzle can bind
@@ -9331,7 +9408,7 @@ export class CollectionMutationService extends BaseService {
             collection,
             collectionHasStatus:
               (collection as { status?: boolean }).status === true,
-            componentFieldData: {},
+            componentFieldData,
             draftLocale: draftLocale,
             fields,
             manyToManyData,
@@ -9380,6 +9457,18 @@ export class CollectionMutationService extends BaseService {
             );
           }
         }
+      }
+
+      // Component rows are live content like the junction rows above, so a
+      // held edit keeps them in the draft (stored above) rather than here.
+      if (!storeAsWorkingDraft) {
+        await this.saveComponentFieldDataInTx(tx, {
+          parentId: entryId,
+          tableName,
+          fields,
+          data: componentFieldData,
+          user: params.user,
+        });
       }
 
       // Record a durable version snapshot and the outbox event on the caller's
