@@ -86,7 +86,16 @@ jobs:
           token: ${{ github.token }}
 
   integration:
-    name: Integration (${{ matrix.dialect }})
+    # A job-level `if` is evaluated before the matrix is applied, so when it is
+    # false this job reports as ONE skipped check, not one per dialect, and
+    # `matrix.dialect` is empty in its name. That one check is named for what
+    # it is, so `scripts/verify-merge.mjs` can read it as the postgres and
+    # mysql legs standing down for a newer commit rather than as two required
+    # checks that never reported. `needs` is readable in a job name; `matrix`
+    # is not readable in a job-level `if`, which is why the skip cannot be
+    # applied per leg. The sqlite job below is not a matrix, so its skipped
+    # check keeps its name.
+    name: ${{ needs.supersession.outputs.superseded == 'true' && 'Integration (superseded: postgres, mysql)' || format('Integration ({0})', matrix.dialect) }}
     needs: supersession
     if: needs.supersession.outputs.superseded != 'true'
     runs-on: ubuntu-latest

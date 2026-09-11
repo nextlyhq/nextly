@@ -335,6 +335,11 @@ export function gateVerdict({
   return {
     mergeable: blockers.length === 0,
     blockers,
+    // Required checks a newer commit's run answered for. Reported, so a pass
+    // says which coverage this revision did not carry itself.
+    delegated: Array.isArray(checkRuns)
+      ? delegatedRequired(checkRuns, changedPaths, required)
+      : [],
     // Reported, never a blocker. The project's decision is to run with one
     // reviewer and know it, rather than to treat its silence as coverage.
     secondReviewer: reviewCoverage(coderabbitReviewCount),
@@ -353,6 +358,11 @@ export function formatVerdict(verdict) {
   lines.push(verdict.mergeable ? "GATE PASSED" : "GATE BLOCKED");
   for (const blocker of verdict.blockers)
     lines.push(`  - ${blocker.kind}: ${blocker.detail}`);
+  for (const check of verdict.delegated ?? []) {
+    lines.push(
+      `  ! ${check.name}: superseded, judged by a newer main commit's run (${check.standIn})`
+    );
+  }
   if (verdict.secondReviewer !== "reviewed") {
     lines.push(
       `  ! second reviewer: ${verdict.secondReviewer} (not a blocker; not coverage either)`
@@ -577,10 +587,42 @@ export function missingRequired(checkRuns, changedPaths, required) {
     throw new TypeError("missingRequired needs an array of check-runs");
   }
   const present = new Set(checkRuns.map(run => run?.name));
+  const standingIn = new Set(standIns(checkRuns));
   return required
     .filter(check => workflowApplies(check.pathsIgnore, changedPaths))
+    .filter(check => !(check.standIn && standingIn.has(check.standIn)))
     .map(check => check.name)
     .filter(name => !present.has(name));
+}
+
+/**
+ * The names of stand-in checks that are actually standing in.
+ *
+ * A stand-in counts only when it concluded `skipped`. Its whole meaning is
+ * "this job did not run because a newer commit's run covers it"; the same
+ * name with any other conclusion is a job that ran, and a job that ran is
+ * judged by `blockingJobs` like any other and stands in for nothing.
+ */
+function standIns(checkRuns) {
+  return checkRuns
+    .filter(run => run?.conclusion === "skipped")
+    .map(run => run.name);
+}
+
+/**
+ * Required checks a stand-in answered for, so the report can say so.
+ *
+ * A required check satisfied this way was not run on this revision. That is
+ * the design, not a defect, but a reader of GATE PASSED is owed the
+ * distinction between "tested here" and "tested on the commit after".
+ */
+export function delegatedRequired(checkRuns, changedPaths, required) {
+  if (!Array.isArray(checkRuns) || !Array.isArray(required)) return [];
+  const standingIn = new Set(standIns(checkRuns));
+  return required
+    .filter(check => workflowApplies(check.pathsIgnore, changedPaths))
+    .filter(check => check.standIn && standingIn.has(check.standIn))
+    .map(check => ({ name: check.name, standIn: check.standIn }));
 }
 
 /**
@@ -712,6 +754,15 @@ export function workflowPathsIgnore(workflowText, trigger) {
 }
 
 /**
+ * The one check the postgres and mysql matrix reports as when a newer push to
+ * `main` has overtaken the commit. Spelled once, here, and asserted against
+ * the workflow's own text by the tests, since the two files agree by
+ * convention and nothing else.
+ */
+export const INTEGRATION_MATRIX_SUPERSEDED =
+  "Integration (superseded: postgres, mysql)";
+
+/**
  * Checks whose absence means the revision has no coverage, not that it is
  * clean, each with the filter deciding whether it was due to report.
  */
@@ -732,8 +783,24 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     { name: "Comment convention (describes code, not process)", pathsIgnore: [] },
     // The only coverage any dialect-specific behaviour has: the unit suites
     // mock the drivers and the browser tests run on sqlite alone.
-    { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
-    { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
+    //
+    // The postgres and mysql legs are one matrix job. On a push to `main` that
+    // a newer push has overtaken, `integration.yml` skips that job at the job
+    // level, and a job-level skip is applied before the matrix expands: the
+    // two legs report as ONE skipped check, named for what happened. That
+    // name is the stand-in accepted here, only when its conclusion is
+    // `skipped`, and it is reported rather than silently accepted. The sqlite
+    // leg is not a matrix, so its skipped check keeps its own name.
+    {
+      name: "Integration (postgres)",
+      pathsIgnore: integrationPathsIgnore,
+      standIn: INTEGRATION_MATRIX_SUPERSEDED,
+    },
+    {
+      name: "Integration (mysql)",
+      pathsIgnore: integrationPathsIgnore,
+      standIn: INTEGRATION_MATRIX_SUPERSEDED,
+    },
     { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
     // Reports through the STATUSES surface from its own workflow, and only on a
     // pull request — a push to the base branch has no title to validate, so

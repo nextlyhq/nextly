@@ -32,8 +32,12 @@ pass.** A push to `main` that a newer push has already overtaken skips its
 jobs rather than repeating work: the newer run's verdict includes this commit.
 `skipped` already passes the gate, and here it is literally true. Nothing is
 cancelled by this, so a `cancelled` job still means what it says and still
-blocks. To see what actually tested the commit, read the newest run of that
-workflow on `main`.
+blocks. The postgres and mysql legs are one matrix job, and a job skipped
+before its matrix expands reports as ONE check,
+`Integration (superseded: postgres, mysql)`; the script accepts that name,
+skipped, in place of the two dialect names and says so in the report with a
+`!` line per leg. To see what actually tested the commit, read the newest run
+of that workflow on `main`.
 
 **Know its range before trusting it.** The script's module header lists what it
 does not cover, and the four worth carrying in your head are: it snapshots

@@ -24,8 +24,10 @@ import {
   checkability,
   countRewriteEvents,
   exitCode,
+  delegatedRequired,
   formatVerdict,
   gateVerdict,
+  INTEGRATION_MATRIX_SUPERSEDED,
   jobPasses,
   landedWhole,
   OPTIONAL_STATUS_CONTEXTS,
@@ -56,6 +58,7 @@ const forcePush = { event: "head_ref_force_pushed" };
 const commented = { event: "commented" };
 const green = name => ({ name, status: "completed", conclusion: "success" });
 const queued = name => ({ name, status: "queued", conclusion: null });
+const skipped = name => ({ name, status: "completed", conclusion: "skipped" });
 /** The one check whose ABSENCE means no build ran. Fixtures must name it. */
 const CI = "Lint / Typecheck / Test / Build";
 /** A real 40-character object name; the gate refuses anything shorter as a tip. */
@@ -546,6 +549,29 @@ describe("gateVerdict", () => {
 });
 
 describe("formatVerdict", () => {
+  it("reports a leg a stand-in answered for, without blocking", () => {
+    const runs = allGreen().filter(
+      run => !/^Integration \((postgres|mysql)\)$/.test(run.name)
+    );
+    runs.push(skipped(INTEGRATION_MATRIX_SUPERSEDED));
+    const verdict = gateVerdict({
+      tip: FULL_TIP,
+      unresolvedThreads: 0,
+      checkRuns: runs,
+      changedPaths: CODE_CHANGE,
+      required: REQUIRED,
+      codexReviewedSha: FULL_TIP.slice(0, 10),
+      coderabbitReviewCount: 1,
+      approvalCount: 1,
+    });
+
+    expect(verdict.mergeable).toBe(true);
+    const text = formatVerdict(verdict);
+    expect(text).toContain("GATE PASSED");
+    expect(text).toContain("! Integration (postgres): superseded");
+    expect(text).toContain("! Integration (mysql): superseded");
+  });
+
   it("says BLOCKED and names each reason", () => {
     const text = formatVerdict(
       gateVerdict({
@@ -733,6 +759,65 @@ describe("missingRequired", () => {
         REQUIRED
       )
     ).toEqual(["Comment convention (describes code, not process)", TITLE]);
+  });
+
+  it("lets the superseded matrix check stand in for the postgres and mysql legs", () => {
+    // On a `main` push a newer push has overtaken, the two-dialect matrix job
+    // is skipped at the job level, which is applied before the matrix
+    // expands: one skipped check, named for what happened, and no per-dialect
+    // ones. Requiring the dialect names there would report every superseded
+    // merge commit as untested, which at this repository's merge rate is most
+    // of them.
+    const runs = [
+      green("Lint / Typecheck / Test / Build"),
+      green("gitleaks"),
+      green("Comment convention (describes code, not process)"),
+      skipped(INTEGRATION_MATRIX_SUPERSEDED),
+      skipped("Integration (sqlite)"),
+      green(TITLE),
+    ];
+
+    expect(missingRequired(runs, CODE_CHANGE, REQUIRED)).toEqual([]);
+  });
+
+  it("does NOT let the stand-in answer when it ran rather than skipped", () => {
+    // The stand-in's meaning is "did not run because a newer commit covers
+    // it". A check of that name that concluded anything else is a job that
+    // ran, and the legs it would have stood in for are still due.
+    const runs = [
+      green("Lint / Typecheck / Test / Build"),
+      green("gitleaks"),
+      green("Comment convention (describes code, not process)"),
+      green(INTEGRATION_MATRIX_SUPERSEDED),
+      skipped("Integration (sqlite)"),
+      green(TITLE),
+    ];
+
+    expect(missingRequired(runs, CODE_CHANGE, REQUIRED)).toEqual([
+      "Integration (postgres)",
+      "Integration (mysql)",
+    ]);
+  });
+
+  it("names the legs the stand-in answered for", () => {
+    // Reported, so GATE PASSED on a superseded merge commit says which
+    // coverage the revision did not carry itself.
+    const runs = [skipped(INTEGRATION_MATRIX_SUPERSEDED)];
+
+    expect(delegatedRequired(runs, CODE_CHANGE, REQUIRED)).toEqual([
+      { name: "Integration (postgres)", standIn: INTEGRATION_MATRIX_SUPERSEDED },
+      { name: "Integration (mysql)", standIn: INTEGRATION_MATRIX_SUPERSEDED },
+    ]);
+    expect(delegatedRequired([green(INTEGRATION_MATRIX_SUPERSEDED)], CODE_CHANGE, REQUIRED)).toEqual([]);
+    expect(delegatedRequired(runs, DOCS_CHANGE, REQUIRED)).toEqual([]);
+  });
+
+  it("spells the stand-in the way the workflow does", () => {
+    // Two files agree on one string by convention. The workflow renders it
+    // from an expression, so it is asserted as a literal in the workflow's
+    // text: renaming either side alone turns every superseded merge commit
+    // into two absent required checks.
+    expect(INTEGRATION_YML).toContain(`'${INTEGRATION_MATRIX_SUPERSEDED}'`);
   });
 
   it("requires every check when the change set could not be read", () => {
