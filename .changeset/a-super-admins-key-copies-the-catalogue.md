@@ -1,5 +1,4 @@
 ---
-
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-postgres": patch
@@ -25,6 +24,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+---
 
 An API key created by a Super Admin copies the permission catalogue rather
 than the role's rows. A Super Admin's power is a bypass, and the role only
