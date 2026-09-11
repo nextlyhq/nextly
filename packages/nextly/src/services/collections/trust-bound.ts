@@ -3,7 +3,7 @@
  *
  * A caller serving one fixed audience can name the collections its bypass may
  * reach; anything outside that set must be read as the audience would read it.
- * For a dynamic collection that means evaluating its stored rules. The system
+ * For a dynamic collection that means asking its own read gate. The system
  * tables have none, so the rule lives here instead — and it is shared, because
  * both the collection and the Single read paths expand uploads and both would
  * otherwise answer the question differently.
@@ -25,7 +25,7 @@ export const MEDIA_TARGET = "media";
  * Media columns describing who filed a file and how it is organized, rather
  * than the file itself.
  *
- * Media is a system table with no stored rules, so a read that must treat it as
+ * Media is a system table with no collection config, so a read that must treat it as
  * an unauthorized caller would has nothing to filter rows BY. What such a caller
  * is owed is the file: an upload field exists to be rendered, and the URL is
  * public by construction since the page serves it to anyone. Its ownership and

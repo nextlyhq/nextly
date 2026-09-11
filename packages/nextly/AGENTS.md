@@ -21,16 +21,31 @@ inside `packages/nextly`.
 - Direct API lists return `{ items, meta }`; mutations return a result with
   `.item`. There is no `docs`/`totalDocs` shape anywhere.
 - `overrideAccess` defaults to `true` (trusted server context) and returns
-  before any check. Under `overrideAccess: false` there are TWO layers and a
-  missing `user` does opposite things to them. The coarse RBAC permission gate
-  needs a user to have permissions, so without one it does not run. The STORED
-  rules run either way, and an `owner-only` rule with no user is DENIED
-  (`Authentication required`), not skipped. So an anonymous caller is refused
-  by the rule rather than waved past the gate.
-- A collection with NO rule for an operation is public: `evaluateAccess`
-  returns `allowed: true` when `rules?.[operation]` is absent. Two exceptions
-  fail closed instead — `publish`/`unpublish` with no user and no explicit
-  rule, and `routeAuthorized` with no user.
+  before any check. Under `overrideAccess: false` there is ONE decision, the
+  RBAC gate (`checkCollectionAccess` → `rbacAccessControlService.checkAccess`,
+  or `apiKeyWriteAllowed` for a scoped key): super-admin bypass, then the
+  code-defined `access` from `defineCollection`/`defineSingle` when it names
+  the operation, else DB permissions. There is no stored rule layer; the
+  `access_rules` registry column is retired, nothing reads it, and a database
+  that still carries values in it is named at boot and by `nextly migrate`.
+- Only the DB-permission half of the gate needs a `user`. An anonymous
+  caller under `overrideAccess: false` is still judged by the collection's
+  code-defined rule (`checkAnonymousCodeAccess`, handed `user: null`, no
+  roles, no permissions); a rule that says nothing about the operation lets
+  the request fall through to the public default. The Single gate
+  (`checkSingleAccess`) and relationship expansion (`judgeTarget`) ask that
+  same question, so one rule gives one answer on every door. Two exceptions
+  fail closed regardless: `publish`/`unpublish` with no user, and
+  `routeAuthorized` with no user.
+- A code-defined rule reads permissions as `resource:action` (`posts:read`);
+  a key's scope stores them as `action-resource` (`read-posts`). The one
+  conversion is `ruleFacingPermissions`, and `ReadAccessCaller` carries both
+  spellings (`permissions` for coarse checks, `rulePermissions` for rules) so
+  no path hands a rule the stored form. Build callers with `readAccessCaller`;
+  a hand-assembled literal is how two doors came to answer one key differently.
+- A collection whose code-defined `access` says nothing about an operation
+  falls through to DB permissions; a caller with no matching grant is refused.
+  A rule that throws denies.
 - FIELD-level rules are different: they run whenever `overrideAccess` is
   false, user or not. "Which fields may this writer set" has a perfectly good
   answer for nobody, and treating absence of a user as trust let an anonymous

@@ -90,6 +90,17 @@ jobs:
           fail-on-issues: true
           comment: false
           annotations: true
+          # Diff from the base branch as it is now, named the way the envelope
+          # step below names it. Left unset, the action scopes to
+          # `pull_request.base.sha`, which GitHub sets when the pull request is
+          # opened or pushed to and does not move as the base branch advances;
+          # the merge ref it audits is rebuilt against the live base, so every
+          # file the base gained since the last push read as changed by the
+          # pull request, and functions its author never touched failed the
+          # gate as introduced. On the merge ref, `origin/<base>...HEAD` diffs
+          # from the merge's own base parent, so the scope is exactly the pull
+          # request.
+          changed-since: origin/${{ github.base_ref }}
           # playground is a dev harness, not a published package. Excluding it
           # keeps the gate focused on the packages that ship to consumers and
           # prevents its intentional loose dependency declarations from

@@ -1147,19 +1147,15 @@ describe("SingleEntryService", () => {
       expect(rowInserts).toHaveLength(0);
     });
 
-    it("does not let a super-admin-owned key bypass a stored rule on update", async () => {
+    it("does not let a super-admin-owned key bypass its own scope on update", async () => {
       // The primary update gate must also receive the API-key scope, so the
       // session super-admin bypass does not apply to a scoped key — otherwise a
-      // super-admin-owned, update-only key would skip the Single's stored rules.
+      // super-admin-owned key would act on the owner's roles rather than the
+      // grants stamped on it.
       const ctx = createCtx({ withRbac: true });
-      ctx.registry.registerSingle(
-        "site-settings",
-        siteSettingsMeta({ accessRules: { update: { type: "owner-only" } } })
-      );
-      // No document yet, so the owner-only rule has no ownership to compare and
-      // fails closed — but only if the super-admin bypass did not fire first.
-      ctx.adapter.selectOne.mockResolvedValue(null);
-
+      ctx.registry.registerSingle("site-settings", siteSettingsMeta());
+      // The key's own grant does not cover this write. Only the scope can refuse
+      // it: the owner's roles say super-admin, and `rbac.checkAccess` allows.
       const result = await ctx.service.update(
         "site-settings",
         { siteName: "x" },
@@ -1167,7 +1163,7 @@ describe("SingleEntryService", () => {
           user: { id: "admin-1", roles: ["super-admin"] },
           authenticatedScope: {
             actorType: "apiKey",
-            permissions: ["update-site-settings"],
+            permissions: ["read-site-settings"],
           },
         }
       );

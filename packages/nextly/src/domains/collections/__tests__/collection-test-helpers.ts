@@ -211,7 +211,6 @@ export function createMockCollection(overrides: Record<string, unknown> = {}) {
         { name: "category", type: "relation", relationTo: "categories" },
         { name: "price", type: "number" },
       ],
-      accessRules: undefined,
       hooks: [],
       search: undefined,
     },
@@ -247,6 +246,25 @@ export function createMockCollectionService(
   return {
     getCollection: vi.fn().mockResolvedValue(collection),
     generateId: vi.fn().mockReturnValue("generated-id-1"),
+  };
+}
+
+/**
+ * The coarse access gate every collection read and write consults.
+ *
+ * `checkAccess` decides the operation for an ordinary caller;
+ * `getRegisteredAccess` is what the API-key branch asks for the collection's
+ * code-defined `access` functions, and returns nothing unless a test registers
+ * one. Allowing by default so a test that does not care about access does not
+ * have to say so.
+ */
+export function createMockRbacAccessControlService(): MockRecord {
+  return {
+    checkAccess: vi.fn().mockResolvedValue(true),
+    // Answers `undefined`: no code-defined rule governs the operation, so an
+    // anonymous caller falls through to the public default.
+    checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
+    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
   };
 }
 
@@ -287,12 +305,6 @@ export function createMockHookRegistry(): MockRecord {
     executeBeforeOperation: vi.fn().mockResolvedValue(undefined),
     execute: vi.fn().mockResolvedValue(undefined),
     executeAfterOperation: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
-export function createMockAccessControlService(): MockRecord {
-  return {
-    evaluateAccess: vi.fn().mockResolvedValue({ allowed: true }),
   };
 }
 

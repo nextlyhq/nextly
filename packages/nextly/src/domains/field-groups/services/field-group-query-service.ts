@@ -16,10 +16,9 @@ import {
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { EVERY_TRANSLATION, NO_FALLBACK } from "../../i18n/locale-selector";
+import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
 import {
-  isValidLocale,
-  resolveFallbackChain,
+  resolveLocaleChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { buildCompanionSchema } from "../../i18n/runtime/companion-io";
@@ -288,10 +287,15 @@ export class FieldGroupQueryService extends BaseService {
     // the default locale), so a default-locale read still overlays the component's companion
     // values instead of returning the omitted main-table columns.
     const requested = resolveRequestedLocale(this.localization, locale);
-    const localeChain = this.resolveComponentLocaleChain(
+    // Through the shared resolver, so a component read falls back exactly as
+    // the collection and single reads around it do. `requested` is already
+    // resolved and is never `all` here, so the chain is never null; the
+    // fallback keeps the contract this path always had rather than asserting.
+    const localeChain = resolveLocaleChain(
+      this.localization,
       requested,
       fallbackLocale
-    );
+    ) ?? [requested];
     // Resolved before the overlay runs, because inside a transaction it can only be read and the
     // read itself must not be what fails.
     const readiness = await this.companionReadiness(companion, executor);
@@ -405,34 +409,6 @@ export class FieldGroupQueryService extends BaseService {
         }
       }
     }
-  }
-
-  /**
-   * Build the fallback chain for a component read, honoring a per-request `fallbackLocale`
-   * (`false`/`"none"` disables fallback; a named locale overrides the configured chain),
-   * mirroring the collection read path so the admin's no-fallback edit mode works for
-   * embedded components too.
-   */
-  private resolveComponentLocaleChain(
-    requested: string,
-    fallbackLocale: string | false | undefined
-  ): string[] {
-    if (!this.localization) return [requested];
-    if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
-      return [requested];
-    }
-    if (
-      typeof fallbackLocale === "string" &&
-      isValidLocale(this.localization, fallbackLocale)
-    ) {
-      const seen = new Set<string>();
-      return [
-        requested,
-        ...resolveFallbackChain(this.localization, fallbackLocale),
-      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
-    }
-    if (this.localization.fallback === false) return [requested];
-    return resolveFallbackChain(this.localization, requested);
   }
 
   setRelationshipService(service: CollectionRelationshipService): void {

@@ -24,11 +24,6 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { CollectionRelationshipService } from "../services/collection-relationship-service";
 
-const PREDICATE_RULE_PATH = new URL(
-  "./_fixtures/tenant-read-rule.ts",
-  import.meta.url
-).pathname;
-
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
@@ -243,32 +238,6 @@ describe("related rows honour Draft/Published (integration)", () => {
 
     expect(row).toBeNull();
     expect([...withheld]).toEqual([]);
-  });
-
-  it("keeps a draft target through predicate confirmation for status=all", async () => {
-    // A rule answering with a predicate confirms its rows in a second query.
-    // Re-resolving the lifecycle there without the caller's intent re-applies
-    // the published-only default, so an editor reading everything loses the
-    // draft row the first fetch admitted.
-    const { handler, draftAuthorId, draftRefId } = await boot();
-    await current!.adapter.update(
-      "dynamic_collections",
-      {
-        access_rules: {
-          read: { type: "custom", functionPath: PREDICATE_RULE_PATH },
-        },
-      },
-      { and: [{ column: "slug", op: "=", value: "authors" }] }
-    );
-
-    // `name-scoped` answers with a predicate over a column `authors` has, so
-    // the confirming query really runs. A caller whose rule answers `true`
-    // never reaches it and would pass this test either way.
-    const author = await populatedAuthor(handler, draftRefId, {
-      status: "all",
-      user: { id: "name-scoped" },
-    });
-    expect(author?.id).toBe(draftAuthorId);
   });
 
   it("leaves a target with no lifecycle alone", async () => {

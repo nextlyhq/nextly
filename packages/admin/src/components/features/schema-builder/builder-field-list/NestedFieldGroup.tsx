@@ -15,6 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 
 import * as Icons from "@admin/components/icons";
 import type { LucideIcon } from "@admin/components/icons";
+import { fieldSubject } from "@admin/lib/builder/builder-announcements";
 import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
 import type { WidthField } from "@admin/lib/builder/reflow";
 import { cn } from "@admin/lib/utils";
@@ -165,7 +166,7 @@ function NestedFieldRow({
         {!readOnly && (
           <button
             type="button"
-            aria-label={`Reorder ${field.name}`}
+            aria-label={`Reorder ${fieldSubject(field)}`}
             className="text-muted-foreground select-none cursor-grab text-xs"
             {...attributes}
             {...listeners}

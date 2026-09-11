@@ -42,11 +42,6 @@ import {
   readRevalidateConfig,
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
-import {
-  AccessControlService,
-  type CollectionAccessRules,
-  isSuperAdminContext,
-} from "../../../services/access";
 import { expansionAccess } from "../../../services/collections/trust-bound";
 import {
   assumedBound,
@@ -224,9 +219,6 @@ class SingleStatusTransitionDeniedError extends NextlyError {
 export class SingleMutationService extends BaseService {
   private readonly queryService: SingleQueryService;
 
-  /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
-  private readonly accessControlService: AccessControlService;
-
   /**
    * Stateless version-capture service. Records a durable version snapshot
    * inside the update transaction when the single opts into versioning.
@@ -242,12 +234,9 @@ export class SingleMutationService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     // i18n: when set and the single is localized, writes route translatable field
     // values to the companion `single_<slug>_locales` row for the write's locale.
-    private readonly localization?: SanitizedLocalizationConfig,
-    accessControlService?: AccessControlService
+    private readonly localization?: SanitizedLocalizationConfig
   ) {
     super(adapter, logger);
-    this.accessControlService =
-      accessControlService ?? new AccessControlService();
     this.queryService = new SingleQueryService(
       adapter,
       logger,
@@ -468,9 +457,8 @@ export class SingleMutationService extends BaseService {
         };
       }
 
-      // 1.5. Load the current document first (no auto-create yet) so an
-      // owner-only stored rule can compare ownership, then run the access
-      // check (stored rules + RBAC) before any hooks/DB writes.
+      // 1.5. Load the current document first (no auto-create yet), then run the
+      // access check before any hooks/DB writes.
       let existingDoc = await this.adapter.selectOne<SingleDocument>(
         singleMeta.tableName,
         {}
@@ -486,9 +474,6 @@ export class SingleMutationService extends BaseService {
         // A scoped API key is judged on its own grants here too, so the session
         // super-admin bypass does not apply to it on the primary update gate.
         authenticatedScope: options.authenticatedScope,
-        accessControlService: this.accessControlService,
-        accessRules: singleMeta.accessRules,
-        document: existingDoc ?? undefined,
         logger: this.logger,
       });
       if (accessDenied) {
@@ -708,8 +693,8 @@ export class SingleMutationService extends BaseService {
       // status. The gate no-ops when the single has no draft/published lifecycle,
       // and a trusted write bypasses it.
       //
-      // TOCTOU-safe: the permission (and any owner-only/custom rule) for the ONE
-      // op this write could require is pre-resolved here, OFF the write
+      // TOCTOU-safe: the permission for the ONE op this write could require is
+      // pre-resolved here, OFF the write
       // transaction's connection, but the transition is CLASSIFIED against the
       // status read UNDER THE ROW LOCK inside the transaction (below). Only
       // "published" can publish; any other explicit value can only unpublish a
@@ -766,16 +751,11 @@ export class SingleMutationService extends BaseService {
       const transitionNextStatus = isNonDefaultLocaleWrite
         ? companionNextStatus
         : mainNextStatus;
-      // The guard carries the pre-resolved PERMISSION denial (document-
-      // independent, judged off this transaction's connection) plus, when the
-      // op's stored rule is document-dependent (owner-only/custom), the rules to
-      // re-evaluate against the ROW-LOCKED document inside the transaction. A
-      // custom transition rule keyed on a mutable field must not be judged
-      // against the stale pre-transaction document.
+      // The guard carries the pre-resolved PERMISSION denial, judged off this
+      // transaction's connection so the under-lock step needs no DB read.
       let transitionGuard: {
         op: "publish" | "unpublish";
         permissionDenied: SingleResult | null;
-        documentRule: CollectionAccessRules | null;
       } | null = null;
       if (
         singleHasStatus &&
@@ -784,22 +764,6 @@ export class SingleMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        // Defer a document-dependent (owner-only/custom) rule for this op to the
-        // under-lock re-check; public/authenticated/role-based rules are decided
-        // here since they need no document. A session super-admin bypasses stored
-        // rules on every transport (matching checkSingleAccess) — but NOT via a
-        // scoped API key — so no document rule is installed for them, or the
-        // under-lock evaluation (which does not re-apply the bypass) would wrongly
-        // 403 an admin on an owner-only/custom Single they do not own.
-        const isSuperAdminSession =
-          isSuperAdminContext(options.user) &&
-          options.authenticatedScope?.actorType !== "apiKey";
-        const opRule = (singleMeta.accessRules as CollectionAccessRules)?.[
-          transitionOp
-        ] as { type?: string } | undefined;
-        const deferDocumentRule =
-          !isSuperAdminSession &&
-          (opRule?.type === "owner-only" || opRule?.type === "custom");
         const permissionDenied = await checkSingleAccess({
           slug,
           operation: transitionOp,
@@ -816,21 +780,13 @@ export class SingleMutationService extends BaseService {
           // A scoped API key is judged on its own publish/unpublish grant, not
           // the key owner's — the route only checked `update` against the scope.
           authenticatedScope: options.authenticatedScope,
-          accessControlService: this.accessControlService,
-          accessRules: singleMeta.accessRules,
-          document: existingDoc ?? undefined,
-          deferStoredRuleEval: deferDocumentRule,
           logger: this.logger,
         });
-        // Only guard under the lock when there is something to enforce there: a
-        // pre-resolved permission denial, or a deferred document rule to re-judge.
-        if (permissionDenied || deferDocumentRule) {
+        // Only guard under the lock when there is something to enforce there.
+        if (permissionDenied) {
           transitionGuard = {
             op: transitionOp,
             permissionDenied,
-            documentRule: deferDocumentRule
-              ? (singleMeta.accessRules as CollectionAccessRules)
-              : null,
           };
         }
       }
@@ -1049,8 +1005,7 @@ export class SingleMutationService extends BaseService {
             // `committed ?? insert` branch) — the transition is judged against the
             // row this update actually mutates. The PERMISSION was pre-resolved
             // into `transitionGuard` off this transaction's connection (no
-            // permission read here); a document-dependent (owner-only/custom)
-            // rule is re-evaluated against the row-locked document below. Runs
+            // permission read here). Runs
             // before the UPDATE, so throwing rolls the transaction back — including
             // any auto-create insert above — with nothing persisted and no
             // compensating delete.
@@ -1105,42 +1060,6 @@ export class SingleMutationService extends BaseService {
                 if (transitionGuard.permissionDenied) {
                   transitionDeniedResult = transitionGuard.permissionDenied;
                   throw new SingleStatusTransitionDeniedError();
-                }
-                // Then the deferred document-dependent (owner-only/custom) rule,
-                // judged against the ROW-LOCKED document (`lockedRow`) — not the
-                // stale pre-transaction one — so a custom rule keyed on a mutable
-                // field sees the committed value this update transitions from.
-                // Pure evaluation, no metadata or permission read.
-                if (transitionGuard.documentRule && lockedRow) {
-                  const docResult =
-                    await this.accessControlService.evaluateAccess(
-                      transitionGuard.documentRule,
-                      transitionGuard.op,
-                      {
-                        user: options.user
-                          ? {
-                              id: options.user.id,
-                              role: options.user.role,
-                              roles: options.user.roles,
-                              email: options.user.email,
-                            }
-                          : undefined,
-                      },
-                      typeof (lockedRow as { id?: unknown }).id === "string"
-                        ? (lockedRow as { id: string }).id
-                        : undefined,
-                      lockedRow
-                    );
-                  if (!docResult.allowed) {
-                    transitionDeniedResult = {
-                      success: false,
-                      statusCode: 403,
-                      message:
-                        docResult.reason ??
-                        `Access denied: ${transitionGuard.op} on single "${slug}" is not permitted`,
-                    };
-                    throw new SingleStatusTransitionDeniedError();
-                  }
                 }
               }
             }
@@ -2671,7 +2590,7 @@ export class SingleMutationService extends BaseService {
       // 10.5. Expand upload fields with full media data.
       //
       // Carries the same caller as the relationship expansion below. Media is a
-      // system table with no stored rules, so a write that narrowed its bypass
+      // system table with no collection config, so a write that narrowed its bypass
       // has refused that target like any other, and this expansion is the only
       // one that reads it. The two are not alternatives: a Single holding
       // uploads and no relationship field returns before the expansion below

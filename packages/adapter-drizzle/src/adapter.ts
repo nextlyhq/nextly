@@ -11,9 +11,14 @@
  * @packageDocumentation
  */
 
-import { count, getColumns } from "drizzle-orm";
+import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
+import {
+  bindStructuredAsJson,
+  isJsonColumn,
+  type ColumnKindInput,
+} from "./column-kinds";
 import { buildDrizzleOrderBy } from "./drizzle-order";
 import { buildDrizzleWhere } from "./drizzle-where";
 import {
@@ -24,6 +29,7 @@ import type {
   SupportedDialect,
   SqlParam,
   WhereClause,
+  WhereCondition,
   CountOptions,
   SelectOptions,
   InsertOptions,
@@ -46,6 +52,7 @@ import type {
   TableResolver,
 } from "./types";
 import { createDatabaseError, isDatabaseError } from "./types";
+import { buildUpdateStatement } from "./update-statement";
 
 /**
  * A Drizzle column that decodes its own driver representation.
@@ -524,23 +531,10 @@ export abstract class DrizzleAdapter {
       const sqlName = (colDef as { name: string }).name;
       sqlToJs.set(sqlName, jsName);
 
-      // Detect JSON/JSONB columns — Drizzle auto-serializes objects for these,
-      // so pre-stringified values must be parsed to avoid double-encoding.
-      const dataType = (colDef as { dataType?: string }).dataType;
-      const columnType = (colDef as { columnType?: string }).columnType;
-      // Detect JSON/JSONB columns — Drizzle auto-serializes objects for these,
-      // so pre-stringified values must be parsed to avoid double-encoding.
-      // IMPORTANT: For SQLite, only match text columns declared with { mode: "json" }
-      // (columnType "SQLiteTextJson", dataType "json"). Plain SQLiteText columns
-      // (dataType "string") store pre-serialized strings and must NOT be re-parsed,
-      // otherwise better-sqlite3 receives objects it cannot bind.
-      if (
-        dataType === "json" ||
-        columnType === "PgJsonb" ||
-        columnType === "PgJson" ||
-        columnType === "MySqlJson" ||
-        columnType === "SQLiteTextJson" // SQLite JSON-mode text columns only
-      ) {
+      // Drizzle serializes objects for a JSON column itself, so a value that
+      // arrives already serialized is parsed first or it is serialized twice.
+      // One predicate with the transactional path, so the two cannot drift.
+      if (isJsonColumn(colDef as ColumnKindInput)) {
         jsonColumns.add(jsName);
       }
     }
@@ -2293,6 +2287,210 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * A transaction context's `update`, for each adapter to bind.
+   *
+   * Not forwarded to the pooled `update` the way `select` and `delete` are:
+   * that one goes through the Drizzle query builder, which writes the columns
+   * the runtime MODEL declares, and a transaction's update must reach the
+   * columns the physical TABLE has — the localization transition window
+   * writes a column the model has already moved to a companion table that
+   * does not exist yet. The INSERT half of every transaction context already
+   * builds its own statement for that reason; `update-statement.ts` is the
+   * UPDATE half, spelled once for the three adapters, and this runs it: on
+   * the transaction executor, classified with the operation and table named
+   * as the pooled `update` classifies its failures, and read back through
+   * `select` on the same executor when the caller asked for rows.
+   *
+   * That read is by the rows' IDENTITY where the dialect can report it: on
+   * PostgreSQL and SQLite the statement carries `RETURNING <primary key>`, and
+   * the read-back asks for exactly those rows — so a row another transaction
+   * adds under the same predicate meanwhile is not among them, and an update
+   * whose own write falsifies its predicate still reads its rows back. MySQL
+   * has no RETURNING, so there the read re-runs the predicate, as the pooled
+   * `update` always has on that dialect; a table with no primary key in its
+   * model reads back the same way.
+   *
+   * @param txDb - thunk returning the transaction-bound Drizzle instance
+   * @param run - how this dialect runs a statement on that instance, and the
+   *   rows it returns when the statement carries RETURNING: better-sqlite3
+   *   answers synchronously, the pooled drivers do not
+   * @param bindUnmodeled - how a value binds when the model declares no
+   *   column for it; a declared column binds through its own encoder
+   * @returns the context's `update` method
+   */
+  protected transactionUpdate(
+    txDb: () => unknown,
+    run: (
+      statement: SQL,
+      returnsRows: boolean
+    ) =>
+      | Promise<Record<string, unknown>[] | undefined>
+      | Record<string, unknown>[]
+      | undefined,
+    bindUnmodeled: (value: unknown) => unknown
+  ): TransactionContext["update"] {
+    return async <T = unknown>(
+      table: string,
+      data: Record<string, unknown>,
+      where: WhereClause,
+      options?: UpdateOptions
+    ): Promise<T[]> => {
+      const wantsRows = this.updateReturnsRows(options?.returning);
+      const tableObj = this.resolvedTableObject(table);
+      const identity =
+        wantsRows && this.getCapabilities().supportsReturning
+          ? this.identityColumns(tableObj)
+          : [];
+      let reported: Record<string, unknown>[] | undefined;
+      try {
+        reported = await run(
+          this.buildTransactionUpdate(tableObj, table, data, where, {
+            bindUnmodeled,
+            returning: identity.map(key => sql`${sql.identifier(key.sqlName)}`),
+          }),
+          identity.length > 0
+        );
+      } catch (error) {
+        throw this.handleQueryError(error, "update", table);
+      }
+      if (!wantsRows) return [];
+      if (identity.length === 0 || !Array.isArray(reported)) {
+        return this.select<T>(table, { where }, txDb());
+      }
+      // In bounded pieces: one predicate per reported row is a statement
+      // SQLite refuses past a thousand branches and PostgreSQL past its
+      // parameter limit, and a batch update can touch far more rows.
+      const rows: T[] = [];
+      for (let at = 0; at < reported.length; at += IDENTITY_READ_BACK_CHUNK) {
+        rows.push(
+          ...(await this.select<T>(
+            table,
+            {
+              where: rowsByIdentity(
+                identity,
+                reported.slice(at, at + IDENTITY_READ_BACK_CHUNK)
+              ),
+            },
+            txDb()
+          ))
+        );
+      }
+      return rows;
+    };
+  }
+
+  /**
+   * The columns that identify a row of this table, under both spellings: the
+   * SQL name RETURNING reports and the Drizzle property name the query
+   * builder's WHERE is addressed by. Columns flagged primary first; failing
+   * that, the table-level primary key the dialect's table config carries
+   * (`primaryKey({ columns })` leaves each column's flag false), which each
+   * adapter reads through its own dialect. Empty when the model declares
+   * neither, and the read-back falls back to the caller's predicate.
+   */
+  protected identityColumns(
+    tableObj: Record<string, unknown>
+  ): Array<{ jsName: string; sqlName: string }> {
+    const columns: Array<[string, { name?: unknown; primary?: unknown }]> =
+      Object.entries(getColumns(tableObj as never));
+    const flagged = columns.filter(([, c]) => c.primary === true);
+    const members =
+      flagged.length > 0
+        ? flagged
+        : columns.filter(([, c]) =>
+            this.compositePrimaryKey(tableObj).includes(c)
+          );
+    return members.flatMap(([jsName, c]) =>
+      typeof c.name === "string" ? [{ jsName, sqlName: c.name }] : []
+    );
+  }
+
+  /**
+   * How a value binds to a column the model does not declare, on a driver
+   * that binds scalars, dates and binary natively: a structured value goes
+   * as JSON text, since what node-postgres and mysql2 make of a bare object
+   * or array is not JSON. For the adapters to hand `transactionUpdate`.
+   */
+  protected bindUnmodeledStructuredAsJson(value: unknown): unknown {
+    return bindStructuredAsJson(value);
+  }
+
+  /**
+   * The columns of a table-level `primaryKey({ columns })`, as the dialect's
+   * table config reports them. The base class cannot read that config without
+   * naming a dialect, so each adapter answers for its own; a dialect that does
+   * not answer reports none.
+   */
+  protected compositePrimaryKey(_tableObj: Record<string, unknown>): object[] {
+    return [];
+  }
+
+  /** The registered table object, or the error every CRUD method throws without one. */
+  private resolvedTableObject(table: string): Record<string, unknown> {
+    const tableObj = this.getTableObject(table);
+    if (!tableObj || typeof tableObj !== "object") {
+      throw this.createDatabaseError(
+        "query",
+        `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
+        undefined
+      );
+    }
+    return tableObj as Record<string, unknown>;
+  }
+
+  /**
+   * The statement `transactionUpdate` runs.
+   *
+   * @throws when nothing would be written — every key `undefined`, or none at
+   *   all. The query builder refused that too ("No values to set"), and a
+   *   patch that names nothing is a caller's mistake rather than a write of
+   *   nothing.
+   */
+  private buildTransactionUpdate(
+    tableObj: Record<string, unknown>,
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause,
+    binding: {
+      bindUnmodeled: (value: unknown) => unknown;
+      returning: SQL[];
+    }
+  ): SQL {
+    const statement = buildUpdateStatement({
+      table,
+      tableObj,
+      data,
+      where,
+      bindUnmodeled: binding.bindUnmodeled,
+      returning: binding.returning,
+    });
+    if (!statement) {
+      throw this.createDatabaseError(
+        "query",
+        `No values to set: the update of "${table}" names no column with a defined value.`,
+        undefined
+      );
+    }
+    return statement;
+  }
+
+  /**
+   * Whether a transaction's `update` reads the rows it changed back: the
+   * caller named columns, or `*`. An empty list, like no option at all, asks
+   * for nothing and `update` answers `[]`, as it always has. The rows come
+   * from a read of the update's own WHERE on its own transaction, so they are
+   * the model's view of the row, decoded as every read is decoded — which is
+   * what the query-builder update returned for them, and why the named list
+   * selects nothing narrower.
+   */
+  private updateReturnsRows(returning: UpdateOptions["returning"]): boolean {
+    return (
+      returning !== undefined &&
+      !(Array.isArray(returning) && returning.length === 0)
+    );
+  }
+
+  /**
    * Classify an error into a DatabaseError.
    *
    * @remarks
@@ -2340,9 +2538,16 @@ export abstract class DrizzleAdapter {
   ): DatabaseError {
     const dbError = this.classifyError(error);
 
-    // Add operation context if not already present
-    if (!dbError.message.includes(operation)) {
-      dbError.message = `${operation} operation failed on table '${table}': ${dbError.message}`;
+    // Add operation context if not already present — asked of the context
+    // this method writes, not of the operation's bare name. A driver message
+    // that quotes the failed statement names the operation already (Drizzle's
+    // `Failed query: update "posts" set …` on PostgreSQL and MySQL, whose
+    // statements it spells in lower case), and so does any table or column
+    // whose name contains the word; neither says which operation failed on
+    // which table.
+    const context = `${operation} operation failed on table '${table}'`;
+    if (!dbError.message.includes(context)) {
+      dbError.message = `${context}: ${dbError.message}`;
     }
 
     if (!dbError.table) {
@@ -2351,6 +2556,51 @@ export abstract class DrizzleAdapter {
 
     return dbError;
   }
+}
+
+/**
+ * How many reported rows one read-back statement names. Well under SQLite's
+ * expression-depth limit of a thousand and its default variable limit, and
+ * under PostgreSQL's parameter limit, with a composite key of several columns.
+ */
+const IDENTITY_READ_BACK_CHUNK = 200;
+
+/**
+ * The predicate that names exactly the rows a statement reported, addressed
+ * by the Drizzle property names the where builder resolves: for a single-
+ * column key one `IN` over the reported values; for a composite key one `and`
+ * of every key column per row, `or`-ed together, so the key is matched as a
+ * whole rather than column by column.
+ */
+function rowsByIdentity(
+  identity: Array<{ jsName: string; sqlName: string }>,
+  rows: Record<string, unknown>[]
+): WhereClause {
+  if (identity.length === 1) {
+    const [key] = identity;
+    return {
+      and: [
+        {
+          column: key.jsName,
+          op: "IN",
+          value: rows.map(row => row[key.sqlName]) as WhereCondition["value"],
+        },
+      ],
+    };
+  }
+  return {
+    or: rows.map(
+      (row): WhereClause => ({
+        and: identity.map(
+          (key): WhereCondition => ({
+            column: key.jsName,
+            op: "=",
+            value: row[key.sqlName] as WhereCondition["value"],
+          })
+        ),
+      })
+    ),
+  };
 }
 
 /**

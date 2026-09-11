@@ -100,6 +100,8 @@ export interface ReadableWidgetDeclaration {
   query?: WidgetQuery;
   component?: string;
   actions?: WidgetAction[];
+  /** Present for `text`: the markdown the host draws. */
+  content?: string;
   /** Present for `stats`: the numbers the card draws, each with its own query. */
   cells?: WidgetStatCell[];
   link?: { label: string; href: string };
@@ -228,6 +230,7 @@ function resolveOne(
     settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
+    content: meta.content,
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
@@ -274,6 +277,7 @@ function resolveRegistered(
     settings: meta.settings,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
+    content: meta.content,
     cells: meta.cells,
     link: meta.link,
     defaultOrder: meta.defaultOrder,
@@ -370,6 +374,12 @@ function mergeCollision(
     // the card loads forever. Cells travel only with the archetype that draws
     // them.
     cells: registration.archetype === "stats" ? registration.cells : undefined,
+    // The same rule for prose: it travels only with the archetype that draws
+    // it, and both channels passed the non-blank check at boot, so a text
+    // registration colliding with a text contribution keeps its prose rather
+    // than drawing an empty card.
+    content:
+      registration.archetype === "text" ? registration.content : undefined,
     // Both channels can state these, and the registry wins where it does --
     // the rule `defaultSize` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped

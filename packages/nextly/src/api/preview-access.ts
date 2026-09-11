@@ -147,8 +147,8 @@ export async function assertEntryPreviewable(
   // to carry the minter's identity rather than a better guess here.
   //
   // `routeAuthorized` skips ONLY the coarse RBAC / code-defined access gate;
-  // the stored owner-only, role-based and custom rules still evaluate against
-  // the loaded document with the real user either way. Which makes it exactly
+  // the lifecycle and field-level rules still apply to the loaded document
+  // either way. Which makes it exactly
   // the flag that must not be decided here: skipping a gate that DID run costs
   // nothing, and skipping one that did not is the difference between enforcing
   // a withdrawn role and ignoring it.
@@ -183,10 +183,10 @@ export async function assertEntryPreviewable(
  *
  * The Single counterpart of {@link assertEntryPreviewable}, asking the same two
  * questions for the same reason. It is NOT redundant with the route's own gate:
- * that gate is per-slug RBAC, and a Single's stored rules — owner-only, role
- * based, custom — are evaluated against the loaded document and can deny a
- * caller who holds the coarse permission. Stopping at the permission would mint
- * a bearer credential for a draft the real update path refuses to show them.
+ * that gate is per-slug RBAC, while the real update path additionally requires
+ * the document to exist and to be reachable in the language asked for. Stopping
+ * at the permission would mint a bearer credential for a draft the real update
+ * path refuses to show them.
  *
  * One answer for every refusal, deliberately: a caller who is refused a link
  * learns only that they are refused.
@@ -217,11 +217,11 @@ export async function assertSinglePreviewable(
     // No `actor`. It carried an API KEY's own stamped grants, and both mints
     // now refuse a key outright — a preview link records whose permissions the
     // draft renders through, and a key names no person.
-    // The TRANSLATION the token will name, so the rules are evaluated against
-    // the document the bearer actually receives. A localized Single is a
-    // different document per language, and an owner-only or custom rule can
-    // answer differently for each — authorizing the default translation and
-    // then signing another is authorizing something else.
+    // The TRANSLATION the token will name, so the gate is run against the
+    // document the bearer actually receives. A localized Single is a different
+    // document per language, and its lifecycle can differ for each —
+    // authorizing the default translation and then signing another is
+    // authorizing something else.
     ...(locale === undefined ? {} : { locale }),
   };
 

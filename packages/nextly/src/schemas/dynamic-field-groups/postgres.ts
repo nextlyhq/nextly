@@ -10,7 +10,6 @@
  * in Collections and Singles via the `component` field type.
  *
  * Key differences from Dynamic Singles:
- * - No `accessRules` column (Components are templates, not documents)
  * - Table name convention: `comp_` prefix (e.g., 'comp_seo')
  * - `admin.category` for sidebar grouping
  *

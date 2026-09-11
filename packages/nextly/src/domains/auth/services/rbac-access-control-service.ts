@@ -206,12 +206,11 @@ export class RBACAccessControlService {
    * before it reads the rule, because everything below that line resolves roles
    * and permissions from a user id. So an anonymous caller reached no rule at
    * all, and a collection declaring `create: false` or `read: ({ user }) =>
-   * !!user` was judged only on its STORED rules, which is a different place and
-   * usually empty. The declaration was accepted, recorded and never consulted.
+   * !!user` had its declaration accepted, recorded and never consulted.
    *
    * Answers `undefined` when no code-defined rule governs this operation, which
-   * means "no opinion" and leaves the stored rules to decide. A boolean is a
-   * verdict.
+   * means "no opinion" and leaves the caller to its public default. A boolean
+   * is a verdict.
    *
    * The context is a real anonymous one rather than a stand-in: `user` is
    * `null`, which the type has always allowed, and both lists are empty. A rule

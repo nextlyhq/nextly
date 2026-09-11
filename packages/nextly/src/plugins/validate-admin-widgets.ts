@@ -17,7 +17,10 @@
  * @module plugins/validate-admin-widgets
  */
 
-import type { CanonicalWidget } from "../domains/widgets/canonical";
+import {
+  actionGatesOf,
+  type CanonicalWidget,
+} from "../domains/widgets/canonical";
 import type { WidgetArchetype } from "../domains/widgets/definition";
 import {
   actionProblem,
@@ -30,6 +33,7 @@ import {
   CELL_ARCHETYPES,
   cellsProblem,
   QUERYLESS_ARCHETYPES,
+  textContentProblem,
   widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
@@ -100,6 +104,14 @@ function querylessProblem(widget: Record<string, unknown>): string | undefined {
   // refetch for a result the declared renderer discards.
   const queryProblem = querylessQueryProblem(widget.archetype, widget.query);
   if (queryProblem !== undefined) return queryProblem;
+
+  // `text` IS its prose, through the same rule the registry applies.
+  if (widget.archetype === "text") {
+    const problem = textContentProblem(widget.content);
+    return problem === undefined
+      ? undefined
+      : `names the "text" archetype and ${problem.replace(/^archetype "text" /, "")}`;
+  }
 
   if (widget.archetype !== "actions") return undefined;
 
@@ -551,6 +563,9 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
   return {
     id,
     ...(requiredPermission === undefined ? {} : { requiredPermission }),
+    // The gates inside an `actions` declaration, verbatim, for the same
+    // reason the card's own gate is.
+    actionGates: actionGatesOf(declaration.actions),
     ...(defaultSize === undefined ? {} : { defaultSize }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     // `Number.isFinite`, so a `NaN` or an infinity a plugin computed cannot

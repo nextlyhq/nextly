@@ -5,15 +5,13 @@
  * every assertion in it is satisfied by a bare `SELECT COUNT(*)` over the
  * physical table — which is what this used to be. Entity-level scope decides
  * whether a collection appears; it says nothing about which ROWS inside it the
- * caller may read. A collection with an owner-only stored read rule therefore
- * reported every author's row count to every reader who could open it at all:
- * Alice, allowed to read `posts` but only her own, saw Bob's posts in the
- * number.
+ * caller may read. The raw count therefore reported rows the caller's own read
+ * withholds — unpublished ones among them — so Alice saw a number she could not
+ * reproduce by listing.
  *
  * The fix routes the total through `nextly.count({ overrideAccess: false })`,
- * which runs `checkCollectionAccess` and then applies
- * `getAccessQueryConstraint` — the same owner-only WHERE predicate the list
- * read applies. So the tests here drive the raw table count and the
+ * which runs the same gate and the same filtering the list read runs. So the
+ * tests here drive the raw table count and the
  * access-controlled count to DIFFERENT numbers; a test where they agreed could
  * not tell the two implementations apart.
  */
@@ -117,7 +115,7 @@ describe("per-collection totals honour the caller's row-level access", () => {
     });
 
     // `overrideAccess: false` plus `user` is what runs both
-    // `checkCollectionAccess` and the owner-only query constraint. Omitting
+    // `checkCollectionAccess` and the read path's own filtering. Omitting
     // either makes the count trusted, which is what the raw query already was.
     expect(count).toHaveBeenCalledWith(
       expect.objectContaining({

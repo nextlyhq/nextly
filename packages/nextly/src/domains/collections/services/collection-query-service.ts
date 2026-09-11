@@ -52,10 +52,6 @@ import {
   type StatusOption,
 } from "../../../lib/status-filter";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import {
-  describeUntranslatableConstraint,
-  stripNoOpConstraintMembers,
-} from "../../../services/access/constraint-shape";
 import type {
   CollectionFileManager,
   CompanionSchema,
@@ -134,12 +130,8 @@ import {
   type TranslationFilterState,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
-import { EVERY_TRANSLATION, NO_FALLBACK } from "../../i18n/locale-selector";
-import {
-  isValidLocale,
-  resolveFallbackChain,
-  resolveRequestedLocale,
-} from "../../i18n/resolve-locale";
+import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
@@ -664,9 +656,8 @@ interface FilteredReadParams {
   trusted?: TrustBound;
   /**
    * The route middleware already ran the RBAC gate for the authorizing
-   * operation; skip only that redundant re-check while stored read rules
-   * (owner-only filter) still apply. Mirrors listEntries so the count
-   * beside a route-authorized enumeration answers the same question and
+   * operation; skip only that redundant re-check. Mirrors listEntries so the
+   * count beside a route-authorized enumeration answers the same question and
    * does not fall back to 0 for update/delete-only callers.
    */
   routeAuthorized?: boolean;
@@ -1011,42 +1002,6 @@ export class CollectionQueryService extends BaseService {
   // ============================================================
 
   /**
-   * Resolve the fallback chain for a read request, or `null` when localization is off.
-   * `fallbackLocale === false | "none"` disables fallback (chain = just the requested locale);
-   * otherwise the requested locale's configured chain + default locale is used (spec §8).
-   */
-  private resolveLocaleChain(
-    locale: string | undefined,
-    fallbackLocale: string | false | undefined
-  ): string[] | null {
-    // `locale=all` is handled by a separate keyed-populate path — not a single-value chain.
-    if (!this.localization || locale === EVERY_TRANSLATION) return null;
-    const requested = resolveRequestedLocale(this.localization, locale);
-    // A per-request opt-out disables fallback: return the requested language only.
-    if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
-      return [requested];
-    }
-    // A concrete per-request fallback locale overrides the configured chain: the
-    // requested locale first, then the named fallback's own chain (deduped).
-    if (
-      typeof fallbackLocale === "string" &&
-      isValidLocale(this.localization, fallbackLocale)
-    ) {
-      const seen = new Set<string>();
-      return [
-        requested,
-        ...resolveFallbackChain(this.localization, fallbackLocale),
-      ].filter(code => (seen.has(code) ? false : (seen.add(code), true)));
-    }
-    // The global localization.fallback switch (default true) disables fallback
-    // for ordinary reads when turned off.
-    if (!this.localization.fallback) {
-      return [requested];
-    }
-    return resolveFallbackChain(this.localization, requested);
-  }
-
-  /**
    * `locale=all` populate (admin/export): set each localized field to a language-keyed object
    * covering every configured locale. No-op when localization is off, the request isn't
    * `locale=all`, or the collection isn't localized.
@@ -1061,7 +1016,7 @@ export class CollectionQueryService extends BaseService {
    * names in it.
    *
    * Only non-`NextlyError` failures are wrapped. One that is already typed carries a deliberate
-   * status — a refused access constraint is a 403 — and flattening it would report an
+   * status — a refusal is a 403 — and flattening it would report an
    * authorization decision as a server fault.
    */
   private async overlayLocalized(
@@ -1618,60 +1573,40 @@ export class CollectionQueryService extends BaseService {
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<T> | null> {
-    return this.accessService.checkCollectionAccess<T>(
-      params.collectionName,
-      "read",
-      params.accessUser,
-      params.entryId,
-      undefined,
-      params.overrideAccess,
-      params.routeAuthorized,
+    return this.accessService.checkCollectionAccess<T>({
+      collectionName: params.collectionName,
+      operation: "read",
+      user: params.accessUser,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       // A scoped API key is judged on its own read grant, so the session
       // super-admin bypass does not apply to a super-admin-owned key here.
-      params.authenticatedScope
-    );
+      authenticatedScope: params.authenticatedScope,
+    });
   }
 
   /**
-   * Which rows this caller may see, and in which lifecycle state.
+   * In which lifecycle state this caller may see rows.
    *
-   * The two questions travel together on every read path — a listing, its
-   * total, and a read by id all narrow by the stored read rule AND by the
-   * Draft/Published filter, and both answers refuse by returning fewer rows
-   * rather than by raising, so the by-id path reports a row it may not see as a
-   * 404 rather than confirming it exists with a 403.
+   * One answer for every read path — a listing, its total, and a read by id
+   * all narrow by the Draft/Published filter, and it refuses by returning
+   * fewer rows rather than by raising, so the by-id path reports a row it may
+   * not see as a 404 rather than confirming it exists with a 403. Whether the
+   * caller may read the collection at all is the coarse gate's question,
+   * decided for the whole collection before any of this runs; nothing narrows
+   * per row any more.
    *
-   * The loaded collection comes back with them because every caller needs it
+   * The loaded collection comes back with it because every caller needs it
    * next and re-reading it is a second metadata round trip.
    */
   private async resolveRowScope(params: {
     collectionName: string;
-    accessUser?: UserContext;
     overrideAccess?: boolean;
-    authenticatedScope?: AuthenticatedScope;
     status?: StatusOption;
-    /**
-     * The document a by-id read names, forwarded so a custom rule deciding FROM
-     * the id is asked about the same document the coarse gate judged. A listing
-     * or an aggregate leaves it absent, which is the honest answer there.
-     */
-    entryId?: string;
   }): Promise<{
-    accessConstraint: Record<string, unknown> | null;
     statusFilter: ReturnType<typeof resolveStatusFilter>;
     collection: unknown;
   }> {
-    const accessConstraint = await this.accessService.getAccessQueryConstraint(
-      params.collectionName,
-      params.accessUser,
-      params.overrideAccess,
-      // Scope the owner filter too: without this a super-admin-owned scoped key
-      // takes the session bypass and reads past its own grant, the predicate
-      // having been lifted before it ever reached SQL.
-      params.authenticatedScope,
-      params.entryId
-    );
-
     // `resolveStatusFilter` returns null when the collection has no status
     // column, the caller is trusted with no explicit choice, or explicit was
     // 'all'. Callers guard on `schema.status` before using the value, so a
@@ -1685,7 +1620,7 @@ export class CollectionQueryService extends BaseService {
       explicit: params.status,
     });
 
-    return { accessConstraint, statusFilter, collection };
+    return { statusFilter, collection };
   }
 
   /**
@@ -1920,14 +1855,11 @@ export class CollectionQueryService extends BaseService {
     const conditions: SQLWrapper[] = [];
     const { schema, companion, localeChain } = params;
 
-    // Row scope: the stored read rule's predicate and the Draft/Published
-    // filter. The predicate is applied last, but resolved here so a rule that
-    // refuses is judged against the same request as everything else.
-    const { accessConstraint, statusFilter } = await this.resolveRowScope({
+    // Row scope: the Draft/Published filter, resolved here so it is judged
+    // against the same request as everything else.
+    const { statusFilter } = await this.resolveRowScope({
       collectionName: params.collectionName,
-      accessUser: params.accessUser,
       overrideAccess: params.overrideAccess,
-      authenticatedScope: params.authenticatedScope,
       status: params.status,
     });
     // The lifecycle predicate: the resolved status set, widened by whatever a
@@ -2003,14 +1935,6 @@ export class CollectionQueryService extends BaseService {
     });
     conditions.push(...filter.conditions);
     const { componentTables, componentTypeColumns } = filter;
-
-    const accessCondition = this.accessConstraintCondition(
-      params.collectionName,
-      accessConstraint,
-      schema,
-      localizedCtx
-    );
-    if (accessCondition) conditions.push(accessCondition);
 
     return {
       conditions,
@@ -2325,81 +2249,6 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
-   * Translate the stored read rule's query constraint into a SQL condition, for
-   * whichever read is asking.
-   *
-   * All three read verbs narrow rows by the same rule, so they must translate
-   * it the same way — through the same builder the caller's own `where` goes
-   * through. It is a full filter predicate: an owner-only read emits one field,
-   * but a custom rule can return any supported operator across several fields,
-   * and reducing it to a single equality binds less than the rule states. A
-   * list that filters and a read-by-id that does not is not a milder version of
-   * the same rule, it is the id-iteration leak the predicate exists to close.
-   *
-   * Returns `undefined` when the rule imposes no predicate. Refuses — rather
-   * than narrowing partially — when the constraint cannot be fully expressed.
-   */
-  private accessConstraintCondition(
-    collectionName: string,
-    accessConstraint: Record<string, unknown> | null,
-    schema: DynamicSchema,
-    localizedCtx: LocalizedQueryContext | null
-  ): ReturnType<typeof and> | undefined {
-    if (!accessConstraint) return undefined;
-
-    // Refuse before translating: a partially translatable constraint yields a
-    // non-empty condition that binds less than the rule requires.
-    const untranslatable = describeUntranslatableConstraint(
-      accessConstraint,
-      name => Object.prototype.hasOwnProperty.call(schema, name),
-      name => Boolean(localizedCtx?.localizedFields.some(f => f.name === name))
-    );
-    // Explicitly against null: a reason can be any string, and an empty one
-    // would read as success.
-    if (untranslatable !== null) {
-      // Logged here rather than left on the error: the callers flatten this
-      // into a result envelope, so the reason would otherwise never reach
-      // operator logs and every refusal would look alike.
-      this.logger.warn("Refused an untranslatable access constraint", {
-        collection: collectionName,
-        reason: untranslatable,
-      });
-      throw NextlyError.forbidden({
-        logContext: {
-          collection: collectionName,
-          reason: "untranslatable-access-constraint",
-          reason_detail: untranslatable,
-        },
-      });
-    }
-
-    // Members that cannot narrow anything are removed before translation, so
-    // the "translated to nothing" check below judges only what was meant to
-    // restrict. A constraint made up entirely of them restricts nothing, and
-    // the rule already allowed the caller.
-    const restricting = stripNoOpConstraintMembers(accessConstraint);
-    if (Object.keys(restricting).length === 0) return undefined;
-
-    const accessCondition = this.buildDrizzleCondition(
-      buildWhereClause(restricting as WhereFilter),
-      schema,
-      this.queryDialect,
-      localizedCtx
-    );
-    if (!accessCondition) {
-      // A constraint that translates to nothing would widen the read to every
-      // row. Fail closed instead: the rule asked to narrow.
-      throw NextlyError.forbidden({
-        logContext: {
-          collection: collectionName,
-          reason: "untranslatable-access-constraint",
-        },
-      });
-    }
-    return accessCondition;
-  }
-
-  /**
    * The relationship-expansion bounds for a read by id, asked once for both
    * documents that path can return.
    *
@@ -2648,18 +2497,16 @@ export class CollectionQueryService extends BaseService {
     trusted?: TrustBound;
     /**
      * The route middleware already ran the RBAC gate for the authorizing
-     * operation, so skip only that redundant re-check while still evaluating
-     * the stored read rules (owner-only filter, custom queries). Used by the
+     * operation, so skip only that redundant re-check. Used by the
      * bulk-by-query writers to enumerate their targets: the route authorized
      * the write, so an update/delete-only key must not be rejected by a read
-     * RBAC gate here — but owner-only scoping must still apply.
+     * RBAC gate here.
      */
     routeAuthorized?: boolean;
     /**
      * The caller's authenticated scope. A scoped API key is judged on its OWN
-     * read grant, so a super-admin-owned key stays bound by a `read: owner-only`
-     * rule instead of inheriting the owner's session bypass. Undefined for
-     * session/system callers. Mirrors getEntry.
+     * read grant rather than inheriting the owner's session bypass. Undefined
+     * for session/system callers. Mirrors getEntry.
      */
     authenticatedScope?: AuthenticatedScope;
     /**
@@ -2714,7 +2561,8 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve the locale chain + load the companion once, so both the sort
       // block (in-query ORDER BY on a localized column) and the post-query populate reuse
       // it. `null` when localization is off or the collection isn't localized.
-      const localeChain = this.resolveLocaleChain(
+      const localeChain = resolveLocaleChain(
+        this.localization,
         params.locale,
         params.fallbackLocale
       );
@@ -3116,6 +2964,7 @@ export class CollectionQueryService extends BaseService {
               // rows pointing at the same target resolve its policy once.
               targetPolicies: new Map(),
               targetCompanions: new Map(),
+              targetVerdicts: new Map(),
               // A relationship inside a component points at a collection whose
               // read rule may filter on one of its own localized fields.
               locale: localeChain?.[0],
@@ -3445,12 +3294,13 @@ export class CollectionQueryService extends BaseService {
    * locale-scoped search or filter describes the SAME rows the page returns.
    */
   private async localeScope(params: FilteredReadParams): Promise<{
-    localeChain: ReturnType<CollectionQueryService["resolveLocaleChain"]>;
+    localeChain: string[] | null;
     companion: Awaited<
       ReturnType<CollectionFileManager["loadCompanionSchema"]>
     > | null;
   }> {
-    const localeChain = this.resolveLocaleChain(
+    const localeChain = resolveLocaleChain(
+      this.localization,
       params.locale,
       params.fallbackLocale
     );
@@ -3609,8 +3459,8 @@ export class CollectionQueryService extends BaseService {
       });
       return {
         success: false,
-        // Mirrors listEntries: a refused access constraint is a 403, not a
-        // server fault, and the count must report it the same way.
+        // Mirrors listEntries: a refusal is a 403, not a server fault, and the
+        // count must report it the same way.
         statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,
@@ -3716,8 +3566,8 @@ export class CollectionQueryService extends BaseService {
       });
       return {
         success: false,
-        // Mirrors countEntries: a refused access constraint is a 403 and a
-        // refused group key a 400, not a server fault.
+        // Mirrors countEntries: a refusal is a 403 and a refused group key a
+        // 400, not a server fault.
         statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,
@@ -3860,8 +3710,8 @@ export class CollectionQueryService extends BaseService {
       });
       return {
         success: false,
-        // Mirrors groupEntries: a refused access constraint is a 403 and a
-        // refused date key a 400, not a server fault.
+        // Mirrors groupEntries: a refusal is a 403 and a refused date key a
+        // 400, not a server fault.
         statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,
@@ -3999,7 +3849,7 @@ export class CollectionQueryService extends BaseService {
      * caller (mirrors listEntries). It skips only the redundant RBAC re-check,
      * which would otherwise resolve permissions from the caller's stored roles
      * and so reject an API key whose scoped permissions differ from its
-     * creator's. Owner-only and other document-level rules still apply.
+     * creator's.
      */
     routeAuthorized?: boolean;
     /**
@@ -4057,86 +3907,27 @@ export class CollectionQueryService extends BaseService {
         requestFacts,
       });
 
-      // Fold the stored read rule's predicate into the SQL WHERE clause. A
-      // caller the rule excludes gets a 404 (same response shape as a
-      // non-existent ID), not a 403, so IDOR-by-iteration leaks nothing about
-      // which IDs exist.
-      //
-      // The same question `listEntries` and `countEntries` ask, through the
-      // same method. This path used to ask `getOwnerConstraint` instead, which
-      // answers only `owner-only` and returns a flat `{field, value}` pair: the
-      // two agree for an owner-only rule and nowhere else, so a `custom` rule
-      // returning a query constraint narrowed every listing and left a read by
-      // id unfiltered — the row was withheld from the list and reachable by
-      // guessing its id.
-      //
-      // The Draft/Published filter comes back with it, and the same
-      // 404-not-403 reasoning covers it: a public caller asking for a draft
-      // entry by id gets a 404, never a hint that it exists.
-      const {
-        accessConstraint,
-        statusFilter,
-        collection: collectionForStatus,
-      } = await this.resolveRowScope({
-        collectionName: params.collectionName,
-        accessUser,
-        overrideAccess: params.overrideAccess,
-        authenticatedScope: params.authenticatedScope,
-        status: params.status,
-        // The SETTLED id — the row this read will actually return, which is
-        // the subject a predicate has to be about. A custom rule may decide
-        // from it, so resolving without it asks that rule about no document at
-        // all and a rule allowing exactly one row denies every read of it.
-        //
-        // NOT the id the coarse gate above was given. That one ran before
-        // `resolveReadEntryId`, so it judged the id as REQUESTED, and a
-        // `beforeOperation` hook may have rewritten it since. The order is
-        // deliberate and stays: that resolution runs `beforeOperation` and
-        // `beforeRead`, which are ordinary user code that records audit entries
-        // and spends rate-limit budget, and running them for a request
-        // authorization was going to refuse charges the caller for work and
-        // leaves a trail of reads that did not happen.
-        //
-        // The two subjects therefore differ exactly when a hook rewrites the
-        // id, and both must pass: the requested id at the gate, the settled one
-        // here, where `getAccessQueryConstraint` RAISES a denial rather than
-        // returning an absent predicate. That is the fail-closed direction —
-        // a rewrite can narrow what a caller reaches and never widen it.
-        entryId,
-      });
+      // The Draft/Published filter, from the same resolver the listing uses.
+      // A public caller asking for a draft entry by id gets a 404, never a hint
+      // that it exists: the filter refuses by returning no row, not by raising.
+      // Whether this caller may read the collection at all was the coarse
+      // gate's question above; nothing narrows per row any more.
+      const { statusFilter, collection: collectionForStatus } =
+        await this.resolveRowScope({
+          collectionName: params.collectionName,
+          overrideAccess: params.overrideAccess,
+          status: params.status,
+        });
 
       const idCondition = eq(schema.id, entryId);
       // The languages this read resolves through, and the companion those
-      // values live in. Resolved HERE, above the predicate, rather than beside
-      // the overlay further down: a stored rule may name a LOCALIZED field,
-      // whose column exists only on the companion, and the shared translator
-      // recognises such a field only when it is given this context. Without it
-      // the by-id path refuses a constraint the listing binds — the same rule
-      // answering 403 here and returning rows there, which is the divergence
-      // this service exists to not have.
-      //
-      // BOTH are reused below — the chain by the overlays and the relationship
-      // expansion, the companion by the three overlays that would otherwise
-      // load it again. `loadCompanionSchema` fetches metadata BEFORE it
-      // consults its cache, so each of those is a query rather than a lookup,
-      // and resolving here without passing it on would have added them to
-      // every localized read by id.
+      // values live in. BOTH are reused below — the chain by the overlays and
+      // the relationship expansion, the companion by the three overlays that
+      // would otherwise load it again. `loadCompanionSchema` fetches metadata
+      // BEFORE it consults its cache, so each of those is a query rather than
+      // a lookup, and resolving here without passing it on would have added
+      // them to every localized read by id.
       const { localeChain, companion } = await this.localeScope(params);
-      // Translated through the shared builder, so a multi-member or
-      // non-`equals` predicate binds here exactly as it binds a listing, and a
-      // localized member becomes the same companion EXISTS.
-      const accessCondition =
-        this.accessConstraintCondition(
-          params.collectionName,
-          accessConstraint,
-          schema,
-          this.buildLocalizedQueryContext(
-            companion,
-            localeChain,
-            schema,
-            statusFilter?.values
-          )
-        ) ?? null;
       // An explicit `status: "draft"` view that opts into the working draft must
       // not filter the live row to draft-only: the split keeps the main row
       // published, so that predicate would 404 before the overlay below can
@@ -4192,11 +3983,7 @@ export class CollectionQueryService extends BaseService {
               readNow
             ),
           });
-      const whereParts = [
-        idCondition,
-        accessCondition,
-        lifecycleCondition,
-      ].filter(
+      const whereParts = [idCondition, lifecycleCondition].filter(
         (c): c is NonNullable<typeof c> => c !== null && c !== undefined
       );
       const whereCondition =
@@ -4366,9 +4153,8 @@ export class CollectionQueryService extends BaseService {
       // sets it from `!!user` after authorizing the READ, so it attests read, not
       // update — trusting it would leak drafts to a read-only authenticated
       // caller. Every non-override authenticated caller is instead judged by an
-      // actual update-capability probe against the LOADED row, so an owner-only
-      // update rule (which the coarse check passes pending a row-level predicate)
-      // does not treat a non-owner reader as an editor.
+      // actual update-capability check, so a reader the collection's update
+      // rule refuses is not treated as an editor.
       let draftView = false;
       // Set once a working draft is actually surfaced. When the draft predicate
       // was suppressed but nothing is overlaid, the loaded row is the published
@@ -4378,18 +4164,16 @@ export class CollectionQueryService extends BaseService {
         if (params.overrideAccess === true) {
           draftView = true;
         } else if (params.user !== undefined) {
-          const updateDenied = await this.accessService.checkCollectionAccess(
-            params.collectionName,
-            "update",
-            params.user,
-            entryId,
-            entry as Record<string, unknown>,
-            params.overrideAccess,
+          const updateDenied = await this.accessService.checkCollectionAccess({
+            collectionName: params.collectionName,
+            operation: "update",
+            user: params.user,
+            overrideAccess: params.overrideAccess,
             // The route attested a read, never an update, so the update grant is
             // checked rather than assumed from `routeAuthorized`.
-            false,
-            params.authenticatedScope
-          );
+            routeAuthorized: false,
+            authenticatedScope: params.authenticatedScope,
+          });
           draftView = !updateDenied;
         }
       }

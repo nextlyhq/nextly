@@ -29,9 +29,6 @@ vi.mock("../../../../di", () => ({
   },
 }));
 vi.mock("../single-query-service", () => ({ checkSingleAccess }));
-vi.mock("../../../../services/access/access-control-service", () => ({
-  AccessControlService: class {},
-}));
 
 const { singleDocumentReadable, singleDocumentEditable } = await import(
   "../single-document-access"
@@ -113,8 +110,8 @@ describe("authorizing an edit of a Single", () => {
   // Reading proves nothing about editing: where a Single allows broad reads and
   // restricts updates, a caller reads the published document and would
   // otherwise be handed the author's unpublished edits.
-  it("asks the update question against the stored document", async () => {
-    getSingleBySlug.mockResolvedValue({ tableName: "t", accessRules: {} });
+  it("asks the update question, not the read one", async () => {
+    getSingleBySlug.mockResolvedValue({ tableName: "t" });
     selectOne.mockResolvedValue({ id: "s1" });
     checkSingleAccess.mockResolvedValue(null);
 
@@ -123,14 +120,14 @@ describe("authorizing an edit of a Single", () => {
     ).resolves.toBe(true);
 
     expect(checkSingleAccess).toHaveBeenCalledWith(
-      expect.objectContaining({ operation: "update", document: { id: "s1" } })
+      expect.objectContaining({ operation: "update" })
     );
   });
 
-  // `checkSingleAccess` refuses outright when an owner-only rule has no
-  // document, so a Single with no row cannot be authorized either way.
+  // A Single with no materialized row has nothing to edit, so the probe refuses
+  // before the gate is consulted at all.
   it("refuses when there is no document to judge", async () => {
-    getSingleBySlug.mockResolvedValue({ tableName: "t", accessRules: {} });
+    getSingleBySlug.mockResolvedValue({ tableName: "t" });
     selectOne.mockResolvedValue(null);
 
     await expect(

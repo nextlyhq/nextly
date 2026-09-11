@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, useMemo } from "react";
 
 import {
   ADMIN_META_KEY,
+  ADMIN_WORKSPACE_KEY,
   useSchemaUpdateInvalidation,
 } from "@admin/hooks/useSchemaUpdateInvalidation";
 
@@ -277,7 +278,7 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
     isPending: workspacePending,
     isLoadingError: workspaceUnavailable,
   } = useQuery<AdminBranding>({
-    queryKey: ["admin-meta", "workspace", signedIn],
+    queryKey: [...ADMIN_WORKSPACE_KEY, signedIn],
     queryFn: () => protectedApi.get<AdminBranding>("/admin-meta/workspace"),
     staleTime: 5 * 60 * 1000,
     retry: false,

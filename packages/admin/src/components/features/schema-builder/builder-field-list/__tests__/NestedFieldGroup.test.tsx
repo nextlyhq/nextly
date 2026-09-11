@@ -74,6 +74,34 @@ describe("NestedFieldGroup", () => {
     expect(onEdit).toHaveBeenCalledWith("c1");
   });
 
+  it("names each child's handle for what the child is called, or that it is unnamed", () => {
+    // 🔴 The handle read `field.name`, so a child just added -- no label and
+    // no name yet -- had a handle called "Reorder " and a drag that announced
+    // nothing. It now says the same subject the announcement says: the label
+    // the card shows, else the name, else that the field is unnamed.
+    renderInDnd(
+      <NestedFieldGroup
+        parentField={{
+          id: "p1",
+          name: "heroSections",
+          label: "Hero Sections",
+          type: "repeater",
+          validation: {},
+          fields: [childField("c1", "title"), childField("c2", "", "")],
+        }}
+        onEditField={noop}
+        onDeleteField={noop}
+        onDuplicateField={noop}
+        onAddInsideParent={noop}
+      />
+    );
+    expect(
+      screen
+        .getAllByRole("button", { name: /^Reorder / })
+        .map(handle => handle.getAttribute("aria-label"))
+    ).toEqual(["Reorder Title Field", "Reorder an unnamed field"]);
+  });
+
   it("calls onAddInsideParent with the parent's id when +Add is clicked", async () => {
     const onAdd = vi.fn();
     renderInDnd(
