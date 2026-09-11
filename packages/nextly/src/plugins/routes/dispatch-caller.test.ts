@@ -33,6 +33,12 @@ vi.mock("../../services/lib/permissions", async importOriginal => {
   return {
     ...actual,
     listRoleSlugsForUser: vi.fn(async () => ["editor"]),
+    // The same answer by the name `readCaller` asks through: the module calls
+    // its own binding, which a mock of the export above cannot reach.
+    resolveRoleSlugs: vi.fn(
+      async (auth: { authMethod: string; roles: string[] }) =>
+        auth.authMethod === "api-key" ? auth.roles : ["editor"]
+    ),
   };
 });
 
@@ -202,6 +208,33 @@ describe("a plugin route is told what the caller may do", () => {
 
     checkAccess.mockResolvedValue(false);
     await expect(seen!.caller!.can("delete", "posts")).resolves.toBe(false);
+  });
+
+  it("hands over the reader an enforced Direct API read takes: roles resolved, claims kept, the key's scope carried", async () => {
+    // A route reading "as the user" with `overrideAccess: false` needs the
+    // roles a stored role-based rule reads, and `ctx.user` carries none — a
+    // context built from it alone is refused by the very rule the route's
+    // gate admitted the caller past. Resolved once, on first use, from the
+    // same reader `can()` uses.
+    reqAuth.mockResolvedValue(sessionAuth as never);
+    await runPluginRoute(req(), match(route({}), baseCtx()));
+
+    const session = await seen!.caller!.identity();
+    expect(session.user).toMatchObject({
+      id: "u1",
+      email: "u1@x.com",
+      roles: ["editor"],
+      role: "editor",
+      tenant: "acme",
+    });
+    expect(session.authenticatedScope).toBeUndefined();
+    expect(await seen!.caller!.identity()).toBe(session);
+
+    reqAuth.mockResolvedValue(readOnlyKeyAuth as never);
+    await runPluginRoute(req(), match(route({}), baseCtx()));
+    const keyed = await seen!.caller!.identity();
+    expect(keyed.user.roles).toEqual(["editor"]);
+    expect(keyed.authenticatedScope).toBeDefined();
   });
 
   it("carries authMethod, apiKeyId and claims to the handler", async () => {

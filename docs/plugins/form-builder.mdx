@@ -285,6 +285,11 @@ const result = await submitForm(
   {
     formSlug: 'contact',
     data: { firstName: 'Jane', email: 'jane@example.com', message: 'Hello!' },
+    // The language the visitor submitted in. A picked redirect page is read in
+    // it, so a page whose slug is `thanks` in English and `merci` in French
+    // sends a French visitor to `/merci`. Pass whatever you resolved for the
+    // page the form was on; the built-in route reads it from `?locale=`.
+    locale: 'fr',
     metadata: {
       // No ipAddress here on purpose: see "Where the IP has to come from"
       // below. Reading `x-forwarded-for` straight off the request is the one
@@ -358,6 +363,8 @@ Spam protection runs on the same hook, and is decided BEFORE the payload is vali
 The honeypot and the rate limit are facts about an HTTP REQUEST rather than about a row, so they stand down when no request produced the write: a trusted server importing a thousand submissions does not rate-limit its own import, and a honeypot field means nothing without a browser to have skipped it. What separates the two is whether a request reached the hook, not which function was called.
 
 You do not need a route of your own to get any of it. `POST /api/forms/:slug/submit` is contributed by this plugin and calls `submitForm`, so a browser posting to it meets the honeypot and the rate limit exactly as one posting to a route you host yourself would. Host your own when you want a different response shape or extra work around the submission, not to obtain spam protection.
+
+On a localized site, post to `/api/forms/:slug/submit?locale=fr` from a French page. The locale decides which translation the redirect target is read in, so the visitor lands on that page's French URL; a submission that names none is answered in the default language. A code the site does not have reads as the default rather than refusing the submission — the visitor filled the form in, and a wrong query string is not a reason to lose it. The target is read as the visitor, so a translation that is still a draft is not where they are sent: the published default answers until the translation is published.
 
 You can validate data without creating a submission:
 

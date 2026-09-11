@@ -1478,6 +1478,73 @@ export class CollectionMutationService extends BaseService {
    * write. `manyToManyFields` is passed in rather than recomputed because the
    * caller reuses the same list for the junction rewrite later in the write.
    */
+  /**
+   * Field-group values, removed from a write payload for their own tables.
+   *
+   * Mutates `data` in place, since it is the object that continues to the
+   * main-row write, and returns what was taken out keyed by field name. The
+   * one implementation every write path shapes with: the ordinary create and
+   * update each carried a copy and the transactional writes carried none,
+   * and that difference was an insert that failed on the first field group
+   * and an update that dropped it without a word.
+   */
+  private extractComponentFieldData(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Record<string, unknown> {
+    const componentFieldData: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (isFieldGroupField(field) && data[field.name] !== undefined) {
+        componentFieldData[field.name] = data[field.name];
+        delete data[field.name];
+      }
+    }
+    return componentFieldData;
+  }
+
+  /**
+   * Write extracted field-group values on the caller's transaction.
+   *
+   * No locale: the transactional writes take none, so a localized component
+   * writes the default locale, as the rest of that path does. Readiness is
+   * read rather than resolved here, which is why a caller that opens its own
+   * transaction warms it first (`warmLocalizedReadiness`).
+   *
+   * A failure here is a write-integrity failure: the parent row is already
+   * written, and a component instance is validated by its own pass inside the
+   * field-group service, so a bad instance surfaces only now. Reported as a
+   * soft per-item failure, a batch under `stopOnError: false` would carry on
+   * and commit a row without the component it promised; marked, the batch
+   * loop aborts and the transaction rolls back, and a single transactional
+   * write rethrows into its caller's transaction the same way.
+   */
+  private async saveComponentFieldDataInTx(
+    tx: TransactionContext,
+    args: {
+      parentId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      data: Record<string, unknown>;
+      user?: UserContext;
+    }
+  ): Promise<void> {
+    if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
+      return;
+    }
+    try {
+      await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+        parentId: args.parentId,
+        parentTable: args.tableName,
+        fields: args.fields as unknown as FieldConfig[],
+        data: args.data,
+        locale: undefined,
+        req: args.user ? { user: args.user } : {},
+      });
+    } catch (error: unknown) {
+      throw markWriteIntegrityFailure(error);
+    }
+  }
+
   private shapeWriteParts(
     data: Record<string, unknown>,
     fields: FieldDefinition[],
@@ -1511,15 +1578,8 @@ export class CollectionMutationService extends BaseService {
       }
     });
 
-    // Extract component field data (stored in separate comp_{slug} tables)
-    // Component fields should not be stored in the collection table
-    const componentFieldData: Record<string, unknown> = {};
-    fields.forEach(field => {
-      if (isFieldGroupField(field) && data[field.name] !== undefined) {
-        componentFieldData[field.name] = data[field.name];
-        delete data[field.name]; // Remove from main update
-      }
-    });
+    // Field-group values go to their own comp_{slug} tables, not this row.
+    const componentFieldData = this.extractComponentFieldData(data, fields);
 
     // Normalize relationship data inside repeater/group fields before serialization.
     // The admin panel may send full relationship objects ({id, title, slug, ...})
@@ -3062,16 +3122,11 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
-      // Extract component field data (stored in separate comp_{slug} tables)
-      // Component fields should not be stored in the collection table
-      // Extract component field data for separate storage in comp_{slug} tables
-      const componentFieldData: Record<string, unknown> = {};
-      fields.forEach(field => {
-        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
-          componentFieldData[field.name] = finalData[field.name];
-          delete finalData[field.name]; // Remove from main insert
-        }
-      });
+      // Field-group values go to their own comp_{slug} tables, not this row.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
 
       this.serializeHasManyRelationships(finalData, fields);
 
@@ -5979,8 +6034,6 @@ export class CollectionMutationService extends BaseService {
 
       // Wrap main update and component data save in a transaction so that
       // a component save failure rolls back the entry update — no partial state.
-      // tx.execute() is used for the UPDATE so it runs on the same DB client
-      // as the transaction (unlike tx.update() which delegates to the pool).
       // Resolved versioning config persisted on the collection (or null when
       // unversioned); read once so the in-tx capture below can skip cheaply.
       const versionsConfig = (collection as Record<string, unknown>)
@@ -6712,16 +6765,6 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // Dialect-aware identifier quoting and placeholder syntax.
-          // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
-          const isMysql = this.dialect === "mysql";
-          const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-          const sqlParams: unknown[] = [];
-          const makePlaceholder = () =>
-            this.dialect === "postgresql"
-              ? `$${sqlParams.length}` // length already incremented by push below
-              : "?";
-
           // A row becoming public for the first time records when, once and for good.
           //
           // `status` says what a document IS; nothing said what it HAS BEEN, so an unpublish
@@ -6803,26 +6846,23 @@ export class CollectionMutationService extends BaseService {
             updatePayload.firstPublishedAt = updateStamp;
           }
 
-          const setClauses = Object.entries(updatePayload)
-            .map(([key, val]) => {
-              sqlParams.push(val);
-              return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
-            })
-            .join(", ");
-          sqlParams.push(params.entryId);
+          // Keyed by SQL column name, as the adapter takes it. A transaction's
+          // update is built by the adapter rather than by the query builder,
+          // which is what lets this write reach a column the runtime model
+          // has already moved to a companion table that does not exist yet
+          // (the localization transition window). A key whose value is
+          // `undefined` is not written; `null` clears the column.
+          const columns: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(updatePayload)) {
+            columns[toSnakeCase(key)] = value;
+          }
           // Skip the live-row UPDATE for a draft edit — the pending
           // change is stored as the working draft below, not written to the row.
           if (!storeAsWorkingDraft) {
-            await tx.execute(
-              `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
-              sqlParams as (
-                | string
-                | number
-                | boolean
-                | Date
-                | null
-                | undefined
-              )[]
+            await tx.update(
+              tableName,
+              columns,
+              this.whereEq("id", params.entryId)
             );
           }
 
@@ -8359,7 +8399,6 @@ export class CollectionMutationService extends BaseService {
       let currentData: Record<string, unknown> = options.shapeCallerObject
         ? body
         : { ...body };
-
       // Shared context between all hooks in this request
       // Seeded from the caller, like the non-transactional pipelines. An
       // empty literal here meant a hook context reached every write EXCEPT
@@ -8584,6 +8623,14 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-group values live in their own comp_{slug} tables and have no
+      // column on the main row; left in place, the insert fails on the first
+      // one. Written after the row exists, below.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
+
       this.serializeHasManyRelationships(finalData, fields);
 
       // Convert date-field strings into `Date` objects so Drizzle can bind
@@ -8661,6 +8708,14 @@ export class CollectionMutationService extends BaseService {
       // Insert using transaction context
       const entry = await tx.insert<unknown>(tableName, entryData, {
         returning: "*",
+      });
+
+      await this.saveComponentFieldDataInTx(tx, {
+        parentId: (entry as { id: string }).id,
+        tableName,
+        fields,
+        data: componentFieldData,
+        user: params.user,
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -9156,6 +9211,14 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-group values have no column on the main row. Left in place they
+      // were dropped by the UPDATE without an error, so the row reported
+      // success and the component table kept its old value.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
+
       this.serializeHasManyRelationships(finalData, fields);
 
       // Convert date-field strings into `Date` objects so Drizzle can bind
@@ -9244,7 +9307,10 @@ export class CollectionMutationService extends BaseService {
             tableName,
             {
               ...stripImmutableSystemFields(finalData, "collection"),
-              updatedAt: nowForUpdate,
+              // The SQL name: a dynamic table keys its system columns by it,
+              // and the adapter-built update refuses a key that names no
+              // column rather than dropping it.
+              updated_at: nowForUpdate,
               ...(updateStamp ? { first_published_at: updateStamp } : {}),
             },
             this.whereEq("id", entryId),
@@ -9331,7 +9397,7 @@ export class CollectionMutationService extends BaseService {
             collection,
             collectionHasStatus:
               (collection as { status?: boolean }).status === true,
-            componentFieldData: {},
+            componentFieldData,
             draftLocale: draftLocale,
             fields,
             manyToManyData,
@@ -9380,6 +9446,18 @@ export class CollectionMutationService extends BaseService {
             );
           }
         }
+      }
+
+      // Component rows are live content like the junction rows above, so a
+      // held edit keeps them in the draft (stored above) rather than here.
+      if (!storeAsWorkingDraft) {
+        await this.saveComponentFieldDataInTx(tx, {
+          parentId: entryId,
+          tableName,
+          fields,
+          data: componentFieldData,
+          user: params.user,
+        });
       }
 
       // Record a durable version snapshot and the outbox event on the caller's

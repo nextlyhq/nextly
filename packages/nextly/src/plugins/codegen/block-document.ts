@@ -623,6 +623,18 @@ function collectDeclaredFields(node: unknown, into: Set<string>): void {
   for (const value of Object.values(record)) collectDeclaredFields(value, into);
 }
 
+/** The one refusal a corrupted derivation gets, on each of the two paths. */
+const DERIVATION_FAILED_EMIT =
+  "The block document schema could not be derived, so it was not emitted.";
+const DERIVATION_FAILED_CHECK =
+  "The published schema could not be derived, so this document cannot be checked against it.";
+
+function isDerivationFailure(error: unknown): boolean {
+  return (
+    error instanceof NextlyError && error.code === "SCHEMA_DERIVATION_FAILED"
+  );
+}
+
 let declaredFieldsCache: string[] | undefined;
 
 function declaredFields(): string[] {
@@ -677,7 +689,23 @@ export type BlockDocumentShape = z.infer<typeof blockDocumentSchema>;
  * artifact is writing a document rather than reading one back out of zod.
  */
 export function blockDocumentJsonSchema(): Record<string, unknown> {
-  const schema = z.toJSONSchema(blockDocumentSchema, { io: "input" });
+  let schema: Record<string, unknown>;
+  try {
+    schema = z.toJSONSchema(blockDocumentSchema, { io: "input" });
+  } catch (error) {
+    // zod refuses the corruption itself now: with `id` on `Object.prototype`
+    // every registration reads the same id, and since 4.4 the converter
+    // reports the collision instead of emitting a shorter schema. The refusal
+    // is the same one the check below makes, so it is given the same shape;
+    // a caller then has one error to handle for one reason.
+    throw new NextlyError({
+      code: "SCHEMA_DERIVATION_FAILED",
+      publicMessage: DERIVATION_FAILED_EMIT,
+      logContext: {
+        cause: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
 
   // The emission is checked HERE rather than only where this module consumes
   // it, because publishing a corrupted schema is the worse of the two failures:
@@ -686,17 +714,18 @@ export function blockDocumentJsonSchema(): Record<string, unknown> {
   // has exited.
   //
   // What corrupts it is prototype pollution. Emitting while `Object.prototype`
-  // carries `id`, `type`, `version` and `props` returns EIGHT property names
-  // instead of 33, with every node field missing — a shorter document rather
-  // than an error, which is why nothing downstream notices.
+  // carried `id`, `type`, `version` and `props` returned EIGHT property names
+  // instead of 33 under zod 4.1, with every node field missing — a shorter
+  // document rather than an error, which is why nothing downstream noticed.
+  // The converter reports that case now; this stays for a corruption it does
+  // not, since a shorter emission is still the failure that hides.
   const emitted = new Set<string>();
   collectDeclaredFields(schema, emitted);
   const missing = NODE_REQUIRED_FIELDS.filter(field => !emitted.has(field));
   if (missing.length > 0) {
     throw new NextlyError({
       code: "SCHEMA_DERIVATION_FAILED",
-      publicMessage:
-        "The block document schema could not be derived, so it was not emitted.",
+      publicMessage: DERIVATION_FAILED_EMIT,
       logContext: {
         missing: [...missing],
         cause:
@@ -791,7 +820,15 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
   // `Object.prototype`, every object in the document resolves that field
   // whether or not it holds one, so the schema would be validating values the
   // document does not contain and storage will not receive.
-  const fields = declaredFields();
+  let fields: string[];
+  try {
+    fields = declaredFields();
+  } catch (error) {
+    // The emission refused, which is a derivation failure and not this
+    // document's fault; the answer is the same as for a shorter emission.
+    if (!isDerivationFailure(error)) throw error;
+    return { success: false, issues: [DERIVATION_FAILED_CHECK] };
+  }
   // The positive control. A perturbed emission returns a SHORTER list rather
   // than an error, so "no declared field is shadowed" has to be distinguished
   // from "the list being searched was not the real one".
@@ -799,12 +836,7 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
     fields.includes(field)
   );
   if (!derivationIntact) {
-    return {
-      success: false,
-      issues: [
-        "The published schema could not be derived, so this document cannot be checked against it.",
-      ],
-    };
+    return { success: false, issues: [DERIVATION_FAILED_CHECK] };
   }
 
   const shadowed = shadowedDeclaredField(fields);

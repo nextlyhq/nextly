@@ -43,8 +43,16 @@ another component is judged for placement by what that component draws, under
 the site's own document caps, and the panel says when a tier of the library was
 too large to load whole or could not be read.
 
+The component tier is read in the language the surrounding document is being
+edited in, as the public page reads it, so a localized component draws on the
+canvas as it will on the page; and a row without a title — a custom collection
+with none, or one field-level access redacts — is offered labelled by its id
+rather than left out.
+
 The Direct API's `findByID` now forwards `status`, so an untrusted by-id read
 can reach a row that was never published — a caller passing it before was
-silently ignored — and `nextly/runtime` exports `buildUserContext`, the one
-builder of the identity an access rule is evaluated against, for a route
-reading on a caller's behalf.
+silently ignored. A plugin route's caller gains `identity()`, which resolves
+once per request the identity an access rule is evaluated against — the user
+with their roles, and an API key's scope — so a route reading through the
+Direct API on the caller's behalf reads as the caller its own gate admitted;
+`PluginRouteIdentity` names its answer in the SDK.

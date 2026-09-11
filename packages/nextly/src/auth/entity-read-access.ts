@@ -13,33 +13,20 @@
  * @module auth/entity-read-access
  */
 
-import { container } from "../di/container";
-import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../errors/nextly-error";
 import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
-import type {
-  AccessControlContext,
-  CollectionAccessControl,
-  SingleAccessControl,
-} from "../shared/types/access";
 
-/**
- * The resolved identity a read decision needs.
- *
- * `permissions` are the API key's OWN scoped grants in `{action}-{resource}`
- * form. Note the format: `listEffectivePermissions` returns the other one
- * (`{resource}:{action}`), and mixing them silently answers "denied" for every
- * check. Session callers carry an empty list — their grants are resolved from
- * the database instead.
- */
-export interface ReadAccessCaller {
-  userId: string;
-  authMethod: "session" | "api-key";
-  permissions: string[];
-  /** Role slugs, already normalized (session roles arrive as ids). */
-  roles: string[];
-}
+import { ruleFacingPermissions } from "./authenticated-scope";
+import {
+  codeAccessAllows,
+  getRBACService,
+  type ReadAccessCaller,
+} from "./code-access";
+
+// The shared halves of the decision keep their old address: every reader and
+// every test that mocks this module reaches them here.
+export { codeAccessAllows, getRBACService, type ReadAccessCaller };
 
 /**
  * The same caller a read endpoint resolved, in the shape an ENTITY-LEVEL read
@@ -64,77 +51,33 @@ export interface ReadAccessCaller {
  * decision, which is the failure this module exists to prevent.
  */
 export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
-  const isApiKey = caller.authenticatedScope?.actorType === "apiKey";
+  const scope = caller.authenticatedScope;
+  if (scope?.actorType === "apiKey") {
+    return {
+      userId: caller.user.id,
+      authMethod: "api-key",
+      permissions: [...scope.permissions],
+      // Only a scope that carried the ROWS can spell a grant the way a rule
+      // reads it; one that held slugs alone is left without, and the rule
+      // gets the stored spelling as it always did.
+      ...(scope.grants
+        ? { rulePermissions: ruleFacingPermissions(scope) }
+        : {}),
+      // The key's OWN roles when authentication resolved them; a key judged
+      // on its owner's roles is the same defect as one judged on its owner's
+      // permissions, in the direction that denies.
+      roles: [...(scope.roles ?? caller.user.roles ?? [])],
+    };
+  }
   return {
     userId: caller.user.id,
-    authMethod: isApiKey ? "api-key" : "session",
+    authMethod: "session",
     // A session caller carries none here on purpose: its grants are resolved
     // from the database by `checkAccess`. Handing it the key vocabulary would
     // answer "denied" for every check.
-    permissions: isApiKey
-      ? [...(caller.authenticatedScope?.permissions ?? [])]
-      : [],
+    permissions: [],
     roles: caller.user.roles ?? [],
   };
-}
-
-/**
- * The RBAC service, or undefined before the container is initialized.
- *
- * Exported for `auth/authenticated-scope`, which composes the api-key and
- * session branches of the same decision and would otherwise hold a fourth copy
- * of this resolver. It is not part of any published surface.
- */
-export function getRBACService(): RBACAccessControlService | undefined {
-  try {
-    if (container.has("rbacAccessControlService")) {
-      return container.get<RBACAccessControlService>(
-        "rbacAccessControlService"
-      );
-    }
-  } catch {
-    // DI container not initialized yet — the caller decides how to fall back.
-  }
-  return undefined;
-}
-
-/**
- * Evaluate a code-defined access rule.
- *
- * An absent rule allows: the permission check that precedes this one is what
- * grants access, and a rule that says nothing about an operation does not
- * revoke it. A rule that throws denies, so a broken rule fails closed.
- */
-export async function codeAccessAllows(
-  codeAccess: CollectionAccessControl | SingleAccessControl,
-  operation: "create" | "read" | "update" | "delete" | "publish" | "unpublish",
-  resource: string,
-  caller: ReadAccessCaller
-): Promise<boolean> {
-  const operationAccess =
-    codeAccess[
-      operation as keyof (CollectionAccessControl | SingleAccessControl)
-    ];
-
-  if (operationAccess === undefined) return true;
-  if (typeof operationAccess === "boolean") return operationAccess;
-
-  // The context carries the CALLER's roles and permissions. For an API key
-  // those are the key's own scoped values, not its owner's — which is the
-  // whole point of evaluating the rule against the key.
-  const ctx: AccessControlContext = {
-    user: { id: caller.userId },
-    roles: caller.roles,
-    permissions: caller.permissions,
-    operation,
-    collection: resource,
-  };
-
-  try {
-    return (await operationAccess(ctx)) === true;
-  } catch {
-    return false;
-  }
 }
 
 /**

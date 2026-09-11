@@ -57,6 +57,37 @@ export const LIBRARY_ROUTE_PATH = "/library";
 export const COMPONENT_LIBRARY_ROUTE_PATH = `${LIBRARY_ROUTE_PATH}/components`;
 
 /**
+ * The query parameter naming the language the component tier is read in.
+ *
+ * A component's document field can be localized, and the public renderer
+ * reads definitions in the page's locale; the editor asks for the language
+ * the surrounding document is being edited in, so the canvas draws what the
+ * page will. ONE spelling, here, for the client that writes it and the route
+ * that reads it — two spellings agree until one of them is renamed.
+ */
+export const COMPONENT_LIBRARY_LOCALE_PARAM = "locale";
+
+/**
+ * The component route's path for one language, as the client requests it.
+ *
+ * `null` or `undefined` is the app's default language, which the admin
+ * addresses everywhere by an ABSENT `?locale=` — so the path carries no
+ * parameter rather than an empty one, and the read hook's cache key, which
+ * is the path, differs between languages and is shared within one.
+ */
+export function componentLibraryPath(
+  locale: string | null | undefined
+): string {
+  if (locale === null || locale === undefined || locale === "") {
+    return COMPONENT_LIBRARY_ROUTE_PATH;
+  }
+  const query = new URLSearchParams({
+    [COMPONENT_LIBRARY_LOCALE_PARAM]: locale,
+  });
+  return `${COMPONENT_LIBRARY_ROUTE_PATH}?${query.toString()}`;
+}
+
+/**
  * Where the editor asks what the author may do with patterns.
  *
  * A route of its own rather than a field on the library response, and the

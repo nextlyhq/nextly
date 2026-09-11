@@ -74,6 +74,7 @@ export type {
 export type {
   PluginRoute,
   PluginRouteCaller,
+  PluginRouteIdentity,
   PluginRouteContext,
   PluginRouteHandler,
   PluginRouteMount,

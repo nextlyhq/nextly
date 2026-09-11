@@ -18,7 +18,7 @@
  * @module canvas-drag.test
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
 import {
@@ -27,7 +27,9 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentLookup,
+  type DocumentLimits,
   type NestingSource,
+  DEFAULT_LIMITS,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
@@ -113,12 +115,23 @@ function Host({
   document,
   nesting = PERMISSIVE,
   definitions,
+  limits,
+  onRefused,
 }: {
   document: BlockDocument;
   nesting?: NestingSource;
   definitions?: ComponentLookup;
+  limits?: DocumentLimits;
+  onRefused?: (refusal: { sentence: string }) => void;
 }): React.JSX.Element {
-  const editor = useEditorState({ initialDocument: document });
+  // The editor is where room is judged; the drag hands it the move and the
+  // editor tells the host why when it refuses.
+  const editor = useEditorState({
+    initialDocument: document,
+    ...(limits === undefined ? {} : { limits }),
+    ...(definitions === undefined ? {} : { definitions }),
+    ...(onRefused === undefined ? {} : { onRefused }),
+  });
   editorRef = editor;
   const drag = useCanvasDrag({
     editor,
@@ -509,6 +522,80 @@ describe("useCanvasDrag", () => {
     moveTo(root2, 200, 190);
     release(root2, 200, 190);
     expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["b", "i1"]);
+  });
+
+  it("hands a move to the editor, which refuses one the page has no room for and says why", () => {
+    // The budget is spent in document order. Two instances of a three-node
+    // component on a page with room for one: carrying the second ahead of
+    // the first takes the budget the first had, and the page would draw a
+    // placeholder where a component stood. The editor's own apply asks the
+    // resolver with the move applied, under its caps, and tells the host why;
+    // the control moves a block on the same page.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const three: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        node("d1", "test/heading"),
+        node("d2", "test/heading"),
+        node("d3", "test/heading"),
+      ],
+    } as BlockDocument;
+    const definitions: ComponentLookup = new Map([["three", three]]);
+    const instance = (id: string): BlockNode =>
+      ({
+        ...node(id, "nextly/component-instance"),
+        props: { componentId: "three" },
+      }) as BlockNode;
+    const page = () =>
+      documentOf([
+        node("p0", "test/heading"),
+        instance("first"),
+        instance("second"),
+      ]);
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+    const raise = vi.fn();
+    const refused = render(
+      <Host
+        document={page()}
+        definitions={definitions}
+        limits={limits}
+        onRefused={refusal => raise(refusal.sentence)}
+      />
+    );
+    layout(refused.container, { p0: 100, first: 100, second: 100 });
+    const root = rootOf(refused.container);
+    // From the bottom to just below the top block: ahead of "first".
+    press(root, blockElement(refused.container, "second"), 200, 250);
+    moveTo(root, 200, 110);
+    release(root, 200, 110);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual([
+      "p0",
+      "first",
+      "second",
+    ]);
+    expect(raise).toHaveBeenCalledWith(expect.stringMatching(/no room left/));
+    refused.unmount();
+
+    const allowed = render(
+      <Host
+        document={page()}
+        definitions={definitions}
+        limits={limits}
+        onRefused={refusal => raise(refusal.sentence)}
+      />
+    );
+    layout(allowed.container, { p0: 100, first: 100, second: 100 });
+    const root2 = rootOf(allowed.container);
+    press(root2, blockElement(allowed.container, "p0"), 200, 50);
+    moveTo(root2, 200, 290);
+    release(root2, 200, 290);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual([
+      "first",
+      "second",
+      "p0",
+    ]);
   });
 
   it("ignores a press that is not the primary button", () => {

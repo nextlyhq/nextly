@@ -13,7 +13,6 @@ import type {
   DeleteOptions,
   SelectOptions,
   TransactionContext,
-  UpdateOptions,
   UpsertOptions,
   WhereClause,
 } from "./types";
@@ -32,13 +31,6 @@ export interface TransactionCrudDelegator {
     options?: SelectOptions,
     executor?: unknown
   ): Promise<T | null>;
-  update<T = unknown>(
-    table: string,
-    data: Record<string, unknown>,
-    where: WhereClause,
-    options?: UpdateOptions,
-    executor?: unknown
-  ): Promise<T[]>;
   updateCount(
     table: string,
     data: Record<string, unknown>,
@@ -61,12 +53,17 @@ export interface TransactionCrudDelegator {
 
 /**
  * Transaction context CRUD methods provided by the forwarder.
+ *
+ * `update` is not among them. The pooled `update` goes through the Drizzle
+ * query builder, which writes the columns the runtime model declares; a
+ * transaction's update must reach the columns the physical table has, and
+ * each adapter binds the base class's `transactionUpdate` beside its
+ * transactional `insert`.
  */
 export type TransactionCrudForwarders = Pick<
   TransactionContext,
   | "select"
   | "selectOne"
-  | "update"
   // The fenced compare-and-set. Listed explicitly like every other key here:
   // the type is DERIVED from `TransactionContext` in the sense that its
   // signatures come from there, but the key set is enumerated, so a method
@@ -106,15 +103,6 @@ export function createTransactionForwarders(
       options?: SelectOptions
     ): Promise<T | null> => {
       return delegator.selectOne<T>(table, options, txDb());
-    },
-
-    update: async <T = unknown>(
-      table: string,
-      data: Record<string, unknown>,
-      where: WhereClause,
-      options?: UpdateOptions
-    ): Promise<T[]> => {
-      return delegator.update<T>(table, data, where, options, txDb());
     },
 
     updateCount: async (

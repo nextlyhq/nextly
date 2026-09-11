@@ -24,6 +24,7 @@ import {
 } from "../../auth/authenticated-scope";
 import { readAccessCaller } from "../../auth/entity-read-access";
 import type { AuthContext } from "../../auth/middleware";
+import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
 import type { PluginRouteCaller } from "./route-types";
 
@@ -62,19 +63,23 @@ export function pluginRouteScope(
  */
 export function buildPluginRouteCaller(auth: AuthContext): PluginRouteCaller {
   const scope = pluginRouteScope(auth);
-  let resolved: ReturnType<typeof resolveAccessCaller> | undefined;
-
-  function resolveAccessCaller() {
-    return readCaller(auth).then(readAccessCaller);
+  // ONE resolution of the caller per request, shared by both questions asked
+  // of it: what the caller may do, and who they are to an enforced read. A
+  // second resolution would be a second account read per request, and two
+  // answers that could disagree between calls.
+  let reader: Promise<ReadCaller> | undefined;
+  function identity(): Promise<ReadCaller> {
+    reader ??= readCaller(auth);
+    return reader;
   }
 
   return {
     authMethod: auth.authMethod,
     ...(auth.apiKeyId === undefined ? {} : { apiKeyId: auth.apiKeyId }),
     ...(auth.claims === undefined ? {} : { claims: auth.claims }),
+    identity,
     async can(action: string, resource: string): Promise<boolean> {
-      resolved ??= resolveAccessCaller();
-      const caller = await resolved;
+      const caller = readAccessCaller(await identity());
       return callerMayPerform(scope, action, resource, {
         id: caller.userId,
         roles: caller.roles,

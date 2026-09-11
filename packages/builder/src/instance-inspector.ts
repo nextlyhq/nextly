@@ -204,8 +204,24 @@ export function inspectInstance(
  * says.
  */
 function storedComponentId(node: BlockNode): string {
-  const id = node.props.componentId;
+  const id = instanceProps(node).componentId;
   return typeof id === "string" ? id : "";
+}
+
+/**
+ * The instance's props as a record, or an empty one.
+ *
+ * A stored document can hold an instance whose `props` is missing or is not a
+ * record — an import, a hook, a hand edit — and the canvas draws it as a
+ * malformed placeholder rather than failing. Selecting that placeholder must
+ * not throw either, so every read of an instance's props here goes through
+ * this one guard, which is how the resolver reads them too.
+ */
+function instanceProps(node: BlockNode): Record<string, unknown> {
+  const props: unknown = node.props;
+  return typeof props === "object" && props !== null && !Array.isArray(props)
+    ? (props as Record<string, unknown>)
+    : {};
 }
 
 /** The resolver's rows, as the panel draws them. */
@@ -214,14 +230,16 @@ function rowsOf(
   node: BlockNode
 ): ExposedRow[] {
   const labels = new Map(
-    properties.map(state => [state.property.id, state.property.label] as const)
+    properties.map(
+      state => [state.property.id, labelOf(state.property)] as const
+    )
   );
   // Read off the node's own record rather than the resolver's source, which
   // is the target's and is shared by every exposure aimed at it.
   const stored = storedOverrides(node);
   return properties.map(state => ({
     id: state.property.id,
-    label: state.property.label,
+    label: labelOf(state.property),
     type: state.property.type,
     value: state.value,
     source: state.source,
@@ -230,7 +248,7 @@ function rowsOf(
     supported: (EDITABLE_EXPOSED_TYPES as readonly string[]).includes(
       state.property.type
     ),
-    options: state.property.options ?? [],
+    options: optionsOf(state.property.options),
     ...(state.shadowedBy === undefined
       ? {}
       : {
@@ -240,6 +258,44 @@ function rowsOf(
           },
         }),
   }));
+}
+
+/**
+ * What to call an exposed property: its label, or its id when the stored
+ * label is not a string.
+ *
+ * The resolver checks the fields its own writer reads — id, node, path and
+ * type — so a label reaches here as the stored or hook-shaped definition left
+ * it, and one that is an object would be handed to the panel to draw as text.
+ * The id is the one name the property is sure to have.
+ */
+function labelOf(property: { id: string; label?: unknown }): string {
+  const label: unknown = property.label;
+  return typeof label === "string" && label !== "" ? label : property.id;
+}
+
+/**
+ * The choices a select exposure offers, as a control can draw them.
+ *
+ * Normalised here, where they are consumed, for the reason {@link labelOf}
+ * gives: a value that is not a list offers nothing, an entry without a string
+ * value and a string label is left out, and a value offered twice is offered
+ * once — the control keys its items by value, and two items with one value
+ * are one choice drawn twice.
+ */
+function optionsOf(options: unknown): ExposedRow["options"] {
+  if (!Array.isArray(options)) return [];
+  const seen = new Set<string>();
+  const usable: { value: string; label: string }[] = [];
+  for (const entry of options as unknown[]) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { value, label } = entry as { value?: unknown; label?: unknown };
+    if (typeof value !== "string" || typeof label !== "string") continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    usable.push({ value, label });
+  }
+  return usable;
 }
 
 /**
@@ -270,7 +326,7 @@ function orphanedOf(
  * `constructor` with a function for a key it never had.
  */
 function storedOverrides(node: BlockNode): Record<string, OverrideValue> {
-  const overrides = node.props.overrides;
+  const overrides = instanceProps(node).overrides;
   if (typeof overrides !== "object" || overrides === null) return {};
   if (Array.isArray(overrides)) return {};
   return overrides as Record<string, OverrideValue>;
@@ -291,7 +347,7 @@ export function overridesPatch(
   node: BlockNode,
   overrides: Readonly<Record<string, OverrideValue>>
 ): NodePatch {
-  const { overrides: _stored, ...rest } = node.props;
+  const { overrides: _stored, ...rest } = instanceProps(node);
   return {
     props: Object.keys(overrides).length === 0 ? rest : { ...rest, overrides },
   };

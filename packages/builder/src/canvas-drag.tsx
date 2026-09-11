@@ -44,7 +44,6 @@
 import type {
   BlockNode,
   ComponentLookup,
-  DocumentLimits,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
 import { findNode } from "@nextlyhq/blocks-engine";
@@ -229,8 +228,6 @@ export interface UseCanvasDragOptions {
    * anywhere — the posture of a host that resolves nothing.
    */
   definitions?: ComponentLookup;
-  /** The caps the canvas resolves under, so those roots are judged as drawn. */
-  limits?: DocumentLimits;
   /**
    * The canvas root, for a drag that begins outside it.
    *
@@ -460,7 +457,6 @@ export function useCanvasDrag({
   slots,
   nesting,
   definitions,
-  limits,
   canvasRoot,
   activationPx = DEFAULT_ACTIVATION_PX,
   switchPx = DEFAULT_SWITCH_PX,
@@ -475,8 +471,8 @@ export function useCanvasDrag({
 
   // Read at event time rather than closed over, so a handler bound on one render
   // never patches a document that a later edit has already replaced.
-  const latest = React.useRef({ editor, slots, nesting, definitions, limits });
-  latest.current = { editor, slots, nesting, definitions, limits };
+  const latest = React.useRef({ editor, slots, nesting, definitions });
+  latest.current = { editor, slots, nesting, definitions };
 
   /**
    * Undo the document-level listening an insert-drag needs, or nothing.
@@ -566,11 +562,7 @@ export function useCanvasDrag({
         rects,
         forbiddenParents: movingSubtree(current.document, nodeId),
         blockName: node.type,
-        blockNames: placementTypesOf(
-          node,
-          latest.current.definitions,
-          latest.current.limits
-        ),
+        blockNames: placementTypesOf(node, latest.current.definitions),
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
@@ -857,6 +849,10 @@ export function useCanvasDrag({
     (subject: DragSubject, at: OpPosition) => {
       const { editor: current } = latest.current;
       if (subject.kind === "move") {
+        // Whether the PAGE still composes with the node there — an instance
+        // carried ahead of another takes the budget that one had — is the
+        // editor's own apply's to refuse, and to say why; a null here is that
+        // refusal.
         current.apply({ kind: "move", id: subject.nodeId, to: at });
         return;
       }

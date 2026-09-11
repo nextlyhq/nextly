@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   COMPLETION_CONCURRENCY,
   COMPONENT_LIST_PAGE_SIZE,
+  DEFAULT_COMPONENT_STORE,
   LIBRARY_PAGE_SIZE,
   MAX_LIBRARY_BYTES,
   MAX_LIBRARY_PATTERNS,
@@ -104,6 +105,7 @@ function componentContext(
     self: { collections: self },
     user: { id: "u1" },
     components: { list, read },
+    store: DEFAULT_COMPONENT_STORE,
   };
   return { ctx, list, read, inFlight };
 }
@@ -215,17 +217,20 @@ describe("what one row becomes", () => {
     expect(library.items[0]).toHaveProperty("keywords", null);
   });
 
-  it("drops a row it cannot key or label, and keeps the rest", async () => {
+  it("drops a row it cannot key, keeps the rest, and labels a row without a title by its id", async () => {
     // One pattern stops being offered rather than all of them — the direction
     // the remote-pattern reader already moves in. A row with no id could not be
-    // planned against; one with no title could not be found.
+    // planned against. A title only LABELS a row: a collection whose title
+    // field is absent, or redacted by field-level access, still holds the
+    // pattern, and the id is a label an author can find it by.
     const { ctx } = contextOver([
       [row("a"), { title: "no id" }, row("b", { title: "" }), row("c")],
     ]);
 
     const library = await readPatternLibrary(ctx);
 
-    expect(library.items.map(p => p.id)).toEqual(["a", "c"]);
+    expect(library.items.map(p => p.id)).toEqual(["a", "b", "c"]);
+    expect(library.items[1]).toMatchObject({ id: "b", title: "b" });
   });
 });
 
@@ -670,13 +675,39 @@ describe("the component tier", () => {
     });
   });
 
-  it("omits a listed component whose by-id row cannot be labelled, and says the tier was cut", async () => {
-    // The listing named it, so a library without it is not whole — and a row
-    // the read answered but which carries no title is one nothing can label.
+  it("keeps a component whose by-id row carries no title, labelled by its id, and the library stays whole", async () => {
+    // What a page's renderer reads of a component is its id and its document;
+    // a title is not among them. A custom collection with no title field, or
+    // one whose title is redacted by field-level access, still renders every
+    // instance on the public page — so the canvas must draw it too rather
+    // than a missing-component placeholder, and the tile is labelled by the
+    // one name the row is sure to have.
     const { ctx } = componentContext({
       pages: [[componentRow("a"), componentRow("b")]],
       byId: {
         a: { id: "a", content: draft("x") },
+        b: { id: "b", title: "B", content: draft("y") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
+    expect(library.items[0]).toMatchObject({
+      id: "a",
+      title: "a",
+      document: draft("x"),
+    });
+    expect(library.meta.truncated).toBe(false);
+  });
+
+  it("still omits a listed component whose by-id row has no id, and says the tier was cut", async () => {
+    // The control for the case above: an id is what keys the row, and a row
+    // the read answered without one cannot be the one the listing named.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: { title: "A", content: draft("x") },
         b: { id: "b", title: "B", content: draft("y") },
       },
     });
@@ -830,6 +861,26 @@ describe("the component tier", () => {
 
     expect(list.mock.calls.map(call => call[1])).toEqual([1, 2]);
     expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("reads the store the plugin was told components live in, collection and field alike", async () => {
+    // A host may keep its definitions in a collection of its own and render
+    // from it; an editor reading the plugin's store regardless would draw a
+    // different definition for the same id, or none. The same statement the
+    // readiness notice follows, so one setting redirects both.
+    const { ctx, list, read } = componentContext({
+      pages: [[{ id: "a", title: "A" }]],
+      byId: {
+        a: { id: "a", title: "A", blocks: draft("a"), content: "not this" },
+      },
+    });
+    ctx.store = { collection: "site_components", field: "blocks" };
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(list.mock.calls.map(call => call[0])).toEqual(["site_components"]);
+    expect(read.mock.calls.map(call => call[0])).toEqual(["site_components"]);
+    expect(library.items[0]?.document).toEqual(draft("a"));
   });
 
   it("reads through the host's renamed slug", async () => {

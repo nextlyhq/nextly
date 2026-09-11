@@ -1,6 +1,6 @@
 // Why: top-level field list — Built-in group above (always shown), user
-// fields below packed into rows by width using packIntoRows from
-// lib/builder/reflow. The page that mounts this owns the DndContext and
+// fields below packed into rows by width through builderRows from
+// lib/builder/builder-rows. The page that mounts this owns the DndContext and
 // the in-memory builder state; this component renders SortableRows that
 // participate in the parent's sortable context.
 //
@@ -18,11 +18,7 @@ import {
 import { Button } from "@nextlyhq/ui";
 import { useEffect, useState } from "react";
 
-import {
-  packIntoRows,
-  parseWidth,
-  type WidthField,
-} from "@admin/lib/builder/reflow";
+import { builderRowId, builderRows } from "@admin/lib/builder/builder-rows";
 
 import { EmptyState } from "./builder-field-list/EmptyState";
 import { NestedFieldGroup } from "./builder-field-list/NestedFieldGroup";
@@ -48,8 +44,6 @@ type Props = {
   readOnly?: boolean;
 };
 
-type RowItem = WidthField & { _field: BuilderField };
-
 export function BuilderFieldList({
   fields,
   onAddAt,
@@ -60,27 +54,10 @@ export function BuilderFieldList({
   readOnly = false,
 }: Props) {
   const systemFields = fields.filter(f => f.isSystem);
-  // Hidden fields are plumbing (e.g. a plugin's mode field driven by a form
-  // toolbar) — keep them out of the editable "Your fields" list.
-  const userFields = fields.filter(
-    f => !f.isSystem && f.admin?.hidden !== true
-  );
-
-  const rows = packIntoRows<RowItem>(
-    userFields.map(f => ({
-      id: f.id,
-      // Why: PR I -- container fields (repeater/group) always render on
-      // their own full-width row in the field list so their nested
-      // NestedFieldGroup has horizontal room. The user's stored width
-      // is still honored at content-edit time; this override only shapes
-      // the builder visualization.
-      width:
-        f.type === "repeater" || f.type === "group"
-          ? 100
-          : parseWidth(f.admin?.width),
-      _field: f,
-    }))
-  );
+  // Packed by the ONE derivation the reorder and the drag announcements read
+  // too, so the row a reader sees is the row they move.
+  const rows = builderRows(fields);
+  const userFields = rows.flat().map(item => item._field);
 
   return (
     <div className="space-y-6 p-4">
@@ -102,7 +79,7 @@ export function BuilderFieldList({
           // sortable item IDs. Without this wrapper, useSortable never
           // registers and pointer events are silently ignored.
           <SortableContext
-            items={rows.map((_, idx) => `row-${idx}`)}
+            items={rows.map((_, idx) => builderRowId(idx))}
             strategy={verticalListSortingStrategy}
           >
             <div className="space-y-2">
@@ -120,7 +97,7 @@ export function BuilderFieldList({
                 return (
                   <div key={`row-${idx}`}>
                     <SortableRow
-                      rowId={`row-${idx}`}
+                      rowId={builderRowId(idx)}
                       fields={rowFields}
                       readOnly={readOnly}
                       onEditField={onEditField}
