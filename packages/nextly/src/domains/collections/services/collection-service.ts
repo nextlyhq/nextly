@@ -816,6 +816,25 @@ export class CollectionService extends BaseService {
     entryId: string,
     context: RequestContext
   ): Promise<void> {
+    // A delete removes the DOCUMENT: the row and every translation with it.
+    // There is no per-language delete, so a locale here reads as one and is
+    // not one — a caller asking to remove the French translation would remove
+    // the English, the German and the row, and be told nothing. Refused by
+    // name rather than ignored; the day a translation can be removed on its
+    // own, this is where it is honoured.
+    if (context.locale !== undefined) {
+      throw NextlyError.invalidInput({
+        message:
+          "deleteEntry removes every translation of a document; a locale cannot scope it.",
+        logContext: {
+          reason: "delete-entry-locale-unsupported",
+          collectionName,
+          entryId,
+          locale: context.locale,
+        },
+      });
+    }
+
     this.logger.debug("Deleting entry", { collectionName, entryId });
 
     const result = await this.entryService.deleteEntry({

@@ -122,6 +122,7 @@ import {
   type TranslationFilterState,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
 import {
   isValidLocale,
   resolveFallbackChain,
@@ -984,7 +985,7 @@ export class CollectionQueryService extends BaseService {
     fallbackLocale: string | false | undefined
   ): string[] | null {
     // `locale=all` is handled by a separate keyed-populate path — not a single-value chain.
-    if (!this.localization || locale === "all") return null;
+    if (!this.localization || locale === EVERY_TRANSLATION) return null;
     const requested = resolveRequestedLocale(this.localization, locale);
     // A per-request opt-out disables fallback: return the requested language only.
     if (fallbackLocale === false || fallbackLocale === "none") {
@@ -1051,7 +1052,8 @@ export class CollectionQueryService extends BaseService {
     preloaded?: CompanionSchema | null,
     statusFilterValues?: readonly string[] | null
   ): Promise<void> {
-    if (!this.localization || locale !== "all" || rows.length === 0) return;
+    if (!this.localization || locale !== EVERY_TRANSLATION || rows.length === 0)
+      return;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return;
@@ -1837,7 +1839,9 @@ export class CollectionQueryService extends BaseService {
         params.fallbackLocale
       );
       const companion =
-        localeChain || params.locale === "all" || params.translationStatus
+        localeChain ||
+        params.locale === EVERY_TRANSLATION ||
+        params.translationStatus
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
 
@@ -3355,7 +3359,7 @@ export class CollectionQueryService extends BaseService {
       params.fallbackLocale
     );
     const companion =
-      localeChain || params.locale === "all"
+      localeChain || params.locale === EVERY_TRANSLATION
         ? await this.fileManager.loadCompanionSchema(params.collectionName)
         : null;
     return { localeChain, companion };

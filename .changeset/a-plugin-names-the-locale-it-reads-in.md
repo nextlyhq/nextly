@@ -38,9 +38,13 @@ locale resolves to the default on a read, as it does on the wire, and is
 refused on a write, so a typo cannot overwrite the default language's
 content. `createMany` refuses any locale by name rather than filing the rows
 under the default language silently; its bulk pipeline cannot store a
-translation yet. The selectors `*` and `all` are refused outright: a value
-forwarded from a query string must never be able to publish every
-translation of a document.
+translation yet. `deleteEntry` refuses one likewise: a delete removes every
+translation with the document, and a locale on it would read as removing one.
+The selectors `*` and `all` are refused outright, from one classifier the
+core now exports as `isLocaleSelector`: a value forwarded from a query string
+must never be able to publish every translation of a document. The same
+spellings are reserved at localization configuration — a site can no longer
+name a language `all`, which could never be read or written as one.
 
 The form builder uses it for the one place a visitor could see the gap. A
 form that redirects to a picked page read that page with no locale, so a page

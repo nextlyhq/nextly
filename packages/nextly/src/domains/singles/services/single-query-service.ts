@@ -92,6 +92,7 @@ import {
   populateTranslationStatus,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
 import {
   isValidLocale,
   resolveFallbackChain,
@@ -2270,7 +2271,7 @@ export class SingleQueryService extends BaseService {
     locale: string | undefined,
     fallbackLocale: string | false | undefined
   ): string[] | null {
-    if (!this.localization || locale === "all") return null;
+    if (!this.localization || locale === EVERY_TRANSLATION) return null;
     const requested = resolveRequestedLocale(this.localization, locale);
     // Per-request disable wins — the admin editor passes this so untranslated fields show blank.
     if (fallbackLocale === false || fallbackLocale === "none") {

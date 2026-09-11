@@ -2,7 +2,7 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
-import { EVERY_LOCALE } from "../domains/i18n/locale-selector";
+import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
 import type {
@@ -120,18 +120,6 @@ export interface ServiceOpts {
    * language, say — and would be misled by the default's value standing in.
    */
   fallbackLocale?: string | false;
-}
-
-/**
- * Whether a `locale` value is one of the core's selectors rather than a code.
- *
- * Named after what they are rather than spelled inline, so the refusal above
- * and the wire vocabulary it guards against cannot drift apart: `*` is
- * `EVERY_LOCALE` in `domains/i18n/locale-selector`, and `all` is the read
- * wildcard the query service honours.
- */
-function isLocaleSelector(locale: string): boolean {
-  return locale === EVERY_LOCALE || locale === "all";
 }
 
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */

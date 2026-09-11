@@ -1,3 +1,6 @@
+import { NextlyError } from "../../../errors/nextly-error";
+import { isLocaleSelector } from "../locale-selector";
+
 import { normalizeLocalization } from "./normalize";
 import type { LocalizationConfig } from "./types";
 
@@ -37,6 +40,20 @@ export function validateLocalizationConfig(input: LocalizationConfig): void {
         `Invalid locale code '${l.code}' in localization.locales — a code must be ` +
           `non-empty and contain only letters, digits, '-' or '_' (e.g. 'en', 'en-US').`
       );
+    }
+    // The selectors are reserved. `*` already fails the pattern; `all` does
+    // not, and a site that configured it as a language could never read or
+    // write that language — every read naming it answers with every
+    // translation instead, and the plugin boundary refuses it as a selector.
+    // Refused at configuration, where the collision is a sentence rather than
+    // a page that silently answers in every language at once.
+    if (isLocaleSelector(l.code)) {
+      throw NextlyError.invalidInput({
+        message:
+          `Locale code '${l.code}' in localization.locales is reserved: it selects ` +
+          `every language rather than naming one. Choose another code.`,
+        logContext: { reason: "localization-locale-code-is-a-selector" },
+      });
     }
     // Bound the length to the companion `_locale` VARCHAR(20) so a longer code
     // can't fail or silently truncate (and then collide) on insert.

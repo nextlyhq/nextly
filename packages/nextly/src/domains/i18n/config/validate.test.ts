@@ -18,6 +18,21 @@ describe("validateLocalizationConfig", () => {
     ).toThrow(/at least one locale/i);
   });
 
+  it("rejects a selector spelled as a locale code", () => {
+    // `all` is letters, so the code pattern admits it — and a site that
+    // configured it as a language could never read or write that language:
+    // every read naming it answers with every translation instead. Reserved
+    // where the collision is a sentence rather than a page answering in every
+    // language at once. `*` fails the pattern on its own and is not asserted
+    // here; only the collision that needs a reservation is.
+    expect(() =>
+      validateLocalizationConfig({
+        locales: ["en", "all"],
+        defaultLocale: "en",
+      })
+    ).toThrow(/reserved/i);
+  });
+
   it("rejects duplicate locale codes", () => {
     expect(() =>
       validateLocalizationConfig({ locales: ["en", "en"], defaultLocale: "en" })

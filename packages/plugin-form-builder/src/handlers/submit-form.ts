@@ -8,7 +8,12 @@
  * @since 0.1.0
  */
 
-import { formAvailability, NextlyError, NO_SUCH_FORM } from "nextly";
+import {
+  formAvailability,
+  isLocaleSelector,
+  NextlyError,
+  NO_SUCH_FORM,
+} from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -770,16 +775,17 @@ interface TargetRead {
 /**
  * The language a visitor submitted in, or nothing.
  *
- * The read wildcards are not one: `all` and `*` ask the collection services
- * for every translation at once, which answers a localized URL field with one
- * value per language — a shape no URL pattern can be filled from, so a valid
- * redirect would resolve to nothing after the submission succeeded. Neither
- * is a language a form was filled in, so both read as no language named.
+ * A selector is not one: it asks the collection services for every
+ * translation at once, which answers a localized URL field with one value per
+ * language — a shape no URL pattern can be filled from — and the plugin
+ * boundary refuses it outright, which after the submission is stored degrades
+ * to no redirect. Neither is a language a form was filled in, so a selector
+ * reads as no language named. Which spellings are selectors is the core's
+ * question, asked of the core, so this cannot forward one the boundary has
+ * since learned to refuse.
  */
 function visitorLocale(locale: string | undefined): string | undefined {
-  if (locale === undefined || locale === "all" || locale === "*") {
-    return undefined;
-  }
+  if (locale === undefined || isLocaleSelector(locale)) return undefined;
   return locale;
 }
 

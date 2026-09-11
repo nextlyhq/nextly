@@ -219,6 +219,45 @@ describe("what the pair refuses", () => {
     expect(listed.data).toEqual([]);
   });
 
+  it("refuses a locale on deleteEntry by name, and deletes nothing", async () => {
+    // A delete removes the document and every translation with it. A caller
+    // naming `fr` is asking to remove ONE translation, and the only thing that
+    // could happen is the whole row going — so it must not happen. Both
+    // translations are still there afterwards, checked in both languages.
+    const services = await boot();
+    const id = await pageInTwoLanguages(services);
+
+    await expect(
+      services.collections.deleteEntry("pages", id, {
+        as: "system",
+        locale: "fr",
+      })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    const english = await services.collections.findEntryById("pages", id, {
+      as: "system",
+    });
+    expect(titleOf(english)).toBe("Page EN");
+    const german = await services.collections.findEntryById("pages", id, {
+      as: "system",
+      locale: "de",
+    });
+    expect(titleOf(german)).toBe("Seite DE");
+  });
+
+  it("still deletes the document when no locale is named", async () => {
+    // The control: the refusal is about a locale, not about deleting.
+    const services = await boot();
+    const id = await pageInTwoLanguages(services);
+    await services.collections.deleteEntry("pages", id, { as: "system" });
+    const listed = await services.collections.listEntries(
+      "pages",
+      {},
+      { as: "system" }
+    );
+    expect(listed.data).toEqual([]);
+  });
+
   it("still bulk-creates when no locale is named", async () => {
     // The control: the refusal is about a locale, not about createMany.
     const services = await boot();

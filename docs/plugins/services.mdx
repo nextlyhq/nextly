@@ -80,7 +80,14 @@ which moves every translation's lifecycle in one write, and `all`, which answers
 with one value per language — are refused here with a `400`, so a value forwarded from a
 query string can never publish every translation of a document by accident. A plugin
 that needs the every-locale sweep needs a surface that says so by name; there is none
-yet.
+yet. A route that forwards `?locale=` and wants a wildcard to read as "no language" can
+ask the core which spellings are selectors — `isLocaleSelector` from `nextly` — rather
+than keep a list of its own. The same spellings are reserved at configuration, so a site
+cannot name a language `all`.
+
+`deleteEntry` refuses a locale too, by name: a delete removes the document and every
+translation with it, and there is no per-language delete — so `{ locale: "fr" }` would
+read as "remove the French translation" and remove the English, the German and the row.
 
 With that, the pair is spelled exactly as it is on the request context and on the wire,
 and a route can pass through what it was given: a wrong code shows the default on a
