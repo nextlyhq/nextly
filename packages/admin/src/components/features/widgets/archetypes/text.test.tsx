@@ -98,4 +98,35 @@ describe("the text archetype", () => {
     expect(link?.getAttribute("target")).toBe("_blank");
     expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
   });
+
+  it("declines a scheme hidden behind markdown escaping, on both spellings", async () => {
+    // 🔴 The library unescapes the capture before it creates the node, so
+    // `javascript\:` and `javascript&#58;` both reached the DOM as
+    // `javascript:` past a guard that read the raw capture. Asserted through
+    // Lexical itself, so a change in what it unescapes is caught here rather
+    // than mirrored blindly.
+    const root = await drawn(
+      "Not [this](javascript\\:alert%281%29) nor [that](javascript&#58;alert%281%29)."
+    );
+    expect(root.querySelectorAll("a")).toHaveLength(0);
+  });
+
+  it("is document content, not a read-only form control", async () => {
+    // 🔴 `ContentEditable` names itself `role="textbox"` and, when the editor
+    // is not editable, `aria-readonly` -- so a card of prose was announced as
+    // a disabled field. A plain element carries neither.
+    const root = await drawn("Plain prose.");
+    expect(root.getAttribute("role")).toBeNull();
+    expect(root.getAttribute("aria-readonly")).toBeNull();
+    expect(root.getAttribute("contenteditable")).not.toBe("true");
+  });
+
+  it("marks the root so the stylesheet can announce a new tab on its links", async () => {
+    // The notice itself is a pseudo-element in `globals.css`, keyed on this
+    // attribute and the `target` the renderer sets; jsdom draws no
+    // stylesheet, so what can be asserted here is that both hooks exist.
+    const root = await drawn("Read [the docs](https://nextlyhq.com/docs).");
+    expect(root.hasAttribute("data-widget-text")).toBe(true);
+    expect(root.querySelector('a[target="_blank"]')).not.toBeNull();
+  });
 });

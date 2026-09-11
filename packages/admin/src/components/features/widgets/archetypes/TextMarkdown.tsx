@@ -9,6 +9,13 @@
  * and no HTML string anywhere between the markdown and the DOM. Loaded lazily
  * by `textBody`, so a dashboard with no text card pays nothing for it.
  *
+ * The root is a plain element handed to the editor, not `ContentEditable`.
+ * That component is an editor's surface: it takes `role="textbox"` and, when
+ * the editor is not editable, `aria-readonly` -- so a card of prose read as a
+ * disabled form control, and a screen reader moving through headings and links
+ * met a textbox instead of a document. Prose in a card is document content,
+ * and a plain element says so by saying nothing.
+ *
  * Keyed on the content by its caller: a composer reads its initial state once,
  * and a card whose declaration changed under a plugin reload should redraw
  * rather than keep the prose it first mounted with.
@@ -18,10 +25,8 @@
 
 import { $convertFromMarkdownString } from "@lexical/markdown";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
-import { ContentEditable } from "@lexical/react/LexicalContentEditable";
-import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
-import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
-import { useMemo } from "react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { useCallback, useMemo } from "react";
 
 import { RICH_TEXT_NODES } from "@admin/components/features/entries/fields/special/rich-text-kit";
 
@@ -33,6 +38,31 @@ import {
 
 export interface TextMarkdownProps {
   content: string;
+}
+
+/**
+ * The element the editor draws into.
+ *
+ * `setRootElement` is the whole of what `ContentEditable` does for a
+ * non-editable editor, minus the textbox semantics that do not belong on
+ * prose. Passing `null` on unmount releases the editor's DOM listeners.
+ */
+function ProseRoot() {
+  const [editor] = useLexicalComposerContext();
+  const attach = useCallback(
+    (element: HTMLDivElement | null) => {
+      editor.setRootElement(element);
+    },
+    [editor]
+  );
+  return (
+    <div
+      ref={attach}
+      data-testid="widget-text"
+      data-widget-text=""
+      className="text-sm text-foreground"
+    />
+  );
 }
 
 export function TextMarkdown({ content }: TextMarkdownProps) {
@@ -58,16 +88,7 @@ export function TextMarkdown({ content }: TextMarkdownProps) {
 
   return (
     <LexicalComposer initialConfig={initialConfig}>
-      <RichTextPlugin
-        contentEditable={
-          <ContentEditable
-            data-testid="widget-text"
-            className="text-sm text-foreground focus:outline-none"
-          />
-        }
-        placeholder={null}
-        ErrorBoundary={LexicalErrorBoundary}
-      />
+      <ProseRoot />
     </LexicalComposer>
   );
 }

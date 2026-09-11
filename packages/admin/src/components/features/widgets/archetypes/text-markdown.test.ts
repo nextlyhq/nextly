@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { externalHref, safeHref } from "./text-markdown";
+import { destinationOf, externalHref, safeHref } from "./text-markdown";
 
 describe("which hrefs may become links", () => {
   it("allows the web, mail, phone and paths on this site", () => {
@@ -54,6 +54,26 @@ describe("which hrefs may become links", () => {
       expect(safeHref(href), JSON.stringify(href)).toBe(false);
     }
   });
+
+  it("judges the destination AFTER the markdown unescaping the library applies", () => {
+    // 🔴 `@lexical/markdown` unescapes the capture before creating the node:
+    // a backslash before punctuation is dropped and a decimal entity is
+    // decoded. Judged on the raw capture, neither spelling shows a scheme,
+    // and both reach the DOM as `javascript:`.
+    expect(destinationOf("javascript\\:alert%281%29")).toBe(
+      "javascript:alert%281%29"
+    );
+    expect(destinationOf("javascript&#58;alert%281%29")).toBe(
+      "javascript:alert%281%29"
+    );
+    for (const href of [
+      "javascript\\:alert%281%29",
+      "javascript&#58;alert%281%29",
+      "java\u0001script&#58;alert%281%29",
+    ]) {
+      expect(safeHref(href), JSON.stringify(href)).toBe(false);
+    }
+  });
 });
 
 describe("which links leave this site", () => {
@@ -62,5 +82,13 @@ describe("which links leave this site", () => {
     expect(externalHref("//cdn.example.com/x")).toBe(true);
     expect(externalHref("/admin")).toBe(false);
     expect(externalHref("mailto:a@b.c")).toBe(false);
+  });
+
+  it("classifies the destination the browser will follow, not the raw string", () => {
+    // 🔴 An allowed address behind a leading control character is admitted by
+    // the guard and leaves the site when clicked; classified on the raw
+    // string it received no target and no `noopener`.
+    expect(externalHref("\u0001https://example.com")).toBe(true);
+    expect(externalHref(" https://example.com")).toBe(true);
   });
 });

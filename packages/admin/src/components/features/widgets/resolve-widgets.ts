@@ -374,6 +374,12 @@ function mergeCollision(
     // the card loads forever. Cells travel only with the archetype that draws
     // them.
     cells: registration.archetype === "stats" ? registration.cells : undefined,
+    // The same rule for prose: it travels only with the archetype that draws
+    // it, and both channels passed the non-blank check at boot, so a text
+    // registration colliding with a text contribution keeps its prose rather
+    // than drawing an empty card.
+    content:
+      registration.archetype === "text" ? registration.content : undefined,
     // Both channels can state these, and the registry wins where it does --
     // the rule `defaultSize` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped
