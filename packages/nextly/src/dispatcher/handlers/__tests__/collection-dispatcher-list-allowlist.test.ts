@@ -61,9 +61,14 @@ describe("listCollections resolves its allowlist before querying", () => {
 
     const passed = listCollections.mock.calls[0][0];
     expect([...passed.slugAllowlist].sort()).toEqual(["pages", "posts"]);
-    // Asked about THIS caller, so a handler passing a constant fails here
-    // rather than merely passing something list-shaped.
-    expect(allowlistFor).toHaveBeenCalledWith("u1");
+    // Asked about THIS caller, in the shape the shared read decision takes,
+    // and about the collections registry -- so a handler passing a constant,
+    // or a bare id, or the other kind fails here rather than merely passing
+    // something list-shaped.
+    expect(allowlistFor).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "u1", authMethod: "session" }),
+      "collection"
+    );
   });
 
   it("passes NO allowlist for a super admin", async () => {

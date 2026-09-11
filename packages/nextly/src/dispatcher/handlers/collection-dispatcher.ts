@@ -113,6 +113,7 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { readAccessCallerFromParams } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
@@ -412,15 +413,17 @@ const COLLECTIONS_METHODS: Record<
     // reading that stops at the first page, and everything past it is
     // unreachable. The singles dispatcher resolves its allowlist the same way.
     execute: async (svc, p) => {
-      const userId = p._authenticatedUserId
-        ? String(p._authenticatedUserId)
-        : undefined;
-
-      // The SHARED resolver, which the singles listing asks too. `undefined`
-      // means no filter — an unauthenticated caller, gated at the route layer,
-      // or a super admin. An empty list means nothing is visible, which the
-      // registry short-circuits to a zero-row, zero-total answer.
-      const slugAllowlist = await readableSlugAllowlist(userId);
+      // The SHARED resolver, which the singles listing asks too, handed the
+      // SAME caller every other read decision takes. `undefined` means no
+      // filter — an unauthenticated caller, gated at the route layer, or a
+      // session super admin. An empty list means nothing is visible, which
+      // the registry short-circuits to a zero-row, zero-total answer.
+      const slugAllowlist = await readableSlugAllowlist(
+        p._authenticatedUserId
+          ? readAccessCallerFromParams(p, userFromParams(p))
+          : undefined,
+        "collection"
+      );
 
       const result = await svc.listCollections({
         page: toNumber(p.page),

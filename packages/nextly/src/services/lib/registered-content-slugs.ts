@@ -23,7 +23,7 @@
 import { container } from "../../di/container";
 
 /** A registry's slugs, and whether they are all of them. */
-interface RegistryRead {
+export interface RegistryRead {
   slugs: string[];
   reachable: boolean;
 }
@@ -81,6 +81,19 @@ function singleSlugs(): Promise<RegistryRead> {
   return registryRead<{
     getAllSingles: () => Promise<Array<{ slug: string }>>;
   }>("singleRegistryService", registry => registry.getAllSingles());
+}
+
+/**
+ * The slugs of ONE kind, with whether that registry answered.
+ *
+ * For a caller that lists a single kind and must fail closed only when the
+ * registry it lists from is the one that could not be reached: a collections
+ * outage is not a reason to hide every single.
+ */
+export function registeredSlugsOfKind(
+  kind: "collection" | "single"
+): Promise<RegistryRead> {
+  return kind === "single" ? singleSlugs() : collectionSlugs();
 }
 
 /**

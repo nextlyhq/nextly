@@ -21,10 +21,7 @@ import {
   tryResolveCurrentFields,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
-import {
-  canReadEntity,
-  type ReadAccessCaller,
-} from "../../auth/entity-read-access";
+import { canReadEntity } from "../../auth/entity-read-access";
 import type { RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
@@ -51,6 +48,8 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
 import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
+
+import { readAccessCallerFromParams } from "./read-access-caller";
 
 /** Page size when the caller does not ask for one. */
 const DEFAULT_LIMIT = 25;
@@ -333,38 +332,6 @@ export async function getVersionDiffForDocument(
     modifiedOnly: args.modifiedOnly,
     authenticatedScope: args.authenticatedScope,
   });
-}
-
-/**
- * The resolved identity, as the shared read decision needs it.
- *
- * An API key's own scoped grants arrive on the params; a session caller has
- * none there, and `canReadEntity` resolves theirs from the database.
- */
-function readAccessCallerFromParams(
-  p: Params,
-  user: UserContext
-): ReadAccessCaller {
-  const isApiKey = p._authenticatedActorType === "apiKey";
-
-  let permissions: string[] = [];
-  if (isApiKey && p._authenticatedPermissions) {
-    try {
-      const parsed: unknown = JSON.parse(String(p._authenticatedPermissions));
-      if (Array.isArray(parsed)) permissions = parsed as string[];
-    } catch {
-      // A corrupt value must not read as a broader grant than the key holds;
-      // an empty list denies, which is the safe direction.
-      permissions = [];
-    }
-  }
-
-  return {
-    userId: user.id,
-    authMethod: isApiKey ? "api-key" : "session",
-    permissions,
-    roles: user.roles ?? [],
-  };
 }
 
 /**
