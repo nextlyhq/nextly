@@ -132,17 +132,22 @@ const context7Finding = (check, message) => ({
  * untracked file, `null` the unreadable one.
  *
  * Last, the exclusions are held to the shapes their readers understand. Context7 matches
- * `excludeFiles` by filename, so an entry with a path in it excludes nothing; and the
- * index verifier, `check-context7-index`, reads `excludeFolders` as plain paths, so a
- * glob there is a rule it could never witness.
+ * `excludeFiles` by filename, so an entry that is not one, a path or a pattern, excludes
+ * nothing; and the index verifier, `check-context7-index`, reads `excludeFolders` as
+ * plain paths, so a pattern there is a rule it could never witness. What is accepted is
+ * named rather than what is refused: a list of the metacharacters a pattern may use has
+ * no end, and the names in this repository are plain.
  */
 const listOf = value =>
   Array.isArray(value) ? value.filter(entry => typeof entry === "string") : [];
-// Either separator: Context7 sees a filename, git supplies POSIX paths, and a
-// backslash satisfies neither.
-const pathEntries = value => listOf(value).filter(entry => /[\\/]/.test(entry));
-const patternEntries = value =>
-  listOf(value).filter(entry => /[*?[\\]|^\.\/|\/$/.test(entry));
+/** A filename as Context7 matches one, and as git spells one segment of a path. */
+const LITERAL_NAME = /^[A-Za-z0-9._-]+$/;
+const isLiteralName = entry =>
+  LITERAL_NAME.test(entry) && entry !== "." && entry !== "..";
+/** A path as git supplies one: literal names joined by `/`. */
+const isLiteralPath = entry => entry.split("/").every(isLiteralName);
+const notFilenames = value => listOf(value).filter(entry => !isLiteralName(entry));
+const notPaths = value => listOf(value).filter(entry => !isLiteralPath(entry));
 
 const CONTEXT7_RULES = [
   [
@@ -190,19 +195,19 @@ const CONTEXT7_RULES = [
       ),
   ],
   [
-    config => pathEntries(config.excludeFiles).length > 0,
+    config => notFilenames(config.excludeFiles).length > 0,
     config =>
       context7Finding(
         "context7-exclusion",
-        `excludeFiles names ${pathEntries(config.excludeFiles).join(", ")} with a path; Context7 matches the field by filename, so an entry with a slash excludes nothing`
+        `excludeFiles names ${notFilenames(config.excludeFiles).join(", ")}, which is not a filename; Context7 matches the field by filename, so a path or a pattern excludes nothing`
       ),
   ],
   [
-    config => patternEntries(config.excludeFolders).length > 0,
+    config => notPaths(config.excludeFolders).length > 0,
     config =>
       context7Finding(
         "context7-exclusion",
-        `excludeFolders names ${patternEntries(config.excludeFolders).join(", ")} as a pattern; check-context7-index reads plain paths, docs/archive, and cannot witness a pattern`
+        `excludeFolders names ${notPaths(config.excludeFolders).join(", ")}, which is not a plain path; check-context7-index reads plain paths, docs/archive, and cannot witness a pattern`
       ),
   ],
 ];
@@ -535,8 +540,26 @@ const HEX_REF = /^[0-9a-f]{7,40}$/i;
 /** The syntax-tree nodes that carry a destination: a link, an image, a reference definition. */
 const DESTINATION_NODES = new Set(["link", "image", "definition"]);
 
+/**
+ * The JSX a page may write a destination into: an `<img>` is an image and an `<a>` a link,
+ * each by the attribute that carries it. Only a literal string is read; an expression is a
+ * value the page computes, which a scan of the source cannot know.
+ */
+const JSX_DESTINATIONS = { img: ["src", "image"], a: ["href", "link"] };
+const JSX_NODES = new Set(["mdxJsxFlowElement", "mdxJsxTextElement"]);
+
+/** The destination a JSX element carries, as `{ url, type }`, or `null`. */
+function jsxDestination(node) {
+  if (!JSX_NODES.has(node.type) || !(node.name in JSX_DESTINATIONS)) return null;
+  const [attribute, type] = JSX_DESTINATIONS[node.name];
+  const found = (node.attributes ?? []).find(
+    candidate => candidate.type === "mdxJsxAttribute" && candidate.name === attribute
+  );
+  return typeof found?.value === "string" ? { url: found.value, type } : null;
+}
+
 function hasDestination(node) {
-  return DESTINATION_NODES.has(node.type);
+  return DESTINATION_NODES.has(node.type) || jsxDestination(node) !== null;
 }
 
 /**
@@ -574,6 +597,8 @@ function nodesOf(node) {
  * the same patterns had to be taught not to look. A `link` node is a rendered link and a
  * `code` node is not, by construction. An `image` is a destination too: the patterns saw
  * `![d](./x.png)` only because it shares `](` with a link, and the tree names it outright.
+ * So is an `<img src>` or an `<a href>` written as JSX, which compiles and renders
+ * whatever its attribute says; a literal one is read, an expression is left to the page.
  *
  * Frontmatter is taken off first, the way the site's loader takes it off, or the compiler
  * would read the YAML as Markdown. A block that is not YAML is left in and read as
@@ -588,9 +613,10 @@ async function linkDestinations(text, mdx) {
     const nodes = nodesOf(tree);
     const imageIds = imageReferenceIds(nodes);
     for (const node of nodes.filter(hasDestination)) {
+      const jsx = jsxDestination(node);
       links.push({
-        url: node.url,
-        type: destinationKind(node, imageIds),
+        url: jsx ? jsx.url : node.url,
+        type: jsx ? jsx.type : destinationKind(node, imageIds),
         line: (node.position?.start.line ?? 0) + skipped,
       });
     }

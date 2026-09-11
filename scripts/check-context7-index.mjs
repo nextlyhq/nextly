@@ -83,13 +83,14 @@ function isHidden(path) {
   return path.split("/").some(segment => segment.startsWith("."));
 }
 
-function isInside(path, folders) {
-  return folders.some(folder => path.startsWith(`${folder}/`));
-}
-
-/** The listed folder a path sits under. */
+/** The listed folder a path sits under, or none. */
 function folderOf(path, folders) {
   return folders.find(folder => path.startsWith(`${folder}/`));
+}
+
+/** Whether a path sits under one of the folders: the same lookup, read as a yes or no. */
+function isInside(path, folders) {
+  return folderOf(path, folders) !== undefined;
 }
 
 /**

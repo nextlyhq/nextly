@@ -312,7 +312,7 @@ describe("context7", () => {
       projectTitle: "Nextly",
       description: SENTENCE,
       folders: ["docs"],
-      excludeFiles: ["AGENTS.md", "docs/internal/notes.md", "docs\\internal\\draft.md"],
+      excludeFiles: ["AGENTS.md", "docs/internal/notes.md", "docs\\internal\\draft.md", "*.md"],
     });
     const findings = await findingsFor({
       "packages/nextly/package.json": core(SENTENCE),
@@ -320,14 +320,23 @@ describe("context7", () => {
     });
     const exclusion = findings.filter(f => f.check === "context7-exclusion");
     expect(exclusion).toHaveLength(1);
-    expect(exclusion[0].message).toContain("docs/internal/notes.md, docs\\internal\\draft.md");
+    expect(exclusion[0].message).toContain("docs/internal/notes.md, docs\\internal\\draft.md, *.md");
     expect(exclusion[0].message).not.toContain("AGENTS.md");
   });
 
   it("fires on an excludeFolders pattern, which the index verifier cannot witness", async () => {
-    // A glob, a root anchor, a trailing slash, and a backslash path, which
-    // git's POSIX paths never match.
-    for (const entry of ["**/internal", "./build", "docs/old/", "docs\\internal"]) {
+    // Named by what is accepted, not by the metacharacters refused: a glob, a
+    // brace set, an extglob, a root anchor, a trailing slash, a parent segment,
+    // and a backslash path, which git's POSIX paths never match.
+    for (const entry of [
+      "**/internal",
+      "docs/{archive,legacy}",
+      "docs/@(archive|legacy)",
+      "./build",
+      "docs/old/",
+      "docs/../secret",
+      "docs\\internal",
+    ]) {
       const withPattern = JSON.stringify({
         projectTitle: "Nextly",
         description: SENTENCE,
@@ -340,7 +349,7 @@ describe("context7", () => {
       });
       const exclusion = findings.filter(f => f.check === "context7-exclusion");
       expect(exclusion.map(f => f.message), entry).toEqual([
-        expect.stringContaining(`excludeFolders names ${entry} as a pattern`),
+        expect.stringContaining(`excludeFolders names ${entry}, which is not a plain path`),
       ]);
     }
   });
@@ -1216,6 +1225,25 @@ describe("internal-docs-link", () => {
       "embeds diagram.png as a file path",
       "links to guide.mdx as a file path",
     ]);
+  });
+
+  it("reads a destination written as JSX, an <img src> as an image and an <a href> as a link", async () => {
+    // Both compile and render whatever the attribute says, so a file path in
+    // either is as broken as in Markdown. The expression-valued src is the
+    // control that only a literal is read, and the absolute one that an image
+    // by URL passes.
+    const page = [
+      'export const path = "./computed.png";',
+      "",
+      '<img src="./missing.png" alt="d" /> and <a href="../guide.mdx">guide</a>',
+      "",
+      '<img src={path} alt="e" /> <img src="/images/x.png" alt="ok" />',
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => `${f.line} ${f.message.split(";")[0]}`)
+    ).toEqual(["3 embeds ./missing.png as a file path", "3 links to ../guide.mdx as a file path"]);
   });
 
   it("keeps reading links past frontmatter that is not YAML, in a README as in a page", async () => {
