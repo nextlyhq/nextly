@@ -323,6 +323,7 @@ export type {
   PaginationMeta,
   PluginRoute,
   PluginRouteCaller,
+  PluginRouteIdentity,
   PluginRouteContext,
   PluginRouteHandler,
   PluginRouteMount,
