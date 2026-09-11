@@ -584,6 +584,10 @@ export class PermissionService extends BaseService {
           // fails here rather than at insert.
           throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
         }
+        // The row's meaning changed, so every answer copied from it is stale.
+        // Only when something was actually patched: an ensure that found the
+        // row already correct has written nothing.
+        await invalidateAllPermissionCaches();
       }
       return { id: String(existing.id), created: false };
     }
@@ -615,6 +619,10 @@ export class PermissionService extends BaseService {
       // raw driver errors first so the kind is mapped correctly.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
+    // A row the catalogue did not have before. Stale in the widening direction
+    // rather than the dangerous one, but a super-admin's key copies the
+    // catalogue and would not see it for the rest of its TTL.
+    await invalidateAllPermissionCaches();
     return { id, created: true };
   }
 

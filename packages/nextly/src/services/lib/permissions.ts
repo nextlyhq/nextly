@@ -146,6 +146,12 @@ class PermissionChecker {
     }
 
     const key = `${userId}|${action}|${resource}`;
+    // Captured before the reads below; see `resolvedUnderCurrentRevision`. Both
+    // tiers written at the end of this method are subject to the same race, and
+    // the database tier is the worse of the two: it is shared across instances
+    // and its entries live for a day, so a stale decision written after a
+    // tombstone outlives everything else here.
+    const resolvedUnder = rbacRevisionCounter;
 
     // Skip EVERY cache tier when a transaction executor is supplied. Such a check
     // reads through the caller's still-open (uncommitted) transaction, so its
@@ -216,7 +222,8 @@ class PermissionChecker {
         // Cache tiers are populated only for pooled (committed-view) checks; an
         // executor-backed result must not leak into them (see the top-of-method
         // skip). The DB write is also a pooled query the transaction would block on.
-        if (!executor) {
+        // And not at all if these rows were invalidated while the read ran.
+        if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
           this.memo.set(key, false);
           if (this.cacheService) {
             void this.cacheService.setCachedPermission(
@@ -240,14 +247,16 @@ class PermissionChecker {
       // Populate the cache tiers only for pooled checks. An executor-backed
       // result reflects the caller's uncommitted transaction and must not be
       // promoted into the process-wide caches (see the top-of-method skip).
-      if (!executor) {
+      const cacheable =
+        !executor && resolvedUnderCurrentRevision(resolvedUnder);
+      if (cacheable) {
         this.memo.set(key, allowed);
         setCacheEntry(key, allowed, userId, Array.from(roleIds));
       }
 
       // Async write to DB cache (don't block response). Skipped under a
       // transaction executor for the same pooled-query reason as the read above.
-      if (this.cacheService && !executor) {
+      if (this.cacheService && cacheable) {
         void this.cacheService.setCachedPermission(
           userId,
           action,
@@ -601,6 +610,25 @@ export function rbacRevision(): number {
 }
 
 /**
+ * May a result computed under `revision` still be CACHED?
+ *
+ * Every answer here is read asynchronously and stored afterwards, so an
+ * invalidation can land in between: the rows were read under the old revision
+ * and the write would file them under the new one, putting a decision the
+ * change was meant to retire back into a cache that had just been cleared.
+ *
+ * Clearing the caches is therefore not enough on its own, and this is the other
+ * half. Stated once and asked at every cache write rather than solved per
+ * cache, because it is one property of reading asynchronously and caching the
+ * result, and a per-cache answer is a list that the next cache is left off.
+ *
+ * The failing direction is a missed cache write, which costs one re-resolution.
+ */
+export function resolvedUnderCurrentRevision(revision: number): boolean {
+  return revision === rbacRevisionCounter;
+}
+
+/**
  * The super-admin answer, cached per user.
  *
  * Declared here rather than beside `isSuperAdmin` because
@@ -784,6 +812,14 @@ export async function isSuperAdmin(
 ): Promise<boolean> {
   if (!userId) return false;
 
+  // Before the reads below, never after. An invalidation landing while they are
+  // in flight would otherwise be undone by the write at the end of this
+  // function, which repopulates the answer that was just cleared — and a key's
+  // grants resolved from it would then be cached under the NEW revision,
+  // putting the catalogue back for a full five minutes in the hands of somebody
+  // who had just lost the role.
+  const resolvedUnder = rbacRevisionCounter;
+
   // Check in-memory cache (only for pooled, committed-view checks).
   if (!executor) {
     const cached = superAdminCache.get(userId);
@@ -797,7 +833,7 @@ export async function isSuperAdmin(
     const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
     if (roleIds.size === 0) {
-      if (!executor) {
+      if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
         superAdminCache.set(userId, {
           value: false,
           expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
@@ -825,7 +861,8 @@ export async function isSuperAdmin(
 
     // Populate the process-wide cache only for pooled checks; an executor-backed
     // result reflects the caller's uncommitted transaction (see the param note).
-    if (!executor) {
+    // And only if nothing invalidated these rows while the reads were running.
+    if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
       superAdminCache.set(userId, {
         value: result,
         expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,

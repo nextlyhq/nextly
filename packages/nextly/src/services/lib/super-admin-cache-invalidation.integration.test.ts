@@ -386,6 +386,48 @@ describe("an API key's grants are retired when the roles behind them change", ()
     ).toContain("read-extra");
   });
 
+  it("does not let an in-flight super-admin lookup repopulate the answer", async () => {
+    // The same race one level IN, and it defeats the outer fix on its own.
+    // `isSuperAdmin` awaits two queries and then writes its cache. A lookup
+    // started before a demotion completes after it, putting `true` back into
+    // the map the invalidation had just cleared; the next key request then
+    // correctly rejects the outer entry, immediately consumes that stale inner
+    // one, and caches catalogue-wide grants under the NEW revision for another
+    // five minutes.
+    await seedDeputy();
+    expect(await isSuperAdmin(OWNER)).toBe(true);
+
+    // A lookup in flight across the revocation.
+    const inFlight = isSuperAdmin(`${OWNER}-cold`);
+    await revokeInheritance();
+    await invalidatePermissionCache({ roleId: DEPUTY });
+    await inFlight;
+
+    // The owner is no longer a super-admin, so nothing may answer otherwise.
+    expect(await isSuperAdmin(OWNER)).toBe(false);
+    expect(
+      await grants(),
+      "the key took the catalogue branch, so a stale answer was served"
+    ).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("does not cache a super-admin answer resolved before an invalidation", async () => {
+    // Directly on the map this time, and on the OWNER's own entry, which is the
+    // one the case above depends on. The lookup is started, the caches are
+    // invalidated while it runs, and the entry it would have written must not
+    // be there: a later read has to go back to the rows.
+    await seedDeputy();
+    const inFlight = isSuperAdmin(OWNER);
+    await invalidateAllPermissionCaches();
+    expect(await inFlight, "it still answers from the rows it read").toBe(true);
+
+    await revokeInheritance();
+    expect(
+      await isSuperAdmin(OWNER),
+      "a cached true would answer here without reading anything"
+    ).toBe(false);
+  });
+
   it("serves the cache when nothing raced it, which is what makes that a race", async () => {
     // The control. If every read re-resolved, the case above would pass on an
     // implementation that caches nothing at all.

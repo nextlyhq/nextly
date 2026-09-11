@@ -7,6 +7,7 @@ import type { CollectedPermission } from "../../../plugins/permissions/collect-p
 import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
+import { invalidateAllPermissionCaches } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
@@ -619,6 +620,11 @@ export class PermissionSeedService extends BaseService {
             sql`LOWER(${permissions.resource}) = LOWER(${resource})`
           )
         );
+      // Clearing `orphaned_at` returns the row to the catalogue, which is what
+      // a super-admin's key copies. Unconditional here because this method only
+      // runs when it has a row to repair, and the write either happened or
+      // threw into the branch below.
+      await invalidateAllPermissionCaches();
     } catch {
       // The table may predate the column on a partially migrated database. Nothing is written and
       // the permission keeps whatever it had, which is the state this repair found it in.
@@ -786,6 +792,11 @@ export class PermissionSeedService extends BaseService {
       result.errors++;
     }
 
+    // `orphaned_at` decides whether a row is IN the catalogue, so marking one
+    // takes it out of a super-admin's key grants and clearing the mark puts it
+    // back. Only when something was actually written.
+    if (result.created > 0) await invalidateAllPermissionCaches();
+
     return result;
   }
 
@@ -927,6 +938,11 @@ export class PermissionSeedService extends BaseService {
         this.logger.info?.(
           `Deleted ${result.created} permission(s) for resource "${resourceSlug}"`
         );
+        // Rows that no longer exist must not survive in an answer copied from
+        // them: a super-admin's API key holds the catalogue by copy, and an
+        // ordinary check's decision was cached from the grants these rows
+        // carried. Only when something was actually deleted.
+        await invalidateAllPermissionCaches();
       }
     } catch (error) {
       this.logger.warn(
@@ -1017,6 +1033,10 @@ export class PermissionSeedService extends BaseService {
       }
     }
 
+    // The stored slug is what a coarse grant check and a key's grants compare
+    // against, so a repaired one makes every copy of the old spelling wrong.
+    if (repaired > 0) await invalidateAllPermissionCaches();
+
     return repaired;
   }
 
@@ -1091,6 +1111,8 @@ export class PermissionSeedService extends BaseService {
       }
 
       if (result.created > 0) {
+        // Same reason as the resource delete above.
+        await invalidateAllPermissionCaches();
         this.logger.info?.(
           `Cleaned up ${result.created} orphaned permission(s)`
         );

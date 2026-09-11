@@ -45,11 +45,17 @@ the same caller's own request passed it, and a negative rule granted what it
 was written to refuse. The roles are resolved and the caller is built by the
 one constructor every other authenticated path uses.
 
-Editing or deleting a permission now retires the cached answers derived from
-it. `PermissionService`'s update and delete called no invalidation at all, and
-neither of the existing ones can express the change: a permission row belongs to
-no user and no role. So a role-based key kept a renamed slug and a Super Admin's
-key kept a deleted grant until their entries aged out.
+Changing a permission row now retires the cached answers derived from it. None
+of the nine methods that write those rows invalidated anything, and neither of
+the existing invalidations can express the change: a permission row belongs to
+no user and no role. So a role-based key kept a renamed slug, and a Super
+Admin's key kept a deleted grant and missed a new one, until their entries aged
+out.
+
+A cached answer resolved before an invalidation is no longer written after it.
+Every cache here is filled from an asynchronous read, so a lookup that began
+before a role changed could complete afterwards and put the old answer back into
+a cache that had just been cleared.
 
 A plugin call whose caller's roles could not be read is refused rather than run
 as a caller with none, with a typed error rather than the driver's own. The resolver behind it degraded a failed query to an
