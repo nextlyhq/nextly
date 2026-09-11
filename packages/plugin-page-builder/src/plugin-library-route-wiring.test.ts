@@ -88,4 +88,27 @@ describe("the component library route is contributed beside it", () => {
     });
     expect(renamed).toBe("read-host_components");
   });
+
+  it("gates on the collection the plugin was told components live in, when it was told one", () => {
+    // The readiness notice already follows `componentReadiness.collection`;
+    // the editor's read follows the same statement, so a host that keeps its
+    // definitions in a collection of its own says so once. A store the plugin
+    // does not own resolves to its own name, which is what the scope helper
+    // does for a slug the plugin never contributed.
+    const routes =
+      pageBuilder({
+        componentReadiness: { collection: "site_components", field: "blocks" },
+      }).contributes?.routes ?? [];
+    const required = routes.find(
+      route => route.path === COMPONENT_LIBRARY_ROUTE_PATH
+    )?.requiredPermission;
+
+    const slug = (required as (scope: PermissionScope) => string)({
+      plugin: "@nextlyhq/plugin-page-builder",
+      collection: (declared, action) =>
+        `${action}-${declared === COMPONENTS_SLUG ? "host_components" : declared}`,
+      single: (declared, action) => `${action}-${declared}`,
+    });
+    expect(slug).toBe("read-site_components");
+  });
 });
