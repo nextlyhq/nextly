@@ -544,15 +544,33 @@ describe("what the editor reads before anyone asks for it", () => {
 
     openEditor();
 
-    const render = seen.canvas?.render as
-      | { definitions?: Map<string, unknown> }
-      | undefined;
-    expect(render?.definitions?.get("header")).toBe(definition);
-    expect(seen.insertPanel?.componentDefinitions).toBe(render?.definitions);
-    expect(seen.insertPanel?.components).toBe(items);
-    expect(seen.insertPanel?.truncated).toEqual({
-      patterns: false,
-      components: true,
-    });
+    // Population first, once: every recorder must have rendered, or the
+    // identity assertions below would be comparing `undefined` to `undefined`.
+    const canvas = recorded("canvas");
+    const panel = recorded("insertPanel");
+    const inspector = recorded("inspector");
+    const definitions = (canvas.render as { definitions: Map<string, unknown> })
+      .definitions;
+    expect(definitions.get("header")).toBe(definition);
+    expect(panel.componentDefinitions).toBe(definitions);
+    expect(panel.components).toBe(items);
+    expect(panel.truncated).toEqual({ patterns: false, components: true });
+    // And the inspector reads the SAME map, so a selected instance's rows come
+    // from the document the canvas draws, with the rows that carry its title.
+    const library = inspector.componentLibrary as {
+      definitions: unknown;
+      components: unknown;
+    };
+    expect(library.definitions).toBe(definitions);
+    expect(library.components).toBe(items);
   });
 });
+
+/** A recorder's props, asserted present so a missing render cannot read as equal. */
+function recorded(
+  key: "canvas" | "insertPanel" | "inspector"
+): Record<string, unknown> {
+  const props = seen[key];
+  if (props === undefined) throw new Error(`the ${key} never rendered`);
+  return props;
+}

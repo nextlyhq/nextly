@@ -2686,6 +2686,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // inferring one from the document. Two refs would let the panel
             // read a canvas that is not the one on screen.
             canvasRoot={canvasElement}
+            // The SAME read the canvas resolves against, for the reason the
+            // ref is the same ref: a selected instance's rows are read from the
+            // very document the page is drawn from, and titled from the row
+            // the same read returned.
+            componentLibrary={componentLibrary}
             styleState={styleStateBinding}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
