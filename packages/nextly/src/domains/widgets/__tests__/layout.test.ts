@@ -476,22 +476,40 @@ describe("the size ceiling", () => {
 });
 
 describe("the visibility token", () => {
-  it("depends on the set, not the order it was registered in", () => {
+  it("depends on the sets, not the order they were registered in", () => {
     // A hot reload re-registers the same widgets in a different order. If that
     // moved the token, every write would be refused with nothing changed.
-    expect(visibilityToken(["b", "a"])).toBe(visibilityToken(["a", "b"]));
+    expect(visibilityToken(["b", "a"], ["y", "x"])).toBe(
+      visibilityToken(["a", "b"], ["x", "y"])
+    );
   });
 
   it("moves when a widget becomes visible or stops being", () => {
-    const before = visibilityToken(["core/a"]);
-    expect(visibilityToken(["core/a", "core/gated"])).not.toBe(before);
-    expect(visibilityToken([])).not.toBe(before);
+    const before = visibilityToken(["core/a"], []);
+    expect(visibilityToken(["core/a", "core/gated"], [])).not.toBe(before);
+    expect(visibilityToken([], [])).not.toBe(before);
+  });
+
+  it("moves when a shortcut's gate is gained or lost, with the widgets unchanged", () => {
+    // The workspace payload withholds the shortcuts a reader may not see, and
+    // the token is what tells the admin to read it again.
+    const before = visibilityToken(["core/tools"], []);
+    expect(visibilityToken(["core/tools"], ["publish-notes"])).not.toBe(before);
+  });
+
+  it("cannot mistake a held gate for a widget id", () => {
+    expect(visibilityToken(["publish-notes"], [])).not.toBe(
+      visibilityToken([], ["publish-notes"])
+    );
   });
 
   it("does not carry the ids it was built from", () => {
     // It is echoed to the client, and the id list is the one thing this
     // endpoint must never hand back -- it names every widget the caller may see.
-    const token = visibilityToken(["core/secret-project"]);
+    const token = visibilityToken(
+      ["core/secret-project"],
+      ["publish-secret-project"]
+    );
     expect(token).not.toContain("secret");
     expect(token.length).toBeLessThan(20);
   });

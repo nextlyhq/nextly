@@ -803,7 +803,8 @@ export function layoutSizeProblem(
 }
 
 /**
- * A short, stable stand-in for "which widgets this caller could see".
+ * A short, stable stand-in for "what this caller could see": which widgets,
+ * and which of the shortcuts inside them.
  *
  * 🔴 The row's `version` guards the ROW, and that is only half of what shaped
  * the snapshot the client is holding. The other half is VISIBILITY: a GET
@@ -819,20 +820,37 @@ export function layoutSizeProblem(
  * the visible set has moved under it, and stale is exactly what a conflict
  * means: re-read and try again.
  *
- * A hash rather than the id list itself, because the list is the one thing this
- * endpoint must never hand back — it names every widget the caller may see, and
- * comparing two tokens across two callers would otherwise reveal whether their
- * grants differ. Truncated to 16 base64url characters: this is a
+ * 🔴 Over the ACTION GATES the reader holds as well as the widget ids, because
+ * the token is also what tells the admin its workspace payload is stale. That
+ * payload withholds the shortcuts a reader may not see, and a token of the ids
+ * alone stood still when the reader gained only a shortcut's permission -- the
+ * cards were the same cards -- so the shortcut stayed withheld until some
+ * unrelated refresh minutes later. A write guarded by the wider token refuses
+ * in one more case than the row needs, and that case is a view that IS stale.
+ *
+ * A hash rather than the lists themselves, because the id list is the one thing
+ * this endpoint must never hand back — it names every widget the caller may
+ * see, and comparing two tokens across two callers would otherwise reveal
+ * whether their grants differ. Truncated to 16 base64url characters: this is a
  * change-detector between two reads by ONE caller, not a security boundary, and
  * a collision costs a preserved placement rather than a leaked one.
  */
-export function visibilityToken(widgetIds: readonly string[]): string {
+export function visibilityToken(
+  widgetIds: readonly string[],
+  heldActionGates: Iterable<string>
+): string {
   return (
     createHash("sha256")
-      // Sorted, so the token depends on the SET and not on registration order —
+      // Sorted, so the token depends on the SETS and not on registration order —
       // otherwise a hot reload that re-registered the same widgets in a different
-      // order would refuse every write with nothing actually changed.
-      .update([...widgetIds].sort().join("\n"))
+      // order would refuse every write with nothing actually changed. The gates
+      // are prefixed so a slug can never read as an id.
+      .update(
+        [
+          ...[...widgetIds].sort(),
+          ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
+        ].join("\n")
+      )
       .digest("base64url")
       .slice(0, 16)
   );

@@ -45,6 +45,14 @@ export const SCHEMA_UPDATED_EVENT = "nextly:schema-updated";
 /** The queries this provider owns, both halves of the admin-meta payload. */
 export const ADMIN_META_KEY = ["admin-meta"] as const;
 
+/**
+ * The session-gated half alone: the workspace payload, which carries the
+ * widget declarations this reader may see. A prefix of the query's full key,
+ * which also names the session state, so an invalidation by it reaches the
+ * entry whichever session it was fetched under.
+ */
+export const ADMIN_WORKSPACE_KEY = [...ADMIN_META_KEY, "workspace"] as const;
+
 export function useSchemaUpdateInvalidation(
   /**
    * A STABLE reference — a module-level constant, not an inline literal.

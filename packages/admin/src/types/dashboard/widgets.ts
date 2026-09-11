@@ -105,6 +105,8 @@ export interface DashboardWidget {
    * must hide.
    */
   actions?: WidgetAction[];
+  /** Present for `text`: the markdown the host draws, validated non-blank at boot. */
+  content?: string;
   link?: { label: string; href: string };
   /**
    * The DECLARED default position, ascending; absent means "after everything
