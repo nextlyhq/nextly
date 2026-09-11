@@ -76,15 +76,168 @@ export const DEFAULT_LIMITS: DocumentLimits = {
   maxBytes: DEFAULT_MAX_DOCUMENT_BYTES,
 };
 
+/**
+ * How many parts of a structure anything in this engine will walk.
+ *
+ * A machine limit, not a product one, and the ONE answer to that question. The
+ * op layer's preflight refuses a value with more parts than this, and the three
+ * readers below refuse a forest or a serialization that reaches it. Two numbers
+ * for one question is how a dry run comes to accept what the apply then refuses,
+ * and how a site that legitimately raises `maxNodes` finds one reader agreeing
+ * with its configuration while another does not.
+ *
+ * The walks visit every key and every element, so a shallow object with millions
+ * of enumerable properties costs a full traversal — and an in-process or
+ * agent-written op can carry one. The byte cap would refuse such a value, but
+ * only after these walks have already paid for it, which is the wrong order for
+ * a guard whose job is to reject.
+ *
+ * ENTRIES are not bounded by OBJECTS, which is the other reason a bound is
+ * needed here. `walkForest` deliberately revisits a node object reached under
+ * two different parents — one object placed in two slots is two elements of the
+ * document, and counting it once would report half a real size and pass a cap
+ * the document exceeds. That is right for a count, and it makes the walk
+ * exponential in depth for a forest whose branches share objects: measured on
+ * this module's own helpers, a chain of 21 distinct objects each holding the
+ * next twice walks 2,097,151 entries, and every further object doubles it. A
+ * stored document can never be one — `JSON.parse` produces fresh objects and
+ * cannot express sharing — but one built in memory by code can.
+ *
+ * Set well above `DEFAULT_LIMITS.maxBytes`, which is 2 MiB: every part
+ * contributes at least one byte to serialized JSON, so a structure with more
+ * parts than this has more bytes than any default-configured document may hold,
+ * and refusing it unexamined agrees with the answer a full walk would have
+ * reached. A site that raises `maxBytes` past this is choosing a document larger
+ * than the editor will edit, which the machine caps already say elsewhere.
+ *
+ * What this bounds, precisely: the descriptor lookups, the nested traversal and
+ * the value reads, which are the costs that grow with what the value CONTAINS.
+ * It does not bound `Reflect.ownKeys` itself, which materialises the key list in
+ * one call before any loop can stop — and it cannot, because there is no way to
+ * enumerate own keys including non-enumerable and symbol ones without building
+ * that list. The op is already in memory by then, so this doubles a cost the
+ * caller has paid rather than admitting an unbounded new one.
+ */
+export const MAX_VALUE_PARTS = 4 * 1024 * 1024;
+
+/**
+ * How many values {@link documentBytes} may serialize before it refuses.
+ *
+ * SEPARATE from {@link MAX_VALUE_PARTS}, and the separation is the point rather
+ * than an oversight. That ceiling bounds a structural walk, which reads and
+ * allocates nothing; this one bounds a walk that BUILDS as it goes, so the same
+ * numeral buys a different amount of work. Measured on a forest of shared
+ * objects, refusing at 4,194,304 callbacks takes 498ms against 145ms at this
+ * value — sharing one number there was arithmetic, not a derivation.
+ *
+ * DERIVED from the byte cap it exists to protect, so it moves when that moves.
+ * Every serialized value contributes at least one byte to the output, so a
+ * document that has already emitted more values than the cap has bytes cannot
+ * come in under it, and the exact size of something that far over is not a
+ * number any caller needs.
+ *
+ * A site that raises `maxBytes` past this is choosing a document larger than the
+ * editor will edit, which is the stance {@link MAX_VALUE_PARTS} already takes
+ * for the same reason.
+ */
+export const MAX_SERIALIZED_VALUES = DEFAULT_MAX_DOCUMENT_BYTES;
+
+/**
+ * A structure with more parts than {@link MAX_VALUE_PARTS}.
+ *
+ * Thrown rather than answered around, because every honest answer here is a
+ * refusal: a count taken from a walk that stopped early is a PARTIAL one, and
+ * returning it as a whole number is a bound that fails in the passing
+ * direction — the document reads as smaller than it is and passes the very cap
+ * this module exists to enforce.
+ *
+ * Named so a caller can tell it from a defect in its own input handling. The
+ * `nodes` a caller holds are almost never the cause; a node object reached
+ * under more than one parent is.
+ */
+export class ForestTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ForestTooLargeError";
+  }
+}
+
+/**
+ * The two ways a forest outruns a reader, stated together because the reader
+ * CANNOT tell them apart.
+ *
+ * The bound counts entries and never compares object identity, so a flat forest
+ * of a million distinct nodes reaches it exactly as a shared chain of
+ * twenty-one does. Naming only the sharing reads as a diagnosis rather than a
+ * possibility, and sends a reader hunting for a node under two parents in a
+ * document that has none — a repair that cannot succeed because there is
+ * nothing to find.
+ *
+ * Establishing WHICH one it is would mean holding every visited object to
+ * compare identity, which costs memory proportional to the forest on every
+ * ordinary call to pay for a sentence on the failing one. So both are named and
+ * neither is claimed.
+ */
+const WHY_TOO_LARGE =
+  `A forest reaches this either by genuinely holding that many nodes, or by ` +
+  `holding a node placed under more than one parent — which multiplies ` +
+  `entries at every level, so a few dozen objects can reach millions.`;
+
+/**
+ * The same question for the SERIALIZER, which counts a different population.
+ *
+ * A replacer runs for every value `JSON.stringify` visits, not for every node:
+ * a `props` object holding a large array reaches the bound with one node and no
+ * sharing at all. So this names a third route the forest explanation does not
+ * cover, and must not be replaced by it — a caller told to look for a node
+ * under two parents, in a document with one node, is being sent somewhere there
+ * is nothing to find.
+ */
+const WHY_TOO_MANY_VALUES =
+  `The serializer counts every value it visits rather than every node, so a ` +
+  `document reaches this by holding that many values in its props, by holding ` +
+  `that many nodes, or by holding a node placed under more than one parent — ` +
+  `which multiplies what is serialized at every level.`;
+
+/**
+ * Visit the forest, refusing rather than answering from a partial walk.
+ *
+ * The one place the bound is applied, so the three readers below cannot drift
+ * on where it sits or on what happens when it is reached.
+ */
+function walkBounded(
+  nodes: BlockNode[],
+  subject: string,
+  onEntry: (depth: number) => void
+): void {
+  let seen = 0;
+  let spent = false;
+  walkForest(nodes, entry => {
+    seen += 1;
+    if (seen > MAX_VALUE_PARTS) {
+      spent = true;
+      return "stop";
+    }
+    onEntry(entry.depth);
+    return "descend";
+  });
+  if (spent) {
+    throw new ForestTooLargeError(
+      `${subject} reaches more than ${String(MAX_VALUE_PARTS)} entries ` +
+        `and cannot be measured: past that the walk is not affordable. ` +
+        WHY_TOO_LARGE
+    );
+  }
+}
+
 /** Total node count across the forest, slots included. */
 export function countNodes(nodes: BlockNode[]): number {
   let count = 0;
   // EVERY entry counts, malformed ones included: the cap exists to reject a
   // document by its real element count, so an array padded with junk must not
   // slip past it.
-  walkForest(nodes, () => {
+  walkBounded(nodes, "this forest", () => {
     count += 1;
-    return "descend";
   });
   return count;
 }
@@ -92,9 +245,8 @@ export function countNodes(nodes: BlockNode[]): number {
 /** Deepest nesting level in the forest; an empty forest is depth 0. */
 export function treeDepth(nodes: BlockNode[]): number {
   let deepest = 0;
-  walkForest(nodes, entry => {
-    if (entry.depth > deepest) deepest = entry.depth;
-    return "descend";
+  walkBounded(nodes, "this forest", depth => {
+    if (depth > deepest) deepest = depth;
   });
   return deepest;
 }
@@ -102,7 +254,55 @@ export function treeDepth(nodes: BlockNode[]): number {
 /**
  * Serialized size of a document in bytes (UTF-8 of its JSON form — the same
  * bytes that hit storage, so the cap measures what actually gets persisted).
+ *
+ * `JSON.stringify` expands a shared node object into a separate copy per path
+ * that reaches it, so the string grows with ENTRIES rather than with objects and
+ * does not degrade gracefully. Measured on this module's own helpers: 21 shared
+ * objects produce 132 MB, and 23 raise `RangeError: Invalid string length` from
+ * a document that is a few kilobytes in memory. A native `RangeError` names a
+ * string length, which says nothing about the document and cannot be acted on —
+ * and it arrives from the one function whose whole job is to decide whether a
+ * document may be stored, so it lands where a caller is least able to read it.
+ *
+ * The bound is applied BY the serializer's own traversal, through a replacer,
+ * and that is the whole design. It has to satisfy two requirements that defeat
+ * the obvious approaches separately.
+ *
+ * A PREFLIGHT WALK cannot be used, because it answers a different question:
+ * `walkForest` reaches `node.slots` by property access, so it sees inherited
+ * and non-enumerable slots and ignores `toJSON`, while `JSON.stringify` reads
+ * own enumerable properties and honours it. Measured with a node whose `slots`
+ * is non-enumerable — the document serializes to 95 bytes and a preflight walk
+ * refused it. A false refusal, on the gate deciding whether a document may be
+ * stored, against a document that would have saved perfectly.
+ *
+ * CATCHING THE FAILURE afterwards cannot be used either, because by then the
+ * cost has been paid: the string is built until it cannot grow, so the 21-object
+ * case still allocates 132 MB and a larger one exhausts the heap before any
+ * catchable error exists. It also cannot tell the serializer's own size failure
+ * from a `RangeError` thrown by a `toJSON`, a getter or a proxy trap, and
+ * renaming one of those into a size complaint tells a caller to shrink a
+ * document whose problem is in its own hook.
+ *
+ * A replacer is called by the serializer for every value it actually visits, so
+ * counting there uses the SAME traversal — it cannot diverge from what gets
+ * serialized, and it aborts before the string is built rather than after.
+ * Measured: byte-identical output on ordinary documents, and a shared forest of
+ * any depth refuses in about 60 ms instead of exhausting memory. A `RangeError`
+ * from a document's own hook now propagates untouched, because nothing here
+ * catches it.
  */
 export function documentBytes(doc: BlockDocument): number {
-  return new TextEncoder().encode(JSON.stringify(doc)).length;
+  let visited = 0;
+  const json = JSON.stringify(doc, function replacer(_key, value: unknown) {
+    visited += 1;
+    if (visited > MAX_SERIALIZED_VALUES) {
+      throw new ForestTooLargeError(
+        `this document cannot be measured: serializing it visits more than ` +
+          `${String(MAX_SERIALIZED_VALUES)} values. ${WHY_TOO_MANY_VALUES}`
+      );
+    }
+    return value;
+  });
+  return new TextEncoder().encode(json).length;
 }

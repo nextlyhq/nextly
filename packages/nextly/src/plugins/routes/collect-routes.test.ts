@@ -19,7 +19,11 @@ function thrownCode(fn: () => unknown): string {
 
 function plugin(
   name: string,
-  routes: Array<{ method: "GET" | "POST"; path: string }>,
+  routes: Array<{
+    method: "GET" | "POST";
+    path: string;
+    mount?: "plugin" | "root";
+  }>,
   enabled?: boolean
 ): PluginDefinition {
   return {
@@ -68,6 +72,88 @@ describe("collectPluginRoutes", () => {
         collectPluginRoutes([plugin("@a/x", [{ method: "GET", path: "bad" }])])
       )
     ).toBe("NEXTLY_ROUTE_INVALID_PATH");
+  });
+
+  /**
+   * The collision rule asks whether ONE request could reach two routes, and the
+   * registry matches each mount in its own pass -- so two patterns under
+   * different mounts never compete however alike they look. These two overlap
+   * on `/plugins/foo/bar/baz` and carry three literals each, which is a
+   * collision within a mount and nothing at all across them: the root route
+   * still answers `/custom/foo/bar/baz`, where the namespaced one cannot go.
+   */
+  it("allows overlapping patterns filed under different mounts", () => {
+    const collected = collectPluginRoutes([
+      plugin("foo", [{ method: "GET", path: "/bar/:id" }]),
+      plugin("@a/root", [
+        { method: "GET", path: "/:scope/foo/bar/baz", mount: "root" },
+      ]),
+    ]);
+
+    expect(collected.map(r => r.fullPath)).toEqual([
+      "/plugins/foo/bar/:id",
+      "/:scope/foo/bar/baz",
+    ]);
+  });
+
+  it("still refuses overlapping patterns under the SAME mount", () => {
+    // The control for the pair above: identical shapes, one mount, so a request
+    // to `/x/foo/bar/baz` could reach either and registration order would pick.
+    expect(
+      thrownCode(() =>
+        collectPluginRoutes([
+          plugin("@a/one", [
+            { method: "GET", path: "/:scope/foo/bar/baz", mount: "root" },
+          ]),
+          plugin("@a/two", [
+            { method: "GET", path: "/x/foo/bar/:id", mount: "root" },
+          ]),
+        ])
+      )
+    ).toBe("NEXTLY_ROUTE_COLLISION");
+  });
+
+  /**
+   * The type says `"plugin" | "root"`, and a plugin authored in JavaScript
+   * reaches the fold without ever meeting it. Downstream nothing agrees about
+   * an unknown value: `pluginRouteFullPath` reads anything but `"root"` as
+   * namespaced, the registry files the typo verbatim, and the matcher asks only
+   * for the two it knows. The route registers, appears in `/api/admin-meta`,
+   * and can never match, which is the same silent shape a root route on an
+   * unreachable prefix has.
+   */
+  it("rejects a mount outside the union", () => {
+    expect(
+      thrownCode(() =>
+        collectPluginRoutes([
+          plugin("@a/x", [
+            {
+              method: "GET",
+              path: "/p",
+              mount: "roots" as "root",
+            },
+          ]),
+        ])
+      )
+    ).toBe("NEXTLY_ROUTE_INVALID_MOUNT");
+  });
+
+  it("accepts both declared mounts, and an absent one", () => {
+    // The control. A check that refused everything would pass the assertion
+    // above while making the whole contract unusable.
+    const collected = collectPluginRoutes([
+      plugin("@a/x", [
+        { method: "GET", path: "/a" },
+        { method: "GET", path: "/b", mount: "plugin" },
+        { method: "GET", path: "/c", mount: "root" },
+      ]),
+    ]);
+
+    expect(collected.map(r => r.fullPath)).toEqual([
+      "/plugins/@a/x/a",
+      "/plugins/@a/x/b",
+      "/c",
+    ]);
   });
 
   it("returns an empty list when no plugin contributes routes", () => {

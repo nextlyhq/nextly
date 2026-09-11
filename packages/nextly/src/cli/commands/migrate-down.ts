@@ -27,7 +27,7 @@ import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
   type SupportedDialect,
@@ -252,7 +252,7 @@ export async function runMigrateDown(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  const adapter: CLIDatabaseAdapter = await createAdapter({
+  const adapter: CLIDatabaseAdapter = await createCliAdapter({
     dialect: dbValidation.dialect,
     databaseUrl: dbValidation.databaseUrl,
     logger: options.verbose ? logger : undefined,

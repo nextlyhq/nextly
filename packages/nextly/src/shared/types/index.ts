@@ -9,6 +9,8 @@
  * @since 1.0.0
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+
 /**
  * Type alias for Drizzle database instance.
  * Using `any` because the concrete Drizzle type varies by dialect
@@ -59,11 +61,49 @@ export interface RequestContext {
   /** Unique request identifier for tracing/logging */
   requestId?: string;
   /**
+   * The caller's own authorization scope when they arrived on an API key.
+   *
+   * `user` names the key's OWNER, so an access check that resolves permissions
+   * from `user.id` reads the owner's roles — which is how a viewer-scoped key
+   * minted by a super-admin came to be judged as a super-admin. This carries
+   * the grants stamped on the KEY, and the access services already prefer it
+   * over the owner when it is present. Absent for a session or system caller,
+   * who resolve the normal way.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /**
    * @experimental Bypass the access check for this operation (D35 system
    * elevation). Validation/hooks/events still run — only the access check is
    * skipped. Default: undefined (enforce access).
    */
   overrideAccess?: boolean;
+  /**
+   * Arbitrary data handed to this operation's hooks as `ctx.context`.
+   *
+   * The way a caller tells a hook something about the CALL that the row cannot
+   * say. A hook that does expensive presentation work can be told this read is
+   * internal and skip it; a hook that writes can be told not to recurse. The
+   * entry service has accepted this on every operation for some time and seeds
+   * the shared hook context from it, but the service layer dropped it, so
+   * nothing above could reach it.
+   */
+  context?: Record<string, unknown>;
+
+  /**
+   * The HTTP request that produced this operation, when one did.
+   *
+   * The core resolves it into the facts hooks are handed as `ctx.req`: the
+   * headers, and a client address judged against this deployment's proxy-trust
+   * settings rather than read raw off `x-forwarded-for`. It is the request
+   * itself rather than an address because the caller does not get to name its
+   * own client: a forwarded address is only worth what the trust settings say
+   * it is, and those are read in one place.
+   *
+   * Leave it out for a write no request produced -- a seed, an import, a
+   * scheduled job. That absence is what tells a request-scoped rule, a rate
+   * limit or a honeypot, to stand down rather than judge a server as a visitor.
+   */
+  request?: Request;
 }
 
 /**

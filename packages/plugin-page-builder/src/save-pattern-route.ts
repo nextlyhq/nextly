@@ -41,12 +41,19 @@
  * permission to publish a pattern is refused by core rather than by this route
  * having been careful.
  *
- * ## No declared permission, for the reason the read has none
+ * ## The declared permission is COMPUTED, for the reason the read's is
  *
- * A declared permission has to spell the collection slug, and a host may rename
- * the collection — the grant is then seeded under the new name and demanded
- * under the old one, which is a route nobody can call. The write runs as the
- * user, so core enforces whatever the resolved collection actually seeded.
+ * A permission slug has to spell the collection slug, and a host may rename the
+ * collection — the grant is then seeded under the new name and demanded under
+ * the old one, which is a route nobody can call. That is why this route carried
+ * no declared permission at all, and it left a write reachable by any
+ * authenticated caller.
+ *
+ * `requiredPermission` now takes a function of the plugin's OWN resolved names,
+ * so the demanded grant follows the rename. The write still runs as the user
+ * and core still enforces what the resolved collection seeded; this is the door
+ * in front of it, which is what stops an unauthorized request reaching the
+ * planner at all.
  *
  * ## No request size cap of its own
  *
@@ -65,6 +72,7 @@ import {
   type BlockDocument,
   type PlanRefusal,
 } from "@nextlyhq/blocks-engine";
+import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
 import { respondMutation, slugify } from "nextly";
 import { NextlyError } from "nextly/errors";
 
@@ -82,7 +90,16 @@ import {
  * See the module docblock: the default is `draft`, and a draft pattern is not
  * offered, so leaving it would save a pattern the author cannot find.
  */
-const SAVED_PATTERN_STATUS = "published";
+/**
+ * The status a saved pattern is created with.
+ *
+ * EXPORTED so `capability-route` can derive which permissions this write needs
+ * from the write itself. The status decides that — core requires the publish
+ * grant on top of create when the persisted status is `published` — so a
+ * capability answer that named `create` alone would say yes to an author the
+ * save then refuses, which is the defect it exists to prevent.
+ */
+export const SAVED_PATTERN_STATUS = "published";
 
 /**
  * The field the collection stores the tree under.
@@ -417,14 +434,16 @@ function malformed(path: string): NextlyError {
 export function savePatternRoute(): {
   method: "POST";
   path: string;
+  requiredPermission: (scope: PluginRoutePermissionScope) => string;
   handler: (req: Request, ctx: SavePatternRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: SAVE_PATTERN_ROUTE_PATH,
-    // No `public: true`, which is what makes this authenticated, and no
+    // No `public: true`, which is what makes this authenticated, and a COMPUTED
     // `requiredPermission`, which is what keeps it callable on a site that
     // renamed the collection. See the module docblock.
+    requiredPermission: ({ collection }) => collection(PATTERNS_SLUG, "create"),
     handler: savePattern,
   };
 }

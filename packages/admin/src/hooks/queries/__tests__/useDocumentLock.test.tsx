@@ -29,13 +29,19 @@ const acquired = {
   message: "",
   item: { status: "acquired", claimToken: "t1" },
 };
-const held = { message: "", item: { status: "held", holder: other } };
+const held = {
+  message: "",
+  item: { status: "held", holder: other, waiting: false },
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({ shouldAdvanceTime: true });
   post.mockResolvedValue(acquired);
-  patch.mockResolvedValue({ message: "", item: { status: "renewed" } });
+  patch.mockResolvedValue({
+    message: "",
+    item: { status: "renewed", waiting: false },
+  });
   del.mockResolvedValue(undefined);
 });
 
@@ -51,6 +57,7 @@ describe("useDocumentLock", () => {
     expect(post).toHaveBeenCalledWith("/document-lock", {
       ...ref,
       takeover: false,
+      requestAccess: false,
     });
   });
 
@@ -79,6 +86,7 @@ describe("useDocumentLock", () => {
       expect(result.current.state).toEqual({
         status: "held-by-other",
         holder: other,
+        requestSent: false,
       })
     );
   });
@@ -202,7 +210,333 @@ describe("useDocumentLock", () => {
     expect(post).toHaveBeenLastCalledWith("/document-lock", {
       ...ref,
       takeover: true,
+      requestAccess: false,
     });
+  });
+
+  it("asks for nothing until the person asks for it", async () => {
+    // The control, and the reason it comes first: every locked-out editor polls
+    // on every beat, so a flag that rode the poll unconditionally would nudge
+    // the holder on behalf of anybody who merely opened the document to read it.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    for (const call of post.mock.calls) {
+      expect(call[1]).toMatchObject({ requestAccess: false });
+    }
+  });
+
+  it("asks at once, and keeps asking on every beat afterwards", async () => {
+    // 🔴 A STANDING ask. The server holds it on a lease, so one request would
+    // lapse under a holder who keeps working -- and the person pressed once.
+    // Asking at once rather than at the next beat is what answers the press.
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "held", holder: other, waiting: true },
+    });
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    await act(async () => {
+      result.current.requestAccess();
+    });
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: false,
+      requestAccess: true,
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: false,
+      requestAccess: true,
+    });
+  });
+
+  it("confirms the ask only when the SERVER says it is on record", async () => {
+    // 🔴 Not the click. A server that ignored the flag -- an older deployment,
+    // a dropped field -- would otherwise have this editor promise a colleague
+    // was told by a request that landed nowhere.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    await act(async () => {
+      result.current.requestAccess();
+    });
+
+    expect(result.current.state).toEqual({
+      status: "held-by-other",
+      holder: other,
+      requestSent: false,
+    });
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "held", holder: other, waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-other",
+        holder: other,
+        requestSent: true,
+      })
+    );
+  });
+
+  it("does not report a THIRD colleague's ask as this editor's own", async () => {
+    // `waiting` says somebody is waiting, which is also true when it is not the
+    // person in front of this editor. Only the conjunction says "we told them,
+    // for you", and this is the half a click-driven flag cannot see.
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "held", holder: other, waiting: true },
+    });
+    const { result } = renderHook(() => useDocumentLock(ref));
+
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-other",
+        holder: other,
+        requestSent: false,
+      })
+    );
+  });
+
+  it("re-renders when the ask lands, though the holder has not changed", async () => {
+    // 🔴 Nobody changes holder when somebody asks for their document. A poll
+    // that stayed quiet on an unchanged HOLDER would leave the button on screen
+    // after the request that replaced it landed.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "held", holder: other, waiting: true },
+    });
+    await act(async () => {
+      result.current.requestAccess();
+    });
+
+    await waitFor(() =>
+      expect(result.current.state).toMatchObject({ requestSent: true })
+    );
+  });
+
+  it("stops asking once this editor has the document", async () => {
+    // Nobody waits for what they hold. The server clears its own mark on the
+    // same event, so neither side is left saying this editor queues for its own
+    // claim.
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "held", holder: other, waiting: true },
+    });
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+    await act(async () => {
+      result.current.requestAccess();
+    });
+
+    post.mockResolvedValue(acquired);
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: false,
+      })
+    );
+
+    // Then lose it to nobody, and take it back. That second acquisition is what
+    // makes the cleared intent OBSERVABLE: uncleared, a person taking a document
+    // back would be recorded as somebody waiting for the document they now hold,
+    // and their own next beat would tell them so.
+    patch.mockResolvedValue({ message: "", item: { status: "lost" } });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    await act(async () => {
+      result.current.takeOver();
+    });
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: true,
+      requestAccess: false,
+    });
+  });
+
+  it("tells the holder somebody is waiting, on the beat they already make", async () => {
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.state).toEqual({
+      status: "held-by-me",
+      someoneWaiting: false,
+    });
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: true,
+      })
+    );
+  });
+
+  it("does not let an older renewal reverse a newer one's answer", async () => {
+    // 🔴 Renewals overlap, and their replies can arrive out of order — the
+    // lease is already advanced with `Math.max` for exactly this reason. The
+    // waiting answer needs the same fence: a slow beat that left BEFORE anybody
+    // asked still says "nobody is waiting", and landing after a later beat that
+    // said otherwise would take the notice away from the holder until some
+    // subsequent renewal happened to put it back.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    // The older beat leaves first and is still in flight, carrying the answer
+    // from before the ask.
+    let settleOlder: (value: unknown) => void = () => {};
+    patch.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleOlder = resolve;
+      })
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    // The newer beat leaves afterwards and answers first.
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: true,
+      })
+    );
+
+    await act(async () => {
+      settleOlder({ message: "", item: { status: "renewed", waiting: false } });
+    });
+
+    // Still told. The stale reply describes a moment that has passed.
+    expect(result.current.state).toEqual({
+      status: "held-by-me",
+      someoneWaiting: true,
+    });
+  });
+
+  it("keeps the newest answer when the system clock jumps backwards", async () => {
+    // 🔴 The test above cannot tell a correct fence from a plausible broken one.
+    // Its clock only ever moves forwards, so "newest dispatch" and "largest
+    // `Date.now()`" are the same number there, and a fence built on either
+    // passes. `Date.now()` is WALL time: an NTP correction, a VM resuming or
+    // somebody setting the clock moves it backwards, and a timestamp fence then
+    // ranks a later renewal BELOW an earlier one and ignores every answer until
+    // wall time catches up. Rolling the clock back is what separates the two.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    let settleOlder: (value: unknown) => void = () => {};
+    patch.mockReturnValueOnce(
+      new Promise(resolve => {
+        settleOlder = resolve;
+      })
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    // The clock is corrected backwards while that renewal is still in flight,
+    // so every beat after this one carries a SMALLER timestamp than it does.
+    vi.setSystemTime(Date.now() - 10 * 60 * 1000);
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: true,
+      })
+    );
+
+    await act(async () => {
+      settleOlder({ message: "", item: { status: "renewed", waiting: false } });
+    });
+
+    // The earlier beat is still the earlier beat, whatever the clock says.
+    expect(result.current.state).toEqual({
+      status: "held-by-me",
+      someoneWaiting: true,
+    });
+  });
+
+  it("says it once, not once per beat", async () => {
+    // 🔴 The notice lives in a live region, so re-rendering it on an unchanged
+    // answer would read the same sentence to somebody every fifteen seconds.
+    // State identity is the instrument: a new object IS the re-announcement.
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toMatchObject({ someoneWaiting: true })
+    );
+    const spoken = result.current.state;
+
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS * 3);
+    });
+
+    expect(result.current.state).toBe(spoken);
   });
 
   it("reports the claim unavailable when it cannot be asked for, and retries", async () => {
@@ -333,6 +667,7 @@ describe("useDocumentLock", () => {
       expect(post).toHaveBeenLastCalledWith("/document-lock", {
         ...ref,
         takeover: true,
+        requestAccess: false,
       })
     );
 
@@ -362,6 +697,7 @@ describe("useDocumentLock", () => {
     expect(post).toHaveBeenLastCalledWith("/document-lock", {
       ...ref,
       takeover: false,
+      requestAccess: false,
     });
   });
 
@@ -436,6 +772,7 @@ describe("useDocumentLock", () => {
     expect(post).toHaveBeenLastCalledWith("/document-lock", {
       ...ref,
       takeover: true,
+      requestAccess: false,
     });
   });
 
@@ -482,7 +819,10 @@ describe("useDocumentLock", () => {
       message: "",
       item: { status: "acquired", claimToken: "t2" },
     });
-    patch.mockResolvedValue({ message: "", item: { status: "renewed" } });
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: false },
+    });
     await act(async () => {
       result.current.takeOver();
     });
@@ -540,6 +880,7 @@ describe("useDocumentLock", () => {
     expect(post).toHaveBeenLastCalledWith("/document-lock", {
       ...ref,
       takeover: true,
+      requestAccess: false,
     });
   });
 
@@ -719,6 +1060,7 @@ describe("useDocumentLock", () => {
       expect(result.current.state).toEqual({
         status: "held-by-other",
         holder: other,
+        requestSent: false,
       })
     );
   });
@@ -1024,6 +1366,7 @@ describe("useDocumentLock", () => {
     expect(post).toHaveBeenLastCalledWith("/document-lock", {
       ...ref,
       takeover: true,
+      requestAccess: false,
     });
     const sent = post.mock.calls.length;
 
@@ -1036,6 +1379,7 @@ describe("useDocumentLock", () => {
     expect(post).toHaveBeenLastCalledWith("/document-lock", {
       ...ref,
       takeover: true,
+      requestAccess: false,
     });
   });
 

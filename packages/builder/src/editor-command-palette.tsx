@@ -25,6 +25,7 @@ import { builderCommands } from "./builder-commands";
 import { CommandPalette } from "./command-palette";
 import type { EditorState } from "./editor-state";
 import { useBlockActionsContext } from "./keyboard-actions";
+import { useSelectionActions } from "./selection-actions";
 
 export interface EditorCommandPaletteProps {
   /** The editor whose state the commands read and change. */
@@ -45,6 +46,7 @@ export function EditorCommandPalette({
   onExit,
 }: EditorCommandPaletteProps): React.JSX.Element {
   const verbs = useBlockActionsContext();
+  const actions = useSelectionActions(editor);
 
   /*
    * Rebuilt when what it OFFERS could have changed, which is the document, the
@@ -59,8 +61,10 @@ export function EditorCommandPalette({
   const commands = React.useMemo(
     () =>
       builderCommands({
-        document: editor.document,
-        selectedId: editor.selectedId,
+        // The SAME list the bar and the menu are drawing, not a second call
+        // that could be given a narrower question — which is how this surface
+        // came to offer a verb the bar refused.
+        actions,
         verbs,
         undo: editor.undo,
         redo: editor.redo,
@@ -69,8 +73,7 @@ export function EditorCommandPalette({
         onExit,
       }),
     [
-      editor.document,
-      editor.selectedId,
+      actions,
       editor.undo,
       editor.redo,
       editor.canUndo,

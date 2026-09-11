@@ -20,7 +20,7 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateSingle } from "@admin/hooks/queries";
 import { toKebabName } from "@admin/lib/builder";
-import { singleToManifestEntity } from "@admin/lib/builder/to-manifest-entity-single";
+import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 
@@ -49,7 +49,7 @@ export default function SingleBuilderPage(): React.ReactElement | null {
       {
         slug,
         label: singular,
-        description: values.description?.trim() || undefined,
+        description: values.description,
         admin: {
           icon: values.icon,
           // Advanced tab. Code-first config can still set admin.group /
@@ -88,24 +88,13 @@ export default function SingleBuilderPage(): React.ReactElement | null {
           void (async () => {
             try {
               await schemaFileApi.writeSingle(
-                singleToManifestEntity({
+                singleEntityFromSettings(
                   slug,
-                  settings: {
-                    singularName: singular,
-                    status: values.status === true,
-                    // i18n: mirror the Internationalization flag into ui-schema.json.
-                    localized: values.i18n === true,
-                    // and version history.
-                    versions: values.versions === true,
-                    // and its retention setting.
-                    versionsMaxPerDoc: values.versionsMaxPerDoc,
-                    // and cache revalidation (on unless explicitly off).
-                    revalidate: values.revalidate !== false,
-                    // and webhook recording (on unless explicitly off).
-                    webhooks: values.webhooks !== false,
-                  },
-                  fields: [],
-                })
+                  // The name the form collected, which is not yet on `values` at
+                  // create time.
+                  { ...values, singularName: singular },
+                  []
+                )
               );
             } catch (err) {
               const m = (err as { message?: string })?.message;

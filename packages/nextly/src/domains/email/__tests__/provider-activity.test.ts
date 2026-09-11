@@ -16,6 +16,7 @@ import { container } from "../../../di/container";
 import { getCoreSchema } from "../../../schemas";
 import type { LogActivityInput } from "../../../services/dashboard/activity-log-service";
 import type { Logger } from "../../../services/shared";
+import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import { SYSTEM_CONTEXT } from "../../../shared/types";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../provider-activity";
@@ -482,12 +483,21 @@ describe("email provider activity", () => {
     expect(logged).toHaveLength(0);
   });
 
-  it("records nothing for a write with no signed-in actor", async () => {
-    // A seed, a migration or an API key carries no account. The actor column is
-    // a user reference whose erasure state is answered against the accounts
-    // table, so an id with no account behind it files as an already-erased
-    // identity — a worse record than none.
+  it("records every actor that can name itself, as what it is", async () => {
+    // A seed, a migration or an API key carries no account, and each used to
+    // record NOTHING: the row's only identity column was read as a user
+    // reference, so an id with no account behind it filed as an already-erased
+    // identity. The kind is on the row now, so each is recorded as itself and a
+    // credential change stops being invisible.
+    //
+    // An ABSENT actor is still not recorded, and it is not the same thing as a
+    // system one. This seam takes the actor its caller passes and does not
+    // default it, so `undefined` here means the caller named nobody — there is
+    // no identity to attribute the write to. `SYSTEM_ACTOR`, which
+    // `actorForWrite(null, null)` returns on the paths that DO default, is an
+    // identity and is recorded; see the case below.
     await service.createProvider(INPUT);
+    expect(logged).toHaveLength(0);
     await service.createProvider(
       { ...INPUT, name: "By key" },
       {
@@ -503,6 +513,29 @@ describe("email provider activity", () => {
       }
     );
 
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ actorType: "apiKey", userId: "key-1" });
+  });
+
+  it("records nothing for a system actor, in either shape it arrives in", async () => {
+    // `actorForWrite(null, null)` returns `SYSTEM_ACTOR` for every write that
+    // names no actor — imports, jobs, migrations, and any internal call that
+    // simply did not pass one. Requiring an id would drop exactly those.
+    //
+    // Both spellings, because they arrive by different routes: the canonical
+    // actor carries no id at all, and a seed passing SYSTEM_CONTEXT arrives as
+    // a USER actor holding the reserved id. Filing the second as a person would
+    // attribute an internal write to an account nobody owns.
+    await service.createProvider({ ...INPUT, name: "By a job" }, SYSTEM_ACTOR);
+    await service.createProvider(
+      { ...INPUT, name: "By a seed" },
+      { type: "user", id: SYSTEM_CONTEXT.user?.id ?? "system" }
+    );
+
+    // Refused on ORDERING grounds rather than on anything about the actor: a
+    // plugin's `init()` hook writes content BEFORE pending migrations run, so
+    // on an upgraded database the insert would name a column `activity_log`
+    // does not have yet — and this recorder propagates that failure into boot.
     expect(logged).toHaveLength(0);
   });
 

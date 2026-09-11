@@ -15,6 +15,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   attachFieldGroupChildren,
   sanitizeEntryData,
+  stripHtmlTags,
 } from "../sanitization-service";
 
 const field = (f: Record<string, unknown>): FieldDefinition =>
@@ -249,5 +250,63 @@ describe("attachFieldGroupChildren", () => {
     const raw = field({ name: "seo", type: "component", component: "gone" });
     const fields = await attachFieldGroupChildren([raw], resolver);
     expect(childrenOf(fields[0])).toBeUndefined();
+  });
+});
+
+describe("stripHtmlTags", () => {
+  it("keeps a less-than sign that does not open a tag", () => {
+    // This runs on every text, string, textarea and email field of every
+    // collection, and on media alt text, captions and tags. Treating every `<`
+    // as the start of a tag deleted the rest of an author's sentence on save:
+    // `price < 100` was stored as `price`.
+    expect(stripHtmlTags("price < 100")).toBe("price < 100");
+    expect(stripHtmlTags("2 < 3 and 5 > 4")).toBe("2 < 3 and 5 > 4");
+    expect(stripHtmlTags("x <= y")).toBe("x <= y");
+    expect(stripHtmlTags("<3 heart")).toBe("<3 heart");
+  });
+
+  it("still removes what a browser would read as a tag", () => {
+    // The control for the test above: narrowing the rule must not stop it
+    // removing markup. Each of these is tag-open syntax, including the one left
+    // unclosed at the end, which a browser completes rather than shows.
+    expect(stripHtmlTags("Hello <b>world</b>")).toBe("Hello world");
+    expect(stripHtmlTags("</p>closing")).toBe("closing");
+    expect(stripHtmlTags("hello <script")).toBe("hello");
+    expect(stripHtmlTags("<!-- comment -->text")).toBe("text");
+    expect(stripHtmlTags("<?php echo 1; ?>x")).toBe("x");
+    expect(stripHtmlTags("<IMG SRC=x onerror=alert(1)>done")).toBe("done");
+  });
+
+  it("does not build a tag out of what it removed", () => {
+    // Removing a tag puts its neighbours together. One pass of a rule that
+    // matched only real tag syntax turned `<<b>img src=x onerror=alert(1)>`
+    // into live markup the sanitizer had assembled itself.
+    for (const input of [
+      "<<b>img src=x onerror=alert(1)>",
+      "<<script>script>alert(1)</script>",
+      "<<<b>div onmouseover=alert(1)>hover",
+    ]) {
+      expect(stripHtmlTags(input)).not.toMatch(/<[a-zA-Z/!?]/);
+    }
+  });
+
+  it("strips a hostile value in time proportional to its length", () => {
+    // `<`*n + `b>` + `x>`*n exposes one tag per pass, so a rule that rescanned
+    // until the text stopped changing did n passes over the whole string. Every
+    // create and update reaches this, so the difference is whose CPU a caller
+    // gets to spend.
+    const n = 120_000;
+    const hostile = "<".repeat(n) + "b>" + "x>".repeat(n);
+    const started = Date.now();
+    expect(stripHtmlTags(hostile)).not.toMatch(/<[a-zA-Z/!?]/);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("keeps an author's less-than through the write path", () => {
+    // Reached the way a write reaches it, so the unit above is not the only
+    // thing that has to agree.
+    const data: Record<string, unknown> = { title: "price < 100" };
+    sanitizeEntryData(data, [field({ name: "title", type: "text" })]);
+    expect(data.title).toBe("price < 100");
   });
 });

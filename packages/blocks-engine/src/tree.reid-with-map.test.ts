@@ -12,12 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockNode } from "./document";
-import {
-  reidForestWithMap,
-  reidSubtree,
-  reidSubtreeWithMap,
-  walkNodes,
-} from "./tree";
+import { reidForestWithMap, reidSubtree, walkNodes } from "./tree";
 
 /** A node with an optional DOM id, and children. */
 function node(
@@ -42,10 +37,28 @@ function allNodes(root: BlockNode): BlockNode[] {
   return out;
 }
 
+/**
+ * The forest rewrite for a SINGLE root, shaped like the assertions below expect.
+ *
+ * Local to the tests because the product has no singular form: everything that
+ * re-identifies works on a run of siblings and reaches for `reidForestWithMap`.
+ * These cases are about what a copy IS — new ids, remapped DOM ids, references
+ * that round-trip — and one root is the smallest forest that shows it, so they
+ * are kept and pointed at the function the product actually calls.
+ */
+function reidOne(root: BlockNode): {
+  node: BlockNode;
+  nodeIds: ReadonlyMap<string, string>;
+  domIds: ReadonlyMap<string, string>;
+} {
+  const { nodes, nodeIds, domIds } = reidForestWithMap([root]);
+  return { node: nodes[0] ?? root, nodeIds, domIds };
+}
+
 describe("a re-identified subtree is a different subtree", () => {
   it("gives every node a fresh id and records the mapping", () => {
     const tree = node("root", {}, [node("a"), node("b")]);
-    const result = reidSubtreeWithMap(tree);
+    const result = reidOne(tree);
 
     const ids = allNodes(result.node).map(n => n.id);
     // The control: three nodes in, three out — so the assertions below are
@@ -62,7 +75,7 @@ describe("a re-identified subtree is a different subtree", () => {
 
 describe("a DOM id is remapped rather than dropped", () => {
   it("keeps an id, changes it, and reports the replacement", () => {
-    const result = reidSubtreeWithMap(node("root", { cssId: "pricing" }));
+    const result = reidOne(node("root", { cssId: "pricing" }));
 
     // Three separate claims, and the middle one is the point. Dropping would
     // satisfy "not the original"; keeping would satisfy "still has one".
@@ -75,7 +88,7 @@ describe("a DOM id is remapped rather than dropped", () => {
     // An author reads and writes this value: it appears in a URL fragment, in a
     // stylesheet and in the attribute panel. A UUID would be unique and
     // unusable.
-    const result = reidSubtreeWithMap(node("root", { cssId: "pricing" }));
+    const result = reidOne(node("root", { cssId: "pricing" }));
 
     expect(result.node.cssId).toMatch(/^pricing-/);
   });
@@ -83,7 +96,7 @@ describe("a DOM id is remapped rather than dropped", () => {
   it("remaps the attributes escape hatch too, case-insensitively", () => {
     // A DOM id reaches a page two ways, and a remap that covered one would
     // leave the other emitting a duplicate.
-    const result = reidSubtreeWithMap(
+    const result = reidOne(
       node("root", { attributes: { ID: "pricing", "data-keep": "yes" } })
     );
 
@@ -98,9 +111,7 @@ describe("a DOM id is remapped rather than dropped", () => {
     // one page must not emit the same HTML id.
     const tree = node("root", { cssId: "pricing" });
 
-    expect(reidSubtreeWithMap(tree).node.cssId).not.toBe(
-      reidSubtreeWithMap(tree).node.cssId
-    );
+    expect(reidOne(tree).node.cssId).not.toBe(reidOne(tree).node.cssId);
   });
 
   it("still drops the id through the plain reidSubtree", () => {
@@ -125,7 +136,7 @@ describe("every internal reference round-trips", () => {
       node("b", { attributes: { id: "sidebar" } }),
     ]);
 
-    const result = reidSubtreeWithMap(tree);
+    const result = reidOne(tree);
     const before = ["top", "middle", "deep", "sidebar"];
 
     expect([...result.domIds.keys()].sort()).toEqual([...before].sort());
@@ -147,7 +158,7 @@ describe("every internal reference round-trips", () => {
     // not make it worse. The pair pointed at one target before, so a reference
     // to it still reaches one target after.
     const tree = node("root", { cssId: "dup" }, [node("a", { cssId: "dup" })]);
-    const result = reidSubtreeWithMap(tree);
+    const result = reidOne(tree);
 
     const seen = allNodes(result.node).map(n => n.cssId);
     expect(new Set(seen).size).toBe(1);
@@ -157,14 +168,14 @@ describe("every internal reference round-trips", () => {
   it("leaves a subtree carrying no DOM ids with an empty map", () => {
     // The control for the map itself: it reports what was there, so a function
     // inventing entries would fail here while passing everything above.
-    const result = reidSubtreeWithMap(node("root", {}, [node("a")]));
+    const result = reidOne(node("root", {}, [node("a")]));
 
     expect(result.domIds.size).toBe(0);
     expect(result.nodeIds.size).toBe(2);
   });
 });
 
-describe("reidSubtreeWithMap id references", () => {
+describe("a single root's id references", () => {
   it("points a copied reference at the copy's own target", () => {
     const original: BlockNode = {
       id: "root",
@@ -185,7 +196,7 @@ describe("reidSubtreeWithMap id references", () => {
       },
     };
 
-    const { node } = reidSubtreeWithMap(original);
+    const { node } = reidOne(original);
     const children = node.slots!.children!;
 
     // Without the second pass the copy still says "help", which resolves to
@@ -198,7 +209,7 @@ describe("reidSubtreeWithMap id references", () => {
   });
 });
 
-describe("reidSubtreeWithMap malformed attributes", () => {
+describe("a single root's malformed attributes", () => {
   it("survives a stored attributes: null beside a node with a DOM id", () => {
     const original = {
       id: "root",
@@ -219,7 +230,7 @@ describe("reidSubtreeWithMap malformed attributes", () => {
       },
     } as unknown as BlockNode;
 
-    expect(() => reidSubtreeWithMap(original)).not.toThrow();
+    expect(() => reidOne(original)).not.toThrow();
   });
 });
 
@@ -689,6 +700,127 @@ describe('the "avoid" DOM id policy', () => {
     expect(nodes[0].cssId).toBe("hero");
     expect(nodes[0].attributes?.id).toBe("hero-alt");
     expect(domIds.size).toBe(0);
+  });
+});
+
+describe('the "restore" DOM id policy', () => {
+  /*
+   * The arm a SAVE uses. An insert renames an authored id only because the page
+   * it landed on already held that name, so the new one is a fact about that
+   * page; saving the copy back out has to put the authored one back or the
+   * library grows another suffix on every insert-save cycle.
+   */
+  it("puts back the id the map names, and leaves the rest alone", () => {
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "hero-7f3" }), node("b", { cssId: "aside" })],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    // Both in ONE copy, so this cannot pass by treating the policy as a
+    // whole-forest switch: the decision is per id.
+    expect(nodes[1].cssId).toBe("aside");
+  });
+
+  it("records only the id that moved", () => {
+    const { domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero-7f3" }), node("b", { cssId: "aside" })],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect([...domIds.entries()]).toEqual([["hero-7f3", "hero"]]);
+  });
+
+  it("follows a reference to the id it put back", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("a", { cssId: "hero-7f3" }),
+        node("p", {
+          attributes: { "aria-describedby": "hero-7f3" },
+          props: { href: "#hero-7f3" },
+        }),
+      ],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("hero");
+    expect((nodes[1].props as { href: string }).href).toBe("#hero");
+  });
+
+  it("leaves everything alone when the map is empty", () => {
+    const { nodes, domIds } = reidForestWithMap(
+      [node("a", { cssId: "hero" })],
+      { restore: new Map<string, string>() }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(domIds.size).toBe(0);
+  });
+
+  /*
+   * A shadowed spelling is not the rendered id, so it does not move even when
+   * the map names it — the same rule the other policies follow, asserted here
+   * because a restore reaches for the map first and could answer before asking.
+   */
+  it("leaves a shadowed attribute id alone", () => {
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "actual", attributes: { id: "hero-7f3" } })],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].cssId).toBe("actual");
+    expect(nodes[0].attributes?.id).toBe("hero-7f3");
+  });
+
+  /*
+   * A REFERENCE WITHOUT THE NODE IT NAMES, which is the case the whole map is
+   * seeded for.
+   *
+   * A save works on a selection, and a selection may hold the node carrying
+   * `aria-describedby` while the node rendering that id stays behind. Nothing
+   * in this forest renders `hero-7f3`, so nothing asks what it should become —
+   * and without the map already in the memo the reference keeps a page-specific
+   * id, putting a pattern in the library that names an id existing on exactly
+   * one page.
+   *
+   * It is also the only assertion here that DISCRIMINATES. Where a node renders
+   * the id, two paths answer independently — the seeded memo and the copier's
+   * own lookup — so removing either leaves the other giving the right answer.
+   */
+  it("rewrites a reference whose target is not in the selection", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("p", {
+          attributes: { "aria-describedby": "hero-7f3" },
+          props: { href: "#hero-7f3" },
+        }),
+      ],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].attributes?.["aria-describedby"]).toBe("hero");
+    expect((nodes[0].props as { href: string }).href).toBe("#hero");
+  });
+
+  /*
+   * THE LIMIT OF A FLAT MAP, characterised rather than fixed here.
+   *
+   * A rename record belongs to the expansion that made it, and the map carries
+   * no note of which. A node that reached this forest by another route and
+   * happens to render the same id is restored with the rest — it is asked only
+   * whether the map holds the value, never whether the record governs it.
+   */
+  it("restores ANY node rendering a named id, whatever its origin", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("from-the-expansion", { cssId: "hero-7f3" }),
+        node("from-somewhere-else", { cssId: "hero-7f3" }),
+      ],
+      { restore: new Map([["hero-7f3", "hero"]]) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[1].cssId).toBe("hero");
   });
 });
 

@@ -490,11 +490,11 @@ export interface HtmlFields {
   /**
    * The element's `id`, or `undefined` for a node carrying no such field.
    *
-   * `""` is a THIRD state and a reachable one: the renderer writes
-   * `extra.id = cssId` on `cssId !== undefined`, so a stored empty string
-   * renders `id=""` and shadows any `id` in the bag. This editor never writes
-   * it — clearing the field is `unset` — but an import can, and telling it
-   * apart from an absent field is what makes it removable.
+   * `""` is a THIRD state and a reachable one: a stored empty string SHADOWS
+   * any `id` in the bag while rendering no id itself, so the element ends up
+   * with none. This editor never writes it — clearing the field is `unset` —
+   * but an import can, and telling it apart from an absent field is what makes
+   * it removable.
    */
   readonly cssId: string | undefined;
   readonly attributes: Readonly<Record<string, string>> | undefined;
@@ -551,9 +551,9 @@ export function wantedFields(
    * rendered anchor changed because an attribute was edited.
    *
    * Once the author HAS typed, an empty box means the field should be gone
-   * rather than present and empty: the panel has no gesture that asks for
-   * `id=""` while the renderer would emit one, so `undefined` is the only thing
-   * a cleared box can honestly mean.
+   * rather than present and empty: the panel has no gesture that asks for a
+   * field that is present, renders nothing and shadows the bag, so `undefined`
+   * is the only thing a cleared box can honestly mean.
    */
   const keptId = untouchedId(draft, loaded)
     ? stored.cssId
@@ -633,7 +633,7 @@ export function htmlUpdate(
   if (!sameId) {
     // REMOVED rather than written empty. `applyOp` refuses `undefined` as a
     // patch value and says why, and an empty string is a different request —
-    // it would leave the field present and rendering `id=""`.
+    // it would leave the field present, rendering no id and shadowing the bag.
     if (wanted.cssId === undefined) unset.push("cssId");
     else patch["cssId"] = wanted.cssId;
   }

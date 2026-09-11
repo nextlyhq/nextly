@@ -510,10 +510,20 @@ export { usePluginRoute } from "@nextlyhq/admin";
  * learn rather than two.
  */
 export { usePluginRouteMutation } from "@nextlyhq/admin";
+/**
+ * `PluginRouteInvalidation` is what a write names as gone stale. A plugin
+ * serving both mounts has to say which one an entry belongs to, so the type has
+ * to be nameable by the author building that array rather than reconstructed
+ * from the hook's parameter.
+ *
+ * Stated here rather than inside the export list: the public-surface snapshot
+ * reads that list as names, so a comment between them is recorded as one.
+ */
 export type {
   PluginRouteMethod,
   PluginRouteWrite,
   PluginRouteWriter,
+  PluginRouteInvalidation,
 } from "@nextlyhq/admin";
 export type { PluginRouteRead, PluginRouteRequest } from "@nextlyhq/admin";
 
@@ -555,11 +565,20 @@ export type { PluginRouteRead, PluginRouteRequest } from "@nextlyhq/admin";
  * `validationIssues` answers with an empty array for everything that is not a
  * validation failure, so a surface keying issues by field needs no branch for
  * the transport case.
+ *
+ * `apiErrorMessage` is the third of the set and the one most surfaces want: a
+ * sentence to put in front of a person, assembled from the per-field reasons
+ * when there are any and from the top-level message when there are not. It is
+ * published rather than left to be rebuilt because rebuilding it is how a
+ * plugin comes to show "Validation failed." — which is true, and says nothing
+ * about which field — while the admin's own screens show the reasons.
  */
 export {
   useSingleDocument,
   useUpdateSingleDocument,
+  apiErrorMessage,
   isApiError,
+  toastMutationResult,
   validationIssues,
   type SingleDocument,
   type ApiError,

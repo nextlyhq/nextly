@@ -1,12 +1,22 @@
 /**
  * Spam Detection
  *
- * Implements honeypot and rate limiting spam protection for form submissions.
- * Provides a pluggable approach to spam detection that can be extended.
+ * Honeypot and rate limiting for form submissions.
+ *
+ * The honeypot is a pure read of the submitted payload. The rate limit is not:
+ * it counts, and where the count lives decides whether the limit means
+ * anything. It lives in the deployment's own {@link RateLimitStore}, the one
+ * the REST and auth limiters already share, so `rateLimit.store` is configured
+ * once and all three agree about what they are counting. A store private to
+ * this module would count per process, and on a deployment that spans several
+ * the effective limit becomes `configured x instances` -- a number the operator
+ * never chose, that fails open, and only under load.
  *
  * @module handlers/spam-detection
  * @since 0.1.0
  */
+
+import { RateLimiter, resolveRateLimitStore } from "nextly";
 
 // ============================================================
 // Types
@@ -74,24 +84,6 @@ export interface SpamCheckResult {
 }
 
 // ============================================================
-// Rate Limit Store
-// ============================================================
-
-/**
- * In-memory rate limit store.
- *
- * Note: For multi-instance deployments (serverless, load-balanced),
- * consider using Redis or a database-backed store instead.
- * This in-memory implementation works well for single-instance deployments.
- */
-interface RateLimitEntry {
-  count: number;
-  timestamp: number;
-}
-
-const rateLimitStore = new Map<string, RateLimitEntry>();
-
-// ============================================================
 // Main Spam Check Function
 // ============================================================
 
@@ -124,7 +116,6 @@ const rateLimitStore = new Map<string, RateLimitEntry>();
  * }
  * ```
  */
-// eslint-disable-next-line @typescript-eslint/require-await -- public API: declared return type is `Promise<SpamCheckResult>` and callers `await` it; removing `async` would force a return-type change
 export async function checkSpam(
   options: SpamCheckOptions
 ): Promise<SpamCheckResult> {
@@ -140,7 +131,7 @@ export async function checkSpam(
 
   // 2. Rate limiting check
   if (config.rateLimit && ipAddress) {
-    const rateLimitResult = checkRateLimit(
+    const rateLimitResult = await checkRateLimit(
       ipAddress,
       formSlug,
       config.rateLimit
@@ -213,141 +204,34 @@ function checkHoneypot(data: Record<string, unknown>): SpamCheckResult {
 // ============================================================
 
 /**
- * Check rate limit for a given IP and form combination.
+ * Whether this address has submitted this form too often, recording the attempt.
  *
- * Uses a sliding window approach where submissions are counted
- * within a time window. If the count exceeds the maximum,
- * further submissions are blocked.
+ * Keyed by form and address together, so a burst against one form does not
+ * lock a visitor out of another. The window lives in the deployment's shared
+ * store, so two processes serving the same visitor count once.
  *
- * @param ipAddress - Submitter's IP address
- * @param formSlug - Form identifier
- * @param config - Rate limit configuration
- * @returns Spam check result
+ * An address of `unknown` is not a bucket to key on: every client whose address
+ * could not be resolved would share one window, and the first bot to fill it
+ * would lock out every visitor behind an untrusted proxy. The caller decides
+ * what to do about an unidentifiable client; this counts only identified ones.
  */
-function checkRateLimit(
+async function checkRateLimit(
   ipAddress: string,
   formSlug: string,
   config: { maxSubmissions: number; windowMs: number }
-): SpamCheckResult {
-  const key = `${formSlug}:${ipAddress}`;
-  const now = Date.now();
-  const entry = rateLimitStore.get(key);
-
-  if (entry) {
-    // Check if window has expired
-    if (now - entry.timestamp > config.windowMs) {
-      // Reset counter for new window
-      rateLimitStore.set(key, { count: 1, timestamp: now });
-      return { isSpam: false };
-    }
-
-    // Check if limit exceeded
-    if (entry.count >= config.maxSubmissions) {
-      return {
-        isSpam: true,
-        reason: "rate_limit",
-        details: `Rate limit exceeded: ${entry.count}/${config.maxSubmissions} in ${config.windowMs}ms`,
-      };
-    }
-
-    // Increment counter
-    rateLimitStore.set(key, {
-      count: entry.count + 1,
-      timestamp: entry.timestamp,
-    });
-  } else {
-    // First submission from this IP/form
-    rateLimitStore.set(key, { count: 1, timestamp: now });
-  }
-
-  return { isSpam: false };
-}
-
-// ============================================================
-// Utility Functions
-// ============================================================
-
-/**
- * Clean up expired rate limit entries.
- *
- * Call this periodically (e.g., every 5 minutes) to prevent
- * memory leaks from accumulated rate limit entries.
- *
- * @param maxAgeMs - Maximum age of entries to keep (default: 5 minutes)
- * @returns Number of entries removed
- *
- * @example
- * ```typescript
- * // Set up periodic cleanup
- * setInterval(() => {
- *   const removed = cleanupRateLimitStore();
- *   console.log(`Cleaned up ${removed} expired rate limit entries`);
- * }, 5 * 60 * 1000); // Every 5 minutes
- * ```
- */
-export function cleanupRateLimitStore(
-  maxAgeMs: number = 5 * 60 * 1000
-): number {
-  const now = Date.now();
-  let removed = 0;
-
-  for (const [key, entry] of rateLimitStore.entries()) {
-    if (now - entry.timestamp > maxAgeMs) {
-      rateLimitStore.delete(key);
-      removed++;
-    }
-  }
-
-  return removed;
-}
-
-/**
- * Get the current size of the rate limit store.
- *
- * Useful for monitoring and debugging.
- *
- * @returns Number of entries in the store
- */
-export function getRateLimitStoreSize(): number {
-  return rateLimitStore.size;
-}
-
-/**
- * Clear all rate limit entries.
- *
- * Useful for testing or resetting state.
- */
-export function clearRateLimitStore(): void {
-  rateLimitStore.clear();
-}
-
-/**
- * Check if a specific IP/form is currently rate limited.
- *
- * @param ipAddress - IP address to check
- * @param formSlug - Form slug
- * @param config - Rate limit configuration
- * @returns Whether the IP is currently rate limited
- */
-export function isRateLimited(
-  ipAddress: string,
-  formSlug: string,
-  config: { maxSubmissions: number; windowMs: number }
-): boolean {
-  const key = `${formSlug}:${ipAddress}`;
-  const now = Date.now();
-  const entry = rateLimitStore.get(key);
-
-  if (!entry) {
-    return false;
-  }
-
-  // Check if window has expired
-  if (now - entry.timestamp > config.windowMs) {
-    return false;
-  }
-
-  return entry.count >= config.maxSubmissions;
+): Promise<SpamCheckResult> {
+  const limiter = new RateLimiter(resolveRateLimitStore());
+  const result = await limiter.check(
+    `form-submit:${formSlug}:${ipAddress}`,
+    config.maxSubmissions,
+    config.windowMs
+  );
+  if (result.allowed) return { isSpam: false };
+  return {
+    isSpam: true,
+    reason: "rate_limit",
+    details: `Rate limit exceeded: ${config.maxSubmissions} per ${config.windowMs}ms`,
+  };
 }
 
 // ============================================================

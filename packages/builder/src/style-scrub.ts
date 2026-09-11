@@ -45,21 +45,34 @@ import {
   compilePageCss,
   compileStyleValues,
   escapeIdentifier,
+  MAX_SCOPE_LENGTH,
   nodeClassName,
   PAGE_ROOT_SELECTOR,
   previewContainerName,
   STYLE_STATES,
   type BlockDocument,
+  type BreakpointDef,
   type BreakpointSet,
   type Declaration,
+  type NodeStyles,
   type StyleState,
   type StyleValue,
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
 import { BASE_BREAKPOINT } from "./breakpoints";
-import type { StyleAddress, StylePolicy, StyleWrite } from "./style-values";
-import { styleValueAtPath, styleWriteOp } from "./style-values";
+import type {
+  StyleAddress,
+  StylePolicy,
+  StyleWrite,
+  StyleWriteRequest,
+} from "./style-values";
+import {
+  readStyleValue,
+  styleValueAtPath,
+  styleWriteOp,
+  styleWriteOps,
+} from "./style-values";
 
 /** The node a scrub is previewing against. */
 export interface ScrubTarget {
@@ -125,6 +138,31 @@ export interface ScrubTarget {
   readonly tokenPrefix?: string;
   /** The site policy, forwarded to the compile so a refused URL never previews. */
   readonly policy?: StylePolicy;
+  /**
+   * The node's own styles, so the preview can decline to outrank a state it
+   * does not belong to.
+   *
+   * The compiler emits one rule per state at EQUAL specificity, in
+   * `STYLE_STATES` order — measured: base, then hover, then focus, then active,
+   * each constrained by a zero-specificity `:where()`. Later therefore beats
+   * earlier on document ORDER alone, and a preview mounted after the whole
+   * sheet is later than all of them. So a base-state preview silently outranks
+   * an existing hover declaration: the block shows the scrubbed base value
+   * while the pointer is over it, and reverts to hover on release.
+   *
+   * Given the styles, the rule excludes exactly the states that are emitted
+   * AFTER this one and declare THIS address. The exclusion is written with
+   * `:not(:where(...))`, whose specificity is that of its most specific
+   * argument — and `:where()` is always zero — so the rule still ranks exactly
+   * where the compiler put the one it is previewing over. Raising specificity
+   * instead would win the hover case and lose the contract: the preview would
+   * land somewhere the committed value cannot.
+   *
+   * Omitted, the preview outranks every later state, which is the behaviour
+   * this field exists to correct. Supply it whenever a node may carry
+   * interaction states — which is any node an editor can style.
+   */
+  readonly styles?: NodeStyles;
 }
 
 /**
@@ -167,6 +205,21 @@ function probeSelector(state: StyleState): string {
   };
   const compiled = compilePageCss(document, {
     breakpoints: { viewport: [{ id: "base", label: "Base" }], container: [] },
+    /*
+     * Compiled the way the EDITOR compiles, which is the only way this fragment
+     * is useful. An editor showing a state the pointer is not really in adds
+     * `previewStateClass` to the node and relies on the sheet carrying an arm
+     * for it — the compiler writes `:where(:hover, .nx-pb-state-hover)` for
+     * both at once. Probed without this the fragment is the bare pseudo-class,
+     * so a preview of a FORCED state matches nothing: the drag shows no
+     * movement and the value jumps into place on release.
+     *
+     * Harmless where no state is forced. `:where()` has zero specificity, so
+     * the selector ranks exactly as it did, and the extra arm matches only an
+     * element carrying a marker class — which a surface that never forces a
+     * state does not have.
+     */
+    previewStates: true,
   });
   return compiled.css.split("{")[0].trim();
 }
@@ -331,7 +384,19 @@ function atRuleFor(target: ScrubTarget): string | null {
  * NOT split a class, so rejecting them would drop a scope the compiler kept.
  */
 function rootSelector(scope: string | undefined): string {
-  if (scope === undefined || scope === "" || /[ \t\n\f\r]/.test(scope)) {
+  if (
+    scope === undefined ||
+    scope === "" ||
+    /[ \t\n\f\r]/.test(scope) ||
+    /*
+     * The compiler's OWN cap, imported rather than restated. A scope prefixes
+     * every rule the page emits, so it refuses an oversized one and writes the
+     * sheet unscoped — and a preview that scoped itself anyway would sit one
+     * class below a rule anchored at the bare root, matching nothing. The drag
+     * would look frozen and the value would appear on release.
+     */
+    scope.length > MAX_SCOPE_LENGTH
+  ) {
     return PAGE_ROOT_SELECTOR;
   }
   return `${PAGE_ROOT_SELECTOR}.${escapeIdentifier(scope)}`;
@@ -367,13 +432,118 @@ export type ScrubPreview =
  * merged rule. Repeating the grouping here would be a second copy of a function
  * the engine already has, kept in step by nothing.
  */
+/**
+ * The states that would beat this preview, as selector exclusions.
+ *
+ * Only the states emitted AFTER this one — earlier states lose to it already —
+ * and only those declaring the SAME address. Granularity matters both ways: a
+ * hover that sets `margin.blockStart` compiles to `margin-block-start` alone and
+ * does not touch a `blockEnd` preview, so excluding on the property would blank
+ * the preview wherever the author had styled any other side of the same box.
+ *
+ * Empty when the caller supplied no styles, which leaves the previous behaviour
+ * rather than guessing at one.
+ */
+/** The definition one breakpoint id has on this site, with its axis. */
+function breakpointDef(
+  breakpoints: BreakpointSet | undefined,
+  id: string
+):
+  | { readonly def: BreakpointDef; readonly axis: "viewport" | "container" }
+  | undefined {
+  if (breakpoints === undefined) return undefined;
+  const viewport = breakpoints.viewport.find(one => one.id === id);
+  if (viewport !== undefined) return { def: viewport, axis: "viewport" };
+  const container = breakpoints.container.find(one => one.id === id);
+  return container === undefined
+    ? undefined
+    : { def: container, axis: "container" };
+}
+
+/**
+ * Whether a rule at `other` still applies everywhere a rule at `edited` does.
+ *
+ * Only such a rule can compete with the preview, which is wrapped in the edited
+ * breakpoint's own at-rule and shows up nowhere else. A bound is always an UPPER
+ * one — `BreakpointDef` carries `maxWidth`, and the unconditional tier omits it
+ * — so the question reduces to whether one range contains the other, which the
+ * site's own definitions answer without parsing any CSS.
+ *
+ * A breakpoint this site does not define competes with nothing: `compilePageCss`
+ * writes no rule for it at all.
+ *
+ * Two CONDITIONAL breakpoints on different axes are read as not covering, and
+ * that is the honest answer rather than a cautious one: a `@media` width and a
+ * `@container` width are measured against different boxes, so neither contains
+ * the other by anything these numbers say. Excluding on a guess would freeze the
+ * preview wherever the guess was wrong, which is the worse of the two failures.
+ */
+function coversTier(
+  breakpoints: BreakpointSet | undefined,
+  edited: string,
+  other: string
+): boolean {
+  if (other === edited) return true;
+  const there = breakpointDef(breakpoints, other);
+  // Undefined here, so the compiler emits nothing for it.
+  if (there === undefined) return false;
+  // Unconditional: it applies at every width, so it covers any tier.
+  if (there.def.maxWidth === undefined) return true;
+  const here = breakpointDef(breakpoints, edited);
+  if (here === undefined || here.def.maxWidth === undefined) return false;
+  if (here.axis !== there.axis) return false;
+  // Both upper bounds on one axis: the wider range contains the narrower.
+  return there.def.maxWidth >= here.def.maxWidth;
+}
+
+/** The breakpoint map a state holds, read by own keys only. */
+function ownBreakpoints(
+  styles: NodeStyles,
+  state: StyleState
+): readonly string[] {
+  const part = Object.getOwnPropertyDescriptor(styles, state);
+  const value = part !== undefined && "value" in part ? part.value : undefined;
+  return typeof value === "object" && value !== null
+    ? Object.keys(value as Record<string, unknown>)
+    : [];
+}
+
+function laterStateExclusions(target: ScrubTarget): string {
+  const { address, styles } = target;
+  if (styles === undefined) return "";
+  const from = STYLE_STATES.indexOf(address.state);
+  /* c8 ignore next -- the address's state comes from the same union */
+  if (from < 0) return "";
+  /*
+   * Every breakpoint the node stores, not only the edited one.
+   *
+   * A later state's rules are emitted after EVERY base-state breakpoint —
+   * measured: `hover` at the unconditional tier comes out after `base` inside
+   * `@media (max-width: 640px)`. So a hover declared one tier out still beats a
+   * narrow base rule, and a lookup keyed on the edited breakpoint alone missed
+   * it: the drag appeared to work while hovered and snapped back on release,
+   * which is this function's own defect one dimension over.
+   */
+  const declaredWhereItCompetes = (state: StyleState): boolean =>
+    ownBreakpoints(styles, state).some(
+      breakpoint =>
+        coversTier(target.breakpoints, address.breakpoint, breakpoint) &&
+        readStyleValue(styles, { ...address, state, breakpoint }) !== undefined
+    );
+  return STYLE_STATES.slice(from + 1)
+    .filter(declaredWhereItCompetes)
+    .map(later => `:not(${stateFragment(later)})`)
+    .join("");
+}
+
 function ruleText(
   target: ScrubTarget,
   declarations: readonly Declaration[],
   atRule: string
 ): string {
   const root = rootSelector(target.scope);
-  const state = stateFragment(target.address.state);
+  const state =
+    stateFragment(target.address.state) + laterStateExclusions(target);
   return declarations
     .map(declaration => {
       const descendant =
@@ -463,4 +633,57 @@ export function scrubCommitOp(
     value,
     target.policy
   );
+}
+
+/**
+ * The single op that ends a scrub touching SEVERAL addresses at once.
+ *
+ * A gesture that moves more than one side — every side of a margin, or a pair
+ * across from each other — is still ONE thing the author did, so it has to cost
+ * one entry in the history. `styleWriteOps` is what makes that true at the
+ * value layer rather than at each caller: it folds the writes so the envelope
+ * carries all of them, where repeated `scrubCommitOp` calls would each build a
+ * complete envelope from the same starting styles and the last would silently
+ * drop the rest.
+ *
+ * The breakpoint is decided ONCE, from the target, and every write is required
+ * to share it. They come from one gesture at one tier by construction — the
+ * addresses differ only in their side — so a mixed list is a caller mistake
+ * rather than a case to serve, and committing a value at a tier the compiler
+ * writes no rule for is the failure this refusal exists to prevent.
+ *
+ * @param target - the node and tier being scrubbed
+ * @param styles - that node's styles before the gesture
+ * @param writes - the addresses and values the gesture settled on
+ * @returns one op for all of them, or the reasons the first refusal gives
+ */
+export function scrubCommitOps(
+  target: ScrubTarget,
+  styles: Parameters<typeof styleWriteOps>[1],
+  writes: readonly StyleWriteRequest[]
+): StyleWrite {
+  if (atRuleFor(target) === null) {
+    return { ok: false, issues: [] };
+  }
+  /*
+   * ENFORCED, not assumed.
+   *
+   * The breakpoint is judged once, from the target, and this used to say that a
+   * mixed list was a caller mistake rather than a case to serve — while doing
+   * nothing to stop one. A write naming another tier would then be persisted
+   * under a breakpoint this function never checked, including one the site does
+   * not define, which `compilePageCss` emits no rule for at all: the value is
+   * stored, the page never shows it, and nothing reports either.
+   *
+   * An invariant a function documents and does not check is one its callers are
+   * free to break, and the caller here is a gesture whose addresses change under
+   * a modifier. Refusing costs one comparison per write.
+   */
+  const { state, breakpoint } = target.address;
+  const strayed = writes.some(
+    write =>
+      write.address.state !== state || write.address.breakpoint !== breakpoint
+  );
+  if (strayed) return { ok: false, issues: [] };
+  return styleWriteOps(target.nodeId, styles, writes, target.policy);
 }

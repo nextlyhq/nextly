@@ -291,9 +291,9 @@ describe("the op that stores the two fields", () => {
 
   it("keeps an EMPTY id distinct from an absent one", () => {
     /*
-     * A third state, and the renderer reads it: it writes `extra.id = cssId`
-     * on `cssId !== undefined`, so a stored `""` renders `id=""` and shadows
-     * any `id` in the bag. Asking for one is therefore a patch, not an unset,
+     * A third state, and the rule reads it: a stored `""` shadows any `id` in
+     * the bag while rendering none of its own, so the element ends up with no
+     * id. Asking for one is therefore a patch, not an unset,
      * and asking to remove one is an unset even though the box looks the same.
      */
     expect(htmlUpdate(fields(""), fields("hero"))).toEqual({
@@ -421,10 +421,9 @@ describe("the id a node actually renders", () => {
 
   it("treats an EMPTY modelled id as present, as the renderer does", () => {
     /*
-     * The renderer writes `extra.id = cssId` whenever `cssId !== undefined`, so
-     * an empty one still overwrites the bag and the element renders `id=""`.
-     * Reading it as absent recorded the bag's value and refused another block an
-     * id that never appears on the page.
+     * An empty modelled id still SHADOWS the bag, so the element renders no id
+     * at all rather than the bag's. Reading it as absent recorded the bag's
+     * value and refused another block an id that never appears on the page.
      */
     const taken = domIdsTaken(
       [node({ id: "b", cssId: "", attributes: { id: "hero" } })],
@@ -564,9 +563,9 @@ describe("the id a bag renders when it holds an empty spelling last", () => {
 
   it("takes the LAST variant even when it is empty", () => {
     /*
-     * The renderer assigns each lowercased key in turn, so a trailing `ID: ""`
-     * leaves the element with `id=""`. Skipping the empty one kept `hero` and
-     * refused another block an id that does not render.
+     * Attribute names are case-insensitive and the last variant decides, so a
+     * trailing `ID: ""` leaves an empty id, which is no id. Skipping the empty
+     * one kept `hero` and refused another block an id that does not render.
      */
     const taken = domIdsTaken(
       [node({ id: "b", attributes: { id: "hero", ID: "" } })],

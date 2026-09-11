@@ -30,11 +30,28 @@ definePlugin({
 The route above is served at:
 
 ```
-/api/plugins/@acme/nextly-plugin-reports/summary
+/admin/api/plugins/@acme/nextly-plugin-reports/summary
 ```
 
-i.e. `/api/plugins/<plugin-name><path>`. Paths support `:param` segments
-(`/items/:id`), captured into `ctx.params`.
+That address has two halves, and only the second one is Nextly's.
+
+**The namespace** is `/plugins/<plugin-name><path>`, and the plugin name is the raw
+package name rather than the admin slug: `@acme/p` answers at `/plugins/@acme/p/export`,
+even though the admin addresses that plugin as `/admin/plugins/acme-p`.
+
+**The mount** is wherever your app puts `createDynamicHandlers`, and Nextly cannot know
+it: the handler is a route file in your app directory. A scaffolded project mounts it at
+`src/app/admin/api/[[...params]]/route.ts`, which is where the `/admin/api` above comes
+from. Move that file and every plugin route moves with it.
+
+<Callout type="warn">
+A bare `/api` prefix is **not** the mount in a scaffolded app. The base template puts only
+`health` and `media` under `/api`, with no catch-all, so a plugin route addressed there is
+a 404 with nothing to explain it. If your routes are not answering, check where your own
+`createDynamicHandlers` route file actually sits.
+</Callout>
+
+Paths support `:param` segments (`/items/:id`), captured into `ctx.params`.
 
 ## The handler context
 
@@ -44,6 +61,65 @@ plugin `ctx` (services/db/events/logger/self/…) **plus** per-request fields:
 | Field | Meaning |
 |---|---|
 | `ctx.user` | The authenticated `AuthUser`, or `null` for a `public` route reached without a session. |
+| `ctx.authenticatedScope` | The caller's own grants when they arrived on an API key; `undefined` for a session or a `public` route. |
+
+### The two spellings of a permission
+
+A permission is written two ways, and both are correct:
+
+| Spelling | Where it is used |
+|---|---|
+| `read-posts` | The stored slug — the database, the admin's permission matrix, and `requiredPermission` on a route. |
+| `posts:read` | What a code-defined `access` rule receives, on a collection, a Single or a field. |
+
+`ctx.authenticatedScope.permissions` gives you the first. Both are derived from
+`ctx.authenticatedScope.grants`, the permission rows the key resolved to, so
+they can never name different sets.
+
+### Narrowing the scope before a sensitive call
+
+A route may give up part of its own authority for one call. Use `narrowScope`;
+the scope's arrays are frozen, so editing them is refused:
+
+```ts
+import { narrowScope, type PluginRoute } from "@nextlyhq/plugin-sdk";
+
+const route: PluginRoute = {
+  method: "PATCH",
+  path: "/posts/:id",
+  handler: async (req, ctx) => {
+    // A SESSION caller carries no scope, so there is nothing to narrow. That is
+    // safe to pass on — `narrowScope` answers `undefined` for `undefined`, and a
+    // call with no scope resolves by the caller's own RBAC exactly as it would
+    // have. Refused here anyway, because THIS route is for API keys: a session
+    // reaching it would run unnarrowed, and the point of the narrowing is that
+    // this call is restricted whoever makes it.
+    const scope = ctx.authenticatedScope;
+    if (scope === undefined) {
+      return Response.json({ error: "this route requires an API key" }, {
+        status: 403,
+      });
+    }
+
+    const id = ctx.params.id;
+    const data = (await req.json()) as Record<string, unknown>;
+    const readOnly = narrowScope(scope, g => g.action === "read");
+
+    await ctx.services.collections.updateEntry("posts", id, data, {
+      as: "user",
+      user: ctx.user ?? undefined,
+      authenticatedScope: readOnly, // refused: the scope no longer holds the write
+    });
+    return Response.json({ ok: true });
+  },
+};
+```
+
+The narrowed scope applies for the whole call, so every check underneath sees
+it — the collection gate, each field's `access` rule, and anything nested. It
+can only ever remove authority; a scope cannot grant itself something the key
+was not issued.
+
 | `ctx.params` | Path parameters captured from `:param` segments. |
 
 Return a standard web `Response`. A thrown error is isolated into a JSON error response
@@ -55,6 +131,43 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
   enforce a permission (see [Permissions](/docs/plugins/permissions)).
 - **Opt out:** set `public: true` to make a route callable without a session (e.g. a
   public sitemap or a webhook receiver). `ctx.user` will be `null`.
+
+### Gating on one of your OWN collections
+
+A permission slug spells a collection — and a host can rename your plugin's
+collections. So a fixed `"create-patterns"` demands a grant that was seeded under
+a different name on any install that renamed it, leaving a route nobody there can
+call.
+
+Give a function instead. It receives your plugin's resolved names and returns the
+slug to require:
+
+```ts
+{
+  method: "POST",
+  path: "/patterns",
+  // `collection()` resolves the rename AND composes the slug, so you never
+  // spell one yourself.
+  requiredPermission: ({ collection }) => collection("patterns", "create"),
+  handler: savePattern,
+}
+```
+
+`collection(declaredSlug, action)` takes the slug **you declared**, not the one
+the host ended up with. `single(declaredSlug, action)` does the same for a
+Single.
+
+Keep the plain string for a permission that cannot move — one your plugin
+declared itself, like `"export-submissions"`.
+
+Two rules for the function:
+
+- **It must be pure and synchronous.** It runs on every request to the route,
+  before anything about the caller is known — so it is given your names and
+  nothing about the request. Deciding on the caller is the access rule's job, and
+  it runs after authentication rather than before it.
+- **If it throws, the request is refused.** A gate that cannot be worked out
+  never falls back to "no permission required".
 
 ```ts
 {
@@ -70,7 +183,35 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
 
 Pair `public: true` with `{ as: "system" }` service calls only for genuinely public,
 derived data. For user data, keep the route authenticated and call services with
-`{ as: "user", user: ctx.user ?? undefined }`.
+`{ as: "user", user, authenticatedScope }`.
+
+### An API key is judged on its own grants
+
+`ctx.user` names the ACCOUNT. When the request arrived on an API key that account is
+the key's **owner**, so a service asked to judge `user.id` alone would resolve the
+owner's roles — and a key scoped to read would be allowed whatever its owner can do.
+
+**You do not have to do anything for this.** The dispatcher pins the caller's scope
+for the length of the request, so an ordinary `{ as: "user", user }` call is judged on
+the key's grants:
+
+```ts
+const posts = await ctx.services.collections.listEntries("posts", {}, {
+  as: "user",
+  user: ctx.user ?? undefined,
+});
+```
+
+`ctx.authenticatedScope` is there when you want to read it — to log the grants, or to
+NARROW them before a particularly sensitive call. Passing it explicitly wins over the
+ambient one:
+
+```ts
+{ as: "user", user: ctx.user ?? undefined, authenticatedScope: ctx.authenticatedScope }
+```
+
+A session caller carries no scope at all, and resolves exactly as it always has —
+super-admin bypass included.
 
 ## Middleware (D27)
 
@@ -78,6 +219,8 @@ Routes support an ordered, typed middleware chain (onion model). Each middleware
 `next()` to continue or returns a `Response` to short-circuit:
 
 ```ts
+import type { Middleware } from "@nextlyhq/plugin-sdk";
+
 const timing: Middleware = async (req, ctx, next) => {
   const res = await next();
   res.headers.set("x-handler", "reports");

@@ -15,6 +15,7 @@
  * @module api/versions-access
  */
 
+import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
@@ -85,9 +86,7 @@ export async function requireRouteVersionReadAccess(
   // scoped for read could see a document's history while bypassing its stored
   // owner-only/custom read rule (the dispatcher path does the same).
   const authenticatedScope: AuthenticatedScope | undefined =
-    auth.authMethod === "api-key"
-      ? { actorType: "apiKey", permissions: auth.permissions }
-      : undefined;
+    auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined;
 
   await assertVersionDocumentReadable(
     scopeKind,

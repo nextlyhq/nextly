@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { getSystemColumnDescriptors } from "../../schema/services/field-column-descriptor";
 import { registerBuiltInSources } from "../built-in-sources";
 import { validateWidgetQuery } from "../query";
 import { clearSources, getSource, listSources } from "../sources";
@@ -21,6 +22,108 @@ describe("built-in sources", () => {
     expect(source?.kind).toBe("collection");
     expect(source?.supports).toContain("count");
     expect(source?.supports).toContain("list");
+  });
+
+  it("publishes every readable column the status lifecycle creates", () => {
+    // Derived from the canonical registry rather than restated, so a system
+    // column added there with the lifecycle presence fails here until someone
+    // decides whether a widget may name it. The source publishes a CURATED set
+    // -- `created_by` is deliberately withheld -- so this pins the lifecycle
+    // columns specifically rather than every system column.
+    //
+    // `first_published_at` was missing: the read path could bucket it while
+    // the source did not advertise it, so validation refused every timeline
+    // over first publication before execution.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+        status: true,
+      },
+    ]);
+
+    const published = new Set(
+      (getSource("collection:posts")?.fields ?? []).map(f => f.name)
+    );
+    const lifecycleColumns = getSystemColumnDescriptors("postgresql", {
+      hasTitleField: true,
+      hasSlugField: true,
+      hasStatus: true,
+    })
+      .map(c => c.name)
+      .filter(name => name === "status" || name === "first_published_at");
+
+    expect(lifecycleColumns.sort()).toEqual(["first_published_at", "status"]);
+    expect(published.has("status")).toBe(true);
+    expect(published.has("firstPublishedAt")).toBe(true);
+  });
+
+  it("withholds the lifecycle columns from a collection without status", () => {
+    // The control: appended unconditionally, they would be a promise the read
+    // path cannot keep -- validation passes and the query fails on a missing
+    // column, which is the defect the timestamps docblock describes.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    const published = new Set(
+      (getSource("collection:posts")?.fields ?? []).map(f => f.name)
+    );
+    expect(published.has("status")).toBe(false);
+    expect(published.has("firstPublishedAt")).toBe(false);
+    expect(published.has("createdAt")).toBe(true);
+  });
+
+  it("carries a field's localization onto the source", () => {
+    // The coarse source type cannot express it -- a localized date is still a
+    // date -- so without the flag a validator reading only the type approves a
+    // timeline the read then refuses, leaving a widget that fails on every
+    // load. The flag is what lets the refusal happen at the declaration.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [
+          { name: "publishedAt", type: "date" },
+          { name: "translatedAt", type: "date", localized: true },
+        ],
+        timestamps: true,
+      },
+    ]);
+
+    const fields = getSource("collection:posts")?.fields ?? [];
+    const byName = new Map(fields.map(f => [f.name, f]));
+    expect(byName.get("translatedAt")?.localized).toBe(true);
+    // The control: an ordinary date must NOT be marked, or the flag would
+    // refuse every timeline rather than the localized ones.
+    expect(byName.get("publishedAt")?.localized).toBeUndefined();
+    expect(byName.get("publishedAt")?.type).toBe("date");
+  });
+
+  it("declares every aggregate op a collection read can answer", () => {
+    // An op the executor implements but no source DECLARES is unreachable:
+    // validation refuses it before execution, so the branch is dead code and
+    // the advertised operation cannot be used from a dashboard. Asserted as the
+    // WHOLE set rather than one `toContain` per op, so an op added to the
+    // executor without being declared here fails rather than passing unnoticed.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    expect(getSource("collection:posts")?.supports).toEqual([
+      "count",
+      "list",
+      "groupBy",
+      "timeseries",
+    ]);
   });
 
   it("keeps the FIRST declaration when two declared fields share a name", () => {
@@ -420,5 +523,83 @@ describe("what a source calls itself, and which field names its rows", () => {
       },
     ]);
     expect(getSource("collection:posts")?.titleField).toBe("tags");
+  });
+});
+
+describe("what a source claims it can do", () => {
+  it("offers timeseries only when it exposes a date the read would take", () => {
+    // A collection with no timestamps and no date field has no valid timeseries
+    // query at all, so advertising the op is a capability nothing can exercise.
+    registerBuiltInSources([
+      {
+        slug: "dateless",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: false,
+      },
+    ]);
+
+    expect(getSource("collection:dateless")?.supports).toEqual([
+      "count",
+      "list",
+      "groupBy",
+    ]);
+  });
+
+  it("offers timeseries once a date is present", () => {
+    // The control: without it, a source that never offered the op would satisfy
+    // the assertion above while making the feature unreachable everywhere.
+    registerBuiltInSources([
+      {
+        slug: "dated",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    expect(getSource("collection:dated")?.supports).toContain("timeseries");
+  });
+
+  it("does not count a localized date as one the read would take", () => {
+    // Its values live in the `_locales` companion, so the read refuses to
+    // bucket it and the op would have no usable field.
+    registerBuiltInSources([
+      {
+        slug: "i18nonly",
+        fields: [{ name: "translatedAt", type: "date", localized: true }],
+        timestamps: false,
+      },
+    ]);
+
+    expect(getSource("collection:i18nonly")?.supports).not.toContain(
+      "timeseries"
+    );
+  });
+});
+
+describe("what a source says about a date the read would refuse", () => {
+  it("marks a localized date as one that cannot be bucketed", () => {
+    // The validator runs in a module the admin type-checks, so it cannot reach
+    // the field registry to decide this for itself. The builder decides, here,
+    // and the validator reads the answer -- so there is still one place that
+    // knows what the read will accept.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [
+          { name: "publishedAt", type: "date" },
+          { name: "translatedAt", type: "date", localized: true },
+        ],
+        timestamps: true,
+      },
+    ]);
+
+    const byName = new Map(
+      (getSource("collection:posts")?.fields ?? []).map(f => [f.name, f])
+    );
+    expect(byName.get("translatedAt")?.bucketable).toBe(false);
+    // The control: an ordinary date is NOT marked, so absence keeps meaning
+    // "the read has no objection" rather than becoming a silent refusal.
+    expect(byName.get("publishedAt")?.bucketable).toBeUndefined();
+    expect(byName.get("createdAt")?.bucketable).toBeUndefined();
   });
 });

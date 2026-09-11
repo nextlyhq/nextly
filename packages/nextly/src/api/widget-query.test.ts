@@ -690,13 +690,26 @@ describe("POST /api/dashboard/query", () => {
       const unknownSource = await postWidgetQuery(
         makeReq({ queries: [{ source: "collection:salaries", op: "count" }] })
       );
-      // `timeseries` because the op has to be one NO source declares, and a
-      // collection source now declares `groupBy`. Whichever op stands here
-      // must stay unsupported: once one is implemented this test starts
-      // comparing a validation message against a source refusal and says so
-      // loudly, which is the intended way to find out.
+      // The unsupported pair is unsupported BY CONSTRUCTION: a source
+      // registered here declaring only `list`, asked for `count`. Naming an op
+      // that no source happened to declare yet tied this test to the op
+      // vocabulary, so implementing one turned it red for a reason that has
+      // nothing to do with the property under test -- which is that the two
+      // refusals are indistinguishable, not which op is unimplemented.
+      registerSystemSource(
+        {
+          id: "system:listing-only",
+          label: "Listing only",
+          kind: "system",
+          supports: ["list"],
+          fields: [{ name: "title", type: "string" }],
+        },
+        vi.fn()
+      );
       const unsupportedOp = await postWidgetQuery(
-        makeReq({ queries: [{ source: "collection:posts", op: "timeseries" }] })
+        makeReq({
+          queries: [{ source: "system:listing-only", op: "count" }],
+        })
       );
 
       const a = (await slotsOf(unknownSource))[0];
@@ -706,7 +719,7 @@ describe("POST /api/dashboard/query", () => {
       expect(b.ok).toBe(false);
       expect(a.error).toBe(b.error);
       expect(a.error).not.toContain("salaries");
-      expect(b.error).not.toContain("timeseries");
+      expect(b.error).not.toContain("listing-only");
     });
 
     it("keeps the source/op detail in the log", async () => {

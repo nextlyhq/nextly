@@ -65,6 +65,7 @@ import {
 } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
+  CANVAS_ROOT_CLASS,
   authoredBreakpoints,
   BlockToolbar,
   BreakpointManager,
@@ -154,7 +155,9 @@ import { readSiteStyleRecord } from "../site-style-record";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
+import { useMayCreatePattern } from "./pattern-capability-client";
 import { usePatternLibrary } from "./pattern-library-client";
+import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
    work down with it. */
@@ -193,7 +196,7 @@ export interface BlocksFieldProps<
    * that ignores it does not merely look wrong: this one opened a full-screen
    * editor bound to whichever form was nearest, which in a version-history view
    * is the SNAPSHOT'S. Committing there writes into a past version of the
-   * document — `VersionSnapshotForm` states that as impossible in its own
+   * document — `ReadOnlyDocumentForm` states that as impossible in its own
    * docblock, and nothing was enforcing it.
    */
   readOnly?: boolean;
@@ -1504,6 +1507,86 @@ function finishInlineEdit(
 }
 
 /**
+ * Raising the save-as-pattern form, and everything that has to be true first.
+ *
+ * A hook rather than three pieces of state in the editor, and not only because
+ * that function is the most complex in the package: the three are one gesture.
+ * An open passage has to be committed before the document is worth saving, the
+ * document that comes back is what the form must store, and the control the
+ * author pressed has to be remembered before it loses focus. Split across the
+ * editor they would be three things to keep in step; here the order is the
+ * function body.
+ */
+function useSavePatternVerb(
+  editor: { document: BlockDocument },
+  inline: { commit: () => InlineEditOutcome }
+): {
+  /** The document to save from, or `null` when the author has not asked. */
+  readonly document: BlockDocument | null;
+  /** Where focus should go when the form closes, asked at that moment. */
+  readonly returnFocusTo: () => HTMLElement | null;
+  readonly open: () => void;
+  readonly close: () => void;
+} {
+  const [document, setDocument] = useState<BlockDocument | null>(null);
+  /*
+   * The opener, read at the GESTURE.
+   *
+   * The toolbar button, the menu item or the palette row still has focus while
+   * this runs, and by the time the dialog is mounting it does not — measured,
+   * it has gone even by Radix's own "about to take focus" hook. This is the
+   * last moment it is knowable.
+   */
+  const [openedFrom, setOpenedFrom] = useState<HTMLElement | null>(null);
+
+  const open = useCallback(() => {
+    /*
+     * An open inline passage is COMMITTED first, and its document is what the
+     * form saves.
+     *
+     * A rich-text editor holds the author's words itself while they type — the
+     * canvas keeps the caret still — so `editor.document` during an open
+     * passage is the one from before it. A form snapshotting that stores a
+     * pattern missing the words on screen, silently.
+     *
+     * A REFUSED commit declines to open the form at all, for the reason the
+     * exit gesture declines to close: the words are in the passage and nowhere
+     * else, and the author has been told what happened.
+     */
+    const finished = finishInlineEdit(inline, editor.document);
+    if (!finished.mayClose) return;
+    const active = window.document.activeElement;
+    setOpenedFrom(active instanceof HTMLElement ? active : null);
+    setDocument(finished.document);
+  }, [editor.document, inline]);
+
+  const close = useCallback(() => setDocument(null), []);
+
+  /*
+   * Resolved at the CLOSE, not at the open.
+   *
+   * The control that raised the form is usually gone by then: a context-menu
+   * item unmounts with its menu, and a palette row with the palette. Focusing a
+   * detached node does nothing and leaves the author on the body, at the top of
+   * the page — so the fallback is the editor itself.
+   *
+   * The canvas REGION rather than the canvas root: the root is a plain div with
+   * no tabindex, so focusing it does nothing, while the region the shell wraps
+   * it in is `tabIndex={0}` because a keyboard author has to be able to scroll
+   * the page. Found by walking up from the root rather than by its label, which
+   * is display copy.
+   */
+  const returnFocusTo = useCallback((): HTMLElement | null => {
+    if (openedFrom?.isConnected === true) return openedFrom;
+    const root = window.document.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    const region = root?.closest<HTMLElement>("[tabindex]") ?? null;
+    return region;
+  }, [openedFrom]);
+
+  return { document, returnFocusTo, open, close };
+}
+
+/**
  * The form's save shortcut, parsed from the SAME spec the form registers.
  *
  * Asked of the shortcut library rather than written out here. A hand-rolled
@@ -1764,6 +1847,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     if (problem !== null) toast.error(problem);
   }, []);
   const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
+
+  // Whether the save-as-pattern form is up. A boolean here rather than the form
+  // itself, because the verb that raises it belongs to the shared chain — the
+  // toolbar, the context menu and the palette all reach it — while everything
+  // the form needs is mounted only while it is up. See `SavePatternPrompt`.
+  const savePattern = useSavePatternVerb(editor, inline);
+  /*
+   * Whether this author may create a pattern at all, read EAGERLY here.
+   *
+   * Beside the verb it gates rather than inside it: the toolbar, the context
+   * menu and the command palette all offer the verb from one shared action
+   * list, so the answer has to exist before any of them draws — and asking in
+   * three places would be three requests answering one question.
+   */
+  const mayCreatePattern = useMayCreatePattern();
 
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -2092,6 +2190,60 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const editedBreakpoint = editedBreakpointAtWidth(
     canvasRender.styleContext.breakpoints,
     measuredWidth
+  );
+
+  /*
+   * What a spacing drag handle writes, and what its live preview compiles with.
+   *
+   * Every field is read back from the SAME context the canvas sheet was
+   * compiled under, never derived again here. A preview compiled against a
+   * different breakpoint set, container name, token prefix or scope than the
+   * rule it has to outrank simply does not match — the drag looks frozen and
+   * the value jumps into place on release, which reads as the handle being
+   * broken rather than as the two answers having diverged.
+   *
+   * The tier and the state are the inspector's own bindings, so the handle
+   * writes exactly where the Style panel's spacing fields write. Those fields
+   * are this row's click path, and a handle landing in another tier would make
+   * the two disagree about what an author just changed.
+   *
+   * Memoized because the overlay holds it in a callback dependency: rebuilt
+   * inline it is a fresh object on every render, and every gesture the handles
+   * are tracking would restart on the next keystroke anywhere in the shell.
+   */
+  const spacingScrub = useMemo(
+    () => ({
+      /*
+       * The SHOWN state, not the preserved one. `shownStyleStateFor` forces the
+       * canvas and the inspector back to `base` whenever the state switcher is
+       * off screen — a multi-selection, or a node the inspector cannot edit —
+       * while keeping the author's previous choice for when it returns. A handle
+       * reading the preserved value would preview the base spacing the canvas is
+       * showing and commit under the hidden state, so the change an author just
+       * dragged would vanish on release.
+       */
+      address: { state: shownStyleState, breakpoint: editedBreakpoint },
+      breakpoints: canvasRender.styleContext.breakpoints,
+      ...(canvasPreviewContainer === undefined
+        ? {}
+        : { previewContainer: canvasPreviewContainer }),
+      ...(canvasRender.styleContext.tokenPrefix === undefined
+        ? {}
+        : { tokenPrefix: canvasRender.styleContext.tokenPrefix }),
+      ...(canvasRender.styleContext.scope === undefined
+        ? {}
+        : { scope: canvasRender.styleContext.scope }),
+      ...(stylePolicy === undefined ? {} : { policy: stylePolicy }),
+    }),
+    [
+      canvasPreviewContainer,
+      canvasRender.styleContext.breakpoints,
+      canvasRender.styleContext.scope,
+      canvasRender.styleContext.tokenPrefix,
+      editedBreakpoint,
+      shownStyleState,
+      stylePolicy,
+    ]
   );
   /*
    * Release a requested width the site no longer offers.
@@ -2654,7 +2806,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           It draws the live region and publishes the structural verbs to what it
           wraps, which is how the toolbar presses exactly what the keys press.
         */}
-        <BlockKeyboardActions editor={editor} onEditText={inline.begin}>
+        <BlockKeyboardActions
+          editor={editor}
+          onEditText={inline.begin}
+          onSaveAsPattern={savePattern.open}
+          /*
+            Whether the author holds the grant the save is judged by, asked of
+            the server because only it knows the RESOLVED collection: a site may
+            rename it, and the browser knows the declared name alone. Passed
+            here rather than read inside the builder for the same reason
+            `onSaveAsPattern` is passed — the collection a pattern goes in is
+            this plugin's business, not the canvas's.
+          */
+          mayCreatePattern={mayCreatePattern}
+        >
           {/*
             Inside the verbs provider, which is what lets the palette run
             exactly what the keystrokes and the toolbar run.
@@ -2765,7 +2930,21 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   bands report a layout that is mid-change during a drag, so
                   every value on them is about to be wrong.
                 */}
-                    <SpacingOverlay editor={editor} hidden={dragging} />
+                    <SpacingOverlay
+                      editor={editor}
+                      hidden={dragging}
+                      /*
+                       * The tier a spacing handle writes to, and what the canvas
+                       * compiled this page under. Not optional in practice: the
+                       * overlay falls back to the base breakpoint of the resting
+                       * state, so without this a handle on a narrow canvas would
+                       * preview nothing and commit at the wrong tier — the same
+                       * inputs the inspector beside it is already given, read
+                       * from the ONE context that compiled the sheet rather than
+                       * derived a second time.
+                       */
+                      scrub={spacingScrub}
+                    />
                     {/*
                   Suppressed during a drag for the same reason the toolbar and
                   the bands are: the document is mid-change, so a control
@@ -2800,6 +2979,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               />
             </BlockContextMenu>
           )}
+          {/*
+            Rendered inside the verbs provider so the form and the button that
+            opens it are one feature rather than two that have to be kept in
+            step. The dialog is CONTROLLED from here because the verb that opens
+            it belongs to the same chain as every other block verb — a form that
+            owned its own trigger would be reachable from one surface and not
+            from the palette, the context menu or a keystroke.
+          */}
+          <SavePatternPrompt
+            document={savePattern.document}
+            selectedIds={editor.selection.ids}
+            onClose={savePattern.close}
+            returnFocusTo={savePattern.returnFocusTo}
+          />
         </BlockKeyboardActions>
       </BuilderShell>
     </div>

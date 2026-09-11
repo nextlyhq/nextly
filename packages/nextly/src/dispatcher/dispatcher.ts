@@ -19,6 +19,7 @@
 
 import { createAdapterFromEnv } from "../database/factory";
 import { NextlyError } from "../errors/nextly-error";
+import { runWithRequestScope } from "../hooks/request-scope";
 import { ServiceContainer } from "../services";
 import type { ServiceResult } from "../types/auth";
 
@@ -29,7 +30,6 @@ import {
   dispatchEmailProviders,
   dispatchEmailTemplates,
 } from "./handlers/email-dispatcher";
-import { dispatchForms } from "./handlers/form-dispatcher";
 import { dispatchSingles } from "./handlers/single-dispatcher";
 import { dispatchUser } from "./handlers/user-dispatcher";
 import { dispatchUserFields } from "./handlers/user-field-dispatcher";
@@ -67,7 +67,6 @@ export class ServiceDispatcher {
     "auth",
     "collections",
     "singles",
-    "forms",
     "field-groups",
     "userFields",
     "emailProviders",
@@ -185,7 +184,11 @@ export class ServiceDispatcher {
     }
 
     try {
-      const result = await this.executeServiceMethod(request);
+      // Pins the request for the whole dispatch, so a service several layers
+      // down is told about the caller whether or not the layer above named it.
+      const result = await runWithRequestScope(request.request, () =>
+        this.executeServiceMethod(request)
+      );
 
       // Handlers built via respondX helpers return a Response directly
       // (body, status, content-type already set). Pass through unchanged
@@ -253,13 +256,17 @@ export class ServiceDispatcher {
       case "auth":
         return dispatchAuth(this.container, method, p, body);
       case "collections":
-        return dispatchCollections(this.container, method, p, body);
+        return dispatchCollections(
+          this.container,
+          method,
+          p,
+          body,
+          request.request
+        );
       case "rbac":
         return dispatchRbac(this.container, method, p, body);
       case "singles":
-        return dispatchSingles(method, p, body);
-      case "forms":
-        return dispatchForms(this.container, method, p, body, request.request);
+        return dispatchSingles(method, p, body, request.request);
       case "field-groups":
         return dispatchComponents(method, p, body);
       case "userFields":

@@ -18,6 +18,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   pluginRouteFullPath,
   type JsonValue,
+  type PluginRouteMount,
   type RouteMethod,
 } from "nextly/config";
 import { useCallback, useRef, useState } from "react";
@@ -64,8 +65,28 @@ export interface PluginRouteWrite {
    * `pluginRouteFullPath` with this plugin's own name, so a plugin cannot
    * invalidate another plugin's cached reads however it spells the path.
    */
-  readonly invalidates?: readonly string[];
+  readonly invalidates?: readonly PluginRouteInvalidation[];
+  /**
+   * Where the route this writes to answers. Defaults to the namespace.
+   *
+   * See {@link PluginRouteRequest.mount}. A write aimed at the wrong mount
+   * requests a path nothing serves, which fails rather than writing elsewhere.
+   */
+  readonly mount?: PluginRouteMount;
 }
+
+/**
+ * A read this write makes stale, named the way the read named itself.
+ *
+ * A bare string carries the write's own mount, which is right whenever both
+ * halves live in the same place. A plugin that serves a rooted write and a
+ * namespaced read has to say so per entry, because the key `usePluginRoute`
+ * cached under is the RESOLVED path: resolved under the wrong mount, the
+ * invalidation names a key nothing holds and the stale read stays on screen.
+ */
+export type PluginRouteInvalidation =
+  | string
+  | { readonly path: string; readonly mount?: PluginRouteMount };
 
 /** What a write reports back while and after it runs. */
 export interface PluginRouteWriter<TBody, TResult extends object | null> {
@@ -110,9 +131,10 @@ export function usePluginRouteMutation<
   path,
   method = "POST",
   invalidates,
+  mount,
 }: PluginRouteWrite): PluginRouteWriter<TBody, TResult> {
   const client = useQueryClient();
-  const route = pluginRouteFullPath(plugin, path);
+  const route = pluginRouteFullPath(plugin, path, mount);
   const mutation = useMutation<TResult | undefined, Error, PluginWrite<TBody>>({
     // The TARGET travels with the body rather than being closed over. A write
     // paused offline has its options updated by TanStack before its retryer
@@ -135,12 +157,23 @@ export function usePluginRouteMutation<
     // caller is told about and may repeat deliberately, and a write that is
     // retried wrongly costs duplicate data nothing can identify afterwards.
     retry: false,
-    onSuccess: async (_answered, sent: PluginWrite<TBody>) => {
+    onSuccess: (_answered, sent: PluginWrite<TBody>) => {
       // The keys THIS write carried, not the ones the hook points at now. A
       // callback reading the latest render refreshes the wrong plugin's reads
       // when the target changed while the request was in flight, and leaves
       // the data it did change stale.
-      await Promise.all(
+      //
+      // NOT awaited, deliberately. Returning the promise keeps the mutation
+      // pending until every invalidated read has refetched — so a write is
+      // reported as still running while a GET it does not depend on comes back,
+      // and a surface that closes on success sits there until it does. A
+      // plugin's reads can be large: the page builder's own library route is
+      // bounded at sixteen mebibytes, and a save waited for all of it before
+      // its dialog could close.
+      //
+      // The refresh still happens, and the surface that reads it re-renders
+      // when it lands. What changes is only that the WRITE stops waiting.
+      void Promise.all(
         sent.invalidates.map(queryKey => client.invalidateQueries({ queryKey }))
       );
     },
@@ -178,7 +211,9 @@ export function usePluginRouteMutation<
           // carries the keys it was submitted with.
           invalidates: (invalidates ?? []).map(target => [
             "plugin-route",
-            pluginRouteFullPath(plugin, target),
+            typeof target === "string"
+              ? pluginRouteFullPath(plugin, target, mount)
+              : pluginRouteFullPath(plugin, target.path, target.mount),
           ]),
         });
         // A success clears the last failure — but only one from a write
@@ -205,7 +240,7 @@ export function usePluginRouteMutation<
         setInFlight(inFlightRef.current);
       }
     },
-    [mutateAsync, method, route, plugin, invalidates]
+    [mutateAsync, method, route, plugin, invalidates, mount]
   );
 
   return { write, pending: inFlight > 0, error: failure?.error ?? null };

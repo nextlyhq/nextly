@@ -25,11 +25,16 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { patternCapabilityRoute } from "./capability-route";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
 import {
   CLASS_USAGE_INDEX_SLUG,
   classUsageIndexCollection,
 } from "./collections/class-usage-index";
+import {
+  COMPONENT_USAGE_INDEX_SLUG,
+  componentUsageIndexCollection,
+} from "./collections/component-usage-index";
 import {
   COMPONENTS_SLUG,
   componentsCollection,
@@ -41,6 +46,7 @@ import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { patternLibraryRoute } from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -106,7 +112,7 @@ function pagePreviewBreakpoints(
        * in, which has no use for it and cannot run it.
        */
       reader: async () => {
-        const { getCachedNextly } = await import("nextly");
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
         const nextly = await getCachedNextly();
         return { findSingle: args => nextly.findSingle(args) };
       },
@@ -449,6 +455,21 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // collection, because it is a property of the plugin being INSTALLED: the
       // index table exists whether or not anything maintains it, and a host
       // that installs the plugin is asking for both.
+      // Refuse deleting a component a Layout still names. Registered beside
+      // the index maintenance because both answer "is this still in use", and
+      // separately because they answer it about different things: the index is
+      // a count over many pages, this is a refusal over few Layouts, and the
+      // refusal has to be exact at the moment it refuses.
+      registerLayoutComponentGuard({
+        ctx,
+        // RESOLVED slugs. A host may rename either, and a guard holding the
+        // declared name would register on a collection nothing deletes from
+        // and scan one that does not exist — refusing nothing, silently.
+        componentsCollection:
+          ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
+        layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+      });
+
       registerClassUsageMaintenance({
         ctx,
         // The RESOLVED slug, not the declared one. An integrator may
@@ -459,6 +480,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         indexCollection:
           ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
           CLASS_USAGE_INDEX_SLUG,
+        // Resolved the same way and for the same reason: an integrator may
+        // rename it, and a hook holding the declared name would write every row
+        // to a collection that does not exist and fail to recognise its own
+        // writes, so the wildcard would re-enter itself.
+        componentIndexCollection:
+          ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+          COMPONENT_USAGE_INDEX_SLUG,
         // The registry record, projected. `getCollection` is declared to
         // return a shape that promises none of the properties this question
         // reads, while returning an object that carries all of them.
@@ -503,6 +531,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         componentsCollection(),
         layoutsCollection(),
         classUsageIndexCollection(),
+        componentUsageIndexCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated
@@ -549,7 +578,11 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // the planner's answer and the planner needs the server's block
       // registry — the browser holds the core blocks and not the ones another
       // plugin declared.
-      routes: [patternLibraryRoute(), savePatternRoute()],
+      routes: [
+        patternLibraryRoute(),
+        savePatternRoute(),
+        patternCapabilityRoute(),
+      ],
 
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which

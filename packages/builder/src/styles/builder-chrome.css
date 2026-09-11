@@ -2366,9 +2366,16 @@
  * state an author most needs to spot reads as a full stop.
  *
  * What is left is the pair the affordance actually wants: `--nx-chart-2` for a
- * value set here and `--nx-chart-4`, amber-500, for one arriving from elsewhere
- * — the blue-and-orange distinction the prior art established, in tokens that
- * are retuned with the theme rather than pinned to a hex.
+ * value set here and `--nx-chart-4` for one arriving from elsewhere — the
+ * blue-and-orange distinction the prior art established, in tokens that are
+ * retuned with the theme rather than pinned to a hex.
+ *
+ * Deliberately named by SLOT rather than by ramp step. Both resolve to a
+ * different step per mode — amber-700 and cyan-600 on the light surface here,
+ * the 500s on the dark one — because this inspector's background is
+ * `--nx-builder-surface`, an alias of `--nx-muted`, and a 6px dot has to clear
+ * the non-text minimum against it in both. Writing the step into the prose is
+ * what made this comment wrong the first time the two modes diverged.
  */
 .nx-style-inspector__provenance {
   display: inline-block;
@@ -3419,4 +3426,80 @@
   flex: 0 0 auto;
   opacity: 0.75;
   font-style: italic;
+}
+
+/*
+ * The spacing handles: the interactive half of the overlay.
+ *
+ * `pointer-events: auto` re-enables what the layer above turns off. The layer
+ * takes no pointer events at all, because bands cover the block they measure
+ * and a hit-test landing there would make the selected block unclickable; a
+ * handle is a thin strip on one edge, and taking a press is its whole purpose.
+ */
+.nx-spacing-handles__handle {
+  position: absolute;
+  pointer-events: auto;
+  /*
+   * Above the bands, so the strip on a band's edge takes the press rather than
+   * the band drawn under it. Still below the toolbar and the drop indicator,
+   * which the layer's own `z-index` already settles.
+   */
+  z-index: 1;
+  /* The axis the value moves along, so the cursor states which way to pull. */
+  touch-action: none;
+}
+
+.nx-spacing-handles__handle[data-side="top"],
+.nx-spacing-handles__handle[data-side="bottom"] {
+  cursor: ns-resize;
+}
+
+.nx-spacing-handles__handle[data-side="left"],
+.nx-spacing-handles__handle[data-side="right"] {
+  cursor: ew-resize;
+}
+
+/*
+ * Invisible until it is wanted. A permanent bar on all eight edges competes
+ * with the bands' own fills and with the selection outline, and the value chip
+ * is what an author reads at rest; the affordance appears under the pointer and
+ * whenever the handle holds focus, which is what makes the keyboard path
+ * discoverable rather than merely present.
+ */
+.nx-spacing-handles__handle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: var(--nx-primary);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-spacing-handles__handle:hover::before,
+.nx-spacing-handles__handle:focus-visible::before {
+  opacity: 0.85;
+}
+
+/*
+ * The focus ring is drawn on the strip itself rather than left to the UA
+ * default, which would be clipped to a nine-pixel band and easy to miss.
+ */
+.nx-spacing-handles__handle:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/*
+ * The live region is permanently mounted and never seen. A polite region
+ * inserted already carrying its text is not reliably announced, so it cannot be
+ * mounted with the message; `clip-path` keeps it out of the picture without
+ * `display: none`, which would take it out of the accessibility tree too.
+ */
+.nx-spacing-handles__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

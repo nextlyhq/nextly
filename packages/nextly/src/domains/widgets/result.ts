@@ -10,6 +10,8 @@
  * @module domains/widgets/result
  */
 
+import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
+
 import type { WidgetSourceFieldType } from "./sources";
 
 /**
@@ -99,6 +101,27 @@ export type WidgetResult =
        * `atLeast` makes for a bounded count. Absent means every bucket is here.
        */
       truncated?: boolean;
+    }
+  | {
+      op: "timeseries";
+      /**
+       * One point per interval in the window, oldest first.
+       *
+       * An interval with no rows is present with a count of zero rather than
+       * left out. A `GROUP BY` cannot report a bucket it never grouped, so the
+       * quiet interval is simply missing from the database's answer -- and a
+       * line drawn through the gap reads as steady activity rather than none.
+       *
+       * Zero means NO ROWS, never unknown: every interval in the window was
+       * read, so a reader can act on a zero the same way they act on a five.
+       *
+       * `start` is the instant the interval begins, as UTC. A chart shows it in
+       * the viewer's own zone; bucketing happens in UTC so the same row lands
+       * in the same interval whoever is looking.
+       */
+      points: { start: string; count: number }[];
+      /** The interval the points were bucketed by. */
+      interval: TimeseriesInterval;
     };
 
 /**

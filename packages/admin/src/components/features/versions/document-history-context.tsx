@@ -67,8 +67,9 @@ export interface DocumentHistoryValue {
 
 /**
  * Defaults to live with a setter that does nothing, so a document editor
- * rendered without the provider — a Single, a preview, a test harness — behaves
- * exactly as it did before history existed rather than throwing.
+ * rendered without the provider — an embedded editor, a preview, a test
+ * harness — behaves exactly as it did before history existed rather than
+ * throwing. Both full-page editors provide it through the shared host.
  */
 export const DocumentHistoryContext = createContext<DocumentHistoryValue>({
   viewing: null,

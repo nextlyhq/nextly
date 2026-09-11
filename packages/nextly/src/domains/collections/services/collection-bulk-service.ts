@@ -498,6 +498,8 @@ export class CollectionBulkService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
     /**
@@ -535,6 +537,7 @@ export class CollectionBulkService extends BaseService {
         trusted: params.trusted,
         status: sourceStatus,
         context: params.context,
+        request: params.request,
         // Judge the source read on the key's OWN read grant: a create-scoped key
         // that lacks read must not copy fields from a row it cannot see.
         authenticatedScope: params.authenticatedScope,
@@ -603,6 +606,10 @@ export class CollectionBulkService extends BaseService {
           routeAuthorized: params.routeAuthorized,
           // Judge the create-as-published on the key's own publish grant.
           authenticatedScope: params.authenticatedScope,
+          // Each row in a batch is its own create, and a caller's hook context
+          // describes the CALL, so every row in it carries the same one.
+          context: params.context,
+          request: params.request,
         },
         duplicateData
       );
@@ -646,6 +653,8 @@ export class CollectionBulkService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /**
      * The caller's authenticated scope. Forwarded to each per-id delete so a
      * scoped API key is judged on its OWN delete grant, not the key owner's.
@@ -676,6 +685,7 @@ export class CollectionBulkService extends BaseService {
               overrideAccess: params.overrideAccess,
               routeAuthorized: params.routeAuthorized,
               context: params.context,
+              request: params.request,
               // Judge the key's own delete grant per row.
               authenticatedScope: params.authenticatedScope,
             });
@@ -742,6 +752,8 @@ export class CollectionBulkService extends BaseService {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
     /**
@@ -772,6 +784,7 @@ export class CollectionBulkService extends BaseService {
                 overrideAccess: params.overrideAccess,
                 routeAuthorized: params.routeAuthorized,
                 context: params.context,
+                request: params.request,
                 // Judge the key's own publish/unpublish grant per row.
                 authenticatedScope: params.authenticatedScope,
               },
@@ -858,6 +871,8 @@ export class CollectionBulkService extends BaseService {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
       /**
@@ -943,6 +958,7 @@ export class CollectionBulkService extends BaseService {
       overrideAccess: true,
       status: "all",
       context: params.context,
+      request: params.request,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit, // Use limit or max allowed
     });
@@ -1013,6 +1029,7 @@ export class CollectionBulkService extends BaseService {
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,
+      request: params.request,
       // Carry the key's scope into the per-id transition gate.
       authenticatedScope: params.authenticatedScope,
     });
@@ -1068,6 +1085,8 @@ export class CollectionBulkService extends BaseService {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
     },
     options?: {
       /**
@@ -1141,6 +1160,7 @@ export class CollectionBulkService extends BaseService {
       overrideAccess: true,
       status: "all",
       context: params.context,
+      request: params.request,
       depth: 0, // Only need IDs, not full relationships
       limit: limit > 0 ? limit : PAGINATION_DEFAULTS.maxLimit,
     });
@@ -1207,6 +1227,7 @@ export class CollectionBulkService extends BaseService {
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       context: params.context,
+      request: params.request,
     });
   }
 
@@ -1259,6 +1280,10 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Arbitrary data passed to hooks via context */
+      context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       // A scoped API key is judged on its OWN publish grant when the batch's
       // transition authorization is pre-resolved, not the key owner's RBAC.
       authenticatedScope?: AuthenticatedScope;
@@ -2082,6 +2107,8 @@ export class CollectionBulkService extends BaseService {
       user?: UserContext;
       authenticatedScope?: AuthenticatedScope;
       overrideAccess?: boolean;
+      /** Named so the per-item write's request facts survive the narrowing. */
+      request?: Request;
     },
     transitionAuth: Awaited<
       ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>
@@ -2133,6 +2160,8 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       user?: UserContext;
       authenticatedScope?: AuthenticatedScope;
+      /** Named so the per-item write's request facts survive the narrowing. */
+      request?: Request;
     },
     transitionAuth: Awaited<
       ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>

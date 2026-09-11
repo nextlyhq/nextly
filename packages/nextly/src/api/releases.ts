@@ -21,7 +21,9 @@
  * @module api/releases
  */
 
+import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
@@ -755,26 +757,34 @@ export async function handleReleaseRequest(
 
     const nextly = await getCachedNextly();
 
-    return operation({
-      request,
-      caller: {
-        userId: auth.userId,
-        overrideAccess: false,
-        authenticatedScope:
-          auth.authMethod === "api-key"
-            ? { actorType: "apiKey", permissions: auth.permissions }
-            : undefined,
-        // The authenticated role set. `apiKeyWriteAllowed` evaluates
-        // code-defined publish rules against it, so dropping it makes every
-        // rule see `roles: []` — a role-positive rule then rejects a valid key,
-        // and an absence-based one ("not a contractor") admits one it should
-        // refuse.
-        userRoles: auth.roles,
-      },
-      nextly,
-      releases: nextly.releases,
-      releaseId: routeParams.releaseId ?? "",
-      memberId: routeParams.memberId ?? "",
-    });
+    // Pinned for the WHOLE operation, not only handed to the one call that
+    // names it. An operation resolves its target before it acts — `resolveTarget`
+    // reads with `auth.userId` alone — and a read that carries no scope is
+    // judged on the key OWNER's grants. The `caller.authenticatedScope` below
+    // reaches the act and not the lookup that precedes it, so the two halves of
+    // one request were answering to different callers.
+    return runWithCallerScope(
+      auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined,
+      () =>
+        operation({
+          request,
+          caller: {
+            userId: auth.userId,
+            overrideAccess: false,
+            authenticatedScope:
+              auth.authMethod === "api-key" ? apiKeyScopeFrom(auth) : undefined,
+            // The authenticated role set. `apiKeyWriteAllowed` evaluates
+            // code-defined publish rules against it, so dropping it makes every
+            // rule see `roles: []` — a role-positive rule then rejects a valid
+            // key, and an absence-based one ("not a contractor") admits one it
+            // should refuse.
+            userRoles: auth.roles,
+          },
+          nextly,
+          releases: nextly.releases,
+          releaseId: routeParams.releaseId ?? "",
+          memberId: routeParams.memberId ?? "",
+        })
+    );
   })(req);
 }

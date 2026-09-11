@@ -50,6 +50,22 @@ export interface PatternLibraryRead {
    * library resolves.
    */
   readonly patterns: readonly SavedPattern[];
+  /**
+   * The categories this library already uses, in the order they read best.
+   *
+   * Offered as SUGGESTIONS by the save form, which is what stops one library
+   * growing "Hero", "hero" and "Heroes" as three groupings nobody chose. Not a
+   * closed list: the useful groupings belong to the site being built, so the
+   * field stays free text and a new site with no categories yet still works.
+   *
+   * Taken from every row the READ returned rather than from the insertable
+   * ones, because a page-granularity pattern's category is a category this
+   * library uses — it is simply not offered for insertion.
+   *
+   * Empty until the read arrives, which the form is written to expect: it takes
+   * a name before the suggestions land and gains them when they do.
+   */
+  readonly categories: readonly string[];
 }
 
 /**
@@ -85,11 +101,38 @@ export function usePatternLibrary(): PatternLibraryRead {
     // library: `filter` allocates whether or not it dropped anything.
     return insertable.length === all.length ? all : insertable;
   }, [read.data]);
-  return { patterns };
+  const categories = useMemo(() => categoriesOf(read.data?.items), [read.data]);
+  return { patterns, categories };
+}
+
+/**
+ * Every category named by a stored pattern, deduplicated and ordered.
+ *
+ * Case-INSENSITIVE deduplication, keeping the first spelling seen. A library
+ * holding both "Heroes" and "heroes" already has the problem this list exists
+ * to prevent, and offering both spellings would invite a third.
+ *
+ * Sorted by name rather than by frequency. A suggestion list an author scans is
+ * one they can predict; ordering by how often each is used moves the entries
+ * around as the library grows, so the one they reached for last time is
+ * somewhere else.
+ */
+function categoriesOf(items: readonly LibraryPattern[] | undefined): string[] {
+  if (items === undefined) return NO_CATEGORIES;
+  const seen = new Map<string, string>();
+  for (const item of items) {
+    const name = typeof item.category === "string" ? item.category.trim() : "";
+    if (name === "") continue;
+    const key = name.toLocaleLowerCase();
+    if (!seen.has(key)) seen.set(key, name);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
 /** One empty list for every read that has nothing yet; see `usePatternLibrary`. */
 const NO_PATTERNS: readonly SavedPattern[] = [];
+/** The same, for the categories, and for the same identity reason. */
+const NO_CATEGORIES: string[] = [];
 
 /**
  * Whether a saved pattern belongs in the INSERT list.

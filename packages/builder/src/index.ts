@@ -179,9 +179,9 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * carrying its own copy of this ranking would certify its own copy, and would
  * keep passing through exactly the correction it exists to catch.
  *
- * `InsertTarget` and `SlotSource` travel with them because the region types are
- * written in terms of both: a consumer that can name a region but not what it
- * accepts cannot ask the nesting rule about one.
+ * `PlacementTarget` and `SlotSource` travel with them because the region types
+ * are written in terms of both: a consumer that can name a region but not what
+ * it accepts cannot ask the nesting rule about one.
  */
 export {
   axisOfRects,
@@ -203,6 +203,13 @@ export {
   blockAllowedAt,
   registryBlockSource,
   registrySlotSource,
+  // The engine spells the placement destination, and this package re-exports
+  // that spelling rather than a second one: the drop and region types below are
+  // written in terms of it, and a consumer holding one has to be able to hand it
+  // straight to the nesting rule. `InsertTarget` is the name it used to carry,
+  // kept for one release so a host importing it still compiles.
+  type PlacementTarget,
+  /** @deprecated Import `PlacementTarget`; its discriminant is `kind`. */
   type InsertTarget,
   // The shape a host has to supply for the panel to offer saved patterns. The
   // prop has existed since the tier landed and the type did not, so a host
@@ -361,6 +368,17 @@ export {
 } from "./builder-commands";
 
 /**
+ * @experimental Why a composition verb refused, in words an author can act on.
+ *
+ * From this entry because the surface that phrases a refusal is not always one
+ * of the editor's own: the form that names a pattern is the host's, and it has
+ * to say the same thing the toolbar said about the same selection. A second
+ * phrasing of one cause is how an author is told two different things about one
+ * refusal.
+ */
+export { compositionRefusalReason, isPlanProblem } from "./composition-refusal";
+
+/**
  * @experimental Who owns Escape while the editor is on screen.
  *
  * From this entry because the rule is a plain function over the DOM and a
@@ -431,9 +449,11 @@ export {
   styleClearOp,
   styleValueAtPath,
   styleWriteOp,
+  styleWriteOps,
   type StyleAddress,
   type StylePolicy,
   type StyleWrite,
+  type StyleWriteRequest,
 } from "./style-values";
 
 /**

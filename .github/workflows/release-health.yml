@@ -1,0 +1,202 @@
+name: Release health
+
+# Does the release `main` declares actually exist everywhere it should?
+#
+# A release is three facts: the packages are on the registry, a git tag points
+# at the commit they were built from, and a GitHub Release describes it.
+# Publishing writes the first. A later step writes the other two, and that step
+# is skipped whenever verification fails. `0.0.2-alpha.64` and `0.0.2-alpha.65`
+# each sat on npm for hours with no tag and no release, and the only signal was
+# one red cross on one run, in a repository where runs go red all day.
+#
+# Scheduled and advisory rather than a gate inside `release.yml`, matching
+# dependency-audit and package-smoke. A detector on the release path can only
+# fail closed, and failing closed here means nobody can ship: a run that strands
+# a train reports the strand, and the `gh run rerun --failed` that would repair
+# it re-runs the same detector against the same state. The gap this closes is
+# invisibility, not a missing gate, so it reports into an issue that is still
+# open tomorrow instead of a cross that scrolls away.
+
+on:
+  # Immediately after any release run, whatever its conclusion. A release that
+  # fails before finalization is exactly the state worth reporting, and the
+  # report is wanted within minutes rather than at the next cron.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  schedule:
+    # Daily, in the gap between the nightly Lighthouse run and the repository
+    # metadata check, so the three do not contend for runners.
+    - cron: "47 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A release run and the nightly can otherwise overlap, and two runs that both
+# see no open issue would each file one. Queue rather than cancel: a run that
+# has already found an unfinalized release should finish reporting it.
+concurrency:
+  group: release-health
+  cancel-in-progress: false
+
+jobs:
+  finalized:
+    name: The release main declares is finalized
+    # Same guard as `release.yml`. A fork's Release run completes with its only
+    # job skipped and still fires `workflow_run`, and this check reads the
+    # upstream registry and the upstream GitHub Release, so on a fork it would
+    # file an issue about a release the fork does not own.
+    if: github.repository == 'nextlyhq/nextly'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      unfinalized: ${{ steps.check.outputs.unfinalized }}
+      headline: ${{ steps.check.outputs.headline }}
+      state: ${{ steps.check.outputs.state }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Dropped deliberately: the check reaches the remote with
+          # `git ls-remote origin`, and this repository is public, so that read
+          # is anonymous. Making it private would turn every tag lookup into
+          # "unknown" and this job into a daily exit 2, so restore the
+          # credential in the same change.
+          # 🔴 Always the default branch, on every trigger. A `workflow_dispatch`
+          # from another branch or a tag would otherwise check that ref out, and
+          # `github.sha` would name it too, so the job would grade an unreleased
+          # branch manifest and file an upstream issue about a release `main`
+          # never declared. This workflow says it checks main; this is what
+          # makes that true.
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          persist-credentials: false
+          # Full history, because a tag is judged by the version its target
+          # commit declares. A shallow clone cannot read a commit older than its
+          # depth, which would turn every tag into an unreadable one.
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Three outcomes, kept apart. 0 is a finished release, 1 is a published
+      # one missing its tag or its GitHub Release, and 2 is a question that
+      # could not be asked - an unreachable registry or remote. Only 1 files an
+      # issue: a 2 fails the run so it is visible, without turning a network
+      # blip into a release-integrity report someone has to close by hand.
+      - name: Check
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # 🔴 The CHECKER comes from the default branch; the SUBJECT is passed
+          # as an argument. Checking out the triggering commit would have run
+          # whatever checker that commit carried, and commits older than this
+          # feature carry none at all: `MODULE_NOT_FOUND` exits 1, which this
+          # workflow reads as an unfinalized release and files an issue about.
+          # Separating the two is what the script's ref argument is for, and it
+          # is why the checkout above fetches full history.
+          SUBJECT: >-
+            ${{ github.event.workflow_run.head_sha
+                || github.event.repository.default_branch
+                || 'main' }}
+        run: |
+          set +e
+          report=$(node scripts/release/check-finalized.mjs "$SUBJECT" 2>&1)
+          code=$?
+          set -e
+
+          printf '%s\n' "$report"
+
+          if [ "$code" -eq 1 ]; then
+            echo "unfinalized=true" >> "$GITHUB_OUTPUT"
+            # The first non-empty line AFTER the banner. A fixed line number
+            # takes whatever a runtime warning pushed into that position, and
+            # the headline becomes an issue title nobody can act on. `exit`
+            # after the first match keeps it to one line, so the value can
+            # never carry a newline into $GITHUB_OUTPUT.
+            headline=$(printf '%s\n' "$report" \
+              | awk '/check-finalized: FAILED/{seen=1; next} seen && NF {print; exit}' \
+              | sed 's/^ *//')
+            echo "headline=${headline}" >> "$GITHUB_OUTPUT"
+            # Which defect, not just that there is one. The checker prints this
+            # as its last line so it cannot displace the diagnosis above.
+            state=$(printf '%s\n' "$report" \
+              | awk -F= '/^check-finalized: state=/{print $2; exit}')
+            echo "state=${state:-unfinalized}" >> "$GITHUB_OUTPUT"
+            {
+              echo "## The release main declares is not finished"
+              echo
+              echo '```'
+              printf '%s\n' "$report"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "unfinalized=false" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+  report-failure:
+    name: File an issue on failure
+    needs: [finalized]
+    if: >-
+      always() && github.repository == 'nextlyhq/nextly'
+      && needs.finalized.outputs.unfinalized == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEADLINE: ${{ needs.finalized.outputs.headline }}
+          STATE: ${{ needs.finalized.outputs.state }}
+        run: |
+          # 🔴 The title names the defect the checker actually found. A single
+          # hard-coded sentence about a missing tag or release states a fact the
+          # check never established when the defect is an incomplete npm train
+          # or a channel tag left behind, and sends whoever reads it to the
+          # wrong layer.
+          case "$STATE" in
+            partial)
+              title="A release published only some of its packages" ;;
+            channel-stale)
+              title="A published release is not what the channel tag resolves to" ;;
+            mistagged)
+              title="A release tag names a different version" ;;
+            unfinalized)
+              title="A published release is missing its tag or GitHub Release" ;;
+            *)
+              title="A release main declares is not finished" ;;
+          esac
+
+          # `// empty` keeps the empty-result case a genuinely empty string
+          # rather than depending on gh suppressing a null for us, so the
+          # branch below turns on the presence of an issue number alone.
+          existing=$(gh issue list --repo "${{ github.repository }}" \
+            --label ci-release-health-failure --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" \
+              --body "$(printf 'Still unfinished (%s): %s\n\nRun: %s' "$STATE" "$HEADLINE" "$RUN_URL")"
+          else
+            # printf keeps the multi-line body inside this YAML block scalar;
+            # a raw multi-line string here would dedent and break the file.
+            body=$(printf '%s\n\nA release is three facts: the packages are on the registry, a git tag points at the commit they were built from, and a GitHub Release describes it. Publishing writes the first; a later step writes the other two, and it is skipped when verification fails. A release left that way is invisible - npm serves it, git does not know it happened.\n\nThe run prints which artifact is missing and the remedy for that specific case, because re-running does not repair every one of them: %s' "$HEADLINE" "$RUN_URL")
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$title" \
+              --label ci-release-health-failure \
+              --body "$body"
+          fi

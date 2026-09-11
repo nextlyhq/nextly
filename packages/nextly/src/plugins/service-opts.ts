@@ -1,3 +1,5 @@
+import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
 import { NextlyError } from "../errors/nextly-error";
@@ -19,16 +21,87 @@ import type { AuthUser } from "../types/auth";
  * DB RBAC, for now (documented v1 limitation).
  */
 export interface ServiceOpts {
-  as?: "user" | "system";
+  /**
+   * Who this operation runs as.
+   *
+   * `user` is a signed-in caller and requires one. `system` is the plugin
+   * acting on its own behalf, and bypasses the access check.
+   *
+   * `public` is a caller with no session AT ALL, with the collection's access
+   * rules still enforced. A plugin serving a `public: true` route needs it and
+   * had no way to say it: `user` throws without a user, and everything else
+   * elevated to `system`, so a public route could only read by bypassing the
+   * host's configured rules. Route auth and collection access are separate
+   * questions, and `public: true` answers only the first.
+   */
+  as?: "user" | "system" | "public";
   user?: AuthUser;
+  /**
+   * Arbitrary data handed to this operation's hooks as `ctx.context`.
+   *
+   * How a plugin tells a hook something about the CALL that the row cannot say.
+   * A hook doing expensive presentation work can be told a read is internal and
+   * skip it, and a hook that writes can be told not to recurse. Core has
+   * accepted this on every collection operation for some time and seeds the
+   * shared hook context from it; this facade dropped it, so a plugin could
+   * reach neither.
+   *
+   * It is data, not permission: nothing here bypasses access, validation or any
+   * hook. A hook decides for itself what to do with what it is told.
+   */
+  context?: Record<string, unknown>;
+
+  /**
+   * The HTTP request this operation is serving, when the plugin is serving one.
+   *
+   * A plugin handling its own route passes the request it was given, and the
+   * core resolves it into the facts hooks read as `ctx.req`: the headers, and a
+   * client address judged against the deployment's proxy-trust settings. A
+   * plugin doing background work leaves it out, and a hook scoped to a visitor
+   * then knows to stand down.
+   *
+   * The request rather than an address, for the same reason core takes the
+   * request: a caller does not get to name its own client.
+   */
+  request?: Request;
+
+  /**
+   * The caller's own authorization scope when they arrived on an API key --
+   * `ctx.authenticatedScope`, passed straight through.
+   *
+   * `user` names the key's OWNER, so without this the access check resolves the
+   * owner's roles and a viewer-scoped key minted by a super-admin is judged as
+   * a super-admin. A route serving an API key must forward it; a session caller
+   * has none and resolves the normal way.
+   *
+   * Unlike `context` above this IS permission: it narrows what the caller may
+   * do, never widens it.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 /** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
 export function resolveServiceOpts(opts: ServiceOpts): {
   user?: RequestContext["user"];
+  authenticatedScope?: AuthenticatedScope;
   overrideAccess: boolean;
+  context?: Record<string, unknown>;
+  request?: Request;
 } {
-  const { as, user } = opts;
+  const { as, user, context, request } = opts;
+  // The caller's own scope wins when named; otherwise the one the dispatcher
+  // pinned for this request. A route that omits it is the common case, not the
+  // exception, so the ambient value is what makes the key's grants reach the
+  // access check at all.
+  const authenticatedScope = effectiveCallerScope(opts.authenticatedScope);
+
+  // No caller, rules still enforced. Named rather than inferred from an absent
+  // `user`, because that shape already means "system" and quietly changing it
+  // would elevate nothing and demote every existing plugin call at once.
+  if (as === "public") {
+    return { overrideAccess: false, context, request };
+  }
+
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {
@@ -43,9 +116,12 @@ export function resolveServiceOpts(opts: ServiceOpts): {
     return {
       overrideAccess: false,
       user: { id: user.id, email: user.email, role: "", permissions: [] },
+      context,
+      request,
+      ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
-  return { overrideAccess: true };
+  return { overrideAccess: true, context, request };
 }
 
 /**
@@ -161,12 +237,26 @@ export function wrapCollectionsForPlugin(
       return async (...args: unknown[]) => {
         const resolved = resolveServiceOpts((args[idx] as ServiceOpts) ?? {});
         const next = [...args];
-        next[idx] = {
-          user: resolved.user,
-          overrideAccess: resolved.overrideAccess,
-        };
+        // Spread rather than named one by one. Rebuilding this literal is
+        // what kept a plugin from reaching the hook context, and the same
+        // shape then dropped an API key's scope on its way to the access
+        // check -- twice, because a hand-written list is a second
+        // implementation of what `resolveServiceOpts` already decided. A
+        // spread cannot forget a field.
+        next[idx] = { ...resolved } satisfies RequestContext;
+        // The scope this call runs under becomes the ambient one for its whole
+        // duration, so a route that NARROWED its scope is narrowed at every
+        // gate underneath and not only at the one it passed the scope to.
+        //
+        // Field access is the gate that makes this necessary. It reads the
+        // ambient scope rather than an argument — eighteen call sites reach it
+        // and none could be relied on to forward one — so without re-pinning,
+        // a handler that gave up a grant still got the field that grant opens,
+        // which is the narrowing silently not happening.
         const call = () =>
-          (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next);
+          runWithCallerScope(resolved.authenticatedScope, () =>
+            (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next)
+          );
 
         if (verb === undefined) return call();
 

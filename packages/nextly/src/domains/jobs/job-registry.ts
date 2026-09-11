@@ -48,6 +48,41 @@ export { SWEEP_KEY_PREFIX, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 /** What a handler is told about the run it is in. */
 export interface JobContext {
   /**
+   * This job's row id, the same on every attempt at it.
+   *
+   * The idempotency key to hand anything OUTSIDE the database. Delivery is
+   * at-least-once, so one queued job can reach a handler more than once, and
+   * the fence that protects the jobs table cannot reach an email already sent
+   * or a charge already made. Passing this id to something that de-duplicates
+   * on a key of its own (a payment provider's idempotency header, a unique
+   * column an upsert targets) is what turns "ran twice" into "happened once".
+   *
+   * Deriving a key from `input` instead works only for as long as the input is
+   * unique, which is a property of the caller rather than of the queue: the
+   * same payload queued twice is two jobs and two ids.
+   *
+   * One key per SIDE EFFECT, not one per job. A handler that charges a card and
+   * then writes a ledger row must not send this same value to both where they
+   * share a uniqueness namespace, or the second is refused as a duplicate of
+   * the first. Derive one per operation, `${jobId}:charge` and so on.
+   */
+  jobId: string;
+  /**
+   * Which attempt this is, counting from 1.
+   *
+   * Written to the row BEFORE the handler starts, so a handler that dies
+   * part-way still leaves the count advanced and the next run is numbered
+   * higher. Reliable for behaviour that should change on a retry: logging
+   * louder, or abandoning an optimisation that failed last time.
+   *
+   * 🔴 Still not a substitute for `jobId` when deciding whether work already
+   * happened. `attempt > 1` says an earlier run BEGAN, not what it finished,
+   * and nothing in this process can know what a provider did with a request it
+   * never answered. That question is answered by asking the provider, which is
+   * what handing it `jobId` does.
+   */
+  attempt: number;
+  /**
    * The identity this job runs AS, or `null` when it genuinely acts as nobody.
    *
    * `null` does NOT mean "as the system". A job whose stored identity no longer

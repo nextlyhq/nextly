@@ -47,7 +47,15 @@ describe("component route auth tier", () => {
 
   it("keeps genuinely public endpoints public", () => {
     // Regression guard: the change must not tighten unrelated public routes.
-    expect(isPublicEndpoint("forms", "submit")).toBe(true);
     expect(isPublicEndpoint("auth", "register")).toBe(true);
+  });
+
+  it("no longer answers for forms, which the core does not serve", () => {
+    // `forms` was public here because the core once served the form builder's
+    // endpoints. The plugin serves them now, at the same addresses, and decides
+    // their auth itself through `public: true` on the routes it contributes.
+    // Left behind, this would grant an unauthenticated tier to a service name
+    // the parser can no longer produce.
+    expect(isPublicEndpoint("forms", "submit")).toBe(false);
   });
 });

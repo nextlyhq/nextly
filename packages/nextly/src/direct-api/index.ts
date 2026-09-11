@@ -32,7 +32,7 @@
  */
 
 // Export Nextly class, factory, and convenience object
-export { Nextly, getNextly, resetNextlyInstance, nextly } from "./nextly";
+export { Nextly, requireNextly, resetNextlyInstance, nextly } from "./nextly";
 export * from "./types";
 // Canonical NextlyError replaces the legacy direct-api error subclass
 // hierarchy (NotFoundError, ValidationError, etc.) — those were deleted in

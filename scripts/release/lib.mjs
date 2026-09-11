@@ -74,12 +74,51 @@ function getPath(object, path) {
  * stable version: `1.0.0-alpha.4` -> `"alpha"`, `1.0.0` -> `undefined`. Mirrors
  * `semver.parse(v).prerelease[0]` for the shapes npm accepts, without pulling in
  * a dependency for one field.
+ *
+ * Exported so that "is this a prerelease" is asked in ONE place. A second
+ * spelling of it, however obvious, is a second answer waiting to disagree with
+ * this one about a build-metadata suffix.
  */
-function firstPrereleaseId(version) {
+export function firstPrereleaseId(version) {
   const withoutBuildMetadata = version.split("+")[0];
   const separator = withoutBuildMetadata.indexOf("-");
   if (separator === -1) return undefined;
   return withoutBuildMetadata.slice(separator + 1).split(".")[0];
+}
+
+/**
+ * Whether a version is a prerelease OF a given active tag.
+ *
+ * 🔴 Deliberately not `firstPrereleaseId(version) === tag`, and deliberately
+ * different from the comparison inside `getExpectedDistTag`. That one mirrors
+ * Changesets, which classifies with `semver.parse(v).prerelease[0] === tag`
+ * and so reads `1.2.3-next.1.0` as belonging to `next` rather than to
+ * `next.1`. It has to keep that quirk: its job is to predict what
+ * `changeset publish` will do, and predicting something better than the tool
+ * does is still predicting wrong.
+ *
+ * This answers a different question, which is whether `pre.json` and the
+ * manifests describe the same release. A dotted tag is where the two answers
+ * part company, and borrowing the mirror here would switch the channel check
+ * off for the whole of a `next.1` cycle rather than answer it incorrectly.
+ * Both spellings are correct, for their own question, which is why they are
+ * two functions with this note between them.
+ */
+export function isPrereleaseOfTag(version, tag) {
+  const withoutBuildMetadata = version.split("+")[0];
+  const separator = withoutBuildMetadata.indexOf("-");
+  if (separator === -1) return false;
+  const identifiers = withoutBuildMetadata.slice(separator + 1);
+  if (!identifiers.startsWith(`${tag}.`)) return false;
+  /*
+   * 🔴 Exactly ONE counter after the tag, not merely the tag as a prefix.
+   * `changeset version` in pre mode writes `<version>-<tag>.<n>`, so a `next`
+   * cycle produces `-next.0` and a `next.1` cycle produces `-next.1.0`. A
+   * prefix test alone reads that second one as an artifact of `next` too, and
+   * a cycle exited under `next.1` and re-entered under `next` would then have
+   * its old builds accepted as the new channel's.
+   */
+  return /^\d+$/.test(identifiers.slice(tag.length + 1));
 }
 
 /**
@@ -91,6 +130,31 @@ export function readPreState() {
   if (!existsSync(PRE_STATE_PATH)) return null;
   const state = readJson(PRE_STATE_PATH);
   return state.mode === "pre" ? state : null;
+}
+
+/**
+ * `.changeset/pre.json` as it stands, or `null` when there is no such file.
+ *
+ * 🔴 Deliberately NOT `readPreState`, which answers `null` for `mode: "exit"`
+ * and for no file at all. Those are different situations. Exiting prerelease
+ * mode is a transition the repository is IN: the manifests still declare the
+ * last alpha until the Version PR lands, so anything that cannot tell the two
+ * apart treats that alpha as a stable release and expects `latest` to resolve
+ * to it. The remedy that follows from believing this says to move `latest` onto
+ * a prerelease, which is a worse outcome than the check not running at all.
+ *
+ * The whole record rather than the mode alone, because the ACTIVE TAG is half
+ * of what makes a mode and a version agree: prerelease mode re-entered under a
+ * new tag leaves manifests declaring the old one, and a reader holding only
+ * `mode` cannot see the difference.
+ */
+export function readPreConfig() {
+  if (!existsSync(PRE_STATE_PATH)) return null;
+  const state = readJson(PRE_STATE_PATH);
+  // A plain reader. Whether a mode and a tag make SENSE together is a question
+  // for whoever is asking, and it is asked in `shouldAssertChannel`, where a
+  // test can reach it.
+  return { mode: state.mode ?? null, tag: state.tag ?? null };
 }
 
 /**
@@ -268,7 +332,20 @@ export function isBootstrapPlaceholderOnly(state) {
  */
 export async function fetchRegistryState(name) {
   const response = await fetch(`${REGISTRY}/${name.replace("/", "%2F")}`, {
-    headers: { accept: "application/vnd.npm.install-v1+json" },
+    headers: {
+      accept: "application/vnd.npm.install-v1+json",
+      /*
+       * The registry sits behind a CDN, and every caller of this function is
+       * asking what is true NOW rather than what was true recently: the
+       * preflight decides what still needs publishing, the bootstrap check
+       * decides whether a package exists, and the verification decides whether
+       * a release is complete. A cached packument answers all three with the
+       * state before the publish, and the verification would then spend its
+       * whole budget re-reading one stale copy and conclude the packages never
+       * arrived. Revalidation is what makes waiting meaningful.
+       */
+      "cache-control": "no-cache",
+    },
   });
 
   if (response.status === 404) return null;
@@ -377,6 +454,145 @@ export async function fetchAllRegistryStates(manifest) {
     ])
   );
   return new Map(states);
+}
+
+
+/*
+ * How long to keep asking the registry before calling a package missing.
+ *
+ * A publish is not one event. `changeset publish` returns once npm has accepted
+ * every tarball, but a package becomes readable on the packument endpoint some
+ * time later, and for a train this size that lag is measured in minutes rather
+ * than in the "few seconds" a per-package view of it suggests: across twenty
+ * packages accepted within one second of each other, the last four became
+ * readable 47s, 125s, 179s and 186s afterwards. A budget shorter than that
+ * reports a complete release as incomplete.
+ *
+ * The cost of the two mistakes is not symmetric, which is what sets the size.
+ * Publishing has already succeeded by the time this runs, so waiting too long
+ * spends CI minutes and nothing else. Giving up too early withholds the tag and
+ * the GitHub release from a release npm accepted, leaving npm, git and the
+ * releases page describing different things, and it does so on a step whose red
+ * cross means "look again later" rather than "something is wrong" — which is
+ * the kind of red that teaches a reader to wave the next one through.
+ *
+ * Ten minutes is roughly three times the longest settle observed, and the job
+ * that runs it allows forty-five.
+ */
+const SETTLE_BUDGET_MS = 10 * 60 * 1000;
+
+/*
+ * Backoff rather than a fixed interval: a release that settles immediately is
+ * the common case and should not pay a long first wait, while one that needs
+ * minutes should not ask the registry a hundred times to find out.
+ */
+const FIRST_DELAY_MS = 5_000;
+const MAX_DELAY_MS = 30_000;
+
+/**
+ * Packages that are not yet fully released, each with the reason. A missing
+ * version and a stale dist-tag are reported separately because they need
+ * different fixes: the first is a failed publish, the second a tag that was
+ * never moved.
+ */
+export function collectProblems(manifest, registry, preState) {
+  const problems = [];
+
+  for (const entry of manifest) {
+    const state = registry.get(entry.name);
+
+    if (state === null) {
+      problems.push({
+        name: entry.name,
+        reason: "package not found on registry",
+      });
+      continue;
+    }
+
+    if (!state.versions.includes(entry.version)) {
+      problems.push({
+        name: entry.name,
+        reason: `version ${entry.version} not published`,
+      });
+      continue;
+    }
+
+    const expectedTag = getExpectedDistTag(state, preState);
+    const actual = state.distTags[expectedTag];
+    if (actual !== entry.version) {
+      problems.push({
+        name: entry.name,
+        reason:
+          `dist-tag "${expectedTag}" points at ${actual ?? "nothing"}, ` +
+          `so ${entry.name}@${expectedTag} does not resolve to ${entry.version}`,
+      });
+    }
+  }
+
+  return problems;
+}
+
+/**
+ * Ask the registry until it agrees the release is complete, or the budget runs out.
+ *
+ * The clock, the sleeper and the fetch are parameters so the waiting can be
+ * exercised without one: a test that actually slept would have to choose
+ * between a slow suite and a budget too small to describe the behaviour.
+ *
+ * Returns the last answer either way. A caller reports the problems; deciding
+ * that an incomplete release is a failure is not this function's job, because
+ * the same wait is the right one whether the caller exits or reports.
+ */
+export async function waitForCompleteRelease({
+  manifest,
+  preState,
+  fetchStates,
+  sleep: wait,
+  now,
+  budgetMs = SETTLE_BUDGET_MS,
+  firstDelayMs = FIRST_DELAY_MS,
+  maxDelayMs = MAX_DELAY_MS,
+  /*
+   * What "not settled yet" means, so a caller can ask a narrower question than
+   * the release gate does. The default is the full predicate, which is right
+   * for `verify`: it decides whether to finalize, so anything short of a whole
+   * release is worth waiting on.
+   *
+   * 🔴 A caller that only reports must not wait on conditions that can never
+   * clear. A dist-tag that was never moved is a real defect, not a delay, and a
+   * package awaiting its first publish will not appear however long anyone
+   * waits; waiting on either turns the budget into a guaranteed stall before
+   * the same verdict.
+   */
+  problemsFor = collectProblems,
+}) {
+  const deadline = now() + budgetMs;
+  let delay = firstDelayMs;
+  let registry;
+  let problems;
+  let attempts = 0;
+
+  for (;;) {
+    registry = await fetchStates(manifest);
+    problems = problemsFor(manifest, registry, preState);
+    attempts += 1;
+    if (problems.length === 0) break;
+
+    // Measured against the deadline rather than counted, so the budget states a
+    // duration and stays true however long a registry round trip takes.
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+
+    const pause = Math.min(delay, remaining);
+    console.log(
+      `Waiting for ${problems.length} package(s) to settle on the registry ` +
+        `(attempt ${attempts}, ${Math.round(remaining / 1000)}s of budget left)...`
+    );
+    await wait(pause);
+    delay = Math.min(delay * 2, maxDelayMs);
+  }
+
+  return { registry, problems, attempts };
 }
 
 export { REGISTRY, REPO_ROOT };

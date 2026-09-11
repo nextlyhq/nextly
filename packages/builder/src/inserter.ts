@@ -235,10 +235,28 @@ export interface SlotSource {
   slotsOf(type: string): readonly string[] | undefined;
 }
 
-/** Where an insert would land, as the nesting rule needs to see it. */
-export type InsertTarget =
-  | { readonly at: "root" }
-  | { readonly at: "slot"; readonly parentType: string; readonly slot: string };
+/**
+ * Where an insert would land, as the nesting rule needs to see it.
+ *
+ * The engine's type, re-exported rather than restated. It is the input to
+ * `placementVerdict`, which is the one implementation of the placement rule, so
+ * a second declaration here would be a second vocabulary for the rule's own
+ * argument — and every caller would reach the rule through a translation whose
+ * two sides could drift.
+ */
+export type { PlacementTarget } from "@nextlyhq/blocks-engine";
+
+/**
+ * @deprecated Renamed to `PlacementTarget`, which is the engine's name for it
+ * and now the only one. Kept as an alias for one release because this type is
+ * published from the package entry; import `PlacementTarget` instead.
+ *
+ * Note the discriminant moved with the name: the member is `kind`, not `at`.
+ * A value written as `{ at: "slot", ... }` no longer satisfies this type, and
+ * that is deliberate — a silently accepted `at` would fall through every
+ * `kind === "slot"` narrowing and be judged as a root placement.
+ */
+export type InsertTarget = PlacementTarget;
 
 /**
  * A position to insert at, with the target that position implies.
@@ -254,7 +272,7 @@ export type InsertTarget =
 export interface InsertionPoint {
   readonly kind: "after-selection" | "document-end" | "inside-selection";
   readonly at: OpPosition;
-  readonly target: InsertTarget;
+  readonly target: PlacementTarget;
 }
 
 /**
@@ -504,7 +522,7 @@ function humanise(name: string): string {
  */
 export function entryAllowedAt(
   entry: InsertEntry,
-  target: InsertTarget,
+  target: PlacementTarget,
   source: NestingSource
 ): NestingVerdict {
   if (entry.kind === "pattern") {
@@ -535,12 +553,12 @@ export function entryAllowedAt(
  */
 function patternAllowedAt(
   document: BlockDocument,
-  target: InsertTarget,
+  target: PlacementTarget,
   source: NestingSource
 ): NestingVerdict {
   return placementVerdict(
     document.nodes.map(root => root.type),
-    placedAt(target),
+    target,
     source
   );
 }
@@ -565,27 +583,10 @@ function patternAllowedAt(
  */
 export function blockAllowedAt(
   blockName: string,
-  target: InsertTarget,
+  target: PlacementTarget,
   source: NestingSource
 ): NestingVerdict {
-  return placementVerdict([blockName], placedAt(target), source);
-}
-
-/**
- * This module's target, in the vocabulary the rule is written in.
- *
- * Two names for one idea, and the translation is here so it happens ONCE.
- * `InsertTarget` is published by this package and spells the discriminant
- * `at`; the engine's `PlacementTarget` spells it `kind`. Converging them is a
- * change to a published type across every drag, drop and refusal surface that
- * reads one, so the rule is shared first and the spelling after — a second
- * implementation of the RULE is what produces a palette that offers what the
- * insert refuses, where two spellings of the target produce a rename.
- */
-function placedAt(target: InsertTarget): PlacementTarget {
-  return target.at === "root"
-    ? { kind: "root" }
-    : { kind: "slot", parentType: target.parentType, slot: target.slot };
+  return placementVerdict([blockName], target, source);
 }
 
 /**
@@ -600,7 +601,7 @@ function placedAt(target: InsertTarget): PlacementTarget {
  */
 export function allowedEntries<TEntry extends InsertEntry>(
   entries: readonly TEntry[],
-  target: InsertTarget,
+  target: PlacementTarget,
   source: NestingSource
 ): TEntry[] {
   return entries.filter(entry => entryAllowedAt(entry, target, source).allowed);
@@ -713,7 +714,7 @@ export function insertionPointFor(
   const end: InsertionPoint = {
     kind: "document-end",
     at: { index: document.nodes.length },
-    target: { at: "root" },
+    target: { kind: "root" },
   };
   if (selectedId === null) return end;
 
@@ -739,7 +740,7 @@ export function insertionPointFor(
     return {
       kind: "inside-selection",
       at: { parentId: selected.id, slot: emptySlot, index: 0 },
-      target: { at: "slot", parentType: selected.type, slot: emptySlot },
+      target: { kind: "slot", parentType: selected.type, slot: emptySlot },
     };
   }
 
@@ -756,7 +757,7 @@ export function insertionPointFor(
   }
 
   if (location.parent === undefined) {
-    return { kind: "after-selection", at: after, target: { at: "root" } };
+    return { kind: "after-selection", at: after, target: { kind: "root" } };
   }
   // `positionOf` has already refused the slot-less case, so a parent here has a
   // slot. Read it from the location rather than re-deriving from `after`, whose
@@ -765,7 +766,7 @@ export function insertionPointFor(
     kind: "after-selection",
     at: after,
     target: {
-      at: "slot",
+      kind: "slot",
       parentType: location.parent.type,
       slot: location.slot ?? "",
     },

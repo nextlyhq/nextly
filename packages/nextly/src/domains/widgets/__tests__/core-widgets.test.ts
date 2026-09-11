@@ -98,6 +98,47 @@ describe("core widget definitions", () => {
    * of these hides a card every authenticated admin can see today, which is the
    * behaviour change that docblock exists to prevent.
    */
+  it("offers the get-started card only while there is nothing to look at", () => {
+    // The card used to hide ITSELF: it was placed, given an order, and then
+    // rendered nothing once seeding was done -- so the arrangement reserved a
+    // slot for a card drawing nothing. The host now answers the part it can,
+    // and the declaration is where that is stated.
+    const seed = CORE_WIDGETS.find(w => w.id === "core/seed-demo-content");
+    expect(seed?.lifecycle).toBe("conditional");
+    // BOTH, and the pair is the point: `content:empty` alone left a reader who
+    // declined the offer still holding the slot, because declining does not
+    // create content.
+    expect(seed?.visibleWhen).toEqual(["content:empty", "seed:unanswered"]);
+  });
+
+  it("offers the checklist only while setup is outstanding", () => {
+    // Same move as the card above, for the same reason: this one decided from
+    // `localStorage`, which answered a per-reader question per browser -- the
+    // same person on a second machine met a checklist they had finished.
+    const checklist = CORE_WIDGETS.find(
+      w => w.id === "core/onboarding-checklist"
+    );
+    expect(checklist?.lifecycle).toBe("conditional");
+    expect(checklist?.visibleWhen).toBe("onboarding:incomplete");
+  });
+
+  it("keeps every OTHER core card permanent", () => {
+    // The control. A conversion that made the whole list conditional would
+    // satisfy the cases above while emptying the dashboard, and nothing in
+    // those assertions could tell the difference.
+    //
+    // Membership rather than a count: a change that made one card transient
+    // while making another permanent leaves any total unmoved, and the card
+    // that quietly stopped being offered is the one nobody would look for.
+    const conditional = CORE_WIDGETS.filter(
+      w => w.lifecycle === "conditional"
+    ).map(w => w.id);
+    expect(conditional).toEqual([
+      "core/seed-demo-content",
+      "core/onboarding-checklist",
+    ]);
+  });
+
   it("gates no card that predates the grid", () => {
     const gated = CORE_WIDGETS.filter(
       widget => widget.requiredPermission !== undefined

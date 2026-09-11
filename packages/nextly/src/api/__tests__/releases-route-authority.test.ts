@@ -403,10 +403,13 @@ describe("release route input validation", () => {
     );
     expect(api.releases.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        authenticatedScope: {
+        // See the note in `versions-access.test.ts`: the scope carries more
+        // than these two fields, and this test is about which grant reaches
+        // the call rather than about the scope's shape.
+        authenticatedScope: expect.objectContaining({
           actorType: "apiKey",
           permissions: ["read-content-releases"],
-        },
+        }),
       })
     );
   });

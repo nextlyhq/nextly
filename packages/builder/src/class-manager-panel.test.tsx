@@ -436,6 +436,159 @@ describe("a host with no way to carry out a delete", () => {
 });
 
 describe("a rename the host refuses", () => {
+  it("shows a refusal the host answers with STRAIGHT AWAY", async () => {
+    /*
+     * 🔴 The contract is "returning a ClassRenameOutcome is how a refusal
+     * reaches the author", and it says nothing about WHEN. A host that checks
+     * something it already knows — a locked site style, a slug it holds in
+     * memory — answers inside the call, and that answer was being dropped: the
+     * row cleared and the author was told nothing, which is the exact silence
+     * the outcome exists to remove.
+     *
+     * Deliberately NOT async. The asynchronous case is covered below, and it
+     * passed throughout; only the synchronous one was lost.
+     */
+    const onRename = vi.fn(() => ({
+      ok: false as const,
+      reason: "The site style is locked.",
+    }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    expect(await screen.findByText("The site style is locked.")).toBeTruthy();
+  });
+
+  it("says nothing when a synchronous host answers that it worked", async () => {
+    /*
+     * The control for the case above. Reporting whatever a host returns would
+     * also satisfy it — and would put a refusal notice beside every successful
+     * rename by a host that answers `{ ok: true }`.
+     */
+    const onRename = vi.fn(() => ({ ok: true as const }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    await Promise.resolve();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("still says nothing when a host answers with void, as most do", async () => {
+    /*
+     * The second control. The contract this replaced was `=> void`, so the
+     * common host returns nothing at all — and treating an un-outcome as a
+     * refusal would report a failure for every rename those hosts perform.
+     */
+    const onRename = vi.fn(() => undefined);
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    await Promise.resolve();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says nothing when a synchronous answer is failure-SHAPED but has no reason", async () => {
+    /*
+     * 🔴 The distinguishing control, and the one the two above cannot stand in
+     * for: they vary `ok`, and this varies whether the value is an outcome at
+     * all. A mutation helper answering `{ ok: false, error }` is not this
+     * panel's contract — its refusal carries `reason` — but a guard that reads
+     * only `ok` accepted it and reported `undefined`, which renders an alert
+     * with nothing written in it. An empty error box is worse than silence: it
+     * says a rename failed and refuses to say why.
+     *
+     * Asserting on the ROLE rather than on text is what makes it discriminate.
+     * The blank alert is present in the accessibility tree and announced; only
+     * its text is missing, so any assertion phrased on the words would pass
+     * against the very output this is here to reject.
+     */
+    const onRename = vi.fn(() => ({ ok: false as const, error: "locked" }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    await Promise.resolve();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says nothing when an AWAITED answer is failure-shaped but has no reason", async () => {
+    /*
+     * The same shape down the promise path, which had the defect first and
+     * keeps it if the guard is repaired only where the synchronous branch
+     * reads it. Two paths interpreting one answer must not disagree about
+     * whether it is an answer.
+     *
+     * The resolution is flushed inside `act` rather than by awaiting a
+     * microtask or two. Nothing VISIBLE marks a non-outcome being dismissed —
+     * the path clears state that is already clear — so an assertion racing the
+     * commit finds no alert whatever the guard decides, and passes just as
+     * happily against the version this rejects. Flushing first is what makes
+     * the silence a result instead of a head start.
+     */
+    const onRename = vi.fn(async () => ({
+      ok: false as const,
+      error: "locked",
+    }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+
+    // The host was actually asked: the silence below is about what came back,
+    // not about a rename that never left the panel.
+    expect(onRename).toHaveBeenCalled();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows the reason rather than clearing as though it landed", async () => {
     const onRename = vi.fn(async () => ({
       ok: false as const,

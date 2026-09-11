@@ -259,6 +259,16 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:test-lanes
 
+      # The lane above proves a PACKAGE is run by some lane. Which lane a FILE
+      # lands in is decided by its name alone: the unit config excludes
+      # `*.integration.test.ts` and the integration config claims it. A suite
+      # that boots a real instance under the unit name runs on a 10s budget
+      # sized for jsdom components, against every package turbo is building,
+      # and times out only when the runner is busy.
+      - name: A suite that boots an instance is in the integration lane
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:instance-boot-lane
+
       # The About line and topic list are repository settings, not files, so every
       # check that reads git's index is blind to them. Reports unverifiable rather
       # than failing when the API cannot be reached.
@@ -504,6 +514,17 @@ jobs:
       - name: Workspace consistency
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
+
+      # The dev-tooling scripts, which no other lint reaches. `turbo run lint`
+      # is per-package and stops at the workspace boundary, and the shared
+      # eslint config ignores `**/scripts/**/*` because type-aware linting
+      # cannot resolve files outside a tsconfig project. That ignore takes the
+      # UNTYPED rules with it, so an undefined reference in a release script
+      # reached a pull request with the whole scripts suite green: the
+      # reference was in the command-line block no test enters.
+      - name: Scripts lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm lint:scripts
 
       # Identified for the same reason `install` is, and the reason is in
       # AGENTS.md rather than here: these steps read `dist`, and what they say

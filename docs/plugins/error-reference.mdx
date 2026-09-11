@@ -34,7 +34,7 @@ Nextly validates plugins **fail-fast at boot** (D7): a bad plugin config stops s
 
 | Code | Status | Cause | Fix |
 |---|---|---|---|
-| `NEXTLY_ROUTE_COLLISION` | 409 | Two routes share the same `(method, full path)` after namespacing under `/api/plugins/<name>`. | Give each route a distinct method/path. |
+| `NEXTLY_ROUTE_COLLISION` | 409 | Two routes share the same `(method, full path)` after namespacing under `/plugins/<name>`. | Give each route a distinct method/path. |
 | `NEXTLY_ROUTE_INVALID_PATH` | 400 | A route `path` does not start with `/`. | Start the path with `/` (e.g. `/export`). |
 
 ## Inspecting plugins

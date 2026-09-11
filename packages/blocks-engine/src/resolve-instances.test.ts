@@ -19,6 +19,7 @@ import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
+  componentUsageIn,
   resolveComponentInstances,
   type DefinitionsById,
   type ResolvedBlockNode,
@@ -110,6 +111,61 @@ const byInstanceOf = (
   flatten(doc.nodes).filter(entry => entry.instanceOf === instanceId);
 
 describe("resolveComponentInstances", () => {
+  it("strips a stored claim without INVOKING it, so a hostile accessor cannot abort the page", () => {
+    // `resolveComponentInstances` is public and takes a tree, so it is handed
+    // objects a host assembled in memory as well as JSON from the database.
+    // Destructuring or spreading to drop a property READS it, so an enumerable
+    // `instanceOf` accessor that throws took the whole resolution down from the
+    // strip — before any per-block boundary could contain the failure and draw
+    // a placeholder. Measured: it aborted the render outright.
+    const hostile = { id: "a", type: "core/box", version: 1, props: {} };
+    Object.defineProperty(hostile, "instanceOf", {
+      enumerable: true,
+      get() {
+        throw new Error("provenance getter invoked");
+      },
+    });
+
+    const doc = page([hostile as unknown as BlockNode]);
+
+    // The control on the control: this must not throw, and the node must
+    // survive — a resolver that dropped the node entirely would also not throw.
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes).toHaveLength(1);
+    expect(result.document.nodes[0]?.id).toBe("a");
+    expect(result.document.nodes[0]?.instanceOf).toBeUndefined();
+  });
+
+  it("strips a STORED provenance claim from an instance it cannot resolve", () => {
+    // The refusal path is the one route a stored claim survives. A host node
+    // carrying `instanceOf` is stripped on the way through, but an INSTANCE
+    // node branches to expansion before that, and a refusal spreads the
+    // original node — so a page node hand-edited to claim membership of a
+    // component keeps the claim exactly when the component is missing.
+    //
+    // `sanitizeDocument` preserves unknown node keys deliberately, so this
+    // arrives from an export replayed, a tree a host assembled, or content
+    // edited in storage. An editor reading the marker sends a click, an edit
+    // or a delete to an instance the author never placed.
+    const doc = page([
+      instance("i1", "missing", {}, {
+        instanceOf: "forged",
+      } as Partial<BlockNode>),
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    const refused = flatten(result.document.nodes).find(
+      entry => entry.id === "i1"
+    );
+    // Present first: an absent node is trivially unmarked, which would let a
+    // resolver that dropped the refused instance satisfy the real assertion.
+    expect(refused).toBeDefined();
+    expect(refused?.unresolvedComponent).toBeDefined();
+    expect(refused?.instanceOf).toBeUndefined();
+  });
+
   it("returns the same document object when the page holds no instance", () => {
     const doc = page([node("a"), box("b", [node("c")])]);
 
@@ -435,6 +491,38 @@ describe("resolveComponentInstances visibility", () => {
 
     expect(truthy.document.nodes[0]!.visibility).toEqual(own);
     expect(flatten(falsy.document.nodes)).toHaveLength(3);
+  });
+});
+
+describe("a stored node claiming to belong to a component", () => {
+  it("loses the claim, because only this pass may make it", () => {
+    // `instanceOf` means "the resolver inlined this from a definition", and
+    // documents arrive from places that never ran it: an export replayed, a
+    // tree a host assembled, content hand-edited in storage. `sanitizeDocument`
+    // preserves unknown node keys deliberately, so the claim survives storage.
+    //
+    // Left standing, an editor reads it as provenance and sends a click, an
+    // edit or a delete to an instance the author never placed — while the node
+    // they were pointing at is one of their own.
+    const doc = page([
+      { ...node("mine"), instanceOf: "not-a-real-instance" } as never,
+    ]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes[0]).not.toHaveProperty("instanceOf");
+  });
+
+  it("keeps the node itself, and everything else about it", () => {
+    // The control: stripping the claim must not be a licence to drop or reshape
+    // the node. A pass that returned nothing here would satisfy the assertion
+    // above while destroying the author's content.
+    const doc = page([{ ...node("mine"), instanceOf: "stored" } as never]);
+
+    const result = resolveComponentInstances(doc, defs({}));
+
+    expect(result.document.nodes.map(n => n.id)).toEqual(["mine"]);
+    expect(result.document.nodes[0]!.type).toBe(node("mine").type);
   });
 });
 
@@ -2173,5 +2261,172 @@ describe("componentIdsIn", () => {
 
     expect(componentIdsIn(nodes, 2)).toEqual([]);
     expect(componentIdsIn(nodes, 3)).toEqual(["late"]);
+  });
+});
+
+describe("resolveComponentInstances under an unusable cap", () => {
+  // A host states `limits` in its own config, so a computed one — a cap read
+  // from an environment variable that is not set, say — arrives as `NaN`. That
+  // is not a loose bound but NO bound: `budget <= 0` is false against it, the
+  // survey never records that it stopped, and the refusal below it never
+  // fires. The document is then composed from a survey that read only part of
+  // it, which is the state that refusal exists to prevent.
+  const oversized = () => {
+    const nodes: BlockNode[] = [
+      ...Array.from({ length: DEFAULT_LIMITS.maxNodes + 10 }, (_, i) =>
+        node(`n${i}`)
+      ),
+      instance("i1", "def-1"),
+    ];
+    return { formatVersion: DOCUMENT_FORMAT_VERSION, kind: "page", nodes };
+  };
+  const definitions = {
+    get: () => ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component" as const,
+      nodes: [node("d1")],
+    }),
+  };
+
+  it("refuses an oversized document under an ordinary cap", () => {
+    // The control. Without it the refusal below could be read as this function
+    // simply never composing anything in this fixture.
+    const doc = oversized() as BlockDocument;
+    const out = resolveComponentInstances(doc, definitions as never, {
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect({
+      referenced: out.referenced,
+      composed: out.document !== doc,
+    }).toEqual({ referenced: [], composed: false });
+  });
+
+  it("refuses a cap that would remove the bound rather than set one", () => {
+    // Asserted through the helper's own message, which names both the subject
+    // and the field: a bare `toThrow()` would pass on any error this function
+    // might raise for another reason.
+    expect(() =>
+      resolveComponentInstances(
+        oversized() as BlockDocument,
+        definitions as never,
+        {
+          limits: { ...DEFAULT_LIMITS, maxNodes: Number.NaN },
+        }
+      )
+    ).toThrow(/resolveComponentInstances: maxNodes/);
+  });
+
+  it("reads each cap it uses exactly once", () => {
+    // The caller owns this object, so a member that answers differently
+    // between reads lets the survey validate under one cap and the composition
+    // run under another. One read cannot disagree with itself.
+    let reads = 0;
+    const counting = {
+      ...DEFAULT_LIMITS,
+      get maxNodes() {
+        reads += 1;
+        return DEFAULT_LIMITS.maxNodes;
+      },
+    };
+
+    resolveComponentInstances(
+      page([instance("i1", "def-1")]),
+      definitions as never,
+      { limits: counting }
+    );
+
+    expect(reads).toBe(1);
+  });
+});
+
+describe("componentUsageIn", () => {
+  // Three entries exactly, so the budget can be set above, at and below the
+  // size of the forest. The reference is the LAST of them, which is what makes
+  // a prefix distinguishable from the whole answer at all: a truncated walk
+  // returns `[]` here, and `[]` is also what a document referencing nothing
+  // returns — the pair the `complete` flag exists to separate.
+  const nodes = [node("a"), node("b"), instance("i1", "late")];
+
+  it("reports a whole read, with what it found", () => {
+    expect(componentUsageIn(nodes, 10)).toEqual({
+      ids: ["late"],
+      complete: true,
+    });
+  });
+
+  it("reports a truncated read, and the prefix it managed", () => {
+    // Both halves asserted together. `ids: []` alone is the answer a document
+    // holding no instances gives, so an assertion on it cannot tell the two
+    // apart — which is the whole defect this function exists to close.
+    expect(componentUsageIn(nodes, 2)).toEqual({ ids: [], complete: false });
+  });
+
+  it("calls a forest of exactly the budget COMPLETE, not truncated", () => {
+    // The boundary, and the reason `complete` is set on the branch that ends
+    // the walk rather than derived from the budget afterwards. Three entries
+    // under a budget of three spends the last of it on the last entry and
+    // reads the forest WHOLE; a check on the remaining budget would report
+    // this as unreadable, at exactly the size the rest of the engine accepts.
+    expect(componentUsageIn(nodes, 3)).toEqual({
+      ids: ["late"],
+      complete: true,
+    });
+  });
+
+  it("gives an empty forest a complete answer, not an unread one", () => {
+    // "Nothing to read" and "could not be read" are the two states this
+    // separates, and the empty forest is the one a caller meets first.
+    expect(componentUsageIn([], 10)).toEqual({ ids: [], complete: true });
+  });
+
+  it("refuses a budget that would remove the bound rather than set one", () => {
+    // `NaN` is not a loose bound, it is NO bound: every `budget <= 0` test
+    // against it is false, so the walk never stops and reads a stored document
+    // of any size whole. Asserted through the published helper's own message,
+    // which names both the subject and the field — a bare `toThrow()` would
+    // pass on any error this function might raise for another reason.
+    expect(() => componentUsageIn(nodes, Number.NaN)).toThrow(
+      /componentUsageIn: maxNodes/
+    );
+
+    // The derived function inherits the refusal, which is the point of it
+    // being derived. Its previous behaviour was to walk unbounded in silence.
+    expect(() => componentIdsIn(nodes, Number.NaN)).toThrow(
+      /componentUsageIn: maxNodes/
+    );
+
+    // The control: an ordinary budget is untouched by the guard, so what the
+    // test above measures is the refusal rather than the function being broken.
+    expect(componentUsageIn(nodes, 10).complete).toBe(true);
+  });
+
+  it("keeps the answer truthful under a fractional budget", () => {
+    // A fractional budget is accepted — that is `boundedLimit`'s decision, and
+    // refusing it here alone would make this walk disagree with the helper
+    // that exists to stop walks disagreeing. It costs at most one node beyond
+    // the cap.
+    //
+    // What must hold either way is that `complete` describes what the walk
+    // REACHED rather than what the budget permitted. Both cases are asserted,
+    // because a rule that only ever reports `true` would satisfy the first.
+    expect(componentUsageIn(nodes, 2.5)).toEqual({
+      ids: ["late"],
+      complete: true,
+    });
+    expect(componentUsageIn(nodes, 1.5)).toEqual({ ids: [], complete: false });
+  });
+
+  it("answers what componentIdsIn answers, truncation included", () => {
+    // `componentIdsIn` is derived from this, and the case where a
+    // reimplementation would diverge is the bounded one: a second walk with
+    // its own budget arithmetic returns a different prefix here while both
+    // agree on every document small enough to be read whole.
+    for (const budget of [1, 2, 3, 10]) {
+      expect({ budget, ids: componentIdsIn(nodes, budget) }).toEqual({
+        budget,
+        ids: componentUsageIn(nodes, budget).ids,
+      });
+    }
   });
 });

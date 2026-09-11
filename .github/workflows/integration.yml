@@ -22,6 +22,22 @@ on:
 permissions:
   contents: read
 
+# The wall-clock budget for ONE dialect's suite, enforced per step rather than
+# per job — see scripts/run-with-budget.sh for why the distinction decides
+# whether a slow leg reports at all.
+#
+# 55 against a MySQL leg that spends about 34 minutes in this step and an sqlite
+# leg that spends about 22. Set with real headroom rather than just past the
+# last measurement: a bound at the current duration is a bound that fires on
+# variance, and this one is meant to catch a suite that has genuinely run away,
+# not to police a slow morning on shared runners.
+#
+# ONE knob for all three legs on purpose. Per-leg budgets would have to be
+# re-tuned as each suite grows, and a budget nobody re-tunes is a budget that
+# drifts back into firing on variance.
+env:
+  INTEGRATION_SUITE_BUDGET: 55m
+
 # Keyed per commit on `main` for the same reason as the CI workflow: a shared
 # `github.ref` group cancelled the previous commit's run on every merge, and
 # switching cancellation off is not enough — a group holds one running and one
@@ -34,6 +50,8 @@ jobs:
   integration:
     name: Integration (${{ matrix.dialect }})
     runs-on: ubuntu-latest
+    # A BACKSTOP now, not the bound that should ever fire.
+    #
     # 25 minutes until the suite outgrew it. The MySQL leg's last GREEN run
     # finished in 24m52s — eight seconds inside the limit — and every run after
     # that hit the ceiling. A timeout-minutes kill is reported as
@@ -41,12 +59,19 @@ jobs:
     # a verdict while looking like somebody had cancelled the run: six
     # consecutive PRs merged with MySQL coverage that never reported.
     #
-    # `packages/nextly` runs its integration files sequentially on purpose
-    # (fileParallelism: false, single fork — the system-table suites share
-    # fixed table names), so this number only ever needs to grow. Raised with
-    # real headroom rather than to just past the last measurement, because a
-    # ceiling set at the current duration is a ceiling that fails on variance.
-    timeout-minutes: 45
+    # Raising it to 45 bought time and left that trap fully armed, which is how
+    # it recurred: on 2026-09-10 three separate branches were killed at exactly
+    # 45 minutes and all three read as cancellations. Raising the number is not
+    # the fix, because `packages/nextly` runs its integration files sequentially
+    # on purpose (fileParallelism: false, single fork — the system-table suites
+    # share fixed table names), so this number only ever grows.
+    #
+    # So the real bound moved into the STEP, where overrunning exits non-zero
+    # and the job FAILS (INTEGRATION_SUITE_BUDGET, above). This value only has
+    # to stay far enough above it that the step's bound always fires first —
+    # 55 for the suite plus checkout, install and build — leaving this to catch
+    # a hang somewhere else in the job, which nothing else would end.
+    timeout-minutes: 75
 
     strategy:
       # One dialect failing must not cancel the others: seeing that a change
@@ -159,7 +184,9 @@ jobs:
         if: matrix.dialect == 'postgres'
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder
-          pnpm lane:test:integration:postgres
+          scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
+            "the PostgreSQL integration suite" \
+            pnpm lane:test:integration:postgres
         env:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
           TURBO_CACHE_DIR: .turbo
@@ -168,7 +195,9 @@ jobs:
         if: matrix.dialect == 'mysql'
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder
-          pnpm lane:test:integration:mysql
+          scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
+            "the MySQL integration suite" \
+            pnpm lane:test:integration:mysql
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
@@ -193,9 +222,12 @@ jobs:
   integration-sqlite:
     name: Integration (sqlite)
     runs-on: ubuntu-latest
-    # Raised with the matrix legs above: this one passed at 22m18s, which is
-    # inside 25 but not by enough to leave alone while its siblings move.
-    timeout-minutes: 45
+    # A BACKSTOP, for the same reason as the matrix legs above: the bound that
+    # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as
+    # a failure. This one passed at 22m18s, so it has the most room of the
+    # three, and it moves with its siblings so there is one rule to reason about
+    # rather than a per-leg ceiling nobody re-derives.
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
@@ -261,7 +293,9 @@ jobs:
       - name: Run integration tests (sqlite)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder
-          pnpm lane:test:integration:sqlite
+          scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
+            "the SQLite integration suite" \
+            pnpm lane:test:integration:sqlite
         env:
           TURBO_CACHE_DIR: .turbo
 

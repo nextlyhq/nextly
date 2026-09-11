@@ -199,6 +199,8 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Route authorization already ran the coarse RBAC gate; stored rules run. */
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
@@ -224,6 +226,8 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Route authorization already ran the coarse RBAC gate; stored rules run. */
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
@@ -251,6 +255,13 @@ export class CollectionEntryService extends BaseService {
     params: Parameters<CollectionQueryService["groupEntries"]>[0]
   ): ReturnType<CollectionQueryService["groupEntries"]> {
     return this.queryService.groupEntries(params);
+  }
+
+  /** How many rows fall in each interval of a recent window. */
+  async timeseriesEntries(
+    params: Parameters<CollectionQueryService["timeseriesEntries"]>[0]
+  ): ReturnType<CollectionQueryService["timeseriesEntries"]> {
+    return this.queryService.timeseriesEntries(params);
   }
 
   async getEntry(params: {
@@ -285,6 +296,8 @@ export class CollectionEntryService extends BaseService {
     /** Fallback control (`false`/`"none"` disables fallback). */
     fallbackLocale?: string | false;
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Route authorization already ran the coarse RBAC gate; stored rules run. */
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
@@ -499,6 +512,8 @@ export class CollectionEntryService extends BaseService {
       /** Write locale (i18n M5) — translatable values stored for this language. */
       locale?: string;
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /**
        * The caller's authenticated scope. For a scoped API-key REST create the
        * publish transition gate (create-as-published) judges the key's OWN grants.
@@ -554,6 +569,8 @@ export class CollectionEntryService extends BaseService {
       /** Write locale (i18n M5) — translatable values updated for this language. */
       locale?: string;
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /**
        * Set when this write restores an earlier version, recorded on the
        * version it captures.
@@ -662,6 +679,8 @@ export class CollectionEntryService extends BaseService {
     trusted?: TrustBound;
     routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** API-key scope; judges the delete gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }) {
@@ -731,8 +750,19 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /**
+       * The caller's own grants when they arrived on an API key. Declared here
+       * or a spread carrying it is silently dropped: a spread into an object
+       * literal is exempt from excess-property checking, so the omission
+       * compiles clean and the gate never sees the scope.
+       */
+      authenticatedScope?: AuthenticatedScope;
       /** Who performed the delete, recorded on the outbox event. */
       actor?: RequestActor;
+      /** Arbitrary data passed to this operation's hooks via context. */
+      context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
     }
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return this.mutationService.deleteEntryInTransaction(tx, params);
@@ -757,6 +787,8 @@ export class CollectionEntryService extends BaseService {
      */
     trusted?: TrustBound;
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
     /** API-key scope; judges the create-as-published on the key's own grant. */
@@ -790,6 +822,8 @@ export class CollectionEntryService extends BaseService {
     trusted?: TrustBound;
     routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** API-key scope; judges each per-id delete on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
@@ -818,6 +852,8 @@ export class CollectionEntryService extends BaseService {
     trusted?: TrustBound;
     routeAuthorized?: boolean;
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
     /** API-key scope; judges each per-id transition on the key's own grant. */
@@ -850,6 +886,8 @@ export class CollectionEntryService extends BaseService {
       /** Route auth already ran; response is still redacted for this user */
       routeAuthorized?: boolean;
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
       /** API-key scope; judges the collection gate + transitions on the key's own grant. */
@@ -886,6 +924,8 @@ export class CollectionEntryService extends BaseService {
        */
       trusted?: TrustBound;
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
     },
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
@@ -905,6 +945,10 @@ export class CollectionEntryService extends BaseService {
       disableRevalidate?: boolean;
       user?: UserContext;
       overrideAccess?: boolean;
+      /** Arbitrary data passed to hooks via context */
+      context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /**
        * Which collections a trusted read may reach as relationships are expanded.
        * Absent means every populated target inherits the caller's trust. Only ever

@@ -36,11 +36,15 @@
  *
  * @module class-usage-reconcile
  */
-import { MAX_NAMED_CLASS_NAME_LENGTH } from "@nextlyhq/blocks-engine";
-import type { DocumentLimits } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  MAX_NAMED_CLASS_NAME_LENGTH,
+  type DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 
 import { classUsageOf } from "./class-usage";
 import type { ClassUsageRow } from "./collections/class-usage-index";
+import type { UsageIndex, UsageSubject } from "./usage-index";
 
 /**
  * The class id a marker row carries, chosen so no real reference can wear it.
@@ -165,19 +169,61 @@ export function deriveClassUsageRows(
    */
   limits?: DocumentLimits
 ): ClassUsageDerivation {
-  const usage = classUsageOf(document, limits);
+  return deriveUsageRows(classUsageIndex, subject, document, limits);
+}
+
+/**
+ * The class index, as the shared machinery sees it.
+ *
+ * Named `classUsageIndex` rather than inlined so the one place a class row is
+ * BUILT is also the one place its marker is chosen — the two have to agree
+ * about which value no real reference can wear, and separating them is how a
+ * marker becomes indistinguishable from a reference nobody noticed was legal.
+ */
+export const classUsageIndex: UsageIndex<ClassUsageRow> = {
+  readOwn: item =>
+    typeof item.classId === "string" ? { classId: item.classId } : null,
+  // The class row carries nothing beside its reference, so the key IS the id.
+  reconcileKeyOf: row => row.classId,
+  rowFor: (subject, referenceId) => ({ ...subject, classId: referenceId }),
+  // The class row carries nothing beside its reference, so naming the class is
+  // the whole question. Its marker is disjoint by LENGTH — longer than a class
+  // id may be — so it cannot be matched by an id a caller could ask about.
+  whereReferencing: referenceId => ({ classId: { equals: referenceId } }),
+  // Disjoint by LENGTH, so this predicate can never collide with a question
+  // about a real class: `UNDETERMINED_CLASS_ID` is longer than a class id may
+  // be, which is the same property that lets the marker share the column.
+  whereUndetermined: () => ({ classId: { equals: UNDETERMINED_CLASS_ID } }),
+  markerFor: subject => ({ ...subject, classId: UNDETERMINED_CLASS_ID }),
+  isMarker: row => row.classId === UNDETERMINED_CLASS_ID,
+  derive: (document, limits) => classUsageOf(document, limits),
+};
+
+/**
+ * The rows describing one document under ANY index, or the fact that it could
+ * not be read whole.
+ *
+ * The generic beneath {@link deriveClassUsageRows}, which is a call to it. The
+ * named function keeps its signature deliberately: its tests are the oracle
+ * for this refactor, and a test edited alongside the code it checks stops
+ * being one.
+ */
+export function deriveUsageRows<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  subject: UsageSubject,
+  document: unknown,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): { complete: true; rows: TRow[] } | { complete: false; undetermined: TRow } {
+  const usage = index.derive(document, limits);
   if (!usage.complete) {
     // The prefix it DID read is discarded rather than recorded. A partial list
     // stored as a list is indistinguishable from a complete one, and the whole
     // point of the marker is to be distinguishable.
-    return {
-      complete: false,
-      undetermined: { ...subject, classId: UNDETERMINED_CLASS_ID },
-    };
+    return { complete: false, undetermined: index.markerFor(subject) };
   }
   return {
     complete: true,
-    rows: usage.ids.map(classId => ({ ...subject, classId })),
+    rows: usage.ids.map(referenceId => index.rowFor(subject, referenceId)),
   };
 }
 
@@ -208,6 +254,22 @@ export function reconcileClassUsage(
   derived: readonly ClassUsageRow[],
   stored: readonly StoredClassUsageRow[]
 ): ClassUsageReconciliation {
+  return reconcileUsage(classUsageIndex, subject, derived, stored);
+}
+
+/**
+ * The same reconciliation, for any index.
+ *
+ * The generic beneath {@link reconcileClassUsage}. Every rule below is the
+ * class index's, unchanged — what moved is only WHICH column carries the
+ * reference, which the descriptor answers.
+ */
+export function reconcileUsage<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  subject: UsageSubject,
+  derived: readonly TRow[],
+  stored: readonly (TRow & { id: string })[]
+): { insert: TRow[]; remove: string[] } {
   for (const row of derived) {
     if (!describesSubject(row, subject)) {
       throw new Error(
@@ -228,7 +290,7 @@ export function reconcileClassUsage(
     }
   }
 
-  const wanted = new Set(derived.map(row => row.classId));
+  const wanted = new Set(derived.map(row => index.reconcileKeyOf(row)));
   // Which classes a SURVIVING stored row records. A class reaches this set only
   // by having a row that is both wanted and the first of its class, which is
   // what makes it the right thing to subtract the inserts from: a class whose
@@ -256,16 +318,16 @@ export function reconcileClassUsage(
     // re-derives from the row that won. That is a property of the write path,
     // which cannot be established here, and this comment is where it is
     // recorded rather than assumed.
-    const duplicate = kept.has(row.classId);
-    if (duplicate || !wanted.has(row.classId)) {
+    const duplicate = kept.has(index.reconcileKeyOf(row));
+    if (duplicate || !wanted.has(index.reconcileKeyOf(row))) {
       remove.push(row.id);
       continue;
     }
-    kept.add(row.classId);
+    kept.add(index.reconcileKeyOf(row));
   }
 
   return {
-    insert: derived.filter(row => !kept.has(row.classId)),
+    insert: derived.filter(row => !kept.has(index.reconcileKeyOf(row))),
     remove,
   };
 }

@@ -375,6 +375,7 @@ describe("the root entry", () => {
       // The editor marker namespace, public so an editor refuses a name the
       // renderer would drop rather than keeping a list beside it.
       "EDITOR_NAMESPACE",
+      "INSTANCE_ATTRIBUTE",
       "NODE_ID_ATTRIBUTE",
       // The container names a preview compile aims its breakpoints at. Public
       // because the surface doing the previewing must put the same identifier

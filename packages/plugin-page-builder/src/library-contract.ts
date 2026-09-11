@@ -38,6 +38,17 @@ export const PAGE_BUILDER_PLUGIN_NAME = "@nextlyhq/plugin-page-builder";
 export const LIBRARY_ROUTE_PATH = "/library";
 
 /**
+ * Where the editor asks what the author may do with patterns.
+ *
+ * A route of its own rather than a field on the library response, and the
+ * timing is the whole reason. The Save as pattern verb renders from the
+ * toolbar's own action list before any panel exists, and the library is read
+ * WHEN THE PANEL OPENS — so an answer carried on that response arrives after
+ * the control it was meant to describe.
+ */
+export const CAPABILITY_ROUTE_PATH = "/capability";
+
+/**
  * How much of a page one pattern covers.
  *
  * A closed set rather than free text, because it is a FACET: the browser
@@ -264,4 +275,29 @@ export interface SavePatternResponse {
   readonly item: { readonly id: string } & Record<string, unknown>;
   /** Side effects that failed after the row committed, when any did. */
   readonly warnings?: readonly HookWarning[];
+}
+
+/**
+ * What the editor may do with patterns, as the server sees this caller.
+ *
+ * ONE field, because one verb asks. A map of every capability the plugin might
+ * ever gate would be a promise about surfaces that do not exist, and the reader
+ * after this one cannot tell such a field from one that quietly stopped being
+ * computed — the same reason `PatternLibraryRead` carries the patterns and
+ * nothing else.
+ *
+ * NOT A SECURITY BOUNDARY. The write is authorized on its own, by the route
+ * that performs it; a caller who lies to this one gains nothing. It exists so
+ * an author is not invited to fill in a form whose save cannot succeed.
+ */
+export interface PatternCapabilityResponse {
+  /**
+   * Whether this caller may create a pattern in the resolved collection.
+   *
+   * `create` on the collection the host actually has, which is the grant the
+   * save is judged by. Asking about the DECLARED name instead would refuse an
+   * author on a site that renamed the collection — hiding a feature that works,
+   * which is worse than the late failure this replaces.
+   */
+  readonly mayCreate: boolean;
 }

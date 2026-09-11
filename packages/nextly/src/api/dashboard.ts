@@ -23,6 +23,9 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
+import { refreshCollectionSources } from "../domains/widgets/collection-sources";
+import { conditionProbe } from "../domains/widgets/condition-probe";
+import { onboardingSteps } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
@@ -149,6 +152,36 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   // bound is satisfied without leaning on a typecast (named interfaces lack
   // an implicit index signature).
   return respondData({ ...stats }, { headers: PRIVATE_NO_STORE_HEADERS });
+});
+
+/**
+ * GET /api/dashboard/onboarding
+ *
+ * Which setup steps this reader has finished. The same answer the
+ * `onboarding:incomplete` widget condition is derived from, so the card and the
+ * rule that decides whether to offer it cannot disagree.
+ *
+ * The source registry is REFRESHED first, exactly as the layout endpoint does
+ * before resolving anything. Boot does not publish it, and the steps read it to
+ * learn which collections exist -- without this an install with content would
+ * report every step outstanding, which is the answer that keeps the card on
+ * screen forever.
+ *
+ * Caching: `private, no-store`. The answer is per reader, and a shared cache
+ * serving one reader's progress to another would leak which collections exist.
+ */
+export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+
+  await refreshCollectionSources();
+  const caller = await readCaller(auth);
+  // The same probe the layout read builds, so this endpoint and the condition
+  // that decides whether the card is offered resolve the reader's collections
+  // by one path rather than two.
+  const steps = await onboardingSteps(conditionProbe(caller));
+
+  return respondData({ steps }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
 
 /**

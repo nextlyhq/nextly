@@ -1052,35 +1052,6 @@ export function reidSubtree(node: BlockNode): BlockNode {
 }
 
 /**
- * What re-identifying a subtree produced, when the caller needs to follow it.
- *
- * {@link reidSubtree} drops a copy's DOM ids, which is right when the copy is
- * all anyone will look at. It is wrong when the subtree REFERS to itself: a
- * link inside a saved pattern pointing at `#pricing` resolves to a node in the
- * same pattern, and dropping the target's id leaves the copy carrying a link to
- * nowhere — worse, to whatever `#pricing` the destination page happens to own.
- *
- * So the ids are remapped rather than dropped, and both maps are handed back.
- * The engine cannot rewrite the references itself: a link's target lives in a
- * block's props, and which prop holds one is a property of the block's
- * definition rather than of the document format.
- */
-export interface ReidentifiedSubtree {
-  /** The rebuilt subtree. */
-  node: BlockNode;
-  /** Every node's old id → its new one. */
-  nodeIds: ReadonlyMap<string, string>;
-  /**
-   * Every DOM id the subtree carried → its replacement.
-   *
-   * Keyed by the id as written. A subtree that already used one id on two nodes
-   * is malformed — validation reports it as a duplicate — and appears here once,
-   * mapped to the first replacement minted.
-   */
-  domIds: ReadonlyMap<string, string>;
-}
-
-/**
  * What a re-identification does with the DOM ids it copies.
  *
  * Two words rather than a boolean, because the call site is where this is read
@@ -1351,26 +1322,6 @@ export function referencedDomIds(
     mapForest([root], copy => relinkOne(copy, probe));
   });
   return perRoot;
-}
-
-/**
- * One subtree, re-identified — {@link reidForestWithMap} for a single root.
- *
- * Delegates rather than repeating the two passes, so the singular and the
- * plural cannot drift into disagreeing about what a copy is.
- *
- * It takes no {@link DomIdPolicy}, and the honest reason is that nothing in the
- * product calls this. Measured: every occurrence outside this file is a test,
- * the package entry, or a comment in `resolve-instances.ts` citing it as an
- * analogy — composition keeps a `domIds` memo of its own and re-identifies to
- * deterministic scoped ids rather than random ones, and a save works on a RUN
- * of siblings and reaches for the forest form. Adding the parameter would be
- * offering an option to nobody. Whether a published helper with no caller
- * should stay is a separate question from this one.
- */
-export function reidSubtreeWithMap(node: BlockNode): ReidentifiedSubtree {
-  const { nodes, nodeIds, domIds } = reidForestWithMap([node]);
-  return { node: nodes[0] ?? node, nodeIds, domIds };
 }
 
 /** One node, re-identified, with its DOM id remapped rather than removed. */

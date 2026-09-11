@@ -36,6 +36,10 @@ import {
   type BuildContextOptions,
 } from "../../../hooks/context-builder";
 import type { HookRegistry } from "../../../hooks/hook-registry";
+import {
+  resolveRequestFacts,
+  type ResolvedRequestFacts,
+} from "../../../hooks/request-facts";
 import type { HookContext } from "../../../hooks/types";
 import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
@@ -456,9 +460,13 @@ export function resolveNextlyForHooks(): NextlyDirectAPI | undefined {
 
 /**
  * Build a HookContext with the Nextly Direct API instance injected into `req.nextly`.
+ *
+ * `req` is required for the reason the collection builder's is: a Single's
+ * hooks run on browser traffic through the admin, so a path that has a request
+ * and forgets to pass it tells them a person's edit was server-side work.
  */
 export function buildSingleHookContext<T>(
-  options: BuildContextOptions<T>
+  options: BuildContextOptions<T> & { req: ResolvedRequestFacts }
 ): HookContext<T> {
   return buildContext({
     ...options,
@@ -1790,6 +1798,9 @@ export class SingleQueryService extends BaseService {
 
       // 2. Build shared context for hooks (seed with caller-provided context)
       const sharedContext: Record<string, unknown> = { ...options.context };
+      // Resolved once for the whole operation, so every hook phase is told the
+      // same thing about the caller.
+      const requestFacts = resolveRequestFacts(options.request);
       const hookCollection = getSingleHookCollection(slug);
 
       // 3. Execute beforeOperation hook
@@ -1801,6 +1812,7 @@ export class SingleQueryService extends BaseService {
           user: options.user ?? undefined,
           context: sharedContext,
           req: {
+            ...requestFacts,
             nextly: resolveNextlyForHooks(),
           },
         });
@@ -1814,6 +1826,7 @@ export class SingleQueryService extends BaseService {
           data: { slug },
           user: options.user ?? undefined,
           context: sharedContext,
+          req: requestFacts,
         });
         await this.hookRegistry.execute("beforeRead", beforeContext);
       }
@@ -2000,6 +2013,7 @@ export class SingleQueryService extends BaseService {
           data: doc,
           user: options.user ?? undefined,
           context: sharedContext,
+          req: requestFacts,
         });
         const transformedData = await this.hookRegistry.execute(
           "afterRead",

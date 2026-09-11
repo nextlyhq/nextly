@@ -26,6 +26,8 @@ import {
   type SeedStatus as SeedStatusRow,
 } from "@admin/services/seedApi";
 
+import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
+
 export type SeedStatus =
   | { kind: "loading" }
   | { kind: "hidden" }
@@ -77,6 +79,14 @@ export function useSeedStatus(): UseSeedStatusReturn {
       setOverlay({ kind: "success", result });
       // Refresh the meta read so reload-as-other-user sees completedAt.
       void qc.invalidateQueries({ queryKey: QK_STATUS });
+      // Seeding is the moment the get-started card's condition stops holding:
+      // the reader can now see content, so the server no longer offers that
+      // card and the scope token shaping the arrangement has changed. The
+      // layout query has no polling and refetches only on focus, so without
+      // this the open dashboard keeps drawing the stale arrangement and the
+      // next save of it is refused with a scope conflict the reader did
+      // nothing to cause.
+      void qc.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
     },
     onError: err => {
       setOverlay({ kind: "error", message: err.message });
@@ -90,6 +100,13 @@ export function useSeedStatus(): UseSeedStatusReturn {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: QK_STATUS });
+      // Declining now closes the `seed:unanswered` condition, so the server
+      // stops offering this card exactly as it does after a successful seed.
+      // Without this the open dashboard keeps the pre-skip arrangement: edit
+      // mode can surface a placement the server has dropped, and saving it is
+      // refused on the scope token. Skip used to change nothing the host could
+      // see, which is why only the seed path invalidated.
+      void qc.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
     },
   });
 

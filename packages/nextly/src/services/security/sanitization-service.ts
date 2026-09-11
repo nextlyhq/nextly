@@ -12,7 +12,7 @@
 import { typeHasNestedFields } from "../../collections/fields/guards";
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -20,25 +20,68 @@ import type { SanitizationConfigInput } from "../../schemas/security-config";
 
 const TEXT_LIKE_FIELDS = new Set(["text", "string", "textarea", "email"]);
 
+/** Whether this character would make the `<` before it open a tag. */
+function opensTag(character: string | undefined): boolean {
+  if (character === undefined) return false;
+  return (
+    character === "/" ||
+    character === "!" ||
+    character === "?" ||
+    (character >= "a" && character <= "z") ||
+    (character >= "A" && character <= "Z")
+  );
+}
+
 /**
- * Remove all HTML tags from a string, collapse whitespace, and trim.
+ * Remove HTML tags from a string, collapse whitespace, and trim.
  *
- * Uses a regex that matches both complete tags (`<b>`) and unclosed tags
- * at end-of-string (`<script`) to prevent browsers from interpreting
- * incomplete markup.
+ * A `<` opens a tag only when what follows it could name one: an ASCII letter,
+ * `/` for a closing tag, or `!` and `?` for comments and doctypes. That is the
+ * HTML tokenizer's own rule, so what survives is what a browser would have
+ * shown as text anyway.
+ *
+ * Treating every `<` as the start of a tag deleted ordinary writing. This runs
+ * on every text, string, textarea and email field of every collection, and on
+ * media alt text, captions and tags, so `price < 100` was stored as `price` and
+ * `2 < 3 and 5 > 4` as `2 4`. An author lost the rest of a sentence on save
+ * with nothing to say why.
+ *
+ * One pass, holding one invariant: a `<` that has been kept is never followed
+ * by a character that would open a tag. Removing a tag can put its neighbours
+ * together into a new one, so `<<b>img src=x onerror=alert(1)>` would otherwise
+ * come back as live markup the sanitizer assembled itself, and a kept `<` is
+ * dropped the moment the next character would make it dangerous. Rescanning
+ * until the text stopped changing holds the same invariant and is quadratic:
+ * `"<".repeat(n) + "b>" + "x>".repeat(n)` exposes one tag per pass. Each
+ * character here is examined once and dropped at most once.
  *
  * @example
  * stripHtmlTags('Hello <b>world</b>')          // 'Hello world'
- * stripHtmlTags('<script>alert(1)</script>')    // ''
+ * stripHtmlTags('<script>alert(1)</script>')   // 'alert(1)'
  * stripHtmlTags('hello <script')               // 'hello'
  * stripHtmlTags('hello <br/> world')           // 'hello world'
- * stripHtmlTags('&lt;script&gt;')              // '&lt;script&gt;' (already encoded — safe)
+ * stripHtmlTags('price < 100')                 // 'price < 100'
+ * stripHtmlTags('&lt;script&gt;')              // '&lt;script&gt;' (already encoded)
  */
 export function stripHtmlTags(input: string): string {
-  return input
-    .replace(/<[^>]*(?:>|$)/g, "") // Remove HTML tags (including unclosed at end-of-string)
-    .replace(/\s+/g, " ") // Collapse multiple whitespace into single space
-    .trim();
+  const kept: string[] = [];
+  for (let at = 0; at < input.length; at += 1) {
+    const character = input[at];
+    if (character === "<" && opensTag(input[at + 1])) {
+      const close = input.indexOf(">", at + 1);
+      at = close === -1 ? input.length : close;
+      continue;
+    }
+    while (
+      kept.length > 0 &&
+      kept[kept.length - 1] === "<" &&
+      opensTag(character)
+    ) {
+      kept.pop();
+    }
+    kept.push(character);
+  }
+  return kept.join("").replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -150,7 +193,7 @@ export function sanitizeEntryData(
     // A field group's values are nested documents carrying the group's own
     // fields, so the descent must follow either type spelling — skipping the
     // migrated one would leave its text values unsanitized.
-    if (isFieldGroupType(field.type)) {
+    if (isFieldGroupFieldType(field.type)) {
       sanitizeFieldGroupValue(value, field, config);
       continue;
     }
@@ -341,7 +384,7 @@ export async function attachFieldGroupChildren(
   if (depth > MAX_FIELD_GROUP_RESOLVE_DEPTH) return fields;
 
   for (const field of fields) {
-    if (isFieldGroupType(field.type)) {
+    if (isFieldGroupFieldType(field.type)) {
       await attachFieldGroupReferences(
         field,
         resolveChildren,

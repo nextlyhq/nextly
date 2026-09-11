@@ -15,10 +15,16 @@ import {
   parseNearQuery,
   parseWithinQuery,
 } from "../collections/query/geo-utils";
+import { localizedGroupKeyProblem } from "../collections/query/localized-group-key";
 import {
   GEO_OPERATORS,
   isValidOperator,
 } from "../collections/query/query-operators";
+import {
+  isTimeseriesInterval,
+  TIMESERIES_INTERVALS,
+  type TimeseriesInterval,
+} from "../collections/query/timeseries-interval";
 
 import {
   failUnavailableSourceOrOp,
@@ -46,6 +52,10 @@ export interface WidgetQuery {
   select?: string[];
   sort?: string;
   groupBy?: string;
+  /** The date field a `timeseries` places its rows on. */
+  dateField?: string;
+  /** How wide each point of a `timeseries` is. */
+  interval?: TimeseriesInterval;
   limit?: number;
 }
 
@@ -67,14 +77,31 @@ export interface WidgetQuery {
  * only the authors who write TypeScript.
  */
 export type WidgetQuerySpec =
-  | (WidgetQuery & { op: Exclude<WidgetOp, "groupBy">; groupBy?: never })
+  | (WidgetQuery & {
+      op: Exclude<WidgetOp, "groupBy" | "timeseries">;
+      groupBy?: never;
+      dateField?: never;
+      interval?: never;
+    })
   | (WidgetQuery & {
       op: "groupBy";
       groupBy: string;
+      dateField?: never;
+      interval?: never;
       // `select` and `sort` describe ROWS, and this op returns buckets. The
       // validator refuses them, so admitting them here would compile a
       // declaration whose every request fails -- an author learning at runtime
       // what the type could have told them.
+      select?: never;
+      sort?: never;
+    })
+  | (WidgetQuery & {
+      op: "timeseries";
+      dateField: string;
+      interval: TimeseriesInterval;
+      // A timeline groups by a bucketing expression over its date field, so a
+      // second group key would be a different question asked at the same time.
+      groupBy?: never;
       select?: never;
       sort?: never;
     });
@@ -114,6 +141,8 @@ export interface RawWidgetQuery {
   select: unknown;
   sort: unknown;
   groupBy: unknown;
+  dateField: unknown;
+  interval: unknown;
   limit: unknown;
 }
 
@@ -137,6 +166,8 @@ export function readWidgetQuery(query: unknown): RawWidgetQuery {
     status: q.status,
     select: q.select,
     sort: q.sort,
+    dateField: q.dateField,
+    interval: q.interval,
     groupBy: q.groupBy,
     limit: q.limit,
   };
@@ -648,6 +679,129 @@ function assertGroupByAgreesWithOp(
   return groupBy;
 }
 
+/**
+ * Refuse a timeline key carried by an op that would ignore it.
+ *
+ * Accepted and dropped, a `dateField` beside `count` reads back to the caller
+ * as a timeline they asked for and did not get.
+ */
+function refuseTimelineKeysOutsideTimeseries(
+  op: WidgetOp,
+  dateField: unknown,
+  interval: unknown
+): void {
+  if (dateField !== undefined) fail(`dateField is not valid for op "${op}"`);
+  if (interval !== undefined) fail(`interval is not valid for op "${op}"`);
+}
+
+/**
+ * Confirms a timeline key names a field the source declared AS A DATE.
+ *
+ * The type is checked here rather than at execution because the source already
+ * states it. Accepted, a non-date key would reach the read, be refused there
+ * for storing no date, and arrive as a failed widget slot -- a runtime answer
+ * to a question the declaration already answers.
+ */
+function assertDateFieldBucketable(
+  source: WidgetSource,
+  dateField: string,
+  declared: ReadonlySet<string>
+): void {
+  if (!declared.has(dateField)) {
+    fail(
+      `dateField references undeclared field "${dateField}" on "${source.id}"`
+    );
+  }
+  const declaredField = source.fields.find(field => field.name === dateField);
+  // ONE rule, asked rather than repeated. The read refuses a localized group
+  // key through `localizedGroupKeyProblem`, and this asks the same leaf — so
+  // the day localized aggregation becomes supported, both start accepting it
+  // together instead of this one refusing a read the engine now allows.
+  //
+  // Still refused HERE rather than left to the `bucketable` flag below: that
+  // flag is derived by the collection source builder, and a plugin registering
+  // its own source through the SDK carries `localized` without it. Validating
+  // from the flag alone would approve exactly those sources and leave a widget
+  // that fails on every load.
+  const localizedProblem = localizedGroupKeyProblem(declaredField);
+  if (localizedProblem !== undefined) {
+    fail(`dateField "${dateField}" on "${source.id}" ${localizedProblem}`);
+  }
+  // Read off the DESCRIPTION rather than asked of the read's own guard. That
+  // guard reaches the field-level registry, and this module is type-checked by
+  // the admin, whose project does not define the `@nextly/*` aliases that graph
+  // pulls in -- importing it here reported a hundred errors about code the
+  // admin never touches. The source builder runs server-side and marks each
+  // date it publishes, so the answer still comes from one place.
+  //
+  // ONE decision, not two. Localization is one of the reasons a date cannot be
+  // bucketed, and `groupKeyDeclarationProblem` is where that list lives — so
+  // the source builder already marks a localized date `bucketable: false` and a
+  // second `localized` test beside this one was the same question answered
+  // twice. They agree today; the day localized aggregation becomes supported
+  // they would not, and the parallel test would keep refusing a read the engine
+  // had started accepting.
+  if (declaredField?.bucketable === false) {
+    fail(
+      `dateField "${dateField}" on "${source.id}" cannot be grouped, so its rows cannot be placed on a timeline`
+    );
+  }
+  const declaredType = declaredField?.type;
+  if (declaredType !== "date") {
+    fail(
+      `dateField "${dateField}" on "${source.id}" is a ${String(declaredType)} field; a timeseries needs a date`
+    );
+  }
+}
+
+/**
+ * Confirms the timeline keys agree with the op, and name a declared field.
+ *
+ * Judged together with the op for the reason the group key is: a `dateField`
+ * carried beside `count` would pass a field check, ride along in the returned
+ * query and change no result, which reads back as a timeline the caller asked
+ * for and did not get.
+ *
+ * Both keys are required together. An interval with no field has nothing to
+ * bucket, and a field with no interval has no width -- and defaulting either
+ * would answer a question the caller did not ask.
+ */
+function assertTimeseriesAgreesWithOp(
+  source: WidgetSource,
+  dateField: unknown,
+  interval: unknown,
+  declared: ReadonlySet<string>,
+  op: WidgetOp,
+  select: unknown,
+  sort: unknown
+): { dateField: string; interval: TimeseriesInterval } | undefined {
+  if (op !== "timeseries") {
+    refuseTimelineKeysOutsideTimeseries(op, dateField, interval);
+    return undefined;
+  }
+  if (dateField === undefined) {
+    fail('op "timeseries" requires a dateField');
+  }
+  if (interval === undefined) fail('op "timeseries" requires an interval');
+  // `select` and `sort` describe ROWS, and a timeline returns points. The
+  // executor ignores both, so accepting them answers a different question than
+  // the one asked and says nothing about it.
+  if (select !== undefined) {
+    fail(
+      'select is not valid for op "timeseries", which returns points and not rows'
+    );
+  }
+  if (sort !== undefined) {
+    fail('sort is not valid for op "timeseries"; points are ordered by time');
+  }
+  if (typeof dateField !== "string") fail("dateField must be a string");
+  assertDateFieldBucketable(source, dateField, declared);
+  if (!isTimeseriesInterval(interval)) {
+    fail(`interval must be one of ${TIMESERIES_INTERVALS.join(", ")}`);
+  }
+  return { dateField, interval };
+}
+
 /** Confirms `status`, when present, is one of the known values, and returns it. */
 function assertValidStatus(status: unknown): WidgetQuery["status"] | undefined {
   if (status === undefined) return undefined;
@@ -743,6 +897,15 @@ export function validateReadWidgetQuery(
     select,
     sort
   );
+  const timeline = assertTimeseriesAgreesWithOp(
+    source,
+    raw.dateField,
+    raw.interval,
+    declared,
+    op,
+    select,
+    sort
+  );
 
   return {
     source: source.id,
@@ -752,6 +915,7 @@ export function validateReadWidgetQuery(
     ...(select ? { select } : {}),
     ...(sort ? { sort } : {}),
     ...(groupBy ? { groupBy } : {}),
+    ...(timeline ?? {}),
     limit: clampLimit(raw.limit),
   };
 }

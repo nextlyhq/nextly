@@ -58,6 +58,15 @@ export interface RestoreVersionArgs {
    * OWN `publish-<slug>` grant, not the owner's RBAC.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The HTTP request behind the restore, when one produced it.
+   *
+   * A restore replays a snapshot through the ordinary update, so its hooks run
+   * exactly as an edit's do. Without this a restore an editor clicked would
+   * reach them looking like server-side work, and a rule that treats those two
+   * differently would apply the wrong one.
+   */
+  request?: Request;
 }
 
 export interface RestoreVersionResult {
@@ -516,6 +525,7 @@ export async function restoreVersion(
         user: args.user,
         overrideAccess: false,
         routeAuthorized: true,
+        request: args.request,
         // A snapshot that restores `status: "published"` must satisfy the key's
         // own publish grant, not the owner's RBAC.
         ...(args.authenticatedScope

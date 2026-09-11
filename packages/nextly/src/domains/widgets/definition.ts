@@ -12,6 +12,11 @@
 import { NextlyError } from "../../errors/nextly-error";
 
 import { requiredPermissionSlugs } from "./gate";
+import {
+  lifecycleProblem,
+  type WidgetCondition,
+  type WidgetLifecycle,
+} from "./lifecycle";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
 import { validateWidgetSettings, type WidgetSetting } from "./settings";
 import type { WidgetOp } from "./sources";
@@ -77,6 +82,16 @@ export const WIDGET_ARCHETYPES = [
   "stats",
   "table",
   "list",
+  // A categorical comparison, drawn as bars. Named for the SHAPE rather than
+  // for `groupBy`, the op behind it: an archetype is a way of drawing, and a
+  // name taken from the query would have to change if the same picture were
+  // ever drawn from a different one.
+  "bars",
+  // A count per interval, drawn as a line. This one DOES share its name with
+  // its op, and that is not the near-miss `stats` avoids: `metric`/`metrics`
+  // are two different pictures one keystroke apart, while an archetype and an
+  // op called `timeseries` are the same idea named once.
+  "timeseries",
   "text",
   "actions",
   "custom",
@@ -93,7 +108,13 @@ export type WidgetArchetype = (typeof WIDGET_ARCHETYPES)[number];
  * implementation; a narrower view is derived from this rather than computed
  * beside it.
  */
-export const DATA_ARCHETYPES = ["metric", "table", "list"] as const;
+export const DATA_ARCHETYPES = [
+  "metric",
+  "table",
+  "list",
+  "bars",
+  "timeseries",
+] as const;
 
 /**
  * Archetypes drawn from MANY queries, declared as `cells`.
@@ -147,6 +168,8 @@ const ARCHETYPE_RESULTS: ReadonlyMap<
   ["metric", new Set<WidgetOp>(["count"])],
   ["table", new Set<WidgetOp>(["list"])],
   ["list", new Set<WidgetOp>(["list"])],
+  ["bars", new Set<WidgetOp>(["groupBy"])],
+  ["timeseries", new Set<WidgetOp>(["timeseries"])],
 ]);
 
 /**
@@ -194,7 +217,22 @@ export interface WidgetStatCell {
    * a group key beside it, which the registration check does not look at and
    * the executor would drop.
    */
-  query: WidgetQuery & { op: "count"; groupBy?: never };
+  /**
+   * A count, with every key belonging to another op closed off.
+   *
+   * `groupBy`, `dateField` and `interval` are optional on `WidgetQuery` because
+   * it stays flat, so without these a stats cell carrying one COMPILES and is
+   * then refused by the endpoint on every load -- a permanently failed stat the
+   * type could have caught. Each op-specific key is named rather than the type
+   * being derived from a union member, because `keyof` over a union keeps only
+   * the shared keys and would quietly stop demanding a position on new ones.
+   */
+  query: WidgetQuery & {
+    op: "count";
+    groupBy?: never;
+    dateField?: never;
+    interval?: never;
+  };
   /** Where this number navigates. A cell without one draws as plain text. */
   link?: { label: string; href: string };
 }
@@ -261,6 +299,23 @@ export interface WidgetDefinition {
    * renumber them. Any finite value is legal, negatives and fractions included.
    */
   defaultOrder?: number;
+  /**
+   * How long this widget stays on the dashboard. Defaults to `"always"`.
+   *
+   * A `conditional` widget is transient: it shows only while `visibleWhen`
+   * holds, and is neither placed nor offered otherwise. Declaring it here
+   * rather than deciding in the component is what stops the grid reserving a
+   * slot, and an order, for a card that renders nothing.
+   */
+  lifecycle?: WidgetLifecycle;
+  /**
+   * The named condition this widget shows under. Required when conditional.
+   *
+   * A NAME the host evaluates, never a predicate the widget supplies. The
+   * closed set lives in `lifecycle.ts` with the reasoning; the short version is
+   * that a vocabulary cannot be spammed and an arbitrary hook can.
+   */
+  visibleWhen?: WidgetCondition | readonly WidgetCondition[];
   /**
    * Whether the host frames this widget. Defaults to `"card"`.
    *
@@ -467,6 +522,15 @@ export function widgetValueProblem(
 
   const geometry = geometryShapeProblem(widget);
   if (geometry !== undefined) return geometry;
+
+  // Asked HERE rather than in the registration validator, because both channels
+  // must answer it the same way. Left on the registration side, a plugin using
+  // the contributed channel could declare a lifecycle nothing validated: the
+  // summary carried the fields through and the layout server treated the card
+  // as permanent, so a transient card shipped by the documented route would
+  // simply never lapse -- and the author would have no refusal to read.
+  const lifecycle = lifecycleProblem(widget);
+  if (lifecycle !== undefined) return lifecycle;
 
   // A permission slug is a STRING in every version -- a newer core may mint new
   // slugs, but it cannot make a slug stop being a string -- so this is shape
@@ -1018,6 +1082,20 @@ function cellQueryProblem(query: unknown, at: string): string | undefined {
   // bind: a plugin compiled separately, JavaScript, and a cast.
   if ((query as WidgetQuery).op !== "count") {
     return `${at} must be a "count" query, because a stats cell draws one number`;
+  }
+  // A key belonging to another op is refused rather than ignored. Carried
+  // alongside `count` it would pass registration, be refused by the dashboard
+  // endpoint on every load, and leave a permanently failed stat -- with nothing
+  // pointing at the declaration that caused it.
+  //
+  // Named as a list rather than derived from a type, because this exists for
+  // the callers a type does not reach; the type beside it closes the same keys
+  // for the callers it does.
+  const foreign = (["groupBy", "dateField", "interval"] as const).filter(
+    key => (query as Record<string, unknown>)[key] !== undefined
+  );
+  if (foreign.length > 0) {
+    return `${at} is a "count" query and cannot carry ${foreign.join(", ")}`;
   }
   return undefined;
 }

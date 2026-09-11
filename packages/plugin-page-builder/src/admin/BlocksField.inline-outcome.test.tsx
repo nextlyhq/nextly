@@ -17,11 +17,13 @@
  *
  * @module admin/BlocksField.inline-outcome.test
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm, useWatch, type Control } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
 import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
@@ -33,6 +35,22 @@ const errors: string[] = [];
 
 /** The value the field has written back to the form. */
 let saved: unknown;
+
+/** How many times the inline passage has been asked to commit. */
+let commits = 0;
+
+/**
+ * The document the save form was handed, so the WORDS can be followed.
+ *
+ * Counting commits proves the flow was entered and nothing about what it
+ * carried: an editor that committed and then snapshotted the stale document
+ * would satisfy a call count while saving a pattern without the text the author
+ * had just typed, which is the entire defect.
+ */
+let savedFrom: unknown;
+
+/** The save-as-pattern verb the editor published, so a test can run it. */
+let offeredSaveVerb: (() => void) | undefined;
 
 vi.mock("@nextlyhq/ui", async importOriginal => {
   // Spread rather than replaced: the shell below is the REAL module and draws
@@ -71,18 +89,38 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       onExit?: () => void;
       children?: React.ReactNode;
     }): React.JSX.Element => (
-      <div>
-        <button type="button" onClick={onExit}>
-          Leave editor
-        </button>
-        {children}
-      </div>
+      // The shortcut context comes with the real shell, and the save form holds
+      // the keyboard while it is open — so a plain div here fails inside the
+      // form rather than telling us anything about the subject.
+      <ShortcutProvider>
+        <div>
+          <button type="button" onClick={onExit}>
+            Leave editor
+          </button>
+          {children}
+        </div>
+      </ShortcutProvider>
     ),
     BreakpointManager: nothing,
     BreakpointSwitcher: nothing,
     InspectorPanel: nothing,
     Canvas: nothing,
-    BlockKeyboardActions: passthrough,
+    /*
+     * Records the save-as-pattern verb as well as passing children through. The
+     * verb is published to the toolbar, the context menu and the palette alike,
+     * so capturing it here is capturing what all three would run — and running
+     * it is the only way to observe what the editor does with an open passage.
+     */
+    BlockKeyboardActions: ({
+      children,
+      onSaveAsPattern,
+    }: {
+      children?: React.ReactNode;
+      onSaveAsPattern?: () => void;
+    }): React.JSX.Element => {
+      offeredSaveVerb = onSaveAsPattern;
+      return <>{children}</>;
+    },
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
      * a stub would take the recorder below out of the tree along with it. The
@@ -148,6 +186,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       editingRich: null,
       begin: () => false,
       commit: () => {
+        commits += 1;
         onFinished?.(outcome);
         return outcome;
       },
@@ -173,7 +212,27 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     error: null,
     refetch: () => {},
   }),
-  useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
+  /*
+   * The save form's write and the two helpers that phrase its refusals. Never
+   * exercised by these cases — they stop at whether the form opens — but the
+   * modules the form imports resolve them at load, so omitting one is a missing
+   * export rather than an unused stub.
+   */
+  usePluginRouteMutation: () => ({
+    write: async () => ({ message: "Pattern created.", item: { id: "p1" } }),
+    pending: false,
+    error: null,
+  }),
+  apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+  validationIssues: () => [],
+  /*
+   * `schedule` is what the editor actually calls; `record`/`clear` were a shape
+   * this mock invented and nothing has. It went unnoticed because the call sits
+   * behind "the document changed since it opened", which no case here had
+   * reached — so the stub answered every question it was asked and none of the
+   * ones it would be.
+   */
+  useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
@@ -190,6 +249,27 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 // Imported after the mocks, which is what makes them take effect.
+/*
+ * The save form, replaced by a recorder.
+ *
+ * What is under test here is which DOCUMENT the editor hands over, and the real
+ * form would only let that be observed through a full submit. The form itself is
+ * exercised against the real components in `BlocksField.savePattern.test`; this
+ * file is about the editor's response to an inline outcome.
+ */
+vi.mock("./SavePatternPrompt", () => ({
+  SavePatternPrompt: ({
+    document,
+  }: {
+    document: BlockDocument | null;
+    selectedIds: readonly string[];
+    onClose: () => void;
+  }): React.JSX.Element | null => {
+    savedFrom = document;
+    return document === null ? null : <div role="dialog">save form</div>;
+  },
+}));
+
 const { BlocksField } = await import("./BlocksField");
 
 /** Watches what the field writes back, which is what a save actually persists. */
@@ -229,6 +309,9 @@ beforeEach(() => {
   outcome = { status: "unchanged" };
   errors.length = 0;
   saved = undefined;
+  commits = 0;
+  savedFrom = undefined;
+  offeredSaveVerb = undefined;
 });
 
 afterEach(() => {
@@ -382,5 +465,66 @@ describe("the save shortcut with an inline edit that could not be written", () =
 
     expect(saved).toMatchObject({ kind: "page" });
     expect(errors).toEqual([]);
+  });
+});
+
+describe("saving a pattern while a passage is still open", () => {
+  it("saves the COMMITTED document, not the one the editor was holding", () => {
+    /*
+     * A rich-text editor holds the author's text itself while they type — the
+     * canvas keeps the caret still — so the document the editor holds during an
+     * open passage is the one from before it. A form snapshotting that stores a
+     * pattern missing what is on screen, silently.
+     *
+     * Followed by IDENTITY rather than by counting the commit. An editor that
+     * committed and then snapshotted the stale document would satisfy a call
+     * count perfectly while doing exactly the thing this exists to prevent.
+     */
+    const written = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "typed", type: "core/text", version: 1, props: { text: "new" } },
+      ],
+    } as unknown as BlockDocument;
+    outcome = { status: "written", document: written };
+    openEditor();
+
+    React.act(() => {
+      offeredSaveVerb?.();
+    });
+
+    expect(commits).toBe(1);
+    expect(savedFrom).toBe(written);
+  });
+
+  it("declines to open the form when the commit was REFUSED", () => {
+    // The same rule leaving the editor follows, and for the same reason: the
+    // words are in the passage and nowhere else. Opening a modal over them
+    // invites the author to save a pattern without the text they just wrote,
+    // and to walk away from the passage while they are at it.
+    outcome = { status: "refused", reason: "Too large." };
+    openEditor();
+
+    React.act(() => {
+      offeredSaveVerb?.();
+    });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // And nothing was handed over, so there is no document waiting to be saved
+    // from behind a form that did not open.
+    expect(savedFrom).toBeNull();
+  });
+
+  it("opens it when the commit went through", () => {
+    // The control. Without it the case above passes against an editor whose
+    // save verb never opens anything.
+    openEditor();
+
+    React.act(() => {
+      offeredSaveVerb?.();
+    });
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });

@@ -61,10 +61,12 @@ import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import {
   countNodes,
   DEFAULT_LIMITS,
+  ForestTooLargeError,
   MAX_COMPOSED_DEPTH,
   MAX_ENVELOPE_ENTRIES,
   type DocumentLimits,
 } from "./limits";
+import { boundedLimit } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
@@ -262,16 +264,83 @@ const SCOPED_ID_PREFIX = "cx-";
  */
 const MAX_PROP_PATH_SEGMENTS = 16;
 
-/** The component ids a document references directly, in first-reached order. */
-export function componentIdsIn(
+/**
+ * What a document says about the components it references directly.
+ *
+ * Two values, because an empty list and an unread document are different
+ * answers and a caller must be able to tell them apart. The walk is bounded,
+ * and a bound that ends it early leaves a PREFIX — which, for the question an
+ * index of this asks, is the dangerous direction: "references nothing" is what
+ * permits deleting a component a page still renders.
+ */
+export interface ComponentUsage {
+  /** The component ids the document references, in first-reached order. */
+  ids: string[];
+  /**
+   * Whether the whole forest was read.
+   *
+   * False means `ids` is a prefix of the answer rather than the answer. A
+   * caller must not read a missing id as absent while this is false.
+   */
+  complete: boolean;
+}
+
+/**
+ * The components a document references, and whether it could all be read.
+ *
+ * The richer of the two answers this module gives, with {@link componentIdsIn}
+ * derived from it rather than computed beside it. They are one question, and
+ * two walks over one forest agree on the day they are written: the narrow one
+ * would go on returning a prefix silently after a change to the bound, the
+ * ordering or the descent rule moved only the other.
+ *
+ * ORDER IS FIRST-REACHED, not sorted, because `componentIdsIn` publishes that
+ * and its consumer is cache tagging. A caller comparing two answers for
+ * equality has to sort them itself.
+ */
+export function componentUsageIn(
   nodes: readonly unknown[],
   maxNodes: number = DEFAULT_LIMITS.maxNodes
-): string[] {
+): ComponentUsage {
+  // Through the published helper rather than a check written here, because its
+  // own docblock says why it is published: more than one walk is held to these
+  // numbers and they have to agree about what counts as a bound. A second rule
+  // spelled locally is how two walks come to accept different budgets.
+  //
+  // `NaN` is the case that matters. Every `budget <= 0` comparison against it
+  // is false, so the walk never stops — the bound is not loosened, it is GONE,
+  // and an unbounded read of an arbitrarily large stored document is exactly
+  // what the budget exists to prevent.
+  //
+  // A FRACTIONAL budget is accepted, and that is the helper's decision rather
+  // than an oversight here. It costs at most one node beyond the cap — 2.5
+  // reads three entries — and the answer stays truthful, because `complete`
+  // reports what the walk actually reached rather than what the budget
+  // allowed. Refusing it here and nowhere else would make this walk disagree
+  // with the helper that exists to stop walks disagreeing.
+  //
+  // The RETURNED value is what the walk spends, though nothing can currently
+  // tell it from `maxNodes`: the helper validates and returns its input
+  // unchanged, so the two are the same number on every path that gets past it,
+  // and a break-verify swapping them kills no test. Stated rather than left to
+  // look tested, and kept anyway — a helper that later normalises, by flooring
+  // a fraction say, is honoured here for free and silently ignored by the
+  // other spelling.
+  const cap = boundedLimit(maxNodes, "maxNodes", "componentUsageIn");
   const ids: string[] = [];
   const seen = new Set<string>();
-  let budget = maxNodes;
+  let budget = cap;
+  // Set on the branch that ENDS the walk early, rather than derived afterwards
+  // from `budget === 0`. A forest holding exactly `maxNodes` entries spends the
+  // last of the budget on its last entry and is read WHOLE, so a check on the
+  // remaining budget calls a complete read truncated — and reports a document
+  // as unreadable at exactly the size the rest of the engine still accepts.
+  let truncated = false;
   walkForest(nodes, entry => {
-    if (budget <= 0) return "stop";
+    if (budget <= 0) {
+      truncated = true;
+      return "stop";
+    }
     budget -= 1;
     const id = componentIdOf(entry.node);
     if (id !== undefined && !seen.has(id)) {
@@ -280,7 +349,22 @@ export function componentIdsIn(
     }
     return "descend";
   });
-  return ids;
+  return { ids, complete: !truncated };
+}
+
+/**
+ * The component ids a document references directly, in first-reached order.
+ *
+ * Answers nothing about whether the whole document was read. A caller deciding
+ * whether a component is USED needs {@link componentUsageIn} instead: a walk
+ * this one truncated returns a prefix that is indistinguishable here from a
+ * document referencing nothing.
+ */
+export function componentIdsIn(
+  nodes: readonly unknown[],
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): string[] {
+  return componentUsageIn(nodes, maxNodes).ids;
 }
 
 /**
@@ -304,7 +388,40 @@ export function resolveComponentInstances(
     return unchanged;
   }
 
-  const limits = options.limits ?? DEFAULT_LIMITS;
+  // Taken by name and validated once, rather than read from the caller's object
+  // wherever a cap is wanted. Two separate faults meet on this line.
+  //
+  // A `NaN` cap is not a loose bound, it is NO bound: `budget <= 0` is false
+  // against it, so the survey never stops and `survey.truncated` is never set —
+  // and the refusal directly below, which exists because composing from a
+  // partial survey is worse than not composing, silently never fires. Measured
+  // on a document of `maxNodes + 11` entries: under the default cap the
+  // resolver returns the document unchanged and references nothing, and under
+  // a `NaN` cap it composes it. `limits.maxNodes - survey.count` is NaN too,
+  // so the slot budget fails open as well.
+  //
+  // And `options.limits` is an object the CALLER owns, read four times here. A
+  // member that answers differently between reads lets the survey validate
+  // under one cap while the composition runs under another — the same fault
+  // this module's planner neighbour was fixed for.
+  //
+  // `maxBytes` is carried but NOT validated: nothing here reads it, and
+  // refusing a value this function never consults would reject callers it has
+  // always served. It is taken by name so the snapshot is whole.
+  const supplied = options.limits ?? DEFAULT_LIMITS;
+  const limits: DocumentLimits = {
+    maxDepth: boundedLimit(
+      supplied.maxDepth,
+      "maxDepth",
+      "resolveComponentInstances"
+    ),
+    maxNodes: boundedLimit(
+      supplied.maxNodes,
+      "maxNodes",
+      "resolveComponentInstances"
+    ),
+    maxBytes: supplied.maxBytes,
+  };
   const survey = surveyHost(document.nodes, limits.maxNodes);
   // A survey that stopped at the cap collected a PREFIX of the document's ids,
   // so every id minted afterwards would be checked against a set missing
@@ -318,7 +435,12 @@ export function resolveComponentInstances(
   // when nothing changed, so removing this line changes no output. What it
   // saves is building the run and walking the tree at all, which is the whole
   // cost this module adds to a page that uses no components.
-  if (!survey.hasInstance) return unchanged;
+  //
+  // `hasStoredProvenance` is the exception, and it is why this is no longer
+  // purely an optimisation. A document with no instances still has to be walked
+  // when one of its nodes carries a stored `instanceOf`, because that claim is
+  // stripped on the way through and returning early would leave it standing.
+  if (!survey.hasInstance && !survey.hasStoredProvenance) return unchanged;
 
   const run: ResolveRun = {
     definitions,
@@ -448,6 +570,15 @@ const ROOT_SCOPE: ComposedScope = { depth: 0, onPath: new Set<string>() };
 /** What the host document holds, read once before anything is rebuilt. */
 interface HostSurvey {
   hasInstance: boolean;
+  /**
+   * Some node arrived already claiming `instanceOf`.
+   *
+   * Stored data wearing this pass's provenance. It has to be walked and cleared
+   * even when the document composes nothing, so this is read beside
+   * `hasInstance` rather than folded into it — the two are different reasons to
+   * walk, and only one of them is about components being present.
+   */
+  hasStoredProvenance: boolean;
   /** The walk stopped at the node cap, so `ids` is a PREFIX of what is there. */
   truncated: boolean;
   /** How many nodes the host already holds, instances included. */
@@ -475,6 +606,7 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
   const ids = new Set<string>();
   const domIds = new Set<string>();
   let hasInstance = false;
+  let hasStoredProvenance = false;
   let truncated = false;
   let count = 0;
   let budget = maxNodes;
@@ -490,9 +622,14 @@ function surveyHost(nodes: readonly unknown[], maxNodes: number): HostSurvey {
     if (typeof node.id === "string") ids.add(node.id);
     collectDomIds(node, domIds);
     if (node.type === COMPONENT_INSTANCE_TYPE) hasInstance = true;
+    // A stored node wearing this pass's provenance. Noted HERE because the walk
+    // is already happening: without it the composition-free fast path below
+    // returns the document untouched, which is exactly the document where a
+    // false claim survives — a page with no components at all.
+    if ("instanceOf" in node) hasStoredProvenance = true;
     return "descend";
   });
-  return { hasInstance, truncated, count, ids, domIds };
+  return { hasInstance, hasStoredProvenance, truncated, count, ids, domIds };
 }
 
 /** Every DOM id one stored node publishes, in either of the two places. */
@@ -565,8 +702,16 @@ function inlineNode(
   depth: number
 ): ResolvedBlockNode[] | null {
   if (!isPlainRecord(node)) return null;
-  if (node.type === COMPONENT_INSTANCE_TYPE) {
-    return expandInstance(node, run, scope, depth);
+  // Stripped HERE, before the instance branch, because both kinds of node on
+  // this walk are the page's own and neither may arrive already wearing this
+  // pass's provenance. The instance case is the one that bites: it returns
+  // below without reaching the host cleanup, and a refusal SPREADS the node it
+  // was given — so a hand-edited instance whose component is missing, cyclic or
+  // budget-refused kept its forged claim precisely when a placeholder is drawn
+  // for it, which is the element an author can see and click.
+  const own = "instanceOf" in node ? withoutInstanceOf(node) : node;
+  if (own.type === COMPONENT_INSTANCE_TYPE) {
+    return expandInstance(own, run, scope, depth);
   }
   // The same rule `expandInstance` applies to an instance's OWN gate, applied
   // to the node holding one. Gating is inherited — `pruneHiddenNodes` drops a
@@ -582,11 +727,51 @@ function inlineNode(
   // Asked of the node ITSELF rather than tracked down the walk, because
   // `inlineForest` descends one level per frame: a gated node returns here
   // before its slots are visited, so nothing below it is ever reached.
-  if (isConditionGated(node)) return null;
-  const slots = node.slots;
-  if (!isPlainRecord(slots)) return null;
+  // A gated node is dropped with its whole subtree by `pruneHiddenNodes`, so a
+  // stored claim on one reaches no reader whether or not it was cleared here.
+  // Reported as unchanged rather than as a stripped node, which keeps the
+  // identity signal below meaning what it says.
+  if (isConditionGated(own)) return null;
+  const slots = own.slots;
+  if (!isPlainRecord(slots)) return own === node ? null : [own];
   const next = inlineHostSlots(slots, run, scope, depth);
-  return next === slots ? null : [{ ...node, slots: next }];
+  if (next === slots) return own === node ? null : [own];
+  return [{ ...own, slots: next }];
+}
+
+/**
+ * The same node with a stored provenance claim removed.
+ *
+ * `instanceOf` means "the resolver inlined this node from a definition", and
+ * the only writer that may say so is this pass. Documents arrive from places
+ * that never ran it — an export replayed, a tree a host assembled, content
+ * hand-edited in storage — and `sanitizeDocument` preserves unknown node keys
+ * deliberately, so a page node can reach the resolver already claiming to
+ * belong to a component. An editor reading that marker sends a click, an edit
+ * or a delete to an instance the author never placed, and the node they were
+ * pointing at is one of their own.
+ *
+ * Cleared on the way through rather than checked at every reader: this is the
+ * pass that OWNS the field, so it is the one place that can tell a stored claim
+ * from provenance it created. Applied only on the page walk, which is why
+ * `cloneDefinitionNode` is untouched — provenance on a definition-owned node is
+ * this pass's own and must survive.
+ */
+function withoutInstanceOf(node: ResolvedBlockNode): ResolvedBlockNode {
+  // Copied by DESCRIPTOR, so the property is removed without ever being read.
+  // Destructuring and spreading both INVOKE a getter, and this runs on trees a
+  // host assembled in memory rather than only on JSON from the database — so a
+  // node carrying an enumerable `instanceOf` accessor that throws would take
+  // the whole resolution down from here, before any per-block boundary could
+  // contain it and draw a placeholder. Measured: it aborted `PageRenderer`
+  // outright.
+  //
+  // Other properties keep whatever descriptors they had, which is deliberate:
+  // this changes only when `instanceOf` is read, not how the rest of the node
+  // behaves.
+  const descriptors = Object.getOwnPropertyDescriptors(node);
+  delete descriptors.instanceOf;
+  return Object.defineProperties({}, descriptors) as ResolvedBlockNode;
 }
 
 /** Every slot of a host node, with its children resolved in the same scope. */
@@ -1246,7 +1431,7 @@ function refundDiscardedSlots(
     if (kept.has(name)) continue;
     const children = ownEntry(slots, name);
     if (!Array.isArray(children)) continue;
-    run.budget += countNodes(children);
+    run.budget += refundableCount(children);
   }
 }
 
@@ -1472,7 +1657,7 @@ interface InlineContext {
    * Asked once per distinct ORIGINAL, so a definition whose two nodes carry
    * one DOM id maps both to a single replacement — the pair pointed at one
    * target before and still reaches one target after. The same memo
-   * `reidSubtreeWithMap` keeps, for the same reason.
+   * `reidForestWithMap` keeps, for the same reason.
    */
   domIds: Map<string, string>;
   /** The scope INSIDE this component, for instances the definition itself holds. */
@@ -1948,10 +2133,33 @@ function survivesGating(
  * content, which is what `nodes` holds until something places it. Refunding a
  * composed size credited a number the survey never took, in either direction.
  */
+/**
+ * What a subtree is worth as a REFUND, or nothing when it cannot be counted.
+ *
+ * `countNodes` refuses a forest whose entries outrun the machine bound rather
+ * than answering from a partial walk, and a refund is the wrong place to let
+ * that escape. This module's whole limit strategy is to degrade — a document
+ * past its budget comes back unchanged or with instances left unresolved, so a
+ * visitor gets the page rather than a blank screen — and an exception thrown
+ * midway through composition replaces that with nothing at all.
+ *
+ * Nothing is the conservative refund. It leaves the run believing it has spent
+ * more than it has, so the budget it already checks runs out and the existing
+ * graceful path takes over, which is the same outcome by the intended route.
+ */
+function refundableCount(nodes: BlockNode[]): number {
+  try {
+    return countNodes(nodes);
+  } catch (error) {
+    if (error instanceof ForestTooLargeError) return 0;
+    throw error;
+  }
+}
+
 function refundPlannedSlots(plan: NodePlan, run: ResolveRun): void {
   if (plan.slots === undefined) return;
   for (const content of plan.slots.values()) {
-    run.budget += countNodes(content.nodes);
+    run.budget += refundableCount(content.nodes);
   }
 }
 

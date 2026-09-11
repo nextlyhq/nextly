@@ -10,7 +10,7 @@
  *
  * @module runtime/routing/resolve-content
  */
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
@@ -28,7 +28,7 @@ export type ContentEntry = Record<string, unknown>;
  * The booted-Nextly surface these helpers need: a `find` reader, plus
  * `findByID` for the working-draft overlay. Typed structurally (not as the
  * Direct API class) so BOTH the internal singleton and the public instance
- * returned by `await getNextly(config)` satisfy it — the public interface does
+ * returned by `await getNextly({ config })` satisfy it — the public interface does
  * not expose the Direct API's internal handlers.
  */
 export type NextlyContentReader = Pick<Nextly, "find" | "findByID">;
@@ -36,9 +36,10 @@ export type NextlyContentReader = Pick<Nextly, "find" | "findByID">;
 /** Options for {@link resolveContent}. */
 interface ResolveContentOptionsBase {
   /**
-   * A booted Nextly instance. Defaults to the runtime singleton (`getNextly()`),
+   * A booted Nextly instance. Defaults to the runtime singleton (`requireNextly()`),
    * which requires services to be registered — pass one explicitly (e.g. the
-   * value from `await getNextly(config)`) from a frontend read path that boots
+   * value from `await getNextly({ config })` from `nextly`) from a frontend read
+   * path that boots
    * the config itself.
    */
   nextly?: NextlyContentReader;
@@ -134,12 +135,14 @@ interface ResolveContentOptionsBase {
    * rule is hidden from an unauthenticated request (resolves to `null` →
    * `notFound()`). Pass `true` for a fully trusted read. NOTE on anonymous
    * scope: an anonymous read enforces stored rules that DENY outright
-   * (public/authenticated/role-based). A row-level CONSTRAINT rule (owner-only,
-   * or a custom rule returning a query predicate) and inline
-   * `defineCollection({ access })` code rules require a `user` context to
-   * evaluate, so they are not applied for an anonymous read — gate such content
-   * behind an authenticated read (pass a `user`) rather than relying on the
-   * anonymous default. CACHING: only a trusted (`overrideAccess: true`) read
+   * (public/authenticated/role-based), and it enforces inline
+   * `defineCollection({ access })` code rules, which are handed a real
+   * anonymous context (`user: null`, no roles) and decide on it. What an
+   * anonymous read still cannot apply is a row-level CONSTRAINT rule
+   * (owner-only, or a custom rule returning a query predicate): those compare
+   * the row against somebody, and there is nobody to compare it to. Gate
+   * content that depends on a CONSTRAINT rule behind an authenticated read
+   * (pass a `user`) rather than relying on the anonymous default. CACHING: only a trusted (`overrideAccess: true`) read
    * with no `user` is F1-cached — an enforced read is never cached (its access
    * decision can't be invalidated on a policy change). A public site that wants
    * cached pages should read its public content with `overrideAccess: true`.
@@ -274,7 +277,7 @@ export async function resolveContent(
   slug: string,
   options: ResolveContentOptions = {}
 ): Promise<ContentEntry | null> {
-  const nextly = options.nextly ?? getNextly();
+  const nextly = options.nextly ?? requireNextly();
   const slugField = options.slugField ?? "slug";
   const draft = options.draft ?? false;
   const grantedEntryId = options.entryId;

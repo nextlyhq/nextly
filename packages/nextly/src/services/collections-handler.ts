@@ -621,6 +621,8 @@ export class CollectionsHandler {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
   }) {
     return this.entryService.listEntries(params);
   }
@@ -662,6 +664,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /**
        * The caller's authenticated scope. For a scoped API-key REST create the
        * publish transition gate (create-as-published) judges the key's OWN grants.
@@ -738,6 +742,8 @@ export class CollectionsHandler {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /**
      * Set by a route that already authenticated and authorized the caller.
      * Skips the redundant RBAC re-check (which resolves the caller's stored
@@ -817,6 +823,8 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
   }) {
     return this.entryService.countEntries(params);
   }
@@ -831,6 +839,13 @@ export class CollectionsHandler {
     params: Parameters<CollectionEntryService["groupEntries"]>[0]
   ): ReturnType<CollectionEntryService["groupEntries"]> {
     return this.entryService.groupEntries(params);
+  }
+
+  /** How many rows fall in each interval of a recent window. */
+  async timeseriesEntries(
+    params: Parameters<CollectionEntryService["timeseriesEntries"]>[0]
+  ): ReturnType<CollectionEntryService["timeseriesEntries"]> {
+    return this.entryService.timeseriesEntries(params);
   }
 
   /**
@@ -871,6 +886,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /**
        * Set when this write restores an earlier version, recorded on the
        * version it captures.
@@ -1015,6 +1032,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /**
      * The caller's authenticated scope. A scoped API key is judged on its OWN
      * delete grant, so the session super-admin bypass does not apply to it.
@@ -1067,6 +1086,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /**
      * The caller's authenticated scope. Each per-id delete is judged on a scoped
      * API key's OWN delete grant, not the key owner's.
@@ -1118,6 +1139,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
     /**
@@ -1168,6 +1191,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /** Acting identity from the transport, forwarded to the recorded event. */
       actor?: RequestActor;
       /**
@@ -1231,6 +1256,8 @@ export class CollectionsHandler {
       routeAuthorized?: boolean;
       /** Arbitrary data passed to hooks via context */
       context?: Record<string, unknown>;
+      /** The HTTP request behind this operation, when one produced it. */
+      request?: Request;
       /** Skip cache revalidation for this bulk delete (the outbox drain still runs). */
       disableRevalidate?: boolean;
     },
@@ -1276,6 +1303,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
     /**

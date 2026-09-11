@@ -28,7 +28,7 @@
  */
 import type { Metadata } from "next";
 
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
 
@@ -39,6 +39,14 @@ import {
   type ContentEntry,
   type NextlyContentReader,
 } from "./resolve-content";
+import { slugToStaticParam } from "./slug-param";
+
+// Re-exported, not defined here. It moved to a LEAF module so that importing
+// the one pure function this file exports does not drag this file's graph — the
+// Direct API, the error type, the not-found trigger, the content resolver —
+// along with it. The name stays here because `nextly/runtime` and the plugin
+// SDK publish it, and moving a published export is a break for no benefit.
+export { slugToStaticParam };
 
 /** Where a resolved entry was found, and in which language. */
 export interface ResolvedContext {
@@ -239,7 +247,7 @@ export interface ContentRouteConfig<TNode> {
    * would see beside the page being previewed.
    */
   trustedCollections?: string[];
-  /** A booted Nextly instance (defaults to `getNextly()`). */
+  /** A booted Nextly instance (defaults to `requireNextly()`). */
   nextly?: NextlyContentReader;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
@@ -340,81 +348,6 @@ export interface StaticContentRoute<TNode> extends ContentRoute<TNode> {
 
 const MAX_STATIC_PARAMS_PER_PAGE = 500;
 
-/**
- * Map a stored slug value to a static param, or `null` to skip it. An empty
- * slug is the site root (`/`) — emitted as the no-segment param so the homepage
- * pre-renders — while whitespace-only, non-string, and reserved values are
- * dropped (the page would only `notFound()` them).
- */
-/**
- * Whether a STORED path segment is one URL resolution removes.
- *
- * Literal `.` and `..` only. The URL standard does also treat `%2e` as a dot
- * when parsing a URL, but this reads a slug as STORED, and a stored segment
- * reaches a URL already encoded: `%2E%2E` becomes `%252E%252E`, which stays a
- * literal segment and decodes back to the text the lookup matches. Applying the
- * URL-text rule to stored text would reject an entry that is perfectly
- * addressable, taking it out of static generation and stripping its canonical.
- */
-function isDotSegment(segment: string): boolean {
-  return segment === "." || segment === "..";
-}
-
-/**
- * The instance, bound to the access policy this route resolved the entry with.
- *
- * The Direct API is a TRUSTED server surface: its documented default is
- * `overrideAccess: true`, because the ordinary caller is application code that
- * has already decided who is asking. A route is the opposite — it answers
- * whoever holds the URL — and it resolves its own entry with access enforced
- * and no user.
- *
- * Handing a render or metadata callback the raw instance therefore offers a
- * reader whose defaults are the inverse of the page's. A callback doing the
- * obvious thing — `context.reader.find({ collection: "authors" })` to name the
- * author of the post it is rendering — would read PAST the access rules that
- * governed the post itself, and publish restricted rows in a public response.
- *
- * So the defaults are restated to match the route: access enforced unless this
- * route resolved with it overridden, and no identity, because the route
- * resolves anonymously. A caller that genuinely wants the trusted surface can
- * still pass `overrideAccess: true` explicitly — the arguments win, since they
- * are spread over these defaults. What changes is which way the DEFAULT points,
- * and that is the direction a caller cannot see.
- */
-export function slugToStaticParam(value: unknown): { slug: string[] } | null {
-  if (typeof value !== "string") return null;
-  if (value === "") return isReservedPath("/") ? null : { slug: [] };
-  if (value.trim() === "") return null;
-  // Collapse leading/trailing/duplicate slashes so a stored "/admin" or "a//b"
-  // normalizes to clean segments and can't dodge the reserved-path check.
-  const normalized = value
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "")
-    .replace(/\/{2,}/g, "/");
-  if (normalized === "") return null;
-  if (isReservedPath(`/${normalized}`)) return null;
-  const segments = normalized.split("/");
-  // A `.` or `..` segment makes the slug UNADDRESSABLE. URL resolution removes
-  // those segments before a request is sent, so a pre-rendered `/pages/../admin`
-  // is fetched as `/admin` and the page generated here can never be reached —
-  // while the path it occupies belongs to a different, possibly reserved route.
-  // Percent-encoding does not help: the URL standard treats `%2e` as a dot for
-  // exactly this purpose, so `%2E%2E` resolves away too.
-  if (segments.some(isDotSegment)) return null;
-  // A slug NORMALIZATION changed is a slug that cannot be served. The route
-  // matches the joined incoming segments against the stored column, so an entry
-  // stored as `a//b` is fetched at `/a/b` and looked up as `a/b` — which it does
-  // not have. Pre-rendering that path builds a page the lookup can never find,
-  // and any URL derived from it names one the route answers with `notFound()`.
-  //
-  // The normalization above still happens, because a reserved path must not be
-  // smuggled past the check by a leading slash. What changes is the ANSWER:
-  // normalization is used to decide, never to rewrite.
-  if (segments.join("/") !== value) return null;
-  return { slug: segments };
-}
-
 function buildRoute<TNode>(
   config: ContentRouteConfig<TNode>,
   content: "public" | "restricted"
@@ -458,7 +391,8 @@ function buildRoute<TNode>(
   // The predicate form, for the reads this module issues directly.
   const trusted = (name: string): boolean => trustedSet.has(name);
 
-  const getInstance = (): NextlyContentReader => config.nextly ?? getNextly();
+  const getInstance = (): NextlyContentReader =>
+    config.nextly ?? requireNextly();
 
   /** Whether this request may see unpublished edits at one collection + slug. */
   /**

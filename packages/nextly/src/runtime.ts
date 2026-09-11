@@ -9,8 +9,15 @@
  * re-export from here. That keeps the root Node-safe so:
  *   - The CLI can load user configs without dragging Next.js in.
  *   - Plugin authors can `import { defineCollection } from "nextly"`
- *     in their own packages without forcing a `next` peer dep on
- *     consumers.
+ *     in their own packages without pulling `next/*` into a module
+ *     graph that gets bundled for the browser.
+ *
+ * The distinction is what an import PULLS IN, not what a package
+ * manager installs. `next` is the one peer dependency this package
+ * does not mark optional, so a consumer resolves it whichever subpath
+ * they import; choosing the root does not avoid it. What the root
+ * avoids is Next.js appearing in a graph that has no request
+ * lifecycle to run inside.
  *
  * Templates wire the catch-all admin route from this subpath:
  *
@@ -89,12 +96,22 @@ export type {
 
 // Content routing + sitemap/robots delivery. `next`/`react` are type-only and
 // `next/navigation` resolves lazily, so importing these never forces them.
-// `getNextly` is the documented default for `ContentRouteConfig.nextly`, and a
-// helper built ON a content route needs the same instance the route resolves
-// through — on a per-tenant setup a second instance is a second DATABASE. It is
-// exported so such a helper can resolve it the same way, rather than having the
-// route hand a general reader to every callback in order to share one.
-export { getNextly } from "./direct-api/nextly";
+// `requireNextly` is the default a content route falls back to when
+// `ContentRouteConfig.nextly` names no reader, and a helper built ON such a
+// route needs the instance the route reads through. It is exported so the
+// helper can reach it the same way, rather than the route handing a reader to
+// every callback in order to share one.
+//
+// It reads the registered singleton and throws when there is none, so it says
+// so in its name. It used to be exported here as `getNextly`, which is also the
+// name `nextly` exports for a function that initialises, takes required config
+// and returns a promise — two different functions, one name, opposite tolerance
+// for an uninitialised process.
+//
+// Worth knowing before reaching for it: where the route was given an explicit
+// `nextly` reader, as a per-tenant setup must, this resolves the GLOBAL
+// singleton and not that reader. Pass the reader for those.
+export { requireNextly } from "./direct-api/nextly";
 
 export {
   resolveContent,

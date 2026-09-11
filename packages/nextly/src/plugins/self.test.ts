@@ -58,4 +58,39 @@ describe("resolvePluginSelf (rename resolution — D54, P2c)", () => {
 
     expect(self.singles.settings).toBe("site-settings");
   });
+
+  it("does not inherit a rename for a slug that names an Object member", () => {
+    // `constructor` is a valid collection slug, and `renameMap[slug] ?? slug`
+    // answers with the inherited FUNCTION for it rather than undefined — so the
+    // `??` never fires and the resolved "slug" is
+    // `function Object() { [native code] }`. Every permission and query built
+    // from that names a resource nothing has.
+    const self = resolvePluginSelf({
+      name: "@t/proto",
+      contributes: {
+        collections: [{ slug: "constructor" }, { slug: "toString" }],
+        singles: [{ slug: "valueOf" }],
+      },
+      renameMap: {},
+    } as unknown as PluginDefinition);
+
+    expect(self.collections.constructor).toBe("constructor");
+    expect(self.collections.toString).toBe("toString");
+    expect(self.singles.valueOf).toBe("valueOf");
+  });
+
+  it("hands out maps a CONSUMER cannot inherit from either", () => {
+    // Every reader does `self.collections[declaredSlug]` — `library-route.ts`
+    // does exactly that to find the patterns collection. Fixing only the writer
+    // would leave each of those lookups able to inherit `Object`'s members for
+    // a slug it was never given.
+    const self = resolvePluginSelf({
+      name: "@t/proto",
+      contributes: { collections: [{ slug: "patterns" }] },
+    } as unknown as PluginDefinition);
+
+    expect(Object.getPrototypeOf(self.collections)).toBeNull();
+    expect(Object.getPrototypeOf(self.singles)).toBeNull();
+    expect(self.collections["constructor"]).toBeUndefined();
+  });
 });

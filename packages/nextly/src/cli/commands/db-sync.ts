@@ -74,7 +74,7 @@ import {
   type GlobalOptions,
 } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
@@ -248,7 +248,7 @@ export async function runDbSync(
   // are known to exist — `dynamic_components` has to be readable before it can be listed.
   let schemaRegistry: SchemaRegistry;
   try {
-    adapter = await createAdapter({
+    adapter = await createCliAdapter({
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
       logger: options.verbose ? logger : undefined,

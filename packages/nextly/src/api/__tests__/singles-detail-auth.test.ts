@@ -92,9 +92,13 @@ describe("singles-detail PATCH route auth forwarding", () => {
         // context; a session caller attributes to the user.
         actor: { type: "user", id: "u-1" },
         // The route forwards the caller's authenticated scope so a scoped API
-        // key is judged on its own publish grant; a session user carries an
-        // empty-permission user scope.
-        authenticatedScope: { actorType: "user", permissions: [] },
+        // key is judged on its own publish grant. A session carries NONE —
+        // `undefined`, not a `user`-typed scope with an empty permission list.
+        // The two were always read identically (`apiKeyWriteAllowed` answers
+        // null for anything that is not an api key), and the empty one had to
+        // be built by hand, which is how it came to omit the caller's roles and
+        // the rows a rule's spelling derives from.
+        authenticatedScope: undefined,
       }
     );
   });

@@ -96,6 +96,27 @@ export const activityLog = mysqlTable(
   {
     id: varchar("id", { length: 191 }).primaryKey(),
     userId: varchar("user_id", { length: 191 }).notNull(),
+    /**
+     * What KIND of caller `user_id` refers to.
+     *
+     * `user_id` is already documented as "the actor, as an opaque reference
+     * that outlives their account" — the name is historical, the meaning is the
+     * actor. What it could never say is WHICH KIND, so a write had to be by a
+     * signed-in person to be recordable at all: any other actor was refused and
+     * left no trace. Imports, API-key writes, job writes and bulk edits were
+     * invisible rather than merely unattributed, and nothing about them is
+     * recoverable after the fact.
+     *
+     * With the kind on the row, `user_id` holds a user's id, an API key's own
+     * id, or a system caller's name, and the reader knows which. The accountable
+     * human is derived rather than stored twice: for a key that is the key's
+     * owner, which the keys table holds and outlives this row.
+     *
+     * NULL on rows written before this existed. Those are all user writes, since
+     * no other kind was recordable — a fact about the old gate rather than an
+     * assumption, so a reader may read NULL as `"user"`.
+     */
+    actorType: varchar("actor_type", { length: 16 }),
     userName: varchar("user_name", { length: 255 }),
     userEmail: varchar("user_email", { length: 255 }),
     action: varchar("action", { length: 10 }).notNull(), // 'create' | 'update' | 'delete'

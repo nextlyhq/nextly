@@ -29,6 +29,56 @@
  * Reducing both to the role pair gives one identity that both can ask for.
  */
 
+/**
+ * Faded UTILITIES shipped below their threshold, keyed by the utility itself.
+ *
+ * The sibling of {@link ACCEPTED_REGRESSIONS}, and keyed differently on purpose.
+ * That list identifies a pairing by its ROLE PAIR because two suites reach the
+ * same colours through different names. A faded utility is a third naming, and
+ * reducing it to a role pair loses three things the scan measured — each of
+ * which turns an acceptance into a suppression it was never agreed for:
+ *
+ * - the KIND, and so the threshold. `border-x/50` and `text-x/50` reduce to one
+ *   identity while being held to 3:1 and 4.5:1, so accepting a decorative
+ *   boundary would silently accept body text at the same ratio.
+ * - the VARIANT. `dark:border-success-900/50` is scanned as
+ *   `border-success-900/50`, so a light-mode acceptance would vouch for a
+ *   utility that only ever renders in dark.
+ * - the PRECISION. `border-input/[33.3%]` parses to `0.33299999999999996`,
+ *   which is not the `0.333` anyone would write.
+ *
+ * The utility string loses none of them, so that is the key. It lives in this
+ * file rather than beside the scan because this is where a reviewer comes to
+ * learn what the palette knowingly ships below its minimum, and two files
+ * answering that question is how the ledger comes to understate what renders.
+ *
+ * These do not duplicate {@link ACCEPTED_REGRESSIONS}: a faded utility and the
+ * opaque pairing of the same roles are different colours and measure different
+ * ratios, so an entry here is never the same fact recorded twice.
+ */
+export interface AcceptedAlphaUtility {
+  /**
+   * What the utility measures, to 2dp, in each mode that FAILS.
+   *
+   * A mode that already clears its threshold carries no number, and recording
+   * one for it is refused. Many utilities fail in one theme only — measured,
+   * `border-input/90` is about 1.14:1 in light and 3.58:1 in dark — so an entry
+   * required to record both could never be written for the commonest case.
+   */
+  light?: number;
+  dark?: number;
+  /** Why the shortfall is shipped rather than corrected. */
+  reason: string;
+}
+
+/**
+ * Empty, and that is the honest state: no faded utility is currently shipped
+ * in scope and failing. The suite that consults this holds every entry to
+ * being still used, still failing, and still measuring what it records.
+ */
+export const ACCEPTED_ALPHA_UTILITIES: Record<string, AcceptedAlphaUtility> =
+  Object.create(null) as Record<string, AcceptedAlphaUtility>;
+
 /** A pairing knowingly shipped below its threshold. */
 export interface AcceptedRegression {
   /** Foreground role: the token name with its `--nx-` / `--color-` prefix cut. */

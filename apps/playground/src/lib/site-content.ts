@@ -28,7 +28,7 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 /**
  * The instance, resolved per call.
  *
- * A route helper otherwise falls back to the synchronous `getNextly()` from
+ * A route helper otherwise falls back to the synchronous `requireNextly()` from
  * `nextly/runtime`, which returns the already-registered singleton and throws
  * when nothing has registered it. A public page can be the FIRST request a cold
  * server handles, so relying on that means the route works only once something

@@ -42,6 +42,57 @@ const FORBIDDEN = [
   "COMPONENT_MIGRATION_STATUSES",
 ];
 
+/**
+ * What a published function looks like from an import site.
+ *
+ * Arity and whether it is async, because those are the two halves a caller has
+ * to get right and the two the collision this guards against differed in.
+ */
+function shapeOf(value: (...args: unknown[]) => unknown): string {
+  const kind = value.constructor.name === "AsyncFunction" ? "async" : "sync";
+  return `${kind}/${String(value.length)}`;
+}
+
+/** Names published from more than one entry point with more than one shape. */
+function namesPublishedTwice(
+  surfaces: Map<string, Record<string, unknown>>
+): string[] {
+  const seen = new Map<string, Array<{ entry: string; shape: string }>>();
+  for (const [entry, mod] of surfaces) {
+    for (const [name, value] of Object.entries(mod)) {
+      if (typeof value !== "function") continue;
+      seen.set(name, [
+        ...(seen.get(name) ?? []),
+        { entry, shape: shapeOf(value as (...args: unknown[]) => unknown) },
+      ]);
+    }
+  }
+  return [...seen.entries()]
+    .filter(
+      ([, places]) =>
+        places.length > 1 && new Set(places.map(p => p.shape)).size > 1
+    )
+    .map(
+      ([name, places]) =>
+        `${name}: ${places.map(p => `${p.entry} ${p.shape}`).join(", ")}`
+    );
+}
+
+/**
+ * Names published from two entry points meaning different things.
+ *
+ * 🔴 EMPTY, and that is the point. It held the two this check found when it was
+ * written, `isFieldGroupType` and `createAdapter`, each recorded rather than
+ * fixed because each needed the decision `getNextly` needed about which keeps
+ * the name. Both have now been made, so nothing is exempt and the next one
+ * fails on the day it appears rather than joining a list.
+ *
+ * Add to this only to record a clash somebody has decided to keep, with the
+ * reason. A name added here to make a red test green is the defect being
+ * written down instead of fixed.
+ */
+const KNOWN_SHAPE_CLASHES: string[] = [];
+
 const manifestUrl = new URL("../../package.json", import.meta.url);
 const packageRoot = path.dirname(fileURLToPath(manifestUrl));
 
@@ -99,6 +150,62 @@ describe("published export surface", () => {
     }
   );
 
+  // 🔴 The defect this generalises: `getNextly` was published from `nextly` as
+  // an async function taking a required config, and from `nextly/runtime` as a
+  // synchronous one taking none. Same name, opposite tolerance for an
+  // uninitialised process, and nothing said so at an import site.
+  //
+  // Arity alone cannot separate that pair, which is worth stating because the
+  // first version of this test used it and would have passed with the defect
+  // reinstated: an optional TypeScript parameter is still a declared JavaScript
+  // parameter, so `getNextly(options)` and `getNextly(config?)` both report a
+  // `length` of 1. Whether the function is async is the half that separates
+  // them, and `namesPublishedTwice` compares both.
+  it("does not publish one name from two entries with different shapes", async () => {
+    const surfaces = new Map<string, Record<string, unknown>>();
+    for (const [entry, source] of ENTRY_POINTS) {
+      surfaces.set(
+        entry,
+        (await import(pathToFileURL(source).href)) as Record<string, unknown>
+      );
+    }
+    expect(namesPublishedTwice(surfaces)).toEqual(KNOWN_SHAPE_CLASHES);
+    // The control: a scan that imported nothing would report no clash. This
+    // asserts the scan actually read a surface.
+    expect(surfaces.size).toEqual(ENTRY_POINTS.length);
+  });
+
+  it("catches the pair it was written for", () => {
+    // The control the first version of this check lacked. These are the two
+    // real shapes, and putting them back under one name has to be reported.
+    const reinstated = new Map<string, Record<string, unknown>>([
+      ["nextly", { getNextly: async (options: unknown) => options }],
+      ["nextly/runtime", { getNextly: (config: unknown) => config }],
+    ]);
+    expect(namesPublishedTwice(reinstated)).toEqual([
+      "getNextly: nextly async/1, nextly/runtime sync/1",
+    ]);
+    // And the other direction: one name, one shape, published twice is a
+    // re-export rather than a collision.
+    const reexported = new Map<string, Record<string, unknown>>([
+      ["nextly", { shared: (a: unknown) => a }],
+      ["nextly/runtime", { shared: (a: unknown) => a }],
+    ]);
+    expect(namesPublishedTwice(reexported)).toEqual([]);
+  });
+
+  it("publishes each way to reach an instance under its own name", async () => {
+    // The two are kept apart on purpose. `getNextly` initialises and is correct
+    // whether or not the process has booted; `requireNextly` reads what is
+    // already registered and throws when there is none.
+    const root = (await import("../index")) as Record<string, unknown>;
+    const runtime = (await import("../runtime")) as Record<string, unknown>;
+    expect(typeof root.getNextly).toBe("function");
+    expect(typeof runtime.requireNextly).toBe("function");
+    expect("getNextly" in runtime).toBe(false);
+    expect("requireNextly" in root).toBe(false);
+  });
+
   it("exposes the field-group vocabulary from the config entry point", async () => {
     // The counterpart to the list above: absence alone would also be satisfied
     // by deleting the API, so the replacements are asserted present.
@@ -146,5 +253,42 @@ describe("published export surface", () => {
     expect(typeof mod.readFieldGroupType).toBe("function");
     expect(typeof mod.isFieldGroupType).toBe("function");
     expect(typeof mod.writeFieldGroupType).toBe("function");
+  });
+
+  /**
+   * The names a resolved clash left behind, asserted where they were promised.
+   *
+   * An empty {@link KNOWN_SHAPE_CLASHES} says only that no name is published
+   * twice with different shapes. Deleting `isFieldGroupFieldType` outright
+   * satisfies that too, and so does dropping `createCliAdapter`: the collision
+   * is gone either way, and a rename that quietly became a deletion reads as a
+   * pass.
+   *
+   * So each is asserted at the entry it was moved TO. A rename is a promise
+   * about where a caller finds the function afterwards, and that is the half an
+   * absence check cannot make.
+   */
+  it("keeps the names the resolved clashes were renamed to", async () => {
+    const root = (await import("../index")) as Record<string, unknown>;
+    expect(typeof root.isFieldGroupFieldType).toBe("function");
+
+    const fieldGroupType = (await import("../field-group-type")) as Record<
+      string,
+      unknown
+    >;
+    expect(typeof fieldGroupType.isFieldGroupFieldType).toBe("function");
+
+    const cli = (await import("../cli/utils")) as Record<string, unknown>;
+    expect(typeof cli.createCliAdapter).toBe("function");
+
+    const database = (await import("../database")) as Record<string, unknown>;
+    expect(typeof database.createAdapter).toBe("function");
+
+    // The root re-exports the database factory, so `createAdapter` is expected
+    // HERE and is the same function `nextly/database` publishes. That pair was
+    // never the clash: they agreed. The CLI's was the odd one, and the other
+    // half of the promise is that its old spelling has not come back.
+    expect(root.createAdapter).toBe(database.createAdapter);
+    expect(cli.createAdapter).toBeUndefined();
   });
 });

@@ -47,8 +47,14 @@ export const fieldGroupFieldTypes: readonly string[] = [
  * Whether a field type token names a field group, in either the current or the
  * migrated spelling. Anything else — including the kebab-cased
  * `"field-group"`, which no release ever wrote — is not a field group here.
+ *
+ * Named for the token it reads, not for the question `nextly/field-group-type`
+ * answers. That entry publishes an `isFieldGroupType` that takes an INSTANCE
+ * and narrows it, and while both were spelled the same a reader could not tell
+ * which had arrived without checking the import line. This one belongs to
+ * `fieldGroupFieldTypes` above it and is named after it.
  */
-export function isFieldGroupType(type: unknown): boolean {
+export function isFieldGroupFieldType(type: unknown): boolean {
   return typeof type === "string" && fieldGroupFieldTypes.includes(type);
 }
 

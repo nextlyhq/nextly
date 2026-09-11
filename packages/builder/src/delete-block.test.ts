@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { MAX_VALUE_PARTS } from "@nextlyhq/blocks-engine";
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
 import { blockDeletion } from "./delete-block";
@@ -134,5 +135,82 @@ describe("blockDeletion", () => {
 
   it("is empty-document safe", () => {
     expect(blockDeletion(documentOf([]), "a")).toBeNull();
+  });
+});
+
+describe("a subtree the engine cannot count", () => {
+  /**
+   * A chain of distinct node objects where each holds the NEXT one twice, so
+   * entries double at every level while the object count stays linear. The
+   * engine refuses to count past its machine ceiling rather than answering from
+   * a partial walk.
+   *
+   * DERIVED from the ceiling rather than written beside it. `sharedChain(w)`
+   * builds one leaf plus `w` wrappers, so its entries are `2 ** (w + 1) - 1`;
+   * stating that number by hand got it wrong by a factor of two, and a fixture
+   * with that much slack keeps passing while the ceiling moves underneath it.
+   *
+   * The smallest chain that exceeds the ceiling is the sensitive one: raise the
+   * ceiling and this stops being refused, which is the drift worth catching.
+   */
+  /** Entries a chain of `wrappers` doublings walks, over one leaf. */
+  function chainEntries(wrappers: number): number {
+    return 2 ** (wrappers + 1) - 1;
+  }
+
+  /** The smallest chain whose entries exceed the engine's ceiling. */
+  function overCeiling(): number {
+    let wrappers = 1;
+    while (chainEntries(wrappers) <= MAX_VALUE_PARTS) wrappers += 1;
+    return wrappers;
+  }
+
+  function sharedChain(objects: number): BlockNode {
+    let node: BlockNode = leaf("deep-leaf");
+    for (let i = objects - 1; i >= 0; i--) {
+      node = {
+        id: `d${String(i)}`,
+        type: "acme/box",
+        version: 1,
+        props: {},
+        slots: { children: [node, node] },
+      } as BlockNode;
+    }
+    return node;
+  }
+
+  it("still offers the deletion instead of throwing out of the editor", () => {
+    /*
+     * `blockDeletion` is called to decide whether the toolbar's Delete button
+     * is ENABLED, so a refusal escaping here throws during toolbar construction
+     * and takes the editor down at the moment the node is selected. Being able
+     * to remove a block must not depend on being able to describe it.
+     */
+    const doc = documentOf([sharedChain(overCeiling()), leaf("after")]);
+
+    const deletion = blockDeletion(doc, "d0");
+
+    expect(deletion).not.toBeNull();
+    expect(deletion?.id).toBe("d0");
+    // Selection still lands somewhere real, which is the other half of what
+    // this function owes its caller.
+    expect(deletion?.nextSelection).toBe("after");
+  });
+
+  it("claims nothing about the contents it could not count", () => {
+    // Zero is the same value a childless node reports, and that is deliberate:
+    // the announcement says "<name> deleted" at zero and adds "with N blocks
+    // inside" above it, so zero states nothing rather than stating none.
+    const doc = documentOf([sharedChain(overCeiling())]);
+
+    expect(blockDeletion(doc, "d0")?.descendantCount).toBe(0);
+  });
+
+  it("still counts a subtree it CAN measure", () => {
+    // The control. Without it, a `blockDeletion` that reported zero for every
+    // node — or never counted at all — passes both tests above.
+    const doc = documentOf([sharedChain(4)]);
+
+    expect(blockDeletion(doc, "d0")?.descendantCount).toBe(2 ** 5 - 2);
   });
 });

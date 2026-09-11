@@ -107,8 +107,17 @@ export type { SiteStyleReader } from "./site-style-storage";
 // second.
 export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
+// `rebuildPageBuilderUsageIndexes` rather than the general
+// `rebuildUsageIndexes` behind it. The general one takes the list of indexes to
+// repair, and that list is not a caller's to write: it names package-internal
+// descriptors, and a host that could write it could only ever name the indexes
+// that existed when its code was written — so an index added later would go
+// unrepaired on every upgraded site, which is the undercount this whole export
+// exists to prevent. The preconfigured entry point takes the STORES and knows
+// the set itself.
 export {
   rebuildClassUsageIndex,
+  rebuildPageBuilderUsageIndexes,
   type ClassUsageDocumentStore,
   type ClassUsageRebuildReport,
 } from "./class-usage-index-rebuild";
@@ -117,6 +126,51 @@ export type { ClassUsageIndexStore } from "./class-usage-maintenance";
 // the rebuild without naming the variant, and a caller left to spell it as a
 // string can spell it wrong.
 export type { ClassUsageVariant } from "./collections/class-usage-index";
+
+// "Used on N pages", and the reader that answers it.
+//
+// Public because the question belongs to the host's surfaces — a library tile,
+// a component's own header — and because counting it any other way gets a
+// different number. A row is filed per field, per locale and per stored
+// variant, so a host counting rows would report one page as several and watch
+// the figure climb whenever somebody added a translation.
+//
+// `usageCountReader` comes with it: the count is asked of a grouped read that
+// must run as the system, since the index denies every access rule it declares
+// and an untrusted read answers an empty set — indistinguishable from a
+// component nothing uses.
+//
+// The SLUG travels with them, because `usageCountReader` takes one and a
+// consumer of the published package has no other way to name it: the plugin
+// resolves it from its own context, and that context is not reachable from
+// application code. Without this export the only way to call the reader is to
+// spell `nx_pb_component_usage` as a literal, which then has to be re-spelled
+// by hand if the constant ever changes — a copy of an identifier the package
+// owns, kept in step by nobody.
+//
+// It is the DECLARED slug. An integrator who renamed the collection passes the
+// name they chose; the plugin's own wiring resolves a rename the same way, from
+// the declared name as the key.
+//
+// The HEALTH reader is public for the same reason the count is: the count
+// requires it, so without this a consumer of the published package could only
+// obtain a trustworthy answer by reproducing private queries and identifiers,
+// or by hard-coding the health object — which is exactly the confident
+// `complete: true` the flag exists to prevent, written by hand.
+//
+// `componentUsageIndexDescriptor` travels with it because the reader is generic
+// over the indexes and a caller outside this package has no other way to name
+// the component one.
+export {
+  componentUsageCount,
+  componentUsageIndex as componentUsageIndexDescriptor,
+} from "./component-usage";
+export { usageCountReader } from "./class-usage-runtime";
+export { COMPONENT_USAGE_INDEX_SLUG } from "./collections/component-usage-index";
+export { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
+export type { UsageIndexHealth } from "./usage-index-health";
+export type { UsageCount } from "./usage-count";
+export type { GroupedUsageReader } from "./usage-index";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
  *

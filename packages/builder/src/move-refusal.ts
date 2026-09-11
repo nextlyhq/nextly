@@ -71,8 +71,12 @@ export function nestingRefusalForMove(
   if (to.parentId !== undefined && parent === undefined) return null;
   const target =
     parent === undefined
-      ? ({ at: "root" } as const)
-      : ({ at: "slot", parentType: parent.type, slot: to.slot ?? "" } as const);
+      ? ({ kind: "root" } as const)
+      : ({
+          kind: "slot",
+          parentType: parent.type,
+          slot: to.slot ?? "",
+        } as const);
 
   const verdict = blockAllowedAt(moving.type, target, nesting);
   // ALLOWED is null: the rule permits this placement. Whether it survives the

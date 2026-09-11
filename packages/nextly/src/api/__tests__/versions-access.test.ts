@@ -113,10 +113,15 @@ describe("requireRouteVersionReadAccess", () => {
 
     expect(getEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        authenticatedScope: {
+        // `objectContaining` on the scope too: it also carries the key's roles
+        // and, where authentication resolved them, the permission rows both
+        // spellings derive from. Pinning the whole object would fail whenever
+        // the scope gains a field, which is a change to the scope rather than
+        // to what this test is about.
+        authenticatedScope: expect.objectContaining({
           actorType: "apiKey",
           permissions: ["read-posts"],
-        },
+        }),
       })
     );
   });

@@ -1,11 +1,16 @@
 /**
  * What a request with no user meets on the way through, at both layers.
  *
- * The coarse RBAC gate needs a user in order to have permissions to check, so
- * it does not run for an anonymous caller. The stored rules run regardless, and
- * that is where the caller is refused: an `owner-only` rule has nobody to
- * compare against and denies. Skipping the gate is therefore not a way past the
- * rules, and the two must not be confused for each other.
+ * The gate is two things, and only one of them needs a user. The DB PERMISSION
+ * check does, so it does not run for an anonymous caller. The collection's own
+ * CODE-DEFINED rule does not: it reads nothing off the caller, and it is
+ * consulted. Treating the two as one is what left `access: { create: false }`
+ * accepted at boot and never asked.
+ *
+ * The stored rules run regardless, and are where an `owner-only` rule refuses:
+ * it has nobody to compare against and denies. So skipping the permission check
+ * is not a way past the rules, and the three layers must not be confused for
+ * one another.
  *
  * Driven through `checkCollectionAccess` with the real leaf evaluator, because
  * this is a claim about how the layers combine. Calling the evaluator directly
@@ -32,6 +37,8 @@ function buildService(accessRules: Record<string, unknown>) {
   // tests assert.
   const rbac = {
     checkAccess: vi.fn().mockResolvedValue(true),
+    // Answers `undefined`: no code-defined rule, so the stored rules decide.
+    checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     getRegisteredAccess: vi.fn().mockReturnValue(undefined),
   };
   const service = new CollectionAccessService(
@@ -78,6 +85,46 @@ describe("checkCollectionAccess with no user", () => {
 
     expect(result).toBeNull();
     expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("applies the collection's inline code rule, which needs no user", async () => {
+    // The layer the doc on `resolveContent` said could not run. A code rule
+    // reads what it is given, and an anonymous caller is a thing it can be
+    // given: `user: null`, no roles. So it is consulted, and its refusal is the
+    // answer, even though the permission check beside it never runs.
+    const { service, rbac } = buildService({});
+    rbac.checkAnonymousCodeAccess.mockResolvedValue(false);
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "read",
+      undefined
+    );
+
+    expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalledWith({
+      operation: "read",
+      resource: "posts",
+    });
+    expect(result?.success).toBe(false);
+    expect(result?.statusCode).toBe(403);
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("lets the stored rules decide when no inline rule governs the operation", async () => {
+    // The control that keeps the case above from meaning "anonymous is denied".
+    // `undefined` is no opinion, not a refusal, so a collection with no inline
+    // rule for this operation still reads as it always did.
+    const { service, rbac } = buildService({});
+    rbac.checkAnonymousCodeAccess.mockResolvedValue(undefined);
+
+    const result = await service.checkCollectionAccess(
+      "posts",
+      "read",
+      undefined
+    );
+
+    expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalled();
+    expect(result).toBeNull();
   });
 
   it("refuses publish with no user and no rule for it", async () => {

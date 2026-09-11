@@ -15,9 +15,9 @@
  *
  * @example
  * ```typescript
- * import { getNextly } from 'nextly';
+ * import { requireNextly } from 'nextly/runtime';
  *
- * const nextly = getNextly();
+ * const nextly = requireNextly();
  *
  * // Find documents -> ListResult<T> = { items, meta }
  * const result = await nextly.find({
@@ -119,6 +119,8 @@ import type {
   CountResult,
   GroupArgs,
   GroupResult,
+  TimeseriesArgs,
+  TimeseriesResult,
   CreateArgs,
   RowFromCollectionSlug,
   RowFromSingleSlug,
@@ -221,7 +223,7 @@ import type { JobSlug, QueueJobArgs } from "./types/jobs";
  *
  * @example
  * ```typescript
- * const nextly = getNextly();
+ * const nextly = requireNextly();
  *
  * // Default: bypass access control (trusted server context)
  * // Returns ListResult<T> = { items, meta }.
@@ -550,6 +552,11 @@ export class Nextly implements NextlyContext {
     return collectionsNs.group(this, args);
   }
 
+  /** How many documents fall in each interval of a recent window. */
+  timeseries(args: TimeseriesArgs): Promise<TimeseriesResult> {
+    return collectionsNs.timeseries(this, args);
+  }
+
   /** Bulk-delete multiple documents by IDs (partial success pattern). */
   bulkDelete(args: BulkDeleteArgs): Promise<BulkOperationResult> {
     return collectionsNs.bulkDelete(this, args);
@@ -657,12 +664,22 @@ const globalForDirectApi = globalThis as unknown as {
 };
 
 /**
- * Get the Nextly Direct API instance.
+ * The Nextly instance this process has already registered.
  *
- * Returns a singleton instance of the Nextly class for direct server-side
- * database operations.
+ * Named for what it demands rather than what it returns. It does NOT
+ * initialise: it reads the singleton and throws when there is none, so it is
+ * only correct where something else has provably booted the runtime. Where you
+ * are not sure, `getNextly({ config })` from `nextly` initialises and is
+ * correct in both cases.
  *
- * **Important:** `registerServices()` must be called before using this function.
+ * That difference is why the two no longer share a name. Both were called
+ * `getNextly`, one exported from `nextly` and one from `nextly/runtime`, with
+ * different arities, different return types and opposite tolerance for an
+ * uninitialised process. The example on this function even told readers to
+ * import it from `nextly`, where the name resolves to the other one, so the
+ * snippet could not compile.
+ *
+ * **Important:** `registerServices()` must have run before this is called.
  *
  * @param config - Optional configuration to apply to new instance
  * @returns Nextly instance
@@ -670,9 +687,9 @@ const globalForDirectApi = globalThis as unknown as {
  *
  * @example
  * ```typescript
- * import { getNextly } from 'nextly';
+ * import { requireNextly } from 'nextly/runtime';
  *
- * const nextly = getNextly();
+ * const nextly = requireNextly();
  *
  * // Find posts. Returns ListResult<T> = { items, meta }.
  * const result = await nextly.find({
@@ -683,7 +700,7 @@ const globalForDirectApi = globalThis as unknown as {
  * result.meta.total;  // number
  * ```
  */
-export function getNextly(config?: DirectAPIConfig): Nextly {
+export function requireNextly(config?: DirectAPIConfig): Nextly {
   // Registration is not readiness. A production boot publishes services and
   // THEN waits for the migrate lock, so this flag is true throughout a window
   // in which the schema is unverified — and this getter is synchronous, so it
@@ -728,7 +745,7 @@ export function resetNextlyInstance(): void {
 /**
  * Whether the Direct API singleton has been built in this process.
  *
- * Answers the question without building it, which `getNextly()` cannot: asking
+ * Answers the question without building it, which `requireNextly()` cannot: asking
  * it constructs the instance and registers the container binding. That makes
  * "was the Direct API resolved?" unobservable through the ordinary surface, so
  * a test cannot tell a caller that resolved it lazily from one that never
@@ -745,10 +762,12 @@ export function isNextlyInstantiated(): boolean {
  *
  * Each method lazily resolves the Nextly singleton on first call,
  * so it's safe to import at module scope. All methods delegate to
- * `getNextly()` internally.
+ * `requireNextly()` internally.
  *
- * **Important:** Services must be initialized (via `getNextly()` from
- * `nextly`) before calling any method on this object.
+ * **Important:** the runtime must already be initialised before any method on
+ * this object is called, because each one resolves through `requireNextly()`,
+ * which throws when nothing has registered services. `getNextly({ config })`
+ * from `nextly` is what initialises.
  *
  * @example
  * ```typescript
@@ -767,195 +786,205 @@ export function isNextlyInstantiated(): boolean {
  */
 export const nextly = {
   find: <TSlug extends CollectionSlug>(args: FindArgs<TSlug>) =>
-    getNextly().find(args),
+    requireNextly().find(args),
   findByID: <TSlug extends CollectionSlug>(args: FindByIDArgs<TSlug>) =>
-    getNextly().findByID(args),
+    requireNextly().findByID(args),
   create: <TSlug extends CollectionSlug>(args: CreateArgs<TSlug>) =>
-    getNextly().create(args),
+    requireNextly().create(args),
   update: <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
-    getNextly().update(args),
-  delete: (args: DeleteArgs) => getNextly().delete(args),
-  count: (args: CountArgs) => getNextly().count(args),
-  group: (args: GroupArgs) => getNextly().group(args),
-  bulkDelete: (args: BulkDeleteArgs) => getNextly().bulkDelete(args),
+    requireNextly().update(args),
+  delete: (args: DeleteArgs) => requireNextly().delete(args),
+  count: (args: CountArgs) => requireNextly().count(args),
+  group: (args: GroupArgs) => requireNextly().group(args),
+  timeseries: (args: TimeseriesArgs) => requireNextly().timeseries(args),
+  bulkDelete: (args: BulkDeleteArgs) => requireNextly().bulkDelete(args),
   duplicate: <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
-    getNextly().duplicate(args),
+    requireNextly().duplicate(args),
 
   findSingle: <TSlug extends SingleSlug>(args: FindSingleArgs<TSlug>) =>
-    getNextly().findSingle(args),
+    requireNextly().findSingle(args),
   updateSingle: <TSlug extends SingleSlug>(args: UpdateSingleArgs<TSlug>) =>
-    getNextly().updateSingle(args),
-  findSingles: (args?: FindSinglesArgs) => getNextly().findSingles(args ?? {}),
+    requireNextly().updateSingle(args),
+  findSingles: (args?: FindSinglesArgs) =>
+    requireNextly().findSingles(args ?? {}),
 
-  login: (args: LoginArgs) => getNextly().login(args),
-  logout: () => getNextly().logout(),
-  me: (args: { user: UserContext }) => getNextly().me(args),
+  login: (args: LoginArgs) => requireNextly().login(args),
+  logout: () => requireNextly().logout(),
+  me: (args: { user: UserContext }) => requireNextly().me(args),
   updateMe: (args: {
     user: UserContext;
     data: { name?: string; image?: string };
-  }) => getNextly().updateMe(args),
-  register: (args: RegisterArgs) => getNextly().register(args),
+  }) => requireNextly().updateMe(args),
+  register: (args: RegisterArgs) => requireNextly().register(args),
   changePassword: (args: ChangePasswordArgs & { user: UserContext }) =>
-    getNextly().changePassword(args),
+    requireNextly().changePassword(args),
   forgotPassword: (args: ForgotPasswordArgs) =>
-    getNextly().forgotPassword(args),
-  resetPassword: (args: ResetPasswordArgs) => getNextly().resetPassword(args),
-  verifyEmail: (args: VerifyEmailArgs) => getNextly().verifyEmail(args),
+    requireNextly().forgotPassword(args),
+  resetPassword: (args: ResetPasswordArgs) =>
+    requireNextly().resetPassword(args),
+  verifyEmail: (args: VerifyEmailArgs) => requireNextly().verifyEmail(args),
 
   jobs: {
     queue: <TTask extends JobSlug>(args: QueueJobArgs<TTask>) =>
-      getNextly().jobs.queue(args),
+      requireNextly().jobs.queue(args),
   },
 
   releases: {
     create: (args: Parameters<ReleasesNamespace["create"]>[0]) =>
-      getNextly().releases.create(args),
+      requireNextly().releases.create(args),
     find: (args?: Parameters<ReleasesNamespace["find"]>[0]) =>
-      getNextly().releases.find(args),
+      requireNextly().releases.find(args),
     findByID: (args: Parameters<ReleasesNamespace["findByID"]>[0]) =>
-      getNextly().releases.findByID(args),
+      requireNextly().releases.findByID(args),
     addMember: (args: Parameters<ReleasesNamespace["addMember"]>[0]) =>
-      getNextly().releases.addMember(args),
+      requireNextly().releases.addMember(args),
     removeMember: (args: Parameters<ReleasesNamespace["removeMember"]>[0]) =>
-      getNextly().releases.removeMember(args),
+      requireNextly().releases.removeMember(args),
     listMembers: (args: Parameters<ReleasesNamespace["listMembers"]>[0]) =>
-      getNextly().releases.listMembers(args),
+      requireNextly().releases.listMembers(args),
     schedule: (args: Parameters<ReleasesNamespace["schedule"]>[0]) =>
-      getNextly().releases.schedule(args),
+      requireNextly().releases.schedule(args),
     cancel: (args: Parameters<ReleasesNamespace["cancel"]>[0]) =>
-      getNextly().releases.cancel(args),
+      requireNextly().releases.cancel(args),
   },
 
   users: {
-    find: (args?: FindUsersArgs) => getNextly().users.find(args),
-    findOne: (args?: FindOneUserArgs) => getNextly().users.findOne(args),
-    findByID: (args: FindUserByIDArgs) => getNextly().users.findByID(args),
-    create: (args: CreateUserArgs) => getNextly().users.create(args),
-    update: (args: UpdateUserArgs) => getNextly().users.update(args),
-    delete: (args: DeleteUserArgs) => getNextly().users.delete(args),
+    find: (args?: FindUsersArgs) => requireNextly().users.find(args),
+    findOne: (args?: FindOneUserArgs) => requireNextly().users.findOne(args),
+    findByID: (args: FindUserByIDArgs) => requireNextly().users.findByID(args),
+    create: (args: CreateUserArgs) => requireNextly().users.create(args),
+    update: (args: UpdateUserArgs) => requireNextly().users.update(args),
+    delete: (args: DeleteUserArgs) => requireNextly().users.delete(args),
   },
 
   media: {
-    upload: (args: UploadMediaArgs) => getNextly().media.upload(args),
-    find: (args?: FindMediaArgs) => getNextly().media.find(args),
-    findByID: (args: FindMediaByIDArgs) => getNextly().media.findByID(args),
-    update: (args: UpdateMediaArgs) => getNextly().media.update(args),
-    delete: (args: DeleteMediaArgs) => getNextly().media.delete(args),
+    upload: (args: UploadMediaArgs) => requireNextly().media.upload(args),
+    find: (args?: FindMediaArgs) => requireNextly().media.find(args),
+    findByID: (args: FindMediaByIDArgs) => requireNextly().media.findByID(args),
+    update: (args: UpdateMediaArgs) => requireNextly().media.update(args),
+    delete: (args: DeleteMediaArgs) => requireNextly().media.delete(args),
     bulkDelete: (args: BulkDeleteMediaArgs) =>
-      getNextly().media.bulkDelete(args),
+      requireNextly().media.bulkDelete(args),
     folders: {
-      list: (args?: ListFoldersArgs) => getNextly().media.folders.list(args),
+      list: (args?: ListFoldersArgs) =>
+        requireNextly().media.folders.list(args),
       create: (args: CreateFolderArgs) =>
-        getNextly().media.folders.create(args),
+        requireNextly().media.folders.create(args),
     },
   },
 
   forms: {
-    find: (args?: FindFormsArgs) => getNextly().forms.find(args),
+    find: (args?: FindFormsArgs) => requireNextly().forms.find(args),
     findBySlug: (args: FindFormBySlugArgs) =>
-      getNextly().forms.findBySlug(args),
-    submit: (args: SubmitFormArgs) => getNextly().forms.submit(args),
+      requireNextly().forms.findBySlug(args),
+    submit: (args: SubmitFormArgs) => requireNextly().forms.submit(args),
     submissions: (args: FormSubmissionsArgs) =>
-      getNextly().forms.submissions(args),
+      requireNextly().forms.submissions(args),
   },
 
   fieldGroups: {
-    find: (args?: FindFieldGroupsArgs) => getNextly().fieldGroups.find(args),
+    find: (args?: FindFieldGroupsArgs) =>
+      requireNextly().fieldGroups.find(args),
     findBySlug: (args: FindFieldGroupBySlugArgs) =>
-      getNextly().fieldGroups.findBySlug(args),
+      requireNextly().fieldGroups.findBySlug(args),
     create: (args: CreateFieldGroupArgs) =>
-      getNextly().fieldGroups.create(args),
+      requireNextly().fieldGroups.create(args),
     update: (args: UpdateFieldGroupArgs) =>
-      getNextly().fieldGroups.update(args),
+      requireNextly().fieldGroups.update(args),
     delete: (args: DeleteFieldGroupArgs) =>
-      getNextly().fieldGroups.delete(args),
+      requireNextly().fieldGroups.delete(args),
   },
 
   email: {
-    send: (args: SendEmailArgs) => getNextly().email.send(args),
+    send: (args: SendEmailArgs) => requireNextly().email.send(args),
     sendWithTemplate: (args: SendTemplateEmailArgs) =>
-      getNextly().email.sendWithTemplate(args),
+      requireNextly().email.sendWithTemplate(args),
   },
 
   emailProviders: {
     find: (args?: FindEmailProvidersArgs) =>
-      getNextly().emailProviders.find(args),
+      requireNextly().emailProviders.find(args),
     findByID: (args: FindEmailProviderByIDArgs) =>
-      getNextly().emailProviders.findByID(args),
+      requireNextly().emailProviders.findByID(args),
     create: (args: CreateEmailProviderArgs) =>
-      getNextly().emailProviders.create(args),
+      requireNextly().emailProviders.create(args),
     update: (args: UpdateEmailProviderArgs) =>
-      getNextly().emailProviders.update(args),
+      requireNextly().emailProviders.update(args),
     delete: (args: DeleteEmailProviderArgs) =>
-      getNextly().emailProviders.delete(args),
+      requireNextly().emailProviders.delete(args),
     setDefault: (args: SetDefaultProviderArgs) =>
-      getNextly().emailProviders.setDefault(args),
+      requireNextly().emailProviders.setDefault(args),
     test: (args: TestEmailProviderArgs) =>
-      getNextly().emailProviders.test(args),
+      requireNextly().emailProviders.test(args),
   },
 
   emailTemplates: {
     find: (args?: FindEmailTemplatesArgs) =>
-      getNextly().emailTemplates.find(args),
+      requireNextly().emailTemplates.find(args),
     findByID: (args: FindEmailTemplateByIDArgs) =>
-      getNextly().emailTemplates.findByID(args),
+      requireNextly().emailTemplates.findByID(args),
     findBySlug: (args: FindEmailTemplateBySlugArgs) =>
-      getNextly().emailTemplates.findBySlug(args),
+      requireNextly().emailTemplates.findBySlug(args),
     create: (args: CreateEmailTemplateArgs) =>
-      getNextly().emailTemplates.create(args),
+      requireNextly().emailTemplates.create(args),
     update: (args: UpdateEmailTemplateArgs) =>
-      getNextly().emailTemplates.update(args),
+      requireNextly().emailTemplates.update(args),
     delete: (args: DeleteEmailTemplateArgs) =>
-      getNextly().emailTemplates.delete(args),
+      requireNextly().emailTemplates.delete(args),
     preview: (args: PreviewEmailTemplateArgs) =>
-      getNextly().emailTemplates.preview(args),
+      requireNextly().emailTemplates.preview(args),
   },
 
   userFields: {
-    find: (args?: FindUserFieldsArgs) => getNextly().userFields.find(args),
+    find: (args?: FindUserFieldsArgs) => requireNextly().userFields.find(args),
     findByID: (args: FindUserFieldByIDArgs) =>
-      getNextly().userFields.findByID(args),
-    create: (args: CreateUserFieldArgs) => getNextly().userFields.create(args),
-    update: (args: UpdateUserFieldArgs) => getNextly().userFields.update(args),
-    delete: (args: DeleteUserFieldArgs) => getNextly().userFields.delete(args),
+      requireNextly().userFields.findByID(args),
+    create: (args: CreateUserFieldArgs) =>
+      requireNextly().userFields.create(args),
+    update: (args: UpdateUserFieldArgs) =>
+      requireNextly().userFields.update(args),
+    delete: (args: DeleteUserFieldArgs) =>
+      requireNextly().userFields.delete(args),
     reorder: (args: ReorderUserFieldsArgs) =>
-      getNextly().userFields.reorder(args),
+      requireNextly().userFields.reorder(args),
   },
 
   roles: {
-    find: (args?: FindRolesArgs) => getNextly().roles.find(args),
-    findByID: (args: FindRoleByIDArgs) => getNextly().roles.findByID(args),
-    create: (args: CreateRoleArgs) => getNextly().roles.create(args),
-    update: (args: UpdateRoleArgs) => getNextly().roles.update(args),
-    delete: (args: DeleteRoleArgs) => getNextly().roles.delete(args),
+    find: (args?: FindRolesArgs) => requireNextly().roles.find(args),
+    findByID: (args: FindRoleByIDArgs) => requireNextly().roles.findByID(args),
+    create: (args: CreateRoleArgs) => requireNextly().roles.create(args),
+    update: (args: UpdateRoleArgs) => requireNextly().roles.update(args),
+    delete: (args: DeleteRoleArgs) => requireNextly().roles.delete(args),
     getPermissions: (args: GetRolePermissionsArgs) =>
-      getNextly().roles.getPermissions(args),
+      requireNextly().roles.getPermissions(args),
     setPermissions: (args: SetRolePermissionsArgs) =>
-      getNextly().roles.setPermissions(args),
+      requireNextly().roles.setPermissions(args),
   },
 
   permissions: {
-    find: (args?: FindPermissionsArgs) => getNextly().permissions.find(args),
+    find: (args?: FindPermissionsArgs) =>
+      requireNextly().permissions.find(args),
     findByID: (args: FindPermissionByIDArgs) =>
-      getNextly().permissions.findByID(args),
+      requireNextly().permissions.findByID(args),
     create: (args: CreatePermissionArgs) =>
-      getNextly().permissions.create(args),
+      requireNextly().permissions.create(args),
     delete: (args: DeletePermissionArgs) =>
-      getNextly().permissions.delete(args),
+      requireNextly().permissions.delete(args),
   },
 
   apiKeys: {
-    list: (args?: ListApiKeysArgs) => getNextly().apiKeys.list(args),
-    findByID: (args: FindApiKeyByIDArgs) => getNextly().apiKeys.findByID(args),
-    create: (args: CreateApiKeyArgs) => getNextly().apiKeys.create(args),
-    update: (args: UpdateApiKeyArgs) => getNextly().apiKeys.update(args),
-    revoke: (args: RevokeApiKeyArgs) => getNextly().apiKeys.revoke(args),
+    list: (args?: ListApiKeysArgs) => requireNextly().apiKeys.list(args),
+    findByID: (args: FindApiKeyByIDArgs) =>
+      requireNextly().apiKeys.findByID(args),
+    create: (args: CreateApiKeyArgs) => requireNextly().apiKeys.create(args),
+    update: (args: UpdateApiKeyArgs) => requireNextly().apiKeys.update(args),
+    revoke: (args: RevokeApiKeyArgs) => requireNextly().apiKeys.revoke(args),
   },
 
   access: {
-    check: (args: CheckAccessArgs) => getNextly().access.check(args),
+    check: (args: CheckAccessArgs) => requireNextly().access.check(args),
     checkApiKey: (args: CheckApiKeyArgs) =>
-      getNextly().access.checkApiKey(args),
+      requireNextly().access.checkApiKey(args),
   },
 };
 

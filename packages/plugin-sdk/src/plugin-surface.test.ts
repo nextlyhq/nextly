@@ -81,6 +81,26 @@ describe("plugin-sdk public export surface", () => {
     expect(exportedNames("widgets.ts")).toMatchSnapshot();
   });
 
+  it("takes the slug rule from the LEAF entry, not the route bundle", () => {
+    // 🔴 The surface snapshot above cannot see this: both spellings export the
+    // same name, so the SDK's public surface is identical either way. What
+    // differs is what a consumer installs behind it. `nextly/runtime` is the
+    // built route bundle, which has already inlined this function beside its
+    // eager Direct API imports — measured through package resolution at 3,251
+    // inputs and 21.3 MB, against 5 and 1.4 KB through the leaf entry. Every
+    // plugin that draws a sitemap pays whichever one this line names.
+    //
+    // 🔴 Matched as a STATEMENT, not as text. This module's docblock discusses
+    // `nextly/runtime` at length — it is the graph the entry exists to avoid —
+    // so a plain substring check reports the prose and never reads the import.
+    const source = readFileSync(path.join(SRC, "routing.ts"), "utf8");
+    const reexports = [
+      ...source.matchAll(/^export\s[^;]*?from\s+"([^"]+)"/gm),
+    ].map(m => m[1]);
+    expect(reexports).toContain("nextly/route-path");
+    expect(reexports).not.toContain("nextly/runtime");
+  });
+
   // The name/kind extractor cannot see through `export *` re-exports, so a star
   // export would add names to the public surface that the snapshots never
   // record. Fail loudly if one is introduced, so the guard stays complete.

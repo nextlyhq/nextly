@@ -63,10 +63,13 @@ describe("readCaller for an API-KEY caller", () => {
     // `actorType: "apiKey"` is what makes `apiKeyScopeAllows` treat the scope
     // as authoritative; any other value makes it return null and fall back to
     // the OWNER's RBAC, which is the inheritance this branch exists to stop.
-    expect(caller.authenticatedScope).toEqual({
-      actorType: "apiKey",
-      permissions: ["read-posts"],
-    });
+    expect(caller.authenticatedScope?.actorType).toBe("apiKey");
+    expect(caller.authenticatedScope?.permissions).toEqual(["read-posts"]);
+    // The KEY's roles now travel on the scope rather than only on the user.
+    // A code-defined rule reading `roles` is evaluated against the scope when
+    // it carries them, so a role-based key is judged on the role it was
+    // stamped with instead of whatever its owner happens to hold.
+    expect(caller.authenticatedScope?.roles).toEqual(["viewer-of-posts"]);
   });
 
   it("forwards the grant verbatim, in the `action-resource` spelling", async () => {
@@ -87,10 +90,8 @@ describe("readCaller for an API-KEY caller", () => {
     // least-privileged key would be judged as the most privileged owner.
     const caller = await readCaller(apiKeyAuth({ permissions: [] }));
 
-    expect(caller.authenticatedScope).toEqual({
-      actorType: "apiKey",
-      permissions: [],
-    });
+    expect(caller.authenticatedScope?.actorType).toBe("apiKey");
+    expect(caller.authenticatedScope?.permissions).toEqual([]);
   });
 
   it("resolves role SLUGS onto the user rather than forwarding raw ids", async () => {

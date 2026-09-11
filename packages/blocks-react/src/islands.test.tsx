@@ -16,6 +16,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 import { coreBlocks } from "./blocks";
@@ -341,12 +342,21 @@ describe("the limits a site sets", () => {
     // A site that raised `maxDepth` renders deeper than the default allows. Read
     // against the defaults, an island the page DOES draw is truncated away and
     // the caller is told the page needs less JavaScript than it does.
+    //
+    // A WHOLE `DocumentLimits`, which is what the parameter asks for. This once
+    // passed `{ maxDepth: 40 } as never` — a partial object forced past the
+    // type — and the missing `maxNodes` did not fall back to a default: it
+    // removed the node bound entirely, because every `budget <= 0` test against
+    // `undefined` is false. The property under test is the raised depth, and it
+    // needs no help from that.
     const document = nested(14);
 
     expect(islandsFor(document, deep)).toEqual({});
     expect(
       Object.keys(
-        islandsFor(document, deep, { limits: { maxDepth: 40 } as never })
+        islandsFor(document, deep, {
+          limits: { ...DEFAULT_LIMITS, maxDepth: 40 },
+        })
       )
     ).toEqual(["test/ticker"]);
   });

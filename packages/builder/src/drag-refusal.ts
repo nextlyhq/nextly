@@ -34,6 +34,7 @@
  */
 import type { DropRefusal } from "./drop-targets";
 import { blockLabel } from "./inserter";
+import { asPermittedList, permittedLabel } from "./permitted-prose";
 
 /**
  * The two facts a refusal's wording is built from.
@@ -82,38 +83,6 @@ export interface RefusalWording {
  */
 function article(label: string): string {
   return /^[aeiou]/i.test(label) ? "an" : "a";
-}
-
-/**
- * The permitted types as prose.
- *
- * A sentence an author reads rather than a set they scan, so it takes "and"
- * rather than a delimiter. Two members join without a comma; three or more take
- * commas up to the last.
- */
-function asList(labels: readonly string[], joiner: string): string {
-  if (labels.length === 1) return labels[0] ?? "";
-  if (labels.length === 2) return `${labels[0]} ${joiner} ${labels[1]}`;
-  const last = labels[labels.length - 1];
-  return `${labels.slice(0, -1).join(", ")} ${joiner} ${last}`;
-}
-
-/**
- * One entry of a permitted list, as an author reads it.
- *
- * A slot may admit a whole NAMESPACE rather than named types — `nesting.ts`
- * matches an entry ending `/*` as a prefix — and such an entry is not a block
- * name. Sending it through {@link blockLabel} humanises it into the bare
- * `"*"`, so a slot admitting everything core would announce "Takes *".
- *
- * The group is named instead. It is deliberately lower case where a block label
- * is not: "any core block" is a description of a set, and capitalising it would
- * dress it as the name of a block that does not exist.
- */
-function permittedLabel(entry: string): string {
-  if (!entry.endsWith("/*")) return blockLabel(entry);
-  const namespace = entry.slice(0, -2);
-  return namespace === "" ? "any block" : `any ${namespace} block`;
 }
 
 /**
@@ -167,7 +136,7 @@ export function refusalWording(
   if (permitted.length === 0) return { headline, remedy: null };
   const remedy =
     refusal.reason === "not-allowed-in-slot"
-      ? `Takes ${asList(permitted, "and")}`
-      : `${moving} goes inside ${asList(permitted, "or")}`;
+      ? `Takes ${asPermittedList(permitted, "and")}`
+      : `${moving} goes inside ${asPermittedList(permitted, "or")}`;
   return { headline, remedy };
 }

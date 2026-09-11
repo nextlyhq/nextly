@@ -54,6 +54,8 @@ import {
 import {
   countNodes,
   DEFAULT_LIMITS,
+  ForestTooLargeError,
+  MAX_VALUE_PARTS,
   treeDepth,
   type DocumentLimits,
 } from "./limits";
@@ -350,33 +352,6 @@ function describe(value: unknown): string {
 const MAX_VALUE_DEPTH = 512;
 
 /**
- * How many parts a value may have before it is refused unexamined.
- *
- * A machine limit like {@link MAX_WALKABLE_DEPTH}, not a product one. The domain
- * walks below visit every key and every element, so a shallow object with
- * millions of enumerable properties costs a full traversal — and an in-process
- * or agent-written op can carry one. The byte cap would refuse such a value, but
- * only after these walks have already paid for it, which is the wrong order for
- * a guard whose job is to reject.
- *
- * Set well above `DEFAULT_LIMITS.maxBytes`, which is 2 MiB: every part
- * contributes at least one byte to serialized JSON, so a value with more parts
- * than this has more bytes than any default-configured document may hold, and
- * refusing it unexamined agrees with the answer a full walk would have reached.
- * A site that raises `maxBytes` past this is choosing a document larger than the
- * editor will edit, which the machine caps already say elsewhere.
- *
- * What this bounds, precisely: the descriptor lookups, the nested traversal and
- * the value reads, which are the costs that grow with what the value CONTAINS.
- * It does not bound `Reflect.ownKeys` itself, which materialises the key list in
- * one call before any loop can stop — and it cannot, because there is no way to
- * enumerate own keys including non-enumerable and symbol ones without building
- * that list. The op is already in memory by then, so this doubles a cost the
- * caller has paid rather than admitting an unbounded new one.
- */
-const MAX_VALUE_PARTS = 4 * 1024 * 1024;
-
-/**
  * How deep a node TREE may nest before the engine's helpers cannot walk it.
  *
  * A machine limit, not a product one: `limits.maxDepth` is a rule a site may
@@ -434,6 +409,31 @@ function assertUsableLimits(limits: DocumentLimits): void {
 }
 
 /** Refuses a tree the engine's recursive helpers cannot walk. */
+/**
+ * Measure a forest, reporting a refusal to measure as an `OpError`.
+ *
+ * `countNodes` and `treeDepth` refuse a forest whose entries outrun
+ * {@link MAX_VALUE_PARTS} rather than answering from a partial walk, and
+ * that refusal has to arrive here wearing this module's error type. Six
+ * `...Refusal` helpers in this file are written as
+ * `catch (error) { if (error instanceof OpError) return error.message; throw error; }`
+ * — so an error of any other type is rethrown, and a helper whose whole purpose
+ * is to hand back a reason instead throws at its caller.
+ *
+ * The message is carried verbatim: it already names the cause a reader has to
+ * act on, and restating it here would be a second spelling of one explanation.
+ */
+function measured(measure: () => number, verb: string): number {
+  try {
+    return measure();
+  } catch (error) {
+    if (error instanceof ForestTooLargeError) {
+      throw new OpError(`${verb}: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
 function assertWalkable(depth: number, subject: string): void {
   if (depth > MAX_WALKABLE_DEPTH) {
     throw new OpError(
@@ -1930,15 +1930,21 @@ function assertFitsCaps(
   // against a freshly measured original made the original's cost proportional
   // to the number of offending nodes, so lowering `maxDepth` under a broad
   // document turned a linear edit into a quadratic one.
-  const depth = treeDepth(result.nodes);
-  if (depth > limits.maxDepth && depth > treeDepth(before.nodes)) {
+  const depth = measured(() => treeDepth(result.nodes), verb);
+  if (
+    depth > limits.maxDepth &&
+    depth > measured(() => treeDepth(before.nodes), verb)
+  ) {
     throw new OpError(
       `${verb}: this would leave the document nested ${String(depth)} ` +
         `levels deep, past the ${String(limits.maxDepth)} it may hold.`
     );
   }
-  const total = countNodes(result.nodes);
-  if (total > limits.maxNodes && total > countNodes(before.nodes)) {
+  const total = measured(() => countNodes(result.nodes), verb);
+  if (
+    total > limits.maxNodes &&
+    total > measured(() => countNodes(before.nodes), verb)
+  ) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
         `past the ${String(limits.maxNodes)} a document may hold. The edit would ` +
@@ -3061,7 +3067,10 @@ export function applyOp(
   // saying so is better than letting a native RangeError escape from whichever
   // helper reaches it first. This is deliberately NOT `limits.maxDepth`: that
   // is a product rule a site may relax, and this is a machine one nothing can.
-  assertWalkable(treeDepth(nodes), "this document");
+  assertWalkable(
+    measured(() => treeDepth(nodes), "this document"),
+    "this document"
+  );
 
   // The op itself, before its discriminant is read. `op.kind` on a `null`
   // leaves this module as a TypeError, which a caller cannot distinguish from
@@ -3149,7 +3158,10 @@ export function applyOp(
       // `limits.maxDepth` can otherwise hand in a subtree deeper than the
       // engine's helpers can walk, and the overflow lands after the document
       // has been checked rather than before.
-      assertWalkable(treeDepth([op.node]), "insert");
+      assertWalkable(
+        measured(() => treeDepth([op.node]), "insert"),
+        "insert"
+      );
       const lockedId = lockedWithin(op.node);
       if (lockedId !== undefined) {
         throw new OpError(

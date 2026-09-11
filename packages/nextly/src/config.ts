@@ -176,6 +176,9 @@ export { pluginAdminSlug } from "./plugins/plugin-slug";
 // because a plugin's own UI calling its own route has to address it, and the
 // dispatcher is the only thing that knows where that is.
 export { pluginRouteFullPath } from "./plugins/routes/route-path";
+// The mount travels with the path builder, so a client that resolves a route
+// names the same union the server declared it with.
+export type { PluginRouteMount } from "./plugins/routes/route-types";
 
 // The VERBS those routes may declare, published beside the path helper and for
 // the same reason: the admin's client for calling a plugin route has to know
@@ -255,6 +258,25 @@ export type {
   WidgetSize,
   WidgetChrome,
 } from "./domains/widgets/definition";
+// The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
+// leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
+// and without it the two fields have types no config author can write down.
+export {
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
+  type WidgetLifecycle,
+  type WidgetCondition,
+} from "./domains/widgets/lifecycle";
+// The onboarding step ids the dashboard checklist draws. Published here rather
+// than only from the root because the admin reads this entry point, and a
+// union it restates instead of importing is a contract with nothing holding
+// the two halves together.
+export {
+  ONBOARDING_STEPS,
+  isOnboardingStepId,
+  type OnboardingStepId,
+  type OnboardingStep,
+} from "./domains/widgets/onboarding-steps";
 export type { WidgetQuery } from "./domains/widgets/query";
 // A VALUE, and for the same reason as the batch limit below: the admin resolves
 // a contributed widget's deprecated `size` alias into the enum, and so does the
@@ -305,6 +327,20 @@ export {
 // emit. `sources.ts` reaches only `NextlyError` and an import-free helper, so
 // publishing it on this client-safe surface pulls no server code after it.
 export { WIDGET_SOURCE_FIELD_TYPES } from "./domains/widgets/sources";
+// The interval vocabulary, on this client-safe surface for the same reason the
+// field types are: the admin has to label a timeline's axis and decide it can
+// draw the width it was handed, and re-listing the intervals in the browser is
+// a second copy that agrees on the day it is written.
+//
+// Taken from `timeseries-interval`, which carries no database import. The
+// expression builder beside it reaches Drizzle, and exporting the vocabulary
+// from THERE put `drizzle-orm` in the admin's browser bundle -- refused by
+// `client-bundle-boundary.test.ts`, which is why the two are separate modules.
+export {
+  isTimeseriesInterval,
+  TIMESERIES_INTERVALS,
+} from "./domains/collections/query/timeseries-interval";
+export type { TimeseriesInterval } from "./domains/collections/query/timeseries-interval";
 export type {
   WidgetOp,
   WidgetSourceField,

@@ -506,29 +506,25 @@ function errorsIn(
 }
 
 /**
- * Validate the values that would result, and answer with the op or the reasons.
+ * What the validator says about the ONE leaf an edit writes.
+ *
+ * Only that leaf. A sibling that is already invalid is not this edit's fault,
+ * and judging anything wider lets one bad value block the controls around it
+ * with no way to fix them: a breakpoint-wide check blocks every control on the
+ * breakpoint, and a property-wide one blocks every side of a margin whose top
+ * is malformed. It is also what keeps the commit judging exactly what the
+ * preview compiled, so a clean drag cannot snap back on release. The document
+ * validator still reads the whole map where completeness is the question.
  *
  * `strict` because the author is writing this value right now: a property this
  * build does not know is a mistake to report at the keystroke, not a document
  * from a newer engine to be forgiving about.
  */
-function writeResult(
-  nodeId: string,
-  before: NodeStyles | undefined,
-  after: NodeStyles,
-  values: StyleValues,
+function judge(
   subject: StyleValues,
   policy: StylePolicy | undefined
-): StyleWrite {
-  // ONLY the leaf this edit writes. A sibling that is already invalid is not
-  // this edit's fault, and judging anything wider lets one bad value block the
-  // controls around it with no way to fix them: a breakpoint-wide check blocks
-  // every control on the breakpoint, and a property-wide one blocks every side
-  // of a margin whose top is malformed. It is also what keeps the commit
-  // judging exactly what the preview compiled, so a clean drag cannot snap
-  // back on release. The document validator still reads the whole map where
-  // completeness is the question.
-  const issues = validateStyleValues(
+): readonly ValidationIssue[] {
+  return validateStyleValues(
     subject,
     "",
     "strict",
@@ -537,26 +533,73 @@ function writeResult(
     policy?.tokens,
     { mayFetchUrl: policy?.mayFetchUrl }
   );
+}
+
+/**
+ * The op that moves a node from one envelope to another, or `null`.
+ *
+ * Asked with the op layer's OWN comparison rather than a second one, so the
+ * answer here and the answer `applyOp` would give cannot differ. An empty
+ * envelope stands in for an absent one: a node with no styles and a node whose
+ * styles cleared to nothing are the same document.
+ *
+ * The STYLE predicate, not the general stored one: the compiler sorts a
+ * composite's keys, so a reorder renders identically and an op for it would
+ * rewrite the document and cost an undo entry for nothing.
+ */
+function opFor(
+  nodeId: string,
+  before: NodeStyles | undefined,
+  after: NodeStyles
+): BuilderOp | null {
+  return sameStyleValue(before ?? {}, after) ? null : patchOp(nodeId, after);
+}
+
+/** The issues that accompany an accepted write. */
+function acceptedWarnings(
+  issues: readonly ValidationIssue[]
+): readonly ValidationIssue[] {
+  return issues.filter(issue => issue.severity !== "error");
+}
+
+/**
+ * Validate the values that would result, and answer with the op or the reasons.
+ */
+function writeResult(
+  nodeId: string,
+  before: NodeStyles | undefined,
+  after: NodeStyles,
+  subject: StyleValues,
+  policy: StylePolicy | undefined
+): StyleWrite {
+  const issues = judge(subject, policy);
   const errors = errorsIn(issues);
   if (errors.length > 0) return { ok: false, issues: errors };
-  // Asked with the op layer's OWN comparison rather than a second one, so the
-  // answer here and the answer `applyOp` would give cannot differ. An empty
-  // envelope stands in for an absent one: a node with no styles and a node
-  // whose styles cleared to nothing are the same document.
-  // The STYLE predicate, not the general stored one: the compiler sorts a
-  // composite's keys, so a reorder renders identically and an op for it would
-  // rewrite the document and cost an undo entry for nothing.
-  if (sameStyleValue(before ?? {}, after)) {
-    return {
-      ok: true,
-      op: null,
-      warnings: issues.filter(issue => issue.severity !== "error"),
-    };
-  }
   return {
     ok: true,
-    op: patchOp(nodeId, after),
-    warnings: issues.filter(issue => issue.severity !== "error"),
+    op: opFor(nodeId, before, after),
+    warnings: acceptedWarnings(issues),
+  };
+}
+
+/** The envelope one write produces, and the leaf it has to be judged on. */
+function nextStyles(
+  styles: NodeStyles | undefined,
+  address: StyleAddress,
+  value: StyleValue
+): { readonly after: NodeStyles; readonly subject: StyleValues } {
+  const current = valuesAt(styles, address.state, address.breakpoint);
+  const values: StyleValues = {
+    ...current,
+    [address.property]: writeAtPath(
+      current === undefined ? undefined : ownValue(current, address.property),
+      address.path,
+      value
+    ),
+  };
+  return {
+    after: withValues(styles, address.state, address.breakpoint, values),
+    subject: { [address.property]: styleValueAtPath(address.path, value) },
   };
 }
 
@@ -568,23 +611,77 @@ export function styleWriteOp(
   value: StyleValue,
   policy?: StylePolicy
 ): StyleWrite {
-  const current = valuesAt(styles, address.state, address.breakpoint);
-  const values: StyleValues = {
-    ...current,
-    [address.property]: writeAtPath(
-      current === undefined ? undefined : ownValue(current, address.property),
-      address.path,
-      value
-    ),
+  const next = nextStyles(styles, address, value);
+  return writeResult(nodeId, styles, next.after, next.subject, policy);
+}
+
+/** One address and the value to put there. */
+export interface StyleWriteRequest {
+  readonly address: StyleAddress;
+  readonly value: StyleValue;
+}
+
+/**
+ * ONE op that sets several addresses on ONE node.
+ *
+ * ## Why this is not a list of `styleWriteOp` results
+ *
+ * A style op patches the WHOLE `styles` envelope. Four calls to `styleWriteOp`
+ * built from the same node therefore produce four complete envelopes that each
+ * know about one side, and whichever is applied last wins — the other three
+ * sides are silently dropped. `batchStyleWriteOps` documents the same mechanism
+ * from the other direction, where an op built from the primary carried the
+ * primary's unrelated declarations to every block in the selection.
+ *
+ * Folding is what fixes it: each write is computed against the envelope the
+ * previous one produced, so the last envelope carries all of them and is the
+ * only op anyone needs. That it is ONE op rather than a group is also what
+ * makes "one gesture, one undo entry" a property of the value layer instead of
+ * something every caller has to remember to ask `applyAll` for.
+ *
+ * ## Judged per write, not on the merged result
+ *
+ * Every write is validated on its own leaf, exactly as the singular does.
+ * Judging the folded envelope instead would look at the LAST value written to a
+ * property and miss the other three — so a drag that set three legal sides and
+ * one impossible one would commit all four.
+ *
+ * Atomic: the first refusal ends it and no op is returned. A gesture that
+ * writes some of the sides it promised is not a smaller version of the edit the
+ * author asked for.
+ *
+ * An empty list is not an error and produces `op: null` — the same answer as a
+ * write that changes nothing, which is what it is.
+ *
+ * @param nodeId - the node being edited
+ * @param styles - that node's own styles before the edit
+ * @param writes - the addresses to set, applied in order
+ * @param policy - the site policy every value is judged under
+ * @returns one op for all of them, or the reasons the first refusal gives
+ */
+export function styleWriteOps(
+  nodeId: string,
+  styles: NodeStyles | undefined,
+  writes: readonly StyleWriteRequest[],
+  policy?: StylePolicy
+): StyleWrite {
+  let after: NodeStyles | undefined = styles;
+  const warnings: ValidationIssue[] = [];
+  for (const write of writes) {
+    const next = nextStyles(after, write.address, write.value);
+    const issues = judge(next.subject, policy);
+    const errors = errorsIn(issues);
+    if (errors.length > 0) return { ok: false, issues: errors };
+    warnings.push(...acceptedWarnings(issues));
+    after = next.after;
+  }
+  return {
+    ok: true,
+    // Against the ORIGINAL envelope, so a gesture that ends where it started
+    // costs no undo entry however many addresses it passed through.
+    op: opFor(nodeId, styles, after ?? {}),
+    warnings,
   };
-  return writeResult(
-    nodeId,
-    styles,
-    withValues(styles, address.state, address.breakpoint, values),
-    values,
-    { [address.property]: styleValueAtPath(address.path, value) },
-    policy
-  );
 }
 
 /**
@@ -619,7 +716,6 @@ export function styleClearOp(
     nodeId,
     styles,
     withValues(styles, address.state, address.breakpoint, values),
-    values,
     {},
     policy
   );

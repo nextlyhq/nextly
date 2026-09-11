@@ -27,6 +27,7 @@
 
 import { useQueries } from "@tanstack/react-query";
 import {
+  isTimeseriesInterval,
   MAX_QUERIES_PER_REQUEST,
   WIDGET_SOURCE_FIELD_TYPES,
   type WidgetQuery,
@@ -398,6 +399,75 @@ function asGrouped(
   };
 }
 
+/**
+ * A timeline result, or `undefined` when the payload does not carry one.
+ *
+ * A ZERO count is kept exactly as a positive one is. Every interval in the
+ * window was read, so zero means no rows rather than no answer, and dropping
+ * the empty points would leave a chart drawing a straight line across a quiet
+ * stretch -- reading as steady activity rather than none.
+ *
+ * `start` is checked as a string and the count as a finite number, for the
+ * reason the buckets are: `NaN` and `Infinity` are both `typeof "number"` and
+ * both reach a chart as a bar of no height or one that dwarfs every real point.
+ */
+/**
+ * Whether text is a timestamp this can be read back as the instant it claims.
+ *
+ * `Date.parse` alone is too permissive for a contract check: it accepts a bare
+ * "2026" and platform-specific spellings. Requiring the canonical form the
+ * server emits means a response that drifted from the contract is caught here
+ * rather than at the point something tries to draw it.
+ */
+function isInstant(text: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text)) {
+    return false;
+  }
+  const parsed = Date.parse(text);
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString() === text;
+}
+
+function asPoints(
+  value: unknown
+): { start: string; count: number }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const points: { start: string; count: number }[] = [];
+  for (const raw of value) {
+    if (!isObject(raw)) return undefined;
+    const point = raw as { start?: unknown; count?: unknown };
+    // `start` is contractually a UTC instant, and this decoder exists to keep a
+    // malformed or version-skewed response away from the components that draw
+    // it. Arbitrary text reaches a chart as an unlabelled axis tick, or throws
+    // when a component formats it as a date -- turning one bad slot into a
+    // rendering error for the whole dashboard.
+    if (typeof point.start !== "string" || !isInstant(point.start)) {
+      return undefined;
+    }
+    if (typeof point.count !== "number" || !Number.isFinite(point.count)) {
+      return undefined;
+    }
+    points.push({ start: point.start, count: point.count });
+  }
+  return points;
+}
+
+/**
+ * A timeline result, or `undefined` when the payload does not carry one.
+ *
+ * The interval is checked against the vocabulary rather than passed through: it
+ * labels the axis, and a value outside the union would reach a chart as a width
+ * nothing knows how to render.
+ */
+function asTimeline(
+  points: unknown,
+  interval: unknown
+): WidgetResult | undefined {
+  const read = asPoints(points);
+  if (!read || !isTimeseriesInterval(interval)) return undefined;
+  return { op: "timeseries", points: read, interval };
+}
+
 function asResult(value: unknown): WidgetResult | undefined {
   if (!isObject(value)) return undefined;
 
@@ -409,6 +479,8 @@ function asResult(value: unknown): WidgetResult | undefined {
     fields?: unknown;
     buckets?: unknown;
     truncated?: unknown;
+    points?: unknown;
+    interval?: unknown;
   };
 
   if (result.op === "count") return asCount(result.total, result.atLeast);
@@ -426,6 +498,10 @@ function asResult(value: unknown): WidgetResult | undefined {
 
   if (result.op === "groupBy") {
     return asGrouped(result.buckets, result.truncated);
+  }
+
+  if (result.op === "timeseries") {
+    return asTimeline(result.points, result.interval);
   }
 
   return undefined;

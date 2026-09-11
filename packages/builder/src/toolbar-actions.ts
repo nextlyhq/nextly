@@ -35,8 +35,15 @@
  * @module toolbar-actions
  */
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  registryNestingSource,
+  saveAsPatternRefusal,
+  type BlockDocument,
+  type BlockNode,
+  type NestingSource,
+} from "@nextlyhq/blocks-engine";
 
+import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import type { Rect } from "./geometry";
@@ -51,6 +58,7 @@ export type ToolbarActionId =
   | "move-up"
   | "move-down"
   | "duplicate"
+  | "save-as-pattern"
   | "delete";
 
 /** One button's worth of decision. */
@@ -117,6 +125,81 @@ function moveAction(
 }
 
 /**
+ * Whether this selection could be stored in the library, and why not.
+ *
+ * ASKED OF THE PLANNER, never restated. The ways a selection can be unsavable
+ * are not a short list a toolbar should keep its own copy of — a run with a gap,
+ * a block that may not be a document root, a node the op layer will not carry,
+ * one HTML id on two of the run's nodes, a document past the byte cap — and a
+ * surface enumerating them drifts the first time the planner learns a new way to
+ * say no. It drifts SILENTLY: the button stays enabled and the save fails.
+ *
+ * Offered for a SET as readily as for one block, because saving several blocks
+ * as one pattern is the ordinary case rather than the exception — a hero is a
+ * heading, a paragraph and a button.
+ *
+ * The refusal carries a reason whatever the cause, unlike a move at the edge of
+ * its container. There is nothing on the canvas that explains why a selection
+ * cannot be saved, so leaving it dimmed and silent would be a control an author
+ * can only guess at.
+ */
+/**
+ * What an author is told when they hold no grant to save a pattern.
+ *
+ * Names the OPERATION the author attempted, not a permission. Saving needs more
+ * than one grant — the pattern is stored and published in the same act — so a
+ * message naming any single one is wrong for somebody: an author who may create
+ * a pattern but not publish it would be told they cannot create, and would go
+ * and ask for the grant they already hold. "Save" is also the word on the
+ * control they pressed, which is the thing they can describe when they ask.
+ *
+ * Which grant is missing is deliberately NOT reported. The answer arrives as
+ * one boolean because that is the question the verb asks, and a message
+ * enumerating server-side permission names would tie this copy to slugs the
+ * browser has no other reason to know — the same coupling the resolved-slug
+ * lookup exists to avoid.
+ *
+ * ONE string, exported, because two surfaces say it: this list, which dims the
+ * control and titles it, and the runner in `keyboard-actions`, which announces
+ * it when a dimmed control is pressed anyway. Written twice they would drift,
+ * and the drift would be invisible — each reads correctly on its own.
+ */
+export const SAVE_PATTERN_GRANT_REFUSAL =
+  "You do not have permission to save patterns.";
+
+function saveAction(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  mayCreate: boolean
+): ToolbarAction {
+  const label = "Save as pattern";
+  // The GRANT first, and it is the one refusal not asked of the planner —
+  // because it is not about this selection. Every other reason a save is
+  // refused describes the blocks in hand, so a planner that learns a new one
+  // is still describing them; whether the author may create a pattern at all
+  // is true of the next selection too. Asked first so an author who cannot
+  // save is told that, rather than told why these particular blocks are
+  // unsuitable for a thing they could not have saved either way.
+  if (!mayCreate)
+    return {
+      id: "save-as-pattern",
+      label,
+      enabled: false,
+      reason: SAVE_PATTERN_GRANT_REFUSAL,
+    };
+  const refusal = saveAsPatternRefusal(document, ids, nesting);
+  if (refusal === undefined)
+    return { id: "save-as-pattern", label, enabled: true };
+  return {
+    id: "save-as-pattern",
+    label,
+    enabled: false,
+    reason: compositionRefusalReason(refusal),
+  };
+}
+
+/**
  * The bar for a selection holding more than one block.
  *
  * **Duplicate, delete and move keep their meaning; select-parent loses it.**
@@ -138,7 +221,9 @@ function moveAction(
  */
 function manyBlockActions(
   document: BlockDocument,
-  ids: readonly string[]
+  ids: readonly string[],
+  nesting: NestingSource,
+  mayCreate: boolean
 ): ToolbarAction[] {
   const many = `Only one block at a time. ${ids.length} are selected.`;
   const deleteLock = ids
@@ -157,6 +242,7 @@ function manyBlockActions(
     // A lock never stops a duplication, for a set as for one block: the
     // originals stay where they are.
     { id: "duplicate", label: "Duplicate", enabled: true },
+    saveAction(document, ids, nesting, mayCreate),
     deleteLock === undefined
       ? { id: "delete", label: "Delete", enabled: true }
       : {
@@ -187,15 +273,43 @@ export function toolbarActions(
    * not adopted the set — keeps the same answer it had. What changes for a
    * SET is which verbs are well defined, not which rules decide them.
    */
-  selectedIds?: readonly string[]
+  selectedIds?: readonly string[],
+  /**
+   * The nesting rule source, for asking whether a selection can be saved.
+   *
+   * Optional and defaulted to the registry, which is how the insert panel and
+   * the keyboard route already default it — so a refusal reads the same whether
+   * an author dragged the block, moved it with the keyboard, or tried to save
+   * it. Present as an option only so a test can supply a rule set without
+   * registering blocks globally.
+   */
+  nesting?: NestingSource,
+  /**
+   * Whether the caller may create a pattern at all. Defaults to true.
+   *
+   * The HOST's answer, because it is the host's question: the grant is seeded
+   * against the collection a pattern goes in, a site may have renamed it, and
+   * nothing here knows either. The same reason `onSaveAsPattern` is supplied
+   * rather than performed here.
+   *
+   * PERMISSIVE by default, unlike every other refusal in this file. The others
+   * are computed from the document in hand and an absent answer means the
+   * question was not asked; this one arrives over the network, and "not yet"
+   * would dim the verb on every mount for every author. A wrong `true` costs
+   * the late refusal that already happens; a wrong `false` hides a feature the
+   * author has, and there is nothing on the canvas to explain it.
+   */
+  mayCreatePattern: boolean = true
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
   const path = pathTo(document, selectedId);
   if (path.length === 0) return [];
 
+  const rules = nesting ?? registryNestingSource();
   const ids = selectedIds ?? [selectedId];
-  if (ids.length > 1) return manyBlockActions(document, ids);
+  if (ids.length > 1)
+    return manyBlockActions(document, ids, rules, mayCreatePattern);
 
   const moveLock = lockBlockingMove(document, selectedId);
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -236,6 +350,7 @@ export function toolbarActions(
       // reading the keyboard duplicate takes.
       enabled: blockDuplication(document, selectedId) !== null,
     },
+    saveAction(document, ids, rules, mayCreatePattern),
     deleteLock === undefined
       ? {
           id: "delete",

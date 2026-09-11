@@ -73,11 +73,24 @@ export type { SingleDocument } from "./hooks/queries";
 // answers the second, each by CHECKING rather than asserting — which matters
 // because a transport failure rejects with a native error that is neither.
 export {
+  apiErrorMessage,
   isApiError,
   validationIssues,
   type ApiError,
   type ValidationIssue,
 } from "./lib/api/parseApiError";
+
+// Reporting a write that committed while something after it did not. A
+// post-commit hook cannot un-save the row, so the server answers success and
+// carries the failure alongside — and the three shapes that answer needs
+// (success, advisory, partial failure) are easy to collapse into one. Published
+// so a plugin's own writes report them the way the admin's do rather than
+// inventing a fourth phrasing.
+export {
+  toastMutationResult,
+  type HookWarning,
+  type MutationResult,
+} from "./lib/mutation-warnings";
 
 // Media hooks
 export {
@@ -279,6 +292,7 @@ export type {
   PluginRouteMethod,
   PluginRouteWrite,
   PluginRouteWriter,
+  PluginRouteInvalidation,
 } from "@admin/hooks/queries/usePluginRouteMutation";
 
 // Field-UI kit — controlled, form-library-agnostic field-building components
@@ -674,11 +688,6 @@ export type {
   RecentEntriesResponse,
 } from "./types/dashboard/recent-entries";
 export type { ProjectStatItem } from "./types/dashboard/project-stats";
-export type {
-  OnboardingStepId,
-  OnboardingStep,
-  OnboardingProgress,
-} from "./types/dashboard/onboarding";
 
 // Constants
 export {

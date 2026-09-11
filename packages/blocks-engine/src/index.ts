@@ -42,6 +42,11 @@ export {
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
+  // Published on the argument its own docblock makes: it is the ONE answer to
+  // whether a value names a part, for the same reason `isBlockType` above is.
+  // A caller outside this package that bounds a part name where the compiler
+  // does not emits a class the compiler refuses to read.
+  isPartName,
   isComponentDocument,
   isComponentInstance,
   isUnsetOverride,
@@ -102,6 +107,16 @@ export {
   countNodes,
   treeDepth,
   documentBytes,
+  // Published because the three readers above now REFUSE a structure they
+  // cannot afford to walk, and a caller that wants to report that rather than
+  // let it escape has to be able to name it and to say what it exceeded.
+  //
+  // ONE ceiling, which is the point: the op layer's preflight already refused a
+  // value with more parts than this, so a second number here would let a dry run
+  // accept what the apply then refuses.
+  MAX_VALUE_PARTS,
+  MAX_SERIALIZED_VALUES,
+  ForestTooLargeError,
 } from "./limits";
 export type { DocumentLimits } from "./limits";
 export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
@@ -122,7 +137,6 @@ export {
   removeNode,
   moveNode,
   reidSubtree,
-  reidSubtreeWithMap,
   // The forest form, which is the shape a saved selection actually has: a
   // pattern is a run of siblings, and re-identifying its roots one at a time
   // leaves a reference that crosses between them pointing at the original.
@@ -160,7 +174,6 @@ export {
 export type {
   NodeLocation,
   ReidentifiedForest,
-  ReidentifiedSubtree,
   SlotDefaultSource,
   TreePosition,
   // Beside `walkNodes`, because a caller BOUNDING a walk has to hold its
@@ -266,6 +279,7 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // what to FETCH, asked before anything can be resolved.
 export {
   componentIdsIn,
+  componentUsageIn,
   resolveComponentInstances,
   // Why an instance was left standing. Published because the surfaces that
   // REPORT one are in other packages — the renderer draws a placeholder, the
@@ -277,6 +291,7 @@ export {
 export type {
   ComponentLookup,
   ComponentUnresolvedReason,
+  ComponentUsage,
   DefinitionsById,
   ResolveComponentOptions,
   ResolvedBlockNode,

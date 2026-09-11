@@ -15,7 +15,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  saveAsPatternRefusal,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+
+import { compositionRefusalReason } from "./composition-refusal";
 
 import {
   TOOLBAR_GAP_PX,
@@ -71,17 +77,113 @@ describe("toolbarActions", () => {
     // the selection has finished changing. A set that varied would move the
     // control they were reaching for.
     const document = documentOf([box("outer", [node("kid")]), node("last")]);
-    const expected: ToolbarActionId[] = [
-      "select-parent",
-      "move-up",
-      "move-down",
-      "duplicate",
-      "delete",
-    ];
+    // Taken from the bar's own answer for the first selection rather than
+    // written down, so a verb added to the bar is covered by this the day it
+    // arrives. A literal list only ever asserts the shape somebody typed, which
+    // is never the shape that is about to change.
+    const expected = toolbarActions(document, "outer").map(a => a.id);
 
-    for (const id of ["outer", "kid", "last"]) {
+    // The control: a list this could not read would make every comparison below
+    // pass against nothing.
+    expect(expected.length).toBeGreaterThan(1);
+    for (const id of ["kid", "last"]) {
       expect(toolbarActions(document, id).map(a => a.id)).toEqual(expected);
     }
+  });
+
+  describe("saving a selection to the pattern library", () => {
+    // A rule source of its own rather than the registry, so these assert the
+    // toolbar's reading of a refusal and not which blocks happen to be
+    // registered in this process.
+    const anyParent = { parentsOf: () => undefined };
+
+    it("offers it for a run of blocks, which is the ordinary case", () => {
+      // Not a single-block afterthought: a pattern is usually several blocks —
+      // a heading, a paragraph and a button — so the SET is what this verb is
+      // for. Move is the verb that narrows for a set; this one does not.
+      const document = documentOf([node("a"), node("b"), node("c")]);
+
+      const action = actionOf(
+        toolbarActions(document, "a", ["a", "b"], anyParent),
+        "save-as-pattern"
+      );
+
+      expect(action.enabled).toBe(true);
+      expect(action.reason).toBeUndefined();
+    });
+
+    it("refuses a selection with a gap in it, and says what to do", () => {
+      // `a` and `c` share a parent with `b` between them. The sentence has to
+      // be a remedy: nothing on the canvas says why this particular pair cannot
+      // travel together.
+      const document = documentOf([node("a"), node("b"), node("c")]);
+
+      const action = actionOf(
+        toolbarActions(document, "a", ["a", "c"], anyParent),
+        "save-as-pattern"
+      );
+
+      expect(action.enabled).toBe(false);
+      expect(action.reason).toBe(compositionRefusalReason({ problem: "gap" }));
+    });
+
+    it("asks the PLANNER, so it refuses exactly what a save would refuse", () => {
+      // The property that matters, and the one a toolbar keeping its own list
+      // of causes would lose. Every selection is put to both, and they agree on
+      // every one — including the ones neither refuses, which is what stops
+      // this passing against a bar that refuses everything.
+      const document = documentOf([
+        box("outer", [node("kid"), node("kid2")]),
+        node("mid"),
+        node("last"),
+      ]);
+      // Only selections the bar is DRAWN for. An id the document no longer
+      // holds produces no bar at all, which is a different rule and is asserted
+      // on its own above.
+      const selections = [
+        ["outer"],
+        ["kid"],
+        ["kid", "kid2"],
+        ["outer", "mid"],
+        ["outer", "last"],
+        ["kid", "last"],
+      ];
+
+      const verdicts = selections.map(ids => {
+        const offered = actionOf(
+          toolbarActions(document, ids[0] ?? null, ids, anyParent),
+          "save-as-pattern"
+        ).enabled;
+        const planner =
+          saveAsPatternRefusal(document, ids, anyParent) === undefined;
+        return { ids, offered, planner };
+      });
+
+      // Both outcomes are present, so neither a bar that always offers nor one
+      // that never does could satisfy this.
+      expect(verdicts.some(v => v.planner)).toBe(true);
+      expect(verdicts.some(v => !v.planner)).toBe(true);
+      for (const verdict of verdicts) {
+        expect({ ids: verdict.ids, enabled: verdict.offered }).toEqual({
+          ids: verdict.ids,
+          enabled: verdict.planner,
+        });
+      }
+    });
+
+    it("is offered for a set as well as for one block", () => {
+      // The two branches of `toolbarActions` are separate lists, so a verb
+      // added to one and not the other is invisible until an author selects a
+      // second block.
+      const document = documentOf([node("a"), node("b")]);
+
+      expect(
+        toolbarActions(document, "a", ["a"], anyParent).map(a => a.id)
+      ).toContain("save-as-pattern");
+      expect(
+        toolbarActions(document, "a", ["a", "b"], anyParent).map(a => a.id)
+      ).toContain("save-as-pattern");
+    });
   });
 
   it("cannot select a parent from the top level, and can from inside one", () => {

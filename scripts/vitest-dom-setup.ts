@@ -26,6 +26,18 @@
  * React directly — a mocked component's callback, a bare `act` in a test — is
  * left without it.
  *
+ * ## `ResizeObserver` exists
+ *
+ * jsdom does not implement it, and several design-system components are built
+ * on Radix primitives that measure themselves through it — a radio group, a
+ * checkbox, a scroll area. Without it the component throws during layout
+ * effects, so the failure is a `ReferenceError` from inside `react-dom` rather
+ * than anything naming the control under test.
+ *
+ * A stub rather than a polyfill: nothing here asserts on resize behaviour, and
+ * the components need the constructor to exist rather than to report. Installed
+ * only when the runtime has none, so a real implementation is never replaced.
+ *
  * ## Guarded, because most files here have no DOM
  *
  * Both packages that load this run `environment: "node"` and opt into jsdom
@@ -53,6 +65,13 @@ if ("document" in globalThis) {
   (
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
+  if (!("ResizeObserver" in globalThis)) {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    };
+  }
   const { cleanup } = await import("@testing-library/react");
   afterEach(cleanup);
 }

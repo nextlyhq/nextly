@@ -43,6 +43,37 @@ export interface WidgetSourceField {
   name: string;
   type: WidgetSourceFieldType;
   /**
+   * Whether this field's values are stored per locale.
+   *
+   * A localized field lives in the `_locales` companion rather than on the
+   * collection's own table, so it can be SELECTED by a list but cannot be
+   * grouped or bucketed. The coarse `type` cannot express that -- a localized
+   * date is still a date -- so a validator reading only the type approves a
+   * timeline over it and the read then refuses it, leaving a widget that fails
+   * on every load.
+   */
+  localized?: boolean;
+  /**
+   * Whether the read would accept this date as a bucketing key.
+   *
+   * Marked by the source builder, which runs server-side and can ask the same
+   * guard the read asks. The validator cannot: it is type-checked by the admin,
+   * whose project does not define the aliases that guard's dependency graph
+   * pulls in. So the description carries the answer instead, and there is still
+   * one place that decides it.
+   *
+   * Absent means the read has no objection. Only `false` refuses, and the
+   * builder sets it explicitly on the dates it knows the read would reject.
+   *
+   * That direction is deliberate. Defaulting to "not bucketable" would silently
+   * remove the op from every source registered by hand -- a plugin author
+   * declaring a perfectly ordinary date would lose it without being told, for a
+   * flag that is a framework detail rather than something they should have to
+   * know. The builder is the only production path for a collection source and
+   * it marks every date it publishes, so nothing is lost by trusting absence.
+   */
+  bucketable?: boolean;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest
@@ -259,6 +290,68 @@ function validateSourceSupports(s: Partial<WidgetSource>): void {
 }
 
 /**
+ * Refuses a field whose IDENTITY a source cannot be used with.
+ *
+ * Name and type: what the field IS. Separated from the optional annotations
+ * below because the two answer different questions — this one decides whether
+ * there is a usable field at all, and that one whether the extras attached to
+ * it are well-formed.
+ */
+function validateFieldIdentity(
+  sourceId: string,
+  field: Partial<WidgetSourceField> | null | undefined
+): string {
+  if (typeof field?.name !== "string" || field.name.trim() === "") {
+    fail(`${sourceId}: every field requires a non-empty name`);
+  }
+  if (
+    !WIDGET_SOURCE_FIELD_TYPES.includes(field.type as WidgetSourceFieldType)
+  ) {
+    fail(
+      `${sourceId}: field "${field.name}" has an unknown type "${String(field.type)}"`
+    );
+  }
+  return field.name;
+}
+
+/**
+ * Refuses an ANNOTATION that is present and unusable.
+ *
+ * Both are optional, and absence is legal for each — so what is checked is the
+ * shape of a value that IS there. They are refused HERE, where every source
+ * passes, rather than only on the path that computes them: the collection
+ * builder derives both and can only produce well-formed ones, while a plugin
+ * registering its own source through the SDK, or a source restored from a
+ * stored snapshot, reaches this untouched by that path.
+ *
+ * A blank label is refused rather than trimmed away, because it is a mistake in
+ * the plugin's config and silently dropping it leaves the author wondering why
+ * their heading never appears. A non-boolean `bucketable` is refused because
+ * query validation rejects only the literal `false` — so the string `"false"`,
+ * legal in untyped JavaScript and in JSON, would advertise a date the read then
+ * refuses, and the widget would fail on every load with nothing naming why.
+ */
+function validateFieldAnnotations(
+  sourceId: string,
+  name: string,
+  field: Partial<WidgetSourceField>
+): void {
+  if (
+    field.label !== undefined &&
+    (typeof field.label !== "string" || field.label.trim() === "")
+  ) {
+    fail(
+      `${sourceId}: field "${name}" has a label that is empty or not a string`
+    );
+  }
+  if (field.bucketable !== undefined && typeof field.bucketable !== "boolean") {
+    fail(
+      `${sourceId}: field "${name}" has a bucketable flag that is not a boolean`
+    );
+  }
+}
+
+/**
  * Confirms `fields` is a non-empty array of well-formed, uniquely-named
  * fields. A duplicate field name would make `validateWidgetQuery`'s
  * declared-field set silently collapse two fields into one entry, so it is
@@ -272,36 +365,12 @@ function validateSourceFields(s: Partial<WidgetSource>): void {
   const seen = new Set<string>();
   for (const raw of s.fields as unknown[]) {
     const field = raw as Partial<WidgetSourceField> | null | undefined;
-    if (typeof field?.name !== "string" || field.name.trim() === "") {
-      fail(`${s.id}: every field requires a non-empty name`);
+    const name = validateFieldIdentity(String(s.id), field);
+    validateFieldAnnotations(String(s.id), name, field as WidgetSourceField);
+    if (seen.has(name)) {
+      fail(`${s.id}: field "${name}" is declared more than once`);
     }
-    if (
-      !WIDGET_SOURCE_FIELD_TYPES.includes(field.type as WidgetSourceFieldType)
-    ) {
-      fail(
-        `${s.id}: field "${field.name}" has an unknown type "${String(field.type)}"`
-      );
-    }
-    if (seen.has(field.name)) {
-      fail(`${s.id}: field "${field.name}" is declared more than once`);
-    }
-    // A label that is present but unusable is refused HERE, where every source
-    // passes, rather than only on the path that builds one from a collection.
-    // A plugin registering its own source through the SDK reaches the stored
-    // snapshot untouched by that path, and `"   "` is legal TypeScript -- so
-    // the empty column head this field exists to prevent arrived through the
-    // one channel that had no normalisation. Refused rather than trimmed away,
-    // because a blank label is a mistake in the plugin's config and silently
-    // dropping it leaves the author wondering why their heading never appears.
-    if (
-      field.label !== undefined &&
-      (typeof field.label !== "string" || field.label.trim() === "")
-    ) {
-      fail(
-        `${s.id}: field "${field.name}" has a label that is empty or not a string`
-      );
-    }
-    seen.add(field.name);
+    seen.add(name);
   }
 }
 
@@ -483,4 +552,41 @@ export function listSources(): WidgetSource[] {
 
 export function clearSources(): void {
   store().clear();
+}
+
+/**
+ * Refuse a query carrying a field this source does not consume.
+ *
+ * The TABLE stays with each source and only the walk lives here. That split is
+ * the point: an exhaustive `Record<keyof WidgetQuery, ...>` beside the source
+ * is what makes `check-types` fail there when a query field is added, so
+ * someone decides what the new field means for that source rather than having
+ * it silently accepted and dropped. Sharing the tables would answer that
+ * question once, for every source, which is the coupling the tables exist to
+ * prevent.
+ *
+ * A key present but `undefined` is not carried input: `readWidgetQuery` reads
+ * every property once into a fresh object, so an absent field can arrive as an
+ * own key holding `undefined`, and treating that as supplied would refuse an
+ * ordinary query.
+ *
+ * The field names travel in the refusal, which is careful not to describe a
+ * source the caller may not be able to see.
+ */
+export function refuseUnconsumedQueryFields<TQuery extends object>(
+  query: TQuery,
+  use: Record<keyof TQuery & string, "consumed" | "refused">,
+  sourceId: string
+): void {
+  const carried = Object.entries(query)
+    .filter(
+      ([name, value]) =>
+        value !== undefined && use[name as keyof TQuery & string] === "refused"
+    )
+    .map(([name]) => name);
+  if (carried.length > 0) {
+    failUnavailableSourceOrOp(
+      `source "${sourceId}" answers a fixed question and cannot honour: ${carried.join(", ")}`
+    );
+  }
 }

@@ -23,6 +23,9 @@ import {
   sql,
   asc,
   desc,
+  gte,
+  lt,
+  type SQL,
   type SQLWrapper,
 } from "drizzle-orm";
 
@@ -36,6 +39,10 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
+import {
+  resolveRequestFacts,
+  type ResolvedRequestFacts,
+} from "../../../hooks/request-facts";
 import { toCamelCase, toSnakeCase } from "../../../lib/case-conversion";
 import { statusCondition } from "../../../lib/status-condition";
 import {
@@ -79,6 +86,7 @@ import {
 } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -143,7 +151,13 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
-import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
+import {
+  DEFAULT_DECIMAL_SCALE,
+  getColumnDescriptor,
+  getSystemColumnDescriptors,
+  type ColumnDescriptor,
+  type SupportedDialect,
+} from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   draftDocumentFacts,
@@ -158,12 +172,24 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
+import {
+  timeseriesBoundOperand,
+  timeseriesBucketExpression,
+  timeseriesWindowIsStorable,
+} from "../query/timeseries-bucket";
+import {
+  bucketStartToDbText,
+  intervalAfter,
+  intervalWindow,
+  isTimeseriesInterval,
+  type TimeseriesInterval,
+} from "../query/timeseries-interval";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
-  isJsonFieldType,
   getTableName,
   getSearchableFields,
   getMinSearchLength,
@@ -264,6 +290,40 @@ function buildComponentValueCondition(
  * them, and a second copy of this fallback would be a second place for the two
  * to disagree about what the collection declares.
  */
+/**
+ * A collection's fields as they are ADDRESSED on this table, with unnamed
+ * presentational containers flattened into the level they sit in.
+ *
+ * Deliberately not `collectionFieldsFor`, which answers a different question:
+ * the top-level declarations, which is what the draft overlay and the filter
+ * assembly need. A field nested in an unnamed group gets a column at THIS
+ * level, so the runtime schema has it and the widget source advertises it,
+ * while the top-level array never mentions it. Judging a group key from the
+ * top-level array therefore found no declaration for a column that exists --
+ * leaving a date field refused as storing no date, and a decimal grouped
+ * without the scale its author declared.
+ *
+ * Uses the shared walk rather than a second traversal, at its default setting,
+ * which treats every unnamed container as transparent. That is what core's own
+ * callers use and is a superset of the narrower view the source builder takes,
+ * so a column that exists always has a declaration here.
+ *
+ * NOT COVERED BY A TEST IN THIS SUITE, stated rather than left to look
+ * covered. An unnamed container is a REGISTRY shape: the code-first config
+ * refuses a field without a name (FIELD_NAME_REQUIRED), so `defineCollection`
+ * cannot build the case and the harness these tests use builds collections
+ * that way. Reverting this call to `collectionFieldsFor` fails nothing here.
+ * What IS pinned is the other half of the mismatch --
+ * `collection-sources.test.ts` proves the source publishes such a field as a
+ * top-level date, so a guard reading the top-level array refuses something the
+ * source advertised.
+ */
+function addressedFieldsFor(collection: unknown): FieldDefinition[] {
+  return addressableFields(
+    collectionFieldsFor(collection)
+  ) as unknown as FieldDefinition[];
+}
+
 function collectionFieldsFor(collection: unknown): FieldDefinition[] {
   const record = collection as Record<string, unknown>;
   const schemaDefinition = record.schemaDefinition as
@@ -301,6 +361,211 @@ function fieldTrustOf(params: {
  * buckets travel back.
  */
 export const MAX_GROUP_BUCKETS = 50;
+
+/**
+ * How many intervals one timeseries may cover, and how many it covers by default.
+ *
+ * A timeseries is bounded by its WINDOW rather than by a cap on the answer, so
+ * this bounds the read itself: the window's start becomes a lower bound on the
+ * date column, which an index can serve. 366 covers a year of days without
+ * letting an hourly request walk an unbounded history.
+ */
+export const MAX_TIMESERIES_INTERVALS = 366;
+export const DEFAULT_TIMESERIES_INTERVALS = 30;
+
+/**
+ * Refuse a window anchor that is not a real instant.
+ *
+ * `new Date("nonsense")` is a `Date` the type accepts and whose `getTime()` is
+ * `NaN`, so it survives to build bucket starts that render as `Invalid Date`.
+ * What happens next differs per dialect -- MySQL refuses it while building the
+ * bound, PostgreSQL and SQLite carry it into the statement or into
+ * `toISOString`, which throws -- so the same bad input answers a named 400 on
+ * one database and a generic 500 on the others.
+ *
+ * Checked inside the plan, so it lands after authorization and BEFORE the read
+ * hooks: `beforeOperation` and `beforeRead` are ordinary user code that writes
+ * audit rows and spends rate-limit budget, and a request that was never going
+ * to be answered must not charge the caller for it.
+ */
+function assertUsableWindowAnchor(now: Date | undefined): void {
+  if (now === undefined) return;
+  if (now instanceof Date && Number.isFinite(now.getTime())) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "now",
+        code: "TIMESERIES_WINDOW_INVALID",
+        message: "The instant a timeseries window ends at must be a real date.",
+      },
+    ],
+  });
+}
+
+/**
+ * How many rows the database grouped into each bucket, keyed by its label.
+ *
+ * A row whose bucket is not text is dropped rather than coerced: every dialect
+ * renders the bucket as a fixed-width string, so anything else means the
+ * expression did not run as written and a coerced key would silently match no
+ * generated interval.
+ */
+function countedByBucket(
+  rows: Array<{ bucket: unknown; total: number | string | null }>
+): Map<string, number> {
+  const counted = new Map<string, number>();
+  for (const row of rows) {
+    if (typeof row.bucket === "string") {
+      counted.set(row.bucket, Number(row.total ?? 0));
+    }
+  }
+  return counted;
+}
+
+/**
+ * The ends of the window the dialect can actually compare against, or
+ * `undefined` when the window cannot contain a storable instant at all.
+ *
+ * Both ends compare the COLUMN rather than the bucketing expression, so an
+ * index over the date can serve them; no index covers a computed value. A bound
+ * the dialect cannot represent is OMITTED: on MySQL an out-of-range operand
+ * renders as NULL, and `column >= NULL` matches nothing, so the predicate meant
+ * to bound the scan would empty the answer. Omitting it is sound because the
+ * column cannot store an instant outside that range.
+ *
+ * Whether the read happens at all is decided from the RAW endpoints rather than
+ * from how many of them rendered. Dropping both ends means the window either
+ * misses the storable range or surrounds it, and the two want opposite answers:
+ * the first has nothing to read, while the second must scan unbounded because
+ * every stored row falls inside it.
+ *
+ * Answers the OPERANDS rather than the comparisons, so the comparison is built
+ * where the column still carries the type the schema gave it.
+ */
+function windowScope(
+  window: Date[],
+  interval: TimeseriesInterval,
+  dialect: SupportedDialect
+): { from?: Date | SQL; to?: Date | SQL } | undefined {
+  const start = window[0];
+  const end = intervalAfter(window[window.length - 1], interval);
+  if (!timeseriesWindowIsStorable(start, end, dialect)) return undefined;
+  const from = timeseriesBoundOperand(start, dialect);
+  const to = timeseriesBoundOperand(end, dialect);
+  return {
+    ...(from === undefined ? {} : { from }),
+    ...(to === undefined ? {} : { to }),
+  };
+}
+
+/**
+ * The read this timeline resolves its rows through.
+ *
+ * The date key travels as `groupBy`, so every refusal a grouped read already
+ * makes applies unchanged: a field carrying a read rule, any spelling of it,
+ * the owner column, a key naming no column. The two `require` flags move the
+ * timeline's own preconditions inside the plan, where they land after
+ * collection authorization and before the read hooks.
+ *
+ * `releaseNow` takes the REQUEST's clock, never the window anchor. Whether a
+ * scheduled release has happened is a fact about the world at the moment of the
+ * read, where the anchor is a reporting parameter the caller chooses -- so
+ * anchoring a window on a future instant would make a draft scheduled for that
+ * date count as published, and a timeline could then report rows an ordinary
+ * read still hides. They are the same instant whenever the caller states no
+ * anchor of its own, which is what keeps a release becoming due mid-read from
+ * leaving the labels describing a later window than the row filter admitted.
+ */
+function timelineReadPlanRequest(
+  params: FilteredReadParams & { dateField: string; interval: unknown },
+  anchor: Date,
+  requestNow: Date
+): FilteredReadParams {
+  return {
+    ...params,
+    groupBy: params.dateField,
+    requireTimestampGroupKey: true,
+    requireBucketableInterval: true,
+    now: anchor,
+    releaseNow: params.releaseNow ?? requestNow,
+  };
+}
+
+/**
+ * The refusals a timeline makes before the read hooks run.
+ *
+ * Grouped into one step because they share a reason as well as a position:
+ * each rejects a request that was never going to be answered, and
+ * `beforeOperation` and `beforeRead` are ordinary user code that writes audit
+ * rows and spends rate-limit budget. They sit after collection authorization,
+ * so an untrusted caller naming a bad interval gets the access refusal rather
+ * than a detailed validation response that confirms the collection exists.
+ */
+function assertTimelinePreconditions(params: FilteredReadParams): void {
+  assertUsableWindowAnchor(params.now);
+  if (params.requireBucketableInterval === true) {
+    assertBucketableInterval(params.interval);
+  }
+}
+
+/** The interval, refused unless an expression exists for it. */
+function assertBucketableInterval(value: unknown): TimeseriesInterval {
+  if (isTimeseriesInterval(value)) return value;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "interval",
+        code: "TIMESERIES_INTERVAL_UNSUPPORTED",
+        message: `"${String(value)}" is not an interval a timeseries can bucket by.`,
+      },
+    ],
+  });
+}
+
+/**
+ * How many intervals the window covers, within the documented bound.
+ *
+ * `Number.isFinite` first, for the reason the bucket cap checks it: `Math.trunc`,
+ * `Math.max` and `Math.min` all PRESERVE `NaN`, so a computed count arriving as
+ * one would reach the window builder and throw rather than fall back to the
+ * documented default.
+ */
+function boundedIntervalCount(requested: unknown): number {
+  if (!Number.isFinite(requested)) return DEFAULT_TIMESERIES_INTERVALS;
+  return Math.min(
+    Math.max(1, Math.trunc(requested as number)),
+    MAX_TIMESERIES_INTERVALS
+  );
+}
+
+/**
+ * Refuse a timeline over a column that does not store a date.
+ *
+ * Judged by the column's declared SHAPE rather than by the field's type name,
+ * so a plugin field storing a timestamp is bucketable on the same terms as a
+ * built-in one.
+ */
+function assertDateColumn(
+  descriptor: ColumnDescriptor | undefined,
+  dateField: string
+): void {
+  if (descriptor?.kind === "timestamp") return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `dateField.${dateField}`,
+        code: "FIELD_NOT_A_DATE",
+        message: `"${dateField}" does not store a date, so its rows cannot be placed on a timeline.`,
+      },
+    ],
+  });
+}
+
+/** How many rows fall in each interval of a window, oldest interval first. */
+interface TimeseriesPoints {
+  points: { start: string; count: number }[];
+  interval: TimeseriesInterval;
+}
 
 /** Distinct values of one field with how many rows carry each. */
 interface GroupedRows {
@@ -354,6 +619,32 @@ interface FilteredReadParams {
    * probe whose answer is the count.
    */
   enforceFieldAccess?: boolean;
+  /**
+   * The instant a timeseries window ends at, when the caller named one.
+   *
+   * Carried on the shared params so the plan can refuse an unusable one before
+   * the read hooks run, rather than after.
+   */
+  now?: Date;
+  /**
+   * The interval a timeseries buckets by, when this read is one.
+   *
+   * Carried on the shared params so the plan can refuse an unusable one after
+   * collection authorization and before the read hooks, rather than before
+   * either.
+   */
+  interval?: unknown;
+  /** Whether the plan must refuse an interval it has no expression for. */
+  requireBucketableInterval?: boolean;
+  /**
+   * Refuse the group key unless the column it names stores a date.
+   *
+   * Carried on the params rather than checked by the caller after the fact, so
+   * the refusal happens inside the plan and therefore before the read hooks
+   * run. A timeline is the only read that needs it; a count and a bucket set
+   * group whatever scalar they were given.
+   */
+  requireTimestampGroupKey?: boolean;
   /**
    * This `where` was built by the framework from a route it was asked to
    * render, not received from a request.
@@ -423,6 +714,8 @@ interface FilteredReadParams {
   resolvedComponentTypeColumns?: Map<string, string>;
   /** Arbitrary data passed to hooks via context */
   context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
   /**
    * The field whose distinct values become buckets.
    *
@@ -432,53 +725,6 @@ interface FilteredReadParams {
    * `where` yields it one probe at a time.
    */
   groupBy?: string;
-}
-
-/**
- * Field types whose column holds a STRUCTURE rather than a value.
- *
- * Not groupable, and refused rather than serialised. Two rows carrying the
- * same content with their keys in a different order are one bucket under
- * PostgreSQL's `jsonb`, which normalises, and two under SQLite, which groups
- * the stored text — so the same data answers a different count per adapter
- * while every answer looks ordinary. A label chosen here cannot fix that: the
- * grouping already happened in the database.
- */
-/**
- * Why a declared field cannot be a group key, or `undefined` if it can.
- *
- * Asked of the CANONICAL classifier the DDL is built from, rather than of a
- * list of type names kept here. A plugin field type declaring `storage: "json"`
- * is mapped to a JSON column by that classifier and would be invisible to such
- * a list — so it would group, and answer differently per adapter.
- *
- * `skip` is a field whose values live in another table (a component, a
- * many-to-many), so this collection has no column to group by. `json` is a
- * structure: two rows holding the same content with their keys written in a
- * different order are ONE bucket under PostgreSQL's `jsonb`, which normalises,
- * and TWO under SQLite, which compares the stored text. The grouping happens in
- * the database, so no label chosen afterwards reconciles them.
- */
-function ungroupableKind(field: FieldDefinition): string | undefined {
-  // Asked of the LOGICAL storage as well as the physical column, because the
-  // two disagree and only one of them decides what the value looks like.
-  // `classifyFieldKind` answers what column the DDL emits: `richText` gets
-  // `longText`, and a `hasMany` text or select gets a text column. The read
-  // and mutation paths nonetheless serialize those values as JSON through
-  // `isJsonFieldType`, so the stored bytes are a document and grouping them
-  // returns raw serialized JSON as labels -- splitting equal content that was
-  // written with its keys in a different order.
-  if (isJsonFieldType(field.type, field)) {
-    return "is stored as serialized JSON, so its buckets would depend on how that text was written rather than on what it means";
-  }
-  const kind = classifyFieldKind(field, "collection");
-  if (kind === "skip") {
-    return "keeps its values in another table, so this collection has no column for it";
-  }
-  if (kind === "json") {
-    return "holds a structure rather than a value, so its buckets would depend on how the database compares stored JSON";
-  }
-  return undefined;
 }
 
 /**
@@ -499,7 +745,7 @@ function assertGroupKeyUsable(
   groupBy: string,
   column: unknown,
   declaredFields: FieldDefinition[]
-): void {
+): FieldDefinition | undefined {
   const snake = toSnakeCase(groupBy);
   const isOwner =
     groupBy === "created_by" ||
@@ -517,6 +763,29 @@ function assertGroupKeyUsable(
       ],
     });
   }
+  // Resolved BEFORE the missing-column refusal below, because a declared field
+  // can legitimately have no column on this table and the reason matters more
+  // than the absence.
+  const spelled = new Set([
+    groupBy,
+    toSnakeCase(groupBy),
+    toCamelCase(groupBy),
+  ]);
+  const declared = declaredFields.find(field => spelled.has(field.name));
+
+  const declaredProblem = groupKeyDeclarationProblem(declared, groupBy);
+  if (declaredProblem !== undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `groupBy.${groupBy}`,
+          code: "FIELD_NOT_GROUPABLE",
+          message: declaredProblem,
+        },
+      ],
+    });
+  }
+
   if (!column) {
     throw NextlyError.validation({
       errors: [
@@ -534,25 +803,6 @@ function assertGroupKeyUsable(
   // stored hash out through a path with nothing on it to clear the value.
   // `assertGroupableField` does not reach this: it judges fields carrying an
   // `access.read` rule, and a password field's guarantee comes from its type.
-  const spelled = new Set([
-    groupBy,
-    toSnakeCase(groupBy),
-    toCamelCase(groupBy),
-  ]);
-  const declared = declaredFields.find(field => spelled.has(field.name));
-  const ungroupable = declared ? ungroupableKind(declared) : undefined;
-  if (ungroupable !== undefined) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: `groupBy.${groupBy}`,
-          code: "FIELD_NOT_GROUPABLE",
-          message: `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`,
-        },
-      ],
-    });
-  }
-
   if (isPasswordFieldName(declaredFields, groupBy)) {
     throw NextlyError.validation({
       errors: [
@@ -565,6 +815,12 @@ function assertGroupKeyUsable(
       ],
     });
   }
+
+  // Handed back rather than looked up again by the caller. The declaration is
+  // what decides how a bucket's value is rendered -- a decimal's scale, a
+  // date's interval -- and a second lookup is a second answer that has to
+  // agree with this one.
+  return declared;
 }
 
 /**
@@ -588,8 +844,57 @@ function assertGroupKeyUsable(
  * A date travels as ISO rather than through the platform's default rendering,
  * so the same row groups to the same label on every runtime.
  */
-function bucketLabel(value: unknown): string | null {
-  if (value == null) return null;
+function decimalLabel(value: unknown, scale: number): string | undefined {
+  // PostgreSQL and MySQL hand a decimal back as text precisely because it can
+  // exceed what a double holds, so the text is never parsed to re-render it.
+  // SQLite builds its numeric columns to read back as a JS number, which is the
+  // one adapter whose decimal arrives already parsed; its own rendering is
+  // taken rather than a fixed-point one.
+  const text =
+    typeof value === "string"
+      ? value.trim()
+      : typeof value === "number" && Number.isFinite(value)
+        ? String(value)
+        : undefined;
+  if (text === undefined) return undefined;
+
+  const match = /^(-?\d+)(?:\.(\d*))?$/.exec(text);
+  if (!match) return undefined;
+  const [, whole, fraction = ""] = match;
+
+  // PADS up to the declared scale and never truncates below what the value
+  // carries. Rounding to the scale would merge buckets the database kept
+  // apart: SQLite's NUMERIC affinity is best-effort and does not enforce the
+  // declared scale, so a column declared with scale 2 can hold 1.001 and 1.002
+  // as two distinct groups -- and labelling both "1.00" hands back separate
+  // counts under one label, which is the merge a bucket label exists to avoid.
+  //
+  // Two values that genuinely differ therefore still label differently on
+  // different adapters, because they ARE different: PostgreSQL rounds 1.001 to
+  // 1.00 on write while SQLite stores it whole. Making the labels agree by
+  // discarding digits would report data that is not there.
+  const padded = fraction.padEnd(Math.max(0, scale), "0");
+  return padded === "" ? whole : `${whole}.${padded}`;
+}
+
+/**
+ * The label the column's DECLARATION decides, where it decides one.
+ *
+ * Only a decimal has one today: the same stored value reaches this as the
+ * number 1 on SQLite and the string "1.00" on the other two, so a rendering
+ * chosen from the value alone would label identical data differently per
+ * adapter.
+ */
+function declaredLabel(
+  value: unknown,
+  descriptor?: ColumnDescriptor
+): string | undefined {
+  if (descriptor?.kind !== "decimal") return undefined;
+  return decimalLabel(value, descriptor.scale ?? DEFAULT_DECIMAL_SCALE);
+}
+
+/** The label a scalar renders to, or `undefined` when the value is structured. */
+function scalarLabel(value: unknown): string | undefined {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "string") return value;
   if (
@@ -599,6 +904,21 @@ function bucketLabel(value: unknown): string | null {
   ) {
     return String(value);
   }
+  return undefined;
+}
+
+function bucketLabel(
+  value: unknown,
+  descriptor?: ColumnDescriptor
+): string | null {
+  if (value == null) return null;
+  // The declaration is asked first: it is the only source that knows the
+  // author's intent for the value, where the renderings below know only its
+  // runtime shape.
+  const declared = declaredLabel(value, descriptor);
+  if (declared !== undefined) return declared;
+  const scalar = scalarLabel(value);
+  if (scalar !== undefined) return scalar;
   // Everything else is structured. `JSON.stringify` answers `undefined` for a
   // value it cannot represent, which becomes the null bucket rather than the
   // string "undefined" sitting among real labels.
@@ -609,10 +929,11 @@ function toBuckets(
   rows: Array<{
     value: unknown;
     total: number | string | null;
-  }>
+  }>,
+  descriptor?: ColumnDescriptor
 ): Array<{ value: string | null; count: number }> {
   return rows.map(row => ({
-    value: bucketLabel(row.value),
+    value: bucketLabel(row.value, descriptor),
     count: Number(row.total ?? 0),
   }));
 }
@@ -1133,6 +1454,8 @@ export class CollectionQueryService extends BaseService {
     where: WhereFilter | undefined;
     user?: UserContext;
     sharedContext: Record<string, unknown>;
+    /** What the core resolved about the request behind this read. */
+    requestFacts: ResolvedRequestFacts;
   }): Promise<WhereFilter | undefined> {
     // Already inside this collection's read hooks: the call came from one of
     // its own handlers, so it uses the filter it was given and runs nothing.
@@ -1156,6 +1479,7 @@ export class CollectionQueryService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: params.sharedContext,
+            req: params.requestFacts,
           });
 
         // Returning an args object replaces the arguments wholesale, so a handler
@@ -1183,6 +1507,7 @@ export class CollectionQueryService extends BaseService {
             data: afterBeforeOperation ?? {},
             user: params.user,
             context: params.sharedContext,
+            req: params.requestFacts,
           })
         );
 
@@ -1210,6 +1535,8 @@ export class CollectionQueryService extends BaseService {
     entryId: string;
     user?: UserContext;
     sharedContext: Record<string, unknown>;
+    /** What the core resolved about the request behind this read. */
+    requestFacts: ResolvedRequestFacts;
   }): Promise<string> {
     if (CollectionQueryService.readHooksActiveFor(params.collectionName)) {
       return params.entryId;
@@ -1226,6 +1553,7 @@ export class CollectionQueryService extends BaseService {
               ? { id: params.user.id, email: params.user.email }
               : undefined,
             context: params.sharedContext,
+            req: params.requestFacts,
           });
 
         // Use the modified id when beforeOperation returned one.
@@ -1239,6 +1567,7 @@ export class CollectionQueryService extends BaseService {
             data: { entryId: resolvedId },
             user: params.user,
             context: params.sharedContext,
+            req: params.requestFacts,
           })
         );
 
@@ -1774,6 +2103,13 @@ export class CollectionQueryService extends BaseService {
     fields: FieldDefinition[];
     storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
     sharedContext: Record<string, unknown>;
+    /**
+     * What the hooks may learn about the request that made this read — a
+     * visitor or a server. Resolved once by the caller and handed to every hook
+     * phase here, so the `afterRead` phases see the same facts the `beforeRead`
+     * phases did.
+     */
+    requestFacts: ResolvedRequestFacts;
     user?: UserContext;
     fieldAccessUser?: UserContext;
     overrideAccess?: boolean;
@@ -1856,6 +2192,7 @@ export class CollectionQueryService extends BaseService {
         data: toPayload(rows),
         user: params.user,
         context: params.sharedContext,
+        req: params.requestFacts,
       })
     );
     const afterCodeHooks = toRows(transformed, rows);
@@ -1876,16 +2213,17 @@ export class CollectionQueryService extends BaseService {
     const storedAfterResult = await this.hookService.storedHookExecutor.execute(
       "afterRead",
       params.storedHooks,
-      this.hookService.buildPrebuiltHookContext(
-        collectionName,
-        "read",
-        toPayload(afterCodeHooks),
+      this.hookService.buildPrebuiltHookContext({
+        collection: collectionName,
+        operation: "read",
+        data: toPayload(afterCodeHooks),
         // The signature wants a thenable; `async` on a body with nothing to
         // await only asked for a suppression.
-        () => Promise.resolve(false),
-        params.user,
-        params.sharedContext
-      )
+        queryDatabase: () => Promise.resolve(false),
+        req: params.requestFacts,
+        user: params.user,
+        sharedContext: params.sharedContext,
+      })
     );
     let finalData = toRows(storedAfterResult.data, afterCodeHooks);
 
@@ -2345,6 +2683,8 @@ export class CollectionQueryService extends BaseService {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     try {
       // Determine the effective user for access control
@@ -2384,6 +2724,9 @@ export class CollectionQueryService extends BaseService {
       // Shared context between all hooks in this request
       // Seed with caller's context if provided (e.g., from Direct API)
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole read, so every hook phase is told the same
+      // thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // BEFORE the hooks, deliberately. `resolveReadWhere` hands them the
       // caller's own object, and a hook that narrows it IN PLACE -- adding a
@@ -2401,6 +2744,7 @@ export class CollectionQueryService extends BaseService {
         where: params.where,
         user: params.user,
         sharedContext,
+        requestFacts,
       });
 
       // D63 seam: let plugins transform the structured list-query `where`.
@@ -2833,6 +3177,10 @@ export class CollectionQueryService extends BaseService {
         fields,
         storedHooks,
         sharedContext,
+        // The same facts the beforeRead phases were given, so a hook cannot
+        // learn one thing about the request on the way in and another on
+        // the way out.
+        requestFacts,
         user: params.user,
         fieldAccessUser: params.fieldAccessUser,
         overrideAccess: params.overrideAccess,
@@ -2926,6 +3274,7 @@ export class CollectionQueryService extends BaseService {
       where: params.where,
       user: params.user,
       sharedContext: { ...params.context },
+      requestFacts: resolveRequestFacts(params.request),
     });
   }
 
@@ -2944,12 +3293,127 @@ export class CollectionQueryService extends BaseService {
    * run. Collection authorization still comes first: whether the collection is
    * readable at all outranks what was asked of it.
    */
+  /**
+   * The dialect a grouped read builds its expressions for.
+   *
+   * Narrowed to the supported union here rather than read loosely at each use:
+   * the bucketing expressions are chosen by exhaustive comparison, so a value
+   * outside the union has to be refused rather than silently falling through
+   * to whichever branch happens to be last.
+   */
+  private groupDialect(): SupportedDialect {
+    const dialect = this.adapter?.dialect;
+    return dialect === "mysql" || dialect === "sqlite" ? dialect : "postgresql";
+  }
+
+  /**
+   * The column shape a group key resolves to, from the module that already owns
+   * the field-to-column mapping for every dialect.
+   */
+  private groupKeyDescriptor(
+    field: FieldDefinition | undefined,
+    columnKey: string | undefined
+  ): ColumnDescriptor | undefined {
+    const dialect = this.groupDialect();
+    if (field !== undefined) {
+      return getColumnDescriptor(field, dialect, "collection") ?? undefined;
+    }
+    if (columnKey === undefined) return undefined;
+
+    // `created_at` and `updated_at` are INJECTED rather than declared, so they
+    // never appear in the author's field list and the lookup above cannot see
+    // them -- while they are the two columns a timeline is most often drawn
+    // over. Resolved through the canonical system-column descriptors rather
+    // than by naming them here, so a system column added there is bucketable
+    // without a second edit.
+    //
+    // The option set is the widest one deliberately. It decides which columns
+    // are INJECTED, and whether this collection has the column is already
+    // settled: the key reached here only by resolving against the runtime
+    // schema's own properties. What is wanted from this call is the column's
+    // SHAPE, which does not vary with the option set.
+    const system = getSystemColumnDescriptors(dialect, {
+      hasTitleField: false,
+      hasSlugField: false,
+      hasStatus: true,
+    }).find(column => column.name === toSnakeCase(columnKey));
+    if (system === undefined) return undefined;
+    return {
+      name: system.name,
+      dialectType: system.dialectType,
+      ...(system.length === undefined ? {} : { length: system.length }),
+      nullable: system.nullable,
+      kind: system.kind,
+    };
+  }
+
+  /**
+   * The window as points, taking each interval's count from what was grouped.
+   *
+   * Built from the WINDOW rather than from the rows, so the answer carries one
+   * point per interval whether or not the database grouped that interval --
+   * which is what makes a quiet stretch read as zero rather than disappear.
+   */
+  private timeseriesAnswer(
+    window: Date[],
+    interval: TimeseriesInterval,
+    counted: Map<string, number>
+  ): CollectionServiceResult<TimeseriesPoints> {
+    return {
+      success: true,
+      statusCode: 200,
+      message: "Timeseries retrieved successfully",
+      data: {
+        interval,
+        points: window.map(start => ({
+          start: start.toISOString(),
+          count: counted.get(bucketStartToDbText(start)) ?? 0,
+        })),
+      },
+    };
+  }
+
+  /**
+   * The answer for a window no stored row can fall in: every interval, zero.
+   *
+   * Shaped exactly like a queried answer, because a caller cannot tell the two
+   * apart and should not have to -- zero means no rows either way.
+   */
+  private emptyTimeseries(
+    window: Date[],
+    interval: TimeseriesInterval
+  ): CollectionServiceResult<TimeseriesPoints> {
+    // Through the same assembly a queried answer uses, with nothing counted, so
+    // the two cannot drift into different shapes.
+    return this.timeseriesAnswer(window, interval, new Map());
+  }
+
+  /**
+   * The group key's column shape, with every refusal that depends on it made.
+   *
+   * Runs BEFORE the read hooks, for the reason the key itself is validated
+   * before them: `beforeOperation` and `beforeRead` are ordinary user code that
+   * records audit entries and spends rate-limit budget, so a request that was
+   * never going to be answered must not charge the caller for work or leave a
+   * trail of reads that did not happen.
+   */
+  private settledGroupDescriptor(
+    params: FilteredReadParams,
+    groupKey: { key?: string; field?: FieldDefinition }
+  ): ColumnDescriptor | undefined {
+    const descriptor = this.groupKeyDescriptor(groupKey.field, groupKey.key);
+    if (params.requireTimestampGroupKey === true) {
+      assertDateColumn(descriptor, params.groupBy ?? "");
+    }
+    return descriptor;
+  }
+
   private async validatedGroupKey(
     params: FilteredReadParams,
     schema: DynamicSchema
-  ): Promise<string | undefined> {
+  ): Promise<{ key?: string; field?: FieldDefinition }> {
     const groupBy = params.groupBy;
-    if (groupBy === undefined) return undefined;
+    if (groupBy === undefined) return {};
     // OWN properties only: `schema` is an ordinary object, so a key like
     // `toString` resolves to a prototype method rather than `undefined`, which
     // read as a column and failed inside the query builder as a 500 where the
@@ -2957,14 +3421,14 @@ export class CollectionQueryService extends BaseService {
     const key = [groupBy, toSnakeCase(groupBy)].find(name =>
       Object.prototype.hasOwnProperty.call(schema, name)
     );
-    assertGroupKeyUsable(
+    const field = assertGroupKeyUsable(
       groupBy,
       key === undefined ? undefined : schema[key],
-      collectionFieldsFor(
+      addressedFieldsFor(
         await this.collectionService.getCollection(params.collectionName)
       )
     );
-    return key;
+    return { key, field };
   }
 
   /**
@@ -3038,9 +3502,18 @@ export class CollectionQueryService extends BaseService {
     // module exists to remove.
     const groupKey =
       params.groupBy === undefined
-        ? undefined
+        ? {}
         : await this.validatedGroupKey(params, schema);
-    const groupColumn = groupKey === undefined ? undefined : schema[groupKey];
+    const groupColumn =
+      groupKey.key === undefined ? undefined : schema[groupKey.key];
+    // The column's SHAPE, from the module that already owns the field-to-column
+    // mapping for every dialect. Resolved here beside the column so a bucket is
+    // rendered from the author's declaration -- a decimal's scale, which the
+    // adapters otherwise disagree about -- rather than from whatever the driver
+    // happened to hand back.
+    assertTimelinePreconditions(params);
+
+    const groupDescriptor = this.settledGroupDescriptor(params, groupKey);
 
     const countWhere = await this.hookSettledWhere(params);
 
@@ -3084,7 +3557,13 @@ export class CollectionQueryService extends BaseService {
       resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
     });
 
-    return { allowed: true as const, schema, whereConditions, groupColumn };
+    return {
+      allowed: true as const,
+      schema,
+      whereConditions,
+      groupColumn,
+      groupDescriptor,
+    };
   }
 
   async countEntries(
@@ -3220,7 +3699,7 @@ export class CollectionQueryService extends BaseService {
         statusCode: 200,
         message: "Buckets retrieved successfully",
         data: {
-          buckets: toBuckets(rows.slice(0, cap)),
+          buckets: toBuckets(rows.slice(0, cap), plan.groupDescriptor),
           truncated: rows.length > cap,
         },
       };
@@ -3235,6 +3714,150 @@ export class CollectionQueryService extends BaseService {
         success: false,
         // Mirrors countEntries: a refused access constraint is a 403 and a
         // refused group key a 400, not a server fault.
+        statusCode: NextlyError.is(error) ? error.statusCode : 500,
+        message,
+        data: null,
+        ...errorEnvelopeFields(error),
+      };
+    }
+  }
+
+  /**
+   * How many rows fall in each interval of a recent window.
+   *
+   * A timeseries is a grouped read whose key is a bucketing EXPRESSION over a
+   * date column rather than the column itself, so it reaches its rows through
+   * the same `resolveReadPlan` a count and a bucket set do. Assembling its own
+   * filters would let it describe a wider row set than a count of the same
+   * request -- the shape of the aggregate permission failures reported against
+   * other systems, where a rule narrowed the rows and the aggregate counted
+   * past it.
+   *
+   * The window bounds the READ, not the answer. Its oldest interval start
+   * becomes a lower bound on the date column itself, which an index can serve;
+   * comparing the bucketing expression instead would be correct and would scan
+   * the table, because no index covers a computed value.
+   *
+   * Intervals with no rows are returned with a count of zero rather than
+   * omitted. A `GROUP BY` cannot report a bucket it never grouped, so a quiet
+   * day is simply absent -- and a line drawn through the gap reads as steady
+   * activity rather than none, which is wrong in the direction a reader acts on.
+   */
+  async timeseriesEntries(
+    params: FilteredReadParams & {
+      dateField: string;
+      interval: TimeseriesInterval;
+      intervals?: number;
+      /**
+       * The instant the window ends at, defaulting to now.
+       *
+       * Taken from the caller for the reason `releaseNow` is: a window and the
+       * rows it describes have to be settled against ONE clock. Two reads of
+       * the system clock either side of a fixture write can straddle midnight,
+       * which moves every point one interval and is a real intermittent
+       * failure rather than a hypothetical one.
+       *
+       * It is also the honest way to ask for a window that is not "now" -- a
+       * report as of a period end, rather than as of whenever it happened to
+       * run.
+       */
+      now?: Date;
+    }
+  ): Promise<CollectionServiceResult<TimeseriesPoints>> {
+    try {
+      const count = boundedIntervalCount(params.intervals);
+
+      // ONE clock for the whole read. `releaseScope` takes its own `new Date()`
+      // while the plan resolves, and the window used to take a second one
+      // afterwards -- so a scheduled release or a bucket boundary passing
+      // between them left the labels describing a later window than the row
+      // filter admitted.
+      //
+      // The two are read from the same instant rather than from the same
+      // VALUE. Release visibility asks what has actually been published by now,
+      // which is not something a caller may choose; the anchor is the end of
+      // the window it asked to report on, which is. They coincide -- closing
+      // the straddle -- for every caller that states no anchor of its own.
+      const requestNow = new Date();
+      const anchor = params.now ?? requestNow;
+
+      // The date key travels as `groupBy`, so every refusal a grouped read
+      // already makes applies unchanged: a field carrying a read rule, any
+      // spelling of it, the owner column, a key naming no column.
+      //
+      // The interval is judged INSIDE the plan, after collection
+      // authorization: refused here, an untrusted caller naming a bad interval
+      // would get a detailed validation response for a collection the same
+      // request with a good interval answers with an access refusal -- which
+      // tells them the collection exists.
+      const plan = await this.resolveReadPlan<TimeseriesPoints>(
+        timelineReadPlanRequest(params, anchor, requestNow)
+      );
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+      const column = plan.groupColumn;
+
+      const interval = assertBucketableInterval(params.interval);
+      const window = intervalWindow(anchor, interval, count);
+      const dialect = this.groupDialect();
+      const bucket = timeseriesBucketExpression(column, interval, dialect);
+
+      // Built here, where the column keeps the type the schema gave it, so the
+      // comparison needs no cast the compiler cannot check.
+      const scope = windowScope(window, interval, dialect);
+      // `undefined` means the window does not overlap what the column can
+      // store, so no row can fall in it and there is nothing to ask.
+      if (scope === undefined) return this.emptyTimeseries(window, interval);
+      const bounds = [
+        ...(scope.from === undefined ? [] : [gte(column, scope.from)]),
+        ...(scope.to === undefined ? [] : [lt(column, scope.to)]),
+      ];
+
+      const rows = await this.db
+        .select({ bucket, total: sql<number>`count(*)` })
+        .from(schema)
+        // BOTH ends of the window bound the SCAN, as comparisons on the COLUMN
+        // rather than on the bucketing expression, so an index over the date can
+        // serve them; no index covers a computed value.
+        //
+        // The upper bound is not symmetry. A date field holds future values --
+        // a scheduled publication, an event date -- and bounded only below, the
+        // database groups every one of them into buckets the answer then throws
+        // away, so the documented interval cap would bound the answer while the
+        // read walked the rest of the table.
+        //
+        // Neither bound can change the answer: the points are built from the
+        // window, and a bucket outside it is never looked up.
+        // A bound the dialect cannot represent is OMITTED rather than
+        // rendered. On MySQL an out-of-range operand becomes NULL, and
+        // `column >= NULL` matches nothing -- so a predicate meant to bound the
+        // scan would empty the answer instead. Omitting it is sound: the column
+        // cannot store an instant outside that range, so the bound excludes no
+        // row that could exist.
+        .where(and(...whereConditions, ...bounds))
+        // The SAME expression in the SELECT and the GROUP BY. MySQL's
+        // `only_full_group_by` refuses a `GROUP BY` that differs from the
+        // selected expression, so these cannot be spelled apart.
+        //
+        // No ORDER BY: the answer is assembled from the window in chronological
+        // order and each interval's count is looked up by key, so the order
+        // rows arrive in cannot reach the result.
+        .groupBy(bucket);
+
+      const counted = countedByBucket(rows);
+
+      return this.timeseriesAnswer(window, interval, counted);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Failed to build timeseries";
+      this.logger.error("Error building timeseries", {
+        collectionName: params.collectionName,
+        error: message,
+      });
+      return {
+        success: false,
+        // Mirrors groupEntries: a refused access constraint is a 403 and a
+        // refused date key a 400, not a server fault.
         statusCode: NextlyError.is(error) ? error.statusCode : 500,
         message,
         data: null,
@@ -3365,6 +3988,8 @@ export class CollectionQueryService extends BaseService {
     translationStatus?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
     /**
      * Set by a route whose middleware already authenticated AND authorized the
      * caller (mirrors listEntries). It skips only the redundant RBAC re-check,
@@ -3414,6 +4039,9 @@ export class CollectionQueryService extends BaseService {
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
+      // Resolved once for the whole read, so every hook phase is told the same
+      // thing about the caller and none of them re-reads a header.
+      const requestFacts = resolveRequestFacts(params.request);
 
       // `beforeOperation` runs first and may rewrite the id, then `beforeRead`
       // sees the id it settled on.
@@ -3422,6 +4050,7 @@ export class CollectionQueryService extends BaseService {
         entryId: params.entryId,
         user: params.user,
         sharedContext,
+        requestFacts,
       });
 
       // Fold the stored read rule's predicate into the SQL WHERE clause. A
@@ -3943,6 +4572,10 @@ export class CollectionQueryService extends BaseService {
         fields,
         storedHooks,
         sharedContext,
+        // The same facts the beforeRead phases were given, so a hook cannot
+        // learn one thing about the request on the way in and another on
+        // the way out.
+        requestFacts,
         user: params.user,
         fieldAccessUser: params.fieldAccessUser,
         overrideAccess: params.overrideAccess,

@@ -869,3 +869,259 @@ describe("validateWidgetQuery, group key", () => {
     expect(q.groupBy).toBe("status");
   });
 });
+
+describe("validateWidgetQuery, timeline keys", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:timed",
+      label: "Timed",
+      kind: "collection",
+      supports: ["count", "list", "timeseries"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+  });
+
+  it("carries both timeline keys through onto the returned query", () => {
+    // Asserts the WHOLE object: a version that validated the keys and dropped
+    // them on the way out would satisfy any assertion that only read them back
+    // off the input.
+    expect(
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+      })
+    ).toEqual({
+      source: "collection:timed",
+      op: "timeseries",
+      dateField: "createdAt",
+      interval: "day",
+      limit: 5,
+    });
+  });
+
+  it("refuses a date field carried by an op that would ignore it", () => {
+    // Accepted and ignored, a `count` reads back as a timeline that was never
+    // computed.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "count",
+        dateField: "createdAt",
+      })
+    ).toThrow(/dateField is not valid for op "count"/);
+  });
+
+  it("refuses an interval carried by an op that would ignore it", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "count",
+        interval: "day",
+      })
+    ).toThrow(/interval is not valid for op "count"/);
+  });
+
+  it("refuses a timeseries op carrying no date field", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        interval: "day",
+      })
+    ).toThrow(/op "timeseries" requires a dateField/);
+  });
+
+  it("refuses a timeseries op carrying no interval", () => {
+    // Not defaulted: a width nobody chose answers a question nobody asked.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+      })
+    ).toThrow(/op "timeseries" requires an interval/);
+  });
+
+  it("refuses a date field the source never declared", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "secretAt",
+        interval: "day",
+      })
+    ).toThrow(/dateField references undeclared field "secretAt"/);
+  });
+
+  it("refuses a date field that is not a string", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: ["createdAt"],
+        interval: "day",
+      })
+    ).toThrow(/dateField must be a string/);
+  });
+
+  it("refuses an interval it has no expression for", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "fortnight",
+      })
+    ).toThrow(/interval must be one of/);
+  });
+
+  it("refuses an inherited name offered as an interval", () => {
+    // The vocabulary is checked by membership rather than by indexing an
+    // object, so a prototype name is not an interval.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "toString",
+      })
+    ).toThrow(/interval must be one of/);
+  });
+
+  it("refuses select and sort, which describe rows rather than points", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+        select: ["title"],
+      })
+    ).toThrow(/select is not valid for op "timeseries"/);
+
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:timed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+        sort: "createdAt",
+      })
+    ).toThrow(/sort is not valid for op "timeseries"/);
+  });
+});
+
+describe("validateWidgetQuery, a timeline key must name a date", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:mixed",
+      label: "Mixed",
+      kind: "collection",
+      supports: ["count", "timeseries"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "views", type: "number" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+  });
+
+  it("refuses a date field the source declares as something else", () => {
+    // The source already states each field's type, so this is refusable here.
+    // Accepted, it would reach the read, be refused there for storing no date,
+    // and arrive as a failed widget slot -- a runtime answer to a question the
+    // declaration already answers.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:mixed",
+        op: "timeseries",
+        dateField: "title",
+        interval: "day",
+      })
+    ).toThrow(/is a string field; a timeseries needs a date/);
+  });
+
+  it("refuses a numeric field just as firmly", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:mixed",
+        op: "timeseries",
+        dateField: "views",
+        interval: "day",
+      })
+    ).toThrow(/is a number field; a timeseries needs a date/);
+  });
+
+  it("accepts the field the source declares as a date", () => {
+    // The control. Without it a guard that refused every key would satisfy both
+    // assertions above while making the op unusable.
+    expect(
+      validateWidgetQuery({
+        source: "collection:mixed",
+        op: "timeseries",
+        dateField: "createdAt",
+        interval: "day",
+      })
+    ).toEqual({
+      source: "collection:mixed",
+      op: "timeseries",
+      dateField: "createdAt",
+      interval: "day",
+      limit: 5,
+    });
+  });
+});
+
+describe("validateWidgetQuery, a localized date key", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:i18n",
+      label: "Localized",
+      kind: "collection",
+      supports: ["count", "timeseries"],
+      fields: [
+        { name: "publishedAt", type: "date" },
+        // Its values live in the `_locales` companion, so the read cannot
+        // bucket them. The coarse type says "date" either way.
+        { name: "translatedAt", type: "date", localized: true },
+      ],
+    });
+  });
+
+  it("refuses a localized date, which the coarse type cannot express", () => {
+    // Approved here, it would register a widget that the read refuses on every
+    // load, with nothing pointing at the declaration that caused it.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:i18n",
+        op: "timeseries",
+        dateField: "translatedAt",
+        interval: "day",
+      })
+    ).toThrow(/is localized, so its values are stored per locale/);
+  });
+
+  it("still accepts a date that is not localized", () => {
+    // The control: a guard that refused every date field would satisfy the
+    // assertion above while making the op unusable.
+    expect(
+      validateWidgetQuery({
+        source: "collection:i18n",
+        op: "timeseries",
+        dateField: "publishedAt",
+        interval: "day",
+      })
+    ).toEqual({
+      source: "collection:i18n",
+      op: "timeseries",
+      dateField: "publishedAt",
+      interval: "day",
+      limit: 5,
+    });
+  });
+});

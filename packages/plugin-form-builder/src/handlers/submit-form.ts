@@ -8,7 +8,7 @@
  * @since 0.1.0
  */
 
-import { formAvailability, NO_SUCH_FORM } from "nextly";
+import { formAvailability, NextlyError, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -16,14 +16,9 @@ import type {
   FormDocument,
   SubmissionDocument,
   ResolvedFormBuilderConfig,
-  AnyFormField,
 } from "../types";
 import { normalizeFormSettings } from "../utils/form-settings";
-import {
-  generateZodSchema,
-  transformFormData,
-  getValidationErrors,
-} from "../utils/generate-schema";
+import type { ValidationIssue } from "../utils/generate-schema";
 import {
   applyRedirectPattern,
   documentReachability,
@@ -33,6 +28,7 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
+import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
 import { checkSpam } from "./spam-detection";
 
 // ============================================================
@@ -56,7 +52,64 @@ export interface SubmitFormOptions {
     /** Submitter's user agent string */
     userAgent?: string;
   };
+
+  /**
+   * The HTTP request this submission arrived on.
+   *
+   * A route calling this helper is its own route, outside everything Nextly
+   * pins a request around, so nothing else can supply it. Without it the write
+   * reaches the submissions hooks looking like a seed or a job, and every rule
+   * scoped to a visitor stands down: the rate limit above all.
+   *
+   * The request rather than an address, because the core resolves the client
+   * from it under this deployment's proxy-trust settings. `metadata.ipAddress`
+   * is a string the caller chose, which is the right shape for the audit column
+   * it fills and the wrong shape for deciding who to throttle.
+   */
+  request?: Request;
+
+  /**
+   * Whose permissions the reads and the write are judged against.
+   *
+   * Defaults to `system`, so every existing caller behaves as before.
+   */
+  access?: SubmissionAccess;
 }
+
+/**
+ * How this submission reaches the collections it touches.
+ *
+ * `system` is the default and is right for host code: the caller already
+ * decided, and there is no visitor whose permissions could be consulted.
+ *
+ * `public` is for a route serving an anonymous visitor. It keeps the
+ * collection's configured `access` rules in force, so a host that closed
+ * submissions or restricted reading forms is obeyed rather than bypassed. The
+ * former core endpoint ran this way, and elevating a public route to `system`
+ * silently overrode that configuration.
+ */
+export type SubmissionAccess = { as: "system" } | { as: "public" };
+
+/**
+ * Why a submission ended the way it did.
+ *
+ * `success` alone cannot carry this. An HTTP route has to answer 404 for a slug
+ * nobody used, 409 for a form its author closed and 400 for data that did not
+ * validate, and a boolean plus a human sentence cannot tell those apart without
+ * matching on the sentence.
+ *
+ * `accepted` covers every ending a visitor is told succeeded, INCLUDING the two
+ * that are deliberately indistinguishable from success: a submission the
+ * honeypot flagged, and one the rate limiter refused. A caller must not try to
+ * separate them, which is why they do not appear here as their own names.
+ */
+export type SubmitFormOutcome =
+  | "accepted"
+  | "no-such-form"
+  | "closed"
+  | "invalid"
+  | "duplicate"
+  | "failed";
 
 /**
  * Result of form submission.
@@ -64,6 +117,14 @@ export interface SubmitFormOptions {
 export interface SubmitFormResult {
   /** Whether the submission was successful */
   success: boolean;
+
+  /**
+   * Which ending this was, for a caller that has to map it to a status code.
+   *
+   * Required rather than optional, so a return path added later cannot omit it
+   * and leave the HTTP route guessing from the message text.
+   */
+  outcome: SubmitFormOutcome;
 
   /** The created submission document (on success) */
   submission?: SubmissionDocument;
@@ -74,8 +135,39 @@ export interface SubmitFormResult {
   /** Field-level validation errors */
   validationErrors?: Record<string, string>;
 
+  /**
+   * The same failures with their machine codes, for a caller building an HTTP
+   * error. `validationErrors` above cannot carry one, so a route reading only
+   * that has to invent a code and reports every blank answer as `INVALID`.
+   */
+  validationIssues?: ValidationIssue[];
+
   /** Redirect URL (if form configured for redirect on success) */
   redirect?: string;
+
+  /**
+   * The error that ended a `failed` submission, kept rather than flattened.
+   *
+   * A collection can refuse a write for reasons its host chose: a
+   * `beforeValidate` hook throwing `NextlyError.validation`, a uniqueness
+   * conflict. Those carry their own status and field detail, and reporting them
+   * all as one internal error tells a visitor the server broke when in fact
+   * their submission was answered deliberately.
+   */
+  cause?: unknown;
+
+  /**
+   * The toast the form's author wrote for a successful submission.
+   *
+   * Carried on the result rather than read from the form again by whoever
+   * presents it: the HTTP route would otherwise have to fetch the form a second
+   * time purely to learn a string this function already had in hand, and a
+   * second read is a second chance to disagree about which form was submitted.
+   *
+   * Present on every `accepted` ending, including the ones a bot caused, so the
+   * message cannot be used to tell an accepted submission from a flagged one.
+   */
+  successMessage?: string;
 }
 
 /**
@@ -138,20 +230,26 @@ export async function submitForm(
   options: SubmitFormOptions,
   context: SubmitFormContext
 ): Promise<SubmitFormResult> {
-  const { formSlug, data, metadata } = options;
+  const { formSlug, data, metadata, request } = options;
+  const access: SubmissionAccess = options.access ?? { as: "system" };
   const { pluginContext, pluginConfig } = context;
   const { collections } = pluginContext.services;
   const { logger } = pluginContext;
 
   try {
     // 1. Fetch form configuration
-    const form = await fetchFormBySlug(formSlug, pluginConfig, pluginContext);
+    const form = await fetchFormBySlug(
+      formSlug,
+      pluginConfig,
+      pluginContext,
+      access
+    );
 
     if (!form) {
       logger.warn?.("Form submission attempted for non-existent form", {
         formSlug,
       });
-      return { success: false, error: NO_SUCH_FORM };
+      return { success: false, outcome: "no-such-form", error: NO_SUCH_FORM };
     }
 
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
@@ -171,6 +269,7 @@ export async function submitForm(
       // four came to give four different answers in the first place.
       return {
         success: false,
+        outcome: availability.kind === "closed" ? "closed" : "no-such-form",
         error:
           availability.kind === "closed" ? availability.message : NO_SUCH_FORM,
       };
@@ -206,6 +305,10 @@ export async function submitForm(
             status: { not_equals: "spam" },
           },
         },
+        // Deliberately elevated, unlike the write below. This counts rows the
+        // visitor is not entitled to see in order to refuse their second
+        // submission; judged as the public it would count zero on any install
+        // that hides submissions and the restriction would never apply.
         { as: "system" }
       );
       if (existing > 0) {
@@ -215,6 +318,7 @@ export async function submitForm(
         });
         return {
           success: false,
+          outcome: "duplicate",
           error: "You have already submitted this form.",
         };
       }
@@ -231,73 +335,55 @@ export async function submitForm(
       Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
     );
 
+    // The honeypot only, and only to decide whether to validate. It is a pure
+    // read of the payload, so running it here and again at the write seam
+    // costs nothing and cannot disagree. The RATE LIMIT is not asked here: it
+    // counts, and a check with a side effect run twice counts one submission
+    // twice. The seam owns that one, and owns the verdict written to the row.
     const spamResult = await checkSpam({
       data: undeclaredData,
-      ipAddress: metadata?.ipAddress,
       formSlug,
       config: {
         // Per-form overrides win where set; blank inherits the plugin config.
         honeypot:
           settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
-        rateLimit: pluginConfig.spamProtection.rateLimit,
-        recaptcha: {
-          ...pluginConfig.spamProtection.recaptcha,
-          enabled:
-            settings.captchaEnabled ??
-            pluginConfig.spamProtection.recaptcha?.enabled ??
-            false,
-        },
       },
     });
-
-    // Rate-limit hits are pure volume — storing them would turn the limiter
-    // into a database DoS, so they are rejected without a trace (still with
-    // fake success so the client learns nothing).
-    if (spamResult.isSpam && spamResult.reason === "rate_limit") {
-      logger.info?.("Spam submission rejected (rate limit)", {
-        formSlug,
-        ipAddress: metadata?.ipAddress,
-      });
-      return { success: true };
-    }
 
     const isContentSpam = spamResult.isSpam;
 
     // 4. Transform + validate. Content spam skips validation entirely — it
     // is stored for review exactly as the bot shaped it (declared fields
     // only, sanitized), and requiring validity would drop the evidence.
-    const transformedData = transformFormData(data, form.fields);
-    let storedData: Record<string, unknown>;
-
     if (isContentSpam) {
       logger.info?.("Spam submission detected — storing flagged", {
         formSlug,
         reason: spamResult.reason,
         ipAddress: metadata?.ipAddress,
       });
-      sanitizeSubmissionData(transformedData, form.fields);
-      storedData = transformedData;
-    } else {
-      const schema = generateZodSchema(form.fields);
-      const validationResult = schema.safeParse(transformedData);
-
-      if (!validationResult.success) {
-        const validationErrors = getValidationErrors(validationResult);
-        logger.debug?.("Form validation failed", {
-          formSlug,
-          errors: validationErrors,
-        });
-        return {
-          success: false,
-          error: "Validation failed",
-          validationErrors,
-        };
-      }
-
-      // Sanitize validated submission data (strip HTML from free-text fields)
-      sanitizeSubmissionData(validationResult.data, form.fields);
-      storedData = validationResult.data;
     }
+
+    const prepared = prepareSubmission({
+      data,
+      fields: form.fields,
+      validate: !isContentSpam,
+    });
+
+    if (prepared.validationErrors) {
+      logger.debug?.("Form validation failed", {
+        formSlug,
+        errors: prepared.validationErrors,
+      });
+      return {
+        success: false,
+        outcome: "invalid",
+        error: "Validation failed",
+        validationErrors: prepared.validationErrors,
+        validationIssues: prepared.validationIssues,
+      };
+    }
+
+    const storedData = prepared.data;
 
     // 5. Create submission record. Content spam (honeypot/recaptcha) is
     // stored FLAGGED, never silently dropped: a false positive stays
@@ -312,13 +398,66 @@ export async function submitForm(
       submittedAt: new Date(),
     };
 
-    const submission = await collections.createEntry(
-      pluginConfig.formSubmissionOverrides.slug,
-      submissionData,
-      // Public form submission — create as system. No ambient user; an
-      // empty context already resolves to system, but be explicit.
-      { as: "system" }
-    );
+    // Marked as the plugin's own write for the length of the call, so the
+    // write-seam hook knows a flagged row is evidence this handler chose to
+    // keep rather than a caller asking for validation to be skipped.
+    // Marked as this plugin's own write, so the write seam knows a flagged row
+    // is evidence this handler chose to keep rather than a caller asking for
+    // validation to be skipped. The form goes with it so the seam does not read
+    // it a second time.
+    let submission: Awaited<ReturnType<typeof collections.createEntry>>;
+    try {
+      submission = await collections.createEntry(
+        pluginConfig.formSubmissionOverrides.slug,
+        asPluginSubmission(submissionData, {
+          keepAsEvidence: isContentSpam,
+          form: { id: form.id, fields: form.fields },
+        }),
+        // Public form submission — create as system. No ambient user; an
+        // empty context already resolves to system, but be explicit.
+        //
+        // The request travels with it so the seam judges this submission on the
+        // same facts as one arriving through a Nextly route. Omitted by a caller
+        // that has none, and then the seam correctly reads the write as
+        // server-side work.
+        //
+        // `access` rather than a fixed `system`, so a route serving an anonymous
+        // visitor is still judged against the collection's own create rule. A
+        // host that closed public submissions configured that on the
+        // collection, and a write elevated past it reports a 201 for a
+        // submission they had refused.
+        { ...access, ...(request ? { request } : {}) }
+      );
+    } catch (error) {
+      // The seam refuses a submission over the limit, and refuses it the same
+      // way at every door. This answers its own caller with a success anyway: a
+      // browser is on the other end of it, and a bot told it was limited learns
+      // the rate to sit under.
+      //
+      // `POST /api/forms/:slug/submit` reaches this. The route is contributed
+      // by this plugin and calls this function, so the refusal a visitor sees
+      // is decided here rather than being reconstructed as a 429 by an endpoint
+      // that never consulted the seam.
+      //
+      // Nothing is stored. A limiter that wrote a row per refusal would hand an
+      // attacker a way to fill the database with the very volume it exists to
+      // refuse.
+      if (NextlyError.isRateLimited(error)) {
+        logger.info?.("Form submission refused (rate limit)", { formSlug });
+        return {
+          success: true,
+          outcome: "accepted",
+          successMessage: settings.successMessage,
+          // The same destination an accepted submission gets. Returning early
+          // without it left a throttled visitor on the form instead of the
+          // page its author sends people to, and made the one response this
+          // whole branch exists to disguise the only accepted one carrying no
+          // redirect.
+          redirect: await resolveRedirectUrl(form, pluginConfig, pluginContext),
+        };
+      }
+      throw error;
+    }
 
     logger.info?.("Form submission created successfully", {
       formSlug,
@@ -352,11 +491,18 @@ export async function submitForm(
     );
 
     if (isContentSpam) {
-      return { success: true, redirect };
+      return {
+        success: true,
+        outcome: "accepted",
+        successMessage: settings.successMessage,
+        redirect,
+      };
     }
 
     return {
       success: true,
+      outcome: "accepted",
+      successMessage: settings.successMessage,
       // The created ROW, not the envelope around it. Through the shared
       // conversion, which is where the unchecked step lives and says so; the
       // integration test reads `submission.id` off the result because nothing
@@ -372,7 +518,9 @@ export async function submitForm(
 
     return {
       success: false,
+      outcome: "failed",
       error: "An error occurred processing your submission. Please try again.",
+      cause: error,
     };
   }
 }
@@ -392,25 +540,28 @@ export async function submitForm(
 export async function fetchFormBySlug(
   slug: string,
   pluginConfig: ResolvedFormBuilderConfig,
-  pluginContext: PluginContext
+  pluginContext: PluginContext,
+  access: SubmissionAccess = { as: "system" }
 ): Promise<FormDocument | null> {
-  try {
-    const { collections } = pluginContext.services;
+  const { collections } = pluginContext.services;
 
-    // D56: resolve the form by slug via a service-level `where` query
-    // instead of fetching every form and filtering client-side. Forms are
-    // public config the plugin owns, so the read runs as system.
-    const result = await collections.listEntries(
-      pluginConfig.formOverrides.slug,
-      { where: { slug: { equals: slug } }, pagination: { limit: 1 } },
-      { as: "system" }
-    );
+  // D56: resolve the form by slug via a service-level `where` query instead of
+  // fetching every form and filtering client-side.
+  //
+  // Nothing is caught here. A read that THREW did not establish that the form
+  // is absent, and answering `null` made a database outage or a broken schema
+  // indistinguishable from a slug nobody has ever used: the caller was told
+  // "no such form", which is a 404 a client may cache and a person may act on
+  // by deleting the link. A failure now propagates and is answered as the
+  // server error it is.
+  const result = await collections.listEntries(
+    pluginConfig.formOverrides.slug,
+    { where: { slug: { equals: slug } }, pagination: { limit: 1 } },
+    access
+  );
 
-    const form = result.data?.[0];
-    return form ? asFormDocument(form) : null;
-  } catch {
-    return null;
-  }
+  const form = result.data?.[0];
+  return form ? asFormDocument(form) : null;
 }
 
 /**
@@ -637,18 +788,23 @@ export async function validateSubmission(
     return { valid: false, errors: { _form: "Form not found" } };
   }
 
-  // Transform and validate
-  const transformedData = transformFormData(data, form.fields);
-  const schema = generateZodSchema(form.fields);
-  const result = schema.safeParse(transformedData);
+  // The same rule storage applies, asked rather than restated. Restating it
+  // meant this answered on the transformed but unsanitized value while the
+  // write seam answers on the sanitized one, so a preflight check could call a
+  // submission valid that storage then refused.
+  const prepared = prepareSubmission({
+    data,
+    fields: form.fields,
+    validate: true,
+  });
 
-  if (result.success) {
+  if (!prepared.validationErrors) {
     return { valid: true };
   }
 
   return {
     valid: false,
-    errors: getValidationErrors(result),
+    errors: prepared.validationErrors,
   };
 }
 
@@ -676,67 +832,6 @@ export async function isFormAcceptingSubmissions(
   }
 
   return form.status === "published";
-}
-
-// ============================================================
-// Submission Data Sanitization
-// ============================================================
-
-/**
- * Form field types that accept free-text string input from end users.
- * These fields can contain HTML injection vectors and must be sanitized.
- *
- * Fields NOT in this set (select, radio, checkbox, number, date, time, file)
- * are constrained by Zod enum/type validation and don't need sanitization.
- */
-const TEXT_FORM_FIELDS = new Set([
-  "text",
-  "email",
-  "textarea",
-  "phone",
-  "url",
-  "hidden",
-]);
-
-/**
- * Remove all HTML tags from a string, collapse whitespace, and trim.
- *
- * Uses a regex that matches both complete tags (`<b>`) and unclosed tags
- * at end-of-string (`<script`) to prevent browsers from interpreting
- * incomplete markup.
- */
-function stripHtmlTags(input: string): string {
-  return input
-    .replace(/<[^>]*(?:>|$)/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Sanitize form submission data by stripping HTML tags from free-text fields.
- *
- * Iterates over the form's field definitions and applies `stripHtmlTags()`
- * to values whose field type is in `TEXT_FORM_FIELDS`. Non-string values
- * and constrained fields (select, radio, checkbox, etc.) are left unchanged.
- *
- * Mutates the data object in place for efficiency.
- *
- * @param data - Validated submission data (mutated in place)
- * @param fields - Form field definitions (used for type-aware dispatch)
- */
-function sanitizeSubmissionData(
-  data: Record<string, unknown>,
-  fields: AnyFormField[]
-): void {
-  for (const field of fields) {
-    // Plugin field types are not in TEXT_FORM_FIELDS, so they skip naturally.
-    if (!TEXT_FORM_FIELDS.has(field.type)) continue;
-
-    const value = data[field.name];
-    if (typeof value !== "string") continue;
-
-    data[field.name] = stripHtmlTags(value);
-  }
 }
 
 // ============================================================

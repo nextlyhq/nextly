@@ -23,8 +23,9 @@ import type {
   ActivityLogService,
   ActivityWriteDb,
 } from "../../services/dashboard/activity-log-service";
-import { SYSTEM_CONTEXT } from "../../shared/types";
 import { computeChangedFields } from "../webhooks/envelope";
+
+import { recordableActor } from "./record-settings-activity";
 
 /** What one mutation records, as the choke point already knows it. */
 export interface RecordMutationActivityInput {
@@ -136,15 +137,12 @@ function feedHeading(
 export function willRecordMutationActivity(
   collection: string,
   actor?: RequestActor | null
-): actor is RequestActor & { type: "user"; id: string } {
-  if (actor?.type !== "user" || !actor.id) return false;
-  // `SYSTEM_CONTEXT` is a RequestContext whose user carries the reserved id
-  // `system`, so a seed or migration passing it — with no transport actor to
-  // override it — resolves to a USER actor rather than a system one. No account
-  // owns that id, so the entry would be stored already-erased, attributing an
-  // internal write to a person who does not exist. Compared against the
-  // sentinel itself so the two cannot drift apart.
-  if (actor.id === SYSTEM_CONTEXT.user?.id) return false;
+): actor is RequestActor & { id: string } {
+  // Whether an actor belongs in the trail is `recordableActor`'s question,
+  // asked rather than restated: this file carried its own copy of the rule and
+  // the two had to be widened together, which is the drift that docblock warns
+  // about. What is local here is the collection's visibility.
+  if (!recordableActor(actor)) return false;
   return !collectionViews().hidden.has(collection);
 }
 
@@ -188,20 +186,30 @@ export async function recordMutationActivity(
 ): Promise<void> {
   if (!willRecordMutationActivity(input.collection, input.actor)) return;
 
-  let service: ActivityLogService;
+  let service: ActivityLogService | undefined;
   try {
     service = container.get<ActivityLogService>("activityLogService");
   } catch {
     return;
   }
+  // A container can report an absent registration two ways — by throwing, and
+  // by answering `undefined` — and only the first was handled. The second then
+  // failed on the property access, turning "no dashboard service registered"
+  // into a failed content write, which is the outcome the catch above exists to
+  // prevent.
+  if (!service) return;
 
   const metadata = changedFieldNames(input);
   // No name or email is passed: the write resolves both from the account under
   // the same lock that decides whether it still exists. The alternative — the
   // session's copy, carried down from the request — is a snapshot taken before
   // that decision and can name an account that has since been renamed.
+  // Non-null by the gate above, which every caller runs first.
+  const actor = recordableActor(input.actor);
+  if (!actor) return;
   await service.logActivityInTx(db(), {
-    userId: input.actor.id,
+    actorType: actor.type,
+    userId: actor.id,
     action: input.action,
     collection: input.collection,
     ...(input.locale === undefined ? {} : { locale: input.locale }),

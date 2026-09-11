@@ -4,14 +4,15 @@
  * legacy `getCollectionsHandler()` + `overrideAccess` runtime path. (The
  * end-to-end path is covered by `before-email-filter.integration.test.ts`.)
  */
+import { NextlyError } from "nextly";
 import { describe, expect, it, vi } from "vitest";
 
 import { fetchParentForm } from "../plugin";
 
-const config = {
-  formOverrides: { slug: "forms" },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-} as any;
+// The slug now arrives RESOLVED: a host that renames the collection takes the
+// declared name out of the registry, so the caller resolves it and this reads
+// what it is given.
+const formsSlug = "forms";
 
 function nextlyWith(findEntryById: ReturnType<typeof vi.fn>) {
   return {
@@ -28,21 +29,36 @@ describe("fetchParentForm", () => {
       .mockResolvedValue({ id: "form1", slug: "contact" });
 
     const form = await fetchParentForm(
-      config,
+      formsSlug,
       "form1",
       nextlyWith(findEntryById)
     );
 
+    // Asks for the schema alone, so the form's `afterRead` hook can skip the
+    // submission count it would otherwise run on every write.
     expect(findEntryById).toHaveBeenCalledWith("forms", "form1", {
       as: "system",
+      context: { "formBuilder.schemaOnlyRead": true },
     });
     expect(form).toMatchObject({ id: "form1" });
   });
 
   it("returns null (not throws) when the form is missing", async () => {
-    const findEntryById = vi.fn().mockRejectedValue(new Error("not found"));
+    const findEntryById = vi
+      .fn()
+      .mockRejectedValue(NextlyError.notFound({ message: "No such form." }));
     expect(
-      await fetchParentForm(config, "missing", nextlyWith(findEntryById))
+      await fetchParentForm(formsSlug, "missing", nextlyWith(findEntryById))
     ).toBeNull();
+  });
+
+  it("lets a failed read stay a failed read", async () => {
+    // A form that is not there is an answer. A pool timeout or a throwing
+    // `afterRead` hook is not, and answering `null` for it told the writer
+    // their submission was invalid, with a status that says not to retry.
+    const findEntryById = vi.fn().mockRejectedValue(new Error("pool timeout"));
+    await expect(
+      fetchParentForm(formsSlug, "form1", nextlyWith(findEntryById))
+    ).rejects.toThrow("pool timeout");
   });
 });

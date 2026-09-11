@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { getNextly } from "../../direct-api/nextly";
+import { requireNextly } from "../../direct-api/nextly";
 import { definePlugin } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
@@ -45,7 +45,7 @@ describe("plugin custom services", () => {
     current = await createTestNextly({ plugins: [a, b] });
     expect(observed.fromB).toBe("hi from A");
 
-    const greeter = getNextly().plugins["@test/svc-a"]?.greeter as {
+    const greeter = requireNextly().plugins["@test/svc-a"]?.greeter as {
       hi: () => string;
     };
     expect(greeter.hi()).toBe("hi from A");
@@ -68,7 +68,7 @@ describe("plugin custom services", () => {
     });
 
     current = await createTestNextly({ plugins: [a] });
-    const n = getNextly();
+    const n = requireNextly();
     const s1 = n.plugins["@test/svc-once"].counter;
     const s2 = n.plugins["@test/svc-once"].counter;
     expect(s1).toBe(s2);

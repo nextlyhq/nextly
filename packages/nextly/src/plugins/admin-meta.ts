@@ -294,11 +294,11 @@ function mountableRoutes(
   try {
     collected = collectPluginRoutes([...others, { ...plugin, enabled: true }]);
   } catch (error) {
-    // Only route errors reach here — `collectPluginRoutes` throws
-    // `routeInvalidPathError` and `routeCollisionError` and nothing else — and
-    // both mean the same thing to this caller: these declarations do not
-    // mount, so there is nothing honest to advertise. Rethrown otherwise,
-    // since that would be a defect rather than a verdict.
+    // Every refusal the fold raises means one thing to this caller: these
+    // declarations do not mount, so there is nothing honest to advertise.
+    // `isRouteError` reads the fold's own list rather than naming the refusals
+    // here, where a list would fall out of step with the one that matters.
+    // Rethrown otherwise, since that would be a defect rather than a verdict.
     if (!isRouteError(error)) throw error;
     return undefined;
   }

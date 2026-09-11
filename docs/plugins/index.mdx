@@ -11,9 +11,11 @@ Plugins extend Nextly with new functionality without modifying core code. A plug
 
 ## Official Plugins
 
-| Plugin | Package | Description |
-|--------|---------|-------------|
-| [Form Builder](/docs/plugins/form-builder) | `@nextlyhq/plugin-form-builder` | Visual drag-and-drop form builder with submission management, email notifications, spam protection, and export |
+| Plugin                                     | Package                         | Description                                                                                                                                                                                         |
+| ------------------------------------------ | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Form Builder](/docs/plugins/form-builder) | `@nextlyhq/plugin-form-builder` | Visual drag-and-drop form builder with submission management, email notifications, spam protection, and export                                                                                      |
+| [Page Builder](/docs/page-builder)         | `@nextlyhq/plugin-page-builder` | Blocks your team arranges on a page, rendered on the server with no client JavaScript by default                                                                                                    |
+| [SEO](/docs/plugins/seo)                   | `@nextlyhq/plugin-seo`          | An SEO field group on the collections you name, and a sitemap of published content over plain HTTP. Turning those fields into `<meta>` tags is `buildMetadata` from `nextly/runtime`, which is core |
 
 ## Community Plugins
 
@@ -27,8 +29,8 @@ Install the plugin package, then add it to your `defineConfig` call.
 
 ```typescript
 // nextly.config.ts
-import { defineConfig } from 'nextly';
-import { formBuilder } from '@nextlyhq/plugin-form-builder';
+import { defineConfig } from "nextly";
+import { formBuilder } from "@nextlyhq/plugin-form-builder";
 
 const fb = formBuilder();
 
@@ -44,8 +46,8 @@ For simpler setups where you do not need to customize plugin options, use the pr
 
 ```typescript
 // nextly.config.ts
-import { defineConfig } from 'nextly';
-import { formBuilderPlugin } from '@nextlyhq/plugin-form-builder';
+import { defineConfig } from "nextly";
+import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
 
 export default defineConfig({
   plugins: [formBuilderPlugin],
@@ -62,12 +64,12 @@ Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-
 Plugins declare schema, permissions, routes, and admin UI in `contributes` (read by the host without running the plugin). Before services start, Nextly also runs each plugin's optional `setup(config)` escape hatch — all `setup`s run before any `init`. Don't mutate the config; spread and return a new object.
 
 ```typescript
-import { definePlugin } from '@nextlyhq/plugin-sdk';
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 export const myPlugin = definePlugin({
-  name: '@acme/nextly-plugin-example',
-  version: '1.0.0',
-  nextly: '^1.0.0',
+  name: "@acme/nextly-plugin-example",
+  version: "1.0.0",
+  nextly: "^1.0.0",
   contributes: {
     collections: [MyCollection], // merged automatically by the pipeline
   },
@@ -88,16 +90,16 @@ After all services are registered, Nextly calls each plugin's `init(ctx)` with a
 - **`logger`**, **`config`**, **`nextlyVersion`**
 
 ```typescript
-import { definePlugin } from '@nextlyhq/plugin-sdk';
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 export const auditPlugin = definePlugin({
-  name: 'audit-log',
-  version: '1.0.0',
-  nextly: '^1.0.0',
+  name: "audit-log",
+  version: "1.0.0",
+  nextly: "^1.0.0",
 
   async init(ctx) {
-    ctx.hooks.on('afterCreate', '*', async (context) => {
-      ctx.logger.info('Created entry', {
+    ctx.hooks.on("afterCreate", "*", async context => {
+      ctx.logger.info("Created entry", {
         collection: context.collection,
         id: context.data?.id,
       });
@@ -113,25 +115,25 @@ See the **[Plugin Author Guide](/docs/plugins/author-guide)** for the full workf
 Plugins can control where their collections appear in the admin sidebar and customize their visual appearance.
 
 ```typescript
-import type { PluginDefinition } from '@nextlyhq/plugin-sdk';
-import { MyCollection } from './collections/my-collection';
+import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
+import { MyCollection } from "./collections/my-collection";
 
 const plugin: PluginDefinition = {
-  name: 'my-plugin',
-  version: '0.1.0',
-  nextly: '>=0.0.2-alpha.63',
+  name: "my-plugin",
+  version: "0.1.0",
+  nextly: ">=0.0.2-alpha.63",
   contributes: { collections: [MyCollection] },
 
   // Placement and appearance stay at the top level. This is complementary to
   // `contributes.admin`, which is the declarative menu, pages and views surface.
   admin: {
     order: 50,
-    description: 'What this plugin does',
+    description: "What this plugin does",
     appearance: {
-      icon: 'BarChart',
-      label: 'Analytics',
-      badge: 'Beta',
-      badgeVariant: 'secondary',
+      icon: "BarChart",
+      label: "Analytics",
+      badge: "Beta",
+      badgeVariant: "secondary",
     },
   },
 };
@@ -145,17 +147,17 @@ Host applications can override a plugin's sidebar placement and appearance throu
 
 ```typescript
 // nextly.config.ts
-import { AdminPlacement } from 'nextly';
+import { AdminPlacement } from "nextly";
 
 export default defineConfig({
   plugins: [fb.plugin],
   admin: {
     pluginOverrides: {
-      '@nextlyhq/plugin-form-builder': {
+      "@nextlyhq/plugin-form-builder": {
         placement: AdminPlacement.COLLECTIONS,
         order: 10,
         appearance: {
-          label: 'Contact Forms',
+          label: "Contact Forms",
         },
       },
     },
@@ -166,6 +168,7 @@ export default defineConfig({
 ## Next Steps
 
 **Build a plugin**
+
 - [Plugin Author Guide](/docs/plugins/author-guide) -- the overview: lifecycle, `ctx`, and the scaffold → dev → test → publish loop
 - [Lifecycle, dependencies & order](/docs/plugins/lifecycle) -- `setup`/`init`/`destroy`, load order, `dependsOn`, version compatibility, `enabled`
 - [Data access](/docs/plugins/services) -- `ctx.services`, queries, bulk ops, `{ as: "system" }`
@@ -176,11 +179,13 @@ export default defineConfig({
 - [Testing](/docs/plugins/testing) -- `createTestNextly` + real-database tests
 
 **Ship & maintain**
+
 - [API stability](/docs/plugins/stability) -- what's `@public` vs `@experimental`, semver + deprecation policy
 - [Publishing & distribution](/docs/plugins/distribution) -- publish, discovery, the trust model
 - [Contributing a plugin](/docs/plugins/contributing) -- the quality checklist + how to get listed
 
 **Reference**
+
 - [Plugin API Reference](/docs/plugins/api-reference) -- the public `@nextlyhq/plugin-sdk` surface
 - [Plugin Error Reference](/docs/plugins/error-reference) -- fail-fast boot errors and how to fix them
 - [Configuration Reference](/docs/configuration/nextly-config) -- full `defineConfig` options including the `plugins` array

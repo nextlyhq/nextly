@@ -8,7 +8,11 @@
  * @module domains/widgets/built-in-sources
  */
 
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { isGroupableFieldName } from "../../shared/lib/filterable-fields";
 import { entryTitleField } from "../collections/entry-title";
+import { isGroupKeyDeclaration } from "../collections/query/group-key-declaration";
+import { classifyFieldKind } from "../schema/services/field-column-descriptor";
 
 import {
   replaceSourcesOfKind,
@@ -51,6 +55,26 @@ const TIMESTAMP_FIELDS: readonly WidgetSourceField[] = [
  * text, which is what the column stores.
  */
 const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
+
+/**
+ * The other column the status lifecycle creates, and the one a "what went live
+ * this week" timeline buckets by.
+ *
+ * Appended on exactly the same terms as `status`, because it carries exactly
+ * the same presence in the canonical registry: `first_published_at` is declared
+ * `presence: "withStatusLifecycle"`, the same value the status column has, and
+ * it is readable rather than stripped from responses.
+ *
+ * Left out, the read path had the column and could bucket it -- the descriptor
+ * resolves through `getSystemColumnDescriptors` -- while the SOURCE did not
+ * advertise it, so widget validation refused every timeline over first
+ * publication before execution. That is the same failure the status field's own
+ * docblock describes, in the direction of a column that exists and is denied.
+ */
+const FIRST_PUBLISHED_FIELD: WidgetSourceField = {
+  name: "firstPublishedAt",
+  type: "date",
+};
 
 /**
  * Field types a widget must never see, however the caller declares the
@@ -114,9 +138,24 @@ const PRINTABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
   "radio",
 ]);
 
-/** Map a Nextly field type onto the coarse type a query validator needs. */
-function toSourceType(fieldType: string): WidgetSourceField["type"] {
-  switch (fieldType) {
+/**
+ * Map a Nextly field onto the coarse type a query validator needs.
+ *
+ * The built-in names are answered directly, because the mapping is a statement
+ * about what those fields MEAN rather than about the column they emit.
+ *
+ * Anything unrecognised is a PLUGIN field type, and those are asked of the
+ * canonical field-to-column classifier instead of falling through to "string".
+ * A plugin field declaring `storage: "timestamp"` gets a timestamp column and
+ * is bucketable by the read, so advertising it as a string made a timeseries
+ * over it refusable at validation -- the source describing the field as
+ * something the storage says it is not.
+ */
+function toSourceType(field: {
+  type: string;
+  [key: string]: unknown;
+}): WidgetSourceField["type"] {
+  switch (field.type) {
     case "number":
     case "float":
     case "integer":
@@ -128,8 +167,25 @@ function toSourceType(fieldType: string): WidgetSourceField["type"] {
     case "datetime":
       return "date";
     default:
-      return "string";
+      return pluginSourceType(field);
   }
+}
+
+/** What a plugin field's declared STORAGE makes it, in the source vocabulary. */
+function pluginSourceType(field: {
+  type: string;
+  [key: string]: unknown;
+}): WidgetSourceField["type"] {
+  // `classifyFieldKind` is the one place that knows what column a field emits,
+  // for built-in and plugin types alike. Anything it cannot place stays a
+  // string, which is what an unknown field was always described as.
+  const kind = classifyFieldKind(field as FieldDefinition, "collection");
+  if (kind === "timestamp") return "date";
+  if (kind === "boolean") return "boolean";
+  if (kind === "integer" || kind === "double" || kind === "decimal") {
+    return "number";
+  }
+  return "string";
 }
 
 /**
@@ -180,7 +236,11 @@ function retainedDeclarations<T extends { name: string; type: string }>(
 }
 
 function exposedFields(
-  fields: Array<{ name: string; type: string; label?: string }>
+  // DERIVED from the input contract rather than spelled again. This shape was
+  // written out a third time here, narrower than the one the caller passes, so
+  // a property added to the contract reached this function and was invisible
+  // to it -- which is how `localized` was dropped on the way to the source.
+  fields: WidgetSourceCollection["fields"]
 ): WidgetSourceField[] {
   // The label travels with the field. This function REBUILDS each entry rather
   // than passing it through -- `type` is mapped into the source vocabulary
@@ -188,7 +248,11 @@ function exposedFields(
   // missing between the collection registry and the source in the first place.
   return retainedDeclarations(fields).map(field => ({
     name: field.name,
-    type: toSourceType(field.type),
+    type: toSourceType(field),
+    // Carried because the coarse `type` cannot express it: a localized date is
+    // still a date, and a validator reading only the type would approve a
+    // timeline the read then refuses.
+    ...(field.localized === true && { localized: true }),
     ...(field.label !== undefined && { label: field.label }),
   }));
 }
@@ -202,6 +266,13 @@ export interface WidgetSourceCollection {
     label?: string;
     /** Whether the field stores an ARRAY. A scalar type may still be one. */
     hasMany?: boolean;
+    /**
+     * Whether the field's values are stored per locale.
+     *
+     * Declared here rather than read through a cast, so a caller that drops it
+     * is a compile error instead of a flag that silently never arrives.
+     */
+    localized?: boolean;
   }>;
   /**
    * What a human calls this collection — the registry's plural label.
@@ -241,13 +312,61 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   const seen = new Set(declared.map(f => f.name));
   const systemFields: WidgetSourceField[] = [IDENTITY_FIELD];
   if (collection.timestamps !== false) systemFields.push(...TIMESTAMP_FIELDS);
-  if (collection.status === true) systemFields.push(STATUS_FIELD);
+  if (collection.status === true) {
+    systemFields.push(STATUS_FIELD, FIRST_PUBLISHED_FIELD);
+  }
 
   const id = `collection:${collection.slug}`;
   const fields = [
     ...declared,
     ...systemFields.filter(field => !seen.has(field.name)),
   ];
+
+  // Asked of the SAME guards the read asks, rather than re-deriving what makes
+  // a key usable. This runs server-side, so it can reach both the field
+  // registry and the declarations the validator cannot -- and the answer is
+  // MARKED on the field so the validator reads a description instead of
+  // re-deciding.
+  //
+  // Two halves, because the read has two: what the DECLARATION rules out (a
+  // localized field, a structure) and what the field-level REGISTRY rules out
+  // (a read rule the caller does not satisfy). Restating either here would let
+  // the catalog go on hiding a key the read had started accepting, which is the
+  // direction that fails silently -- a supported path with nothing offering it.
+  //
+  // Asking the rule rather than restating it has NO behavioural signature
+  // today, and no test can be written that separates the two: only fields
+  // typed `date` reach this, and their declaration can differ from a plain
+  // localized check on nothing the classifier currently produces. The property
+  // is that the two move together WHEN the rule changes, which is a fact about
+  // the next edit rather than about any input available now.
+  //
+  // A system column has no declaration and no field-level rule, so it is
+  // bucketable without consulting either.
+  // Bridged the same way `pluginSourceType` bridges it: a source collection
+  // carries the subset of a declaration this module needs, and the group-key
+  // rule reads the same keys the classifier does.
+  const declarationOf = new Map(
+    retainedDeclarations(collection.fields).map(field => [
+      field.name,
+      field as FieldDefinition,
+    ])
+  );
+  const canBucket = (field: WidgetSourceField): boolean =>
+    !seen.has(field.name) ||
+    (isGroupKeyDeclaration(declarationOf.get(field.name), field.name) &&
+      isGroupableFieldName("collection", collection.slug, field.name));
+  // Only the REFUSALS are marked. A date the read would reject is stated as
+  // such; everything else is left alone, so a source built anywhere else keeps
+  // whatever it declared.
+  const marked = fields.map(field =>
+    field.type === "date" && !canBucket(field)
+      ? { ...field, bucketable: false }
+      : field
+  );
+  const bucketableDates = marked.filter(
+    field => field.type === "date" && field.bucketable !== false
+  );
   // Through the shared rule, with BOTH halves: the author's nomination and the
   // names it must exist in. Resolved once here so no consumer has to ask again
   // with only one of them.
@@ -294,13 +413,26 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // path answers. Advisory only -- see `WidgetSource.requiredPermission`
     // for why nothing enforces it.
     requiredPermission: `read-${collection.slug}`,
-    // `groupBy` alongside them because a collection source is the one kind
-    // whose rows go through the read pipeline that can settle an aggregate
-    // against the caller's own access. A system source answers from its own
-    // service and would have to implement grouping itself, so it does not
-    // declare support here and is refused by name.
-    supports: ["count", "list", "groupBy"],
-    fields,
+    // `groupBy` and `timeseries` alongside them because a collection source is
+    // the one kind whose rows go through the read pipeline that can settle an
+    // aggregate against the caller's own access. A system source answers from
+    // its own service and would have to implement grouping itself, so it does
+    // not declare support here and is refused by name.
+    //
+    // An op the executor implements but no source DECLARES is unreachable:
+    // validation refuses it before execution, so the branch is dead and the
+    // advertised op cannot be used.
+    // `timeseries` is offered only when this source exposes a date the read
+    // would actually accept. A collection with `timestamps: false` and no
+    // usable date field has no valid timeseries query at all, and a date
+    // carrying a read rule is refused by `assertGroupableField` on every
+    // dashboard request -- widgets execute with `overrideAccess: false`. Either
+    // way, advertising the op makes a card that fails on every load.
+    supports:
+      bucketableDates.length > 0
+        ? ["count", "list", "groupBy", "timeseries"]
+        : ["count", "list", "groupBy"],
+    fields: marked,
   };
 }
 

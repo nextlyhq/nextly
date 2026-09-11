@@ -146,7 +146,19 @@ export { NextlyError } from "./errors";
 // the shape by hand also gains whatever the builder gains next only if somebody
 // remembers to copy it — the same defect the plugin error path already had, one
 // level along.
-export { respondMutation } from "./api/response-shapes";
+// The read and action shapes go with it, for the same reason and one step
+// further: a plugin that takes over an endpoint core used to serve has to
+// answer in the body core answered in, or the URL is preserved while the
+// contract silently changes underneath every client already calling it.
+// `respondAction` reads the same warning scope `respondMutation` does, and a
+// plugin route runs inside it, so these behave identically wherever they are
+// called from. `PaginationMeta`, which `respondList` takes, is exported below.
+export {
+  respondAction,
+  respondDoc,
+  respondList,
+  respondMutation,
+} from "./api/response-shapes";
 
 // The slug rule, published because it was already documented as though it were.
 // `prebuilt`'s own auto-slug docblock shows `slugify(context.data.title)` as the
@@ -202,12 +214,14 @@ export type {
   DeleteArgs,
   CountArgs,
   GroupArgs,
+  TimeseriesArgs,
   BulkDeleteArgs,
   DuplicateArgs,
   FindSingleArgs,
   UpdateSingleArgs,
   CountResult,
   GroupResult,
+  TimeseriesResult,
   DeleteResult,
   BulkOperationResult as DirectAPIBulkOperationResult,
   // Templates and downstream consumers import these to type Direct API
@@ -477,8 +491,10 @@ export {
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type PluginRoute,
+  type PluginRouteCaller,
   type PluginRouteContext,
   type PluginRouteHandler,
+  type PluginRouteMount,
   type Middleware,
   type RouteMethod,
   type ComponentPath,
@@ -515,6 +531,10 @@ export {
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
   WIDGET_OPS,
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
+  TIMESERIES_INTERVALS,
+  isTimeseriesInterval,
   registerWidget,
   overrideWidget,
   extendWidget,
@@ -544,6 +564,9 @@ export {
   type WidgetSourceKind,
   type WidgetOp,
   type WidgetPatch,
+  type TimeseriesInterval,
+  type WidgetLifecycle,
+  type WidgetCondition,
 } from "./domains/widgets";
 
 // Value exports for the email provider contract. A plugin calls
@@ -615,6 +638,22 @@ export type {
   SerializedFieldConfig,
 } from "./plugins/plugin-singles";
 export type { AuthUser } from "./types/auth";
+// Exported for the same reason as `AuthUser` beside it: `PluginRouteContext`
+// carries an `authenticatedScope`, and a plugin typing a helper against it
+// otherwise has to reach into a deep path or widen to `unknown`.
+export type {
+  AuthenticatedScope,
+  GrantedPermission,
+} from "./auth/authenticated-scope";
+// `narrowScope` is a VALUE, not a type: a route restricting itself before a
+// sensitive call has no other correct way to do it. The scope's arrays are
+// frozen, and editing one in place would leave the spelling the field gate
+// reads still holding the surrendered grant.
+export { narrowScope } from "./auth/authenticated-scope";
+export type {
+  PluginRoutePermissionResolver,
+  PluginRoutePermissionScope,
+} from "./plugins/routes/route-permission";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
@@ -861,11 +900,20 @@ export {
   createRateLimiter,
   createRateLimitHeaders,
   InMemoryRateLimitStore,
+  resolveRateLimitStore,
   type RateLimitConfig,
   type RateLimitStore,
   type RateLimitResult,
   type RateLimitRecord,
 } from "./middleware";
+
+// The limiter a caller drives directly, over the same store the middleware
+// uses. Exported so a plugin limiting something of its own counts in the same
+// window as the REST and auth limiters rather than in one of its own.
+export {
+  RateLimiter,
+  type RateLimitCheckResult,
+} from "./auth/middleware/rate-limiter";
 
 // Security middleware types
 export { type SecurityHeadersConfig, type CorsConfig } from "./middleware";
@@ -926,7 +974,7 @@ export type { FieldGroupFieldConfig } from "./collections/fields/types/component
 // literal, so a migrated definition renders as what it is.
 export {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "./domains/field-groups/storage/field-group-field-type";
 
 // Declares an entry field whose type a plugin contributed. `FieldConfig` is a
@@ -1045,6 +1093,19 @@ export {
   parseTrustedProxyIpsEnv,
   type TrustedClientIpOptions,
 } from "./utils/get-trusted-client-ip";
+
+// The same resolution with the settings already read, which is the only form a
+// plugin can call: the options above come from the running configuration
+// through the container, so exporting the resolver alone left it reachable and
+// unusable, and a plugin needing an address was left reading `x-forwarded-for`
+// itself -- the forgeable read the resolver exists to replace.
+export { trustedClientIp } from "./hooks/request-facts";
+
+// Published because a plugin storing text a visitor typed has to strip markup
+// the way core does, and the absence of this export is why a second copy grew
+// in `@nextlyhq/plugin-form-builder` and then drifted from this one. Sits with
+// the security utilities a plugin already reaches for.
+export { stripHtmlTags } from "./services/security/sanitization-service";
 
 export {
   validateExternalUrl,

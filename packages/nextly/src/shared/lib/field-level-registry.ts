@@ -26,6 +26,11 @@
  * @module shared/lib/field-level-registry
  */
 
+import {
+  type AuthenticatedScope,
+  ruleFacingPermissions,
+} from "../../auth/authenticated-scope";
+import { effectiveCallerScope } from "../../auth/caller-scope";
 import { NextlyError } from "../../errors/nextly-error";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
@@ -78,11 +83,34 @@ interface CallerGrants {
  * asking at once must not become two lookups.
  */
 function grantsResolver(
-  userId: string | undefined
+  userId: string | undefined,
+  scope?: AuthenticatedScope
 ): () => Promise<CallerGrants> {
   let pending: Promise<CallerGrants> | undefined;
   return () => {
     if (pending) return pending;
+    // A scoped API key is judged on the grants stamped on the KEY. `userId`
+    // names the key's OWNER, so resolving from it reads the owner's roles and
+    // permissions — which let a viewer-scoped key minted by a super-admin read
+    // a field gated on `roles.includes("super-admin")`. The collection gate
+    // already prefers the scope; this is the same question one level down.
+    //
+    // The scope is taken from the request when the caller did not name one.
+    // Eighteen call sites reach this function, each rebuilding its arguments by
+    // hand, and an argument a call site has to remember is one a nineteenth
+    // will not — the same shape that dropped the scope at the collection gate
+    // and a hook context before it. Explicit still wins, so a caller may narrow.
+    //
+    // No database read at all in this branch: the key's grants were resolved at
+    // authentication and travel with the request.
+    const effective = effectiveCallerScope(scope);
+    if (effective?.actorType === "apiKey") {
+      pending = Promise.resolve({
+        permissions: ruleFacingPermissions(effective),
+        roles: [...(effective.roles ?? [])],
+      });
+      return pending;
+    }
     if (!userId) {
       pending = Promise.resolve({ permissions: [], roles: [] });
       return pending;
@@ -390,6 +418,8 @@ export async function applyFieldWriteAccess(opts: {
   data: Record<string, unknown>;
   operation: "create" | "update";
   user?: Record<string, unknown>;
+  /** The caller's own grants when they arrived on an API key; see {@link grantsResolver}. */
+  authenticatedScope?: AuthenticatedScope;
   overrideAccess?: boolean;
   id?: string;
 }): Promise<void> {
@@ -419,7 +449,8 @@ export async function applyFieldWriteAccess(opts: {
     // `({ permissions }) => permissions.includes(...)` refuses it, which is
     // the correct answer rather than an accident of the shape.
     grants: grantsResolver(
-      typeof opts.user?.id === "string" ? opts.user.id : undefined
+      typeof opts.user?.id === "string" ? opts.user.id : undefined,
+      opts.authenticatedScope
     ),
   });
 }
@@ -642,6 +673,8 @@ export async function applyFieldReadAccess(
     slug: string;
     entry: Record<string, unknown>;
     user?: Record<string, unknown>;
+    /** The caller's own grants when they arrived on an API key; see {@link grantsResolver}. */
+    authenticatedScope?: AuthenticatedScope;
     overrideAccess?: boolean;
   },
   redactions?: ReadAccessRedactions
@@ -669,7 +702,8 @@ export async function applyFieldReadAccess(
       // write one, does not bail without a user — so the resolver is handed the
       // same absent id and answers with no grants rather than not being called.
       grants: grantsResolver(
-        typeof opts.user?.id === "string" ? opts.user.id : undefined
+        typeof opts.user?.id === "string" ? opts.user.id : undefined,
+        opts.authenticatedScope
       ),
     },
     store,

@@ -15,12 +15,26 @@ The Form Builder plugin adds a complete form management system to Nextly. Build 
 npm install @nextlyhq/plugin-form-builder
 ```
 
-The plugin requires these peer dependencies (already present in most Nextly projects):
+The plugin declares these peer dependencies:
 
-- `nextly` >= 0.0.13
-- `@nextlyhq/admin` >= 0.0.13
-- `react` ^18 or ^19
-- `next` ^14, ^15, or ^16
+| Peer | Range |
+|---|---|
+| `nextly` | the matching lockstep version, pinned exactly |
+| `@nextlyhq/admin` | the matching lockstep version, pinned exactly |
+| `@nextlyhq/plugin-sdk` | the matching lockstep version, pinned exactly |
+| `@nextlyhq/ui` | a caret range on the matching lockstep version |
+| `@tanstack/react-query` | >= 5 |
+| `lucide-react` | >= 0.400.0 |
+| `react` | ^18 or ^19 |
+| `next` | ^14, ^15 or ^16 |
+
+While Nextly is in alpha every publishable package ships on one train, so three of the four
+Nextly peers are pinned to the exact version the plugin was built against, and `@nextlyhq/ui`
+publishes as a caret range on it. Either way, install the plugin and your core at the same
+version rather than reaching for a range of your own. `@tanstack/react-query` and
+`lucide-react` are the two most likely to be missing from a project that has not needed
+them yet, and their absence shows up as a broken admin screen rather than an install
+error.
 
 ## Basic Setup
 
@@ -331,7 +345,19 @@ it is supposed to depend on. An application that hosts its own route, as below, 
 
 ### Validation
 
-The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage. Free-text fields are also sanitized by stripping HTML tags to prevent injection.
+The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage, and free-text fields are sanitized by stripping HTML tags to prevent injection.
+
+That happens on a `beforeChange` hook on the submissions collection, the last collection-level mutating phase before the insert, so it applies to every way a submission can be written: your own route calling `submitForm`, the built-in `POST /api/forms/:slug/submit`, `nextly.forms.submit()`, an admin editing a stored submission, and a record created from the admin. A submission is also projected onto the fields the form declares, so a key the form does not define is dropped rather than stored. Field-level `beforeChange` hooks run after this one and are handed the whole record, so one you register on this collection yourself is trusted the way core trusts a field hook on any other collection.
+
+Values are sanitized before they are validated, so every rule judges the value that will actually be stored rather than the one that arrived.
+
+A submission flagged as spam is stored without being validated, deliberately, so a false positive stays reviewable rather than being thrown away. That exception ends when the row leaves spam: marking one "Not spam" checks the payload it is carrying against the form, so a row that never satisfied the form has to be corrected in the same edit before it can become an ordinary counted submission.
+
+Spam protection runs on the same hook, and is decided BEFORE the payload is validated. A bot that trips the honeypot while also omitting a required field is stored flagged rather than answered with a validation error, because an error tells it which of the two it got wrong.
+
+The honeypot and the rate limit are facts about an HTTP REQUEST rather than about a row, so they stand down when no request produced the write: a trusted server importing a thousand submissions does not rate-limit its own import, and a honeypot field means nothing without a browser to have skipped it. What separates the two is whether a request reached the hook, not which function was called.
+
+You do not need a route of your own to get any of it. `POST /api/forms/:slug/submit` is contributed by this plugin and calls `submitForm`, so a browser posting to it meets the honeypot and the rate limit exactly as one posting to a route you host yourself would. Host your own when you want a different response shape or extra work around the submission, not to obtain spam protection.
 
 You can validate data without creating a submission:
 
@@ -433,6 +459,13 @@ The rate limit store is in-memory. For multi-instance deployments, consider usin
 ### reCAPTCHA v3
 
 Configuration is available for Google reCAPTCHA v3. Set the site key and secret key globally or per form.
+
+<Warning>
+  **Not enforced yet.** The settings below are accepted and stored, and nothing
+  verifies a token against Google: submissions are accepted whether the token is
+  valid, invalid or absent. Turning it on protects nothing today. The honeypot
+  and the rate limit above are enforced.
+</Warning>
 
 ```typescript
 spamProtection: {
@@ -747,7 +780,8 @@ export default defineConfig({
 ```
 
 The route is mounted under the contributing plugin's namespace, so the form posts to
-`/api/plugins/@acme/contact-endpoint/contact`.
+`/admin/api/plugins/@acme/contact-endpoint/contact` in a scaffolded app, where `/admin/api`
+is wherever `createDynamicHandlers` is mounted.
 
 
 

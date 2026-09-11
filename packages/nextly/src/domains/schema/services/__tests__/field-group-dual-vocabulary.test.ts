@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { isFieldGroupField } from "../../../../collections/fields/guards";
 import {
   extractFieldGroupReferences,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../../../field-groups/storage/field-group-field-type";
 import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../../pipeline/diff/diff";
@@ -15,14 +15,14 @@ import {
 
 describe("Field Group Dual Vocabulary — type recognition & guards", () => {
   it("recognizes all standard field-group type tokens", () => {
-    expect(isFieldGroupType("component")).toBe(true);
-    expect(isFieldGroupType("fieldGroup")).toBe(true);
-    expect(isFieldGroupType("text")).toBe(false);
+    expect(isFieldGroupFieldType("component")).toBe(true);
+    expect(isFieldGroupFieldType("fieldGroup")).toBe(true);
+    expect(isFieldGroupFieldType("text")).toBe(false);
     // No release ever wrote the kebab spelling, so accepting it would widen
     // the vocabulary beyond what storage declares.
-    expect(isFieldGroupType("field-group")).toBe(false);
-    expect(isFieldGroupType(null)).toBe(false);
-    expect(isFieldGroupType(undefined)).toBe(false);
+    expect(isFieldGroupFieldType("field-group")).toBe(false);
+    expect(isFieldGroupFieldType(null)).toBe(false);
+    expect(isFieldGroupFieldType(undefined)).toBe(false);
   });
 
   it("isFieldGroupField guard narrows both component and fieldGroup definitions", () => {

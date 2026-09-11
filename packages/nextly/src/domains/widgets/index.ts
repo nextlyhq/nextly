@@ -26,6 +26,24 @@ export {
   type QuerylessWidgetArchetype,
   type CellWidgetArchetype,
 } from "./definition";
+// The lifecycle vocabulary travels with the two fields that name it. A closed
+// set an author cannot import is one they must retype as a literal, and a
+// retyped set is a copy that stops matching the day a condition is added.
+export {
+  WIDGET_LIFECYCLES,
+  WIDGET_CONDITIONS,
+  type WidgetLifecycle,
+  type WidgetCondition,
+} from "./lifecycle";
+// The onboarding step vocabulary, published for the same reason the lifecycle
+// one is: the admin draws a row per id and must name them without restating
+// the union. A leaf with no imports, so naming them costs a consumer nothing.
+export {
+  ONBOARDING_STEPS,
+  isOnboardingStepId,
+  type OnboardingStepId,
+  type OnboardingStep,
+} from "./onboarding-steps";
 export {
   MAX_WIDGET_LIMIT,
   validateWidgetQuery,
@@ -70,3 +88,19 @@ export {
   type WidgetSourceCollection,
 } from "./built-in-sources";
 export { refreshCollectionSources } from "./collection-sources";
+
+/**
+ * The interval vocabulary a `timeseries` query names.
+ *
+ * Published from the widgets barrel because `WidgetQuery.interval` IS a
+ * `TimeseriesInterval`, and every contract a published shape names travels with
+ * it: a public property whose type has no public name can be inferred but never
+ * annotated. Without this an author holding a `WidgetQuery` cannot declare a
+ * reusable interval variable, or offer the choices, without restating the
+ * closed set -- a second copy that agrees on the day it is written.
+ */
+export {
+  isTimeseriesInterval,
+  TIMESERIES_INTERVALS,
+  type TimeseriesInterval,
+} from "../collections/query/timeseries-interval";
