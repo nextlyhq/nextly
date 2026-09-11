@@ -26,14 +26,4 @@
 "@nextlyhq/ui": patch
 ---
 
-zod is 4.6 now, from 4.1. The MCP server library needs 4.2 or newer, and a
-second copy of zod beside the first would make every schema a stranger to the
-other's `instanceof`; one version everywhere is what lets the coming MCP plugin
-describe its tools in the same language the rest of Nextly describes content.
-
-One behaviour moved with it. zod's JSON Schema converter now refuses a schema
-whose registrations collide on an `id` rather than emitting a shorter schema,
-which is the corruption the block document emitter already refused; the
-emitter turns that refusal into its own, so a caller still sees one error for
-one reason, and a document checked against a derivation that cannot be made is
-answered rather than thrown at.
+`createEntryInTransaction`, `updateEntryInTransaction` and `deleteEntryInTransaction` on the collection service share one tail: collect what the write left for `withTransaction`, then convert a failed envelope. A failed transactional create now carries the collection in its log context and a failed transactional delete now logs a warning, as the update already did. Nothing on the wire changes.

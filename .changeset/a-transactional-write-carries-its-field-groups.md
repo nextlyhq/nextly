@@ -26,14 +26,4 @@
 "@nextlyhq/ui": patch
 ---
 
-zod is 4.6 now, from 4.1. The MCP server library needs 4.2 or newer, and a
-second copy of zod beside the first would make every schema a stranger to the
-other's `instanceof`; one version everywhere is what lets the coming MCP plugin
-describe its tools in the same language the rest of Nextly describes content.
-
-One behaviour moved with it. zod's JSON Schema converter now refuses a schema
-whose registrations collide on an `id` rather than emitting a shorter schema,
-which is the corruption the block document emitter already refused; the
-emitter turns that refusal into its own, so a caller still sees one error for
-one reason, and a document checked against a derivation that cannot be made is
-answered rather than thrown at.
+A bulk create (`createMany`) and a create or update made inside a caller's transaction now write a `fieldGroup` field's value to its component table, as the ordinary create and update do. Before, a bulk create of any collection that embeds a field group failed every row with `no column named <field>`, and a transactional update reported success while leaving the component's old value in place. A transactional update held as a working draft now carries the field group in the draft.

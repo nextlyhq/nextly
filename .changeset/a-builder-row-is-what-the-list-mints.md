@@ -26,14 +26,13 @@
 "@nextlyhq/ui": patch
 ---
 
-zod is 4.6 now, from 4.1. The MCP server library needs 4.2 or newer, and a
-second copy of zod beside the first would make every schema a stranger to the
-other's `instanceof`; one version everywhere is what lets the coming MCP plugin
-describe its tools in the same language the rest of Nextly describes content.
+The schema builder's drag announcements name every field, and its row ids are
+only the ones the list mints.
 
-One behaviour moved with it. zod's JSON Schema converter now refuses a schema
-whose registrations collide on an `id` rather than emitting a shorter schema,
-which is the corruption the block document emitter already refused; the
-emitter turns that refusal into its own, so a caller still sees one error for
-one reason, and a document checked against a derivation that cannot be made is
-answered rather than thrown at.
+A field just added to the canvas has no label and no name until its author
+fills them in, and it drags in that state: it was announced as nothing at all
+("Picked up , row 2") and, beside a named field, as "and Title". It is now
+called "an unnamed field", on the announcement and on the nested drag handle
+alike. A row id that is not `row-` followed by a canonical nonnegative integer
+no longer names a row, so a drop the reorder would refuse is no longer
+announced as a move.
