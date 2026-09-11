@@ -1,9 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  listRoleSlugsForUser,
+  listRoleSlugsForUserStrict,
+} from "../services/lib/permissions";
 
 import {
   resolveServiceOpts as resolve,
   type ServiceOpts,
 } from "./service-opts";
+
+// Both resolvers, so a case can tell WHICH one the facade's own defaults use.
+// They ask the identical question of the identical rows and differ only in what
+// they do when the question cannot be asked, which is the whole point here.
+vi.mock("../services/lib/permissions", () => ({
+  listRoleSlugsForUser: vi.fn(async () => [] as string[]),
+  listRoleSlugsForUserStrict: vi.fn(async () => {
+    throw new Error("the roles query did not run");
+  }),
+}));
 
 /**
  * The roles the resolver answers with, by user id. A user the table does not
@@ -117,6 +132,30 @@ describe("resolveServiceOpts", () => {
     );
 
     expect(enforcingWithoutUser).toEqual([{ as: "public" }]);
+  });
+
+  it("refuses the operation when the caller's roles could not be read", async () => {
+    // Without deps, so this is the facade's OWN resolver and not the fake.
+    // `listRoleSlugsForUser` degrades a failed query to an empty set, and an
+    // exclusion rule such as `user.role !== "suspended"` then admits a caller
+    // nobody could look up: the same empty-role grant this change removes,
+    // arriving by another door. An access decision taken on roles that were
+    // never read is not a decision.
+    await expect(
+      resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
+    ).rejects.toThrow("the roles query did not run");
+  });
+
+  it("asks the strict resolver and not the one that swallows", async () => {
+    // The control on the case above, which a facade wired to EITHER resolver
+    // could pass if both threw. This says which door it went through.
+    vi.mocked(listRoleSlugsForUser).mockClear();
+    vi.mocked(listRoleSlugsForUserStrict).mockClear();
+    await expect(
+      resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
+    ).rejects.toThrow();
+    expect(vi.mocked(listRoleSlugsForUserStrict)).toHaveBeenCalledWith("u1");
+    expect(vi.mocked(listRoleSlugsForUser)).not.toHaveBeenCalled();
   });
 
   it("as:'user' without a user throws", async () => {

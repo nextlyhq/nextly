@@ -45,11 +45,21 @@ the same caller's own request passed it, and a negative rule granted what it
 was written to refuse. The roles are resolved and the caller is built by the
 one constructor every other authenticated path uses.
 
+A plugin call whose caller's roles could not be read is refused rather than run
+as a caller with none. The resolver behind it degraded a failed query to an
+empty set, which is safe for a rule that grants on a role and wrong for one that
+withholds on it: `user.role !== "suspended"` admitted a caller the database
+declined to answer for.
+
 Losing the Super Admin role now takes effect at once. The cached answer to
 "is this user a super admin" was not cleared when roles changed, so a demoted
 user kept the session bypass until the entry aged out, and an API key's grants
 resolved through that answer could be cached for five minutes of their own on
-top of it. Role and permission invalidation clears it.
+top of it. Role and permission invalidation clears it, and an API key's cached
+grants are retired with it: they are derived from the same rows, and nothing
+retired them when a ROLE changed, so revoking a role's inherited Super Admin
+left a key holding the whole catalogue and changing a role's permissions left a
+role-based key holding the old set.
 
 A caller that arrived on an API key is judged on the KEY's roles, not its
 owner's, the way the REST path already judges one. A stored role rule reads

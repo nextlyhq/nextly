@@ -16,11 +16,14 @@
  * by a raw row delete rather than through the role service, so the only thing
  * that can clear the entry is the call under test.
  */
+import { randomUUID } from "node:crypto";
+
 import { eq } from "drizzle-orm";
 import { createTestNextly, type TestNextly } from "nextly/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../database/index";
+import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 
 import { invalidatePermissionCache, isSuperAdmin } from "./permissions";
 
@@ -148,5 +151,178 @@ describe("the super-admin answer is invalidated with the permissions it is asked
 
     expect(await isSuperAdmin(kept), "still cached").toBe(true);
     expect(await isSuperAdmin(other), "evicted").toBe(false);
+  });
+});
+
+/**
+ * The grants an API key holds are DERIVED from these same rows, and cached for
+ * five minutes of their own under the key's id.
+ *
+ * Nothing retired them when a ROLE changed. `UserRoleService` evicts when a
+ * role is assigned to or removed from a USER; the role services only call
+ * `invalidatePermissionCache`, which knows nothing about keys. So an operator
+ * revoking a role's inherited `super-admin` left that user's key holding the
+ * entire catalogue until the entry aged out, and the same gap left a
+ * role-based key holding a permission set its role no longer has, which a
+ * comment in `UserRoleService` said was handled elsewhere and was not.
+ *
+ * `invalidatePermissionCache` now counts its invalidations and the key cache
+ * refuses an entry resolved under an older count, so neither module has to
+ * enumerate the other's keys and a path written later is covered without
+ * remembering to.
+ */
+describe("an API key's grants are retired when the roles behind them change", () => {
+  const DEPUTY = "deputy-role";
+
+  /**
+   * A fresh owner and key per case.
+   *
+   * Every cache in play here is module-level and outlives a harness, while the
+   * database does not: the grant cache is keyed by key id and the super-admin
+   * answer by user id, so a shared id makes these cases order-dependent in both
+   * directions. One that ends having resolved an empty grant set, or a `false`
+   * super-admin answer, hands that to the next case's first read against a
+   * freshly seeded database, before it has done anything at all. Real keys and
+   * real accounts have distinct ids, and so do these.
+   */
+  let OWNER = "";
+  let KEY = "";
+
+  /** A permission the catalogue holds and the deputy's own role does not. */
+  const ONLY_IN_THE_CATALOGUE = "read-secrets";
+
+  /**
+   * The key service built from SOURCE, on the harness's adapter.
+   *
+   * Not `harness.getService("apiKeyService")`, which the test harness resolves
+   * through `nextly/testing`, and that is the BUILT package: its
+   * `services/lib/permissions` is a different module instance from the one this
+   * file imports, with its own caches and its own revision counter. The two
+   * could never agree, and the first version of this suite measured exactly
+   * that and nothing else.
+   */
+  const keyService = () =>
+    new ApiKeyService(harness!.adapter as never, {
+      debug() {},
+      info() {},
+      warn() {},
+      error() {},
+    });
+
+  beforeEach(() => {
+    const unique = randomUUID();
+    OWNER = `deputy-owner-${unique}`;
+    KEY = `deputy-key-${unique}`;
+  });
+
+  async function seedDeputy(): Promise<void> {
+    const db = rawDb();
+    const tables = getDialectTables();
+    await db.insert(tables.permissions).values([
+      {
+        id: "perm-notes",
+        name: "Read notes",
+        slug: "read-notes",
+        action: "read",
+        resource: "notes",
+      },
+      {
+        id: "perm-secrets",
+        name: "Read secrets",
+        slug: ONLY_IN_THE_CATALOGUE,
+        action: "read",
+        resource: "secrets",
+      },
+    ]);
+    await db.insert(tables.roles).values({
+      id: DEPUTY,
+      name: "Deputy",
+      slug: "deputy",
+      level: 10,
+      isSystem: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    // Its own grant, so the ordinary branch has something to return and a
+    // refusal is distinguishable from an empty one.
+    await db.insert(tables.rolePermissions).values({
+      id: "deputy-notes",
+      roleId: DEPUTY,
+      permissionId: "perm-notes",
+    });
+    // Built ON TOP of Super Admin: the edge `isSuperAdmin` follows.
+    await db.insert(tables.roleInherits).values({
+      id: "deputy-inherits",
+      parentRoleId: DEPUTY,
+      childRoleId: SUPER_ADMIN_ROLE,
+    });
+    await db.insert(tables.users).values({
+      id: OWNER,
+      email: `${OWNER}@example.com`,
+      name: OWNER,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await db.insert(tables.userRoles).values({
+      id: `${OWNER}-role`,
+      userId: OWNER,
+      roleId: DEPUTY,
+    });
+  }
+
+  const grants = () =>
+    keyService().resolveApiKeyPermissions("read-only", null, OWNER, KEY);
+
+  /** Remove the inheritance WITHOUT invalidating anything. */
+  async function revokeInheritance(): Promise<void> {
+    const tables = getDialectTables();
+    await rawDb()
+      .delete(tables.roleInherits)
+      .where(eq(tables.roleInherits.parentRoleId, DEPUTY));
+  }
+
+  it("holds the catalogue while the inheritance stands", async () => {
+    // The precondition, and the reason the rest discriminates: the key holds a
+    // permission the owner's own role does not grant, which only the catalogue
+    // branch can produce.
+    await seedDeputy();
+    expect(await isSuperAdmin(OWNER)).toBe(true);
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("keeps holding it after a silent revocation, so the cache is live", async () => {
+    // The control. Every assertion below is that an invalidation CHANGED the
+    // answer, and without a live cache the answer would be recomputed anyway.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
+  it("loses it once the role change is announced", async () => {
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+
+    // Exactly what `RoleInheritanceService` calls after editing an edge.
+    await invalidatePermissionCache({ roleId: DEPUTY });
+
+    const after = await grants();
+    expect(after).not.toContain(ONLY_IN_THE_CATALOGUE);
+    expect(
+      after,
+      "their own role's grant survives, so this is a re-resolve and not a wipe"
+    ).toEqual(["read-notes"]);
+  });
+
+  it("loses it on a userId invalidation too, which names no role", async () => {
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+
+    await invalidatePermissionCache({ userId: OWNER });
+
+    expect(await grants()).not.toContain(ONLY_IN_THE_CATALOGUE);
   });
 });
