@@ -162,17 +162,29 @@ export function useOnboardingSteps(): UseOnboardingStepsResult {
   // include it. One spurious round trip, and a card that flickers away from a
   // reader who needs it.
   //
-  // Compared against the MOUNT rather than trusting `isStale`. With
-  // `staleTime: 0` above, data is stale the instant it arrives, so that flag
-  // cannot separate "not yet refetched" from "just fetched" -- and it is the
-  // refetch this has to wait for, not the staleness.
-  const mountedAt = useRef(Date.now());
+  // Taken from the OBSERVER, which counts the updates it has seen since this
+  // hook subscribed, rather than from a wall-clock comparison against the
+  // mount. A clock cannot order the two mounts reliably: `Date.now()` is
+  // coarsened by browser anti-fingerprinting -- to 100ms under Firefox's
+  // resistFingerprinting -- and steps backwards under an NTP correction, and
+  // either one lets a cached `dataUpdatedAt` read as this mount's own. An
+  // update count cannot run backwards or collide.
+  //
+  // `isStale` cannot stand in for it: with `staleTime: 0` above the data is
+  // stale the instant it arrives, so that flag cannot separate "not yet
+  // refetched" from "just fetched" -- and it is the refetch this waits for.
+  //
+  // ANDed with success because the observer counts a FAILED update too. A
+  // refetch that rejects leaves the previous mount's all-complete data in
+  // place, and on the count alone the card would drop itself on an answer
+  // nobody managed to refresh.
+  const fetchedHere = query.isSuccess && query.isFetchedAfterMount;
   useEffect(() => {
     if (!finished || dropped.current) return;
-    if (query.dataUpdatedAt < mountedAt.current) return;
+    if (!fetchedHere) return;
     dropped.current = true;
     void queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
-  }, [finished, query.dataUpdatedAt, queryClient]);
+  }, [finished, fetchedHere, queryClient]);
 
   return {
     steps,

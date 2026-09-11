@@ -88,7 +88,7 @@ After save, the new collection appears in the admin sidebar under Collections. T
 | Single | `dynamic_singles` table | Runtime-only: the schema is regenerated from the database row on each request. No files are written. |
 | Component | Database row | Runtime-only: stored alongside dynamic singles. No files are written. |
 
-When you edit and re-save a collection, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar). The generator avoids re-running migrations that have already been applied — see [`packages/nextly/src/services/collection-file-manager.ts`](../packages/nextly/src/services/collection-file-manager.ts) for the implementation.
+When you edit and re-save a collection, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar). The generator avoids re-running migrations that have already been applied — see [`packages/nextly/src/services/collection-file-manager.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/services/collection-file-manager.ts) for the implementation.
 
 ## Permissions and visibility
 
