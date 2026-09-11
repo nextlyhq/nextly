@@ -45,6 +45,12 @@ the same caller's own request passed it, and a negative rule granted what it
 was written to refuse. The roles are resolved and the caller is built by the
 one constructor every other authenticated path uses.
 
+Losing the Super Admin role now takes effect at once. The cached answer to
+"is this user a super admin" was not cleared when roles changed, so a demoted
+user kept the session bypass until the entry aged out, and an API key's grants
+resolved through that answer could be cached for five minutes of their own on
+top of it. Role and permission invalidation clears it.
+
 A caller that arrived on an API key is judged on the KEY's roles, not its
 owner's, the way the REST path already judges one. A stored role rule reads
 the caller's roles directly, so the owner's roles let a viewer-scoped key
