@@ -2,8 +2,9 @@
  * Client-side registry of plugin-contributed admin pages.
  *
  * Plugin pages are namespaced under `/admin/plugins/<slug>/<path>` to avoid
- * collisions with core routes (mirrors the P4 API namespacing `/api/plugins/
- * <name>`). The registry is consulted by `resolveRoute` (after exact matches,
+ * collisions with core routes (mirrors the P4 API namespacing, `/plugins/
+ * <name>` beneath the handler's mount). The registry is consulted by
+ * `resolveRoute` (after exact matches,
  * before dynamic matches). Components are resolved client-side via the string-
  * path component registry (`PluginSlot`).
  *

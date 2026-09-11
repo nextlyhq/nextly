@@ -58,9 +58,12 @@ export {
 // and which reference keys it may point at. Renderers that dispatch on a
 // field's type — the admin entry form among them — ask the predicate rather
 // than compare either literal, so a migrated definition renders as what it is.
-// Renamed on this surface to keep the two predicates apart: the `isFieldGroupType`
-// above judges a stored INSTANCE's value, this one judges a FIELD's type token.
+//
+// This entry aliased the name apart before the other one did, for the reason
+// the alias gave: `isFieldGroupType` above judges a stored INSTANCE, this
+// judges a FIELD's type token. The alias is the real name now, so the root
+// entry cannot publish the ambiguous spelling the alias was working around.
 export {
   extractFieldGroupReferences,
-  isFieldGroupType as isFieldGroupFieldType,
+  isFieldGroupFieldType,
 } from "./domains/field-groups/storage/field-group-field-type";

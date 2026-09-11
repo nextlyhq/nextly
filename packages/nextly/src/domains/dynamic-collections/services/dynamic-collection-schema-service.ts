@@ -35,7 +35,7 @@ import {
 } from "../../../shared/lib/plugin-storage";
 import {
   fieldGroupSlugList,
-  isFieldGroupType,
+  isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { generateSQL } from "../../schema/pipeline/sql-templates/index";
@@ -1507,10 +1507,10 @@ ${allColumnDefs.join(",\n")}
     const newNames = new Set(newFields.map(f => f.name));
 
     const oldOnly = oldFields.filter(
-      f => !newNames.has(f.name) && isFieldGroupType(f.type)
+      f => !newNames.has(f.name) && isFieldGroupFieldType(f.type)
     );
     const newOnly = newFields.filter(
-      f => !oldNames.has(f.name) && isFieldGroupType(f.type)
+      f => !oldNames.has(f.name) && isFieldGroupFieldType(f.type)
     );
     if (oldOnly.length === 0 || newOnly.length === 0) return null;
 

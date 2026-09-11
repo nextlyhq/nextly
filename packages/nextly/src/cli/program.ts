@@ -13,6 +13,8 @@ import * as telemetry from "@nextlyhq/telemetry";
 import { Command, Option } from "commander";
 import pc from "picocolors";
 
+import { getCoreVersion } from "../plugins/core-version";
+
 import { registerAddCommand } from "./commands/add";
 import { registerBuildCommand } from "./commands/build";
 // What: import the renamed one-shot sync command.
@@ -46,9 +48,20 @@ import { createLogger, type Logger, type LoggerOptions } from "./utils/logger";
 // ============================================================================
 
 /**
- * CLI version - should match package.json version
+ * The running `nextly` version, as `--version` and telemetry report it.
+ *
+ * Asked of {@link getCoreVersion} rather than typed here. "Should match
+ * package.json" was a comment with nothing enforcing it, and it did not: the
+ * constant read `0.1.0` while the package shipped `0.0.2-alpha.65`, so
+ * `nextly --version` answered confidently and wrongly, and telemetry attributed
+ * every CLI event to a version that has never been published.
+ *
+ * `getCoreVersion` is the same question the plugin resolver asks to validate a
+ * plugin's `nextly` range, and it already reads the build-time constant the
+ * tsup and vitest `define` blocks inject from `package.json`, with a runtime
+ * read as a fallback.
  */
-export const CLI_VERSION = "0.1.0";
+export const CLI_VERSION = getCoreVersion();
 
 // ============================================================================
 // Types

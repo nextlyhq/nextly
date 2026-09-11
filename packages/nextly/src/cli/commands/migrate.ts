@@ -74,7 +74,7 @@ import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-
 import { NextlyError, describeError } from "../../errors";
 import { createContext, type CommandContext } from "../program";
 import {
-  createAdapter,
+  createCliAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
@@ -243,7 +243,7 @@ export async function runMigrate(
 
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createAdapter({
+    adapter = await createCliAdapter({
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
       logger: options.verbose ? logger : undefined,

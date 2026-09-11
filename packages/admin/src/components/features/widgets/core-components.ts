@@ -18,6 +18,7 @@
  */
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
+import { OnboardingChecklist } from "@admin/components/features/dashboard/OnboardingChecklist";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentActivity } from "@admin/components/features/dashboard/RecentActivity";
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
@@ -35,6 +36,7 @@ import { registerCoreComponent } from "@admin/lib/plugins/component-registry-int
  */
 export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#SeedDemoContentCard", SeedDemoContentCard);
+  registerCoreComponent("core#OnboardingChecklist", OnboardingChecklist);
   registerCoreComponent("core#CollectionQuickLinks", CollectionQuickLinks);
   registerCoreComponent("core#SinglesQuickLinks", SinglesQuickLinks);
   registerCoreComponent("core#QuickCreate", QuickCreate);

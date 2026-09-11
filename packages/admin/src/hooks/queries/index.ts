@@ -116,7 +116,6 @@ export {
 export { useDashboardStats } from "./useDashboardStats";
 export { useRecentEntries } from "./useRecentEntries";
 export { useRecentActivity } from "./useRecentActivity";
-export { useOnboardingProgress } from "./useOnboardingProgress";
 export { useCollectionCounts } from "./useCollectionCounts";
 
 // API Key query and mutation hooks

@@ -17,7 +17,7 @@
  * @module shared/lib/normalize-stored-value
  */
 
-import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
+import { isFieldGroupFieldType } from "../../domains/field-groups/storage/field-group-field-type";
 
 /**
  * The minimal field shape normalization reads. Declared structurally (rather
@@ -154,7 +154,7 @@ function reshapeTypedValue(field: NormalizableField, value: unknown): unknown {
   // would leave a migrated definition's array in place, and the nested diff
   // would then read the array — not the instance — as the value object,
   // losing every child.
-  if (isFieldGroupType(field.type)) {
+  if (isFieldGroupFieldType(field.type)) {
     return fieldGroupValue(field, value);
   }
 

@@ -88,7 +88,7 @@ export interface CanonicalWidget {
    * removes nothing looks exactly like one with nothing to remove.
    */
   lifecycle?: string;
-  visibleWhen?: string;
+  visibleWhen?: string | readonly string[];
 }
 
 /** The summary of one registered widget. */

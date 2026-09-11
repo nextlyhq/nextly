@@ -250,7 +250,7 @@ interface PluginAdminWidgetBase {
    * contributed channel would refuse a value core had just started accepting.
    */
   lifecycle?: WidgetLifecycle;
-  visibleWhen?: WidgetCondition;
+  visibleWhen?: WidgetCondition | readonly WidgetCondition[];
   /**
    * What a reader may change about this card, drawn by the settings panel.
    *

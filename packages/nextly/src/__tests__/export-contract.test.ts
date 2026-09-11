@@ -79,23 +79,19 @@ function namesPublishedTwice(
 }
 
 /**
- * Names already published from two entry points meaning different things.
+ * Names published from two entry points meaning different things.
  *
- * 🔴 Recorded, not accepted. Each is the same defect `getNextly` was: one name,
- * two functions, and nothing at an import site to say which one arrived.
- * `isFieldGroupType` is a boolean test in one place and a generic narrowing in
- * the other; `createAdapter` is the CLI's and the database factory's, which
- * take different arguments and do different work.
+ * 🔴 EMPTY, and that is the point. It held the two this check found when it was
+ * written, `isFieldGroupType` and `createAdapter`, each recorded rather than
+ * fixed because each needed the decision `getNextly` needed about which keeps
+ * the name. Both have now been made, so nothing is exempt and the next one
+ * fails on the day it appears rather than joining a list.
  *
- * They are listed rather than fixed here because each needs the same decision
- * `getNextly` needed about which keeps the name, and answering several of those
- * inside one rename is how a considered API becomes an incidental one. Listing
- * them is what makes a NEW one fail this test on the day it appears.
+ * Add to this only to record a clash somebody has decided to keep, with the
+ * reason. A name added here to make a red test green is the defect being
+ * written down instead of fixed.
  */
-const KNOWN_SHAPE_CLASHES = [
-  "isFieldGroupType: nextly sync/1, nextly/field-group-type sync/2",
-  "createAdapter: nextly async/1, nextly/database async/1, nextly/cli/utils async/0",
-];
+const KNOWN_SHAPE_CLASHES: string[] = [];
 
 const manifestUrl = new URL("../../package.json", import.meta.url);
 const packageRoot = path.dirname(fileURLToPath(manifestUrl));
@@ -257,5 +253,42 @@ describe("published export surface", () => {
     expect(typeof mod.readFieldGroupType).toBe("function");
     expect(typeof mod.isFieldGroupType).toBe("function");
     expect(typeof mod.writeFieldGroupType).toBe("function");
+  });
+
+  /**
+   * The names a resolved clash left behind, asserted where they were promised.
+   *
+   * An empty {@link KNOWN_SHAPE_CLASHES} says only that no name is published
+   * twice with different shapes. Deleting `isFieldGroupFieldType` outright
+   * satisfies that too, and so does dropping `createCliAdapter`: the collision
+   * is gone either way, and a rename that quietly became a deletion reads as a
+   * pass.
+   *
+   * So each is asserted at the entry it was moved TO. A rename is a promise
+   * about where a caller finds the function afterwards, and that is the half an
+   * absence check cannot make.
+   */
+  it("keeps the names the resolved clashes were renamed to", async () => {
+    const root = (await import("../index")) as Record<string, unknown>;
+    expect(typeof root.isFieldGroupFieldType).toBe("function");
+
+    const fieldGroupType = (await import("../field-group-type")) as Record<
+      string,
+      unknown
+    >;
+    expect(typeof fieldGroupType.isFieldGroupFieldType).toBe("function");
+
+    const cli = (await import("../cli/utils")) as Record<string, unknown>;
+    expect(typeof cli.createCliAdapter).toBe("function");
+
+    const database = (await import("../database")) as Record<string, unknown>;
+    expect(typeof database.createAdapter).toBe("function");
+
+    // The root re-exports the database factory, so `createAdapter` is expected
+    // HERE and is the same function `nextly/database` publishes. That pair was
+    // never the clash: they agreed. The CLI's was the odd one, and the other
+    // half of the promise is that its old spelling has not come back.
+    expect(root.createAdapter).toBe(database.createAdapter);
+    expect(cli.createAdapter).toBeUndefined();
   });
 });

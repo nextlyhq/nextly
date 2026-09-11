@@ -531,22 +531,30 @@ function failingModes(r: UtilityReading): readonly ModeReading[] {
   return r.modes.filter(m => m.ratio < r.need);
 }
 
+/**
+ * The failing modes to report: none when the utility is recorded as accepted.
+ *
+ * Takes the failures ALREADY COMPUTED rather than the reading they came from,
+ * so it never sees a threshold and cannot re-decide what counts as a failure.
+ *
+ * That is a boundary rather than a check. Whether a body reimplements
+ * `ratio < need` is a question the whole language can answer — `<=`, a
+ * destructured `const { need } = r`, a helper, arithmetic rearranged — so a
+ * scan over source can only ever refuse the spellings someone thought of.
+ * Withholding the threshold refuses all of them at once.
+ *
+ * `Object.hasOwn` because the map is consulted with a SCANNED string: a utility
+ * whose token is named `constructor` or `toString` inherits a truthy value from
+ * any plain object, so an `in` test would silence a failure nobody recorded.
+ */
 function unacceptedFailures(
   combo: string,
-  r: UtilityReading,
+  failing: readonly ModeReading[],
   accepted: Readonly<
     Record<string, AcceptedAlphaUtility>
   > = ACCEPTED_ALPHA_UTILITIES
 ): readonly ModeReading[] {
-  // Derived from `failingModes` rather than re-testing `ratio < need`. What
-  // counts as a failure is one question, and a second copy agrees today and
-  // drifts the moment the threshold rule changes.
-  //
-  // `Object.hasOwn` because the map is consulted with a scanned string: a
-  // utility named `constructor` or `toString` would otherwise inherit a truthy
-  // value from the prototype and silence itself.
-  if (Object.hasOwn(accepted, combo)) return [];
-  return failingModes(r);
+  return Object.hasOwn(accepted, combo) ? [] : failing;
 }
 
 /*
@@ -750,7 +758,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     for (const combo of combos.keys()) {
       if (ALLOWED_DECORATIVE.has(combo)) continue;
       const r = worstRatio(combo);
-      const reported = unacceptedFailures(combo, r);
+      const reported = unacceptedFailures(combo, failingModes(r));
       if (reported.length > 0) {
         offenders.push(remediation(combo, r, reported));
       }
@@ -874,7 +882,7 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const combo = "border-border/50";
     const r = worstRatio(combo);
     expect(Object.hasOwn(ACCEPTED_ALPHA_UTILITIES, combo)).toBe(false);
-    expect(unacceptedFailures(combo, r)).toEqual(failingModes(r));
+    expect(unacceptedFailures(combo, failingModes(r))).toEqual(failingModes(r));
   });
 
   it("suppresses a utility that IS recorded", () => {
@@ -883,7 +891,9 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const combo = "border-border/50";
     const r = worstRatio(combo);
     expect(failingModes(r).length).toBeGreaterThan(0);
-    expect(unacceptedFailures(combo, r, { [combo]: RECORD })).toEqual([]);
+    expect(
+      unacceptedFailures(combo, failingModes(r), { [combo]: RECORD })
+    ).toEqual([]);
   });
 
   it("is not silenced by a name the prototype carries", () => {
@@ -892,7 +902,9 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     // object, so an `in` test or a truthiness check would suppress a real
     // failure that nobody recorded.
     const r = worstRatio("border-border/50");
-    expect(unacceptedFailures("constructor", r, {})).toEqual(failingModes(r));
+    expect(unacceptedFailures("constructor", failingModes(r), {})).toEqual(
+      failingModes(r)
+    );
   });
 
   it("reads a variant off the source, not off a list of variants", () => {
@@ -1089,24 +1101,24 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     });
   });
 
-  it("derives its failures rather than re-testing the threshold", () => {
-    // A behavioural mutation cannot reach this: a second copy of
-    // `ratio < need` agrees with the first until the threshold rule changes,
-    // which is the whole reason the duplication is worth refusing. So the
-    // source is what carries it.
+  it("cannot re-decide what counts as a failure", () => {
+    // Enforced by the SIGNATURE rather than by reading the body. A scan over
+    // source can refuse only the spellings of `ratio < need` it enumerates,
+    // and the language offers unboundedly many; a parameter list offers one.
+    // `unacceptedFailures` is handed no threshold, so there is nothing left to
+    // reimplement.
+    //
+    // What the signature cannot say is that the SCAN passes `failingModes(r)`
+    // rather than its own filter. A semantically identical copy there changes
+    // nothing observable, and a different one is caught at the threshold below.
     const source = readFileSync(
       resolve(here, "alpha-utilities.test.ts"),
       "utf8"
     );
     const from = source.indexOf("function unacceptedFailures");
-    // Bounded by the function's own closing brace rather than by the next
-    // declaration: `remediation` is defined ABOVE this one, so searching
-    // forward for it returned a backwards slice and an EMPTY body — which
-    // satisfied the absence assertion while reading nothing at all.
     const body = source.slice(from, source.indexOf("\n}\n", from));
     expect(body).toContain("function unacceptedFailures");
-    expect(body).toContain("failingModes(r)");
-    expect(body).not.toMatch(/ratio\s*<\s*r\.need/);
+    expect(body).not.toContain("UtilityReading");
   });
 
   it("reports a mode exactly at its threshold as passing", () => {
@@ -1115,6 +1127,21 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
     const r = worstRatio("border-border/50");
     const exact = { ...r, modes: [{ ...r.modes[0], ratio: r.need }] };
     expect(failingModes(exact)).toEqual([]);
+  });
+
+  it("reports nothing at the threshold through the SCAN's own path too", () => {
+    // The control above calls `failingModes` directly, so it says nothing
+    // about the function the scan actually asks. `unacceptedFailures` reading
+    // `<=` against its own copy of the threshold passes every source check and
+    // every message control, and reports an exact-threshold mode as a
+    // violation — a red on a utility that meets its target.
+    const combo = "border-border/50";
+    const r = worstRatio(combo);
+    const exact = { ...r, modes: [{ ...r.modes[0], ratio: r.need }] };
+    expect(unacceptedFailures(combo, failingModes(exact))).toEqual([]);
+    // The other arm, so this cannot be satisfied by a function that reports
+    // nothing whatever it is handed.
+    expect(unacceptedFailures(combo, failingModes(r))).toEqual(failingModes(r));
   });
 
   it("puts no alpha on the control boundary, in any utility", () => {
