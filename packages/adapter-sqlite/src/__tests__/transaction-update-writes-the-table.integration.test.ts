@@ -11,12 +11,27 @@
 // Every stored value is read back with a raw SELECT rather than through the
 // model, since the model cannot see the column whose write is in question.
 
+import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createSqliteAdapter } from "../index";
 
 const TABLE = "int_txsqlite_update_table";
+
+// The physical table, through the production DDL helper. `title` and
+// `published_at` exist here and not on the model below.
+const TABLE_DEFINITION: TableDefinition = {
+  name: TABLE,
+  columns: [
+    { name: "id", type: "text", primaryKey: true },
+    { name: "slug", type: "text", nullable: false },
+    { name: "title", type: "text" },
+    { name: "published_at", type: "integer" },
+    { name: "updated_at", type: "integer" },
+    { name: "published", type: "integer" },
+  ],
+};
 
 // The runtime model: `title` and `published_at` are deliberately absent.
 const pages = sqliteTable(TABLE, {
@@ -53,9 +68,7 @@ describe("SQLite transaction update writes the physical table", () => {
   beforeAll(async () => {
     adapter = createSqliteAdapter({ memory: true });
     await adapter.connect();
-    await adapter.executeQuery(
-      `CREATE TABLE ${TABLE} (id text PRIMARY KEY, slug text NOT NULL, title text, published_at integer, updated_at integer, published integer)`
-    );
+    await adapter.createTable(TABLE_DEFINITION);
     adapter.setTableResolver({
       getTable: (name: string) => (name === TABLE ? pages : null),
     });
@@ -125,12 +138,15 @@ describe("SQLite transaction update writes the physical table", () => {
     expect((await stored("a"))?.title).toBeNull();
   });
 
-  it("refuses a column the table does not have, rather than dropping it", async () => {
+  it("refuses a column the table does not have, naming the operation and the table", async () => {
     await expect(
       adapter.transaction(async ctx => {
         await ctx.update(TABLE, { ghost: "x" }, byId("a"));
       })
-    ).rejects.toThrow(/ghost/);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/update operation failed.*ghost/s),
+      table: TABLE,
+    });
     // The refused statement wrote nothing else either.
     expect((await stored("a"))?.title).toBe("First");
   });

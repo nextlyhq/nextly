@@ -19,14 +19,21 @@
  * the `buildDrizzleWhere` every other read and write goes through — the raw
  * where builders were removed on purpose and this does not bring one back.
  *
- * A value binds in one of two ways, decided per column:
+ * A value binds in one of three ways, decided per column:
  *  - a column the model DECLARES binds through that column's own encoder.
  *    `sql.param(value, column)` is the `Param` the query builder would have
  *    made for it, so a date, a JSON document or a boolean reaches the driver
  *    as the bytes the builder sent before this existed — for every caller
  *    that was already using the builder;
  *  - a column it does NOT declare binds through the adapter's own sanitizer,
- *    which is how that adapter's transactional INSERT binds every value.
+ *    which is how that adapter's transactional INSERT binds every value;
+ *  - a value that is itself a `Column` or an `SQL` fragment is an expression
+ *    (`{ destination: table.source }` copies a column) and is written as one,
+ *    which is what the query builder's `mapUpdateSet` does with it.
+ *
+ * A declared column with an `$onUpdate` callback that the caller did not name
+ * is assigned the callback's value, as the query builder assigns it on every
+ * update it builds.
  *
  * A key whose value is `undefined` is not written at all — JSON's meaning of
  * an absent key, and what the builder's `mapUpdateSet` did with it. `null` is
@@ -37,7 +44,7 @@
  * @module update-statement
  */
 
-import { getColumns, sql, type SQL } from "drizzle-orm";
+import { Column, getColumns, is, SQL, sql } from "drizzle-orm";
 
 import { buildDrizzleWhere } from "./drizzle-where";
 import type { WhereClause } from "./types";
@@ -49,6 +56,8 @@ interface BindableColumn {
   dataType?: unknown;
   columnType?: unknown;
   mapToDriverValue(value: unknown): unknown;
+  /** The `$onUpdate` callback, when the column declares one. */
+  onUpdateFn?: (() => unknown) | undefined;
 }
 
 /** The arguments the adapters hand this builder. */
@@ -111,20 +120,40 @@ function valueForJsonColumn(value: unknown): unknown {
 }
 
 /**
- * Index a table's columns by both spellings a caller may use.
+ * A table's columns, indexed by both spellings a caller may use, and the
+ * declared columns in order for the `$onUpdate` sweep.
  */
-function columnsByName(
-  tableObj: Record<string, unknown>
-): Map<string, BindableColumn> {
+function columnsOf(tableObj: Record<string, unknown>): {
+  byName: Map<string, BindableColumn>;
+  declared: BindableColumn[];
+} {
   const byName = new Map<string, BindableColumn>();
+  const declared: BindableColumn[] = [];
   for (const [jsName, column] of Object.entries(
     getColumns(tableObj as never)
   )) {
     if (!isBindableColumn(column)) continue;
     byName.set(column.name, column);
     byName.set(jsName, column);
+    declared.push(column);
   }
-  return byName;
+  return { byName, declared };
+}
+
+/** How one value is written: as the expression it already is, or bound. */
+function boundValue(
+  value: unknown,
+  column: BindableColumn | undefined,
+  bindUnmodeled: (value: unknown) => unknown
+): SQL {
+  if (is(value, SQL) || is(value, Column)) return sql`${value}`;
+  if (column) {
+    return sql`${sql.param(
+      isJsonColumn(column) ? valueForJsonColumn(value) : value,
+      column
+    )}`;
+  }
+  return sql`${sql.param(bindUnmodeled(value))}`;
 }
 
 /**
@@ -135,19 +164,26 @@ function columnsByName(
  *   syntax error, so the adapter refuses it by name instead of running it.
  */
 export function buildUpdateStatement(input: UpdateStatementInput): SQL | null {
-  const columns = columnsByName(input.tableObj);
+  const { byName, declared } = columnsOf(input.tableObj);
   const assignments: SQL[] = [];
+  const assigned = new Set<string>();
 
   for (const [key, value] of Object.entries(input.data)) {
     if (value === undefined) continue;
-    const column = columns.get(key);
-    const bound = column
-      ? sql.param(
-          isJsonColumn(column) ? valueForJsonColumn(value) : value,
-          column
-        )
-      : sql.param(input.bindUnmodeled(value));
-    assignments.push(sql`${sql.identifier(column?.name ?? key)} = ${bound}`);
+    const column = byName.get(key);
+    const name = column?.name ?? key;
+    assigned.add(name);
+    assignments.push(
+      sql`${sql.identifier(name)} = ${boundValue(value, column, input.bindUnmodeled)}`
+    );
+  }
+  // The columns the caller left unnamed that update themselves.
+  for (const column of declared) {
+    if (assigned.has(column.name) || column.onUpdateFn === undefined) continue;
+    const value = column.onUpdateFn();
+    assignments.push(
+      sql`${sql.identifier(column.name)} = ${boundValue(value, column, input.bindUnmodeled)}`
+    );
   }
   if (assignments.length === 0) return null;
 

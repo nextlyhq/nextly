@@ -13,6 +13,7 @@ import { sql as rawSql } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import {
   boolean,
+  integer,
   jsonb,
   PgDialect,
   pgTable,
@@ -143,6 +144,65 @@ describe("buildUpdateStatement — how a declared column binds", () => {
     const at = new Date("2026-09-11T10:00:00.000Z");
     const { params } = compile({ data: { title: at } });
     expect(params[0]).toBe(tagged(at));
+  });
+
+  it("writes a column or an SQL fragment as the expression it is, not as a bound value", () => {
+    // `{ slug: pages.id }` copies a column; the query builder's `mapUpdateSet`
+    // passes a Column or an SQL through untouched, and so does this.
+    const { sql, params } = compile({
+      data: { slug: pages.id, meta: rawSql`'{}'::jsonb` },
+    });
+    expect(sql).toBe(
+      `UPDATE "dc_pages" SET "slug" = "dc_pages"."id", "meta" = '{}'::jsonb WHERE "dc_pages"."id" = $1`
+    );
+    expect(params).toEqual(["p1"]);
+  });
+
+  it("assigns a declared $onUpdate column the caller left unnamed, as the query builder does", () => {
+    const counted = pgTable("dc_counted", {
+      id: text("id").primaryKey(),
+      slug: text("slug"),
+      revision: integer("revision").$onUpdate(() => 7),
+      touchedAt: timestamp("touched_at").$onUpdate(
+        () => new Date("2026-09-11T10:00:00.000Z")
+      ),
+    });
+    const { sql, params } = new PgDialect().sqlToQuery(
+      buildUpdateStatement({
+        table: "dc_counted",
+        tableObj: counted,
+        data: { slug: "a" },
+        where: byId("p1"),
+        bindUnmodeled: tagged,
+      })!
+    );
+    expect(sql).toBe(
+      'UPDATE "dc_counted" SET "slug" = $1, "revision" = $2, "touched_at" = $3 WHERE "dc_counted"."id" = $4'
+    );
+    // Through the column's own encoder, like any declared column.
+    expect(params).toEqual([
+      "a",
+      7,
+      counted.touchedAt.mapToDriverValue(new Date("2026-09-11T10:00:00.000Z")),
+      "p1",
+    ]);
+
+    // Named by the caller, the caller's value wins and the callback is not run.
+    const named = new PgDialect().sqlToQuery(
+      buildUpdateStatement({
+        table: "dc_counted",
+        tableObj: counted,
+        data: { revision: 1 },
+        where: byId("p1"),
+        bindUnmodeled: tagged,
+      })!
+    );
+    expect(named.sql).not.toContain('"revision" = $2');
+    expect(named.params).toEqual([
+      1,
+      counted.touchedAt.mapToDriverValue(new Date("2026-09-11T10:00:00.000Z")),
+      "p1",
+    ]);
   });
 });
 

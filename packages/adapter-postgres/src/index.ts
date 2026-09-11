@@ -238,6 +238,13 @@ function applyHappyEyeballsTimeoutOnce(): void {
 }
 
 /**
+ * How a date column's wall clock is spelled out when a write reads its row
+ * back: the stored value to the millisecond, with no zone for the driver to
+ * shift. One spelling for the string statements and the Drizzle-rendered one.
+ */
+const PG_WALL_CLOCK_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.MS';
+
+/**
  * PostgreSQL database adapter for Nextly.
  *
  * @remarks
@@ -938,7 +945,7 @@ export class PostgresAdapter extends DrizzleAdapter {
    * The RETURNING entries that spell each date column's wall clock out as
    * text, one per alias `dateWallClockAliases` chose. `to_char` renders the
    * stored value without a zone, which is the only form node-postgres cannot
-   * shift on the way back.
+   * shift on the way back. For the string statements the inserts build.
    */
   private wallClockSpelling(
     aliases: ReadonlyArray<{ sqlName: string; alias: string }>
@@ -946,9 +953,23 @@ export class PostgresAdapter extends DrizzleAdapter {
     return aliases
       .map(
         a =>
-          `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
+          `to_char(${this.escapeIdentifier(a.sqlName)}, '${PG_WALL_CLOCK_FORMAT}') AS ${this.escapeIdentifier(a.alias)}`
       )
       .join(", ");
+  }
+
+  /**
+   * The same entries as `wallClockSpelling`, as fragments for a statement
+   * Drizzle renders: the identifiers are the dialect's to quote and the
+   * format is bound, so nothing here is text this class escaped.
+   */
+  private wallClockFragments(
+    aliases: ReadonlyArray<{ sqlName: string; alias: string }>
+  ): SQL[] {
+    return aliases.map(
+      a =>
+        sql`to_char(${sql.identifier(a.sqlName)}, ${PG_WALL_CLOCK_FORMAT}) AS ${sql.identifier(a.alias)}`
+    );
   }
 
   private createTransactionContext(client: PoolClient): TransactionContext {
@@ -1095,21 +1116,29 @@ export class PostgresAdapter extends DrizzleAdapter {
           returning === undefined
             ? []
             : this.dateWallClockAliases(tableObj, options?.returning);
-        const spelled = this.wallClockSpelling(aliases);
-        const statement = this.buildTransactionUpdate(
-          table,
-          data,
-          where,
-          value => value,
-          returning === undefined
-            ? undefined
-            : sql.raw(`${returning}${spelled ? `, ${spelled}` : ""}`)
-        );
-        const result = await txDb().execute(statement);
-        if (returning === undefined) return [];
-        return (result.rows as T[]).map(r =>
-          this.mapRowFromRawSql(tableObj, r, aliases)
-        );
+        try {
+          const statement = this.buildTransactionUpdate(
+            table,
+            data,
+            where,
+            value => value,
+            returning === undefined
+              ? undefined
+              : sql.join(
+                  [returning, ...this.wallClockFragments(aliases)],
+                  sql`, `
+                )
+          );
+          const result = await txDb().execute(statement);
+          if (returning === undefined) return [];
+          return (result.rows as T[]).map(r =>
+            this.mapRowFromRawSql(tableObj, r, aliases)
+          );
+        } catch (error) {
+          // Classified with the operation and table named, as the pooled
+          // `update` classifies its failures.
+          throw this.handleQueryError(error, "update", table);
+        }
       },
 
       ...this.createTransactionForwarders(txDb),

@@ -13,6 +13,7 @@
 //
 // Self-skips when TEST_MYSQL_URL is unset or unreachable.
 
+import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
 import {
   boolean,
   datetime,
@@ -27,6 +28,21 @@ import { createMySqlAdapter, type MySqlAdapter } from "../index";
 
 const TABLE = "int_txmysql_update_table";
 const TEST_DB_URL = process.env.TEST_MYSQL_URL;
+
+// The physical table, through the production DDL helper. `title` and
+// `published_at` exist here and not on the model below.
+const TABLE_DEFINITION: TableDefinition = {
+  name: TABLE,
+  columns: [
+    { name: "id", type: "varchar(36)", primaryKey: true },
+    { name: "slug", type: "varchar(255)", nullable: false },
+    { name: "title", type: "varchar(255)" },
+    { name: "meta", type: "json" },
+    { name: "published_at", type: "datetime" },
+    { name: "updated_at", type: "datetime" },
+    { name: "published", type: "boolean" },
+  ],
+};
 
 // The runtime model: `title` and `published_at` are deliberately absent.
 const pages = mysqlTable(TABLE, {
@@ -91,6 +107,7 @@ describe("MySQL transaction update writes the physical table", async () => {
   }
 
   let adapter: MySqlAdapter;
+  let previousTz: string | undefined;
 
   const stored = async (id: string): Promise<StoredRow | undefined> => {
     const rows = await adapter.executeQuery<StoredRow>(
@@ -101,12 +118,14 @@ describe("MySQL transaction update writes the physical table", async () => {
   };
 
   beforeAll(async () => {
+    // A zone with an offset, so a value the driver read as local time would
+    // come back shifted and the wall-clock assertions could fail.
+    previousTz = process.env.TZ;
+    process.env.TZ = "Asia/Karachi";
     adapter = createMySqlAdapter({ url: TEST_DB_URL });
     await adapter.connect();
     await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
-    await adapter.executeQuery(
-      `CREATE TABLE ${TABLE} (id varchar(36) PRIMARY KEY, slug varchar(255) NOT NULL, title varchar(255), meta json, published_at datetime, updated_at datetime, published boolean)`
-    );
+    await adapter.createTable(TABLE_DEFINITION);
     adapter.setTableResolver({
       getTable: (name: string) => (name === TABLE ? pages : null),
     });
@@ -122,6 +141,8 @@ describe("MySQL transaction update writes the physical table", async () => {
   afterAll(async () => {
     await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
     await adapter.disconnect();
+    if (previousTz === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTz;
   });
 
   it("writes a column the model does not declare; the pooled builder update drops it", async () => {
@@ -184,12 +205,15 @@ describe("MySQL transaction update writes the physical table", async () => {
     expect((await stored("a"))?.title).toBeNull();
   });
 
-  it("refuses a column the table does not have, rather than dropping it", async () => {
+  it("refuses a column the table does not have, naming the operation and the table", async () => {
     await expect(
       adapter.transaction(async ctx => {
         await ctx.update(TABLE, { slug: "x", ghost: "x" }, byId("a"));
       })
-    ).rejects.toThrow(/ghost/);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/update operation failed.*ghost/s),
+      table: TABLE,
+    });
     // The refused statement wrote nothing else either.
     expect((await stored("a"))?.slug).toBe("first");
   });

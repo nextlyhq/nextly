@@ -957,13 +957,19 @@ export class MySqlAdapter extends DrizzleAdapter {
         where: WhereClause,
         options?: UpdateOptions
       ): Promise<T[]> => {
-        const statement = this.buildTransactionUpdate(
-          table,
-          data,
-          where,
-          value => value
-        );
-        await txDb().execute(statement);
+        try {
+          const statement = this.buildTransactionUpdate(
+            table,
+            data,
+            where,
+            value => value
+          );
+          await txDb().execute(statement);
+        } catch (error) {
+          // Classified with the operation and table named, as the pooled
+          // `update` classifies its failures.
+          throw this.handleQueryError(error, "update", table);
+        }
         // MySQL has no RETURNING. Select the updated rows back on the same
         // executor by the same WHERE, as the pooled update does — and only
         // when asked, which is the same test the dialects with RETURNING make.

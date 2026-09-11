@@ -63,7 +63,6 @@ import {
 } from "@nextlyhq/adapter-drizzle/types";
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type Database from "better-sqlite3";
-import { sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import {
   drizzle,
@@ -868,9 +867,9 @@ export class SqliteAdapter extends DrizzleAdapter {
 
       // Adapter-built, as `insert` above is; `buildTransactionUpdate` says
       // why. A column the model does not declare binds as every other value
-      // on this path does, through `sanitizeSqliteValue`.
-      // eslint-disable-next-line @typescript-eslint/require-await
-      update: async <T = unknown>(
+      // on this path does, through `sanitizeSqliteValue`. Synchronous like
+      // `runStatement`, so the promise is already settled either way.
+      update: <T = unknown>(
         table: string,
         data: Record<string, unknown>,
         where: WhereClause,
@@ -878,22 +877,30 @@ export class SqliteAdapter extends DrizzleAdapter {
       ): Promise<T[]> => {
         const tableObj = this.getTableObject(table);
         const returning = this.returningColumns(tableObj, options?.returning);
-        const statement = this.buildTransactionUpdate(
-          table,
-          data,
-          where,
-          sanitizeSqliteValue,
-          returning === undefined ? undefined : sql.raw(returning)
-        );
-        if (returning === undefined) {
-          // `run`, not `all`: better-sqlite3 throws on a statement that
-          // returns no rows, which is what an UPDATE without RETURNING is.
-          txDb().run(statement);
-          return [];
+        try {
+          const statement = this.buildTransactionUpdate(
+            table,
+            data,
+            where,
+            sanitizeSqliteValue,
+            returning
+          );
+          if (returning === undefined) {
+            // `run`, not `all`: better-sqlite3 throws on a statement that
+            // returns no rows, which is what an UPDATE without RETURNING is.
+            txDb().run(statement);
+            return Promise.resolve([]);
+          }
+          return Promise.resolve(
+            txDb()
+              .all<T>(statement)
+              .map(r => this.mapRowFromRawSql(tableObj, r))
+          );
+        } catch (error) {
+          // Classified with the operation and table named, as the pooled
+          // `update` classifies its failures.
+          return Promise.reject(this.handleQueryError(error, "update", table));
         }
-        return txDb()
-          .all<T>(statement)
-          .map(r => this.mapRowFromRawSql(tableObj, r));
       },
 
       ...this.createTransactionForwarders(txDb),

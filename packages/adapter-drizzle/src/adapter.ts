@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-import { count, getColumns } from "drizzle-orm";
+import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
 import { buildDrizzleOrderBy } from "./drizzle-order";
@@ -2349,8 +2349,9 @@ export abstract class DrizzleAdapter {
   }
 
   /**
-   * The columns a transaction's `update` returns, spelled for a RETURNING
-   * list or a select-back: `*`, or the requested columns as SQL names.
+   * The columns a transaction's `update` returns, as the RETURNING list:
+   * `*`, or the requested columns as SQL names — each an identifier the
+   * dialect quotes, never a string this class escaped.
    *
    * @returns `undefined` when the caller asked for nothing back — `update`
    *   returns `[]` then, as it always has.
@@ -2358,15 +2359,17 @@ export abstract class DrizzleAdapter {
   protected returningColumns(
     tableObj: unknown,
     returning: UpdateOptions["returning"]
-  ): string | undefined {
+  ): SQL | undefined {
     if (!returning || (Array.isArray(returning) && returning.length === 0)) {
       return undefined;
     }
-    return returning === "*"
-      ? "*"
-      : this.mapColumnNamesToSql(tableObj, returning)
-          .map(col => this.escapeIdentifier(col))
-          .join(", ");
+    if (returning === "*") return sql`*`;
+    return sql.join(
+      this.mapColumnNamesToSql(tableObj, returning).map(col =>
+        sql.identifier(col)
+      ),
+      sql`, `
+    );
   }
 
   /**

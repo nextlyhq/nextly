@@ -13,6 +13,7 @@
 //
 // Self-skips when TEST_POSTGRES_URL is unset.
 
+import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
 import { boolean, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -20,6 +21,22 @@ import { createPostgresAdapter } from "../index";
 
 const TEST_DB_URL = process.env.TEST_POSTGRES_URL;
 const TABLE = "int_txpg_update_table";
+
+// The physical table, through the production DDL helper. `title` and
+// `published_at` exist here and not on the model below.
+const TABLE_DEFINITION: TableDefinition = {
+  name: TABLE,
+  columns: [
+    { name: "id", type: "text", primaryKey: true },
+    { name: "slug", type: "text", nullable: false },
+    { name: "title", type: "text" },
+    { name: "meta", type: "jsonb" },
+    // Without a time zone, which is what every generated timestamp column is.
+    { name: "published_at", type: "timestamp" },
+    { name: "updated_at", type: "timestamp" },
+    { name: "published", type: "boolean" },
+  ],
+};
 
 // The runtime model: `title` and `published_at` are deliberately absent.
 const pages = pgTable(TABLE, {
@@ -56,6 +73,7 @@ describe.skipIf(!TEST_DB_URL)(
   "PostgreSQL transaction update writes the physical table",
   () => {
     let adapter: ReturnType<typeof createPostgresAdapter>;
+    let previousTz: string | undefined;
 
     const stored = async (id: string): Promise<StoredRow | undefined> => {
       const rows = await adapter.executeQuery<StoredRow>(
@@ -66,12 +84,14 @@ describe.skipIf(!TEST_DB_URL)(
     };
 
     beforeAll(async () => {
+      // A zone with an offset, so a value the driver read as local time
+      // would come back shifted and the wall-clock assertions could fail.
+      previousTz = process.env.TZ;
+      process.env.TZ = "Asia/Karachi";
       adapter = createPostgresAdapter({ url: TEST_DB_URL as string });
       await adapter.connect();
       await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
-      await adapter.executeQuery(
-        `CREATE TABLE ${TABLE} (id text PRIMARY KEY, slug text NOT NULL, title text, meta jsonb, published_at timestamp, updated_at timestamp, published boolean)`
-      );
+      await adapter.createTable(TABLE_DEFINITION);
       adapter.setTableResolver({
         getTable: (name: string) => (name === TABLE ? pages : null),
       });
@@ -87,6 +107,8 @@ describe.skipIf(!TEST_DB_URL)(
     afterAll(async () => {
       await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
       await adapter.disconnect();
+      if (previousTz === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTz;
     });
 
     it("writes a column the model does not declare; the pooled builder update drops it", async () => {
@@ -163,12 +185,15 @@ describe.skipIf(!TEST_DB_URL)(
       expect((await stored("a"))?.title).toBeNull();
     });
 
-    it("refuses a column the table does not have, rather than dropping it", async () => {
+    it("refuses a column the table does not have, naming the operation and the table", async () => {
       await expect(
         adapter.transaction(async ctx => {
           await ctx.update(TABLE, { slug: "x", ghost: "x" }, byId("a"));
         })
-      ).rejects.toThrow(/ghost/);
+      ).rejects.toMatchObject({
+        message: expect.stringMatching(/update operation failed.*ghost/s),
+        table: TABLE,
+      });
       // The refused statement wrote nothing else either.
       expect((await stored("a"))?.slug).toBe("first");
     });
