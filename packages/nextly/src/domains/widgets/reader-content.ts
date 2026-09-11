@@ -25,7 +25,6 @@ import {
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import { registeredContentKinds } from "../../services/lib/registered-content-slugs";
 
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
 
@@ -85,25 +84,18 @@ export async function readableCollectionSlugs(
 /**
  * The singles this reader may read, by slug.
  *
- * Taken from the SINGLES REGISTRY rather than the widget source registry, and
- * the asymmetry with {@link readableCollectionSlugs} is a fact about what is
- * registered rather than a choice: nothing publishes a `single:` source yet.
- * `WIDGET_SOURCE_KINDS` names the kind and `executable-source.ts` refuses it,
- * so filtering `listSources()` for singles would answer an empty list on every
- * install and hide the singles card forever. When `single:` sources land, this
- * reads them the way the collection half does, and the two derivations
- * converge.
- *
- * No table is counted here, so the reason the collection half avoids the
- * registry — a count against a table that does not exist yet throws — does not
- * apply. Only existence and permission are asked.
+ * The same derivation as {@link readableCollectionSlugs}, from the same
+ * registry: a `single:` source is published for every single whose stored
+ * metadata is not known to be ahead of its table, so a single the source
+ * builder withheld is not counted here either, and the singles card and the
+ * cards derived per single agree about which singles exist.
  */
 export async function readableSingleSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  const slugs = [...(await registeredContentKinds())]
-    .filter(([, kind]) => kind === "single")
-    .map(([slug]) => slug);
+  const slugs = listSources()
+    .filter(source => sourceKindFromId(source.id) === "single")
+    .map(source => sourceTarget(source.id));
   // The same batched decision as the collections, for the same reason.
   const readable = await readableEntities(slugs, readAccessCaller(caller));
   return slugs.filter(slug => readable.has(slug));

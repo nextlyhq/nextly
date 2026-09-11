@@ -1978,12 +1978,15 @@ async function applyReload(opts?: {
       // and nothing landed either. Replacing the set there would clear a
       // refusal an earlier reload correctly recorded, and take working cards
       // away for the rest of the session.
-      if (synced.collections) {
-        const { setDeferredCollections } = await import(
-          "../domains/widgets/collection-sources"
-        );
-        setDeferredCollections([]);
-      }
+      // Per kind, because each kind's sync succeeds or fails on its own: a
+      // collection sync that ran says nothing about a single a previous reload
+      // refused, and clearing that too would publish a card over a table the
+      // single's metadata is still ahead of.
+      const { setDeferredEntities } = await import(
+        "../domains/widgets/deferred-entities"
+      );
+      if (synced.collections) setDeferredEntities("collection", []);
+      if (synced.singles) setDeferredEntities("single", []);
       // Publish each scope's (possibly toggled) recording policy ONLY when that
       // scope's metadata sync succeeded — a `webhooks` change surfaces as no
       // schema diff, so this is the path a live opt-out/opt-in toggle flows
@@ -2377,14 +2380,20 @@ async function applyReload(opts?: {
       //
       // Replacing the set is what lets a later reload lift a refusal: every
       // collection not named here had its DDL applied in the same pass.
-      const { setDeferredCollections } = await import(
-        "../domains/widgets/collection-sources"
+      // Both kinds, from the one set this reload assembled with the kind
+      // prefixed: a single whose DDL was refused is ahead of its table exactly
+      // as a collection is, and its source names columns it does not have.
+      const { setDeferredEntities } = await import(
+        "../domains/widgets/deferred-entities"
       );
-      setDeferredCollections(
-        [...deferredEntities]
-          .filter(entity => entity.startsWith("collection:"))
-          .map(entity => entity.slice("collection:".length))
-      );
+      for (const kind of ["collection", "single"] as const) {
+        setDeferredEntities(
+          kind,
+          [...deferredEntities]
+            .filter(entity => entity.startsWith(`${kind}:`))
+            .map(entity => entity.slice(`${kind}:`.length))
+        );
+      }
 
       // 🔴 The same reading the metadata-only landing makes, because this is
       // the same sync answering the same way. A per-collection failure RESOLVES

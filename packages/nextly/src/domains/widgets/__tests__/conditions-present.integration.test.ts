@@ -24,7 +24,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshCollectionSources } from "../collection-sources";
+import { refreshCollectionWidgets } from "../collection-widgets";
 import { evaluateConditions } from "../conditions";
 import type { WidgetCondition } from "../lifecycle";
 
@@ -54,8 +54,8 @@ async function boot(options: {
   });
   current = t;
   // The same call the layout endpoint makes before resolving anything. Boot
-  // does not publish the sources, and the collections half reads them.
-  await refreshCollectionSources();
+  // does not publish the sources, and both halves read them.
+  await refreshCollectionWidgets();
   return t;
 }
 
@@ -123,12 +123,10 @@ describe("singles:present against a real instance", () => {
   });
 
   it("is not moved by a collection", async () => {
-    // 🔴 The registry control, and the one that matters most. The singles
-    // half does NOT read the widget source registry, because nothing publishes
-    // a `single:` source yet -- an evaluator that did would answer `false` on
-    // every install and pass the two refusal cases above. This case, beside
-    // the holding one, is what shows it reads the singles registry: a
-    // collection is present and the answer still moves only with singles.
+    // The registry control: both halves read the one source registry, so
+    // this is what shows the singles half filters it by KIND. A collection is
+    // present and published as a source, and the answer still moves only
+    // with singles.
     await boot({
       collections: [
         { slug: "notes", access: readable, fields: [text({ name: "title" })] },

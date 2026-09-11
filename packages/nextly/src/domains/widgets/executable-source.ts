@@ -42,7 +42,8 @@ import { systemResolver, type SystemSourceResolver } from "./system-sources";
  */
 export type ExecutableSource =
   | { kind: "system"; source: WidgetSource; resolve: SystemSourceResolver }
-  | { kind: "collection"; source: WidgetSource };
+  | { kind: "collection"; source: WidgetSource }
+  | { kind: "single"; source: WidgetSource };
 
 /**
  * Resolves `sourceId` against the live registry, or fails loudly.
@@ -74,9 +75,13 @@ export function resolveExecutableSource(sourceId: string): ExecutableSource {
     }
     return { kind: "system", source, resolve };
   }
+  // A single is executable the way a collection is: its one document is read
+  // through the Direct API with the caller, and the executor decides what
+  // that read looks like.
+  if (source.kind === "single") return { kind: "single", source };
   if (source.kind !== "collection") {
     failUnavailableSourceOrOp(
-      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
+      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections, singles and system sources are`
     );
   }
   return { kind: "collection", source };

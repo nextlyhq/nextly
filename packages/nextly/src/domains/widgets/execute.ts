@@ -21,6 +21,7 @@
 
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
+import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
 
@@ -29,6 +30,7 @@ import type { WidgetQuery } from "./query";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
   failUnavailableSourceOrOp,
+  refuseUnconsumedQueryFields,
   sourceTarget,
   type WidgetSource,
 } from "./sources";
@@ -257,6 +259,93 @@ async function runList(
   };
 }
 
+/**
+ * What a single source does with each field of a widget query.
+ *
+ * Exhaustive over `keyof WidgetQuery`, for the reason the versions source's
+ * table is: a field added to the query has to be decided for this source or
+ * `check-types` fails here. A single answers a fixed question -- its one
+ * document -- so nothing that chooses or orders rows applies, and each of
+ * those is refused by name rather than accepted and dropped. `limit` is
+ * consumed rather than refused because validation supplies one on every
+ * query, and a bound of at least one is satisfied by the one row there is.
+ */
+const SINGLE_QUERY_FIELD_USE: Record<
+  keyof WidgetQuery,
+  "consumed" | "refused"
+> = {
+  source: "consumed",
+  op: "consumed",
+  select: "consumed",
+  status: "consumed",
+  limit: "consumed",
+  where: "refused",
+  sort: "refused",
+  groupBy: "refused",
+  dateField: "refused",
+  interval: "refused",
+};
+
+/**
+ * A single's document, as a list of one row.
+ *
+ * Read through the same Direct API a REST read takes, with the caller and
+ * `overrideAccess: false`, so the single's own access rules -- code-defined
+ * ones included -- decide the answer, and a reader the rule refuses gets the
+ * refusal rather than a filtered document. A read this path makes is the
+ * read the admin's editor makes: a single that has never been written is
+ * materialized with its defaults on the way, which is the product's meaning
+ * of a single existing.
+ *
+ * `select` is applied HERE, after the read. The Direct API declares the
+ * option and the singles read does not consume it, so the document arrives
+ * whole and the projection is this function's; the fields the caller may not
+ * read were already withheld by the read itself. A `status` that names no
+ * document -- a draft-only single asked for `published` -- is an empty list,
+ * not an error: the card says "Nothing yet", which is true.
+ */
+async function runSingle(
+  slug: string,
+  query: WidgetQuery,
+  caller: ReadCaller,
+  source: WidgetSource
+): Promise<WidgetResult> {
+  refuseUnconsumedQueryFields(query, SINGLE_QUERY_FIELD_USE, source.id);
+  let document: Record<string, unknown> | undefined;
+  try {
+    document = await requireNextly().findSingle({
+      slug,
+      overrideAccess: false as const,
+      user: caller.user,
+      ...(caller.authenticatedScope
+        ? ({ actor: caller.authenticatedScope } satisfies Pick<
+            FindArgs<string>,
+            "actor"
+          >)
+        : {}),
+      ...(query.status ? { status: query.status } : {}),
+    });
+  } catch (error) {
+    if (!NextlyError.is(error) || error.code !== "NOT_FOUND") throw error;
+    document = undefined;
+  }
+  const items =
+    document === undefined ? [] : [projectedTo(document, query.select)];
+  const fields = describeSelectedFields(query, source, items);
+  return { op: "list", items, ...(fields && { fields }) };
+}
+
+/** The document reduced to the selected names; the whole document for none. */
+function projectedTo(
+  document: Record<string, unknown>,
+  select: readonly string[] | undefined
+): Record<string, unknown> {
+  if (!select || select.length === 0) return document;
+  return Object.fromEntries(
+    select.filter(name => name in document).map(name => [name, document[name]])
+  );
+}
+
 export async function executeWidgetQuery(
   query: WidgetQuery,
   caller: ReadCaller
@@ -273,6 +362,19 @@ export async function executeWidgetQuery(
   }
 
   const source = executable.source;
+
+  // A single answers `list` alone; validation refuses every other op before
+  // it gets here, and the arm refuses again rather than falling into the
+  // collection ops with a slug that names no collection.
+  if (executable.kind === "single") {
+    if (query.op === "list") {
+      return runSingle(sourceTarget(source.id), query, caller, source);
+    }
+    failUnavailableSourceOrOp(
+      `op "${query.op}" on source "${query.source}" is not implemented; a single answers "list" alone`
+    );
+  }
+
   const collection = sourceTarget(source.id);
 
   if (query.op === "count") return runCount(collection, query, caller);

@@ -67,13 +67,13 @@ const {
   errorSpy: vi.fn(),
 }));
 
-const setDeferredCollectionsSpy = vi.fn();
-// The reload PUBLISHES which collections it refused, and the widget source
-// refresh is the consumer. Mocked here so this file can assert the call
-// without pulling the DI container in through the widgets domain.
-vi.mock("../../domains/widgets/collection-sources", () => ({
-  setDeferredCollections: (slugs: readonly string[]) =>
-    setDeferredCollectionsSpy(slugs),
+const setDeferredEntitiesSpy = vi.fn();
+// The reload PUBLISHES which entities it refused, per kind, and the widget
+// source refresh is the consumer. Mocked here so this file can assert the
+// call without pulling the DI container in through the widgets domain.
+vi.mock("../../domains/widgets/deferred-entities", () => ({
+  setDeferredEntities: (kind: string, slugs: readonly string[]) =>
+    setDeferredEntitiesSpy(kind, slugs),
 }));
 
 vi.mock("../../cli/utils/config-loader", () => ({
@@ -123,7 +123,7 @@ describe("reloadNextlyConfig", () => {
     // Its call history is what several assertions read, and it lives at module
     // scope: without this, one test's publish satisfies the next one's
     // expectation and a "not called" assertion can never hold.
-    setDeferredCollectionsSpy.mockReset();
+    setDeferredEntitiesSpy.mockReset();
     pipelineApplySpy.mockResolvedValue({
       success: true,
       statementsExecuted: 1,
@@ -554,7 +554,9 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith(["books"]);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", [
+      "books",
+    ]);
   });
 
   it("does NOT clear refusals when the metadata sync reports per-slug errors", async () => {
@@ -601,7 +603,10 @@ describe("reloadNextlyConfig", () => {
 
     // The control that this reload took the no-DDL landing at all.
     expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(setDeferredCollectionsSpy).not.toHaveBeenCalled();
+    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
+      "collection",
+      expect.anything()
+    );
   });
 
   it("DOES clear refusals when that same sync reports no errors", async () => {
@@ -643,7 +648,7 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver });
 
     expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", []);
   });
 
   it("publishes NOTHING when the reload carries only a refusal", async () => {
@@ -683,7 +688,10 @@ describe("reloadNextlyConfig", () => {
 
     // The control that this reload took the no-DDL path rather than applying.
     expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(setDeferredCollectionsSpy).not.toHaveBeenCalled();
+    expect(setDeferredEntitiesSpy).not.toHaveBeenCalledWith(
+      "collection",
+      expect.anything()
+    );
   });
 
   it("publishes an EMPTY refusal set when everything applied", async () => {
@@ -709,7 +717,7 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("collection", []);
   });
 
   it("marks an EDITED code-first collection as 'applied' after a successful apply", async () => {
