@@ -1,8 +1,9 @@
 /**
  * What content THIS reader can see, asked once and shared.
  *
- * Two callers ask a version of this question — the `content:empty` condition
- * and the onboarding steps — and they must not answer it twice. A second
+ * Three callers ask a version of this question — the `content:empty` and
+ * `collections:present` conditions and the onboarding steps — and they must
+ * not answer it twice. A second
  * implementation would agree on the day it was written and drift afterwards,
  * silently, because both would look correct in isolation: one counting drafts
  * and the other not, or one reading the source registry and the other the
@@ -24,6 +25,7 @@ import {
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
+import { registeredContentKinds } from "../../services/lib/registered-content-slugs";
 
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
 
@@ -76,6 +78,33 @@ export async function readableCollectionSlugs(
   // Asked once for the whole set rather than per collection: a permission
   // decision resolves a session caller through a per-user TTL cache, so asking
   // separately is one database read per collection for one answer.
+  const readable = await readableEntities(slugs, readAccessCaller(caller));
+  return slugs.filter(slug => readable.has(slug));
+}
+
+/**
+ * The singles this reader may read, by slug.
+ *
+ * Taken from the SINGLES REGISTRY rather than the widget source registry, and
+ * the asymmetry with {@link readableCollectionSlugs} is a fact about what is
+ * registered rather than a choice: nothing publishes a `single:` source yet.
+ * `WIDGET_SOURCE_KINDS` names the kind and `executable-source.ts` refuses it,
+ * so filtering `listSources()` for singles would answer an empty list on every
+ * install and hide the singles card forever. When `single:` sources land, this
+ * reads them the way the collection half does, and the two derivations
+ * converge.
+ *
+ * No table is counted here, so the reason the collection half avoids the
+ * registry — a count against a table that does not exist yet throws — does not
+ * apply. Only existence and permission are asked.
+ */
+export async function readableSingleSlugs(
+  caller: ReadCaller
+): Promise<string[]> {
+  const slugs = [...(await registeredContentKinds())]
+    .filter(([, kind]) => kind === "single")
+    .map(([slug]) => slug);
+  // The same batched decision as the collections, for the same reason.
   const readable = await readableEntities(slugs, readAccessCaller(caller));
   return slugs.filter(slug => readable.has(slug));
 }
