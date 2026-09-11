@@ -1,0 +1,73 @@
+{
+  "name": "@nextlyhq/plugin-mcp",
+  "version": "0.0.2-alpha.65",
+  "description": "Experimental: exposes a Nextly install's schema and content to AI agents over the Model Context Protocol, read-only",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@nextlyhq/plugin-sdk": "workspace:*",
+    "nextly": "0.0.2-alpha.65"
+  },
+  "devDependencies": {
+    "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/plugin-sdk": "workspace:*",
+    "@nextlyhq/tsconfig": "workspace:*",
+    "@types/node": "^20.19.17",
+    "nextly": "workspace:*",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+  },
+  "keywords": [
+    "nextly",
+    "nextly-plugin",
+    "plugin",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agents",
+    "cms",
+    "headless-cms"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/plugin-mcp"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "homepage": "https://nextlyhq.com",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
+  "author": "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)"
+}
