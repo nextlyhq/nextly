@@ -1,0 +1,24 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Nextly",
+  "description": "Nextly is an open-source CMS and visual page builder for Next.js. Model content, build pages, localize, version and release from your own stack.",
+  "folders": ["docs"],
+  "excludeFolders": [],
+  "excludeFiles": [
+    "AGENTS.md",
+    "AGENTS.measured.md",
+    "ARCHITECTURE.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "followup-report.md"
+  ],
+  "rules": [
+    "Read content on the server through the Direct API (getNextly + find); do not build an API route to fetch your own content.",
+    "Users are not a normal collection: read them through nextly.users, not find({ collection: \"users\" }).",
+    "Run types:generate after a schema change, in the same change; until then find() returns loosely typed documents.",
+    "Migrations are append-only once shared: add a new one rather than editing an applied file.",
+    "Ask the project which Nextly it is with `nextly --version`; the documentation describes the current release and is not version-stamped."
+  ],
+  "previousVersions": []
+}

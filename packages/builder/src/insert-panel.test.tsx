@@ -36,6 +36,7 @@ import {
 
 import { InsertPanel } from "./insert-panel";
 import type { EditorState } from "./editor-state";
+import { EMPTY_SELECTION } from "./selection";
 
 // The command primitives observe their list box to size it, and jsdom
 // implements no ResizeObserver. Without this every case dies at render with a
@@ -86,6 +87,7 @@ function editorSpy(document: BlockDocument): EditorState & {
   return {
     document,
     selectedId: null,
+    selection: EMPTY_SELECTION,
     select: vi.fn(),
     apply: vi.fn(() => document),
     applyAll: vi.fn(() => document),
@@ -447,6 +449,77 @@ describe("InsertPanel", () => {
     expect(screen.queryAllByRole("option", { name: /^Column\b/ })).toHaveLength(
       0
     );
+  });
+});
+
+describe("the sentence that says where the next block lands", () => {
+  /*
+   * The one placement that differs from what selecting a block usually implies
+   * is "inside": an empty container takes the block rather than standing beside
+   * it. "Inside" is only meaningful if the author knows inside WHAT, and this
+   * paragraph is the polite live region that tells them — for a screen-reader
+   * author it is the whole answer to "where will this go".
+   *
+   * The container is named by `blockLabel`, the same rule the palette, the
+   * layers and the inspector read, so the sentence agrees with every other
+   * place the author has already met the block.
+   */
+
+  /**
+   * An editor with one block selected, stated the way the real editor states
+   * it: `selectedId` is `selection.primary`, so a fixture that set one and not
+   * the other would be a state the editor never produces.
+   */
+  function selecting(editor: EditorState, id: string): EditorState {
+    return {
+      ...editor,
+      selectedId: id,
+      selection: { ids: [id], primary: id },
+    };
+  }
+
+  function emptyContainer(id: string, type: string): EditorState {
+    return selecting(
+      editorSpy(documentOf([{ id, type, version: 1, props: {} }] as never)),
+      id
+    );
+  }
+
+  it("names the container the block will go inside", () => {
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/section",
+          editor: { label: "Section" },
+          slots: { children: {} },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={emptyContainer("s", "acme/section")} />);
+
+    const sentence = screen.getByText("Adds inside Section");
+    // The announcement is the point. A paragraph with the right words that is
+    // not a live region tells a sighted author and nobody else.
+    expect(sentence.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("calls an unlabelled container what the palette calls it", () => {
+    /*
+     * The control on the name: a container with no `editor.label` still reads
+     * as the humanised type every other surface shows, not as "the selected
+     * block" and not as its raw identity. A sentence that always said
+     * "Section" would fail here; one that kept a naming rule of its own would
+     * disagree with the tile the author just clicked.
+     */
+    registerBlocks(
+      [{ ...base, name: "acme/box", slots: { children: {} } }] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={emptyContainer("b", "acme/box")} />);
+
+    expect(screen.getByText("Adds inside Box")).toBeTruthy();
   });
 });
 

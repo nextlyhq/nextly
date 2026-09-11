@@ -116,8 +116,15 @@ export interface RectSource {
 export interface DropRegion {
   /** Stable identity: {@link ROOT_REGION}, or `"<parentId>::<slot>"`. */
   readonly id: string;
-  /** What this region is, as the nesting rule needs to see it. */
-  readonly at: PlacementTarget;
+  /**
+   * What this region is, as the nesting rule needs to see it.
+   *
+   * Named as {@link DropTarget.target} is, because it is the same thing: the
+   * placement a block would be nested into. `at` is reserved for a POSITION
+   * throughout this module, and a reader holding a region and a target should
+   * not have to remember which of two meanings the one word carries.
+   */
+  readonly target: PlacementTarget;
   /** The container node, absent for the root region. */
   readonly parentId?: string;
   /** The slot within that container, absent for the root region. */
@@ -302,7 +309,7 @@ export function collectRegions(
           .filter((child): child is Rect => child !== undefined);
         regions.push({
           id: `${node.id}::${slot}`,
-          at: { kind: "slot", parentType: node.type, slot },
+          target: { kind: "slot", parentType: node.type, slot },
           parentId: node.id,
           slot,
           depth,
@@ -321,7 +328,7 @@ export function collectRegions(
 
   regions.push({
     id: ROOT_REGION,
-    at: { kind: "root" },
+    target: { kind: "root" },
     depth: 0,
     rect: rects.rootRect(),
     axis: axisOfRects(rootChildRects),
@@ -374,7 +381,7 @@ export function targetsInRegion(
     id: `${region.id}#${String(index)}`,
     regionId: region.id,
     at: positionAt(index),
-    target: region.at,
+    target: region.target,
     axis,
     line,
     ...across,
@@ -525,7 +532,7 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
   const region = regionAt(query.regions, pointer, query.forbiddenParents);
   if (region === undefined) return { kind: "none" };
 
-  const verdict = blockAllowedAt(query.blockName, region.at, query.nesting);
+  const verdict = blockAllowedAt(query.blockName, region.target, query.nesting);
   if (!verdict.allowed) {
     return {
       kind: "refused",

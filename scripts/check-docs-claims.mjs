@@ -95,6 +95,90 @@ export const CATEGORY_SURFACES = [
   "docs/getting-started/index.mdx",
 ];
 
+/** The file Context7 reads to decide what to index, at the repository root. */
+export const CONTEXT7_CONFIG = "context7.json";
+
+/** The package whose description every other statement of the category follows. */
+export const CORE_PACKAGE = "nextly";
+
+/** The parsed configuration, or `null` for a file that is absent or not JSON. */
+export function readContext7Config(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+const context7Finding = (check, message) => ({
+  check,
+  file: CONTEXT7_CONFIG,
+  line: null,
+  message,
+});
+
+/**
+ * What is wrong with a Context7 configuration, or nothing.
+ *
+ * The rules are in priority order, and the first that applies is the finding: a file that
+ * is not tracked or does not parse says nothing an indexer can use; a description naming
+ * the retired category is the claim this whole check exists to stop; a core package with
+ * no description leaves nothing to follow; and a description that merely differs from the
+ * core package's is the drift that lets the others happen unnoticed. `undefined` is the
+ * untracked file, `null` the unreadable one.
+ */
+const CONTEXT7_RULES = [
+  [
+    config => config === undefined,
+    () =>
+      context7Finding(
+        "context7-missing",
+        "is not tracked; without it an indexer reads the whole repository and guesses what the project is"
+      ),
+  ],
+  [
+    config => config === null || typeof config !== "object",
+    () => context7Finding("context7-unreadable", "is not a JSON object"),
+  ],
+  [
+    config => typeof config.description !== "string" || config.description.trim() === "",
+    () =>
+      context7Finding(
+        "context7-description",
+        "has no description; an indexer falls back to guessing what the project is"
+      ),
+  ],
+  [
+    config => RETIRED_CATEGORY.test(config.description),
+    () =>
+      context7Finding(
+        "retired-category",
+        `"app framework" — the category is "content platform"; say what this is for`
+      ),
+  ],
+  [
+    (_config, core) => typeof core !== "string" || core.trim() === "",
+    () =>
+      context7Finding(
+        "context7-description",
+        `packages/${CORE_PACKAGE}/package.json has no description for this to follow; the sentence lives there`
+      ),
+  ],
+  [
+    (config, core) => config.description !== core,
+    () =>
+      context7Finding(
+        "context7-description",
+        `description differs from packages/${CORE_PACKAGE}/package.json; one sentence says what this is`
+      ),
+  ],
+];
+
+export function context7Findings(config, coreDescription) {
+  const rule = CONTEXT7_RULES.find(([applies]) => applies(config, coreDescription));
+  return rule ? rule[1]() : null;
+}
+
 /**
  * The category the project moved away from.
  *
@@ -1728,6 +1812,27 @@ export async function runChecks({
       line: null,
       message: `"app framework" — the category is "content platform"; say what this is for`,
     });
+  }
+
+  // `context7.json` tells an indexer what the project is, in one sentence an
+  // agent reads before any page. It is a category surface like the npm
+  // description, and it is held to the SAME sentence as the core package's
+  // rather than checked on its own: two sentences saying what Nextly is, in
+  // two files nobody reads together, is how the second one was still calling
+  // this an app framework months after the first stopped.
+  //
+  // Held whether or not the file is there: a configuration that is deleted or
+  // never tracked is an indexer left to guess, and a check that skipped it
+  // would report that as clean.
+  {
+    const core = packages.find(pkg => pkg.json.name === CORE_PACKAGE);
+    const finding = context7Findings(
+      trackedSet.has(CONTEXT7_CONFIG)
+        ? readContext7Config(join(repoRoot, CONTEXT7_CONFIG))
+        : undefined,
+      core?.json.description
+    );
+    if (finding) findings.push(finding);
   }
 
   // --- per-line prose checks ---

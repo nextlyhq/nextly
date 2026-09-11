@@ -41,6 +41,12 @@ for all published packages. Status: alpha, all packages version in lockstep.
   nextlyhq.com/docs). Nothing here renders them: the site fetches and
   compiles them at its build, so `pnpm check:docs-compile` compiles every page
   with the same MDX compiler and CI refuses one that does not parse.
+- `context7.json` - what Context7 indexes for coding agents: `docs/` and the
+  root README, with every other root Markdown file excluded by name (Context7
+  reads root-level Markdown whatever `folders` says). Its description is held
+  to the core package's by `check-docs-claims`; `pnpm check:context7-index`
+  reads back what the live index cites, and exits 2 rather than 0 while the
+  library is unregistered.
 
 Before editing a package, read its README.md and check for a nested AGENTS.md.
 
