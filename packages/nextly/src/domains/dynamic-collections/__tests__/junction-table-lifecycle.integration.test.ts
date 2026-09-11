@@ -88,6 +88,49 @@ describe("junction table lifecycle on a real SQLite database", () => {
     expect(links.map(l => l.tags_id)).toEqual(["t1", "t2"]);
   });
 
+  it("frees the old attachment names on rename, so a field reusing the old name is indexed", () => {
+    apply(
+      service.generateAlterTableMigration(
+        "dc_posts",
+        [title, manyToMany("tags")],
+        [title, manyToMany("categories")]
+      )
+    );
+    // A new field under the old name: CREATE spells the old index names, which
+    // must be free or `IF NOT EXISTS` would find them on the renamed table
+    // and leave this junction unindexed.
+    apply(
+      service.generateAlterTableMigration(
+        "dc_posts",
+        [title, manyToMany("categories")],
+        [title, manyToMany("categories"), manyToMany("tags")]
+      )
+    );
+    const indexes = db
+      .prepare(
+        "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%' ORDER BY name"
+      )
+      .all() as { name: string; tbl_name: string }[];
+    expect(indexes).toEqual([
+      {
+        name: "idx_dc_posts_dc_tags_categories_posts",
+        tbl_name: "dc_posts_dc_tags_categories",
+      },
+      {
+        name: "idx_dc_posts_dc_tags_categories_tags",
+        tbl_name: "dc_posts_dc_tags_categories",
+      },
+      {
+        name: "idx_dc_posts_dc_tags_tags_posts",
+        tbl_name: "dc_posts_dc_tags_tags",
+      },
+      {
+        name: "idx_dc_posts_dc_tags_tags_tags",
+        tbl_name: "dc_posts_dc_tags_tags",
+      },
+    ]);
+  });
+
   it("leaves no junction behind when the field is removed", () => {
     apply(
       service.generateAlterTableMigration(

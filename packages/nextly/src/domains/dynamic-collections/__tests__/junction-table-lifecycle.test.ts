@@ -42,6 +42,9 @@ const text = (name: string): FieldDefinition => ({ name, type: "text" });
 /** The generated junction name for `dc_posts.<field> -> dc_tags`. */
 const junction = (field: string): string => `dc_posts_dc_tags_${field}`;
 
+const asField = (f: Record<string, unknown>): FieldDefinition =>
+  f as unknown as FieldDefinition;
+
 describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
   const service = () => new DynamicCollectionSchemaService(undefined, dialect);
 
@@ -149,6 +152,67 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       expect(sql).not.toContain("RENAME TO");
     });
 
+    it("renames every attachment whose name embedded the old table name", () => {
+      // Left as they were, the old index and constraint names would still be
+      // taken when a later field reuses the old field name and CREATE spells
+      // the same ones. Each dialect renames what it can and rebuilds the rest.
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany("tags")],
+        [manyToMany("categories")]
+      );
+      const from = junction("tags");
+      const to = junction("categories");
+      const expected: Record<Dialect, string[]> = {
+        postgresql: [
+          `ALTER INDEX "idx_${from}_posts" RENAME TO "idx_${to}_posts";`,
+          `ALTER INDEX "idx_${from}_tags" RENAME TO "idx_${to}_tags";`,
+          `ALTER TABLE "${to}" RENAME CONSTRAINT "fk_${from}_posts" TO "fk_${to}_posts";`,
+          `ALTER TABLE "${to}" RENAME CONSTRAINT "fk_${from}_tags" TO "fk_${to}_tags";`,
+          `ALTER TABLE "${to}" RENAME CONSTRAINT "uq_${from}_pair" TO "uq_${to}_pair";`,
+        ],
+        mysql: [
+          `ALTER TABLE \`${to}\` RENAME INDEX \`idx_${from}_posts\` TO \`idx_${to}_posts\`;`,
+          `ALTER TABLE \`${to}\` RENAME INDEX \`idx_${from}_tags\` TO \`idx_${to}_tags\`;`,
+          `ALTER TABLE \`${to}\` RENAME INDEX \`uq_${from}_pair\` TO \`uq_${to}_pair\`;`,
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_posts\`, ADD CONSTRAINT \`fk_${to}_posts\` FOREIGN KEY (\`posts_id\`) REFERENCES \`dc_posts\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION;`,
+          `ALTER TABLE \`${to}\` DROP FOREIGN KEY \`fk_${from}_tags\`, ADD CONSTRAINT \`fk_${to}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE CASCADE ON UPDATE NO ACTION;`,
+        ],
+        sqlite: [
+          `DROP INDEX IF EXISTS "idx_${from}_posts";`,
+          `CREATE INDEX IF NOT EXISTS "idx_${to}_posts" ON "${to}"("posts_id");`,
+          `DROP INDEX IF EXISTS "idx_${from}_tags";`,
+          `CREATE INDEX IF NOT EXISTS "idx_${to}_tags" ON "${to}"("tags_id");`,
+        ],
+      };
+      for (const statement of expected[dialect]) {
+        expect(sql).toContain(statement);
+      }
+      // The old spellings survive nowhere but in the rename statements.
+      const withoutRenames = sql
+        .split("--> statement-breakpoint")
+        .filter(chunk => !/RENAME|DROP INDEX|DROP FOREIGN KEY/.test(chunk));
+      expect(withoutRenames.join("\n")).not.toContain(from);
+    });
+
+    it("is two drops and a create, not an ambiguous rename, when nothing pairs", () => {
+      // Two removed, one added, and the added one points elsewhere: no
+      // compatible pair exists, so nothing is renamed and nothing is refused.
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany("tags", "tags"), manyToMany("authors", "authors")],
+        [manyToMany("topics", "topics")]
+      );
+      expect(sql).toContain(
+        `DROP TABLE IF EXISTS ${q(dialect, junction("tags"))};`
+      );
+      expect(sql).toContain(
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_authors_dc_posts_authors")};`
+      );
+      expect(sql).toContain("CREATE TABLE IF NOT EXISTS");
+      expect(sql).not.toContain("RENAME TO");
+    });
+
     it("refuses two renames in one save by name rather than guessing the pairing", () => {
       // A wrong pairing hands one field the other's links, so the author
       // renames one per save — the same posture as a field-group rename.
@@ -165,6 +229,91 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
         ).publicData;
         expect(data?.errors?.[0]?.code).toBe("MANY_TO_MANY_RENAME_AMBIGUOUS");
       }
+    });
+  });
+
+  describe("a save that renames a many-to-many and a field group together", () => {
+    it("carries both: the junction rename and the group's association migration", () => {
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [
+          manyToMany("tags"),
+          asField({ name: "seo", type: "fieldGroup", fieldGroup: "seo" }),
+        ],
+        [
+          manyToMany("categories"),
+          asField({ name: "meta", type: "fieldGroup", fieldGroup: "seo" }),
+        ],
+        { fieldGroupTableNames: new Map([["seo", "comp_seo"]]) }
+      );
+      expect(sql).toContain(
+        `ALTER TABLE ${q(dialect, junction("tags"))} RENAME TO ${q(dialect, junction("categories"))};`
+      );
+      expect(sql).toMatch(/["'`]_parent_field["'`] = 'meta'/);
+      expect(sql).not.toContain("CREATE TABLE");
+      expect(sql).not.toContain("DROP TABLE");
+    });
+  });
+
+  describe("a localized many-to-many, which the column diff never sees", () => {
+    it("is dropped and renamed from the full lists the caller hands over", () => {
+      // The column diff of a localized collection receives only the shared
+      // fields; a junction is not a column and must not vanish with the split.
+      const removed = service().generateAlterTableMigration(
+        "dc_posts",
+        [text("title")],
+        [text("title")],
+        {
+          junctionFields: {
+            old: [
+              text("title"),
+              manyToMany("tags", "tags", { localized: true }),
+            ],
+            new: [text("title")],
+          },
+        }
+      );
+      expect(removed).toContain(
+        `DROP TABLE IF EXISTS ${q(dialect, junction("tags"))};`
+      );
+
+      const renamed = service().generateAlterTableMigration(
+        "dc_posts",
+        [text("title")],
+        [text("title")],
+        {
+          junctionFields: {
+            old: [
+              text("title"),
+              manyToMany("tags", "tags", { localized: true }),
+            ],
+            new: [
+              text("title"),
+              manyToMany("categories", "tags", { localized: true }),
+            ],
+          },
+        }
+      );
+      expect(renamed).toContain(
+        `ALTER TABLE ${q(dialect, junction("tags"))} RENAME TO ${q(dialect, junction("categories"))};`
+      );
+
+      const added = service().generateAlterTableMigration(
+        "dc_posts",
+        [text("title")],
+        [text("title")],
+        {
+          junctionFields: {
+            old: [text("title")],
+            new: [
+              text("title"),
+              manyToMany("tags", "tags", { localized: true }),
+            ],
+          },
+        }
+      );
+      expect(added).toContain("CREATE TABLE IF NOT EXISTS");
+      expect(added).toContain(junction("tags"));
     });
   });
 

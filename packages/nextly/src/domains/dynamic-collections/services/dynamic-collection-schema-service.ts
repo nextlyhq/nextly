@@ -59,6 +59,24 @@ import { DynamicCollectionValidationService } from "./dynamic-collection-validat
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
+/** A many-to-many junction, by the names of everything it is made of. */
+export interface JunctionShape {
+  table: string;
+  sourceCollection: string;
+  targetCollection: string;
+  sourceTable: string;
+  targetTable: string;
+  sourceColumn: string;
+  targetColumn: string;
+  fkSource: string;
+  fkTarget: string;
+  uqPair: string;
+  idxSource: string;
+  idxTarget: string;
+  onDelete: string;
+  onUpdate: string;
+}
+
 /**
  * The fields a save removed and the fields it added, among those a rename
  * detector cares about. Every detector pairs from this same set, so a field
@@ -806,6 +824,13 @@ ${allColumnDefs.join(",\n")}
        */
       wasStatus?: boolean;
       /**
+       * The full old and new field lists, for the junction tables, when the
+       * lists above are a localized collection's shared subset. A junction
+       * is not a column: a localized many-to-many sits in neither shared
+       * list, and its table must still be created, renamed or dropped.
+       */
+      junctionFields?: { old: FieldDefinition[]; new: FieldDefinition[] };
+      /**
        * New Draft/Published flag — pass the toggle value the user is
        * saving so the diff can ADD or DROP the `status` column when the
        * lifecycle is enabled or disabled. Pairs with `wasStatus`.
@@ -931,14 +956,8 @@ ${allColumnDefs.join(",\n")}
     // alternative (data destruction). Track as a follow-up; admin UI
     // ideally splits combined edits into two saves.
     const rename = this.detectFieldRename(oldFields, newFields);
-    // A many-to-many rename is a junction table rename, not a column one;
-    // asked only when no column rename was found, as the field-group rename is.
-    const junctionRename = rename
-      ? null
-      : this.detectJunctionRename(oldFields, newFields);
-    let renamedFromName =
-      rename?.from.name ?? junctionRename?.from.name ?? null;
-    let renamedToName = rename?.to.name ?? junctionRename?.to.name ?? null;
+    let renamedFromName = rename?.from.name ?? null;
+    let renamedToName = rename?.to.name ?? null;
     if (rename) {
       const fromCol = toSnakeCase(rename.from.name);
       const toCol = toSnakeCase(rename.to.name);
@@ -952,23 +971,6 @@ ${allColumnDefs.join(",\n")}
         // and SQLite 3.25+ — all dialects we support.
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} RENAME COLUMN ${this.quoteIdentifier(fromCol)} TO ${this.quoteIdentifier(toCol)};`
-        );
-      }
-    } else if (junctionRename) {
-      const fromTable = this.junctionTableNameFor(
-        tableName,
-        junctionRename.from
-      );
-      const toTable = this.junctionTableNameFor(tableName, junctionRename.to);
-      // A junction the author named keeps its name across the rename, and
-      // renaming a table to itself is refused by every dialect.
-      if (fromTable !== toTable) {
-        // RENAME TO is spelled the same on PostgreSQL, MySQL and SQLite. The
-        // table's indexes and constraints keep the names they were created
-        // with — nothing predicts those from the table name — and the links,
-        // which are what the rename exists to keep, travel with the table.
-        statements.push(
-          `ALTER TABLE ${this.quoteIdentifier(fromTable)} RENAME TO ${this.quoteIdentifier(toTable)};`
         );
       }
     } else {
@@ -1013,13 +1015,9 @@ ${allColumnDefs.join(",\n")}
       if (field.name === renamedToName) continue;
       const previous = oldFieldMap.get(field.name);
       if (!previous || this.storageClassChanged(previous, field)) {
-        // Skip manyToMany fields - they don't get columns, they get junction tables
-        if (usesJunctionTable(field)) {
-          // Generate junction table instead
-          const junctionSQL = this.generateJunctionTable(tableName, field);
-          statements.push(junctionSQL);
-          continue;
-        }
+        // A many-to-many gets no column; its junction table is the
+        // lifecycle pass's below, decided on the full field lists.
+        if (usesJunctionTable(field)) continue;
 
         // Component and field-group fields store their data in a separate table, so
         // adding one must not ADD COLUMN on the parent table.
@@ -1203,26 +1201,13 @@ ${allColumnDefs.join(",\n")}
     // Find removed fields
     for (const field of oldFields) {
       // Phase D: skip the renamed source — it's already been handled
-      // above as ALTER TABLE RENAME COLUMN (or, for a many-to-many, as a
-      // junction table rename).
+      // above as ALTER TABLE RENAME COLUMN.
       if (field.name === renamedFromName) continue;
-      const next = newFieldMap.get(field.name);
-      // A many-to-many's links live in its junction table, not in a column, so
-      // removing the field — or moving it to a storage class that has a column
-      // — takes that table with it. Left standing, the table keeps every link:
-      // nothing reads it, and a field added later under the same name meets
-      // `CREATE TABLE IF NOT EXISTS` and inherits links it never made.
-      if (usesJunctionTable(field)) {
-        if (!next || this.storageClassChanged(field, next)) {
-          statements.push(
-            `DROP TABLE IF EXISTS ${this.quoteIdentifier(this.junctionTableNameFor(tableName, field))};`
-          );
-        }
-        continue;
-      }
       // A field with no parent column has nothing to drop, and SQLite's DROP COLUMN has no
-      // IF EXISTS to tolerate the absence.
+      // IF EXISTS to tolerate the absence. A many-to-many is in that set: its junction
+      // table is the lifecycle pass's below.
       if (!fieldProducesColumn(field)) continue;
+      const next = newFieldMap.get(field.name);
       if (!next || this.storageClassChanged(field, next)) {
         const dropCol = toSnakeCase(field.name);
 
@@ -1458,6 +1443,17 @@ ${allColumnDefs.join(",\n")}
       }
     }
 
+    // The junction tables, from the full lists when the caller holds them:
+    // the column diff above may have been handed the shared subset of a
+    // localized collection, and a junction is not a column.
+    statements.push(
+      ...this.junctionLifecycle(
+        tableName,
+        options?.junctionFields?.old ?? oldFields,
+        options?.junctionFields?.new ?? newFields
+      )
+    );
+
     return statements.join("\n--> statement-breakpoint\n");
   }
 
@@ -1598,20 +1594,28 @@ ${allColumnDefs.join(",\n")}
       newFields,
       usesJunctionTable
     );
-    if (oldOnly.length === 0 || newOnly.length === 0) return null;
-    refuseAmbiguousRename({
-      code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
-      what: "many-to-many fields",
-      moves: "the field's links to the new name",
-      one: "many-to-many field",
-      oldOnly,
-      newOnly,
-    });
-    const from = oldOnly[0];
-    const to = newOnly[0];
-    // A different target or relation kind is a different relation: the old
-    // links cannot be the new field's, so this is a remove and an add.
-    return this.sameRelationTarget(from, to) ? { from, to } : null;
+    // Only a removed and an added field pointing at the same target under the
+    // same relation kind can be one field renamed: the old links could not be
+    // the new field's otherwise, and that pair is a remove and an add. A
+    // batch that removes two and adds one unrelated one has no pair at all
+    // and is not ambiguous — it is two drops and a create.
+    const pairs = oldOnly.flatMap(from =>
+      newOnly
+        .filter(to => this.sameRelationTarget(from, to))
+        .map(to => ({ from, to }))
+    );
+    if (pairs.length === 0) return null;
+    if (pairs.length > 1) {
+      refuseAmbiguousRename({
+        code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
+        what: "many-to-many fields",
+        moves: "the field's links to the new name",
+        one: "many-to-many field",
+        oldOnly: [...new Set(pairs.map(p => p.from))],
+        newOnly: [...new Set(pairs.map(p => p.to))],
+      });
+    }
+    return pairs[0];
   }
 
   /**
@@ -1827,19 +1831,9 @@ ${allColumnDefs.join(",\n")}
     sourceTableName: string,
     field: FieldDefinition
   ): string {
-    const targetCollectionName = field.options!.target!;
-    const targetTableName = `dc_${targetCollectionName}`;
-    const junctionTableName = this.junctionTableNameFor(sourceTableName, field);
-
-    const onDelete = this.mapOnDeleteAction(
-      field.options?.onDelete || "cascade"
-    );
-    const onUpdate = this.mapOnUpdateAction(
-      field.options?.onUpdate || "no action"
-    );
-
-    // Extract collection name from table name (remove dc_ prefix)
-    const sourceCollectionName = sourceTableName.replace("dc_", "");
+    const j = this.junctionShape(sourceTableName, field);
+    const q = (name: string) => this.quoteIdentifier(name);
+    const idType = this.dialect === "mysql" ? "varchar(36)" : "text";
 
     // Use dialect-specific timestamp default
     let timestampDefault = "";
@@ -1857,20 +1851,221 @@ ${allColumnDefs.join(",\n")}
     // statements. The UNIQUE pair constraint belongs inside the CREATE TABLE
     // body only; it must not appear again as a trailing fragment (a bare
     // `CONSTRAINT ... );` is not valid SQL on any dialect).
-    return `-- Junction table for many-to-many: ${sourceCollectionName}.${field.name} -> ${targetCollectionName}
-CREATE TABLE IF NOT EXISTS ${this.quoteIdentifier(junctionTableName)} (
-  ${this.quoteIdentifier("id")} ${this.dialect === "mysql" ? "varchar(36)" : "text"} PRIMARY KEY NOT NULL,
-  ${this.quoteIdentifier(`${sourceCollectionName}_id`)} ${this.dialect === "mysql" ? "varchar(36)" : "text"} NOT NULL,
-  ${this.quoteIdentifier(`${targetCollectionName}_id`)} ${this.dialect === "mysql" ? "varchar(36)" : "text"} NOT NULL,
-  ${this.quoteIdentifier("created_at")} ${timestampDefault},
-  CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${sourceCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${sourceCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(sourceTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
-  CONSTRAINT ${this.quoteIdentifier(`fk_${junctionTableName}_${targetCollectionName}`)} FOREIGN KEY (${this.quoteIdentifier(`${targetCollectionName}_id`)}) REFERENCES ${this.quoteIdentifier(targetTableName)}(${this.quoteIdentifier("id")}) ON DELETE ${onDelete} ON UPDATE ${onUpdate},
-  CONSTRAINT ${this.quoteIdentifier(`uq_${junctionTableName}_pair`)} UNIQUE (${this.quoteIdentifier(`${sourceCollectionName}_id`)}, ${this.quoteIdentifier(`${targetCollectionName}_id`)})
+    return `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
+CREATE TABLE IF NOT EXISTS ${q(j.table)} (
+  ${q("id")} ${idType} PRIMARY KEY NOT NULL,
+  ${q(j.sourceColumn)} ${idType} NOT NULL,
+  ${q(j.targetColumn)} ${idType} NOT NULL,
+  ${q("created_at")} ${timestampDefault},
+  CONSTRAINT ${q(j.fkSource)} FOREIGN KEY (${q(j.sourceColumn)}) REFERENCES ${q(j.sourceTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
+  CONSTRAINT ${q(j.fkTarget)} FOREIGN KEY (${q(j.targetColumn)}) REFERENCES ${q(j.targetTable)}(${q("id")}) ON DELETE ${j.onDelete} ON UPDATE ${j.onUpdate},
+  CONSTRAINT ${q(j.uqPair)} UNIQUE (${q(j.sourceColumn)}, ${q(j.targetColumn)})
 );
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${this.quoteIdentifier(`idx_${junctionTableName}_${sourceCollectionName}`)} ON ${this.quoteIdentifier(junctionTableName)}(${this.quoteIdentifier(`${sourceCollectionName}_id`)});
+${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxSource)} ON ${q(j.table)}(${q(j.sourceColumn)});
 --> statement-breakpoint
-${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${this.quoteIdentifier(`idx_${junctionTableName}_${targetCollectionName}`)} ON ${this.quoteIdentifier(junctionTableName)}(${this.quoteIdentifier(`${targetCollectionName}_id`)});`;
+${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn)});`;
+  }
+
+  /**
+   * Everything a many-to-many field's junction is made of, by name: the table,
+   * its two link columns, the two foreign keys, the unique pair and the two
+   * indexes, plus the referential actions. The CREATE renders from this and so
+   * does the RENAME, so the names one writes are the names the other moves.
+   */
+  junctionShape(
+    sourceTableName: string,
+    field: FieldDefinition
+  ): JunctionShape {
+    const table = this.junctionTableNameFor(sourceTableName, field);
+    const targetCollection = field.options?.target ?? "";
+    // Extract collection name from table name (remove dc_ prefix)
+    const sourceCollection = sourceTableName.replace("dc_", "");
+    return {
+      table,
+      sourceCollection,
+      targetCollection,
+      sourceTable: sourceTableName,
+      targetTable: `dc_${targetCollection}`,
+      sourceColumn: `${sourceCollection}_id`,
+      targetColumn: `${targetCollection}_id`,
+      fkSource: `fk_${table}_${sourceCollection}`,
+      fkTarget: `fk_${table}_${targetCollection}`,
+      uqPair: `uq_${table}_pair`,
+      idxSource: `idx_${table}_${sourceCollection}`,
+      idxTarget: `idx_${table}_${targetCollection}`,
+      onDelete: this.mapOnDeleteAction(field.options?.onDelete || "cascade"),
+      onUpdate: this.mapOnUpdateAction(field.options?.onUpdate || "no action"),
+    };
+  }
+
+  /**
+   * The statements that carry a junction from one shape to another: the table
+   * rename, then every attachment whose generated name embedded the old table
+   * name. Left as they were, those names would still be taken when a later
+   * many-to-many field reuses the old field name and CREATE spells the same
+   * ones: MySQL refuses the duplicate foreign-key symbol, and PostgreSQL and
+   * SQLite let `CREATE INDEX IF NOT EXISTS` find the index on THIS table and
+   * leave the new junction unindexed. Each dialect renames what it can rename
+   * and rebuilds what it cannot; SQLite cannot touch a table's constraints and
+   * does not need to, since its constraint names are not shared across tables.
+   * Nothing is emitted for a name that did not change.
+   */
+  renameJunctionStatements(from: JunctionShape, to: JunctionShape): string[] {
+    const q = (name: string) => this.quoteIdentifier(name);
+    const out: string[] = [];
+    if (from.table !== to.table) {
+      // RENAME TO is spelled the same on PostgreSQL, MySQL and SQLite.
+      out.push(`ALTER TABLE ${q(from.table)} RENAME TO ${q(to.table)};`);
+    }
+    out.push(...this.renameJunctionIndexes(from, to));
+    out.push(...this.renameJunctionConstraints(from, to));
+    return out;
+  }
+
+  /** The index half of {@link renameJunctionStatements}, per dialect. */
+  private renameJunctionIndexes(
+    from: JunctionShape,
+    to: JunctionShape
+  ): string[] {
+    const q = (name: string) => this.quoteIdentifier(name);
+    const out: string[] = [];
+    const indexes: Array<[string, string, string]> = [
+      [from.idxSource, to.idxSource, to.sourceColumn],
+      [from.idxTarget, to.idxTarget, to.targetColumn],
+    ];
+    for (const [was, is, column] of indexes) {
+      if (was === is) continue;
+      if (this.dialect === "postgresql") {
+        out.push(`ALTER INDEX ${q(was)} RENAME TO ${q(is)};`);
+      } else if (this.dialect === "mysql") {
+        out.push(
+          `ALTER TABLE ${q(to.table)} RENAME INDEX ${q(was)} TO ${q(is)};`
+        );
+      } else {
+        // SQLite cannot rename an index; an index is cheap to rebuild.
+        out.push(
+          `DROP INDEX IF EXISTS ${q(was)};`,
+          `CREATE INDEX IF NOT EXISTS ${q(is)} ON ${q(to.table)}(${q(column)});`
+        );
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The constraint half of {@link renameJunctionStatements}. PostgreSQL
+   * renames a constraint in place; MySQL renames the unique pair as the
+   * index it is and re-declares each foreign key under its new name, since
+   * a foreign key cannot be renamed there; SQLite's constraint names are not
+   * shared across tables, so a new junction may spell the old ones freely.
+   */
+  private renameJunctionConstraints(
+    from: JunctionShape,
+    to: JunctionShape
+  ): string[] {
+    const q = (name: string) => this.quoteIdentifier(name);
+    if (this.dialect === "postgresql") {
+      const constraints: Array<[string, string]> = [
+        [from.fkSource, to.fkSource],
+        [from.fkTarget, to.fkTarget],
+        [from.uqPair, to.uqPair],
+      ];
+      return constraints
+        .filter(([was, is]) => was !== is)
+        .map(
+          ([was, is]) =>
+            `ALTER TABLE ${q(to.table)} RENAME CONSTRAINT ${q(was)} TO ${q(is)};`
+        );
+    }
+    if (this.dialect !== "mysql") return [];
+    const out: string[] = [];
+    if (from.uqPair !== to.uqPair) {
+      out.push(
+        `ALTER TABLE ${q(to.table)} RENAME INDEX ${q(from.uqPair)} TO ${q(to.uqPair)};`
+      );
+    }
+    const foreignKeys: Array<[string, string, string, string]> = [
+      [from.fkSource, to.fkSource, to.sourceColumn, to.sourceTable],
+      [from.fkTarget, to.fkTarget, to.targetColumn, to.targetTable],
+    ];
+    for (const [was, is, column, references] of foreignKeys) {
+      if (was === is) continue;
+      out.push(
+        `ALTER TABLE ${q(to.table)} DROP FOREIGN KEY ${q(was)}, ADD CONSTRAINT ${q(is)} FOREIGN KEY (${q(column)}) REFERENCES ${q(references)}(${q("id")}) ON DELETE ${to.onDelete} ON UPDATE ${to.onUpdate};`
+      );
+    }
+    return out;
+  }
+
+  /**
+   * What a save does to its many-to-many junction tables: the field renamed
+   * carries its table (and links) to the new name, the field removed or moved
+   * to a storage class with a column loses its table, the field added or
+   * moved in gets one. Decided on the FULL field lists, because a junction is
+   * not a column and the localization split that hands the column diff its
+   * shared subset has nothing to say about it — the create path builds
+   * junctions from every field for the same reason.
+   */
+  junctionLifecycle(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): string[] {
+    const rename = this.detectJunctionRename(oldFields, newFields);
+    const renamed = rename
+      ? this.renameJunctionStatements(
+          this.junctionShape(tableName, rename.from),
+          this.junctionShape(tableName, rename.to)
+        )
+      : [];
+    return [
+      ...renamed,
+      ...this.junctionDrops(tableName, oldFields, newFields, rename?.from.name),
+      ...this.junctionCreates(tableName, oldFields, newFields, rename?.to.name),
+    ];
+  }
+
+  /**
+   * The junctions a save leaves behind: a many-to-many removed, or moved to a
+   * storage class that has a column. Left standing, such a table keeps every
+   * link, unread, and a field added later under the same name meets
+   * `CREATE TABLE IF NOT EXISTS` and inherits links it never made.
+   */
+  private junctionDrops(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    renamedFrom: string | undefined
+  ): string[] {
+    const newByName = new Map(newFields.map(f => [f.name, f]));
+    return oldFields
+      .filter(field => usesJunctionTable(field) && field.name !== renamedFrom)
+      .filter(field => {
+        const next = newByName.get(field.name);
+        return !next || this.storageClassChanged(field, next);
+      })
+      .map(
+        field =>
+          `DROP TABLE IF EXISTS ${this.quoteIdentifier(this.junctionTableNameFor(tableName, field))};`
+      );
+  }
+
+  /** The junctions a save needs: a many-to-many added, or moved in from a column. */
+  private junctionCreates(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    renamedTo: string | undefined
+  ): string[] {
+    const oldByName = new Map(oldFields.map(f => [f.name, f]));
+    return newFields
+      .filter(field => usesJunctionTable(field) && field.name !== renamedTo)
+      .filter(field => {
+        const previous = oldByName.get(field.name);
+        return !previous || this.storageClassChanged(previous, field);
+      })
+      .map(field => this.generateJunctionTable(tableName, field));
   }
 
   /**
