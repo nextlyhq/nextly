@@ -40,8 +40,8 @@ content. `createMany` refuses any locale by name rather than filing the rows
 under the default language silently; its bulk pipeline cannot store a
 translation yet. `deleteEntry` refuses one likewise: a delete removes every
 translation with the document, and a locale on it would read as removing one.
-The selectors `*` and `all` are refused outright, from one classifier the
-core now exports as `isLocaleSelector`: a value forwarded from a query string
+The selectors `*` and `all` are refused outright, from one classifier now
+exported as `isLocaleSelector` from `@nextlyhq/plugin-sdk`: a value forwarded from a query string
 must never be able to publish every translation of a document. The same
 spellings are reserved at localization configuration, together with `none`,
 the wire's spelling of no fallback — a site can no longer name a language

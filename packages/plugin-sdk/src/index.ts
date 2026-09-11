@@ -101,6 +101,19 @@ export { resolvedCollectionView } from "nextly";
 export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 
 /**
+ * Which `locale` values are instructions rather than languages.
+ *
+ * A route that forwards `?locale=` into `ctx.services` has to tell a visitor's
+ * language from the wildcards the core reads as selectors, and the boundary
+ * that refuses those selectors decides with this same function — so a plugin
+ * asks it rather than keeping a list that agrees with the core's only until
+ * one of them gains an entry. Here because this is the surface a plugin
+ * author may import from; the same symbol on bare `nextly` is not part of
+ * the plugin contract.
+ */
+export { isLocaleSelector } from "nextly";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
