@@ -802,11 +802,36 @@ function assertTimeseriesAgreesWithOp(
   return { dateField, interval };
 }
 
-/** Confirms `status`, when present, is one of the known values, and returns it. */
-function assertValidStatus(status: unknown): WidgetQuery["status"] | undefined {
+/**
+ * Confirms `status`, when present, is one of the known values AND is one this
+ * source can actually answer, and returns it.
+ *
+ * 🔴 `draft` and `published` are refused for a source without the lifecycle,
+ * and that is a correctness refusal rather than a tidiness one. Nothing
+ * downstream can honour them: `resolveStatusFilter` returns no filter when the
+ * target carries no status column, so both selectors reach the same rows and
+ * two mutually exclusive questions come back with one answer. A card asking for
+ * drafts would report the published count and say nothing about having been
+ * ignored, which is the failure `statsWidget` already refuses to GENERATE --
+ * this is the same refusal at the door, where a hand-written or plugin query
+ * arrives.
+ *
+ * `all` stays legal for every source. It is not a claim that a lifecycle
+ * exists, it is a statement that this read is not bounded by one, and it is
+ * what the generated count, recent and timeline cards already send.
+ */
+function assertValidStatus(
+  source: WidgetSource,
+  status: unknown
+): WidgetQuery["status"] | undefined {
   if (status === undefined) return undefined;
   if (!VALID_STATUSES.includes(status as WidgetQuery["status"] & string)) {
     fail(`status must be one of ${VALID_STATUSES.join(", ")}`);
+  }
+  if (status !== "all" && source.lifecycleStatus !== true) {
+    fail(
+      `${source.id} has no draft/published lifecycle, so status must be "all"`
+    );
   }
   return status as WidgetQuery["status"];
 }
@@ -888,7 +913,7 @@ export function validateReadWidgetQuery(
   assertWhereClauseUsable(where, { source, declared, op });
   assertSelectFieldsDeclared(source, select, declared);
   const sort = assertSortFieldDeclared(source, raw.sort, declared);
-  const status = assertValidStatus(raw.status);
+  const status = assertValidStatus(source, raw.status);
   const groupBy = assertGroupByAgreesWithOp(
     source,
     raw.groupBy,
