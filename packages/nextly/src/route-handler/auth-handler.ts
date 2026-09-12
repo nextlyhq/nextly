@@ -19,7 +19,7 @@ import {
 import type { NextlyServiceConfig } from "../di/register";
 import { awaitBootMigrations } from "../init/boot-migrations-gate";
 import { buildServiceConfig } from "../init/build-service-config";
-import { seedAllPermissions } from "../init/seed-permissions";
+import { seedPermissionsAndRolePresets } from "../init/seed-permissions";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -455,13 +455,9 @@ async function initializeServicesOnce(): Promise<void> {
     // Shared rather than mirrored: this path used to seed system, collection
     // and single permissions and stop there, which left a plugin's declared
     // permission with no row and no super-admin grant on the one boot path
-    // that never runs post-init tasks.
-    try {
-      await seedAllPermissions();
-    } catch {
-      // Silently skip — permissions table may not exist yet (migrations not run),
-      // or permissionSeedService may not be registered
-    }
+    // that never runs post-init tasks. The PRESET roles were the next thing to
+    // be missing from it for the same reason, so the two are now one call.
+    await seedPermissionsAndRolePresets();
 
     // Sync user extension fields and ensure user_ext table exists
     // This mirrors the init.ts flow so route handler requests work

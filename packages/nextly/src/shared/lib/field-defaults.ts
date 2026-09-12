@@ -74,6 +74,11 @@ export function applyFieldDefaults(
    * remove. Filtering the record itself instead would delete the value before
    * the defaults that decide whether it is allowed have run at all.
    *
+   * The view arrives ALREADY DEFAULTED and already judged: its caller fills it
+   * with this same function and then runs the field rules over it, so what it
+   * holds is what this caller may store, defaults included. That is what makes
+   * a default the rules remove from it stay removed here.
+   *
    * Defaults to the record, which is right wherever there is nothing to hide.
    */
   view?: Record<string, unknown>
@@ -114,10 +119,21 @@ export function applyFieldDefaults(
       );
       data[field.name] = filled;
       // The view follows what has been filled, so a later function default
-      // reading an earlier one sees it. Without this the view stays the
-      // pre-default record and a default computed from a defaulted sibling
-      // gets `undefined` from a document that visibly holds the value.
-      if (readFrom !== data) readFrom[field.name] = filled;
+      // reading an earlier one sees the value the record will actually store
+      // rather than `undefined` from a document that visibly holds it.
+      //
+      // Only a key the view still HOLDS is refreshed. The view was defaulted
+      // and judged before this pass, so a default missing from it is one the
+      // rules removed, and writing the record's copy back would hand a later
+      // default a value this caller may not write. It would then be carried
+      // into a field they can, stored there, and survive the access pass that
+      // removes only the field it came from.
+      if (
+        readFrom !== data &&
+        Object.prototype.hasOwnProperty.call(readFrom, field.name)
+      ) {
+        readFrom[field.name] = filled;
+      }
     }
 
     if (!field.fields) continue;
