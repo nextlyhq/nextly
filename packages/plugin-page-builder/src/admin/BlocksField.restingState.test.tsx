@@ -50,6 +50,9 @@ let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
  */
 let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
 
+/** Every plugin route a render actually asked for, in order. */
+const fetched: string[] = [];
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // Present because the mock REPLACES the module wholesale: an export the
   // subject imports and this omits is a missing-export error rather than an
@@ -69,12 +72,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * says the read ANSWERED with nothing, which is the site with an empty
    * library — the state every one of these cases was written against.
    */
-  usePluginRoute: (args: { path: string }) => ({
-    data: args.path === "/library/components" ? componentAnswer : undefined,
-    pending: false,
-    error: null,
-    refetch: () => {},
-  }),
+  usePluginRoute: (args: { path: string; enabled?: boolean }) => {
+    // Modelled the way TanStack treats a disabled query: nothing is requested,
+    // and it stays `pending` because it never ran. A stub that answered anyway
+    // could not tell a read that was made from one that was not.
+    const enabled = args.enabled !== false;
+    if (enabled) fetched.push(args.path);
+    return {
+      data:
+        enabled && args.path === "/library/components"
+          ? componentAnswer
+          : undefined,
+      pending: !enabled,
+      error: null,
+      refetch: () => {},
+    };
+  },
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -161,6 +174,7 @@ function Host({
 beforeEach(() => {
   siteStyleRead = { data: undefined, isPending: false, error: null };
   componentAnswer = undefined;
+  fetched.length = 0;
 });
 
 afterEach(() => {
@@ -204,6 +218,32 @@ describe("the entry form at rest", () => {
 
     expect(container.querySelector(MINIATURE)).not.toBeNull();
     expect(container.textContent).not.toContain(DEFINITION_TEXT);
+  });
+
+  it("does not read the component library for a page that places no component", () => {
+    /*
+     * This surface is EVERY entry form holding a blocks field, and the read is
+     * the whole component tier: one listing over every row, a read of its own
+     * per row to reach the working draft, bounded at sixteen mebibytes. A page
+     * that places no instance resolves nothing against any of it, so the
+     * miniature is identical without it.
+     *
+     * The card must not sit waiting on it either — a read that never runs
+     * never stops pending, and a surface keyed on that would wait forever.
+     */
+    const { container } = render(<Host />);
+
+    expect(fetched).not.toContain("/library/components");
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(container.textContent).toContain(PAGE_TEXT);
+  });
+
+  it("reads it for a page that places one", () => {
+    // The control: the rule is what the DOCUMENT holds, not a read this
+    // surface never makes.
+    render(<Host document={PAGE_WITH_INSTANCE} />);
+
+    expect(fetched).toContain("/library/components");
   });
 
   it("does not put the block's type name on the screen", () => {
