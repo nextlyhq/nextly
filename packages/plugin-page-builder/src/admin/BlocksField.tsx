@@ -600,7 +600,11 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
    * faithful-looking wrong page when got subtly wrong. They belong together and
    * not in a control whose job is choosing between two surfaces.
    */
-  const resting = useRestingPageRender(PLUGIN_SOURCE);
+  const restingDocument = useMemo(
+    () => documentFrom(field.value, kinds),
+    [field.value, kinds]
+  );
+  const resting = useRestingPageRender(PLUGIN_SOURCE, restingDocument);
 
   /*
    * Closed if the form becomes read-only while the editor is up.
@@ -630,7 +634,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     />
   ) : (
     <PageBuilderCard
-      document={documentFrom(field.value, kinds)}
+      document={restingDocument}
       siteStyles={resting.siteStyles}
       styleState={resting.styleState}
       components={resting.components}
