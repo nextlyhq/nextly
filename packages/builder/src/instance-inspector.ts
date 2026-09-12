@@ -44,12 +44,20 @@ import type { BuilderOp, NodePatch } from "./ops";
  *
  * Named as a set rather than inferred from what the switch happens to handle,
  * for the reason `SUPPORTED_PROP_TYPES` is: an exposed type with no control is
- * a KNOWN gap the row states, never a silent fallthrough. Rich text, images,
- * links and visibility have no control yet; a row of one of those still shows
- * its value and its source, and still offers a reset, because withholding the
- * row would present a component as exposing less than it does.
+ * a KNOWN gap the row states, never a silent fallthrough. A link is edited as
+ * the address its prop holds and visibility as shown-or-hidden; rich text and
+ * images have no control here yet — a passage is edited on the canvas, and an
+ * image needs a picker this package cannot reach — and a row of either still
+ * shows its value and its source, and still offers a reset, because
+ * withholding the row would present a component as exposing less than it
+ * does.
  */
-export const EDITABLE_EXPOSED_TYPES = ["text", "select"] as const;
+export const EDITABLE_EXPOSED_TYPES = [
+  "text",
+  "select",
+  "link",
+  "visibility",
+] as const;
 
 /** One exposed property, with everything a row needs to draw itself. */
 export interface ExposedRow {

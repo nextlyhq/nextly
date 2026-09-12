@@ -247,7 +247,8 @@ export { NextlyError } from "nextly";
 /**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich
  * queries (filters/sort/pagination/relations via QueryOptions), `count`, and
- * `createMany`. Aggregations beyond `count` use the raw `ctx.db` escape hatch
+ * `createMany`, and the batch update `updateMany` takes `BulkUpdateEntry[]`.
+ * Aggregations beyond `count` use the raw `ctx.db` escape hatch
  * (D33), which stays `@experimental`.
  *
  * @public Graduated in P9 — `plugin-form-builder` depends on it
@@ -258,6 +259,7 @@ export type {
   QueryOptions,
   PaginatedResult,
   BatchOperationResult,
+  BulkUpdateEntry,
 } from "nextly";
 
 /**
@@ -534,6 +536,22 @@ export type {
  * Held `@experimental` alongside `PluginAdminWidget`, which is the same feature
  * seen from the contributions side: the widget contract graduates per D55 once a
  * first-party plugin ships one. See STABILITY.md.
+ *
+ * `PluginSourceResolver`, `PluginWidgetSource` and `ReadCaller` are the data
+ * SOURCE contract, which `contributes.widgetSources` names. Inference covers a
+ * resolver written inline inside `definePlugin`; these are what let an author
+ * declare one as a named function instead, which is how a plugin publishing
+ * more than one source ends up written.
+ *
+ * Type a contributed resolver as `PluginSourceResolver`, not
+ * `WidgetSourceResolver`: the latter is core's own two-argument shape and
+ * rejects the `PluginContext` parameter a plugin needs to read any data.
+ *
+ * `callerReadOptions(caller)` turns the caller a resolver is handed into the
+ * `ServiceOpts` a managed read takes. Use it rather than assembling them: the
+ * two identity shapes do not meet without an assertion, and it also carries
+ * the `authenticatedScope` that keeps an API key judged on its OWN stamped
+ * grants instead of the roles of whoever minted it.
  */
 export {
   WIDGET_SIZES,
@@ -567,4 +585,9 @@ export {
   type WidgetSourceKind,
   type WidgetOp,
   type TimeseriesInterval,
+  callerReadOptions,
+  type WidgetSourceResolver,
+  type PluginSourceResolver,
+  type PluginWidgetSource,
+  type ReadCaller,
 } from "nextly";

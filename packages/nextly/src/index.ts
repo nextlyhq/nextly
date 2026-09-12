@@ -524,6 +524,9 @@ export {
 // inferred but never annotated: `WidgetDefinition.defaultHeight` is a
 // `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
 // `WidgetSourceKind` and `WidgetOp`.
+// The last three are the data SOURCE contract that `contributes.widgetSources`
+// names: inference covers a resolver written inline, and these are what let an
+// author declare one as a named function instead.
 export {
   WIDGET_SIZES,
   WIDGET_CHROME,
@@ -568,6 +571,11 @@ export {
   type TimeseriesInterval,
   type WidgetLifecycle,
   type WidgetCondition,
+  callerReadOptions,
+  type WidgetSourceResolver,
+  type PluginSourceResolver,
+  type PluginWidgetSource,
+  type ReadCaller,
 } from "./domains/widgets";
 
 // Value exports for the email provider contract. A plugin calls
@@ -672,7 +680,13 @@ export type {
 // `ctx.services.collections.createMany`. Rich-query options (`QueryOptions`
 // with where/sort/depth/select) + `PaginatedResult` are exported with the other
 // shared service types above.
-export type { BatchOperationResult } from "./domains/collections/services/collection-types";
+export type {
+  BatchOperationResult,
+  // The input half of the batch update, beside the result half: a plugin
+  // typing an array it builds before calling `updateMany` has to be able to
+  // name the contract rather than restate its shape.
+  BulkUpdateEntry,
+} from "./domains/collections/services/collection-types";
 
 // Whether a collection stores a working draft beside its published row.
 //

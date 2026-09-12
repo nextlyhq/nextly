@@ -118,6 +118,43 @@ describe("resetWidgetRegistries", () => {
     expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
   });
 
+  it("does NOT register a plugin's contributed source, which needs a context this runs before", () => {
+    // 🔴 An ordering fact, not a preference. This function runs before
+    // `initializePlugins` has built any plugin context, and a contributed
+    // resolver without its context can answer nothing -- a plugin's data
+    // services are reachable through nothing else. Registering here would
+    // publish a source whose resolver could only return constants.
+    //
+    // They register from `initializePlugins`, each bound to its own plugin's
+    // context, which `plugin-widget-source.integration.test.ts` exercises
+    // through a real boot.
+    resetWidgetRegistries([
+      {
+        name: "@acme/stripe",
+        contributes: {
+          widgetSources: [
+            {
+              source: {
+                id: "plugin:stripe/revenue",
+                label: "Revenue",
+                kind: "plugin",
+                supports: ["count"],
+                fields: [{ name: "total", type: "number" }],
+              },
+              resolve: () =>
+                Promise.resolve({ op: "count" as const, total: 3 }),
+            },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(getSource("plugin:stripe/revenue")).toBeUndefined();
+    // The control: core's own sources DID register in the same call, so this
+    // cannot pass by registering nothing at all.
+    expect(getSource(RELEASES_SOURCE_ID)).toBeDefined();
+  });
+
   it("leaves the deferral store alone, because it has not synced anything yet", () => {
     // 🔴 The reset runs BEFORE the boot syncs any metadata, so clearing here
     // would publish "nothing is withheld" on the strength of work that has not

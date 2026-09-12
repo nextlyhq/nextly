@@ -24,6 +24,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+"@nextlyhq/plugin-mcp": patch
 ---
 
 The setup checklist offers a reader only the steps they could actually finish.
