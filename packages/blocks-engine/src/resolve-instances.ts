@@ -286,6 +286,50 @@ export interface ComponentUsage {
   complete: boolean;
 }
 
+/** One walk over a forest, answering both questions it is asked. */
+interface ForestSurvey {
+  /** The component ids it names, de-duplicated, in first-reached order. */
+  readonly ids: string[];
+  /** The instance nodes that name them, in the same order. */
+  readonly placements: ComponentPlacement[];
+  /** Whether the whole forest was read. */
+  readonly complete: boolean;
+}
+
+/**
+ * Which components a forest names, and which NODES name them.
+ *
+ * ONE traversal for both, because they are one question asked two ways and a
+ * caller that needs both should not pay for the forest twice — nor risk two
+ * walks disagreeing about the bound, the descent rule or the ordering. The
+ * budget is spent per ENTRY, so the two answers are always prefixes of the same
+ * read.
+ */
+function surveyForest(nodes: readonly unknown[], cap: number): ForestSurvey {
+  const ids: string[] = [];
+  const placements: ComponentPlacement[] = [];
+  const seen = new Set<string>();
+  let budget = cap;
+  let truncated = false;
+  walkForest(nodes, entry => {
+    if (budget <= 0) {
+      truncated = true;
+      return "stop";
+    }
+    budget -= 1;
+    const id = componentIdOf(entry.node);
+    if (id !== undefined) {
+      placements.push({ target: id, node: entry.node });
+      if (!seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+    return "descend";
+  });
+  return { ids, placements, complete: !truncated };
+}
+
 /**
  * The components a document references, and whether it could all be read.
  *
@@ -328,29 +372,10 @@ export function componentUsageIn(
   // a fraction say, is honoured here for free and silently ignored by the
   // other spelling.
   const cap = boundedLimit(maxNodes, "maxNodes", "componentUsageIn");
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  let budget = cap;
-  // Set on the branch that ENDS the walk early, rather than derived afterwards
-  // from `budget === 0`. A forest holding exactly `maxNodes` entries spends the
-  // last of the budget on its last entry and is read WHOLE, so a check on the
-  // remaining budget calls a complete read truncated — and reports a document
-  // as unreadable at exactly the size the rest of the engine still accepts.
-  let truncated = false;
-  walkForest(nodes, entry => {
-    if (budget <= 0) {
-      truncated = true;
-      return "stop";
-    }
-    budget -= 1;
-    const id = componentIdOf(entry.node);
-    if (id !== undefined && !seen.has(id)) {
-      seen.add(id);
-      ids.push(id);
-    }
-    return "descend";
-  });
-  return { ids, complete: !truncated };
+  // Through the shared walk, so this and {@link componentPlacementsIn} cannot
+  // come to disagree about the bound, the descent rule or the ordering.
+  const survey = surveyForest(nodes, cap);
+  return { ids: survey.ids, complete: survey.complete };
 }
 
 /**
@@ -386,16 +411,46 @@ export function componentReferencesIn(
   document: unknown,
   maxNodes: number = DEFAULT_LIMITS.maxNodes
 ): ComponentUsage {
+  const { ids, complete } = componentReachIn(document, maxNodes);
+  return { ids, complete };
+}
+
+/** What one document reaches, and the nodes it reaches through. */
+export interface ComponentReachSurvey extends ComponentUsage {
+  /** Its instance nodes, for an edge that belongs to the PLACEMENT. */
+  readonly placements: readonly ComponentPlacement[];
+}
+
+/**
+ * {@link componentReferencesIn} and {@link componentPlacementsIn}, from ONE walk.
+ *
+ * Published for the callers that need both — the write guard and the insert
+ * panel each resolve a placement's overrides against the definition it places,
+ * and each already needs the ids. Asking the two functions separately walks the
+ * forest twice, which on a document whose nodes compute their own children is a
+ * cost a reader can observe.
+ */
+export function componentReachIn(
+  document: unknown,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): ComponentReachSurvey {
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
-    return { ids: [], complete: true };
+    return { ids: [], placements: [], complete: true };
   }
-  const direct = componentUsageIn(document.nodes, maxNodes);
+  const cap = boundedLimit(maxNodes, "maxNodes", "componentReachIn");
+  const direct = surveyForest(document.nodes, cap);
   // A truncated forest is already "cannot be established" to every caller, and
   // the variant pass indexes the WHOLE forest to find the nodes an override
   // lands on. Returning here keeps an oversized document from being walked a
   // second time to sharpen an answer that is not going to be used.
-  if (!direct.complete) return direct;
-  return withVariantReferences(document, direct);
+  if (!direct.complete) {
+    return { ids: direct.ids, placements: direct.placements, complete: false };
+  }
+  const withVariants = withVariantReferences(document, {
+    ids: direct.ids,
+    complete: true,
+  });
+  return { ...withVariants, placements: direct.placements };
 }
 
 /** {@link componentReferencesIn}'s variant pass, over a forest read whole. */
@@ -442,9 +497,32 @@ function installedBy(
   declared: readonly ExposedProperty[],
   nodes: ReadonlyMap<string, BlockNode>
 ): readonly string[] {
+  return installedOn(
+    document,
+    { props: { variant } } as unknown as BlockNode,
+    declared,
+    nodes
+  );
+}
+
+/**
+ * Every component id ONE placing instance installs on a definition's nodes.
+ *
+ * The general form of {@link installedBy}: that one asks it of a synthetic
+ * instance selecting a variant, and {@link componentReferencesFrom} asks it of
+ * the real node doing the placing. Both are the same question — what does
+ * `effectiveOverrides` write, and what does `componentIdOf` read back — so
+ * neither restates the other's rules.
+ */
+function installedOn(
+  document: Record<string, unknown>,
+  instance: BlockNode,
+  declared: readonly ExposedProperty[],
+  nodes: ReadonlyMap<string, BlockNode>
+): readonly string[] {
   const overrides = effectiveOverrides(
     document as unknown as ComponentDocument,
-    { props: { variant } } as unknown as BlockNode
+    instance
   );
   const installed: string[] = [];
   for (const [nodeId, props] of finalProps(
@@ -459,6 +537,96 @@ function installedBy(
     if (id !== undefined) installed.push(id);
   }
   return installed;
+}
+
+/** One instance node in a document, and the component it places. */
+export interface ComponentPlacement {
+  /** The component id the node places, as stored. */
+  readonly target: string;
+  /** The node itself, carrying the `variant` and `overrides` it places with. */
+  readonly node: unknown;
+}
+
+/**
+ * The placements a document makes, and whether the whole forest was read.
+ *
+ * Named for the DOCUMENT, because `ComponentPlacements` in `component-graph`
+ * already names a different thing — the function answering what one component
+ * places, by id. Two exported types of one name in one package is how a reader
+ * comes to believe they are the same question.
+ */
+export interface DocumentPlacements {
+  readonly placements: readonly ComponentPlacement[];
+  /** False means `placements` is a prefix rather than the answer. */
+  readonly complete: boolean;
+}
+
+/**
+ * Every instance node a document holds, with the component each one places.
+ *
+ * {@link componentUsageIn} answers which components a document names;
+ * this answers WHICH NODES name them, which is what a caller needs to follow an
+ * edge that belongs to the placement rather than to either document — see
+ * {@link componentReferencesFrom}.
+ *
+ * Bounded by the same budget and reported the same way: a forest the cap ended
+ * early leaves a prefix, and a prefix read as the whole answer is how a
+ * reference goes unnoticed.
+ *
+ * Nodes are returned as `unknown` deliberately. They come from storage, nothing
+ * validated them, and the only thing a caller does with one is hand it back to a
+ * function in this module that guards its own reads.
+ */
+export function componentPlacementsIn(
+  document: unknown,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): DocumentPlacements {
+  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
+    return { placements: [], complete: true };
+  }
+  const cap = boundedLimit(maxNodes, "maxNodes", "componentPlacementsIn");
+  const survey = surveyForest(document.nodes, cap);
+  return { placements: survey.placements, complete: survey.complete };
+}
+
+/**
+ * Every component a PLACEMENT can reach, which neither document names alone.
+ *
+ * {@link componentReferencesIn} covers what a definition's own variants can
+ * install, because the exposure written through is declared in the same
+ * document. This covers the other half, and it needs both documents at once.
+ *
+ * An instance node placing B may carry `props.overrides` aimed at B's exposures.
+ * If B exposes one of its own nested instances' `componentId`, that override
+ * re-points it — so placing B from A can resolve to A → B → A while neither A's
+ * document nor B's names the other twice. A scans as referencing B, B scans as
+ * referencing whatever it stores, and the loop is in neither scan.
+ *
+ * The resolver applies the placement's overrides before expanding B, so the id
+ * this returns is the one that resolves and the id B stores is never read.
+ *
+ * Takes the placed DEFINITION and the placing NODE because the edge belongs to
+ * neither on its own: the override names an exposure id, and only the definition
+ * says which node and which prop path that id writes to.
+ *
+ * Includes what the node's selected VARIANT installs as well, because
+ * `effectiveOverrides` folds variant then instance — which is the order the
+ * renderer applies them in.
+ */
+export function componentReferencesFrom(
+  definition: unknown,
+  instance: unknown
+): readonly string[] {
+  if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) return [];
+  if (!isPlainRecord(instance)) return [];
+  const declared = usableExposures(definition.exposed);
+  if (declared.length === 0) return [];
+  return installedOn(
+    definition,
+    instance as unknown as BlockNode,
+    declared,
+    nodeIndex(definition.nodes as readonly BlockNode[])
+  );
 }
 
 /**

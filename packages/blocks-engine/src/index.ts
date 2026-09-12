@@ -300,6 +300,15 @@ export {
   // guard has to judge a document a variant can re-point, and the usage index
   // has to count what is actually stored.
   componentReferencesIn,
+  // And the half that needs BOTH documents: what ONE placing node's overrides
+  // install on the definition it places. Published because the write guard and
+  // the insert panel both have to follow an edge neither document names alone.
+  componentReferencesFrom,
+  // Which NODES place something, rather than which components are placed. A
+  // caller following a placement-level override needs the node that carries it.
+  componentPlacementsIn,
+  // Both of the above from ONE walk, for the callers that need both.
+  componentReachIn,
   componentUsageIn,
   // The roots a document composes to, read without composing it. Published
   // because the palette judges every definition's placement by its roots and

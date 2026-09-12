@@ -23,6 +23,7 @@ import {
 import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
+  componentReferencesFrom,
   componentReferencesIn,
   componentUsageIn,
   composedRootTypes,
@@ -2625,6 +2626,118 @@ describe("componentReferencesIn", () => {
       ids: [],
       complete: true,
     });
+  });
+});
+
+/**
+ * The edge that belongs to the PLACEMENT rather than to either document.
+ *
+ * A places B and carries overrides aimed at B's exposures. If B exposes one of
+ * its own nested instances' `componentId`, that override re-points it — so A
+ * resolves to A -> B -> A while A's document names only B and B's names only C.
+ * Neither single-document scan can see it, which is why this takes both.
+ */
+describe("componentReferencesFrom", () => {
+  /** B places C, and exposes that node's componentId under the id `swap`. */
+  const B = component([instance("n1", "c")], {
+    exposed: [
+      {
+        id: "swap",
+        label: "Which",
+        nodeId: "n1",
+        propPath: "componentId",
+        type: "select",
+      },
+    ],
+  });
+
+  const C = component([node("t")]);
+
+  it("finds the id a placing node's own overrides install", () => {
+    const placing = instance("p", "b", { overrides: { swap: "a" } });
+
+    expect(componentReferencesFrom(B, placing)).toEqual(["a"]);
+  });
+
+  it("ORACLE: the resolver expands that id, and never reads the stored one", () => {
+    const A = component([instance("p", "b", { overrides: { swap: "a" } })]);
+    const out = resolveComponentInstances(
+      page([instance("host", "a")]),
+      defs({ a: A, b: B, c: C })
+    );
+
+    // The loop closes through A, and `c` — what B's node actually stores — is
+    // never referenced at all.
+    expect(out.unresolved).toEqual([
+      expect.objectContaining({ componentId: "a", reason: "cycle" }),
+    ]);
+    expect(out.referenced).not.toContain("c");
+
+    // CONTROL: the same placement without the override resolves cleanly and
+    // does reach `c`, so the case above is about the override and not the
+    // fixture.
+    const bare = resolveComponentInstances(
+      page([instance("host", "a")]),
+      defs({ a: component([instance("p", "b")]), b: B, c: C })
+    );
+    expect(bare.unresolved).toEqual([]);
+    expect(bare.referenced).toContain("c");
+  });
+
+  it("neither document's own scan can see it", () => {
+    // Which is the whole reason this function takes two arguments.
+    const A = component([instance("p", "b", { overrides: { swap: "a" } })]);
+
+    expect(componentReferencesIn(A).ids).toEqual(["b"]);
+    expect(componentReferencesIn(B).ids).toEqual(["c"]);
+  });
+
+  it("answers nothing for a placement carrying no overrides", () => {
+    expect(componentReferencesFrom(B, instance("p", "b"))).toEqual([]);
+  });
+
+  it("answers nothing when the definition exposes nothing", () => {
+    expect(
+      componentReferencesFrom(C, instance("p", "c", { overrides: { x: "a" } }))
+    ).toEqual([]);
+  });
+
+  it("ignores an override that does not name a declared exposure", () => {
+    expect(
+      componentReferencesFrom(
+        B,
+        instance("p", "b", { overrides: { nope: "a" } })
+      )
+    ).toEqual([]);
+  });
+
+  it("folds the placement's VARIANT in under its own overrides", () => {
+    // `effectiveOverrides` applies variant then instance, which is the order the
+    // renderer uses, so a preset the placement did not override still counts.
+    const withVariant = component([instance("n1", "c")], {
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "n1",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+      variants: { loop: { label: "Loop", overrides: { swap: "a" } } },
+    });
+
+    expect(
+      componentReferencesFrom(
+        withVariant,
+        instance("p", "b", { variant: "loop" })
+      )
+    ).toEqual(["a"]);
+  });
+
+  it("answers nothing for values that are not documents or nodes", () => {
+    expect(componentReferencesFrom(undefined, instance("p", "b"))).toEqual([]);
+    expect(componentReferencesFrom(B, undefined)).toEqual([]);
   });
 });
 
