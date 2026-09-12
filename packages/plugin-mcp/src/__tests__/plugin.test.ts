@@ -61,6 +61,9 @@ describe("the plugin is published and inert", () => {
     expect(Object.keys(mcpPlugin()).sort()).toEqual([
       "admin",
       "author",
+      // A contract field, not a contribution: it says whether this plugin
+      // runs, not what it adds.
+      "enabled",
       "homepage",
       "license",
       "name",
@@ -76,10 +79,28 @@ describe("the plugin is published and inert", () => {
   });
 
   it("is off unless an operator turns it on", () => {
-    // Both spellings of "not asked for" mean off, and the default is the one a
-    // version bump must never change.
-    expect(mcpPlugin().name).toBe(manifest.name);
-    expect(mcpPlugin({}).name).toBe(manifest.name);
-    expect(mcpPlugin({ enabled: false }).name).toBe(manifest.name);
+    // Asserted on `enabled` itself. Reading the name instead passes for a
+    // definition that resolved the option and dropped it, and core reads an
+    // OMITTED `enabled` as ENABLED — so the assertion that looks like it
+    // covers the default is the one that cannot see it being wrong.
+    expect(mcpPlugin().enabled).toBe(false);
+    expect(mcpPlugin({}).enabled).toBe(false);
+    expect(mcpPlugin({ enabled: false }).enabled).toBe(false);
+  });
+
+  it("is on when an operator asks for it, which is what makes off a choice", () => {
+    // The control. `enabled: false` on every path satisfies the case above and
+    // would leave the option inert once the transport lands.
+    expect(mcpPlugin({ enabled: true }).enabled).toBe(true);
+  });
+
+  it("reports as disabled through the rule core actually applies", () => {
+    // Core decides with `plugin.enabled !== false`, so a definition that omits
+    // the field reports as ENABLED. That is the shape this package must not
+    // ship, and asserting the boolean alone does not say so.
+    const asCoreReads = (p: { enabled?: boolean }) => p.enabled !== false;
+
+    expect(asCoreReads(mcpPlugin())).toBe(false);
+    expect(asCoreReads(mcpPlugin({ enabled: true }))).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ pnpm add @nextlyhq/plugin-mcp@alpha
 
 ```ts
 import { mcpPlugin } from "@nextlyhq/plugin-mcp";
+import { defineConfig } from "nextly/config";
 
 export default defineConfig({
   plugins: [mcpPlugin()],

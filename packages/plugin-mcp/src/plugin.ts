@@ -46,13 +46,14 @@ export interface McpPluginOptions {
  * rather than a signature change for everyone who has already installed it.
  */
 export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
-  // Read here rather than stored: nothing consumes it until the transport
-  // lands, and a field written now would be one the contributions below have to
-  // agree with before either exists.
   const { enabled = false } = options;
-  void enabled;
 
   return definePlugin({
+    // Carried on the definition, not merely resolved. Core reads an OMITTED
+    // `enabled` as enabled (`plugin.enabled !== false`), so a definition that
+    // resolves the option and drops it reports this plugin as on — including
+    // for a caller that passed `enabled: false` and read the default as off.
+    enabled,
     name: "@nextlyhq/plugin-mcp",
     version: PLUGIN_VERSION,
     // Core-compat floor is the version exporting everything this imports. It is
