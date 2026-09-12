@@ -479,10 +479,14 @@ describe("a bulk write on a localized collection", () => {
     // handlers for values this write never changed — and those send mail,
     // re-index, and call out.
     const fired: string[] = [];
+    // What each handler could SEE of its siblings when it ran, which is the
+    // other half: suppressing a handler must not blind the ones that do run.
+    const seen: Record<string, unknown> = {};
     const record =
       (name: string) =>
-      ({ value }: { value: unknown }) => {
+      ({ value, data }: { value: unknown; data: Record<string, unknown> }) => {
         fired.push(name);
+        seen[name] = data.metaTitle;
         return value;
       };
     process.env.DB_DIALECT = "sqlite";
@@ -535,6 +539,11 @@ describe("a bulk write on a localized collection", () => {
     );
 
     expect(fired).toEqual(["title"]);
+    // ...and the handler that DID run still saw the untouched sibling. A
+    // `title` hook deriving a search document from `metaTitle` needs it,
+    // unchanged or not, so the suppression must name which handlers run
+    // rather than take the value off the row.
+    expect(seen.title).toBe("meta");
 
     // And the untouched translation still comes back on the row, which is
     // what makes the exclusion above a hook-phase concern rather than a loss.

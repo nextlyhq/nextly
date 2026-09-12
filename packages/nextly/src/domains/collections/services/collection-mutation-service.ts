@@ -9711,45 +9711,32 @@ export class CollectionMutationService extends BaseService {
       // Field-level afterChange hooks observe the saved values (before the
       // password strip so they can see the full stored row).
       if (options.runHooks) {
-        // A field hook fires for every key PRESENT in the row it is given, so
-        // the untouched translations overlaid above — needed by the snapshot
-        // and the event, which describe the whole language — would run their
-        // `afterChange` handlers for values this write never changed. Those
-        // handlers send mail, re-index and call out, so firing them for an
-        // unchanged sibling is not a harmless extra pass.
+        // The whole language is on this row, because the snapshot and the
+        // events describe a translation rather than the one field of it that
+        // moved. Only the fields this write actually touched should have
+        // their handlers run, though: firing `afterChange` for a sibling
+        // nobody edited sends mail, re-indexes and calls out for an unchanged
+        // value.
         //
-        // Taken off for the hook phase and put back after it, rather than
-        // handed a copy: a handler's return value is written back into the
-        // row, and a copy would drop the transformations belonging to the
-        // fields this write DID set. The same remove-then-restore the field
-        // registry performs around its own snapshots.
-        const untouched = localizedUpdate
-          ? Object.keys(localizedDocument).filter(
-              name => !(name in localizedUpdate.localizedFieldValues)
-            )
-          : [];
-        const held = untouched.map(
-          name => [name, (updated as Record<string, unknown>)[name]] as const
-        );
-        for (const [name] of held) {
-          delete (updated as Record<string, unknown>)[name];
-        }
-        try {
-          await runFieldHooks({
-            kind: "collection",
-            slug: params.collectionName,
-            phase: "afterChange",
-            data: updated as Record<string, unknown>,
-            operation: "update",
-            user: params.user,
-          });
-        } finally {
-          // Restored even when a handler throws, so the response and anything
-          // read from the row afterwards still carry the whole language.
-          for (const [name, value] of held) {
-            (updated as Record<string, unknown>)[name] = value;
-          }
-        }
+        // Named rather than withheld. Removing the untouched keys from the row
+        // would suppress those handlers and also blind the ones that DO run —
+        // a `title` hook that derives a search document from `metaTitle` needs
+        // to read it, unchanged or not.
+        const touched = localizedUpdate
+          ? new Set([
+              ...Object.keys(finalData),
+              ...Object.keys(localizedUpdate.localizedFieldValues),
+            ])
+          : undefined;
+        await runFieldHooks({
+          kind: "collection",
+          slug: params.collectionName,
+          phase: "afterChange",
+          data: updated as Record<string, unknown>,
+          operation: "update",
+          user: params.user,
+          only: touched,
+        });
       }
 
       await this.redactResponseFields(
