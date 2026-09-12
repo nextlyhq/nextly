@@ -107,11 +107,17 @@ export function applyFieldDefaults(
     if (declared !== undefined && supplied === undefined) {
       // Resolved against the data built so far, so a default may read the
       // values the caller did supply, and earlier defaults in this same pass.
-      data[field.name] = cloneDefault(
+      const filled = cloneDefault(
         typeof declared === "function"
           ? (declared as (d: Record<string, unknown>) => unknown)(readFrom)
           : declared
       );
+      data[field.name] = filled;
+      // The view follows what has been filled, so a later function default
+      // reading an earlier one sees it. Without this the view stays the
+      // pre-default record and a default computed from a defaulted sibling
+      // gets `undefined` from a document that visibly holds the value.
+      if (readFrom !== data) readFrom[field.name] = filled;
     }
 
     if (!field.fields) continue;
@@ -120,9 +126,12 @@ export function applyFieldDefaults(
     // before it runs or a required child fails on an entry the caller could
     // not have satisfied.
     if (field.type === "group") {
-      fillGroup(data, field.name, field.fields, own?.fields, readFrom);
+      // `view`, not `readFrom`: with no explicit view the recursion must
+      // read the copy it fills, or it would write defaults into the caller's
+      // own nested container.
+      fillGroup(data, field.name, field.fields, own?.fields, view);
     } else if (field.type === "repeater") {
-      fillRepeaterRows(data, field.name, field.fields, own?.fields, readFrom);
+      fillRepeaterRows(data, field.name, field.fields, own?.fields, view);
     }
   }
 }

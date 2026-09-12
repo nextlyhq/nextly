@@ -366,7 +366,16 @@ function attachValidators(
   fns: Record<string, FieldFunctions>
 ): ValidatableField[] {
   return fields.map(field => {
-    const entry = field.name ? fns[field.name] : undefined;
+    // An unnamed container holds no entry of its own, and its children are
+    // registered at THIS level because that is where their values are stored.
+    // Descending with the same map is what makes the two agree; returning it
+    // untouched left a validator captured at registration unattached, so a
+    // value it should have rejected was accepted.
+    if (!field.name) {
+      if (!field.fields || !storedAtThisLevel(field)) return field;
+      return { ...field, fields: attachValidators(field.fields, fns) };
+    }
+    const entry = fns[field.name];
     if (!entry) return field;
     const next: ValidatableField = { ...field };
     if (entry.validate) next.validate = entry.validate;
@@ -514,7 +523,7 @@ export async function applyFieldWriteAccess(opts: {
   /**
    * A resolver shared with another pass over the same write, so the caller's
    * roles and permissions are read once and both passes judge with one
-   * authority. Build it with {@link writeAccessGrants}. Omitted, this pass
+   * authority. Build it with {@link callerAccessGrants}. Omitted, this pass
    * builds its own, which is right for a write judged only once.
    */
   grants?: () => Promise<CallerGrants>;
@@ -755,26 +764,16 @@ async function applyReadAccessRec(
 }
 
 /**
- * The caller's grants resolver for a read, to hand to every field-access pass
- * over one document so roles and permissions are read once. Memoised on first
- * use, like the resolver each pass would otherwise build for itself.
+ * The caller's grants resolver, to hand to every field-access pass over one
+ * document or record so roles and permissions are read once.
+ *
+ * One function for reads and writes, because they ask the same question of the
+ * same authority. Two constructors of it drifted apart the moment either was
+ * changed: a fix to how an anonymous caller or an API key resolves would land
+ * on one side and leave the other judging by different rules, which is the
+ * shape of an access bug nobody sees until it is exploited.
  */
-export function readAccessGrants(
-  user: Record<string, unknown> | undefined,
-  authenticatedScope?: AuthenticatedScope
-): () => Promise<CallerGrants> {
-  return grantsResolver(
-    typeof user?.id === "string" ? user.id : undefined,
-    authenticatedScope
-  );
-}
-
-/**
- * The caller's grants resolver for a write, to hand to every field-access pass
- * over one record so roles and permissions are read once. The counterpart to
- * {@link readAccessGrants}, for the write path's two passes.
- */
-export function writeAccessGrants(
+export function callerAccessGrants(
   user: Record<string, unknown> | undefined,
   authenticatedScope?: AuthenticatedScope
 ): () => Promise<CallerGrants> {
@@ -807,7 +806,7 @@ export async function applyFieldReadAccess(
     /**
      * A resolver shared with another pass over the same document, so the two
      * passes read the caller's roles and permissions once and judge with one
-     * authority; see {@link readAccessGrants}.
+     * authority; see {@link callerAccessGrants}.
      */
     grants?: () => Promise<CallerGrants>;
   },

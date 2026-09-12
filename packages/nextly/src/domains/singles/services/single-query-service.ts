@@ -66,14 +66,17 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
-import type { ValidatableField } from "../../../shared/lib/entry-validation";
+import {
+  isEmptyRequiredValue,
+  type ValidatableField,
+} from "../../../shared/lib/entry-validation";
 import {
   applyFieldDefaults,
   cloneDefault,
 } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
-  readAccessGrants,
+  callerAccessGrants,
   runFieldHooks,
   type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
@@ -447,7 +450,10 @@ function missesARequiredChild(
       continue;
     }
     const value = filled[child.name];
-    if (child.required && (value === undefined || value === null)) return true;
+    // The same question the write validator will ask of this document later.
+    // A nullish check calls a whitespace string or an empty array present, so
+    // the group would be stored and the next write would reject it.
+    if (child.required && isEmptyRequiredValue(value)) return true;
     if (value !== undefined && missesARequiredChild(child.fields, value)) {
       return true;
     }
@@ -1140,7 +1146,7 @@ export class SingleQueryService extends BaseService {
         overrideAccess: skipFieldRules,
         // One grants resolver for both passes, so the caller's roles and
         // permissions are read once and both passes judge with one authority.
-        grants: readAccessGrants(fieldAccessUser),
+        grants: callerAccessGrants(fieldAccessUser),
       };
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
       await applyFieldReadAccess(fieldAccess, sourceRedactions);

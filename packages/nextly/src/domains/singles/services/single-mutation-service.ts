@@ -59,7 +59,7 @@ import {
   applyFieldWriteAccess,
   attachFieldValidators,
   runFieldHooks,
-  writeAccessGrants,
+  callerAccessGrants,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -657,7 +657,7 @@ export class SingleMutationService extends BaseService {
       // has locked. The one thing it cannot do there is resolve the caller's
       // grants, which queries the pooled connection the transaction is
       // holding, so that is resolved here and handed in.
-      const promoteGrants = writeAccessGrants(
+      const promoteGrants = callerAccessGrants(
         options.user,
         options.authenticatedScope
       );

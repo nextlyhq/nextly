@@ -27,7 +27,7 @@ import {
   attachFieldValidators,
   clearFieldFunctions,
   getFieldFunctions,
-  readAccessGrants,
+  callerAccessGrants,
   type ReadAccessRedactions,
   registerFieldFunctions,
   runFieldHooks,
@@ -138,7 +138,7 @@ describe("field access can ask what the caller is granted", () => {
         },
       },
     ]);
-    const grants = readAccessGrants({ id: "u1" });
+    const grants = callerAccessGrants({ id: "u1" });
     const entry: Record<string, unknown> = { secret: "s" };
     await applyFieldReadAccess({
       kind: "collection",

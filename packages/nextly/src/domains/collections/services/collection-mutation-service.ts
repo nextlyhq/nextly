@@ -78,12 +78,13 @@ import {
   rehydrateSystemTimestamps,
   SYSTEM_TIMESTAMP_KEYS,
 } from "../../../shared/lib/case-conversion";
+import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
-  writeAccessGrants,
+  callerAccessGrants,
   attachFieldValidators,
   getFieldFunctions,
   runFieldHooks,
@@ -3099,7 +3100,7 @@ export class CollectionMutationService extends BaseService {
       // One resolver for both write-access passes over this record, so the
       // caller's roles and permissions are read once and both judge with one
       // authority.
-      const writeGrants = writeAccessGrants(
+      const writeGrants = callerAccessGrants(
         params.user,
         params.authenticatedScope
       );
@@ -3119,7 +3120,11 @@ export class CollectionMutationService extends BaseService {
       // `public`), and judging that rule before the defaults exist denies it.
       // Deleting the value then would lose it for good, since the pass that
       // decides correctly runs after the defaults and has nothing left to keep.
-      const readableByDefaults: Record<string, unknown> = { ...seededBody };
+      // A DEEP copy. The rules delete a denied value in place, and a shallow
+      // copy shares every nested group, repeater row and component with the
+      // record: the deletion would land on the record too, which is the data
+      // loss this whole arrangement exists to avoid, one level down.
+      const readableByDefaults = detachData(seededBody);
       await applyFieldWriteAccess({
         kind: "collection",
         slug: params.collectionName,

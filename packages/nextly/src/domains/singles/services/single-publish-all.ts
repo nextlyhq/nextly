@@ -33,7 +33,7 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
-  writeAccessGrants,
+  callerAccessGrants,
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
@@ -172,7 +172,7 @@ export class SinglePublishAllService extends BaseService {
       // Resolved here because the gate that uses them runs inside the write
       // transaction, and resolving grants queries the pooled connection that
       // transaction is holding.
-      const promoteGrants = writeAccessGrants(
+      const promoteGrants = callerAccessGrants(
         options.user,
         options.authenticatedScope
       );

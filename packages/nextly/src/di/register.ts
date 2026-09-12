@@ -183,7 +183,7 @@ import type { UserFieldDefinitionService } from "../services/users/user-field-de
 import type { UserService } from "../services/users/user-service";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
-import { registerFieldFunctions } from "../shared/lib/field-level-registry";
+import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
 import type {
   AdminConfig,
   AuthConfig,
@@ -827,6 +827,32 @@ export async function registerServices(
       );
     }
   }
+
+  // The function-bearing half of the live config, installed the same way a
+  // reload installs it: one replacement built from the whole config.
+  //
+  // Outside the resolver gate above, deliberately. That gate is about runtime
+  // TABLES, and it has a supported failure path where the registry is absent;
+  // registering in there meant a caller's `access` rules, hooks, validators
+  // and function defaults silently did not exist whenever it took that path.
+  // None of this needs a schema registry to be true.
+  replaceFieldFunctions([
+    ...(transformedConfig.collections ?? []).map(entity => ({
+      kind: "collection" as const,
+      slug: (entity as { slug?: string }).slug ?? "",
+      fields: (entity as { fields?: unknown[] }).fields ?? [],
+    })),
+    ...(transformedConfig.singles ?? []).map(entity => ({
+      kind: "single" as const,
+      slug: (entity as { slug?: string }).slug ?? "",
+      fields: (entity as { fields?: unknown[] }).fields ?? [],
+    })),
+    ...(transformedConfig.fieldGroups ?? []).map(entity => ({
+      kind: "fieldGroup" as const,
+      slug: (entity as { slug?: string }).slug ?? "",
+      fields: (entity as { fields?: unknown[] }).fields ?? [],
+    })),
+  ]);
 
   // Finalize the deferred Builder-lane targets now the DB is reachable (P8/D3).
   // Builder/UI entities live in the dynamic_* registry tables (loaded by
@@ -1736,11 +1762,6 @@ async function registerConfigTablesInResolver(
       const dbName = (collection as { dbName?: string }).dbName;
       const fields = (collection as { fields?: unknown[] }).fields ?? [];
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
-      // Capture function-bearing field configs (validate/access/hooks)
-      // from the LIVE config: the DB-backed registry serializes fields,
-      // which drops functions, so the write/read services resolve them
-      // through the field-level registry instead.
-      registerFieldFunctions("collection", slug, fields);
       const baseTableName = dbName ?? slug.replace(/-/g, "_");
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
@@ -1802,8 +1823,6 @@ async function registerConfigTablesInResolver(
       const dbName = (single as { dbName?: string }).dbName;
       const fields = (single as { fields?: unknown[] }).fields ?? [];
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
-      // Same live-config capture as the collections branch above.
-      registerFieldFunctions("single", slug, fields);
       const tableName = resolveSingleTableName({ slug, dbName });
       // Why: forward the code-first `status: true` flag for singles too —
       // mirrors the collection branch above. Same Draft/Published runtime
@@ -1824,18 +1843,6 @@ async function registerConfigTablesInResolver(
         `[registerServices] Failed to register single "${(single as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
       );
     }
-  }
-
-  // Field groups: no table to resolve here (a field group's own table is
-  // provisioned by the field-group services), only the live config to capture.
-  // Its fields are read from the stored definition on every write, the same
-  // place a collection's are, so a `defaultValue` written as a function is
-  // dropped there and can only come from here.
-  for (const fieldGroup of config.fieldGroups ?? []) {
-    const slug = (fieldGroup as { slug?: string }).slug;
-    const fields = (fieldGroup as { fields?: unknown[] }).fields;
-    if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
-    registerFieldFunctions("fieldGroup", slug, fields);
   }
 }
 
