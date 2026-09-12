@@ -64,3 +64,9 @@ The resolver type a plugin author writes against is published as
 `PluginSourceResolver`. The existing `WidgetSourceResolver` is core's own
 two-argument shape and rejects the context parameter a contributed resolver
 needs, so typing one with it made the contract reachable only inline.
+
+A plugin's managed read keeps the claims the caller's token proved. The
+identity was rebuilt from id, name, email and roles alone, so a collection's
+code-defined access rule reading a tenant, plan or entitlement was judged on a
+different caller than the request authenticated -- denying a positive check,
+and granting an absence-tolerant one.
