@@ -224,24 +224,26 @@ export class DynamicCollectionValidationService {
         this.validateRelationshipField(field);
       }
     }
-
-    this.validateJunctionOwnership(fields);
   }
 
   /**
    * Two many-to-many fields may not store their links in one junction table.
    * A link row carries the two collections' ids and nothing that says which
    * field made it, so the fields would read each other's links, and removing
-   * either field would take the other's table with it. Only an author-named
-   * `junctionTable` can collide: the generated name carries the field's own.
+   * either field would take the other's table with it. Asked of the name each
+   * field RESOLVES to — its `junctionTable`, or the generated name — through
+   * the caller's resolver, which must be the one the DDL is written with: an
+   * author may name a table exactly what another field's generated name is.
    *
    * @throws NextlyError (validation, `JUNCTION_TABLE_SHARED`) naming both fields and the table
    */
-  validateJunctionOwnership(fields: FieldDefinition[]): void {
+  validateJunctionOwnership(
+    fields: FieldDefinition[],
+    junctionTableFor: (field: FieldDefinition) => string
+  ): void {
     const owners = new Map<string, string>();
-    for (const field of fields) {
-      const table = field.options?.junctionTable;
-      if (!usesJunctionTable(field) || !table) continue;
+    for (const field of fields.filter(usesJunctionTable)) {
+      const table = junctionTableFor(field);
       const owner = owners.get(table);
       if (owner !== undefined) {
         throw NextlyError.validation({

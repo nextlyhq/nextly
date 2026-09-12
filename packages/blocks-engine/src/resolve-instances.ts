@@ -48,7 +48,6 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   isComponentDocument,
-  isComponentInstance,
   isUnsetOverride,
   renderedDomId,
   type BlockDocument,
@@ -921,17 +920,26 @@ export function placementTypesOf(
   node: BlockNode,
   definitions?: ComponentLookup
 ): readonly string[] {
-  if (definitions === undefined || !isComponentInstance(node)) {
-    return [node.type];
+  // Read defensively, because a STORED forest reaches this: the internal
+  // nesting walk says in as many words that a slot may hold anything, and
+  // asking what a node draws reads one field further than asking its type did.
+  // The planners shape-check their forest before they get here, so this is a
+  // boundary rather than the whole defence — what it must not do is turn a
+  // malformed entry into a raise where a refusal belongs.
+  const type = isPlainRecord(node) ? node.type : undefined;
+  // No type is no answer: the nesting rule has nothing to judge, and the shape
+  // rule refuses the node before anything is placed.
+  if (typeof type !== "string") return [];
+  if (definitions === undefined || type !== COMPONENT_INSTANCE_TYPE) {
+    return [type];
   }
-  const componentId = node.props.componentId;
-  if (typeof componentId !== "string") return [node.type];
+  const props = (node as unknown as Record<string, unknown>).props;
+  const componentId = isPlainRecord(props) ? props.componentId : undefined;
+  if (typeof componentId !== "string") return [type];
   const document = readableDefinition(definitions.get(componentId));
-  if (document === undefined || document.nodes.length === 0) {
-    return [node.type];
-  }
+  if (document === undefined || document.nodes.length === 0) return [type];
   const roots = composedRootTypes(document, definitions);
-  return roots === undefined || roots.length === 0 ? [node.type] : roots;
+  return roots === undefined || roots.length === 0 ? [type] : roots;
 }
 
 /** A definition's root types as answered once, and how deep an instance they hold for. */

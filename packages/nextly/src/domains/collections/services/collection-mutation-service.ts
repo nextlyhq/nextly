@@ -84,6 +84,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
+  getFieldFunctions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
 import {
@@ -2902,7 +2903,13 @@ export class CollectionMutationService extends BaseService {
       // of write access matches generation, so a field the caller may not
       // create is not reintroduced.
       const seededBody: Record<string, unknown> = { ...body };
-      applyFieldDefaults(seededBody, fields);
+      // The stored fields carry constant defaults; a function default exists
+      // only in the live config, which the registry captured at boot.
+      applyFieldDefaults(
+        seededBody,
+        fields,
+        getFieldFunctions("collection", params.collectionName)
+      );
 
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({

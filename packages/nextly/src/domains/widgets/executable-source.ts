@@ -24,6 +24,7 @@
 import {
   failUnavailableSourceOrOp,
   getSource,
+  sourceTarget,
   type WidgetSource,
 } from "./sources";
 import { systemResolver, type SystemSourceResolver } from "./system-sources";
@@ -42,7 +43,41 @@ import { systemResolver, type SystemSourceResolver } from "./system-sources";
  */
 export type ExecutableSource =
   | { kind: "system"; source: WidgetSource; resolve: SystemSourceResolver }
-  | { kind: "collection"; source: WidgetSource };
+  | { kind: "collection"; source: WidgetSource }
+  | { kind: "single"; source: WidgetSource };
+
+/**
+ * Which executable kinds are answered by a read of the entity the id names.
+ *
+ * An exhaustive record rather than a `kind !== "system"` test, so a kind added
+ * to `ExecutableSource` has to say here whether the entity-read gate applies
+ * to it instead of inheriting an answer nobody gave.
+ */
+const READS_AN_ENTITY: Record<ExecutableSource["kind"], boolean> = {
+  collection: true,
+  single: true,
+  system: false,
+};
+
+/**
+ * The entity this source reads through the Direct API, by slug, or none.
+ *
+ * A collection and a single are each one entity the permission table names,
+ * read with the caller and gated on `read-<slug>` -- the same decision for
+ * both, so the endpoint that takes it need not know which kind it holds. A
+ * system source's rows are not such an entity (a release is not a row in a
+ * collection), and its authorization lives in the service that owns them.
+ *
+ * Published from here rather than restated at the gate, because the gate once
+ * listed the kinds it would admit and the list drifted: `single` became
+ * executable in the domain while the endpoint went on refusing it as "not
+ * executable yet".
+ */
+export function entityRead(executable: ExecutableSource): string | undefined {
+  return READS_AN_ENTITY[executable.kind]
+    ? sourceTarget(executable.source.id)
+    : undefined;
+}
 
 /**
  * Resolves `sourceId` against the live registry, or fails loudly.
@@ -74,9 +109,13 @@ export function resolveExecutableSource(sourceId: string): ExecutableSource {
     }
     return { kind: "system", source, resolve };
   }
+  // A single is executable the way a collection is: its one document is read
+  // through the Direct API with the caller, and the executor decides what
+  // that read looks like.
+  if (source.kind === "single") return { kind: "single", source };
   if (source.kind !== "collection") {
     failUnavailableSourceOrOp(
-      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
+      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections, singles and system sources are`
     );
   }
   return { kind: "collection", source };

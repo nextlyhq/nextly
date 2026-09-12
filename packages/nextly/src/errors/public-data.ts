@@ -21,4 +21,23 @@ export type RateLimitPublicData = {
   retryAfterSeconds?: number;
 };
 
-export type PublicData = ValidationPublicData | RateLimitPublicData | undefined;
+/**
+ * Which Single a `NOT_FOUND` from the singles read is ABOUT.
+ *
+ * The slug the caller named, and nothing more: a Single that is not registered
+ * and one holding no document the caller's status view may see answer with
+ * the same payload, so neither becomes distinguishable from the other. What it
+ * distinguishes is the read's own refusal from a `NOT_FOUND` a hook or a
+ * related read raised for something else -- which a caller reading the Single
+ * on behalf of a card has to tell apart, one being an empty card and the other
+ * a failed one.
+ */
+export type SingleAbsentPublicData = {
+  single: string;
+};
+
+export type PublicData =
+  | ValidationPublicData
+  | RateLimitPublicData
+  | SingleAbsentPublicData
+  | undefined;

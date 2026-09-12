@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { applyOps } from "./ops";
 import { planInsertPattern, type StoredPattern } from "./composition-planners";
+import { placementTypesOf } from "./resolve-instances";
 import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
 import type { ComponentLookup } from "./resolve-instances";
@@ -970,6 +971,45 @@ describe("a composed root is judged by what it draws", () => {
 
     expect(plan.problem).toBe("not-allowed-in-slot");
     expect(plan.permitted).toEqual(["core/text"]);
+  });
+
+  it("does not raise on a slot entry that is not a node at all", () => {
+    /*
+     * A stored forest reaches the internal-nesting walk unvalidated — its own
+     * comment says a slot may hold anything — and reading what a node DRAWS
+     * reads one field further than reading its type did: an entry typed as an
+     * instance but carrying no `props` used to be judged by its type and now
+     * has its `componentId` read.
+     *
+     * The planner shape-checks the forest before it gets here, so this is the
+     * boundary rather than the whole defence; what it must not do is turn a
+     * malformed entry into a raise where the refusal belongs.
+     */
+    const malformed = [
+      null,
+      "not a node",
+      { id: "n1", version: 1, props: {} },
+      { id: "n2", type: COMPONENT_INSTANCE_TYPE, version: 1 },
+      { id: "n3", type: COMPONENT_INSTANCE_TYPE, version: 1, props: "no" },
+    ] as unknown as BlockNode[];
+
+    for (const entry of malformed) {
+      expect(() => placementTypesOf(entry, definitions)).not.toThrow();
+    }
+    // And an entry with no readable type stands for NO type, rather than for
+    // a type spelled out of whatever was there — `placementVerdict` compares
+    // these against a registry, and a string like "undefined" is a name a
+    // slot's admissions list could be made to accept.
+    expect(placementTypesOf(malformed[2] as BlockNode, definitions)).toEqual(
+      []
+    );
+    expect(placementTypesOf(null as unknown as BlockNode, definitions)).toEqual(
+      []
+    );
+    // A valid instance still resolves, so the guards did not swallow the rule.
+    expect(placementTypesOf(instance("i", "col"), definitions)).toEqual([
+      "core/column",
+    ]);
   });
 
   it("judges an instance by its own type when no lookup is supplied", () => {

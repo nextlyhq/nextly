@@ -160,6 +160,30 @@ describe("the text archetype", () => {
     expect(links[1]?.getAttribute("href")).toBe("https://example.com/\uFFFD");
   });
 
+  it("draws an ESCAPED reference no code point can hold as the replacement character, and the rest with it", async () => {
+    // 🔴 The library drops the backslash before `#` or `;` and THEN decodes,
+    // so these reached its decoder as `&#1114112;` and threw -- past a decode
+    // that matched only the unescaped spelling -- and the card was blank.
+    const root = await drawn(
+      "## Still here\n\nPrice &#1114112\\; each, and &\\#1114112; too."
+    );
+    expect(root.querySelector("h2")?.textContent).toBe("Still here");
+    expect(root.textContent).toContain("Price \uFFFD each, and \uFFFD too.");
+  });
+
+  it("leaves a path the browser would read as another site as the markdown it was written in", async () => {
+    // 🔴 `/\\evil.example` is written as a path, so it would open in this tab,
+    // and the browser's parser reads the backslash as a slash: the host
+    // `evil.example`. A link to a real path in the same card is the control.
+    const root = await drawn(
+      "See [runbook](/\\evil.example) or [notes](/admin/collections/notes)."
+    );
+    const links = root.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/admin/collections/notes");
+    expect(root.textContent).toContain("[runbook](/\\evil.example)");
+  });
+
   it("is document content, not a read-only form control", async () => {
     // 🔴 `ContentEditable` names itself `role="textbox"` and, when the editor
     // is not editable, `aria-readonly` -- so a card of prose was announced as

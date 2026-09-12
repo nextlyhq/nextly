@@ -18,8 +18,12 @@ import { authorizationGroups, canReadEntity } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
-import { refreshCollectionSources } from "../domains/widgets/collection-sources";
-import { resolveExecutableSource } from "../domains/widgets/executable-source";
+import { refreshContentSources } from "../domains/widgets/collection-widgets";
+import {
+  entityRead,
+  resolveExecutableSource,
+  type ExecutableSource,
+} from "../domains/widgets/executable-source";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import {
   readWidgetQuery,
@@ -27,11 +31,7 @@ import {
   validateReadWidgetQuery,
 } from "../domains/widgets/query";
 import type { WidgetSlot } from "../domains/widgets/result";
-import {
-  failUnavailableSourceOrOp,
-  sourceTarget,
-  type WidgetSource,
-} from "../domains/widgets/sources";
+import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -162,34 +162,23 @@ const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
  * through that domain's REST route by any authenticated caller. So admitting
  * these sources tells a caller nothing a collection refusal was protecting.
  *
- * 🔴 A `system:` source nothing answers is refused HERE, by asking
- * `resolveExecutableSource` -- the executor's own decision, called rather than
- * restated, so the two cannot answer differently. Admitting on the kind alone
- * was not enough: a resolver-less system source registered through the generic
- * `registerSource` door reached field-level validation, and every message below
- * this point is specific. A caller sending an undeclared `select` was told
- * which field was undeclared ON that source, while an invented id got the
- * generic sentence -- so the pair distinguished a registered system source from
- * a nonexistent one, which is the enumeration oracle this gate exists to close.
+ * 🔴 WHICH sources this gate applies to is the executor's decision, carried in
+ * the `ExecutableSource` that `prepareOne` resolved, and never restated here.
+ * The gate once listed the kinds it would admit, and the list drifted from the
+ * executor's: `single` became executable in the domain while this endpoint --
+ * the only production caller -- went on refusing every `single:` query as "not
+ * executable yet". `entityRead` answers per kind, exhaustively, so a kind the
+ * executor learns to run is gated here the day it is added.
  */
 async function assertSourceReadable(
-  source: WidgetSource,
+  executable: ExecutableSource,
   mayRead: (slug: string) => Promise<boolean>
 ): Promise<void> {
-  if (source.kind === "system") {
-    // Throws the same shared refusal for a system source with no resolver.
-    resolveExecutableSource(source.id);
-    return;
-  }
-  if (source.kind !== "collection") {
-    failUnavailableSourceOrOp(
-      `source "${source.id}" has kind "${source.kind}", which is not executable yet; only collections and system sources are`
-    );
-  }
-  const slug = sourceTarget(source.id);
+  const slug = entityRead(executable);
+  if (slug === undefined) return;
   if (!(await mayRead(slug))) {
     failUnavailableSourceOrOp(
-      `caller may not read "${slug}" behind source "${source.id}"`
+      `caller may not read "${slug}" behind source "${executable.source.id}"`
     );
   }
 }
@@ -230,7 +219,7 @@ type PreparedQuery =
   | {
       ok: true;
       parsed: ReturnType<typeof readWidgetQuery>;
-      source: WidgetSource;
+      executable: ExecutableSource;
     }
   | { ok: false; slot: QuerySlot };
 
@@ -294,7 +283,17 @@ function failedSlot(error: unknown): QuerySlot {
 function prepareOne(raw: unknown): PreparedQuery {
   try {
     const parsed = readWidgetQuery(raw);
-    return { ok: true, parsed, source: resolveWidgetSource(parsed.source) };
+    const source = resolveWidgetSource(parsed.source);
+    // 🔴 Whether anything EXECUTES the source is decided here, before a read
+    // decision is taken or a field is validated, by the executor's own
+    // resolution rather than by the kind alone. A resolver-less system source
+    // registered through the generic `registerSource` door once reached
+    // field-level validation, where every message is specific: an undeclared
+    // `select` was answered ON that source while an invented id got the
+    // generic sentence, so the pair distinguished a registered system source
+    // from a nonexistent one -- the enumeration oracle the gate exists to
+    // close. Every refusal below is the one shared sentence.
+    return { ok: true, parsed, executable: resolveExecutableSource(source.id) };
   } catch (error) {
     return { ok: false, slot: failedSlot(error) };
   }
@@ -303,18 +302,19 @@ function prepareOne(raw: unknown): PreparedQuery {
 /**
  * The DISTINCT entities this batch will need a read decision about.
  *
- * Only collection sources, and they are the only kind that reaches `mayRead` at
- * all: `assertSourceReadable` refuses an unexecutable kind before consulting
- * it, and admits a system source without one -- a system source's
- * authorization belongs to the service that owns its rows, so warming a
- * decision here would take one nothing asks for.
+ * Exactly the sources `assertSourceReadable` will put to `mayRead`, by the
+ * same `entityRead` -- a collection's slug and a single's alike, and nothing
+ * for a system source, whose authorization belongs to the service that owns
+ * its rows. Collected by a second spelling of that rule, this once named the
+ * collections alone, so a batch of singles would have started every one of
+ * its cold decisions at once from the slots, around the bound.
  */
 function batchSlugs(prepared: readonly PreparedQuery[]): string[] {
   const slugs = new Set<string>();
   for (const entry of prepared) {
-    if (entry.ok && entry.source.kind === "collection") {
-      slugs.add(sourceTarget(entry.source.id));
-    }
+    if (!entry.ok) continue;
+    const slug = entityRead(entry.executable);
+    if (slug !== undefined) slugs.add(slug);
   }
   return [...slugs];
 }
@@ -356,9 +356,12 @@ async function runPrepared(
   mayRead: (slug: string) => Promise<boolean>
 ): Promise<QuerySlot> {
   try {
-    await assertSourceReadable(entry.source, mayRead);
+    await assertSourceReadable(entry.executable, mayRead);
 
-    const query = validateReadWidgetQuery(entry.parsed, entry.source);
+    const query = validateReadWidgetQuery(
+      entry.parsed,
+      entry.executable.source
+    );
     const result = await executeWidgetQuery(query, caller);
     return { ok: true, result };
   } catch (error) {
@@ -373,8 +376,8 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   // The body is read and checked BEFORE anything touches the database, and the
   // ordering is the point rather than a tidying. The cap is a QUOTA and the
   // shape check is a validity check, so both are preconditions: they run
-  // first, whatever they cost. They ran last, behind `refreshCollectionSources`
-  // -- a live `getAllCollections()` against `dynamic_collections` -- so an
+  // first, whatever they cost. They ran last, behind the source refresh -- a
+  // live `getAllCollections()` against `dynamic_collections` -- so an
   // authenticated caller sending a truncated body, no `queries` array, or 40
   // of them bought a registry round trip on every attempt while executing no
   // query at all. Nothing below this point needs the body, and nothing here
@@ -393,12 +396,12 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
 
   await getCachedNextly();
 
-  // ONCE for the whole batch, before any query is resolved. The collection
-  // sources are derived from the live collection registry rather than from the
-  // boot config, which is what makes a Schema-Builder collection queryable at
-  // all -- it has no config entry, and it can be created while this process is
-  // running. See `domains/widgets/collection-sources.ts`.
-  await refreshCollectionSources();
+  // ONCE for the whole batch, before any query is resolved, and BOTH kinds of
+  // content source. They are derived from the live registries rather than
+  // from the boot config, which is what makes a Schema-Builder collection
+  // queryable at all -- it has no config entry, and it can be created while
+  // this process is running. See `domains/widgets/collection-sources.ts`.
+  await refreshContentSources();
 
   // Resolve the caller ONCE for the whole batch: role-slug resolution is a
   // database read, and doing it per query would make a 20-widget dashboard pay
