@@ -170,8 +170,15 @@ describe("a bulk write on a localized collection", () => {
       .map(e => {
         const envelope = (
           typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload
-        ) as { resource?: { id?: string }; data?: Record<string, unknown> };
-        return { id: envelope.resource?.id, doc: envelope.data ?? {} };
+        ) as {
+          resource?: { id?: string; locale?: string };
+          data?: Record<string, unknown>;
+        };
+        return {
+          id: envelope.resource?.id,
+          locale: envelope.resource?.locale,
+          doc: envelope.data ?? {},
+        };
       })
       .filter(d => d.id === created._parent);
     expect(documents).toHaveLength(2);
@@ -184,6 +191,11 @@ describe("a bulk write on a localized collection", () => {
     const afterUpdate = documents[1].doc;
     expect(afterUpdate.kind).toBe("edited");
     expect(afterUpdate.title).toBe("first");
+
+    // Every event names the language it describes: a receiver reads the
+    // locale from the resource, and a localized write that omits it is
+    // delivered as belonging to no translation in particular.
+    expect(documents.map(d => d.locale)).toEqual(["en", "en"]);
 
     // Both versions are tagged with the language their values belong to;
     // untagged, a restore reads them as shared and drops them.

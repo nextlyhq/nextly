@@ -1053,6 +1053,9 @@ export class CollectionMutationService extends BaseService {
         kind: "entry",
         collection: args.collectionName,
         id: entryId,
+        // The language this create's translatable values went into, as the
+        // interactive create reports it.
+        ...(args.localeTag ? { locale: args.localeTag } : {}),
       },
       data: createdDocument,
       previous: null,
@@ -9422,6 +9425,13 @@ export class CollectionMutationService extends BaseService {
           kind: "entry",
           collection: params.collectionName,
           id: entryId,
+          // The language this event describes. A receiver reads it from the
+          // resource alone, so a localized write that omits it is delivered as
+          // belonging to no translation in particular.
+          ...(Object.keys(localizedDocument).length > 0 &&
+          localizedUpdate?.writeLocale
+            ? { locale: localizedUpdate.writeLocale }
+            : {}),
         },
         data: updatedDocument,
         previous: previousDocument,
@@ -9432,6 +9442,11 @@ export class CollectionMutationService extends BaseService {
         const statusRecorded = await this.recordStatusEvents(tx, {
           collection: params.collectionName,
           id: entryId,
+          // Same reason as the update event above.
+          ...(Object.keys(localizedDocument).length > 0 &&
+          localizedUpdate?.writeLocale
+            ? { locale: localizedUpdate.writeLocale }
+            : {}),
           from: readStringField(existingEntry, "status") ?? null,
           to: (updated as { status?: unknown }).status as
             | string
