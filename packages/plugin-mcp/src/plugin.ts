@@ -67,7 +67,7 @@ export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
     license: "MIT",
     admin: {
       description:
-        "Experimental. Exposes this install's schema and content to AI agents over the Model Context Protocol, read-only. Off until enabled.",
+        "Experimental placeholder. Serves no endpoint yet. When it does, it will expose this install's schema and content to AI agents over the Model Context Protocol, read-only, and only once enabled.",
     },
   });
 }
