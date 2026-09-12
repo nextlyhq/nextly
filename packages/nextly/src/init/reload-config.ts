@@ -1566,6 +1566,11 @@ async function applyReload(opts?: {
         slug: (entity as { slug?: string }).slug ?? "",
         fields: (entity as { fields?: unknown[] }).fields ?? [],
       })),
+      ...(newConfig?.fieldGroups ?? []).map(entity => ({
+        kind: "fieldGroup" as const,
+        slug: (entity as { slug?: string }).slug ?? "",
+        fields: (entity as { fields?: unknown[] }).fields ?? [],
+      })),
     ];
     commitFieldFunctions = () => replaceFieldFunctions(fieldFunctionSources);
   } catch (err) {
