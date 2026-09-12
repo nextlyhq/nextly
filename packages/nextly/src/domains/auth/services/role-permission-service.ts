@@ -10,7 +10,10 @@ import type {
 
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
-import { invalidatePermissionCache } from "../../../services/lib/permissions";
+import {
+  invalidatePermissionCache,
+  writingPermissions,
+} from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
 /**
@@ -116,39 +119,43 @@ export class RolePermissionService extends BaseService {
       // permission, was unreachable there. The base-service helper opens
       // `BEGIN IMMEDIATE` on the shared connection for that dialect and uses
       // the native transaction on Postgres and MySQL.
-      await this.withTransaction(async txRaw => {
-        const tx = txRaw as TransactionLike;
-        const permissionData = {
-          id: newPermId,
-          name: permName,
-          slug: permSlug,
-          action: perm.action,
-          resource: perm.resource,
-          description: null,
-        };
-        const permInsert = tx
-          .insert(this.tables.permissions)
-          .values(permissionData);
-        if (typeof permInsert.onConflictDoNothing === "function") {
-          await permInsert.onConflictDoNothing();
-        } else {
-          await permInsert;
-        }
+      // The gate wraps the TRANSACTION, not the statement inside it. Retiring
+      // the caches before the commit would leave a window in which a check
+      // refills them from the state this is replacing, and the refilled answer
+      // then outlives the change that was supposed to retire it.
+      await writingPermissions(this.tables.permissions, permissionsTable =>
+        this.withTransaction(async txRaw => {
+          const tx = txRaw as TransactionLike;
+          const permissionData = {
+            id: newPermId,
+            name: permName,
+            slug: permSlug,
+            action: perm.action,
+            resource: perm.resource,
+            description: null,
+          };
+          const permInsert = tx.insert(permissionsTable).values(permissionData);
+          if (typeof permInsert.onConflictDoNothing === "function") {
+            await permInsert.onConflictDoNothing();
+          } else {
+            await permInsert;
+          }
 
-        const rolePermissionData: RolePermissionInsertData = {
-          id: rolePermId,
-          roleId,
-          permissionId: newPermId,
-        };
-        const rpInsert = tx
-          .insert(this.tables.rolePermissions)
-          .values(rolePermissionData);
-        if (typeof rpInsert.onConflictDoNothing === "function") {
-          await rpInsert.onConflictDoNothing();
-        } else {
-          await rpInsert;
-        }
-      });
+          const rolePermissionData: RolePermissionInsertData = {
+            id: rolePermId,
+            roleId,
+            permissionId: newPermId,
+          };
+          const rpInsert = tx
+            .insert(this.tables.rolePermissions)
+            .values(rolePermissionData);
+          if (typeof rpInsert.onConflictDoNothing === "function") {
+            await rpInsert.onConflictDoNothing();
+          } else {
+            await rpInsert;
+          }
+        })
+      );
 
       permissionId = newPermId;
     }
@@ -188,10 +195,15 @@ export class RolePermissionService extends BaseService {
     if (canonical === reversed) return;
 
     try {
-      await (this.db as RBACDatabaseInstance)
-        .update(this.tables.permissions)
-        .set({ slug: canonical })
-        .where(eq(this.tables.permissions.id, permissionId));
+      // The stored slug is what a coarse grant check and an API key's copied
+      // grants compare against, so a repaired one makes every copy of the old
+      // spelling wrong.
+      await writingPermissions(this.tables.permissions, table =>
+        (this.db as RBACDatabaseInstance)
+          .update(table)
+          .set({ slug: canonical })
+          .where(eq(table.id, permissionId))
+      );
     } catch {
       // `slug` is unique, so another row may already answer to the canonical
       // name — a swapped pair of `(action, resource)` produces exactly that.
