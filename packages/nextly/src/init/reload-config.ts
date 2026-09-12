@@ -1562,6 +1562,13 @@ async function applyReload(opts?: {
         registerFieldFunctions("single", slug, fields);
       }
     }
+    for (const fieldGroup of newConfig?.fieldGroups ?? []) {
+      const slug = (fieldGroup as { slug?: string }).slug;
+      const fields = (fieldGroup as { fields?: unknown[] }).fields;
+      if (slug && Array.isArray(fields)) {
+        registerFieldFunctions("fieldGroup", slug, fields);
+      }
+    }
   } catch (err) {
     // The registry was rebuilt from the config that just failed; put the
     // working set back so the retained config keeps the behavior it was

@@ -1823,6 +1823,18 @@ async function registerConfigTablesInResolver(
       );
     }
   }
+
+  // Field groups: no table to resolve here (a field group's own table is
+  // provisioned by the field-group services), only the live config to capture.
+  // Its fields are read from the stored definition on every write, the same
+  // place a collection's are, so a `defaultValue` written as a function is
+  // dropped there and can only come from here.
+  for (const fieldGroup of config.fieldGroups ?? []) {
+    const slug = (fieldGroup as { slug?: string }).slug;
+    const fields = (fieldGroup as { fields?: unknown[] }).fields;
+    if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
+    registerFieldFunctions("fieldGroup", slug, fields);
+  }
 }
 
 function logStorageConfiguration(
