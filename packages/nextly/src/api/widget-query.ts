@@ -30,7 +30,7 @@ import {
   resolveWidgetSource,
   validateReadWidgetQuery,
 } from "../domains/widgets/query";
-import type { WidgetSlot } from "../domains/widgets/result";
+import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -410,6 +410,44 @@ async function withinSlotBudget<T>(
   }
 }
 
+/**
+ * The result, proven to survive the response encoder, inside the slot's own
+ * boundary.
+ *
+ * 🔴 `respondData` calls `JSON.stringify` over the WHOLE results array, after
+ * `Promise.all` has assembled it and outside every slot's `catch`. So a value
+ * the encoder refuses does not fail its own slot -- it throws at the response,
+ * and the endpoint answers 500 with every sibling's rows discarded. One
+ * plugin's bad row blanks the dashboard, which is the precise outcome the
+ * per-slot shape exists to prevent.
+ *
+ * `WidgetResult`'s rows are `Record<string, unknown>`, so a `bigint`, a cycle
+ * or a throwing `toJSON` all satisfy the type. A resolver is third-party code;
+ * it is not the host's business to trust that it returned something encodable,
+ * and the type system cannot say so.
+ *
+ * Encoded HERE, where a failure is caught and becomes this slot's error. The
+ * cost is one serialization of a payload that is about to be serialized
+ * anyway, and the parse back is what keeps the encoder from doing it twice on
+ * a value it has already refused once.
+ */
+function serialisable(result: WidgetResult, source: string): WidgetResult {
+  try {
+    return JSON.parse(JSON.stringify(result)) as WidgetResult;
+  } catch (error) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "This widget returned something that could not be sent",
+      logMessage: `widget source "${source}" returned an unserialisable result`,
+      logContext: {
+        reason: "widget-result-unserialisable",
+        source,
+        err: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+}
+
 async function runPrepared(
   entry: Extract<PreparedQuery, { ok: true }>,
   caller: ReadCaller,
@@ -442,7 +480,7 @@ async function runPrepared(
         });
       }
     );
-    return { ok: true, result };
+    return { ok: true, result: serialisable(result, query.source) };
   } catch (error) {
     return failedSlot(error);
   }

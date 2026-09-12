@@ -1036,3 +1036,72 @@ describe("a slot that never settles", () => {
     expect(slots[0].ok).toBe(true);
   });
 });
+
+describe("a resolver that returns something the response cannot encode", () => {
+  it("fails that slot alone, and the rest of the batch still answers", async () => {
+    // 🔴 `respondData` calls `JSON.stringify` over the WHOLE results array,
+    // after `Promise.all` and outside every slot's catch. So a value the
+    // encoder refuses used to throw at the response and answer 500 with every
+    // sibling's rows discarded -- one plugin's bad row blanking the dashboard,
+    // which is the outcome the per-slot shape exists to prevent.
+    // Both slots name the SAME registered source, dispatching on the op. An
+    // earlier revision used a second, unregistered source for the bad slot --
+    // which failed as "unavailable source" before the executor ran at all, so
+    // the case passed with this guard removed.
+    executeWidgetQuery.mockImplementation((query: { op: string }) => {
+      if (query.op === "list") {
+        const cyclic: Record<string, unknown> = { name: "loop" };
+        cyclic.self = cyclic;
+        return Promise.resolve({ op: "list", items: [cyclic] });
+      }
+      return Promise.resolve({ op: "count", total: 5 });
+    });
+
+    const res = await postWidgetQuery(
+      makeReq({
+        queries: [
+          { source: "collection:posts", op: "list" },
+          { source: "collection:posts", op: "count" },
+        ],
+      })
+    );
+
+    // A 200 with slots, not a request-level failure.
+    expect(res.status).toBe(200);
+    const slots = await slotsOf(res);
+    expect(slots[0].ok).toBe(false);
+    // The control, and the whole point: the sibling was not blanked.
+    expect(slots[1].ok).toBe(true);
+  });
+
+  it("says so in the log, naming the source", async () => {
+    executeWidgetQuery.mockImplementation(() =>
+      Promise.resolve({ op: "list", items: [{ big: BigInt(1) }] })
+    );
+
+    await postWidgetQuery(
+      makeReq({ queries: [{ source: "collection:posts", op: "list" }] })
+    );
+
+    expect(
+      logged.some(entry =>
+        JSON.stringify(entry).includes("widget-result-unserialisable")
+      )
+    ).toBe(true);
+  });
+
+  it("passes an ordinary result through unchanged", async () => {
+    // The must-differ half. Without it a guard that failed every slot -- or
+    // one that quietly emptied results -- satisfies both cases above.
+    executeWidgetQuery.mockResolvedValue({ op: "count", total: 11 });
+
+    const res = await postWidgetQuery(
+      makeReq({ queries: [{ source: "collection:posts", op: "count" }] })
+    );
+    const body = (await res.json()) as {
+      results: Array<{ ok: boolean; result?: { total?: number } }>;
+    };
+    expect(body.results[0].ok).toBe(true);
+    expect(body.results[0].result?.total).toBe(11);
+  });
+});

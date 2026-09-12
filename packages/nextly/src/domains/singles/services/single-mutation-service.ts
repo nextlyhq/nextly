@@ -128,6 +128,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { assertDraftsMayBePromoted } from "./promote-gate";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -646,6 +647,77 @@ export class SingleMutationService extends BaseService {
         );
         if (validationIssues.length > 0) {
           throw NextlyError.validation({ errors: validationIssues });
+        }
+      }
+
+      // 6.3. A publish promotes the held pending change, and that content has
+      // been judged only once, when it was SAVED. Judge it again here, against
+      // the schema and the permissions as they stand now.
+      //
+      // Before the transaction, deliberately. Both a field's `access` rule and
+      // its `validate` are user code, and resolving the caller's grants issues
+      // its own pooled queries: run inside the open write transaction on a
+      // small pool, those queries wait for the connection the transaction is
+      // holding and the publish hangs. The collection publish path gates its
+      // promotion outside its transaction for the same reason.
+      //
+      // Only when this write NAMES `published`. A status-less edit is held as
+      // a pending change rather than promoting one, and the two are disjoint on
+      // exactly that, so a held edit is never gated as though it were a
+      // publish.
+      if (
+        existingDoc !== null &&
+        existingDoc !== undefined &&
+        (singleMeta as { status?: boolean }).status === true &&
+        singleMeta.versions?.drafts?.enabled === true &&
+        currentData.status === "published"
+      ) {
+        const promotedInto = existingDoc;
+        const gateLocale = workingDraftLocale({
+          documentLocalized: singleMeta.localized === true,
+          requestLocale: writeLocale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
+        const held = await new VersionsRepository(
+          this.adapter
+        ).findWorkingDraft(
+          { scopeKind: "single", scopeSlug: slug, entryId: promotedInto.id },
+          gateLocale
+        );
+        if (held) {
+          await assertDraftsMayBePromoted(
+            [{ locale: gateLocale ?? null, snapshot: held.snapshot }],
+            {
+              slug,
+              entryId: promotedInto.id,
+              fields: fieldConfigs,
+              user: options.user,
+              overrideAccess: options.overrideAccess,
+              // A snapshot belongs to this document, so its identity is this
+              // document's. Supplying both ahead of the spread satisfies the
+              // stored-document shape without asserting one, and lets the
+              // snapshot's own values win where it carries them.
+              toLogical: doc =>
+                this.queryService.deserializeJsonFields(
+                  {
+                    id: promotedInto.id,
+                    updatedAt: promotedInto.updatedAt,
+                    ...doc,
+                  },
+                  singleMeta.fields
+                ),
+              liveDocumentFor: async locale =>
+                (
+                  await this.queryService.get(slug, {
+                    locale: locale ?? undefined,
+                    overrideAccess: true,
+                  })
+                ).data,
+              callerData: currentData,
+              localizedFieldNames,
+              enforceLocalizedRequired,
+            }
+          );
         }
       }
 
@@ -1322,7 +1394,8 @@ export class SingleMutationService extends BaseService {
               if (pendingDraft) {
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
-                // field now.
+                // field now. What may be promoted at all was decided before
+                // this transaction opened, by the shared promote gate.
                 ({ main: mainPayload, companion: companionData } =
                   splitPendingChange(
                     pendingDraft.snapshot,

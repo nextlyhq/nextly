@@ -130,6 +130,7 @@ export {
 export type { SourceResolver as WidgetSourceResolver } from "./resolved-sources";
 export type { PluginSourceResolver } from "../../plugins/widgets/collect-widget-sources";
 export type { ReadCaller } from "../../services/dashboard/readable-resources";
+export { callerReadOptions } from "./caller-read-options";
 export type {
   PluginWidgetSource,
   CollectedWidgetSource,

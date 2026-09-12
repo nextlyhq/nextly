@@ -30,9 +30,14 @@
 A plugin can contribute a dashboard-widget DATA SOURCE. `contributes.widgetSources`
 takes a source and the server-side function that answers it, together: the
 source declares its queryable fields and supported ops the way every other
-source does, and the resolver is handed `(query, caller)` and nothing else.
-Because the query was validated against that declared field list first, no
-string the caller wrote reaches the resolver as a URL, a path or a table name.
+source does, and the resolver is handed the query, the caller, and its own
+plugin context to read through.
+
+What the validation bounds is the SHAPE of the question -- field names,
+operators and operand shapes, all against the source's own declaration. It does
+not constrain operand VALUES, so a resolver must treat every value in a query
+as caller-controlled and must not use one as an outbound URL, a path, or a
+table or column name without checking it against a closed set of its own.
 
 Both halves travel in one value, so a source that nothing can answer is not a
 state a plugin can reach. A contributed id must sit in the `plugin:` namespace;

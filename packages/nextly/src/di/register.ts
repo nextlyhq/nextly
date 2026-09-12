@@ -2957,9 +2957,11 @@ async function initializePlugins(
     // than discovered halfway through registration.
     for (const contributed of contributedSources) {
       if (contributed.owner !== plugin.name) continue;
-      registerResolvedSource(
-        { ...contributed.source, kind: "plugin" },
-        (query, caller) => contributed.resolve(query, caller, pluginContext)
+      // The source goes through AS DECLARED. The fold has already refused any
+      // kind but `plugin`, so rewriting it here would only be able to hide a
+      // contribution the fold would have caught.
+      registerResolvedSource(contributed.source, (query, caller) =>
+        contributed.resolve(query, caller, pluginContext)
       );
     }
 

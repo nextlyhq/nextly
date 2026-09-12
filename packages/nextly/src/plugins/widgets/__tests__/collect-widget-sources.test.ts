@@ -112,6 +112,22 @@ describe("collectWidgetSources", () => {
     ).toThrow(/must begin with "plugin:"/);
   });
 
+  it("refuses a source declaring any kind but plugin", () => {
+    // 🔴 The host must not CORRECT this. The boot used to spread
+    // `{ ...source, kind: "plugin" }`, which erased a declared `"collection"`
+    // before `registerSource` could run its kind/namespace agreement check --
+    // so a malformed contribution booted successfully under semantics its
+    // author never wrote.
+    const wrongKind = {
+      ...source("plugin:acme/a"),
+      source: { ...source("plugin:acme/a").source, kind: "collection" },
+    } as unknown as PluginWidgetSource;
+
+    expect(() =>
+      collectWidgetSources([plugin("@acme/x", [wrongKind])])
+    ).toThrow(/must declare kind "plugin"/);
+  });
+
   it("refuses a source with no resolver", () => {
     // The half that fails latest if it is not caught here: the source is
     // discoverable, passes query validation, and only a reader who places the

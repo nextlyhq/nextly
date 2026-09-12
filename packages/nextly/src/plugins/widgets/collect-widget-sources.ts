@@ -64,7 +64,15 @@ export type PluginSourceResolver = (
  * Only the resolver is a function, and only it receives the context.
  */
 export interface PluginWidgetSource {
-  source: WidgetSource;
+  /**
+   * 🔴 Narrowed to `kind: "plugin"`, so a contribution declaring any other
+   * kind is a compile error at the plugin rather than something the host
+   * quietly rewrites. The boot used to spread `{ ...source, kind: "plugin" }`,
+   * which erased a declared `"collection"` before `registerSource` could run
+   * its kind/namespace agreement check -- so a malformed contribution booted
+   * successfully under semantics its author never wrote.
+   */
+  source: WidgetSource & { kind: "plugin" };
   resolve: PluginSourceResolver;
 }
 
@@ -163,6 +171,16 @@ function consider(
     throw NextlyError.invalidInput({
       message: `NEXTLY_WIDGET_SOURCE_NAMESPACE: "${owner}" contributes widget source "${id}", but a contributed source's id must begin with "${PLUGIN_PREFIX}".`,
       logContext: { id, owner },
+    });
+  }
+
+  // The runtime half of the narrowing above, for a plugin compiled separately,
+  // for JavaScript, and for a cast. Refused rather than corrected: the host
+  // rewriting a declared kind is how a malformed contribution came to boot.
+  if (contributed.source.kind !== "plugin") {
+    throw NextlyError.invalidInput({
+      message: `NEXTLY_WIDGET_SOURCE_KIND: "${owner}" contributes widget source "${id}" with kind "${String(contributed.source.kind)}"; a contributed source must declare kind "plugin".`,
+      logContext: { id, owner, kind: String(contributed.source.kind) },
     });
   }
 

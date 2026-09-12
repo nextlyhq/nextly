@@ -148,6 +148,7 @@ Nextly has a first-class plugin SDK. The Visual Page Builder is itself a plugin,
 | **@nextlyhq/plugin-seo**          | SEO fields and a sitemap for your content                   |
 | **@nextlyhq/plugin-form-builder** | Visual form builder and submission capture                  |
 | **@nextlyhq/plugin-sdk**          | Build your own plugins: schema, services, routes, admin UI  |
+| **@nextlyhq/plugin-mcp**          | Experimental placeholder: serves no MCP endpoint yet        |
 
 > Nextly is in alpha, and some plugin surfaces are still settling. The [stability ladder](https://nextlyhq.com/docs/plugins/stability) says which parts are stable today and which are experimental.
 
