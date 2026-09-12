@@ -283,7 +283,8 @@ type AccessMethod =
   | "updateEntry"
   | "deleteEntry"
   | "count"
-  | "createMany";
+  | "createMany"
+  | "updateMany";
 
 const CONTEXT_INDEX: Record<AccessMethod, number> = {
   createEntry: 2,
@@ -294,6 +295,9 @@ const CONTEXT_INDEX: Record<AccessMethod, number> = {
   // D56 additions — trailing context at arg index 2.
   count: 2,
   createMany: 2,
+  // The entries carry their own ids, so the context stays at index 2 as on
+  // `createMany` rather than moving out to make room for one.
+  updateMany: 2,
 };
 
 /**

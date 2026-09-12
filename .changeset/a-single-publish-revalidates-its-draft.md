@@ -24,6 +24,7 @@
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
+"@nextlyhq/plugin-mcp": patch
 ---
 
 Publishing a Single now re-judges the pending change it is about to promote, against the schema and the permissions as they stand at that moment.
