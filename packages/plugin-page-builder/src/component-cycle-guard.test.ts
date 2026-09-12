@@ -555,6 +555,111 @@ describe("saving a component that would reference itself", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("refuses a loop only the COMPOSITION shows, two override levels down", async () => {
+    /*
+     * The case an id-keyed walk cannot reach, and the reason the resolver is the
+     * authority rather than the walk.
+     *
+     * `cc` places `dd` and exposes that node's `componentId` as `swap`. `bb`
+     * places `cc` and exposes THAT node's whole `overrides` record as `pass`. The
+     * document being saved places `bb` and overrides `pass` with
+     * `{ swap: "a" }` — so composing it re-points `cc`'s nested instance at the
+     * component being saved, two levels below the placement that did it.
+     *
+     * Measured on the resolver: `unresolved` carries `reason: "cycle"` and
+     * `referenced` is `["a","bb","cc"]`. Measured on the scan: the document names
+     * only `bb`, `cc` names only `dd`, and `a` appears in neither — so no pair of
+     * documents names the other twice and no walk over ids can see it.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: {
+        bb: {
+          ...places("cc"),
+          exposed: [
+            {
+              id: "pass",
+              label: "Pass",
+              nodeId: "n0",
+              propPath: "overrides",
+              type: "select",
+            },
+          ],
+        },
+        cc: {
+          ...places("dd"),
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        },
+      },
+      stored: { dd: [] },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesWithOverrides("bb", { pass: { swap: "a" } }) },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/once its placements are composed/);
+  });
+
+  it("CONTROL: the same two-level shape pointing somewhere harmless is allowed", async () => {
+    // Without this, refusing whenever a placement carries a nested override
+    // would satisfy the case above and make every composed override unsavable.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: {
+        bb: {
+          ...places("cc"),
+          exposed: [
+            {
+              id: "pass",
+              label: "Pass",
+              nodeId: "n0",
+              propPath: "overrides",
+              type: "select",
+            },
+          ],
+        },
+        cc: {
+          ...places("dd"),
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        },
+      },
+      stored: { dd: [] },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesWithOverrides("bb", { pass: { swap: "dd" } }) },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it("judges the document a status-only publish PROMOTES", async () => {
     /*
      * A publish carrying only `{ status }` is not graph-neutral: core promotes
@@ -795,6 +900,32 @@ describe("saving a component that would reference itself", () => {
     await expect(c.run(saving("a", ["c0"], nextly))).rejects.toThrow(
       /could not all be read/
     );
+  });
+
+  it("stops reading AT the budget, not after one read per placement", async () => {
+    /*
+     * The lookahead that resolves a placement against the definition it places
+     * runs before the traversal that used to count. Charged only there, a
+     * document holding more distinct placements than the bound issued one read
+     * per placement first — and the node cap admits five thousand, so a single
+     * save meant thousands of sequential reads and only then a refusal for
+     * exceeding a bound of a hundred.
+     *
+     * The refusal is the same either way, which is exactly why this asserts the
+     * READ COUNT: the outcome cannot tell the two apart.
+     */
+    const c = context();
+    register(c.ctx);
+    const many = Array.from({ length: 400 }, (_, i) => `c${String(i)}`);
+    const { nextly, asked } = api({
+      stored: Object.fromEntries(many.map(id => [id, []])),
+    });
+
+    await expect(c.run(saving("a", many, nextly))).rejects.toThrow(
+      /could not all be read/
+    );
+    // One form is walked for a status-less save, and the budget is 100.
+    expect(asked.length).toBeLessThanOrEqual(100);
   });
 
   it("reads each component once however many placements point at it", async () => {

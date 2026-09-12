@@ -70,9 +70,12 @@
  * @module component-cycle-guard
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
   componentReach,
   componentReachIn,
   componentReferencesFrom,
+  resolveComponentInstances,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
@@ -85,8 +88,12 @@ import type { ClassUsageDirectApi } from "./class-usage-runtime";
  * A bound on the reads, which nothing else supplies: the walk follows only what
  * the saved document reaches, and that is normally a handful, but a library is
  * sized at three thousand entries and nothing stops one component reaching a
- * large share of them. Each is read twice (below), so this is the number of
- * components rather than of requests.
+ * large share of them.
+ *
+ * Charged per DISTINCT component per lifecycle form, by the reader every read
+ * goes through — so a component reached by twenty placements costs one, and the
+ * lookahead that resolves a placement cannot outrun the bound before the walk
+ * that follows it gets a turn.
  *
  * Exceeding it REFUSES, because a prefix of the graph that did not meet the
  * subject is exactly what a graph with no loop looks like. That is the
@@ -233,7 +240,6 @@ async function refuseIfReached(args: {
       self,
       placedBy: id => graph.get(id),
     });
-    if (verdict.kind === "none") continue;
     if (verdict.kind === "unknown") {
       throw refusal(
         `This component cannot be saved: the components it uses could not all ` +
@@ -241,12 +247,107 @@ async function refuseIfReached(args: {
           `established.`
       );
     }
-    throw refusal(
-      `This component cannot be saved because it would reference itself: ` +
-        `${namedPath(verdict.path, places, self)}. Remove that placement and ` +
-        `save again.`
-    );
+    if (verdict.kind === "cycle") {
+      throw refusal(
+        `This component cannot be saved because it would reference itself: ` +
+          `${namedPath(verdict.path, places, self)}. Remove that placement and ` +
+          `save again.`
+      );
+    }
+    // The walk said none, and the walk is an APPROXIMATION. Ask the renderer.
+    if (await composesACycle(document, self, options, read)) {
+      throw refusal(
+        `This component cannot be saved because it would reference itself once ` +
+          `its placements are composed. Remove the placement that leads back ` +
+          `to it and save again.`
+      );
+    }
   }
+}
+
+/**
+ * Whether composing this document actually produces a loop.
+ *
+ * The walk above answers a question about IDS, and reachability here is not a
+ * property of ids. Overrides flow DOWN through nesting: a placement can re-point
+ * a node two levels below it, so the loop exists in the composed tree while no
+ * pair of documents names the other twice. An id-keyed graph is therefore an
+ * approximation of composition, and it is short by one level for every level of
+ * nesting it does not carry overrides through.
+ *
+ * So this asks `resolveComponentInstances` — the function the RENDERER uses. Its
+ * answer and the reader's experience cannot diverge, because they are the same
+ * computation over the same inputs.
+ *
+ * The walk is kept and runs FIRST because it carries the chain: `resolve`
+ * reports `{ instanceId, componentId, reason }` and not the path, so a refusal
+ * derived from it alone could not tell an author which placement to remove.
+ *
+ * Strictly ADDITIVE: only an explicit `cycle` refuses. A document this cannot
+ * compose for any other reason — one the resolver reads as unreadable, a
+ * definition it declines — falls back to the walk's verdict, which has already
+ * said none. Refusing on anything else would make a document the resolver
+ * cannot parse unsavable, and that is a far worse failure than the gap.
+ */
+async function composesACycle(
+  document: unknown,
+  self: string,
+  options: CycleGuardOptions,
+  read: DocumentReader
+): Promise<boolean> {
+  // The subject under its own id, so a chain leading back to it meets the
+  // document being SAVED rather than the copy the store still holds.
+  const held = new Map<string, unknown>([[self, document]]);
+  const missing = new Set<string>();
+
+  for (let round = 0; round <= MOST_COMPONENTS_READ; round += 1) {
+    const composition = resolveComponentInstances(
+      hostPlacing(self) as never,
+      {
+        has: (id: string) => held.has(id),
+        get: (id: string) => held.get(id),
+      } as never,
+      { limits: options.limits }
+    );
+    if (composition.unresolved.some(one => one.reason === "cycle")) return true;
+
+    // Whatever it wanted and this has not read yet. The resolver names them, so
+    // the set to read is derived from what the COMPOSITION reached rather than
+    // from a second traversal predicting it.
+    const wanted = composition.unresolved
+      .map(one => one.componentId)
+      .filter(id => id !== "" && !held.has(id) && !missing.has(id));
+    if (wanted.length === 0) return false;
+
+    for (const id of wanted) {
+      const answer = await read(id);
+      // Out of budget, or unreadable. Either way this cannot compose further —
+      // and the walk has already had its say, so nothing is claimed here.
+      if (answer.kind === "unreadable") return false;
+      if (answer.kind === "absent") {
+        missing.add(id);
+        continue;
+      }
+      held.set(id, answer.document);
+    }
+  }
+  return false;
+}
+
+/** A page that places one component, so the resolver is asked about it. */
+function hostPlacing(self: string): unknown {
+  return {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "cycle-guard-subject",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: self },
+      },
+    ],
+  };
 }
 
 /**
@@ -392,7 +493,10 @@ async function placementsReachedFrom(
   while (pending.length > 0) {
     const id = pending.shift();
     if (id === undefined || seen.has(id)) continue;
-    if (seen.size >= MOST_COMPONENTS_READ) return graph;
+    // No bound of its own: the reader charges every distinct component against
+    // the budget, and answers `unreadable` past it — which this walk already
+    // reads as an unknown graph and refuses on. A second count here would be a
+    // second number meaning nearly the same thing.
     seen.add(id);
 
     const read_ = await read(id);
@@ -494,6 +598,18 @@ function documentReader(
   return async id => {
     const seen = held.get(id);
     if (seen !== undefined) return seen;
+    // The budget is charged HERE, at the one place every read passes through,
+    // rather than by whichever walk happens to ask. Two walks ask now — the
+    // graph traversal, and the lookahead that resolves a placement against the
+    // definition it places — and the lookahead runs FIRST. Charged only by the
+    // traversal, a document holding more distinct placements than this could
+    // issue one read per placement before anything counted them: the node cap
+    // admits five thousand, so a single save meant a few thousand sequential
+    // reads and only then a refusal for exceeding a bound of a hundred.
+    //
+    // Refused rather than cached, so every id past the bound refuses too — an
+    // entry here would spend the budget on remembering that it had run out.
+    if (held.size >= MOST_COMPONENTS_READ) return { kind: "unreadable" };
     const read = await readComponent(id, options, nextly, draft);
     held.set(id, read);
     return read;
