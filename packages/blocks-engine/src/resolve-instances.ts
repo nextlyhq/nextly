@@ -354,6 +354,114 @@ export function componentUsageIn(
 }
 
 /**
+ * Every component a document can reference, over every variant it offers.
+ *
+ * {@link componentUsageIn} reads the ids the nodes CARRY, which is the right
+ * answer to "what does this document reference as stored" and the wrong one to
+ * "what can this document reach at runtime". A component may expose one of its
+ * own instance nodes' `componentId` — `select` is an exposure type and
+ * `componentId` a legal prop path, so "let the placer choose which card goes
+ * here" is a supported shape — and a variant may then preset that exposure. The
+ * override is applied BEFORE the nested instance is expanded, so the id the
+ * variant installs is the one that resolves, and the id the node stores is
+ * never read. Measured: with such a variant selected the resolver reports
+ * `reason: "cycle"` and never references the stored id at all.
+ *
+ * Derived by APPLYING the overrides with the resolver's own writer and reading
+ * the result back, the way {@link instanceExposure} answers its question, rather
+ * than by looking for override keys that appear to name a component. Whether a
+ * path lands, clobbers a string with a record, or loses to another exposure on
+ * the same node is then answered by the write itself instead of by a list of
+ * cases here that would be complete only until the next shape nobody enumerated.
+ *
+ * A SUPERSET of what any one reader receives, deliberately: only one variant is
+ * selected at a time, and which one is decided by whoever places the component,
+ * not by the document being judged. A caller refusing on what this returns
+ * refuses a document that COULD close a loop, which is the safe direction for a
+ * write guard and the reason this is separate from the usage index's question.
+ *
+ * A document offering no variants costs one extra record check.
+ */
+export function componentReferencesIn(
+  document: unknown,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): ComponentUsage {
+  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
+    return { ids: [], complete: true };
+  }
+  const direct = componentUsageIn(document.nodes, maxNodes);
+  // A truncated forest is already "cannot be established" to every caller, and
+  // the variant pass indexes the WHOLE forest to find the nodes an override
+  // lands on. Returning here keeps an oversized document from being walked a
+  // second time to sharpen an answer that is not going to be used.
+  if (!direct.complete) return direct;
+  return withVariantReferences(document, direct);
+}
+
+/** {@link componentReferencesIn}'s variant pass, over a forest read whole. */
+function withVariantReferences(
+  document: Record<string, unknown>,
+  direct: ComponentUsage
+): ComponentUsage {
+  const variants = document.variants;
+  if (!isPlainRecord(variants)) return direct;
+  const names = boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES);
+  // More variants than the envelope admits. Reported as unread rather than
+  // scanned to the bound: a prefix of the variants is a prefix of the answer.
+  if (names === null) return { ids: direct.ids, complete: false };
+  // No exposure means no override can reach a node, whatever the variants say.
+  const declared = usableExposures(document.exposed);
+  if (names.length === 0 || declared.length === 0) return direct;
+
+  // Indexed ONCE for every variant: the index is a property of the forest, and
+  // rebuilding it per variant is what makes a document with many of them
+  // quadratic in its own size.
+  const nodes = nodeIndex(document.nodes as readonly BlockNode[]);
+  const ids = [...direct.ids];
+  const seen = new Set(ids);
+  for (const name of names) {
+    for (const id of installedBy(document, name, declared, nodes)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  return { ids, complete: true };
+}
+
+/**
+ * The component ids ONE variant's overrides put on this document's nodes.
+ *
+ * The overrides are applied and the result READ BACK, through the same four
+ * functions the resolver and the inspector use — so whether a path lands, or
+ * loses to another exposure on the same node, is answered by the write.
+ */
+function installedBy(
+  document: Record<string, unknown>,
+  variant: string,
+  declared: readonly ExposedProperty[],
+  nodes: ReadonlyMap<string, BlockNode>
+): readonly string[] {
+  const overrides = effectiveOverrides(
+    document as unknown as ComponentDocument,
+    { props: { variant } } as unknown as BlockNode
+  );
+  const installed: string[] = [];
+  for (const [nodeId, props] of finalProps(
+    nodes,
+    appliedWrites(declared, overrides)
+  )) {
+    const node = nodes.get(nodeId);
+    if (node === undefined) continue;
+    // Through the reader the walk itself uses, so the node-type rule and the
+    // non-empty-string rule are not restated here.
+    const id = componentIdOf({ ...node, props });
+    if (id !== undefined) installed.push(id);
+  }
+  return installed;
+}
+
+/**
  * The component ids a document references directly, in first-reached order.
  *
  * Answers nothing about whether the whole document was read. A caller deciding

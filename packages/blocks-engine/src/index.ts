@@ -295,6 +295,11 @@ export {
 
 export {
   componentIdsIn,
+  // Every component a document can reach under ANY variant it offers, which is
+  // a different question from what its nodes carry. Published because the write
+  // guard has to judge a document a variant can re-point, and the usage index
+  // has to count what is actually stored.
+  componentReferencesIn,
   componentUsageIn,
   // The roots a document composes to, read without composing it. Published
   // because the palette judges every definition's placement by its roots and
