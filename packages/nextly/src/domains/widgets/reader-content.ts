@@ -27,9 +27,9 @@
  * @module domains/widgets/reader-content
  */
 
+import { callerMayPerform } from "../../auth/authenticated-scope";
 import {
   authorizationGroups,
-  callerHoldsPermission,
   readAccessCaller,
 } from "../../auth/entity-read-access";
 import { requireNextly } from "../../direct-api/nextly";
@@ -107,10 +107,13 @@ export async function readableSingleSlugs(
  * collection instead); answering it here would make this function two questions
  * wearing one name.
  *
- * Decided through {@link callerHoldsPermission}, the same door `requirePermission`
- * uses, so the answer agrees with what the create itself would say. Deriving it
- * from the stored grant rows instead would disagree in both directions, exactly
- * as {@link readableEntities} documents for reads.
+ * 🔴 Decided through {@link callerMayPerform}, not through the bare permission
+ * check beside it. For a scoped API KEY the two disagree: the bare check reads
+ * the stamped grant and stops, while a real write also evaluates the
+ * collection's code-defined `access.create` against that scope. A key stamped
+ * `create-<slug>` whose code rule refuses it would therefore have been told it
+ * may create -- and the step it was offered is refused by the write, which is
+ * the defect this predicate exists to prevent, wearing a different hat.
  *
  * Short-circuits on the first grant, and walks in {@link authorizationGroups}
  * order otherwise: one decision, then bounded groups, so a cold per-user cache
@@ -120,13 +123,14 @@ export async function readerMayCreateEntry(
   caller: ReadCaller,
   readable: readonly string[]
 ): Promise<boolean> {
-  const access = readAccessCaller(caller);
   for (const group of authorizationGroups(readable)) {
     // `allSettled`, as the read decision beside it: a lookup that threw has
     // told us nothing, and nothing must not read as a grant. The slug counts
     // as refused and the rest of the set still answers.
     const settled = await Promise.allSettled(
-      group.map(slug => callerHoldsPermission(`create-${slug}`, access))
+      group.map(slug =>
+        callerMayPerform(caller.authenticatedScope, "create", slug, caller.user)
+      )
     );
     if (settled.some(result => result.status === "fulfilled" && result.value)) {
       return true;

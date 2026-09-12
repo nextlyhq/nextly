@@ -245,18 +245,19 @@ describe("onboarding steps against a real instance", () => {
     expect(await onboardingIsIncomplete(conditionProbe(admin))).toBe(false);
   });
 
-  it("offers the first-entry step to a builder with no collection in reach yet", async () => {
-    // 🔴 The empty-list case, which the grant walk cannot answer on its own:
-    // with nothing readable there is no `create-<slug>` to find, and reading
-    // that absence as a refusal is a different claim from having observed one.
-    // So the step follows the next question along -- could this reader make
-    // the collection the entry would go in?
+  it("offers a builder the collection step and NOT the entry step", async () => {
+    // 🔴 Creating a collection is not being able to write a row in it.
+    // `seedPermissionsForCollection` assigns a new collection's CRUD
+    // permissions to `super_admin` alone, so this caller would not acquire
+    // `create-<new-slug>` -- and might not even be able to read what they
+    // made. Offering the entry step on the strength of the definition grant
+    // hands them a step they still cannot finish, which is the defect this
+    // predicate exists to prevent, moved one collection later.
     //
-    // The caller is a KEY carrying `manage-settings` and no read grant, which
-    // is the only shape that can tell the two apart: it reads nothing, so the
-    // walk is empty, while the collection answer is unambiguously yes. A
-    // session caller cannot discriminate here -- both branches answer false
-    // for it, so the same test passed with this composition removed.
+    // The caller is a KEY stamped with the definition grant and no read grant,
+    // which is the shape that separates the two predicates: its readable set
+    // is empty while its collection answer is unambiguously yes. A session
+    // caller answers no to both and could not tell them apart.
     await createTestNextly({
       collections: [
         defineCollection({
@@ -273,7 +274,9 @@ describe("onboarding steps against a real instance", () => {
     const steps = await stepsFor(builder);
 
     expect(steps.collection).toBe(false);
-    expect(steps.entry).toBe(false);
+    expect(steps.entry).toBeUndefined();
+    // Still incomplete: there IS something this reader can do, and the card
+    // stays until they have done it.
     expect(await onboardingIsIncomplete(conditionProbe(builder))).toBe(true);
   });
 
@@ -309,6 +312,72 @@ describe("onboarding steps against a real instance", () => {
     // to offer and the card is not put on their dashboard at all.
     expect(Object.keys(steps)).toEqual(["account"]);
     expect(await onboardingIsIncomplete(conditionProbe(admin))).toBe(false);
+  });
+
+  it("withholds the entry step from a KEY the collection's own create rule refuses", async () => {
+    // 🔴 The two decisions disagree for exactly this caller. A bare permission
+    // check reads the key's stamped `create-<slug>` and stops; the WRITE also
+    // evaluates the collection's code-defined `access.create` against that
+    // scope. Gated on the bare check, this key is told it may create -- and
+    // the step it is offered is refused by the write it links to, which is the
+    // defect the predicate exists to prevent.
+    await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: ARCHIVE,
+          access: {
+            read: () => true,
+            // Refuses the key, whatever the key is stamped with.
+            create: () => false,
+            update: () => true,
+          },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    }).then(t => {
+      current = t;
+      return refreshCollectionSources();
+    });
+
+    const stamped: ReadCaller = {
+      user: { id: "key-1", roles: [] },
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: [`read-${ARCHIVE}`, `create-${ARCHIVE}`],
+      },
+    };
+
+    const steps = await stepsFor(stamped);
+    expect(steps.entry).toBeUndefined();
+  });
+
+  it("offers it to the same KEY when the rule admits it", async () => {
+    // The must-differ half, and it has to be the same fixture with the one
+    // rule flipped: a predicate that refused every key -- or never ran --
+    // would satisfy the case above on its own.
+    await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: ARCHIVE,
+          access: { read: () => true, create: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    }).then(t => {
+      current = t;
+      return refreshCollectionSources();
+    });
+
+    const stamped: ReadCaller = {
+      user: { id: "key-1", roles: [] },
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: [`read-${ARCHIVE}`, `create-${ARCHIVE}`],
+      },
+    };
+
+    const steps = await stepsFor(stamped);
+    expect(steps.entry).toBe(false);
   });
 
   // No case asserts that the condition agrees with the steps it reports.

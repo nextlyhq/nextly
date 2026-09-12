@@ -38,3 +38,8 @@ the card pinned to their dashboard for the life of their account.
 A finished step stays on the list whoever the reader is. It records what the
 install has done rather than offering them work, so withholding it would only
 make their progress look smaller than it is.
+
+The step is decided by the same authorization a write performs, so a scoped API
+key whose collection refuses its `access.create` rule is not offered a step that
+write would refuse. The grant that authorizes creating a collection is declared
+once and read by the two routes that enforce it as well as by the checklist.

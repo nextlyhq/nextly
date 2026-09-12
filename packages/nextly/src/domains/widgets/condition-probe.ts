@@ -28,10 +28,11 @@
  * @module domains/widgets/condition-probe
  */
 
+import { callerMayPerform } from "../../auth/authenticated-scope";
 import {
-  callerHoldsPermission,
-  readAccessCaller,
-} from "../../auth/entity-read-access";
+  COLLECTION_DEFINITION_ACTION,
+  COLLECTION_DEFINITION_RESOURCE,
+} from "../../auth/collection-definition-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
 import {
@@ -40,16 +41,6 @@ import {
   readerHasContent,
   readerMayCreateEntry,
 } from "./reader-content";
-
-/**
- * The permission `POST /api/collections/schema` requires to create a collection.
- *
- * Named here rather than spelled at the call site so the two cannot drift: if
- * that endpoint's guard changes, this is the one place that has to follow, and
- * a reader offered a step whose endpoint refuses them is the defect the
- * per-step predicate exists to prevent.
- */
-const COLLECTION_CREATE_PERMISSION = "manage-settings";
 
 /** What every condition evaluator is handed. */
 export interface ConditionProbe {
@@ -62,22 +53,20 @@ export interface ConditionProbe {
   /** Whether this reader can see any row at all, resolved at most once. */
   hasContent(): Promise<boolean>;
   /**
-   * Whether this reader could write a first entry at all, resolved at most once.
+   * Whether this reader could write a first entry, resolved at most once.
    *
-   * Two routes, and the answer is whichever applies: a collection they can
-   * already read and hold `create-<slug>` on, or -- with none in reach -- the
-   * ability to make one to put the entry in. Answering the first alone would
-   * withhold the step from an administrator on a fresh install, who has no
-   * collection yet and is precisely the reader about to make one.
+   * One question: is there a collection they can read and hold `create-<slug>`
+   * on? With none in reach the answer is no -- the ability to create a
+   * COLLECTION is not a substitute, for the reason the implementation gives.
    */
   mayCreateEntry(): Promise<boolean>;
   /**
    * Whether this reader could create a COLLECTION, resolved at most once.
    *
-   * `manage-settings` is what the schema endpoint requires, asked through the
-   * same door it asks through, so this cannot drift from the refusal a reader
-   * would actually meet. Unlike the entry answer there is no "could not ask"
-   * case: the permission is the whole question and it is always decidable.
+   * The grant is `auth/collection-definition-policy`'s, which is what the
+   * schema route and the dispatcher's definition branch both enforce, asked
+   * through the same door they ask through -- so this cannot drift from the
+   * refusal a reader would actually meet.
    */
   mayCreateCollection(): Promise<boolean>;
 }
@@ -95,9 +84,13 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   };
 
   const mayCreateCollection = (): Promise<boolean> => {
-    createCollection ??= callerHoldsPermission(
-      COLLECTION_CREATE_PERMISSION,
-      readAccessCaller(caller)
+    // Through the same decision the entry predicate uses, and for the same
+    // reason: a key's stamped grant alone is not what a route enforces.
+    createCollection ??= callerMayPerform(
+      caller.authenticatedScope,
+      COLLECTION_DEFINITION_ACTION,
+      COLLECTION_DEFINITION_RESOURCE,
+      caller.user
     );
     return createCollection;
   };
@@ -121,15 +114,22 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       // From the same memo `hasContent` reads, for the same reason: the create
       // decision is taken over the collections this reader can read, and
       // resolving that list twice is the duplication this module removes.
+      // 🔴 NOT composed with `mayCreateCollection`. Being able to create a
+      // collection is not being able to write a row in it: seeding a new
+      // collection's CRUD permissions assigns them to `super_admin` alone
+      // (`seedPermissionsForCollection`), so a caller holding the definition
+      // grant and nothing else does not acquire `create-<new-slug>` -- and may
+      // not even be able to READ the collection they just made. Offering the
+      // entry step on that basis hands them a step they still cannot finish,
+      // which is the defect the predicate exists to prevent, moved one
+      // collection later.
+      //
+      // So with nothing in reach the step is not offered. A step is offered
+      // only where the install can point at a way for THIS reader to finish
+      // it, and "they might be granted something on a collection that does not
+      // exist yet" is not one.
       createEntry ??= readableSlugs().then(resolved =>
-        // 🔴 With NOTHING in reach there is no create grant to find, and an
-        // empty walk answering "no" would be an absence read as a refusal.
-        // The honest question then is the next one along: could this reader
-        // make the collection the entry would go in? That is what an
-        // administrator on a fresh install does, in that order.
-        resolved.length === 0
-          ? mayCreateCollection()
-          : readerMayCreateEntry(caller, resolved)
+        readerMayCreateEntry(caller, resolved)
       );
       return createEntry;
     },
