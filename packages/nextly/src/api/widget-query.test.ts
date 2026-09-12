@@ -187,7 +187,8 @@ describe("POST /api/dashboard/query", () => {
       expect.anything(),
       expect.objectContaining({
         user: expect.objectContaining({ id: "user-1" }),
-      })
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 
@@ -452,7 +453,8 @@ describe("POST /api/dashboard/query", () => {
       expect(slot.ok).toBe(true);
       expect(executeWidgetQuery).toHaveBeenCalledWith(
         expect.objectContaining({ source: "system:releases" }),
-        expect.anything()
+        expect.anything(),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
     });
 
@@ -577,7 +579,8 @@ describe("POST /api/dashboard/query", () => {
       expect(slot.ok).toBe(true);
       expect(executeWidgetQuery).toHaveBeenCalledWith(
         expect.objectContaining({ source: "single:settings" }),
-        expect.anything()
+        expect.anything(),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
     });
 
@@ -936,5 +939,232 @@ describe("a body that is not JSON at all", () => {
     expect(body.error).toBeDefined();
     expect(res.status).toBe(400);
     expect(executeWidgetQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe("a slot that never settles", () => {
+  /**
+   * A source answered by a resolver, registered the way boot registers one.
+   *
+   * The kind matters to the assertion rather than to the timer: a
+   * resolver-answered source is the one that can make a network call, and a
+   * dead outbound connection does not reject -- it hangs. That is the shape
+   * the bound exists for.
+   */
+  function registerHangingSource(id: string): void {
+    registerSystemSource(
+      {
+        id,
+        label: "Slow",
+        kind: "system",
+        supports: ["count"],
+        fields: [{ name: "total", type: "number" }],
+      },
+      () => new Promise<never>(() => {})
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fails the hung slot alone, and the rest of the batch still answers", async () => {
+    // 🔴 The defect: the batch aggregates with `Promise.all`, so it is only as
+    // fast as its slowest slot. One query that never settles held every other
+    // card behind it and the reader saw NOTHING -- not seven cards and one
+    // error, which is what the per-slot shape exists to produce.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    executeWidgetQuery.mockImplementation((query: { source: string }) =>
+      query.source === "system:slow"
+        ? new Promise(() => {})
+        : Promise.resolve({ op: "count", total: 7 })
+    );
+
+    const pending = postWidgetQuery(
+      makeReq({
+        queries: [
+          { source: "system:slow", op: "count" },
+          { source: "collection:posts", op: "count" },
+        ],
+      })
+    );
+
+    // Past the bound. `Async` because the race settles on a microtask that a
+    // synchronous timer advance would never let run.
+    await vi.advanceTimersByTimeAsync(31_000);
+    const slots = await slotsOf(await pending);
+
+    expect(slots[0].ok).toBe(false);
+    expect(slots[0].error).toMatch(/took too long/i);
+    // The control, and the whole point: the sibling was not held behind it.
+    expect(slots[1].ok).toBe(true);
+  });
+
+  it("names the source in the log, where an operator can act on it", async () => {
+    // The caller is told their card timed out; only the log says WHICH source
+    // is hanging, which is the half an operator needs.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    executeWidgetQuery.mockImplementation(() => new Promise(() => {}));
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    await pending;
+
+    expect(
+      logged.some(
+        entry =>
+          JSON.stringify(entry).includes("widget-slot-timeout") &&
+          JSON.stringify(entry).includes("system:slow")
+      )
+    ).toBe(true);
+  });
+
+  it("does not fail a slot that answers within the bound", async () => {
+    // The must-differ half. Without it a bound of zero -- or one that fired
+    // unconditionally -- satisfies both cases above.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    executeWidgetQuery.mockResolvedValue({ op: "count", total: 4 });
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+    await vi.advanceTimersByTimeAsync(29_000);
+    const slots = await slotsOf(await pending);
+
+    expect(slots[0].ok).toBe(true);
+  });
+
+  it("aborts the signal it handed the resolver when the budget expires", async () => {
+    // 🔴 Giving up on the race does not stop the work: a promise has no
+    // cancellation, so a hung resolver kept its connection and its memory while
+    // the next request started up to thirty more. The signal is how it is told,
+    // and a resolver that passes it to `fetch` or a database client stops
+    // rather than merely stops being awaited.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    let handed: AbortSignal | undefined;
+    executeWidgetQuery.mockImplementation(
+      (
+        _query: unknown,
+        _caller: unknown,
+        opts?: { signal?: AbortSignal }
+      ): Promise<never> => {
+        handed = opts?.signal;
+        return new Promise<never>(() => {});
+      }
+    );
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+
+    // The must-differ half, and it has to be asserted INSIDE the budget: a
+    // signal aborted unconditionally would satisfy the check below on its own.
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(handed).toBeInstanceOf(AbortSignal);
+    expect(handed?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+
+    expect(handed?.aborted).toBe(true);
+  });
+
+  it("leaves the signal alone for a slot that answers in time", async () => {
+    // The abandoned work is what gets cancelled, never the work that finished.
+    // A resolver that returned inside the budget must not see its signal abort
+    // afterwards -- it may still be holding it open for its own cleanup.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    let handed: AbortSignal | undefined;
+    executeWidgetQuery.mockImplementation(
+      (_query: unknown, _caller: unknown, opts?: { signal?: AbortSignal }) => {
+        handed = opts?.signal;
+        return Promise.resolve({ op: "count", total: 4 });
+      }
+    );
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    const slots = await slotsOf(await pending);
+
+    expect(slots[0].ok).toBe(true);
+    expect(handed?.aborted).toBe(false);
+  });
+});
+
+describe("a resolver that returns something the response cannot encode", () => {
+  it("fails that slot alone, and the rest of the batch still answers", async () => {
+    // 🔴 `respondData` calls `JSON.stringify` over the WHOLE results array,
+    // after `Promise.all` and outside every slot's catch. So a value the
+    // encoder refuses used to throw at the response and answer 500 with every
+    // sibling's rows discarded -- one plugin's bad row blanking the dashboard,
+    // which is the outcome the per-slot shape exists to prevent.
+    // Both slots name the SAME registered source, dispatching on the op. An
+    // earlier revision used a second, unregistered source for the bad slot --
+    // which failed as "unavailable source" before the executor ran at all, so
+    // the case passed with this guard removed.
+    executeWidgetQuery.mockImplementation((query: { op: string }) => {
+      if (query.op === "list") {
+        const cyclic: Record<string, unknown> = { name: "loop" };
+        cyclic.self = cyclic;
+        return Promise.resolve({ op: "list", items: [cyclic] });
+      }
+      return Promise.resolve({ op: "count", total: 5 });
+    });
+
+    const res = await postWidgetQuery(
+      makeReq({
+        queries: [
+          { source: "collection:posts", op: "list" },
+          { source: "collection:posts", op: "count" },
+        ],
+      })
+    );
+
+    // A 200 with slots, not a request-level failure.
+    expect(res.status).toBe(200);
+    const slots = await slotsOf(res);
+    expect(slots[0].ok).toBe(false);
+    // The control, and the whole point: the sibling was not blanked.
+    expect(slots[1].ok).toBe(true);
+  });
+
+  it("says so in the log, naming the source", async () => {
+    executeWidgetQuery.mockImplementation(() =>
+      Promise.resolve({ op: "list", items: [{ big: BigInt(1) }] })
+    );
+
+    await postWidgetQuery(
+      makeReq({ queries: [{ source: "collection:posts", op: "list" }] })
+    );
+
+    expect(
+      logged.some(entry =>
+        JSON.stringify(entry).includes("widget-result-unserialisable")
+      )
+    ).toBe(true);
+  });
+
+  it("passes an ordinary result through unchanged", async () => {
+    // The must-differ half. Without it a guard that failed every slot -- or
+    // one that quietly emptied results -- satisfies both cases above.
+    executeWidgetQuery.mockResolvedValue({ op: "count", total: 11 });
+
+    const res = await postWidgetQuery(
+      makeReq({ queries: [{ source: "collection:posts", op: "count" }] })
+    );
+    const body = (await res.json()) as {
+      results: Array<{ ok: boolean; result?: { total?: number } }>;
+    };
+    expect(body.results[0].ok).toBe(true);
+    expect(body.results[0].result?.total).toBe(11);
   });
 });

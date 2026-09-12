@@ -30,7 +30,7 @@ import {
   resolveWidgetSource,
   validateReadWidgetQuery,
 } from "../domains/widgets/query";
-import type { WidgetSlot } from "../domains/widgets/result";
+import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -350,6 +350,125 @@ async function warmReadDecisions(
 }
 
 /** Authorizes, validates and runs one already-prepared query. */
+/**
+ * How long one slot may take before the batch stops waiting for it.
+ *
+ * 🔴 The batch aggregates with `Promise.all`, so it is only as fast as its
+ * SLOWEST slot: one query that never settles holds every other card on the
+ * dashboard behind it, and the reader sees nothing at all rather than the
+ * seven cards that answered. That is the failure this bound exists for, and it
+ * is not hypothetical for a source answered by a resolver -- a resolver may
+ * make a network call, and a dead outbound connection does not reject, it
+ * hangs for whatever the socket's own timeout is.
+ *
+ * Thirty seconds, following Grafana's `[dataproxy] timeout` default for the
+ * same kind of call. Generous on purpose: the bound is here to stop a hang
+ * becoming an outage, not to police a slow-but-working query, and cutting off
+ * a large but legitimate aggregate would be a worse card than a slow one.
+ */
+const SLOT_TIMEOUT_MS = 30_000;
+
+/**
+ * Starts `work` with a cancellation signal and gives up on it after
+ * {@link SLOT_TIMEOUT_MS}.
+ *
+ * 🔴 A race ABANDONS rather than cancels, and it cannot do otherwise: a
+ * promise has no cancellation, so giving up on the race does not stop the work.
+ * Abandoned work keeps its connection, its memory and its database handle, and
+ * the endpoint's cap is on the queries ONE request may ask for -- so a resolver
+ * that hangs stays running while the next request starts up to thirty more.
+ *
+ * The signal is how that is bounded. It is handed to `work` when it starts and
+ * aborted the moment the budget expires, so a resolver that passes it on --
+ * `fetch` takes one directly -- stops rather than merely stops being awaited.
+ * Cooperative, necessarily: a resolver that ignores it is uninterruptible, as
+ * every resolver was before, and this bounds what the host can offer rather
+ * than what it can guarantee.
+ *
+ * `start` is a FUNCTION rather than a promise so the signal exists before the
+ * work does. Handed an already-running promise, there is nothing to give a
+ * signal to.
+ *
+ * Two further consequences are handled here rather than left to surprise
+ * someone. The abandoned promise may reject later with nobody awaiting it -- an
+ * unhandled rejection, which crashes the process under Node's default policy --
+ * so a no-op handler is attached to the ORIGINAL promise, which marks it
+ * handled without changing what the race sees. And the timer must not hold the
+ * event loop open: a slot that answered in a millisecond would otherwise keep
+ * the process alive for the remaining thirty seconds, which in a test run means
+ * a suite that will not exit.
+ */
+async function withinSlotBudget<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  onTimeout: () => never
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = Symbol("widget-slot-timeout");
+  const controller = new AbortController();
+  const work = start(controller.signal);
+  try {
+    // Attached to `work` itself, not to the race's result: the race settles on
+    // whichever arm wins, so on a timeout nothing would ever observe `work`.
+    void work.catch(() => undefined);
+
+    const deadline = new Promise<typeof timedOut>(resolve => {
+      timer = setTimeout(() => resolve(timedOut), SLOT_TIMEOUT_MS);
+      timer.unref?.();
+    });
+
+    const outcome = await Promise.race([work, deadline]);
+    // `onTimeout` returns `never`, so the compiler narrows `outcome` to `T`
+    // past this line without an assertion.
+    if (outcome === timedOut) {
+      // Before the throw, because `onTimeout` never returns -- and the point of
+      // the signal is that the abandoned work is told, not merely dropped.
+      controller.abort();
+      onTimeout();
+    }
+    return outcome;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * The result, proven to survive the response encoder, inside the slot's own
+ * boundary.
+ *
+ * 🔴 `respondData` calls `JSON.stringify` over the WHOLE results array, after
+ * `Promise.all` has assembled it and outside every slot's `catch`. So a value
+ * the encoder refuses does not fail its own slot -- it throws at the response,
+ * and the endpoint answers 500 with every sibling's rows discarded. One
+ * plugin's bad row blanks the dashboard, which is the precise outcome the
+ * per-slot shape exists to prevent.
+ *
+ * `WidgetResult`'s rows are `Record<string, unknown>`, so a `bigint`, a cycle
+ * or a throwing `toJSON` all satisfy the type. A resolver is third-party code;
+ * it is not the host's business to trust that it returned something encodable,
+ * and the type system cannot say so.
+ *
+ * Encoded HERE, where a failure is caught and becomes this slot's error. The
+ * cost is one serialization of a payload that is about to be serialized
+ * anyway, and the parse back is what keeps the encoder from doing it twice on
+ * a value it has already refused once.
+ */
+function serialisable(result: WidgetResult, source: string): WidgetResult {
+  try {
+    return JSON.parse(JSON.stringify(result)) as WidgetResult;
+  } catch (error) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "This widget returned something that could not be sent",
+      logMessage: `widget source "${source}" returned an unserialisable result`,
+      logContext: {
+        reason: "widget-result-unserialisable",
+        source,
+        err: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+}
+
 async function runPrepared(
   entry: Extract<PreparedQuery, { ok: true }>,
   caller: ReadCaller,
@@ -362,8 +481,27 @@ async function runPrepared(
       entry.parsed,
       entry.executable.source
     );
-    const result = await executeWidgetQuery(query, caller);
-    return { ok: true, result };
+    const result = await withinSlotBudget(
+      signal => executeWidgetQuery(query, caller, { signal }),
+      () => {
+        // A `NextlyError`, so `failedSlot` puts THIS sentence on the wire
+        // rather than the generic one: a card that timed out is worth telling
+        // its reader about, and the source id is already known to them --
+        // they placed the card. The slug travels in `logContext` for the
+        // operator, who needs to know WHICH source is hanging.
+        throw new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "This widget took too long to answer",
+          logMessage: `widget source "${query.source}" exceeded ${SLOT_TIMEOUT_MS}ms`,
+          logContext: {
+            reason: "widget-slot-timeout",
+            source: query.source,
+            timeoutMs: SLOT_TIMEOUT_MS,
+          },
+        });
+      }
+    );
+    return { ok: true, result: serialisable(result, query.source) };
   } catch (error) {
     return failedSlot(error);
   }

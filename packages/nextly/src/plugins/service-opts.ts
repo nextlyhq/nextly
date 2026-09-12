@@ -245,7 +245,31 @@ export async function resolveServiceOpts(
         logContext: { reason: "service-opts-user-missing" },
       });
     }
+    // 🔴 The verified CLAIMS travel with the identity, and dropping them is a
+    // security defect rather than a tidiness one. `readCaller` spreads
+    // `auth.claims` onto the user it builds, so a caller handed to a plugin
+    // carries whatever the token proved -- a tenant, a plan, an entitlement --
+    // and a collection's code-defined `access` rule may read exactly those.
+    // Rebuilt from id/name/email/roles alone, the rule received a DIFFERENT
+    // caller than the endpoint authenticated: a positive check on a claim
+    // denies wrongly, and an absence-tolerant one like
+    // `user.plan !== "suspended"` GRANTS wrongly.
+    //
+    // Taken as "whatever else the supplied identity carried", so a caller
+    // passing a plain `AuthUser` contributes nothing and is unaffected.
+    const {
+      id: _id,
+      name: _name,
+      email: _email,
+      roles: _roles,
+      role: _role,
+      ...claims
+    } = user as typeof user & {
+      roles?: string[];
+      role?: string;
+    };
     const identity = buildUserContext({
+      claims,
       id: user.id,
       name: user.name ?? undefined,
       email: user.email,

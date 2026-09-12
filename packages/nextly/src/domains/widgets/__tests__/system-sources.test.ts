@@ -57,9 +57,13 @@ describe("a registered system source", () => {
     );
 
     expect(result).toEqual({ op: "count", total: 3 });
+    // The third argument is the host's options, absent here because nothing
+    // asked for a budget -- pinned rather than loosened, so a change to what
+    // the executor forwards has to come back through this assertion.
     expect(resolve).toHaveBeenCalledWith(
       { source: "system:releases", op: "count" },
-      caller
+      caller,
+      undefined
     );
   });
 
