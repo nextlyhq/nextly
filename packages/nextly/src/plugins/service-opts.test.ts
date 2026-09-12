@@ -1,9 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { NextlyError } from "../errors/nextly-error";
+import {
+  listRoleSlugsForUser,
+  listRoleSlugsForUserOrRefuse,
+} from "../services/lib/permissions";
 
 import {
   resolveServiceOpts as resolve,
   type ServiceOpts,
 } from "./service-opts";
+
+// Both resolvers, so a case can tell WHICH one the facade's own defaults use.
+// They ask the identical question of the identical rows and differ only in what
+// they do when the question cannot be asked, which is the whole point here.
+vi.mock("../services/lib/permissions", () => ({
+  listRoleSlugsForUser: vi.fn(async () => [] as string[]),
+  listRoleSlugsForUserOrRefuse: vi.fn(async () => {
+    // Its real contract: the strict lookup's failure, in the typed envelope
+    // and still carrying the cause. Proven against the real function in
+    // `services/lib/roles-or-refuse.test.ts`.
+    throw NextlyError.internal({
+      cause: new Error("the roles query did not run"),
+      logContext: { reason: "roles-unreadable", userId: "u1" },
+    });
+  }),
+}));
 
 /**
  * The roles the resolver answers with, by user id. A user the table does not
@@ -117,6 +139,57 @@ describe("resolveServiceOpts", () => {
     );
 
     expect(enforcingWithoutUser).toEqual([{ as: "public" }]);
+  });
+
+  it("refuses the operation when the caller's roles could not be read", async () => {
+    // Without deps, so this is the facade's OWN resolver and not the fake.
+    // `listRoleSlugsForUser` degrades a failed query to an empty set, and an
+    // exclusion rule such as `user.role !== "suspended"` then admits a caller
+    // nobody could look up: the same empty-role grant this change removes,
+    // arriving by another door. An access decision taken on roles that were
+    // never read is not a decision.
+    await expect(
+      resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
+    ).rejects.toThrow();
+  });
+
+  it("refuses with a typed error, not the driver's own", async () => {
+    // Everything a plugin reaches through this facade answers in the typed
+    // envelope, and the strict resolver propagates the driver's exception by
+    // design. A raw error here would reach a plugin route with no `code` to
+    // branch on. The refusal is unchanged; only its shape is.
+    await expect(
+      resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        NextlyError.is(error) &&
+        (error as NextlyError).code === "INTERNAL_ERROR"
+    );
+  });
+
+  it("keeps the cause, so the driver's message is not lost", async () => {
+    // The control on the wrapping: an implementation that threw a fresh
+    // NextlyError and discarded the original passes the case above and leaves
+    // an operator with nothing to diagnose.
+    const error = await resolve({
+      as: "user",
+      user: { id: "u1", email: "u@e.com" },
+    }).catch((thrown: unknown) => thrown);
+    expect((error as { cause?: Error }).cause?.message).toBe(
+      "the roles query did not run"
+    );
+  });
+
+  it("asks the refusing resolver and not the one that swallows", async () => {
+    // The control on the case above, which a facade wired to EITHER resolver
+    // could pass if both threw. This says which door it went through.
+    vi.mocked(listRoleSlugsForUser).mockClear();
+    vi.mocked(listRoleSlugsForUserOrRefuse).mockClear();
+    await expect(
+      resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
+    ).rejects.toThrow();
+    expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith("u1");
+    expect(vi.mocked(listRoleSlugsForUser)).not.toHaveBeenCalled();
   });
 
   it("as:'user' without a user throws", async () => {

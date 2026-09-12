@@ -107,12 +107,31 @@ export interface ComponentLibraryRead {
   readonly retry: () => void;
 }
 
-/** Read this site's component definitions, at the editor's posture. */
-export function useComponentLibrary(): ComponentLibraryRead {
+/**
+ * Read this site's component definitions, at the editor's posture.
+ *
+ * `enabled` is for the surface that may not need them at all. The read is not
+ * small — the route lists the whole tier, completes each row with a read of
+ * its own, and is bounded at sixteen mebibytes — and every entry form holding
+ * a blocks field draws the page at rest, whether or not the page places a
+ * single component. A page that places none resolves nothing against these
+ * definitions, so asking for them buys a miniature exactly nothing and costs
+ * the library on every form open.
+ *
+ * A disabled read is `ready` rather than `pending`: the query never starts, so
+ * its `pending` never clears, and a surface keyed on it would wait forever for
+ * an answer nobody asked for. Nothing is loading and nothing failed, which is
+ * what `ready` says — with the empty map, which is already the value for a
+ * site with no components.
+ */
+export function useComponentLibrary({
+  enabled = true,
+}: { enabled?: boolean } = {}): ComponentLibraryRead {
   const locale = useDocumentLocale();
   const read = usePluginRoute<ComponentLibraryResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: componentLibraryPath(locale?.code),
+    enabled,
     staleTime: 0,
   });
   const { data, pending, error, refetch } = read;
@@ -147,7 +166,7 @@ export function useComponentLibrary(): ComponentLibraryRead {
   // keeps its last answer when a refetch fails, and a state that called that
   // ready left the page drawn from definitions an edit elsewhere may have
   // changed, with nothing saying so and no retry.
-  const state = libraryReadState({ data, pending, error });
+  const state = enabled ? libraryReadState({ data, pending, error }) : "ready";
   // One retry for the life of the hook, asking whatever the read's refetch is
   // NOW. Handing the wrapper out as it arrives would change the retry's
   // identity every render, and with it everything keyed on this read.

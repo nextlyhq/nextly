@@ -77,6 +77,26 @@ export interface JunctionShape {
   onUpdate: string;
 }
 
+/** A junction table as one side of a save sees it: its shape, and every field naming it. */
+interface JunctionTable {
+  shape: JunctionShape;
+  fields: FieldDefinition[];
+}
+
+/**
+ * Whether two junction shapes have the same columns and references — whether
+ * a table built for one serves the other. The referential actions are not
+ * part of it: rebuilding a table to change them would throw its links away.
+ */
+function sameJunctionColumns(a: JunctionShape, b: JunctionShape): boolean {
+  return (
+    a.sourceTable === b.sourceTable &&
+    a.targetTable === b.targetTable &&
+    a.sourceColumn === b.sourceColumn &&
+    a.targetColumn === b.targetColumn
+  );
+}
+
 /**
  * The fields a save removed and the fields it added, among those a rename
  * detector cares about. Every detector pairs from this same set, so a field
@@ -2040,80 +2060,223 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
   }
 
   /**
-   * What a save does to its many-to-many junction tables: the field renamed
-   * carries its table (and links) to the new name, the field removed or moved
-   * to a storage class with a column loses its table, the field added or
-   * moved in gets one. Decided on the FULL field lists, because a junction is
-   * not a column and the localization split that hands the column diff its
-   * shared subset has nothing to say about it — the create path builds
-   * junctions from every field for the same reason.
+   * What a save does to its many-to-many junction tables, decided per TABLE:
+   * a table, not a field, is what the database holds. A table the save no
+   * longer names is dropped; a table it newly names is created; a name reused
+   * for another relation is dropped and created again, since `CREATE TABLE IF
+   * NOT EXISTS` would keep the old columns; and a field that keeps its
+   * relation while its table's name changes — renamed, or its `junctionTable`
+   * edited — carries the table, links and all, to the new name. Drops run
+   * first, so a name is free before anything is created under it. Decided on
+   * the FULL field lists, because a junction is not a column and the
+   * localization split that hands the column diff its shared subset has
+   * nothing to say about it — the create path builds junctions from every
+   * field for the same reason.
    */
   junctionLifecycle(
     tableName: string,
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): string[] {
-    const rename = this.detectJunctionRename(oldFields, newFields);
-    const renamed = rename
-      ? this.renameJunctionStatements(
-          this.junctionShape(tableName, rename.from),
-          this.junctionShape(tableName, rename.to)
-        )
-      : [];
+    const before = this.junctionTables(tableName, oldFields);
+    const after = this.junctionTables(tableName, newFields);
+    const carries = this.junctionCarries(tableName, oldFields, newFields);
+    this.refuseJunctionMoves(carries, before, after);
+    const moved = carries.filter(({ from, to }) => from.table !== to.table);
     return [
-      ...renamed,
-      ...this.junctionDrops(tableName, oldFields, newFields, rename?.from.name),
-      ...this.junctionCreates(tableName, oldFields, newFields, rename?.to.name),
+      ...this.junctionDrops(
+        before,
+        after,
+        new Set(moved.map(m => m.from.table))
+      ),
+      ...carries.flatMap(({ from, to }) =>
+        this.renameJunctionStatements(from, to)
+      ),
+      ...this.junctionCreates(
+        tableName,
+        before,
+        after,
+        new Set(moved.map(m => m.to.table))
+      ),
     ];
   }
 
   /**
-   * The junctions a save leaves behind: a many-to-many removed, or moved to a
-   * storage class that has a column. Left standing, such a table keeps every
-   * link, unread, and a field added later under the same name meets
-   * `CREATE TABLE IF NOT EXISTS` and inherits links it never made.
+   * The junctions this save would carry to a new name, source and destination.
+   *
+   * Published for the save boundary, which can do what this generator cannot:
+   * ask the database whether a destination name is already taken. The tables
+   * a collection's own fields name are visible here and refused here; one left
+   * behind by an older migration is not, and a rename onto it fails at apply
+   * time — in production, where a migration can no longer be refused.
    */
-  private junctionDrops(
+  junctionMoves(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
-    renamedFrom: string | undefined
-  ): string[] {
-    const newByName = new Map(newFields.map(f => [f.name, f]));
-    // A table another surviving field still resolves to is that field's,
-    // whatever this one called it. Validation refuses two fields naming one
-    // junction on save; a definition saved before it did is still read here.
-    const stillOwned = new Set(
-      newFields
-        .filter(usesJunctionTable)
-        .map(field => this.junctionTableNameFor(tableName, field))
+    newFields: FieldDefinition[]
+  ): Array<{ from: JunctionShape; to: JunctionShape }> {
+    return this.junctionCarries(tableName, oldFields, newFields).filter(
+      move => move.from.table !== move.to.table
     );
-    return oldFields
-      .filter(field => usesJunctionTable(field) && field.name !== renamedFrom)
-      .filter(field => {
-        const next = newByName.get(field.name);
-        return !next || this.storageClassChanged(field, next);
-      })
-      .map(field => this.junctionTableNameFor(tableName, field))
-      .filter(table => !stillOwned.has(table))
-      .map(table => `DROP TABLE IF EXISTS ${this.quoteIdentifier(table)};`);
   }
 
-  /** The junctions a save needs: a many-to-many added, or moved in from a column. */
-  private junctionCreates(
+  /** Every junction table a field list names, by name. */
+  private junctionTables(
+    tableName: string,
+    fields: FieldDefinition[]
+  ): Map<string, JunctionTable> {
+    const tables = new Map<string, JunctionTable>();
+    for (const field of fields.filter(usesJunctionTable)) {
+      const shape = this.junctionShape(tableName, field);
+      const known = tables.get(shape.table);
+      if (known) known.fields.push(field);
+      else tables.set(shape.table, { shape, fields: [field] });
+    }
+    return tables;
+  }
+
+  /**
+   * The junctions a save carries from one shape to another rather than
+   * dropping and creating: the field renamed ({@link detectJunctionRename}),
+   * and every field kept by name, relation unchanged, whose table is named
+   * differently now — its `junctionTable` set, edited or cleared. A kept
+   * field whose table kept its name has nothing to carry.
+   */
+  private junctionCarries(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
-    renamedTo: string | undefined
+    newFields: FieldDefinition[]
+  ): Array<{ from: JunctionShape; to: JunctionShape }> {
+    const newByName = new Map(newFields.map(f => [f.name, f]));
+    const carries = oldFields.filter(usesJunctionTable).flatMap(field => {
+      const next = newByName.get(field.name);
+      if (!next || !this.sameRelationTarget(field, next)) return [];
+      const from = this.junctionShape(tableName, field);
+      const to = this.junctionShape(tableName, next);
+      return from.table === to.table ? [] : [{ from, to }];
+    });
+    const renamed = this.detectJunctionRename(oldFields, newFields);
+    if (renamed) {
+      carries.push({
+        from: this.junctionShape(tableName, renamed.from),
+        to: this.junctionShape(tableName, renamed.to),
+      });
+    }
+    return carries;
+  }
+
+  /**
+   * A junction cannot move off a table another field still stores its links
+   * in, nor onto a table that already exists. A link row does not say which
+   * field made it: moving a shared table would take the other field's links
+   * with it and leave that field reading from a table that is gone, and
+   * moving onto a live one would pour two fields' links together, or fail on
+   * the name. Refused by name, before any statement is written.
+   *
+   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`)
+   */
+  private refuseJunctionMoves(
+    carries: Array<{ from: JunctionShape; to: JunctionShape }>,
+    before: Map<string, JunctionTable>,
+    after: Map<string, JunctionTable>
+  ): void {
+    // One table cannot become two. A definition saved before shared junctions
+    // were refused can name the same table from two fields, and giving each of
+    // them a table of its own asks this save to rename one table twice: the
+    // first statement succeeds, the second meets a table that is no longer
+    // there, and the migration stops half-applied with the registry already
+    // recording both new names.
+    const sources = new Map<string, JunctionShape>();
+    for (const { from, to } of carries) {
+      if (from.table === to.table) continue;
+      const twin = sources.get(from.table);
+      if (twin) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fields",
+              code: "JUNCTION_TABLE_IN_USE",
+              message:
+                `Junction table "${from.table}" cannot move to both ` +
+                `"${twin.table}" and "${to.table}" in one save: there is one ` +
+                `table, and a link does not record which field made it. Give ` +
+                `one field its own junction table per save, or remove one of ` +
+                `the fields first.`,
+            },
+          ],
+          logContext: { from: from.table, to: [twin.table, to.table] },
+        });
+      }
+      sources.set(from.table, to);
+    }
+    for (const { from, to } of carries) {
+      if (from.table === to.table) continue;
+      const stays = after.get(from.table)?.fields[0];
+      const occupant = before.get(to.table)?.fields[0];
+      if (!stays && !occupant) continue;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "JUNCTION_TABLE_IN_USE",
+            message: stays
+              ? `Junction table "${from.table}" cannot move to "${to.table}": ` +
+                `field "${stays.name}" still stores its links there, and a link ` +
+                `does not record which field made it. Remove one of the two ` +
+                `fields first, or leave this field's junction where it is.`
+              : `Junction table "${from.table}" cannot move to "${to.table}": ` +
+                `a table of that name already holds the links of field ` +
+                `"${occupant?.name}". Move it in a later save, once that table ` +
+                `is gone.`,
+          },
+        ],
+        logContext: { from: from.table, to: to.table },
+      });
+    }
+  }
+
+  /**
+   * The junctions a save leaves behind: a table no field names any more, or a
+   * name now used for another relation. Left standing, such a table keeps
+   * every link, unread, and a field added later under the same name meets
+   * `CREATE TABLE IF NOT EXISTS` and inherits links it never made — or, for
+   * another relation, columns it does not have. A table carried to a new
+   * name is not left behind.
+   */
+  private junctionDrops(
+    before: Map<string, JunctionTable>,
+    after: Map<string, JunctionTable>,
+    carriedFrom: Set<string>
   ): string[] {
-    const oldByName = new Map(oldFields.map(f => [f.name, f]));
-    return newFields
-      .filter(field => usesJunctionTable(field) && field.name !== renamedTo)
-      .filter(field => {
-        const previous = oldByName.get(field.name);
-        return !previous || this.storageClassChanged(previous, field);
+    return [...before.values()]
+      .filter(({ shape }) => !carriedFrom.has(shape.table))
+      .filter(({ shape }) => {
+        const next = after.get(shape.table);
+        return !next || !sameJunctionColumns(shape, next.shape);
       })
-      .map(field => this.generateJunctionTable(tableName, field));
+      .map(
+        ({ shape }) =>
+          `DROP TABLE IF EXISTS ${this.quoteIdentifier(shape.table)};`
+      );
+  }
+
+  /**
+   * The junctions a save needs: a table newly named, or a name now used for
+   * another relation. A table a junction is carried to already has its links.
+   */
+  private junctionCreates(
+    tableName: string,
+    before: Map<string, JunctionTable>,
+    after: Map<string, JunctionTable>,
+    carriedTo: Set<string>
+  ): string[] {
+    return [...after.values()]
+      .filter(({ shape }) => !carriedTo.has(shape.table))
+      .filter(({ shape }) => {
+        const previous = before.get(shape.table);
+        return !previous || !sameJunctionColumns(previous.shape, shape);
+      })
+      .map(({ fields }) => this.generateJunctionTable(tableName, fields[0]));
   }
 
   /**

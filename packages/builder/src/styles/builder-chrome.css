@@ -671,6 +671,121 @@
 }
 
 /*
+ * The instance inspector's own furniture: what the selection IS, under the
+ * title, and the section headings beneath. The title keeps the block
+ * inspector's treatment so an author switching between a block and a
+ * component reads one panel, not two; the glyph before it is what marks the
+ * difference, in the accent the canvas already uses for an instance.
+ */
+.nx-inspector__glyph {
+  color: var(--nx-primary);
+}
+
+.nx-inspector__meta {
+  margin: -0.5rem 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector__heading {
+  margin: 0 0 0.5rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * An exposed row stacks its control over its provenance, in the field's second
+ * column: the control is what the author edits and the badge and reset beneath
+ * it describe that value, so the two belong in one cell rather than in a third
+ * column the label grid does not have.
+ */
+.nx-inspector__exposed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-inspector__provenance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 1.5rem;
+}
+
+/*
+ * Where a row's value came from, as a badge the author reads beside it. Quiet
+ * for an inherited value, which is the ordinary state; the accent for an
+ * override, because that is the row whose reset undoes THEIR edit; and a
+ * dashed outline for a cleared one, which is a value deliberately absent
+ * rather than one nobody set.
+ */
+.nx-inspector__source {
+  display: inline-block;
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-inspector__source[data-source="instance"] {
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+.nx-inspector__source[data-source="cleared"] {
+  color: var(--nx-primary);
+  background: transparent;
+  outline: 1px dashed color-mix(in oklch, var(--nx-primary) 50%, transparent);
+  outline-offset: -1px;
+}
+
+/*
+ * Values the component no longer exposes. Listed rather than tabulated: each
+ * row is an id, the text it held and the one thing that can be done with it,
+ * and a list reads that at a glance where a grid would invite comparing them.
+ */
+.nx-inspector__orphans {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-inspector__orphan {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.nx-inspector__orphan > code {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector__orphan-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
  * A container, so a field can answer for the RAIL's width rather than the
  * window's. The rail is resizable, so the width that decides whether a label
  * fits beside its control is not a property of the viewport.

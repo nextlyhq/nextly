@@ -19,6 +19,10 @@
 
 import { z } from "zod";
 
+import {
+  COLLECTION_DEFINITION_ACTION,
+  COLLECTION_DEFINITION_RESOURCE,
+} from "../auth/collection-definition-policy";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
@@ -241,7 +245,11 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Authorise: only super-admins or users with manage-settings permission
   // may create new collections (matches the frontend route guard).
-  await requireRoutePermission(request, "manage", "settings");
+  await requireRoutePermission(
+    request,
+    COLLECTION_DEFINITION_ACTION,
+    COLLECTION_DEFINITION_RESOURCE
+  );
 
   const body = await request.json();
 

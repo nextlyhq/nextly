@@ -17,6 +17,7 @@ import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isSystemResource } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
+import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 
@@ -570,19 +571,24 @@ export class PermissionService extends BaseService {
         patch.slug = slug;
       }
 
+      // Entered only when something is actually being patched: an ensure that
+      // found the row already correct has written nothing, and the gate retires
+      // the caches for whatever it wraps.
       if (Object.keys(patch).length > 0) {
-        try {
-          await this.db
-            .update(permissions)
-            .set(patch)
-            .where(eq(permissions.id, String(existing.id)));
-        } catch (err) {
-          // Same contract as the insert below: a raw driver error never leaves
-          // this service. The reachable case is the slug — it carries a unique
-          // index, so adopting a declared slug already taken by another row
-          // fails here rather than at insert.
-          throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-        }
+        await writingPermissions(permissions, async table => {
+          try {
+            await this.db
+              .update(table)
+              .set(patch)
+              .where(eq(table.id, String(existing.id)));
+          } catch (err) {
+            // Same contract as the insert below: a raw driver error never
+            // leaves this service. The reachable case is the slug — it carries
+            // a unique index, so adopting a declared slug already taken by
+            // another row fails here rather than at insert.
+            throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+          }
+        });
       }
       return { id: String(existing.id), created: false };
     }
@@ -598,22 +604,27 @@ export class PermissionService extends BaseService {
       permissionGroup: meta?.group ?? null,
       danger: meta?.danger === true,
     };
-    try {
-      const insertPerm = (this.db as RBACDatabaseInstance)
-        .insert(this.tables.permissions)
-        .values(permissionData);
-      if (typeof insertPerm.onConflictDoNothing === "function") {
-        await insertPerm.onConflictDoNothing();
-      } else {
-        await insertPerm;
+    // A row the catalogue did not have before. Stale in the widening direction
+    // rather than the dangerous one, but a super-admin's key copies the
+    // catalogue and would not see it for the rest of its TTL.
+    await writingPermissions(this.tables.permissions, async table => {
+      try {
+        const insertPerm = (this.db as RBACDatabaseInstance)
+          .insert(table)
+          .values(permissionData);
+        if (typeof insertPerm.onConflictDoNothing === "function") {
+          await insertPerm.onConflictDoNothing();
+        } else {
+          await insertPerm;
+        }
+      } catch (err) {
+        // Constraint / dialect error during insert -> NextlyError. The
+        // method's seed-style idempotency means callers don't need a
+        // distinct "duplicate" branch; fromDatabaseError is enough. Normalise
+        // raw driver errors first so the kind is mapped correctly.
+        throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
       }
-    } catch (err) {
-      // Constraint / dialect error during insert -> NextlyError. The
-      // method's seed-style idempotency means callers don't need a
-      // distinct "duplicate" branch; fromDatabaseError is enough. Normalise
-      // raw driver errors first so the kind is mapped correctly.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-    }
+    });
     return { id, created: true };
   }
 
@@ -701,10 +712,18 @@ export class PermissionService extends BaseService {
         if (value !== undefined) updateData[field] = value;
       }
 
-      await (this.db as RBACDatabaseInstance)
-        .update(this.tables.permissions)
-        .set(updateData)
-        .where(eq(this.tables.permissions.id, permissionId));
+      // What this slug means has changed, so every answer resolved from it is
+      // stale — including an API key's grants, which are copied from these very
+      // rows and cached for five minutes under the key's id. A role-based key
+      // would otherwise keep the old spelling and a super-admin's key the old
+      // catalogue until they aged out. No id scopes this: a permission belongs
+      // to no user and no role.
+      await writingPermissions(this.tables.permissions, table =>
+        (this.db as RBACDatabaseInstance)
+          .update(table)
+          .set(updateData)
+          .where(eq(table.id, permissionId))
+      );
     } catch (err) {
       // Re-throw NextlyError instances unchanged (e.g. our notFound above);
       // map raw DB errors via fromDatabaseError. The legacy override message
@@ -728,6 +747,30 @@ export class PermissionService extends BaseService {
    * @throws NextlyError(BUSINESS_RULE_VIOLATION) when the permission is
    *   currently assigned to one or more roles.
    */
+  /**
+   * Remove one permission row, and retire the answers copied from it.
+   *
+   * Both public deletes reach the same statement by different routes — one is
+   * given the id, the other resolves it from an action and a resource — so the
+   * removal itself is written once. Two copies drift, and the invalidation is
+   * exactly the kind of trailing step one copy loses: a permission row belongs
+   * to no user and no role, so nothing scoped can stand in for it, and a key
+   * that copied the row keeps a grant the install no longer declares.
+   */
+  private async removePermissionRow(permissionId: string): Promise<void> {
+    try {
+      await writingPermissions(this.tables.permissions, table =>
+        (this.db as RBACDatabaseInstance)
+          .delete(table)
+          .where(eq(table.id, permissionId))
+      );
+    } catch (err) {
+      // Normalise raw driver errors so fk-violation / etc. produce the right
+      // NextlyError instead of collapsing to INTERNAL_ERROR.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+  }
+
   async deletePermissionById(permissionId: string): Promise<void> {
     const permission = await (
       this.db as RBACDatabaseInstance
@@ -777,15 +820,7 @@ export class PermissionService extends BaseService {
       });
     }
 
-    try {
-      await (this.db as RBACDatabaseInstance)
-        .delete(this.tables.permissions)
-        .where(eq(this.tables.permissions.id, permissionId));
-    } catch (err) {
-      // Normalise raw driver errors so fk-violation / etc. produce the
-      // right NextlyError instead of collapsing to INTERNAL_ERROR.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-    }
+    await this.removePermissionRow(permissionId);
   }
 
   /**
@@ -840,14 +875,6 @@ export class PermissionService extends BaseService {
       });
     }
 
-    try {
-      await (this.db as RBACDatabaseInstance)
-        .delete(this.tables.permissions)
-        .where(eq(this.tables.permissions.id, permissionId));
-    } catch (err) {
-      // Normalise raw driver errors so the kind is mapped correctly
-      // instead of collapsing to INTERNAL_ERROR.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
-    }
+    await this.removePermissionRow(String(permissionId));
   }
 }

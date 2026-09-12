@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
@@ -343,6 +344,135 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
         ).publicData;
         expect(data?.errors?.[0]?.code).toBe("MANY_TO_MANY_RENAME_AMBIGUOUS");
       }
+    });
+  });
+
+  describe("a kept field whose junction changes name or relation", () => {
+    it("carries the table to a new name when the field's junctionTable is edited", () => {
+      // Same field, same relation, new table name: the links are the field's
+      // and go with it, as they do on a field rename.
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany("tags", "tags", { junctionTable: "post_tag_links" })],
+        [manyToMany("tags", "tags", { junctionTable: "post_tag_refs" })]
+      );
+      expect(sql).toContain(
+        `ALTER TABLE ${q(dialect, "post_tag_links")} RENAME TO ${q(dialect, "post_tag_refs")};`
+      );
+      expect(sql).not.toContain("DROP TABLE");
+      expect(sql).not.toContain("CREATE TABLE");
+    });
+
+    it("replaces the table when the field points at another collection", () => {
+      // Links to one collection mean nothing to another: the old table goes
+      // and the new relation gets its own, which the generated name tells apart.
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany("tags")],
+        [manyToMany("tags", "authors")]
+      );
+      expect(sql).toContain(
+        `DROP TABLE IF EXISTS ${q(dialect, junction("tags"))};`
+      );
+      expect(sql).toContain(
+        `CREATE TABLE IF NOT EXISTS ${q(dialect, "dc_authors_dc_posts_tags")}`
+      );
+      expect(sql).not.toContain("RENAME");
+    });
+
+    it("drops and recreates a table whose name is reused for another relation", () => {
+      // `CREATE TABLE IF NOT EXISTS` would keep the old table, and its
+      // `tags_id` column, for a field that needs `authors_id` — so the drop
+      // must come first, and the create must follow it.
+      const named = { junctionTable: "post_links" };
+      const sql = service().generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany("tags", "tags", named)],
+        [manyToMany("writers", "authors", named)]
+      );
+      const drop = sql.indexOf(
+        `DROP TABLE IF EXISTS ${q(dialect, "post_links")};`
+      );
+      const create = sql.indexOf(
+        `CREATE TABLE IF NOT EXISTS ${q(dialect, "post_links")}`
+      );
+      expect(drop).toBeGreaterThan(-1);
+      expect(create).toBeGreaterThan(drop);
+      expect(sql.slice(create)).toContain(q(dialect, "authors_id"));
+    });
+  });
+
+  describe("a move a junction cannot make", () => {
+    const codeOf = (run: () => unknown): string | undefined => {
+      try {
+        run();
+      } catch (error) {
+        expect(error).toBeInstanceOf(NextlyError);
+        return (
+          (error as NextlyError).publicData as {
+            errors: Array<{ code: string }>;
+          }
+        ).errors[0]?.code;
+      }
+      return undefined;
+    };
+
+    it("refuses to carry away a table another surviving field still stores its links in", () => {
+      // A definition saved before shared junctions were refused: renaming
+      // one field would take both fields' links and leave the other reading
+      // from a table that is gone.
+      const shared = { junctionTable: "shared_links" };
+      expect(
+        codeOf(() =>
+          service().generateAlterTableMigration(
+            "dc_posts",
+            [
+              manyToMany("tags", "tags", shared),
+              manyToMany("labels", "tags", shared),
+            ],
+            [manyToMany("categories"), manyToMany("labels", "tags", shared)]
+          )
+        )
+      ).toBe("JUNCTION_TABLE_IN_USE");
+    });
+
+    it("refuses to split one table between two fields in a single save", () => {
+      // A legacy definition where two fields share a table, and this save
+      // gives each its own: one table cannot become two, and renaming it
+      // twice leaves the second statement meeting a table that is gone.
+      const shared = { junctionTable: "shared_links" };
+      expect(
+        codeOf(() =>
+          service().generateAlterTableMigration(
+            "dc_posts",
+            [
+              manyToMany("tags", "tags", shared),
+              manyToMany("labels", "tags", shared),
+            ],
+            [
+              manyToMany("tags", "tags", { junctionTable: "tag_links" }),
+              manyToMany("labels", "tags", { junctionTable: "label_links" }),
+            ]
+          )
+        )
+      ).toBe("JUNCTION_TABLE_IN_USE");
+    });
+
+    it("refuses to carry a table onto one that already exists", () => {
+      // `labels` goes in the same save, but its table still holds its links
+      // when the rename would land on it.
+      expect(
+        codeOf(() =>
+          service().generateAlterTableMigration(
+            "dc_posts",
+            [
+              manyToMany("tags", "tags", { junctionTable: "links_a" }),
+              manyToMany("labels", "authors", { junctionTable: "links_b" }),
+            ],
+            [manyToMany("tags", "tags", { junctionTable: "links_b" })]
+          )
+        )
+      ).toBe("JUNCTION_TABLE_IN_USE");
     });
   });
 

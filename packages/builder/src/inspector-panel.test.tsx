@@ -682,7 +682,12 @@ describe("InspectorPanel advanced fields", () => {
     ).toBe("data-b");
     // The block's own field is still reachable by its own label, which is what
     // an ambiguous name would break — `getByLabelText` throws on two matches.
-    expect(screen.getByLabelText("Name")).toHaveProperty("id", "nx-block-name");
+    // Told apart by what only the identity field has, its placeholder: the id
+    // is minted per mount so that two editors on one page do not share one.
+    expect(screen.getByLabelText("Name")).toHaveProperty(
+      "placeholder",
+      "Unnamed"
+    );
     // Each Remove is named too, for the same reason.
     expect(screen.getByRole("button", { name: "Remove data-a" })).toBeDefined();
   });
