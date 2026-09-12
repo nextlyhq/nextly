@@ -36,6 +36,7 @@
  * @module class-usage-blocks-fields
  */
 import { isFieldLocalized } from "nextly/config";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import type { BlocksFieldDescriptor } from "./class-usage-subjects";
 import { isBlocksField } from "./fields/blocksHelper";
@@ -239,15 +240,14 @@ function walkDeclarations(
 
     const step = stepFor(field, frame.addressable, collectionLocalized);
     if (step.kind === "skip") continue;
+    if (step.kind === "unresolved") {
+      unaddressable = true;
+      continue;
+    }
     if (step.kind === "descend") {
-      const container = field as object;
-      if (expanded.has(container)) continue;
-      expanded.add(container);
-      stack.push({
-        fields: step.fields,
-        index: 0,
-        addressable: step.addressable,
-      });
+      // Each container expanded ONCE, by identity — the only thing making a walk
+      // over author-supplied nesting finite, since a group may list itself.
+      descend(stack, field as object, step, expanded);
       continue;
     }
     if (!step.addressable) {
@@ -268,6 +268,24 @@ function walkDeclarations(
   return { addressable: found, unaddressable };
 }
 
+/**
+ * Push a container's children onto the cursor stack, once per container.
+ *
+ * Kept out of the walk so the loop reads as a dispatch over the three things a
+ * declaration can be. A container already expanded is left alone; the walk moves
+ * on either way, which is why this answers nothing.
+ */
+function descend(
+  stack: { fields: readonly unknown[]; index: number; addressable: boolean }[],
+  container: object,
+  step: { fields: readonly unknown[]; addressable: boolean },
+  expanded: WeakSet<object>
+): void {
+  if (expanded.has(container)) return;
+  expanded.add(container);
+  stack.push({ fields: step.fields, index: 0, addressable: step.addressable });
+}
+
 /** What the walk does with one declaration. */
 type FieldStep =
   | {
@@ -277,6 +295,8 @@ type FieldStep =
       addressable: boolean;
     }
   | { kind: "field"; descriptor: BlocksFieldDescriptor; addressable: boolean }
+  /** A reference whose definition this cannot read, so it may hide a blocks field. */
+  | { kind: "unresolved" }
   | { kind: "skip" };
 
 /**
@@ -302,6 +322,30 @@ function stepFor(
   const nested = nestedDeclarations(field);
   if (nested !== null) {
     return { kind: "descend", fields: nested, addressable: false };
+  }
+
+  // A REFERENCE to a definition stored elsewhere. A `fieldGroup` or `component`
+  // field carries only the slug it points at, so there is no inline `fields`
+  // array to descend into and a blocks field inside that definition is invisible
+  // here — reported as neither a scope nor unreachable, which is the vacuous
+  // completeness this survey exists to stop.
+  //
+  // Resolving it is not available: the plugin context publishes collections,
+  // singles, users, media, email, versions and jobs, and no field-group
+  // registry. So an unresolved reference is treated as possibly holding blocks.
+  //
+  // That is the fail-closed direction and it has a real cost: a site using any
+  // field group never reports an exact count, so a delete stays conservative for
+  // ever. The other direction permits deleting a component the referenced group
+  // still renders, which is the outcome this index exists to prevent.
+  //
+  // Enumerated rather than structural, deliberately — through the canonical
+  // predicate rather than a second list of the two names. There is no property
+  // that distinguishes a reference from an ordinary scalar field without knowing
+  // the vocabulary, and treating every unrecognised type as unresolvable would
+  // mark a text field unreachable.
+  if (isFieldGroupFieldType((field as { type?: unknown } | null)?.type)) {
+    return { kind: "unresolved" };
   }
 
   const descriptor = readBlocksField(field, collectionLocalized);

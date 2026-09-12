@@ -408,6 +408,50 @@ describe("noticing a blocks field this index cannot address", () => {
     expect(survey.unaddressable).toBe(true);
   });
 
+  it("reports a field-group REFERENCE as unaddressable, since it may hide one", () => {
+    /*
+     * A `fieldGroup` field carries only the slug it points at — the definition
+     * lives elsewhere and there is no inline `fields` array to descend into. So
+     * a blocks field inside that definition was reported as neither a scope nor
+     * unreachable, which is the vacuous completeness this survey exists to stop.
+     *
+     * The plugin context publishes no field-group registry, so it cannot be
+     * resolved from here and is treated as possibly holding blocks.
+     */
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "text", name: "title" },
+        { type: "fieldGroup", name: "seo", fieldGroup: "seo" },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("reports a component REFERENCE the same way", () => {
+    const survey = blocksFieldSurvey({
+      fields: [{ type: "component", name: "hero", component: "hero" }],
+    });
+
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("CONTROL: an ordinary field is not mistaken for a reference", () => {
+    // Without this, treating every unrecognised type as unresolvable would mark
+    // a text field unreachable and withhold completeness from every site.
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "text", name: "title" },
+        { type: "number", name: "n" },
+        { type: "blocks", name: "body" },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([{ name: "body", localized: false }]);
+    expect(survey.unaddressable).toBe(false);
+  });
+
   it("CONTROL: a presentational group's blocks field is addressable, not unreachable", () => {
     // Without this, reporting every group as unaddressable would satisfy the
     // cases above and withhold completeness from every site that uses a layout
