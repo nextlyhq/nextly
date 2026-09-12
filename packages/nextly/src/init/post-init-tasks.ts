@@ -12,14 +12,13 @@ import {
   repairSqliteTimestamps,
   TIMESTAMP_REPAIR_META_KEY,
 } from "../database/repair-sqlite-timestamps";
-import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/register";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
 
-import { seedAllPermissions } from "./seed-permissions";
+import { seedPermissionsAndRolePresets } from "./seed-permissions";
 
 /**
  * Run idempotent post-initialization tasks after services are registered.
@@ -87,24 +86,13 @@ export async function runPostInitTasks(): Promise<void> {
   // Ensures CRUD permissions exist for every collection (4 each) and single (2 each),
   // plus all system resource permissions and plugin-declared custom permissions
   // (D36). New permissions are auto-assigned to super_admin.
-  try {
-    await seedAllPermissions();
-  } catch {
-    // Silently skip — permissions table may not exist yet (migrations not run),
-    // or permissionSeedService may not be registered
-  }
-
-  // Bring the preset roles in line with the permissions that now exist. Runs
-  // every boot rather than once: each preset is a predicate, so a collection
-  // added since last boot is covered without anyone editing a role. Presets
-  // are never assigned to anyone — defining a role is not granting it.
-  try {
-    const adapter = getService("adapter");
-    const logger = getService("logger");
-    await seedRolePresets(adapter, logger);
-  } catch {
-    // Silently skip — roles/permissions tables may not exist yet.
-  }
+  // Permissions, then the preset roles that cover them. One call rather than
+  // two, because the request-path boot has to leave the same rows behind and a
+  // second list of steps is how the two drift -- see `seed-permissions`. Presets
+  // re-resolve every boot rather than once: each is a predicate, so a collection
+  // added since last boot is covered without anyone editing a role, and they are
+  // never assigned to anyone — defining a role is not granting it.
+  await seedPermissionsAndRolePresets();
 
   // Seed plugin/app-declared role bundles (D67) AFTER permissions exist, so each
   // role's permission slugs resolve to ids. Idempotent by slug; roles are
