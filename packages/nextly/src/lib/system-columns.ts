@@ -304,7 +304,7 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     // varchar(191) rather than the varchar(36) row id: a longer user id would be truncated.
     // Nullable because existing rows and system or seed writes have no user.
     //
-    // Collections only. A single is one global row, so owner-only access is meaningless and no
+    // Collections only. A single is one global row with no per-user owner, so no
     // owner column is injected — which leaves `created_by` an ordinary, legal field name for a
     // single to declare. That is the case `appliesTo` exists for: sharing one list wholesale made
     // a single's own column get stripped on every write.

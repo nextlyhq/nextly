@@ -31,7 +31,6 @@ import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
-import { AccessControlService } from "./access";
 import { CollectionFileManager } from "./collection-file-manager";
 import {
   CollectionEntryService,
@@ -222,8 +221,6 @@ export class CollectionsHandler {
       this.collectionService
     );
 
-    const accessControlService = new AccessControlService();
-
     const fieldGroupDataService = container.has("fieldGroupDataService")
       ? container.get<FieldGroupDataService>("fieldGroupDataService")
       : undefined;
@@ -247,9 +244,9 @@ export class CollectionsHandler {
     }
 
     // The RBAC service the write gates evaluate `update`/`publish`/`unpublish`
-    // against. Without it `checkCollectionAccess` has no permission store, so a
-    // missing stored rule defaults to public — which for the publish gate means
-    // an authenticated caller who cleared the route's `update` check could
+    // against. Without it `checkCollectionAccess` has no permission store and
+    // falls through to the permission-less default — which for the publish gate
+    // means an authenticated caller who cleared the route's `update` check could
     // publish without `publish-<slug>`. Resolved from the container (guarded so
     // a minimal boot without RBAC still constructs).
     const rbacAccessControlService = container.has("rbacAccessControlService")
@@ -263,7 +260,6 @@ export class CollectionsHandler {
       this.collectionService,
       this.relationshipService,
       hookRegistry,
-      accessControlService,
       fieldGroupDataService,
       rbacAccessControlService,
       this.localization,
@@ -283,11 +279,10 @@ export class CollectionsHandler {
    * `routeAuthorized: true` marks that the route middleware
    * (`requireCollectionAccess`) already performed the coarse RBAC / code-access
    * gate, so the entry service skips re-running only THAT check. It is NOT a
-   * trusted-server context: `overrideAccess` stays `false` so the stored
-   * collection access rules (owner-only / role-based / authenticated / custom)
-   * and field-level write access are still enforced with the real user — the
-   * route pre-check authorizes the operation, not access to every record or
-   * field. Trusted-server bypass is a separate, explicit `overrideAccess: true`
+   * trusted-server context: `overrideAccess` stays `false` so field-level write
+   * access is still enforced with the real user — the route pre-check authorizes
+   * the operation, not access to every field.
+   * Trusted-server bypass is a separate, explicit `overrideAccess: true`
    * (seeds, plugin `as:'system'`), never inferred from route auth.
    */
   /**
@@ -594,17 +589,16 @@ export class CollectionsHandler {
      */
     trusted?: TrustBound;
     /**
-     * The route already ran the coarse RBAC gate, so skip only that redundant
-     * re-check while the stored read rules (owner-only scoping, role-based,
-     * custom) still run. The query service folds an owner-only rule into the SQL
-     * predicate rather than filtering rows afterwards, so pagination and totals
-     * stay correct.
+     * The route already ran the coarse RBAC gate, so skip that redundant
+     * re-check. Used by the bulk-by-query writers to enumerate their targets:
+     * the route authorized the write, so an update/delete-only key must not be
+     * rejected by a read RBAC gate here.
      */
     routeAuthorized?: boolean;
     /**
      * The caller's authenticated scope. A scoped API key is judged on its own
      * read grant rather than on the permissions of the user that owns it, so a
-     * super-admin-owned key stays bound by a stored owner-only read rule.
+     * super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
     /**
@@ -746,15 +740,13 @@ export class CollectionsHandler {
     request?: Request;
     /**
      * Set by a route that already authenticated and authorized the caller.
-     * Skips the redundant RBAC re-check (which resolves the caller's stored
-     * roles and would reject a scoped API key) while leaving owner-only and
-     * other document-level rules in force.
+     * Skips the redundant RBAC re-check, which resolves the caller's stored
+     * roles and would reject a scoped API key.
      */
     routeAuthorized?: boolean;
     /**
      * The caller's authenticated scope. A scoped API key is judged on its OWN
-     * read grant, so a super-admin-owned key does not skip the collection's
-     * stored owner-only/custom read rule.
+     * read grant, so a super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
   }) {
@@ -800,11 +792,10 @@ export class CollectionsHandler {
      */
     trusted?: TrustBound;
     /**
-     * The route already ran the coarse RBAC gate, so skip only that redundant
-     * re-check while the stored read rules (owner-only scoping, role-based,
-     * custom) still run. Forwarded to the query service, which counts under the
-     * same constraint listEntries filters by, so a total can never describe rows
-     * the caller may not read.
+     * The route already ran the coarse RBAC gate, so skip that redundant
+     * re-check. Forwarded to the query service, which counts under the same
+     * filter listEntries reads by, so a total can never describe rows the caller
+     * may not read.
      */
     routeAuthorized?: boolean;
     /**

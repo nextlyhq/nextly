@@ -68,7 +68,6 @@ function dbRow(
     description: null,
     fields: JSON.stringify([{ name: "siteName", type: "text" }]),
     admin: null,
-    access_rules: null,
     source: "code",
     locked: 1,
     config_path: null,
@@ -198,7 +197,7 @@ describe("SingleRegistryService", () => {
       expect(row.table_name).toBe("single_site_settings");
     });
 
-    it("serializes admin and accessRules to JSON", async () => {
+    it("serializes admin to JSON", async () => {
       ctx.adapter.selectOne.mockResolvedValue(null);
       ctx.adapter.insert.mockResolvedValue(dbRow());
 
@@ -210,16 +209,10 @@ describe("SingleRegistryService", () => {
         source: "code",
         schemaHash: "hash-1",
         admin: { group: "Config" },
-        accessRules: {
-          read: { allowAuthenticated: true },
-        },
       });
 
       const row = ctx.adapter.insert.mock.calls[0][1];
       expect(row.admin).toBe(JSON.stringify({ group: "Config" }));
-      expect(row.access_rules).toBe(
-        JSON.stringify({ read: { allowAuthenticated: true } })
-      );
     });
 
     it("seeds permissions after registration (non-blocking)", async () => {
@@ -267,20 +260,14 @@ describe("SingleRegistryService", () => {
       expect(result).toBeNull();
     });
 
-    it("parses JSON admin and accessRules", async () => {
+    it("parses JSON admin", async () => {
       ctx.adapter.selectOne.mockResolvedValue(
-        dbRow({
-          admin: JSON.stringify({ group: "Config" }),
-          access_rules: JSON.stringify({ read: { allowAuthenticated: true } }),
-        })
+        dbRow({ admin: JSON.stringify({ group: "Config" }) })
       );
 
       const result = await ctx.service.getSingleBySlug("site-settings");
 
       expect(result?.admin).toEqual({ group: "Config" });
-      expect(result?.accessRules).toEqual({
-        read: { allowAuthenticated: true },
-      });
     });
   });
 

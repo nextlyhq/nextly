@@ -14,10 +14,10 @@
  * module asks the read path which ids of ONE collection survive, and this one
  * decides which collections and languages to ask about at all.
  *
- * The rule is never re-implemented here. A stored rule can be `owner-only` or a
- * `custom` function, and both return a query constraint over the COLLECTION's
- * own fields — which is why it cannot be pushed into a sidecar table's query:
- * `activity_log` and `nextly_versions` do not carry the columns a rule names.
+ * The decision is never re-implemented here. What narrows a read is expressed
+ * over the COLLECTION's own table — which is why it cannot be pushed into a
+ * sidecar table's query: `activity_log` and `nextly_versions` carry neither its
+ * lifecycle column nor its fields.
  * Asking the read path which of a known set of ids survive is the one form that
  * works for every rule, including the ones nobody can predict.
  *
@@ -204,11 +204,10 @@ async function admittedPerUnit<T>(
 /**
  * Collection items whose documents survive that collection's read rules.
  *
- * 🔴 Grouped by slug AND language, because a stored rule is a predicate over the
- * collection's own fields and a localized field answers differently per
- * language — `localized-target-predicate.integration.test.ts` pins one row
- * readable in `en` and denied in `de`. One verdict per slug would mark every
- * other language visible on the strength of whichever the read defaulted to.
+ * 🔴 Grouped by slug AND language, because a localized collection carries a
+ * per-language lifecycle, so one row can be readable in `en` and withheld in
+ * `de`. One verdict per slug would mark every other language visible on the
+ * strength of whichever the read defaulted to.
  *
  * Run with BOUNDED CONCURRENCY rather than one after another. Each unit enters
  * the full collection read path, so a batch spanning many collections or

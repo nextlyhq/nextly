@@ -437,6 +437,59 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
     expect(widget?.settings).toEqual(declared(9));
   });
 
+  it("carries a text widget's prose through the collision merge", () => {
+    // 🔴 The field-by-field rebuild one field along again: a text widget IS
+    // its prose, so a merge that dropped `content` drew an empty card for a
+    // widget both channels declared with text in it. The registration's copy
+    // wins, which is the rule every other stated field follows here.
+    const text = (content: string) =>
+      ({
+        id: "notes",
+        title: "Notes",
+        archetype: "text",
+        defaultSize: "md",
+        content,
+      }) as unknown as RegisteredWidgetMeta;
+
+    const [widget] = resolveDashboardWidgets(
+      contributing([text("from the contribution")]),
+      [text("from the registry")],
+      allow
+    );
+
+    expect(widget?.content).toBe("from the registry");
+  });
+
+  it("drops prose that collides with a registration of another archetype", () => {
+    // Prose travels only with the archetype that draws it, as cells do: a
+    // registration that made the widget a metric leaves nothing for a text
+    // body to draw, and the contribution's markdown must not ride along.
+    const [widget] = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "notes",
+          title: "Notes",
+          archetype: "text",
+          defaultSize: "md",
+          content: "from the contribution",
+        },
+      ] as unknown as RegisteredWidgetMeta[]),
+      [
+        {
+          id: "notes",
+          title: "Notes",
+          archetype: "metric",
+          defaultSize: "sm",
+          query: { source: "collection:posts", op: "count" },
+        },
+      ] as unknown as RegisteredWidgetMeta[],
+      allow
+    );
+
+    expect(widget?.archetype).toBe("metric");
+    expect(widget?.content).toBeUndefined();
+  });
+
   it("sorts the merged widget by the order it kept", () => {
     // The consequence, asserted on the OUTCOME rather than on the merged
     // object: a dropped order is invisible until something reads it.

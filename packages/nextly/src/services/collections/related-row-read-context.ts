@@ -17,7 +17,6 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
-import type { CollectionAccessRules } from "../access";
 import type { CompanionSchema } from "../collection-file-manager";
 
 import type { TrustBound } from "./trust-grant";
@@ -30,11 +29,9 @@ import type { TrustBound } from "./trust-grant";
  * cache does not have to import from the service that fills it.
  */
 export interface TargetReadPolicy {
-  rules: CollectionAccessRules | undefined;
   /**
    * Whether the collection has Draft/Published, so a read of it can resolve the
-   * status its rows are filtered by. Taken from the same record the rules come
-   * from rather than looked up separately.
+   * status its rows are filtered by.
    */
   hasStatus: boolean;
 }
@@ -46,7 +43,8 @@ export interface RelatedRowReadContext {
    */
   user?: Record<string, unknown>;
 
-  /** Trusted read: stored rules and the lifecycle default are both bypassed. */
+  /** Trusted read: the target's read gate and the lifecycle default are both
+   * bypassed. */
   overrideAccess?: boolean;
 
   /**
@@ -167,4 +165,14 @@ export interface RelatedRowReadContext {
    * reason. Populated only when a rule actually needs a companion filter.
    */
   targetCompanions?: Map<string, Promise<CompanionSchema | null>>;
+
+  /**
+   * Whether this caller may read each target collection, decided once per
+   * expansion. The verdict depends on nothing but the caller and the target,
+   * and both are fixed for the whole expansion — a nested hop inherits the
+   * same caller — so a `hasMany` field fetching its references concurrently
+   * asks its target's rule once rather than once per reference. Holds the
+   * PENDING verdict, as the policy map does, and for the same reason.
+   */
+  targetVerdicts?: Map<string, Promise<boolean>>;
 }

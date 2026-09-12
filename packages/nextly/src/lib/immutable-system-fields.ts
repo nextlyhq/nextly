@@ -29,7 +29,7 @@ export type WritableEntityKind = SystemColumnEntity;
 /**
  * Built once per entity, because the answer cannot change at runtime and every write asks it.
  *
- * A single is one global row, so owner-only access is meaningless and no `created_by` column is
+ * A single is one global row with no per-user owner, so no `created_by` column is
  * injected onto its table — which leaves `created_by` an ordinary, legal field name for a single
  * to declare. Stripping it there would silently discard the author's own column on every update,
  * so the reservation follows the column, which is what `appliesTo` on the declaration expresses.

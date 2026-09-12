@@ -13,9 +13,6 @@
  *   permission resolution.
  * - AuthService — user registration, password reset / change, email
  *   verification. Consumed by the auth route handlers via deps-bridge.ts.
- *
- * `AccessControlService` is created inline inside the `CollectionService`
- * factory because it only exists as a dependency of that one consumer.
  */
 
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";

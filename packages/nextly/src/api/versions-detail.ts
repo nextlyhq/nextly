@@ -64,7 +64,7 @@ function parseScopeKind(kind: string): VersionScopeKind {
  *
  * Both path parameters are validated before the access gate so malformed input
  * fails fast. The gate confirms the caller may read the live document (which is
- * what applies owner-only rules and status filtering), and the snapshot is then
+ * what applies the collection's gate and status filtering), and the snapshot is then
  * passed through field-level read redaction — a stored snapshot must never
  * reveal a field a normal read would hide.
  */

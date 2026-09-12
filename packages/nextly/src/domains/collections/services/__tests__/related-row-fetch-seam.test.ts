@@ -27,7 +27,6 @@ const SOURCE = fileURLToPath(
  */
 const ALLOWED_DIRECT_READS = [
   "readTargetRows — the reader itself",
-  "narrowByTargetPredicate — re-reads under the rule's own predicate, so the row and the authorization to serve it come from one query",
   "fetchMediaByIds — media is not a collection: no read rules, no hooks, and its own URL absolutization",
 ] as const;
 

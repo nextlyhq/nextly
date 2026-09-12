@@ -4,11 +4,11 @@
  *
  * 🔴 Entity-level access is one axis short of the question, and its own contract
  * says so: `readableEntities` decides whether a collection is in reach AT ALL,
- * leaving the per-row rules of whatever query follows to decide which documents
- * come back. A collection carrying a stored `owner-only` or `custom` read rule
- * therefore admits every editor at the coarse check while the read path narrows
- * to a subset — so any surface keyed by collection name alone reports one
- * author's documents to another.
+ * leaving the query that follows to decide which documents come back. A
+ * collection therefore admits an editor at the coarse check while the read path
+ * still withholds individual rows — a draft they may not see, a row that is
+ * gone — so any surface keyed by collection name alone names documents the
+ * caller cannot open.
  *
  * That is not a hypothetical shape: the dashboard's own statistics once counted
  * rows straight from the physical table and disclosed exactly this, and the
@@ -20,13 +20,12 @@
  * a batch of rows names; this module answers the narrower question it is built
  * from — which ids of ONE collection, in ONE language, survive its read rules.
  *
- * The rule is never re-implemented here. A stored rule can be `owner-only` or a
- * `custom` function, and both return a query constraint expressed over the
- * COLLECTION's own fields — which is why the constraint cannot simply be pushed
- * into a sidecar table's query the way Payload pushes one into its versions
- * collection: `activity_log` and `nextly_versions` do not carry the columns a
- * rule names. Asking the read path which of a known set of ids survive is the
- * one form that works for every rule, including the ones nobody can predict.
+ * The decision is never re-implemented here. What narrows a read is expressed
+ * over the COLLECTION's own table — which is why it cannot simply be pushed into
+ * a sidecar table's query the way Payload pushes one into its versions
+ * collection: `activity_log` and `nextly_versions` carry neither its lifecycle
+ * column nor its fields. Asking the read path which of a known set of ids
+ * survive is the one form that stays correct as that path gains concerns.
  *
  * @module services/lib/readable-documents
  */
@@ -55,8 +54,8 @@ function chunked(ids: readonly string[]): string[][] {
  * The subset of `entryIds` this caller may read from `collection`.
  *
  * `overrideAccess: false` with the caller's own identity is what applies the
- * stored rule, and the API key's stamped scope is forwarded so a key is judged
- * on its own grant rather than on the roles of whoever minted it.
+ * gate, and the API key's stamped scope is forwarded so a key is judged on its
+ * own grant rather than on the roles of whoever minted it.
  *
  * `status: "all"` because a document with unpublished edits may never have been
  * published: filtering to published rows would drop precisely the documents a
@@ -68,11 +67,10 @@ function chunked(ids: readonly string[]): string[][] {
  * enough to answer that is the narrowest thing that also cannot carry field
  * values into a surface that never asked for them.
  *
- * 🔴 `locale` is part of the QUESTION, not a presentation detail. A stored rule
- * is a predicate over the collection's fields, and a localized field answers
- * differently per language, so a read that names no locale judges whichever
- * translation it defaults to. Asking once per slug and applying that verdict to
- * every language discloses the rows a rule refuses in the others.
+ * 🔴 `locale` is part of the QUESTION, not a presentation detail. A localized
+ * collection carries a per-language lifecycle, so a read that names no locale
+ * judges whichever translation it defaults to. Asking once per slug and applying
+ * that verdict to every language names rows the read refuses in the others.
  */
 /**
  * Who the read runs as, and in which language.
@@ -140,9 +138,9 @@ async function idsReturnedBy(
 /**
  * Which of `entryIds` this caller may READ, asked of the ordinary read path.
  *
- * `overrideAccess: false`, so a stored `owner-only` or `custom` rule narrows the
- * answer exactly as it would for a normal read — which is the point: the rule is
- * evaluated by the path that owns it rather than reproduced here.
+ * `overrideAccess: false`, so the read narrows exactly as it would for a normal
+ * one — which is the point: the decision is made by the path that owns it rather
+ * than reproduced here.
  */
 export async function readableDocumentIds(
   collection: string,

@@ -67,6 +67,7 @@ import {
   registrySlotSource,
   type LeftPanel,
   type SavedComponent,
+  type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
@@ -362,15 +363,15 @@ export function documentFrom(
  * READS under-answers the question. And composing three thousand rows to
  * ask it clones every definition each row reaches, once per row.
  *
- * Judged by BOTH facts: the document being edited is a component, and the
- * form names the row. Either alone is not enough — a page's field is never
- * inside a component however the ids fall, and a component's field on a
- * create form names no row yet and can place anything.
+ * Whether the edit is inside a component at all is `editedComponentId`.
  *
  * Every read of the graph is bounded by the SITE's node cap, and a read the
  * cap ends early is not "names nothing" — it is unread, and the candidate is
  * left out; so is one whose graph reaches an id the lookup does not hold out
  * of a library that was not read whole (`namedBy`).
+ *
+ * The pattern tier is filtered by the same rule and the same graph —
+ * {@link withoutSelfPatterns}.
  *
  * Exported for its own test, for the reason `documentFrom` is.
  */
@@ -380,14 +381,90 @@ export function withoutSelf(
   identity: { documentId?: string | undefined } | null,
   graph: ComponentGraph
 ): readonly SavedComponent[] {
-  const self = identity?.documentId;
-  if (self === undefined || !isComponentDocument(editing)) return components;
+  const self = editedComponentId(editing, identity);
+  if (self === undefined) return components;
   const kept = components.filter(
-    component => component.id !== self && !reaches(component.id, self, graph)
+    component =>
+      component.id !== self && !reachesFrom([component.id], self, graph)
   );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
   return kept.length === components.length ? components : kept;
+}
+
+/**
+ * The patterns the panel may OFFER, by the same rule and the same graph.
+ *
+ * A pattern is a second way to copy a component into itself. Saving a
+ * selection keeps the nodes it held, and an instance node is one of them —
+ * so a pattern saved from a page that placed A carries an instance of A, and
+ * a pattern that places B carries A wherever B's definition reaches it. The
+ * component tier being filtered says nothing about either: they are
+ * different rows, out of a different collection, read by a different query.
+ *
+ * Left OUT rather than refused at the click, because the panel is where an
+ * author decides. A tile offered and then refused reads as a bug in the
+ * pattern; a tile that is not there while a component is open is the same
+ * sentence the component tier already tells.
+ *
+ * What a pattern names is read from the row's OWN document — there is no
+ * lookup entry to read it from — and everything past that first step is the
+ * component graph, walked exactly as {@link withoutSelf} walks it, from the
+ * same lookup the canvas resolves against.
+ */
+export function withoutSelfPatterns(
+  patterns: readonly SavedPattern[],
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null,
+  graph: ComponentGraph
+): readonly SavedPattern[] {
+  const self = editedComponentId(editing, identity);
+  if (self === undefined) return patterns;
+  const kept = patterns.filter(
+    pattern => !reachesFrom(namesOf(pattern, graph.limits), self, graph)
+  );
+  return kept.length === patterns.length ? patterns : kept;
+}
+
+/**
+ * The components a stored pattern places directly, or `undefined` when that
+ * cannot be told — which counts as reaching, for the reason {@link namedBy}
+ * gives: a prefix the node cap ended early names nothing, and so does a
+ * pattern nobody could read.
+ *
+ * A row carrying no document at all is not that case. The collection does not
+ * mark its blocks field required, so a titled row with no content is a legal
+ * row; it places nothing, and the catalogue skips it on its own.
+ */
+function namesOf(
+  pattern: SavedPattern,
+  limits: DocumentLimits
+): readonly string[] | undefined {
+  const nodes = pattern.document?.nodes;
+  if (nodes === undefined) return [];
+  const usage = componentUsageIn(nodes, limits.maxNodes);
+  return usage.complete ? usage.ids : undefined;
+}
+
+/**
+ * The component this field is editing, or `undefined` when it is not editing
+ * one.
+ *
+ * Judged by BOTH facts: the document being edited is a component, and the
+ * form names the row. Either alone is not enough — a page's field is never
+ * inside a component however the ids fall, and a component's field on a
+ * create form names no row yet and can place anything.
+ *
+ * Stated once because two filters ask it, and a rule spelled twice is one
+ * that will eventually differ between the tier that is filtered and the tier
+ * that is not.
+ */
+function editedComponentId(
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null
+): string | undefined {
+  const self = identity?.documentId;
+  return self !== undefined && isComponentDocument(editing) ? self : undefined;
 }
 
 /** What judging a candidate's graph reads. */
@@ -405,19 +482,25 @@ export interface ComponentGraph {
 }
 
 /**
- * Whether a component's graph names the definition given, at any depth,
- * through the lookup — or cannot be shown not to.
+ * Whether the graph grown from these components names the definition given,
+ * at any depth, through the lookup — or cannot be shown not to.
  *
- * Each definition is read once per question, the candidate's own included —
- * a loop among other rows ends where it began rather than running on — and
- * from the lookup's copy, which is what the canvas will draw.
+ * The seeds are what a candidate places directly: one id for a component row,
+ * every id its document places for a pattern. `undefined` is a seed list
+ * nobody could read, which counts as reaching for the reason {@link namedBy}
+ * gives.
+ *
+ * Each definition is read once per question, the seeds' own included — a loop
+ * among other rows ends where it began rather than running on — and from the
+ * lookup's copy, which is what the canvas will draw.
  */
-function reaches(
-  candidate: string,
+function reachesFrom(
+  seeds: readonly string[] | undefined,
   id: string,
   graph: ComponentGraph
 ): boolean {
-  const pending = [candidate];
+  if (seeds === undefined || seeds.includes(id)) return true;
+  const pending = [...seeds];
   const followed = new Set<string>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     if (followed.has(next)) continue;
@@ -1923,6 +2006,7 @@ const COMPONENT_READ_NOTES: Readonly<
 
 function InsertPanelWithLibrary({
   components,
+  offerablePatterns,
   ...props
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
@@ -1938,12 +2022,28 @@ function InsertPanelWithLibrary({
    * canvas will draw — and where the read stands, which the panel says.
    */
   components: ComponentLibraryRead;
+  /**
+   * The patterns this edit may offer, out of the rows read HERE.
+   *
+   * A pattern can place a component, so editing a component has to leave out
+   * the patterns that reach it — the same question the component tier is
+   * filtered by, and it needs the same graph. That graph and the facts it is
+   * asked against belong to the editor above, and the rows belong here, so
+   * the rule comes down and is applied where the rows are.
+   */
+  offerablePatterns: (
+    patterns: readonly SavedPattern[]
+  ) => readonly SavedPattern[];
 }): React.JSX.Element {
   const library = usePatternLibrary();
+  const patterns = useMemo(
+    () => offerablePatterns(library.patterns),
+    [offerablePatterns, library.patterns]
+  );
   return (
     <InsertPanel
       {...props}
-      patterns={library.patterns}
+      patterns={patterns}
       components={components.components}
       componentDefinitions={components.definitions}
       library={{
@@ -2479,21 +2579,41 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // change while it is edited, and the opening document is the one this
   // field's own value described.
   const identity = useDocumentIdentity();
+  /*
+   * Built once and asked by BOTH tiers: the components filter below and the
+   * patterns filter the panel runs on the rows it reads for itself. One
+   * object rather than two literals, so the two filters cannot come to walk
+   * different graphs — and so the callback handed down keeps its identity
+   * across renders the read did not change.
+   */
+  const componentGraph = useMemo<ComponentGraph>(
+    () => ({
+      definitions: componentLibrary.definitions,
+      limits: documentLimits,
+      whole: !componentLibrary.truncated,
+    }),
+    [componentLibrary.definitions, componentLibrary.truncated, documentLimits]
+  );
   const offered = useMemo<ComponentLibraryRead>(() => {
     const components = withoutSelf(
       componentLibrary.components,
       initialDocument,
       identity,
-      {
-        definitions: componentLibrary.definitions,
-        limits: documentLimits,
-        whole: !componentLibrary.truncated,
-      }
+      componentGraph
     );
     return components === componentLibrary.components
       ? componentLibrary
       : { ...componentLibrary, components };
-  }, [componentLibrary, initialDocument, identity, documentLimits]);
+  }, [componentLibrary, initialDocument, identity, componentGraph]);
+  /*
+   * The pattern tier is read inside the panel — it is mounted only while the
+   * panel is open — so the RULE comes down and the rows stay there.
+   */
+  const offerablePatterns = useCallback(
+    (patterns: readonly SavedPattern[]) =>
+      withoutSelfPatterns(patterns, initialDocument, identity, componentGraph),
+    [initialDocument, identity, componentGraph]
+  );
 
   const canvasRender = useMemo(
     () =>
@@ -3081,6 +3201,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
                 components={offered}
+                offerablePatterns={offerablePatterns}
               />
             ),
             /*

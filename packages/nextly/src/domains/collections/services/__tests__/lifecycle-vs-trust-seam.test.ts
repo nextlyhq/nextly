@@ -36,8 +36,10 @@ function statusFilterCalls(): string[] {
 describe("the lifecycle decision is separate from the trust decision", () => {
   it("is exercised — the service resolves a status filter at all", () => {
     // Without this the assertion below passes against an empty list, which is
-    // the shape of a guard reporting success because it found nothing.
-    expect(statusFilterCalls().length).toBeGreaterThanOrEqual(2);
+    // the shape of a guard reporting success because it found nothing. One
+    // site, not two: the second resolved the lifecycle for the predicate
+    // re-read, which went with the stored rules that produced predicates.
+    expect(statusFilterCalls().length).toBeGreaterThanOrEqual(1);
   });
 
   it("never decides the lifecycle from the trust predicate", () => {

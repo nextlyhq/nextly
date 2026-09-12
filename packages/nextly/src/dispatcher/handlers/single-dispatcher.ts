@@ -428,7 +428,7 @@ async function requireLiveSingleId(slug: string): Promise<string> {
  * request.
  *
  * Both write handlers need the same shape and for the same reasons: the decoded
- * role SET, so role-based stored rules and the super-admin bypass evaluate
+ * role SET, so role-based access and the super-admin bypass evaluate
  * against the real authorized scope; and a representative singular `role`, for a
  * rule or a field-level `access` callback reading `req.user.role`. Two copies
  * agreed the day they were written and would drift the moment either learned a

@@ -278,6 +278,13 @@ interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
   /** Component rendered for this widget. */
   component: ComponentPath;
   /**
+   * Closed on every arm but `text`, where it is required. The boot validator
+   * refuses `content` on any other archetype, and a type that accepted it
+   * made that refusal the first time an author learned -- after the plugin
+   * shipped. `never` is what makes the type and the validator one contract.
+   */
+  content?: never;
+  /**
    * Still executed server-side, and handed to the component as its slot.
    *
    * {@link WidgetQuerySpec} rather than the flat query, so an op and its group
@@ -309,7 +316,16 @@ interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
 export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
   (
     | { archetype?: "custom"; chrome?: WidgetChrome }
-    | { archetype: Exclude<WidgetArchetype, "custom">; chrome?: never }
+    // A queryless archetype is not a fallback case: `text` IS its prose and
+    // `actions` IS its list, so a component beside either still needs the
+    // payload, and only the arms that require it can say so. Routed there.
+    | {
+        archetype: Exclude<
+          WidgetArchetype,
+          "custom" | QuerylessWidgetArchetype
+        >;
+        chrome?: never;
+      }
   );
 
 /**
@@ -329,6 +345,8 @@ export interface PluginAdminDataWidget extends PluginAdminWidgetBase {
    * and its group key must agree, and that is true of every core.
    */
   query: WidgetQuerySpec;
+  /** Prose belongs to `text` alone; see {@link PluginAdminCustomWidgetBase}. */
+  content?: never;
   /**
    * Optional FALLBACK body, for an archetype this admin release cannot draw
    * yet. Omit it and the card says so by name.
@@ -352,6 +370,8 @@ export interface PluginAdminStatsWidget extends PluginAdminWidgetBase {
   archetype: CellWidgetArchetype;
   /** One entry per number, each with its own count query and optional link. */
   cells: WidgetStatCell[];
+  /** Prose belongs to `text` alone; see {@link PluginAdminCustomWidgetBase}. */
+  content?: never;
   /**
    * Optional FALLBACK body, for an admin release that cannot draw this
    * archetype yet. Omit it and the card says so by name.
@@ -367,6 +387,16 @@ export interface PluginAdminStatsWidget extends PluginAdminWidgetBase {
  */
 export interface PluginAdminTextWidget extends PluginAdminWidgetBase {
   archetype: "text";
+  /**
+   * The prose, as markdown: headings, paragraphs, lists, emphasis, inline
+   * code, block quotes and links. Raw HTML is shown as the text it is. A
+   * link may point at `http`, `https`, `mailto`, `tel`, or a path on this
+   * site written as `/...`, `./...` or `#...`; anything else -- a bare
+   * `posts?status=draft`, an address without a scheme -- is left as the
+   * markdown it was written in, where the author can see it. Bounded; the
+   * card is for notes and a pointer to a runbook, not for the runbook.
+   */
+  content: string;
   query?: never;
   actions?: never;
   /**
@@ -389,6 +419,8 @@ export interface PluginAdminTextWidget extends PluginAdminWidgetBase {
 export interface PluginAdminActionsWidget extends PluginAdminWidgetBase {
   archetype: "actions";
   query?: never;
+  /** Prose belongs to `text` alone; see {@link PluginAdminCustomWidgetBase}. */
+  content?: never;
   actions: WidgetAction[];
   /**
    * Optional FALLBACK body, for an archetype this admin release cannot draw
