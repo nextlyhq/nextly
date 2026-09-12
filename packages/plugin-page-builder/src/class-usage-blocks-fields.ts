@@ -36,6 +36,7 @@
  * @module class-usage-blocks-fields
  */
 import { isFieldLocalized } from "nextly/config";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import type { BlocksFieldDescriptor } from "./class-usage-subjects";
 import { isBlocksField } from "./fields/blocksHelper";
@@ -145,10 +146,57 @@ export interface BlocksFieldsCollection {
 export function blocksFieldsOf(
   collection: BlocksFieldsCollection | null | undefined
 ): BlocksFieldDescriptor[] {
-  const fields = collection?.fields;
-  if (!Array.isArray(fields)) return [];
-  const collectionLocalized = collection?.localized === true;
+  return blocksFieldSurvey(collection).addressable;
+}
 
+/** What one collection declares, split by whether this index can address it. */
+export interface BlocksFieldSurvey {
+  /** The fields a scope can be enumerated for, in declaration order. */
+  addressable: BlocksFieldDescriptor[];
+  /**
+   * Whether the collection ALSO declares a blocks field this cannot address.
+   *
+   * A blocks field nested under a named group — or any other container that
+   * stores its children under its own key — has no subject the row model can
+   * name, so no scope is enumerated for it and no hook reconciles it. That is
+   * deliberate, and on its own it is a gap the completeness flag has to know
+   * about: a collection whose only blocks field is nested contributes no scope,
+   * so "every scope walked" is vacuously true and health reports an index that
+   * never saw those references as exact. A count of zero reported as exact is
+   * what licenses deleting a component those documents still render.
+   *
+   * Reported from the SAME traversal that collects the addressable ones, rather
+   * than by a second walk: two walks over one configuration agree on the day
+   * they are written, and the one that drifts here fails by staying silent.
+   */
+  unaddressable: boolean;
+}
+
+/**
+ * Every blocks field a collection declares, told apart by addressability.
+ *
+ * {@link blocksFieldsOf} is the narrow view of this, derived from it rather than
+ * computed beside it.
+ */
+export function blocksFieldSurvey(
+  collection: BlocksFieldsCollection | null | undefined
+): BlocksFieldSurvey {
+  const fields = collection?.fields;
+  if (!Array.isArray(fields)) return { addressable: [], unaddressable: false };
+  return walkDeclarations(fields, collection?.localized === true);
+}
+
+/**
+ * The walk itself, over a field list already known to be one.
+ *
+ * Split from the shape guards above so this function is about the traversal —
+ * the cursor stack, the cycle set and the two accumulators — and nothing else.
+ */
+function walkDeclarations(
+  fields: readonly unknown[],
+  collectionLocalized: boolean
+): BlocksFieldSurvey {
+  let unaddressable = false;
   const found: BlocksFieldDescriptor[] = [];
   const seen = new Set<string>();
   // Groups already expanded, by IDENTITY. This is what makes the walk finite,
@@ -173,9 +221,13 @@ export function blocksFieldsOf(
   // has committed, where a throw reports a failed save for one that succeeded.
   // A cursor holds each list where it is and reads one field at a time, so no
   // length is ever material.
-  const stack: { fields: readonly unknown[]; index: number }[] = [
-    { fields, index: 0 },
-  ];
+  // `addressable` travels with the frame: a nested container's children are
+  // walked only to NOTICE a blocks field there, never to enumerate one.
+  const stack: {
+    fields: readonly unknown[];
+    index: number;
+    addressable: boolean;
+  }[] = [{ fields, index: 0, addressable: true }];
 
   while (stack.length > 0) {
     const frame = stack[stack.length - 1];
@@ -186,24 +238,132 @@ export function blocksFieldsOf(
     const field = frame.fields[frame.index];
     frame.index += 1;
 
-    const children = presentationalChildren(field);
-    if (children !== null) {
-      const group = field as object;
-      if (expanded.has(group)) continue;
-      expanded.add(group);
-      stack.push({ fields: children, index: 0 });
+    const step = stepFor(field, frame.addressable, collectionLocalized);
+    if (step.kind === "skip") continue;
+    if (step.kind === "unresolved") {
+      unaddressable = true;
       continue;
     }
-
-    const descriptor = readBlocksField(field, collectionLocalized);
-    if (descriptor === null) continue;
+    if (step.kind === "descend") {
+      // Each container expanded ONCE, by identity — the only thing making a walk
+      // over author-supplied nesting finite, since a group may list itself.
+      descend(stack, field as object, step, expanded);
+      continue;
+    }
+    if (!step.addressable) {
+      // Found, and unreachable. Recorded as a fact about the collection rather
+      // than as a descriptor: enumerating a scope for it would file rows no
+      // rebuild can reconcile and no sweep can clear.
+      unaddressable = true;
+      continue;
+    }
     // A duplicate name is one subject, not two. Enumerating it twice would
     // reconcile the same rows twice in one pass, and the second pass reads the
     // first one's inserts as rows the document no longer justifies.
-    if (seen.has(descriptor.name)) continue;
-    seen.add(descriptor.name);
-    found.push(descriptor);
+    if (seen.has(step.descriptor.name)) continue;
+    seen.add(step.descriptor.name);
+    found.push(step.descriptor);
   }
 
-  return found;
+  return { addressable: found, unaddressable };
+}
+
+/**
+ * Push a container's children onto the cursor stack, once per container.
+ *
+ * Kept out of the walk so the loop reads as a dispatch over the three things a
+ * declaration can be. A container already expanded is left alone; the walk moves
+ * on either way, which is why this answers nothing.
+ */
+function descend(
+  stack: { fields: readonly unknown[]; index: number; addressable: boolean }[],
+  container: object,
+  step: { fields: readonly unknown[]; addressable: boolean },
+  expanded: WeakSet<object>
+): void {
+  if (expanded.has(container)) return;
+  expanded.add(container);
+  stack.push({ fields: step.fields, index: 0, addressable: step.addressable });
+}
+
+/** What the walk does with one declaration. */
+type FieldStep =
+  | {
+      kind: "descend";
+      fields: readonly unknown[];
+      /** Whether a blocks field found below can be enumerated. */
+      addressable: boolean;
+    }
+  | { kind: "field"; descriptor: BlocksFieldDescriptor; addressable: boolean }
+  /** A reference whose definition this cannot read, so it may hide a blocks field. */
+  | { kind: "unresolved" }
+  | { kind: "skip" };
+
+/**
+ * Which of the three a declaration is, decided in one place.
+ *
+ * Kept out of the walk so the loop is about the stack and the accumulators. The
+ * two descents are different answers to one question and belong beside each
+ * other: a PRESENTATIONAL group's children live at the parent path and keep the
+ * frame's addressability, while any OTHER container nests its children under its
+ * own key — those are walked only so a blocks field inside one is NOTICED, never
+ * to enumerate it.
+ */
+function stepFor(
+  field: unknown,
+  addressable: boolean,
+  collectionLocalized: boolean
+): FieldStep {
+  const children = presentationalChildren(field);
+  if (children !== null) {
+    return { kind: "descend", fields: children, addressable };
+  }
+
+  const nested = nestedDeclarations(field);
+  if (nested !== null) {
+    return { kind: "descend", fields: nested, addressable: false };
+  }
+
+  // A REFERENCE to a definition stored elsewhere. A `fieldGroup` or `component`
+  // field carries only the slug it points at, so there is no inline `fields`
+  // array to descend into and a blocks field inside that definition is invisible
+  // here — reported as neither a scope nor unreachable, which is the vacuous
+  // completeness this survey exists to stop.
+  //
+  // Resolving it is not available: the plugin context publishes collections,
+  // singles, users, media, email, versions and jobs, and no field-group
+  // registry. So an unresolved reference is treated as possibly holding blocks.
+  //
+  // That is the fail-closed direction and it has a real cost: a site using any
+  // field group never reports an exact count, so a delete stays conservative for
+  // ever. The other direction permits deleting a component the referenced group
+  // still renders, which is the outcome this index exists to prevent.
+  //
+  // Enumerated rather than structural, deliberately — through the canonical
+  // predicate rather than a second list of the two names. There is no property
+  // that distinguishes a reference from an ordinary scalar field without knowing
+  // the vocabulary, and treating every unrecognised type as unresolvable would
+  // mark a text field unreachable.
+  if (isFieldGroupFieldType((field as { type?: unknown } | null)?.type)) {
+    return { kind: "unresolved" };
+  }
+
+  const descriptor = readBlocksField(field, collectionLocalized);
+  return descriptor === null
+    ? { kind: "skip" }
+    : { kind: "field", descriptor, addressable };
+}
+
+/**
+ * The child declarations of a container this index does not address, or null.
+ *
+ * The complement of {@link presentationalChildren}: that one names the
+ * containers whose children belong to THIS level, and this one names every
+ * other container of declarations, so a blocks field nested in one can be
+ * noticed without being enumerated.
+ */
+function nestedDeclarations(value: unknown): readonly unknown[] | null {
+  if (typeof value !== "object" || value === null) return null;
+  const field = value as { fields?: unknown };
+  return Array.isArray(field.fields) ? field.fields : null;
 }

@@ -26,6 +26,7 @@ import {
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { patternCapabilityRoute } from "./capability-route";
+import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -43,6 +44,10 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import {
+  USAGE_BACKFILL_STATE_SLUG,
+  usageBackfillStateCollection,
+} from "./collections/usage-backfill-state";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -59,6 +64,16 @@ import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
+import { usageBackfillJob } from "./usage-backfill-job";
+import {
+  backfillScopes,
+  usageBackfillDeps,
+  type BackfillHost,
+} from "./usage-backfill-wiring";
+import {
+  USAGE_HEALTH_SERVICE,
+  usageHealthService,
+} from "./usage-health-service";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -425,7 +440,325 @@ function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
   );
 }
 
+/**
+ * Turn the installed plugin context into what a backfill pass needs.
+ *
+ * Every member is a FUNCTION rather than a resolved value, and that is the
+ * whole shape of it. A site can gain a collection, a locale or a draft variant
+ * after boot, and the Direct API is not resolvable until services are
+ * registered — so anything captured here would be a fact about the moment the
+ * plugin was installed, used to decide whether an index covering the site as it
+ * is now is complete.
+ */
+/**
+ * Whether any declared Single carries a blocks field.
+ *
+ * The index cannot cover a Single at all: a plugin has no supported way to READ
+ * one — the available path CREATES the row when it is absent, so indexing would
+ * materialise every Single in the app as a side effect — and `writeTargetOf`
+ * declines every `single:` hook for that reason. So no scope is enumerated for
+ * them, and a backfill that finishes every collection scope has still not made
+ * the index cover a site whose homepage is a blocks-backed Single.
+ *
+ * The declaration is what is read, not the content: a Single that nobody has
+ * filled in yet still means the index will not cover it once somebody does, and
+ * this answer must not flip the day an author first saves.
+ *
+ * PAGED and exhausted, for the reason the collection listing is: a short read
+ * here answers "no Singles hold blocks" for a site where a later page does, and
+ * that is the direction that lets completeness be claimed wrongly. A listing it
+ * cannot parse answers TRUE — the conservative reading, since "I could not
+ * check" must not become "there is nothing to worry about".
+ */
+export async function singlesHoldBlocks(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<boolean> {
+  // The count the first page reported. This walk pages by OFFSET, so it carries
+  // the same shift as the collection registry above: a Single deleted behind the
+  // cursor moves the rest back and one is never read. Here the missed row would
+  // be a Single that HOLDS blocks, so the answer flips from "content this index
+  // cannot reach" to "none" — and completeness is granted over a homepage whose
+  // components read as used by nothing.
+  //
+  // `true` is the refusal on every unreadable shape in this function, and a
+  // changed population is one: it means content may be out of reach, which is
+  // what withholds completeness.
+  let expected: number | undefined;
+  // The slugs configuration still declares, read once. A row whose source is
+  // `code` and whose slug is not in here is a leftover, not a Single.
+  const declared = declaredSingleSlugs(ctx);
+
+  for (let offset = 0; ; offset += REGISTRY_PAGE_SIZE) {
+    const listed: unknown = await ctx.services.singles.list({
+      offset,
+      limit: REGISTRY_PAGE_SIZE,
+    });
+
+    const rows = (listed as { data?: unknown }).data;
+    const total = (listed as { total?: unknown }).total;
+    if (!Array.isArray(rows) || typeof total !== "number") return true;
+    expected ??= total;
+    if (total !== expected) return true;
+
+    if (rowsHoldBlocks(rows, declared)) return true;
+
+    // Bounded by BOTH, so neither a `total` that disagrees with the rows nor an
+    // empty page can spin this. An empty page with work still claimed is the
+    // shape that would otherwise loop for ever.
+    if (rows.length === 0 || offset + rows.length >= total) return false;
+  }
+}
+
+/** Whether any row on one page is a live Single declaring blocks content. */
+function rowsHoldBlocks(
+  rows: readonly unknown[],
+  declared: ReadonlySet<string> | undefined
+): boolean {
+  for (const row of rows) {
+    // An ORPHAN says nothing about content that exists. Removing a code-first
+    // Single from config leaves its registry row readable until someone runs
+    // the destructive cleanup — `PluginSinglesService.list` documents that,
+    // says such a row carries `source: "code"`, and says a caller who must
+    // exclude them can, because `source` is on every record and a plugin holds
+    // `ctx.config.singles`. It is not filtered at that layer because doing so
+    // after pagination would return short pages and a total describing one of
+    // them.
+    //
+    // Counted here, a removed Single kept `unreachable` true for ever and no
+    // count could become exact for content the app no longer has.
+    if (isOrphanedSingle(row, declared)) continue;
+    // The FULL survey, not the addressable half. A Single declaring its blocks
+    // field under a named group — or behind a field-group reference — returns
+    // an empty addressable list, and reading only that reported "this Single
+    // holds no blocks" for content no scope will ever index. The collection side
+    // already asks it this way; asking differently here is how the two come to
+    // disagree about the same declaration.
+    const survey = blocksFieldSurvey(row as { fields?: unknown });
+    if (survey.addressable.length > 0 || survey.unaddressable) return true;
+  }
+  return false;
+}
+
+/** The slugs the app's configuration still declares as Singles. */
+function declaredSingleSlugs(ctx: {
+  config?: { singles?: unknown };
+}): ReadonlySet<string> | undefined {
+  const singles = ctx.config?.singles;
+  // No list at all is not an empty list. A config shape this cannot read must
+  // not be treated as declaring nothing, which would make every registry row an
+  // orphan and hide real content from the completeness answer.
+  if (!Array.isArray(singles)) return undefined;
+  const slugs = new Set<string>();
+  for (const single of singles) {
+    const slug = (single as { slug?: unknown } | null)?.slug;
+    if (typeof slug === "string" && slug.length > 0) slugs.add(slug);
+  }
+  return slugs;
+}
+
+/**
+ * Whether a registry row is a removed code-first Single rather than a live one.
+ *
+ * Only a `code` row can be one: a Builder-made Single exists nowhere else, so
+ * its registry row IS the declaration and configuration says nothing about it.
+ *
+ * Anything this cannot read is NOT an orphan. A row with no readable slug, or a
+ * configuration this could not enumerate, keeps the Single counted — the
+ * direction that withholds completeness rather than the one that grants it over
+ * content nobody looked at.
+ */
+function isOrphanedSingle(
+  row: unknown,
+  declared: ReadonlySet<string> | undefined
+): boolean {
+  if (declared === undefined) return false;
+  const record = row as { source?: unknown; slug?: unknown } | null;
+  if (record?.source !== "code") return false;
+  const slug = record.slug;
+  if (typeof slug !== "string" || slug.length === 0) return false;
+  return !declared.has(slug);
+}
+
+/** How many registry rows one page of the collection listing asks for. */
+const REGISTRY_PAGE_SIZE = 100;
+
+/**
+ * Every collection slug the registry holds, or `undefined` when it could not
+ * be read.
+ *
+ * PAGED, and the paging is the point rather than a formality. The listing is
+ * paginated, so a single unpaged call returns the server's default page — and
+ * the collections past it would simply have no scopes, while completion is
+ * judged against that same short list and reports the index whole. That is the
+ * defect this enumeration exists to remove, reintroduced by reading it
+ * carelessly.
+ *
+ * `hasMore` is what ends the loop, so the read is exhausted rather than assumed
+ * to fit. A page that cannot be understood ends it as a REFUSAL — `undefined`
+ * rather than what was collected so far — because a short list here is
+ * indistinguishable from a small site.
+ */
+export async function registeredCollectionSlugs(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
+): Promise<readonly string[] | undefined> {
+  const slugs: string[] = [];
+
+  // The row count the first page reported, so a population that CHANGED while
+  // this walked is refused rather than partially read. The listing pages by
+  // offset, so deleting a row the walk has already passed shifts everything
+  // behind it back and the next page starts one row late — the row that crossed
+  // the boundary is never seen. It gets no scopes, completion is judged against
+  // a list missing it, and health reports the index whole while that
+  // collection's documents are unindexed. That is the confident-zero this
+  // enumeration exists to remove, arriving through the paging.
+  //
+  // The service offers no cursor, only `page`/`limit`, so a keyset walk is not
+  // available here. Comparing the total is what IS available, and it catches
+  // the deletion this fails on. It does not catch a delete and a create in the
+  // same window, which leaves the count unchanged — stated rather than implied,
+  // because a fence that reads as complete is worse than one with a named edge.
+  let expected: number | undefined;
+
+  for (let page = 1; ; page += 1) {
+    const listed: unknown = await ctx.services.collections.listCollections(
+      // Ordered so the pages partition the rows: an unordered paged read has no
+      // defined order between pages, so a slug can appear twice or not at all.
+      { page, limit: REGISTRY_PAGE_SIZE, sortBy: "slug", sortOrder: "asc" },
+      // A sweep acts as nobody, and listing which collections exist is not the
+      // privileged part.
+      undefined as never
+    );
+
+    const rows = (listed as { data?: unknown }).data;
+    const pagination = (
+      listed as {
+        pagination?: { hasMore?: unknown; total?: unknown };
+      }
+    ).pagination;
+    if (
+      !Array.isArray(rows) ||
+      typeof pagination?.hasMore !== "boolean" ||
+      typeof pagination.total !== "number"
+    ) {
+      return undefined;
+    }
+    expected ??= pagination.total;
+    if (pagination.total !== expected) return undefined;
+
+    for (const row of rows) {
+      const slug = (row as { slug?: unknown }).slug;
+      // A row whose slug cannot be read is a collection this cannot enumerate,
+      // and dropping it silently is the same defect as a short page: its scopes
+      // are never created, so completeness is judged against a list missing it
+      // and reports the index whole while that collection's content is
+      // unindexed. Refused rather than skipped, for the reason every other
+      // unreadable input here is.
+      if (typeof slug !== "string" || slug.length === 0) return undefined;
+      slugs.push(slug);
+    }
+
+    if (!pagination.hasMore) return slugs;
+  }
+}
+
+function installContext(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  opts: PageBuilderOptions
+): BackfillHost {
+  return {
+    /*
+     * Imported at CALL time, not at module scope, for the reason the preview
+     * reader above gives: this entry is isomorphic and reachable from a browser
+     * bundle, and `nextly/runtime` aggregates the request lifecycle — its graph
+     * reaches `fs`, `crypto`, `module`, `async_hooks` and more, none of which a
+     * browser can resolve or run. A static import puts all of it in the module
+     * graph of every consumer that imports so much as `isBlocksField` from the
+     * package root.
+     *
+     * Resolved per pass either way. `requireNextly` refuses until services are
+     * registered and boot migrations have settled, which is exactly the guard a
+     * job wants: a pass that ran too early fails and is re-queued rather than
+     * reading a database whose schema is unverified.
+     */
+    nextly: async () => (await import("nextly/runtime")).requireNextly(),
+    // The LIVE registry, not the configured list. `class-usage-hook` opens by
+    // saying the set of collections is not known when a plugin is wired — which
+    // is why the write path registers on the wildcard — because the Schema
+    // Builder creates collections at runtime and those exist only here. A
+    // backfill reading the configured set would walk a narrower population than
+    // the hooks maintain while judging readiness against that same short list.
+    //
+    // A superset rather than a different set: code-first collections are synced
+    // into the registry with `source: "code"`, so nothing declared is lost.
+    //
+    // `undefined` when the registry cannot be read, which the enumeration
+    // treats as a refusal rather than as a site with nothing to index.
+    collectionSlugs: () => registeredCollectionSlugs(ctx),
+    // The REGISTRY record, which is what carries the resolved fields and the
+    // draft split — the declared config alone answers neither after a rename.
+    // No request context: a sweep acts as nobody, and reading a collection's
+    // own configuration is not the privileged part.
+    resolveCollection: slug =>
+      ctx.services.collections.getCollection(slug, undefined as never),
+    hasDrafts: async collection =>
+      (await resolvedCollectionDraftSplit(resolvedCollectionView(collection)))
+        .eligible,
+    singlesHoldBlocks: () => singlesHoldBlocks(ctx),
+    locales: () =>
+      ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+    // The SAME bounds the renderer draws under, for the reason the write path
+    // reads them per call: an index derived under different ones records a
+    // different document than the page serves.
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    // RESOLVED slugs, not the declared ones. An integrator may rename any of
+    // the three, and a pass holding a literal would write to a table that does
+    // not exist while reporting the scope backfilled.
+    slugs: () => ({
+      classIndex:
+        ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ?? CLASS_USAGE_INDEX_SLUG,
+      componentIndex:
+        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+        COMPONENT_USAGE_INDEX_SLUG,
+      backfillState:
+        ctx.self.collections[USAGE_BACKFILL_STATE_SLUG] ??
+        USAGE_BACKFILL_STATE_SLUG,
+    }),
+  };
+}
+
 export const pageBuilder = (opts: PageBuilderOptions = {}) => {
+  /**
+   * The installed context, published by `init` for the backfill job to read.
+   *
+   * `contributes` is evaluated when the plugin is DEFINED and a job handler
+   * runs long afterwards, so the two cannot share a value through an argument.
+   * A holder is what bridges them, and it is safe in the one direction it is
+   * used: nothing reads it until a handler runs, and a handler runs only after
+   * the runner exists, which is after `init`.
+   *
+   * Deliberately not a captured Direct API. `requireNextly` refuses until
+   * services are registered and boot migrations have settled, so resolving it
+   * at definition time would throw during config; the holder stores the CONTEXT
+   * and every pass resolves the API itself.
+   */
+  let installed: BackfillHost | null = null;
+
+  /**
+   * The installed context, or a refusal naming why it is missing.
+   *
+   * Throwing beats defaulting here. Every plausible default is a claim about a
+   * site this has not read — no collections, no locales, the declared slugs —
+   * and each of those reports the backfill finished on a site it never looked
+   * at. A refusal fails the pass, and the sweep is re-queued.
+   */
+  const requireInstalled = (): BackfillHost => {
+    if (installed === null) {
+      throw new Error(
+        "[page-builder] the usage backfill ran before the plugin was installed, so it has no configuration to enumerate"
+      );
+    }
+    return installed;
+  };
   // Resolved once, with no stored tier: at config time there is no database to
   // read, so what the factory can wire into the validator and the canvas is
   // the defaults tier. The stored tier reaches the published route through
@@ -479,6 +812,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
     // because the factory is memoized for the boot and clears only on its
     // first resolution.
     init: ctx => {
+      installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
       // Class-usage maintenance. Registered here rather than beside the
@@ -542,7 +876,30 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // reached via `ctx.services.plugins`.
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
+        // The index-wide facts behind "used on N pages", bound to the
+        // installation. Offered as a service because answering needs the
+        // installed context — which collections the registry holds, which
+        // generation the index was derived under — and nothing outside this
+        // plugin can assemble those. Without it a finished backfill changes
+        // nothing anybody can observe: every consumer takes the conservative
+        // branch and the answer stays a floor for ever.
+        [USAGE_HEALTH_SERVICE]: () => usageHealthService(requireInstalled),
       },
+      // The backfill sweep. Contributed unconditionally beside the index it
+      // fills: the work is owed from the moment this plugin meets existing
+      // content, and no request or hook ever becomes the moment to enqueue it.
+      //
+      // The deps are resolved through the holder on every pass rather than
+      // captured, so a handler that somehow ran before `init` refuses with a
+      // named reason instead of walking a half-built configuration.
+      jobs: [
+        usageBackfillJob({
+          scopes: async () => backfillScopes(requireInstalled()),
+          state: () => usageBackfillDeps(requireInstalled()).state(),
+          rebuild: scope =>
+            usageBackfillDeps(requireInstalled()).rebuild(scope),
+        }),
+      ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
       // to it without a first-run branch, exactly as the site style single is
@@ -562,6 +919,12 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // The backfill's progress. Contributed beside the indexes it fills,
+        // because an index whose write hooks only maintain it going FORWARD is
+        // empty for every document that already existed — and an empty index
+        // answers "used by nothing" for every component, which is the answer a
+        // delete acts on.
+        usageBackfillStateCollection(),
       ],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated

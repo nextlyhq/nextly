@@ -242,5 +242,16 @@ export interface GroupedUsageReader {
   (args: {
     where: Record<string, { equals: string }>;
     groupBy: string;
-  }): Promise<{ bucketCount: number; truncated: boolean }>;
+  }): Promise<{
+    /**
+     * The distinct values of the grouped column — the KEYS, not a count.
+     *
+     * A count alone was enough while every bucket was a document. Once one
+     * index spans several collections a document is a (collection, id) pair,
+     * and counting it needs the collections enumerated first so each can be
+     * grouped on its own. `null` is a row whose grouped column held nothing.
+     */
+    buckets: readonly (string | null)[];
+    truncated: boolean;
+  }>;
 }

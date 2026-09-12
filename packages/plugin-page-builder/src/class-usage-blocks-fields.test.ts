@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import { blocksFieldSurvey, blocksFieldsOf } from "./class-usage-blocks-fields";
 
 describe("finding the blocks fields on a collection", () => {
   it("returns the blocks fields and ignores every other type", () => {
@@ -336,5 +336,162 @@ describe("a presentational group with a very large field list", () => {
     expect(blocksFieldsOf({ fields: [wide] })).toEqual([
       { name: "content", localized: false },
     ]);
+  });
+});
+
+/**
+ * What the collection declares that this index cannot reach.
+ *
+ * Excluding a nested blocks field is deliberate and stays; the defect was that
+ * it was excluded SILENTLY, so a collection whose only blocks field is nested
+ * contributed no scope, "every scope walked" was vacuously true, and health
+ * reported an index that had never seen those references as exact.
+ */
+describe("noticing a blocks field this index cannot address", () => {
+  it("reports a named group's blocks field as unaddressable, and does not enumerate it", () => {
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "text", name: "title" },
+        {
+          type: "group",
+          name: "hero",
+          fields: [{ type: "blocks", name: "content" }],
+        },
+      ],
+    });
+
+    // Both halves: still excluded from the scopes, and no longer silent.
+    expect(survey.addressable).toEqual([]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("reports it even when an addressable field sits beside it", () => {
+    // The case a "does this collection have any scopes" check cannot catch: the
+    // collection DOES get scopes, walks them, and the nested field is still
+    // never indexed.
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "blocks", name: "body" },
+        {
+          type: "group",
+          name: "hero",
+          fields: [{ type: "blocks", name: "content" }],
+        },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([{ name: "body", localized: false }]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("finds one nested arbitrarily deep, through a container of any type", () => {
+    // Asked structurally — any container of declarations — rather than by
+    // listing type names, so a repeater or a container this package has not met
+    // is noticed too.
+    const survey = blocksFieldSurvey({
+      fields: [
+        {
+          type: "repeater",
+          name: "rows",
+          fields: [
+            {
+              type: "group",
+              name: "inner",
+              fields: [{ type: "blocks", name: "c" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("reports a field-group REFERENCE as unaddressable, since it may hide one", () => {
+    /*
+     * A `fieldGroup` field carries only the slug it points at — the definition
+     * lives elsewhere and there is no inline `fields` array to descend into. So
+     * a blocks field inside that definition was reported as neither a scope nor
+     * unreachable, which is the vacuous completeness this survey exists to stop.
+     *
+     * The plugin context publishes no field-group registry, so it cannot be
+     * resolved from here and is treated as possibly holding blocks.
+     */
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "text", name: "title" },
+        { type: "fieldGroup", name: "seo", fieldGroup: "seo" },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("reports a component REFERENCE the same way", () => {
+    const survey = blocksFieldSurvey({
+      fields: [{ type: "component", name: "hero", component: "hero" }],
+    });
+
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("CONTROL: an ordinary field is not mistaken for a reference", () => {
+    // Without this, treating every unrecognised type as unresolvable would mark
+    // a text field unreachable and withhold completeness from every site.
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "text", name: "title" },
+        { type: "number", name: "n" },
+        { type: "blocks", name: "body" },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([{ name: "body", localized: false }]);
+    expect(survey.unaddressable).toBe(false);
+  });
+
+  it("CONTROL: a presentational group's blocks field is addressable, not unreachable", () => {
+    // Without this, reporting every group as unaddressable would satisfy the
+    // cases above and withhold completeness from every site that uses a layout
+    // group — completeness that could then never be earned.
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "group", fields: [{ type: "blocks", name: "content" }] },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([{ name: "content", localized: false }]);
+    expect(survey.unaddressable).toBe(false);
+  });
+
+  it("CONTROL: a collection with no nested blocks field reports none", () => {
+    const survey = blocksFieldSurvey({
+      fields: [
+        { type: "blocks", name: "body" },
+        { type: "group", name: "meta", fields: [{ type: "text", name: "x" }] },
+      ],
+    });
+
+    expect(survey.addressable).toEqual([{ name: "body", localized: false }]);
+    expect(survey.unaddressable).toBe(false);
+  });
+
+  it("agrees with blocksFieldsOf, which is derived from it", () => {
+    const collection = {
+      fields: [
+        { type: "blocks", name: "body" },
+        {
+          type: "group",
+          name: "hero",
+          fields: [{ type: "blocks", name: "c" }],
+        },
+      ],
+    };
+
+    expect(blocksFieldsOf(collection)).toEqual(
+      blocksFieldSurvey(collection).addressable
+    );
   });
 });
