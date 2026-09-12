@@ -3374,6 +3374,37 @@ describe("composedRootTypes", () => {
     expect(walks).toBe(plain + 1);
   });
 
+  it("answers nothing, rather than throwing, for a stored node whose own fields throw", () => {
+    // The resolver is the oracle here too, and it SURVIVES this: a definition
+    // carrying a throwing accessor — which an in-process host can supply, as
+    // the neighbouring test's counting getter shows — composes without
+    // raising. This query read the same fields with no boundary, so the one
+    // caller that cannot afford to raise, the palette building its catalogue,
+    // took the whole panel down over a definition the canvas draws.
+    const throwing = (): BlockNode => {
+      const bad: Record<string, unknown> = { id: "d1", version: 1, props: {} };
+      Object.defineProperty(bad, "type", {
+        enumerable: true,
+        get: () => {
+          throw new Error("unreadable");
+        },
+      });
+      return bad as unknown as BlockNode;
+    };
+    const definitions = defs({ bad: component([throwing()]) });
+
+    // In a definition the query follows into.
+    const viaInstance = component([instance("i1", "bad")]);
+    expect(() =>
+      resolveComponentInstances(page([instance("p1", "bad")]), definitions)
+    ).not.toThrow();
+    expect(composedRootTypes(viaInstance, definitions)).toBeUndefined();
+
+    // And at the document's own root, which no per-definition boundary covers.
+    const atRoot = component([throwing()]);
+    expect(composedRootTypes(atRoot, definitions)).toBeUndefined();
+  });
+
   it("reads each definition once, however many roots point at it", () => {
     // What makes the query cheap where the resolver is not: a definition is
     // read once per query rather than cloned once per instance, so a library
