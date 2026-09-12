@@ -10,7 +10,7 @@ import type {
   CollectionEntry,
   CollectionService,
 } from "../services/collections/collection-service";
-import { listRoleSlugsForUserStrict } from "../services/lib/permissions";
+import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
@@ -135,34 +135,20 @@ export interface ServiceOptsDeps {
 }
 
 /**
- * The STRICT resolver, so a lookup that could not run refuses the operation.
+ * The resolver that refuses rather than answering with an empty set.
  *
- * `listRoleSlugsForUser` degrades a failed query to an empty set, which is the
- * safe direction for a rule that grants on a role and the wrong one for a rule
- * that withholds on one: `user.role !== "suspended"` admits a caller whose
- * roles the database declined to answer for. That is the same empty-role grant
- * this whole change exists to remove, arriving by a different door. Its strict
- * sibling exists for exactly this and says so in its own documentation.
+ * A role set nobody could read is not a role set. The swallowing resolver
+ * returns `[]` on a failed query, which is the safe direction for a rule that
+ * GRANTS on a role and the wrong one for a rule that WITHHOLDS on one:
+ * `user.role !== "suspended"` admits a caller whose roles the database
+ * declined to answer for, and no caller downstream can tell that empty set
+ * from a user who genuinely holds no roles.
  *
- * A throw here fails the plugin's call. That is the correct direction: an
+ * A throw here fails the plugin's call, which is the correct direction: an
  * access decision taken on roles nobody could read is not a decision.
  */
 const REAL_DEPS: ServiceOptsDeps = {
-  listRoleSlugs: async userId => {
-    try {
-      return await listRoleSlugsForUserStrict(userId);
-    } catch (cause) {
-      // The refusal stands; only its SHAPE changes. The strict resolver
-      // propagates the driver's own exception by design, and everything a
-      // plugin reaches through this facade answers in the typed envelope, so
-      // letting a raw database error through would hand a plugin route an
-      // error it has no way to read and no `code` to branch on.
-      throw NextlyError.internal({
-        ...(cause instanceof Error ? { cause } : {}),
-        logContext: { reason: "service-opts-roles-unreadable", userId },
-      });
-    }
-  },
+  listRoleSlugs: listRoleSlugsForUserOrRefuse,
 };
 
 /**

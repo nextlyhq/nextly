@@ -58,11 +58,18 @@ Every cache here is filled from an asynchronous read, so a lookup that began
 before a role changed could complete afterwards and put the old answer back into
 a cache that had just been cleared.
 
-A plugin call whose caller's roles could not be read is refused rather than run
-as a caller with none, with a typed error rather than the driver's own. The resolver behind it degraded a failed query to an
-empty set, which is safe for a rule that grants on a role and wrong for one that
-withholds on it: `user.role !== "suspended"` admitted a caller the database
-declined to answer for.
+A call whose caller's roles could not be read is refused rather than run as a
+caller with none, with a typed error rather than the driver's own. The resolver
+behind it degraded a failed query to an empty set, which is safe for a rule that
+grants on a role and wrong for one that withholds on it: `user.role !==
+"suspended"` admitted a caller the database declined to answer for.
+
+This covers an API KEY's roles as well as a plugin call's. A read-only or
+full-access key resolves its owner's roles, and those populate the scope every
+later role rule reads directly, so a failed lookup arriving as an empty set was
+indistinguishable there from an owner who holds no roles. Both paths now ask one
+resolver that refuses, rather than each deciding for itself what an unanswerable
+question means.
 
 Losing the Super Admin role now takes effect at once. The cached answer to
 "is this user a super admin" was not cleared when roles changed, so a demoted

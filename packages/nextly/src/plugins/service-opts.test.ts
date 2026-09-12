@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NextlyError } from "../errors/nextly-error";
 import {
   listRoleSlugsForUser,
-  listRoleSlugsForUserStrict,
+  listRoleSlugsForUserOrRefuse,
 } from "../services/lib/permissions";
 
 import {
@@ -16,8 +16,14 @@ import {
 // they do when the question cannot be asked, which is the whole point here.
 vi.mock("../services/lib/permissions", () => ({
   listRoleSlugsForUser: vi.fn(async () => [] as string[]),
-  listRoleSlugsForUserStrict: vi.fn(async () => {
-    throw new Error("the roles query did not run");
+  listRoleSlugsForUserOrRefuse: vi.fn(async () => {
+    // Its real contract: the strict lookup's failure, in the typed envelope
+    // and still carrying the cause. Proven against the real function in
+    // `services/lib/roles-or-refuse.test.ts`.
+    throw NextlyError.internal({
+      cause: new Error("the roles query did not run"),
+      logContext: { reason: "roles-unreadable", userId: "u1" },
+    });
   }),
 }));
 
@@ -174,15 +180,15 @@ describe("resolveServiceOpts", () => {
     );
   });
 
-  it("asks the strict resolver and not the one that swallows", async () => {
+  it("asks the refusing resolver and not the one that swallows", async () => {
     // The control on the case above, which a facade wired to EITHER resolver
     // could pass if both threw. This says which door it went through.
     vi.mocked(listRoleSlugsForUser).mockClear();
-    vi.mocked(listRoleSlugsForUserStrict).mockClear();
+    vi.mocked(listRoleSlugsForUserOrRefuse).mockClear();
     await expect(
       resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
     ).rejects.toThrow();
-    expect(vi.mocked(listRoleSlugsForUserStrict)).toHaveBeenCalledWith("u1");
+    expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith("u1");
     expect(vi.mocked(listRoleSlugsForUser)).not.toHaveBeenCalled();
   });
 

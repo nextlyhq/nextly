@@ -22,6 +22,7 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
+import { NextlyError } from "../../errors/nextly-error";
 import { getAuthLogger } from "../../lib/logger";
 import type { Logger } from "../shared";
 
@@ -1217,6 +1218,36 @@ export async function listRoleSlugsForUser(
       error: String(error),
     });
     return [];
+  }
+}
+
+/**
+ * The strict lookup, refusing in the shape every caller can already read.
+ *
+ * Two places need a role set they can trust — the plugin facade and an API
+ * key's own roles — and both need the refusal to arrive as a typed error
+ * rather than as the driver's exception, because everything downstream of them
+ * answers in the typed envelope and a raw database error carries no `code` to
+ * branch on.
+ *
+ * Written once because it is one question. Asked separately, the two would
+ * drift, and a caller left on the swallowing resolver is invisible: an empty
+ * role set is a perfectly ordinary answer, so nothing downstream can tell it
+ * from a lookup that failed.
+ *
+ * @throws NextlyError when the roles cannot be read.
+ */
+export async function listRoleSlugsForUserOrRefuse(
+  userId: string,
+  executor?: unknown
+): Promise<string[]> {
+  try {
+    return await listRoleSlugsForUserStrict(userId, executor);
+  } catch (cause) {
+    throw NextlyError.internal({
+      ...(cause instanceof Error ? { cause } : {}),
+      logContext: { reason: "roles-unreadable", userId },
+    });
   }
 }
 

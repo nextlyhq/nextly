@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import {
   isSuperAdmin,
-  listRoleSlugsForUser,
+  listRoleSlugsForUserOrRefuse,
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import {
@@ -15,7 +15,7 @@ import {
 
 // Mock the RBAC resolvers — they read a global db singleton (not the test DB).
 // We must mock them so tests do not depend on the runtime database connection.
-// The path the subject imports: `api-key-service` reads `listRoleSlugsForUser`
+// The path the subject imports: `api-key-service` reads `listRoleSlugsForUserOrRefuse`
 // and `isSuperAdmin` from `services/lib/permissions`, and a factory registered
 // against any other specifier leaves the real ones in place.
 //
@@ -34,7 +34,7 @@ vi.mock("../../../services/lib/permissions", async importOriginal => ({
     typeof import("../../../services/lib/permissions")
   >()),
   isSuperAdmin: vi.fn(),
-  listRoleSlugsForUser: vi.fn(),
+  listRoleSlugsForUserOrRefuse: vi.fn(),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -738,8 +738,10 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
     // ── read-only ──────────────────────────────────────────────────────────
 
     describe("read-only token type", () => {
-      it("should delegate to listRoleSlugsForUser and return the creator's role slugs", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce(["editor"]);
+      it("should delegate to listRoleSlugsForUserOrRefuse and return the creator's role slugs", async () => {
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
+          "editor",
+        ]);
 
         const roles = await service.resolveApiKeyRoles(
           "read-only",
@@ -747,12 +749,42 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
           userId
         );
 
-        expect(vi.mocked(listRoleSlugsForUser)).toHaveBeenCalledWith(userId);
+        expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith(
+          userId
+        );
         expect(roles).toEqual(["editor"]);
       });
 
+      it("refuses when the roles could not be read, rather than answering none", async () => {
+        // A key's roles populate `authenticatedScope.roles`, which a stored
+        // role rule reads directly. An unreadable lookup arriving as `[]` is
+        // indistinguishable there from an owner who holds no roles, so a rule
+        // that WITHHOLDS on a role authorizes the very request it exists to
+        // refuse. The refusal has to survive this call rather than be
+        // flattened into an answer.
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockRejectedValueOnce(
+          new Error("roles unreadable")
+        );
+
+        await expect(
+          service.resolveApiKeyRoles("read-only", null, userId)
+        ).rejects.toThrow("roles unreadable");
+      });
+
+      it("still answers when the lookup works, which is what makes that a refusal", async () => {
+        // The control. A method that threw unconditionally would satisfy the
+        // case above, and would refuse every key in the install.
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
+          "viewer",
+        ]);
+
+        await expect(
+          service.resolveApiKeyRoles("read-only", null, userId)
+        ).resolves.toEqual(["viewer"]);
+      });
+
       it("should return multiple slugs when the creator has multiple roles", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce([
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
           "editor",
           "viewer",
         ]);
@@ -770,8 +802,10 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
     // ── full-access ────────────────────────────────────────────────────────
 
     describe("full-access token type", () => {
-      it("should delegate to listRoleSlugsForUser and return the creator's role slugs", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce(["super-admin"]);
+      it("should delegate to listRoleSlugsForUserOrRefuse and return the creator's role slugs", async () => {
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
+          "super-admin",
+        ]);
 
         const roles = await service.resolveApiKeyRoles(
           "full-access",
@@ -779,12 +813,14 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
           userId
         );
 
-        expect(vi.mocked(listRoleSlugsForUser)).toHaveBeenCalledWith(userId);
+        expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith(
+          userId
+        );
         expect(roles).toEqual(["super-admin"]);
       });
 
       it("should return empty array when creator has no roles", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce([]);
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([]);
 
         const roles = await service.resolveApiKeyRoles(
           "full-access",

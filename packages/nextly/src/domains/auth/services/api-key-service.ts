@@ -68,7 +68,7 @@ import {
 import { BaseService } from "../../../services/base-service";
 import {
   isSuperAdmin,
-  listRoleSlugsForUser,
+  listRoleSlugsForUserOrRefuse,
   rbacRevision,
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
@@ -844,7 +844,9 @@ export class ApiKeyService extends BaseService {
    * - **role-based** — `[selectedRole.slug]`. Single lookup by the assigned `roleId`.
    *   If the role has been deleted (`roleId === null`), returns `[]`.
    * - **full-access / read-only** — creator's full assigned role slugs, resolved
-   *   via `listRoleSlugsForUser()`. Same set the user would see in a session context.
+   *   via `listRoleSlugsForUserOrRefuse()`. Same set the user would see in a
+   *   session context, and a lookup that could not run refuses instead of
+   *   answering with none.
    *
    * @param tokenType - The key's token type
    * @param roleId - The assigned role ID (only relevant for "role-based" keys)
@@ -869,7 +871,14 @@ export class ApiKeyService extends BaseService {
         : [];
     }
 
-    return listRoleSlugsForUser(userId);
+    // The refusing resolver, not the swallowing one. A key's roles populate
+    // `authenticatedScope.roles`, which every later role rule reads directly,
+    // so a failed lookup arriving as `[]` is indistinguishable from an owner
+    // who holds no roles — and a rule that WITHHOLDS on a role
+    // (`!roles.includes("suspended")`) then authorizes the request it exists
+    // to refuse. Failing the request is the correct direction: a decision taken
+    // on roles nobody could read is not a decision.
+    return listRoleSlugsForUserOrRefuse(userId);
   }
 
   private async resolveRolePermissionRows(
