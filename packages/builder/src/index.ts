@@ -281,6 +281,28 @@ export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";
 export { lockStateOf, type LockState } from "./inspector";
 
 /**
+ * @experimental What a selected component instance exposes for editing, and
+ * the ops that set, clear and reset one exposed property.
+ *
+ * From this entry because they are plain functions over a document and the
+ * canvas's definition lookup. An agent asked to "change the header's title on
+ * this page" needs the same rows the inspector draws — read back from the
+ * resolver, so a row shows what the page shows — and the same override write,
+ * which keeps every other override and omits the record when the last one
+ * goes. A second implementation would drop `componentId` on its first edit.
+ */
+export {
+  EDITABLE_EXPOSED_TYPES,
+  inspectInstance,
+  overridesPatch,
+  resetOverrideOp,
+  setOverrideOp,
+  type ExposedRow,
+  type InstanceInspection,
+  type OrphanedOverride,
+} from "./instance-inspector";
+
+/**
  * @experimental Duplicating a block: the copy, and where it goes.
  *
  * From this entry because it is a plain function over a document. An agent

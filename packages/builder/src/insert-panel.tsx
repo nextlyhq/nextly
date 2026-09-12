@@ -689,7 +689,7 @@ export function InsertPanel({
   const catalog = React.useMemo<InsertEntry[]>(
     () => [
       ...catalogFrom(palette),
-      ...patternEntriesFrom(patterns ?? [], source),
+      ...patternEntriesFrom(patterns ?? [], source, componentDefinitions),
       ...componentEntriesFrom(
         components ?? [],
         componentDefinitions ?? NO_DEFINITIONS
@@ -878,7 +878,12 @@ export function InsertPanel({
       editor.document,
       { id: entry.patternId, document: entry.document },
       point.at,
-      source
+      source,
+      // The same lookup the catalogue judged the tile's roots by, so the offer
+      // and the mutation resolve one forest. Without it the planner reads a
+      // nested instance as its own unregistered type: unrestricted under a
+      // parent rule, and barred by any slot naming what it admits.
+      componentDefinitions
     );
     // A refusal here means the document moved underneath the panel: the
     // catalogue offers only patterns the planner accepts, judged against the

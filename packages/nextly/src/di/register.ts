@@ -94,6 +94,7 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
+import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -107,6 +108,7 @@ import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import { openBootMigrationsGate } from "../init/boot-migrations-gate";
+import { unwrittenSlugs } from "../init/sync-outcome";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -1878,6 +1880,32 @@ function registerCodeDefinedAccess(
   }
 }
 
+/**
+ * Replace one kind's deferral set from a boot sync that actually RAN.
+ *
+ * 🔴 Called only after the sync resolved, never from the reset that precedes
+ * it. `resetWidgetRegistries` runs before any metadata has been synced, so
+ * clearing there would publish "nothing is withheld" on the strength of work
+ * that has not happened -- and the sync can then fail and be caught, leaving
+ * the registry as stale as the previous reload found it while the set says
+ * otherwise. Replacing it HERE means a previous boot's refusal is cleared by
+ * the pass that earned the right to clear it, and retained when the sync
+ * throws, because this line is never reached.
+ *
+ * The set is the slugs whose registry WRITE did not land -- not everything the
+ * sync reported an error for. A slug that errored AFTER its row was written
+ * has current metadata, and withholding its source would hide a working card.
+ */
+async function publishBootDeferrals(
+  kind: DeferrableEntityKind,
+  syncResult: unknown
+): Promise<void> {
+  const { setDeferredEntities } = await import(
+    "../domains/widgets/deferred-entities"
+  );
+  setDeferredEntities(kind, unwrittenSlugs(syncResult));
+}
+
 async function syncCodeFirstCollections(
   adapter: DrizzleAdapter,
   logger: Logger,
@@ -1964,6 +1992,11 @@ async function syncCodeFirstCollections(
   logger.info?.(
     `Collections registered: ${syncResult.created.length} created, ${syncResult.updated.length} updated, ${syncResult.unchanged.length} unchanged`
   );
+
+  // This boot has now spoken for the collections: whatever a previous boot's
+  // reload refused is either fixed or reported here, so its set is replaced
+  // rather than inherited.
+  await publishBootDeferrals("collection", syncResult);
 
   // On a fresh database the dynamic_collections table hasn't been created
   // by migrations yet, so every sync fails with "does not exist". That's
@@ -2527,12 +2560,16 @@ async function syncCodeFirstSingles(
     logger.info?.(
       `Singles registered: ${singleSyncResult.created.length} created, ${singleSyncResult.updated.length} updated, ${singleSyncResult.unchanged.length} unchanged`
     );
+    // The singles' half of the same statement, on the path where their sync
+    // actually ran.
+    await publishBootDeferrals("single", singleSyncResult);
     // Expose the live code-first snapshot (for function/structured defaults)
-    // only for singles that synced: a failed slug's serialized metadata did not
-    // advance, so it is kept off the snapshot and falls back to those fields.
-    const failedSingleSlugs = new Set(
-      singleSyncResult.errors.map(entry => entry.slug)
-    );
+    // only for singles that synced. Narrowed to the writes that did NOT land:
+    // a slug the sync pushed onto `created` or `updated` before its permission
+    // seeding threw appears in `errors` too, and its row is current -- keeping
+    // its PRIOR snapshot there would pair new fields with stale metadata, the
+    // very thing this option exists to prevent.
+    const failedSingleSlugs = new Set(unwrittenSlugs(singleSyncResult));
     singleRegistry.setCodeFirstSingles(transformedConfig.singles, {
       keepPriorFor: failedSingleSlugs,
     });

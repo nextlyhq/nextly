@@ -16,13 +16,14 @@ import {
   type ComponentLookup,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import type { SavedComponent } from "@nextlyhq/builder";
+import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import { describe, expect, it } from "vitest";
 
 import {
   canEditBlocks,
   documentFrom,
   withoutSelf,
+  withoutSelfPatterns,
   type ComponentGraph,
 } from "./BlocksField";
 
@@ -104,37 +105,47 @@ describe("canEditBlocks", () => {
   });
 });
 
+/**
+ * The fixture builders both `withoutSelf` suites read from.
+ *
+ * At module scope because the two suites ask one question of one graph — which
+ * components a candidate reaches — and a second copy of the builders is a
+ * second definition of what a component, an instance and the walk's inputs ARE.
+ * Only the row shapes stay per suite: one offers components, the other patterns.
+ */
+const instanceOf = (componentId: string, id: string): BlockNode => ({
+  id,
+  type: COMPONENT_INSTANCE_TYPE,
+  version: 1,
+  props: { componentId },
+});
+const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes,
+});
+const text = (id: string): BlockNode => ({
+  id,
+  type: "core/text",
+  version: 1,
+  props: {},
+});
+/** What the walk reads: the canvas's lookup, the site's caps, and whether the library read was whole. */
+const graphOf = (
+  definitions: ComponentLookup,
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  whole = true
+): ComponentGraph => ({ definitions, limits, whole });
+/** A component document being edited, and the form naming its row. */
+const editing: BlockDocument = componentOf([text("own")]);
+const identity = { documentId: "a" };
+
 describe("withoutSelf", () => {
-  const instanceOf = (componentId: string, id: string): BlockNode => ({
-    id,
-    type: COMPONENT_INSTANCE_TYPE,
-    version: 1,
-    props: { componentId },
-  });
-  const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "component",
-    nodes,
-  });
-  const text = (id: string): BlockNode => ({
-    id,
-    type: "core/text",
-    version: 1,
-    props: {},
-  });
   const row = (id: string, document: ComponentDocument): SavedComponent => ({
     id,
     title: id,
     document,
   });
-  const editing: BlockDocument = componentOf([text("own")]);
-  const identity = { documentId: "a" };
-  /** What the walk reads: the canvas's lookup, the site's caps, and whether the library read was whole. */
-  const graphOf = (
-    definitions: ComponentLookup,
-    limits: DocumentLimits = DEFAULT_LIMITS,
-    whole = true
-  ): ComponentGraph => ({ definitions, limits, whole });
 
   it("leaves out the row being edited and every row that reaches it, at any depth", () => {
     const a = row("a", componentOf([text("t")]));
@@ -343,5 +354,100 @@ describe("withoutSelf", () => {
     // One walk of the holder's own forest reads its slots once; a
     // composition would clone them.
     expect(descents).toBe(1);
+  });
+});
+
+describe("withoutSelfPatterns", () => {
+  const patternOf = (id: string, nodes: BlockNode[]): SavedPattern => ({
+    id,
+    title: id,
+    document: {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "pattern",
+      nodes,
+    },
+  });
+
+  it("leaves out a pattern that places the component being edited, and one that reaches it through another", () => {
+    // Saving a placed component as a pattern keeps its instance node, so a
+    // pattern is a second way to copy a component into itself.
+    const lookup: ComponentLookup = new Map([
+      ["a", componentOf([text("t")])],
+      ["b", componentOf([instanceOf("a", "b-a")])],
+      ["far", componentOf([text("f")])],
+    ]);
+    const patterns = [
+      patternOf("direct", [instanceOf("a", "p-a")]),
+      patternOf("indirect", [text("t"), instanceOf("b", "p-b")]),
+      patternOf("blocks", [text("t")]),
+      patternOf("unrelated", [instanceOf("far", "p-f")]),
+    ];
+
+    expect(
+      withoutSelfPatterns(patterns, editing, identity, graphOf(lookup)).map(
+        p => p.id
+      )
+    ).toEqual(["blocks", "unrelated"]);
+  });
+
+  it("leaves out a pattern whose own forest the site's cap could not read whole", () => {
+    // A prefix that names nothing is what an unread pattern looks like too,
+    // so it is left out rather than offered on an answer nobody has.
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const long = patternOf("long", [
+      text("t1"),
+      text("t2"),
+      text("t3"),
+      instanceOf("a", "p-a"),
+    ]);
+
+    expect(
+      withoutSelfPatterns(
+        [long],
+        editing,
+        identity,
+        graphOf(lookup, {
+          ...DEFAULT_LIMITS,
+          maxNodes: 2,
+        })
+      ).map(p => p.id)
+    ).toEqual([]);
+  });
+
+  it("offers every pattern when the document being edited is not a component, or the form names no row", () => {
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const patterns = [patternOf("direct", [instanceOf("a", "p-a")])];
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [text("own")],
+    };
+
+    expect(withoutSelfPatterns(patterns, page, identity, graphOf(lookup))).toBe(
+      patterns
+    );
+    expect(withoutSelfPatterns(patterns, editing, null, graphOf(lookup))).toBe(
+      patterns
+    );
+  });
+
+  it("keeps the same list when nothing was removed, so the catalogue memo keeps its key", () => {
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const patterns = [patternOf("blocks", [text("t")])];
+
+    expect(
+      withoutSelfPatterns(patterns, editing, identity, graphOf(lookup))
+    ).toBe(patterns);
+  });
+
+  it("offers a pattern carrying no document at all", () => {
+    // A row whose blocks field was never filled is a legal stored row; it
+    // names no component, and the catalogue skips it on its own.
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const empty: SavedPattern = { id: "empty", title: "Empty" };
+
+    expect(
+      withoutSelfPatterns([empty], editing, identity, graphOf(lookup))
+    ).toEqual([empty]);
   });
 });

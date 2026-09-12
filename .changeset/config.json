@@ -24,6 +24,7 @@
       "@nextlyhq/storage-uploadthing",
       "@nextlyhq/storage-vercel-blob",
       "@nextlyhq/plugin-form-builder",
+      "@nextlyhq/plugin-mcp",
       "@nextlyhq/plugin-page-builder",
       "@nextlyhq/plugin-seo",
       "@nextlyhq/plugin-sdk",
