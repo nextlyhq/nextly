@@ -75,12 +75,11 @@ export function generateMysqlSQL(op: Operation): string {
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":
-      // `DROP FOREIGN KEY`, not `DROP CONSTRAINT`: the latter is accepted
-      // only from 8.0.19 and this has to work on the oldest supported
-      // server. The add re-checks existing rows, and with
-      // `foreign_key_checks` on the server rebuilds the table to do it —
-      // so this is not a cheap statement on a large one.
-      return changeForeignKeyActionSql(op, q, "DROP FOREIGN KEY");
+      // The add re-checks existing rows, and with `foreign_key_checks` on
+      // the server rebuilds the table to do it — so this is not a cheap
+      // statement on a large one. How each dialect spells the drop is
+      // decided once, beside the statements themselves.
+      return changeForeignKeyActionSql(op, "mysql");
     default:
       return unsupportedOperation("generateMysqlSQL", op);
   }

@@ -38,7 +38,12 @@ import {
   isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { generateSQL } from "../../schema/pipeline/sql-templates/index";
+import {
+  addForeignKeySql,
+  changeForeignKeyActionStatements,
+  dropForeignKeySql,
+  generateSQL,
+} from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
   usesJunctionTable,
@@ -153,6 +158,30 @@ function refuseAmbiguousRename(args: {
     },
   });
 }
+
+/**
+ * The statements one relationship's referential-action edit needs, and where
+ * they belong relative to the column work in the same save.
+ *
+ * Placement travels WITH the statements because only the code that resolved
+ * the actions knows which side is safe, and a caller that had to re-derive
+ * that would be answering the same question a second time.
+ */
+interface ReferentialActionChange {
+  statements: string[];
+  /**
+   * True when the key must be installed AFTER the columns move — the case
+   * where it becomes `SET NULL` and the column is still `NOT NULL` until the
+   * column work relaxes it.
+   */
+  emitAfterColumnWork: boolean;
+}
+
+/** Nothing to do: shared so the several early exits cannot allocate differently. */
+const NO_REFERENTIAL_ACTION_CHANGE: ReferentialActionChange = {
+  statements: [],
+  emitAfterColumnWork: false,
+};
 
 export class DynamicCollectionSchemaService {
   private validationService: DynamicCollectionValidationService;
@@ -1328,24 +1357,35 @@ ${allColumnDefs.join(",\n")}
 
     // Find modified fields
     // What a relationship does when the row it points at is deleted, or its
-    // key updated. Its own pass, ahead of the column work and outside the
-    // column loop, for two reasons that both bit: an action is a property of
-    // the CONSTRAINT, so an edit to one changes no column and the loop below
-    // — which runs only for a field whose column moved — never sees it; and
-    // that loop is skipped wholesale on SQLite, which is the one dialect that
-    // has to REFUSE this edit rather than ignore it.
+    // key updated. Its own pass, OUTSIDE the column loop, for two reasons that
+    // both bit: an action is a property of the CONSTRAINT, so an edit to one
+    // changes no column and the loop below — which runs only for a field whose
+    // column moved — never sees it; and that loop is skipped wholesale on
+    // SQLite, which is the one dialect that has to REFUSE this edit rather
+    // than ignore it.
+    //
+    // Split into two, because "outside the loop" does not say which SIDE. A
+    // key becoming `SET NULL` needs its column relaxed first; every other move
+    // needs to happen before the column is tightened. Each change says which
+    // it is.
+    const fkActionsBeforeColumns: string[] = [];
+    const fkActionsAfterColumns: string[] = [];
     for (const field of newFields) {
       const previous = oldFieldMap.get(field.name);
       if (!previous) continue;
-      statements.push(
-        ...this.referentialActionStatements(
-          tableName,
-          toSnakeCase(field.name),
-          previous,
-          field
-        )
+      const change = this.referentialActionStatements(
+        tableName,
+        toSnakeCase(field.name),
+        previous,
+        field,
+        options?.foreignKeysByColumn
       );
+      (change.emitAfterColumnWork
+        ? fkActionsAfterColumns
+        : fkActionsBeforeColumns
+      ).push(...change.statements);
     }
+    statements.push(...fkActionsBeforeColumns);
 
     // Note: SQLite doesn't support ALTER COLUMN - modifications require table rebuild
     // For simplicity, we skip column modifications for SQLite
@@ -1358,7 +1398,28 @@ ${allColumnDefs.join(",\n")}
         // A storage move is handled by the add and remove loops above; altering the column here
         // would target one the table does not have yet, or no longer has.
         if (oldField && this.storageClassChanged(oldField, field)) continue;
-        if (oldField && this.isFieldModified(oldField, field)) {
+        // Requiredness is asked SEPARATELY from `isFieldModified`, because for
+        // one kind of field the two disagree. `getColumnDescriptor` reports a
+        // relationship as nullable whatever its `required` says — the column
+        // it describes is the key's, and a key is described by its constraint
+        // — so a relationship's requiredness toggle left both descriptors
+        // identical, this branch was never entered, and the column stayed as
+        // the CREATE made it. A link turned optional therefore kept a NOT NULL
+        // column while its foreign key moved to `SET NULL`: MySQL rejects that
+        // pairing outright, and PostgreSQL accepts it and fails later, on the
+        // first delete, in production.
+        //
+        // Kept out of `isFieldModified` itself, which answers whether the
+        // column's STORAGE changed and whose `true` drives a type rewrite. The
+        // rewrite is still gated on `columnChanged` below, so a field that
+        // arrives here only because its requiredness moved restates
+        // nullability and nothing else.
+        const requirednessChanged =
+          oldField !== undefined && field.required !== oldField.required;
+        if (
+          oldField &&
+          (this.isFieldModified(oldField, field) || requirednessChanged)
+        ) {
           const alterCol = toSnakeCase(field.name);
           // The descriptor decides the target column, the same answer the comparison above used to
           // decide there was a change at all. Asking a different renderer here is what let a field
@@ -1483,6 +1544,10 @@ ${allColumnDefs.join(",\n")}
       }
     }
 
+    // The keys whose new action is `SET NULL`, now that the columns they sit
+    // on have been relaxed above.
+    statements.push(...fkActionsAfterColumns);
+
     // The junction tables, from the full lists when the caller holds them:
     // the column diff above may have been handed the shared subset of a
     // localized collection, and a junction is not a column.
@@ -1558,11 +1623,14 @@ ${allColumnDefs.join(",\n")}
     tableName: string,
     columnName: string,
     oldField: FieldDefinition,
-    newField: FieldDefinition
-  ): string[] {
-    if (newField.type !== "relationship") return [];
+    newField: FieldDefinition,
+    liveForeignKeys?: ReadonlyMap<string, readonly string[]>
+  ): ReferentialActionChange {
+    if (newField.type !== "relationship") return NO_REFERENTIAL_ACTION_CHANGE;
     const target = newField.options?.target;
-    if (!target || usesJunctionTable(newField)) return [];
+    if (!target || usesJunctionTable(newField)) {
+      return NO_REFERENTIAL_ACTION_CHANGE;
+    }
 
     const actionsOf = (f: FieldDefinition) => ({
       onDelete: this.mapOnDeleteAction(this.relationOnDelete(f)),
@@ -1571,10 +1639,13 @@ ${allColumnDefs.join(",\n")}
     const from = actionsOf(oldField);
     const to = actionsOf(newField);
     if (from.onDelete === to.onDelete && from.onUpdate === to.onUpdate) {
-      return [];
+      return NO_REFERENTIAL_ACTION_CHANGE;
     }
 
-    if (this.dialect === "sqlite") {
+    // Narrowed once, into a local: the refusal below removes SQLite, and the
+    // renderers take only the two dialects that can perform the change.
+    const dialect = this.dialect;
+    if (dialect === "sqlite") {
       // Refused by name, as a foreign-key drop and a unique constraint this
       // dialect cannot enforce already are. The only way to change an action
       // here is to rebuild the table, and doing that silently underneath a
@@ -1603,26 +1674,68 @@ ${allColumnDefs.join(",\n")}
       });
     }
 
-    // Rendered by the shared template, so this path and `migrate:create` emit
-    // the same statements — including the two-statement form both remaining
-    // dialects need to redeclare a constraint under its own name.
-    return [
-      `${generateSQL(
-        {
-          type: "change_foreign_key_action",
-          tableName,
-          constraintName: `fk_${tableName}_${columnName}`,
-          columnName,
-          referencesTable: `dc_${target}`,
-          referencesColumn: "id",
-          fromOnDelete: from.onDelete,
-          fromOnUpdate: from.onUpdate,
-          toOnDelete: to.onDelete,
-          toOnUpdate: to.onUpdate,
-        },
-        this.dialect
-      )};`,
+    const op = {
+      type: "change_foreign_key_action",
+      tableName,
+      constraintName: `fk_${tableName}_${columnName}`,
+      columnName,
+      referencesTable: `dc_${target}`,
+      referencesColumn: "id",
+      fromOnDelete: from.onDelete,
+      fromOnUpdate: from.onUpdate,
+      toOnDelete: to.onDelete,
+      toOnUpdate: to.onUpdate,
+    } as const;
+
+    // WHICH constraint to remove is a fact about the live table, not one this
+    // generator can derive. `fk_<table>_<column>` is only the name THIS service
+    // creates: a key installed under another name is missed, and a column that
+    // carries none at all — reachable by editing a scalar field into a
+    // relationship, which alters the column and installs no constraint — makes
+    // the drop fail and take the add down with it, because neither MySQL nor
+    // this codebase's oldest supported PostgreSQL offers a guarded drop both
+    // dialects spell the same way.
+    //
+    // An undefined map means the CALLER did not look, which leaves this
+    // exactly as it behaved before anything was measured. An empty entry means
+    // the caller looked and found nothing, which is a different answer and is
+    // read as one: install the key, remove nothing.
+    const liveNames =
+      liveForeignKeys === undefined
+        ? [op.constraintName]
+        : (liveForeignKeys.get(columnName) ?? []);
+
+    // Statement by statement rather than as one joined string. What runs this
+    // is `CollectionFileManager.runMigration`, which splits on
+    // `--> statement-breakpoint` and never on `;`, and hands each chunk to a
+    // driver whole — and the MySQL adapter sets `multipleStatements = false`,
+    // so a chunk holding two statements is rejected rather than applied. Each
+    // statement is still rendered by the shared template, so this path and
+    // `migrate:create` cannot spell one differently.
+    const statements = [
+      ...liveNames.map(
+        name => `${dropForeignKeySql(tableName, name, dialect)};`
+      ),
+      `${addForeignKeySql(op, dialect)};`,
     ];
+
+    // WHERE these sit relative to the column work, which is the other half of
+    // the same question. A `SET NULL` action cannot be installed on a `NOT
+    // NULL` column, so a field turning optional must have its column relaxed
+    // FIRST; a field turning required must lose the `SET NULL` key first,
+    // before the column is tightened. MySQL makes getting this wrong
+    // expensive: its DDL auto-commits, so the rejected half leaves the drop
+    // already applied and the migration stopped part-way.
+    //
+    // One predicate covers both directions because the two never overlap:
+    // `relationOnDelete` refuses `set null` on a required field, so an action
+    // that IS `SET NULL` always accompanies a column that is, or is becoming,
+    // nullable.
+    return {
+      statements,
+      emitAfterColumnWork:
+        to.onDelete === "SET NULL" || to.onUpdate === "SET NULL",
+    };
   }
 
   /**
@@ -2236,6 +2349,9 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
   ): string[] {
     const newByName = new Map(newFields.map(f => [f.name, f]));
     const out: string[] = [];
+    // Narrowed once, into a local, as the plain path does: the refusal below
+    // removes SQLite and the renderer takes only the dialects that remain.
+    const dialect = this.dialect;
     for (const field of oldFields.filter(usesJunctionTable)) {
       const next = newByName.get(field.name);
       if (!next || !this.sameRelationTarget(field, next)) continue;
@@ -2246,7 +2362,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
         continue;
       }
 
-      if (this.dialect === "sqlite") {
+      if (dialect === "sqlite") {
         throw NextlyError.validation({
           errors: [
             {
@@ -2273,12 +2389,20 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
       // Both ends. A junction's row is only meaningful while both the source
       // and the target it names exist, so an edit to what happens on delete
       // applies to each of them.
+      //
+      // Statement by statement, for the reason the plain path splits them: the
+      // runner hands each `--> statement-breakpoint` chunk to a driver whole,
+      // and the MySQL adapter refuses a chunk carrying two statements.
+      //
+      // The derived names are authoritative HERE, unlike on the plain path:
+      // this service creates the junction and its keys together, so there is
+      // no path that could have installed one under a different name.
       for (const [constraint, column, references] of [
         [to.fkSource, to.sourceColumn, to.sourceTable],
         [to.fkTarget, to.targetColumn, to.targetTable],
       ] as const) {
         out.push(
-          `${generateSQL(
+          ...changeForeignKeyActionStatements(
             {
               type: "change_foreign_key_action",
               tableName: to.table,
@@ -2291,8 +2415,8 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
               toOnDelete: to.onDelete,
               toOnUpdate: to.onUpdate,
             },
-            this.dialect
-          )};`
+            dialect
+          ).map(statement => `${statement};`)
         );
       }
     }

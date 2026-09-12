@@ -1,37 +1,103 @@
 // The statements that move a foreign key's referential actions, shared by the
 // dialects that can perform the change at all.
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { ChangeForeignKeyActionOp } from "../diff/types";
+
+import { quoteIdent } from "./identifier-quoting";
+
+/**
+ * The dialects that can move a referential action in place.
+ *
+ * SQLite cannot: it reaches this operation only to refuse it, so it is absent
+ * here rather than carried as a case nothing can render.
+ */
+export type ForeignKeyActionDialect = Exclude<SupportedDialect, "sqlite">;
+
+/**
+ * How each dialect spells removing a constraint.
+ *
+ * Not interchangeable: MySQL accepts `DROP CONSTRAINT` only from 8.0.19, and
+ * this has to work on the oldest supported server.
+ */
+const DROP_VERB: Record<ForeignKeyActionDialect, string> = {
+  postgresql: "DROP CONSTRAINT",
+  mysql: "DROP FOREIGN KEY",
+};
+
+/**
+ * Remove a foreign key by the name it actually carries.
+ *
+ * Rendered on its own, rather than only as half of
+ * {@link changeForeignKeyActionStatements}, because a caller that has READ the
+ * live table knows two things this operation cannot: the name the constraint
+ * really has, and whether it is there at all. Such a caller emits the pair,
+ * only the add, or one drop per live name — and every one of those statements
+ * is still written in exactly one place, so no path can spell the drop
+ * differently from the path beside it.
+ */
+export function dropForeignKeySql(
+  tableName: string,
+  constraintName: string,
+  dialect: ForeignKeyActionDialect
+): string {
+  const q = (name: string) => quoteIdent(name, dialect);
+  return `ALTER TABLE ${q(tableName)} ${DROP_VERB[dialect]} ${q(constraintName)}`;
+}
+
+/** Declare the key again, carrying the operation's target actions. */
+export function addForeignKeySql(
+  op: ChangeForeignKeyActionOp,
+  dialect: ForeignKeyActionDialect
+): string {
+  const q = (name: string) => quoteIdent(name, dialect);
+  return (
+    `ALTER TABLE ${q(op.tableName)} ADD CONSTRAINT ${q(op.constraintName)} ` +
+    `FOREIGN KEY (${q(op.columnName)}) REFERENCES ${q(op.referencesTable)}` +
+    `(${q(op.referencesColumn)}) ON DELETE ${op.toOnDelete} ON UPDATE ${op.toOnUpdate}`
+  );
+}
 
 /**
  * Drop the constraint and declare it again with the new actions.
  *
- * Two statements, and on both dialects that is a requirement rather than a
- * preference. The constraint keeps its name here — an action edit renames
+ * TWO statements, and on both dialects that is a requirement rather than a
+ * preference. The constraint keeps its name here — this operation renames
  * nothing — and MySQL rejects a drop and an add of one name in a single
  * `ALTER TABLE` outright (bug #68286, error 1826, still open), while on
  * PostgreSQL a combined statement would depend on the order the server applies
  * its subcommands in, which nothing here can test.
  *
- * The two dialects differ only in how they spell the drop and quote a name, so
- * they share the shape: two spellings of one rule drift, and the drift is
- * silent because each reads correctly on its own.
- *
- * @param dropVerb `DROP CONSTRAINT` on PostgreSQL; `DROP FOREIGN KEY` on
- *   MySQL, which accepts the former only from 8.0.19.
+ * Returned as a LIST rather than one joined string because the list is what
+ * the databases actually need, and a caller that is handed a string has to
+ * take it apart again to run them. One of them took it apart on `; ` — a split
+ * that is unsafe in general (a default value may contain the separator) — and
+ * one did not take it apart at all, which is how a compound statement reached
+ * a MySQL driver configured with `multipleStatements = false` and was rejected
+ * whole. {@link changeForeignKeyActionSql} joins them for the file path that
+ * genuinely wants one string.
+ */
+export function changeForeignKeyActionStatements(
+  op: ChangeForeignKeyActionOp,
+  dialect: ForeignKeyActionDialect
+): readonly [string, string] {
+  return [
+    dropForeignKeySql(op.tableName, op.constraintName, dialect),
+    addForeignKeySql(op, dialect),
+  ];
+}
+
+/**
+ * The single-string form `generateSQL` promises its callers, derived from the
+ * list rather than written a second time.
  */
 export function changeForeignKeyActionSql(
   op: ChangeForeignKeyActionOp,
-  q: (name: string) => string,
-  dropVerb: "DROP CONSTRAINT" | "DROP FOREIGN KEY"
+  dialect: ForeignKeyActionDialect
 ): string {
-  return (
-    `ALTER TABLE ${q(op.tableName)} ${dropVerb} ${q(op.constraintName)}; ` +
-    `ALTER TABLE ${q(op.tableName)} ADD CONSTRAINT ${q(op.constraintName)} ` +
-    `FOREIGN KEY (${q(op.columnName)}) REFERENCES ${q(op.referencesTable)}` +
-    `(${q(op.referencesColumn)}) ON DELETE ${op.toOnDelete} ON UPDATE ${op.toOnUpdate}`
-  );
+  return changeForeignKeyActionStatements(op, dialect).join("; ");
 }
 
 /**

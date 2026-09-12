@@ -70,9 +70,10 @@ export function generatePgSQL(op: Operation): string {
     case "drop_index":
       return generateDropIndex(op);
     case "change_foreign_key_action":
-      // `DROP CONSTRAINT` here; the drop is near-instant (no scan) and the
-      // add re-checks the existing rows.
-      return changeForeignKeyActionSql(op, q, "DROP CONSTRAINT");
+      // The drop is near-instant (no scan); the add re-checks the existing
+      // rows. How each dialect spells the drop is decided once, beside the
+      // statements themselves.
+      return changeForeignKeyActionSql(op, "postgresql");
     default:
       return unsupportedOperation("generatePgSQL", op);
   }
