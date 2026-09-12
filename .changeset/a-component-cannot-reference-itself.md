@@ -34,13 +34,20 @@ Components may place other components, so the library is a directed graph. A
 loop in it is not a crash — the renderer detects one and draws what it reached —
 but it leaves a gap where the loop closes, on every page placing anything on the
 loop, and nothing said how it got there. The editor already withheld the tiles
-that would close one, but that is a snapshot: two authors saving at once, or one
-saving against a library read that had gone stale, closed a loop anyway.
+that would close one, but that is a snapshot: an author saving against a library
+read that had since gone stale closed a loop anyway.
 
 The write now refuses, naming the chain to break — `Hero → Banner → Hero` —
 rather than leaving the author to find which placement did it. The check reads
 each referenced component as it currently stands, and refuses rather than
-guessing when it cannot read them all.
+guessing when it cannot read them all. A component the saving author cannot read
+is named only as `…`, so a refusal does not hand out identifiers.
+
+What it does NOT close is two authors closing a loop between them at the SAME
+moment. The check runs before its own write commits and takes no lock the other
+write contends for, and a plugin hook has no transaction to enlist in — so two
+saves that each read the other's document before either commits are both
+approved. Closing that needs a boundary the two writes share.
 
 A component's VARIANTS count as references. A variant may preset an exposed
 `componentId`, which re-points a nested instance at a different component
