@@ -116,10 +116,19 @@ export {
  * function, or hand it to a helper, which is exactly how a plugin with more
  * than one source ends up written.
  *
- * `ReadCaller` travels with the resolver for the same reason: it is the second
- * of the two arguments, so without it the parameter has no name to annotate.
+ * 🔴 TWO resolver types, and a plugin author wants the second.
+ * `WidgetSourceResolver` is the two-argument shape core's own system sources
+ * use. `PluginSourceResolver` is what `contributes.widgetSources` takes: the
+ * same two plus the plugin's own `PluginContext`, which is how a resolver
+ * reaches any data. Typing a contributed resolver as the former rejects the
+ * `ctx` parameter it needs, so both are published and the names say which is
+ * which.
+ *
+ * `ReadCaller` travels with them for the same reason: it is one of the
+ * arguments, so without it the parameter has no name to annotate.
  */
 export type { SourceResolver as WidgetSourceResolver } from "./resolved-sources";
+export type { PluginSourceResolver } from "../../plugins/widgets/collect-widget-sources";
 export type { ReadCaller } from "../../services/dashboard/readable-resources";
 export type {
   PluginWidgetSource,

@@ -22,14 +22,31 @@
  * context — a plugin's resolver reaches whatever its own closure captured at
  * registration, exactly as `releases-widget-source.ts` does today.
  *
- * 🔴 That signature is a BOUNDARY rather than a convenience, and it is the
- * reason no caller-supplied URL, path, table or column can reach a resolver:
- * every name in `query` was checked against the source's own declared field
- * list before execution, so there is no string a caller controls for a resolver
- * to fetch. It must stay structural. Directus mitigated an import-endpoint SSRF
- * with an IP denylist (CVE-2022-23080) and the denylist was then bypassed by
- * DNS rebinding (CVE-2023-26492) — a validated escape hatch is one round of
- * research away from not being one.
+ * 🔴 What that signature does and does NOT bound, stated exactly, because the
+ * difference is security-relevant and the generous reading is wrong.
+ *
+ * BOUNDED: the SHAPE of the question. `validateReadWidgetQuery` refuses a field
+ * name the source never declared, an operator outside the vocabulary, and an
+ * operand that is a plain object. So a resolver is never asked about a column
+ * its own source did not publish, and never handed a structure where a scalar
+ * belongs.
+ *
+ * NOT BOUNDED: the operand VALUES. `where: { total: { equals: "http://..." } }`
+ * validates cleanly and arrives at the resolver verbatim, because nothing
+ * constrains what a legal string contains. A caller who may place a widget can
+ * therefore choose those bytes.
+ *
+ * So a resolver MUST NOT use any value out of `query` as an outbound URL, a
+ * filesystem path, a table or column name, or anything else that names a
+ * destination. Treat every operand as caller-controlled input and validate it
+ * against a closed set before it decides where a request goes. The contract
+ * hands over a question, not a trusted one.
+ *
+ * Why that is a rule rather than a validator here: Directus mitigated an
+ * import-endpoint SSRF with an IP denylist (CVE-2022-23080) and the denylist
+ * was itself bypassed by DNS rebinding (CVE-2023-26492). A host-side filter
+ * over a value the plugin then uses as a destination is one round of research
+ * from being no filter at all, so the host declines to imply one.
  *
  * ## What this contract does NOT promise
  *

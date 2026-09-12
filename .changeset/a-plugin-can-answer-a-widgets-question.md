@@ -14,6 +14,7 @@
 "@nextlyhq/module-specifiers": patch
 "nextly": patch
 "@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
 "@nextlyhq/plugin-page-builder": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/plugin-seo": patch
@@ -53,3 +54,8 @@ widget contract.
 A contributed resolver is handed its plugin's own context, so it can read data
 to answer with. A plugin's services are reachable through nothing else, so the
 first shape of this contract could return constants and little more.
+
+The resolver type a plugin author writes against is published as
+`PluginSourceResolver`. The existing `WidgetSourceResolver` is core's own
+two-argument shape and rejects the context parameter a contributed resolver
+needs, so typing one with it made the contract reachable only inline.

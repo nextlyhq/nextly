@@ -572,6 +572,7 @@ export {
   type WidgetLifecycle,
   type WidgetCondition,
   type WidgetSourceResolver,
+  type PluginSourceResolver,
   type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";

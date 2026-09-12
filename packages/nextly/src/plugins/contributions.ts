@@ -573,10 +573,15 @@ export interface PluginContributions {
    *
    * Each entry declares the source's queryable fields and supported ops up
    * front, so a query is validated against them before the resolver is ever
-   * called. The resolver receives `(query, caller)` and nothing else; see
-   * `domains/widgets/resolved-sources` for why that signature is the boundary
-   * that keeps a caller-supplied string from ever becoming a URL or a table
-   * name.
+   * called. The resolver receives `(query, caller, ctx)` -- its own plugin's
+   * context, which is how it reads data at all.
+   *
+   * 🔴 That validation checks field names, operators and operand SHAPES. It
+   * does not constrain operand VALUES: `where: { total: { equals: "http://..." } }`
+   * is a legal query, and a caller who may place a widget chooses those bytes.
+   * A resolver must never use a value out of `query` as an outbound URL, a
+   * path, or a table or column name without validating it against a closed set
+   * of its own.
    *
    * The host cannot prove a resolver consults `caller` — it hands the caller
    * over and the plugin decides. That is the trust boundary this plugin's

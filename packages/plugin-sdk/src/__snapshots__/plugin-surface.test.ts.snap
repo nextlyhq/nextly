@@ -294,6 +294,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginSingleRecord (type)",
   "PluginSinglesResult (type)",
   "PluginSinglesService (type)",
+  "PluginSourceResolver (type)",
   "PluginWidgetSource (type)",
   "ProviderAvailability (type)",
   "QueryOptions (type)",
