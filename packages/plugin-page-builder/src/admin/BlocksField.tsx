@@ -47,6 +47,7 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
+  componentReach,
   componentUsageIn,
   isComponentDocument,
   newId,
@@ -499,17 +500,23 @@ function reachesFrom(
   id: string,
   graph: ComponentGraph
 ): boolean {
-  if (seeds === undefined || seeds.includes(id)) return true;
-  const pending = [...seeds];
-  const followed = new Set<string>();
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    if (followed.has(next)) continue;
-    followed.add(next);
-    const named = namedBy(next, graph);
-    if (named === undefined || named.includes(id)) return true;
-    pending.push(...named);
-  }
-  return false;
+  // The ENGINE's walk, not a second one. The same question is asked at the
+  // write — whether a component's references lead back to it — and two
+  // traversals of one graph drift in their ordering, their handling of a
+  // definition nobody could read, and whatever the graph learns to mean next.
+  //
+  // Projected to a boolean here, which is what an OFFER needs: a chain that
+  // closes and a definition that could not be read both mean "do not offer
+  // this", because withholding one tile is the cheap direction. The write
+  // spends the same uncertainty differently, which is why the verdict keeps the
+  // two apart and each caller decides.
+  return (
+    componentReach({
+      places: seeds,
+      self: id,
+      placedBy: candidate => namedBy(candidate, graph),
+    }).kind !== "none"
+  );
 }
 
 /**

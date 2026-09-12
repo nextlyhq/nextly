@@ -42,6 +42,22 @@
  * gone stale; what remains is a true simultaneity, and closing that needs a
  * boundary the two writes share.
  *
+ * A later hook REPLACING the document after this has approved it. This is a
+ * collection-level `beforeChange` handler, and core is not finished
+ * transforming at that point: `runBeforeChange` applies a stored hook's result
+ * after the code hooks, and the mutation service then runs the field-level
+ * `beforeChange` phase over "the final stored value". Either can write a
+ * document this never saw. No plugin can be last — `HOOK_TYPES` declares no
+ * phase after that field pass — so what this covers is the document as
+ * submitted, and closing the rest needs a core phase that runs once every
+ * transform has produced the value being written.
+ *
+ * A LOCALIZED component store. These reads name no locale, so they answer in
+ * the default language; a component whose French document references what its
+ * default one does not would not be seen. Covering it means reading every
+ * configured locale, which multiplies the reads per save by the locale count,
+ * and that cost is worth deciding deliberately rather than absorbing here.
+ *
  * @module component-cycle-guard
  */
 import {
@@ -112,13 +128,29 @@ async function refuseACycle(
   options: CycleGuardOptions,
   context: unknown
 ): Promise<void> {
-  // A caller-owned TRANSACTION, detected the way the delete guard detects it
-  // and refused for the same reason: the Direct API takes no executor, so a
-  // read here checks out a second connection and waits on the one the open
-  // transaction holds — while that transaction waits on this hook.
+  const self = subjectOf(context);
+  // Nothing addressable. Left alone rather than refused: a create whose id the
+  // store has not minted yet is not a row anything can reference, so no chain
+  // can lead back to it.
+  if (self === null) return;
+
+  const places = placesOf(context, options);
+  // Not a document this can read. Whether the value is a legal one is the
+  // field's own validation to answer, and refusing here would report a shape
+  // problem as a reference problem.
+  if (places === "not-a-document") return;
+
+  // AFTER the two checks above, so a write that cannot change the reference
+  // graph is not refused for being in a transaction. A bulk rename, a metadata
+  // edit or a status change carries no document, and a bulk create with no id
+  // has nothing to close a loop onto — none of them needs a graph read, so none
+  // of them is refused.
   //
-  // Refused rather than skipped, because skipping would let exactly the writes
-  // this exists for through, on the path that writes many at once.
+  // For a write that DOES need one, the transaction is a refusal rather than a
+  // skip: the Direct API takes no executor, so a read here checks out a second
+  // connection and waits on the one the open transaction holds — while that
+  // transaction waits on this hook. Skipping instead would let exactly the
+  // writes this exists for through, on the path that writes many at once.
   if (insideACallerTransaction(context)) {
     throw refusal(
       `This component cannot be saved in a bulk operation, because whether it ` +
@@ -127,52 +159,52 @@ async function refuseACycle(
     );
   }
 
-  const self = subjectOf(context);
   const nextly = directApiOf(context);
-  // Nothing addressable, or no Direct API to ask with. Left alone rather than
-  // refused: a create whose id the store has not minted yet is not a row
-  // anything can reference, so no chain can lead back to it.
-  if (self === null || nextly === null) return;
+  // No Direct API to ask with. A guard that refused every write it could not
+  // evaluate would make the collection unwritable on any path that shapes its
+  // context differently, and this is a data-integrity guard rather than an
+  // authorisation one.
+  if (nextly === null) return;
 
-  const places = placesOf(context, options);
-  // Not a document this can read. Whether the value is a legal one is the
-  // field's own validation to answer, and refusing here would report a shape
-  // problem as a reference problem.
-  if (places === "not-a-document") return;
-
-  const graph = await placementsReachedFrom(places, options, nextly);
-  const verdict = componentReach({
-    places,
-    self,
-    placedBy: id => graph.get(id),
-  });
-
-  if (verdict.kind === "none") return;
-  if (verdict.kind === "unknown") {
+  // Each lifecycle form on its OWN, never as one graph. A component's published
+  // and draft documents are alternatives: only one of them is what a reader
+  // receives at any moment. Unioning their edges invents chains that exist in
+  // neither — published B naming C while DRAFT C names A yields A → B → C → A
+  // out of two references that are never live together — and refuses a save
+  // that closes nothing.
+  for (const draft of [false, true]) {
+    const graph = await placementsReachedFrom(places, options, nextly, draft);
+    const verdict = componentReach({
+      places,
+      self,
+      placedBy: id => graph.get(id),
+    });
+    if (verdict.kind === "none") continue;
+    if (verdict.kind === "unknown") {
+      throw refusal(
+        `This component cannot be saved: the components it uses could not all ` +
+          `be read, so whether it would end up referencing itself could not be ` +
+          `established.`
+      );
+    }
     throw refusal(
-      `This component cannot be saved: the components it uses could not all be ` +
-        `read, so whether it would end up referencing itself could not be ` +
-        `established.`
+      `This component cannot be saved because it would reference itself: ` +
+        `${verdict.path.join(" → ")}. Remove that placement and save again.`
     );
   }
-  throw refusal(
-    `This component cannot be saved because it would reference itself: ` +
-      `${verdict.path.join(" → ")}. Remove that placement and save again.`
-  );
 }
 
 /**
- * Every component reachable from these, and what each of them places.
+ * Every component reachable from these in ONE lifecycle form, and what each of
+ * them places.
  *
  * Read as the SYSTEM. A component the saving author cannot see still renders on
  * the page, so a chain running through it is a chain that closes; read as the
- * author, it would be invisible and the loop would be permitted.
+ * author it would be invisible and the loop would be permitted.
  *
- * Each definition is read in BOTH of its forms, and what it places is the union
- * of the two. The collection declares `versions: { drafts: true }`, so a
- * component has a stored row and may have a pending edit that references
- * something the stored row does not — and a loop closing through either is a
- * loop that renders as soon as that form is the live one.
+ * One FORM per walk, never both folded together — see the caller. The published
+ * and draft documents of one component are alternatives, and a chain assembled
+ * out of edges from each is a chain no reader ever receives.
  *
  * An id left OUT of the map is one this could not establish, which
  * {@link componentReach} reads as `unknown` rather than as placing nothing.
@@ -182,7 +214,8 @@ async function refuseACycle(
 async function placementsReachedFrom(
   places: readonly string[] | undefined,
   options: CycleGuardOptions,
-  nextly: CycleGuardDirectApi
+  nextly: CycleGuardDirectApi,
+  draft: boolean
 ): Promise<Map<string, readonly string[]>> {
   const graph = new Map<string, readonly string[]>();
   if (places === undefined) return graph;
@@ -195,7 +228,13 @@ async function placementsReachedFrom(
     if (seen.size >= MOST_COMPONENTS_READ) return graph;
     seen.add(id);
 
-    const named = await placementsOf(id, options, nextly);
+    const named = await readComponent(id, options, nextly, draft);
+    // A component nobody supplied places nothing further, and the resolver
+    // draws it as missing. That is not a loop.
+    if (named === "absent") {
+      graph.set(id, []);
+      continue;
+    }
     if (named === undefined) continue;
     graph.set(id, named);
     pending.push(...named);
@@ -204,35 +243,21 @@ async function placementsReachedFrom(
 }
 
 /**
- * What one stored component places, across both of its forms — or `undefined`
- * where that could not be established.
+ * One form of one component: what it places, absent, or unreadable.
  *
- * `undefined` covers a row nobody could read and a document the site's node cap
- * could only read a prefix of. Reported as an empty list they would both say
- * "places nothing", which is the answer that admits a loop.
+ * A read that raises NOT FOUND is ABSENCE rather than failure. The Direct API
+ * throws for a missing row unless errors are disabled, and a saved document
+ * referencing a component somebody deleted is an ordinary state the renderer
+ * draws as a missing-component placeholder. Read as unreadable it would make the
+ * graph unknown and refuse every save of that component until the reference was
+ * taken out by hand.
+ *
+ * The returned row must also BE the component asked for. A by-id read is not
+ * guaranteed to answer with the row requested — a `beforeOperation` hook can
+ * rewrite the id the query uses and an `afterRead` hook can replace the
+ * response — so a redirected lookup for one component could answer with an
+ * unrelated acyclic row, and the loop through the real one would be approved.
  */
-async function placementsOf(
-  id: string,
-  options: CycleGuardOptions,
-  nextly: CycleGuardDirectApi
-): Promise<readonly string[] | undefined> {
-  const forms = await Promise.all([
-    readComponent(id, options, nextly, false),
-    readComponent(id, options, nextly, true),
-  ]);
-  // Absent from BOTH forms is a component nobody supplied. It places nothing
-  // further and the resolver draws it as missing, which is not a loop.
-  if (forms.every(form => form === "absent")) return [];
-  const union = new Set<string>();
-  for (const form of forms) {
-    if (form === "absent") continue;
-    if (form === undefined) return undefined;
-    for (const named of form) union.add(named);
-  }
-  return [...union];
-}
-
-/** One form of one component: what it places, `"absent"`, or unreadable. */
 async function readComponent(
   id: string,
   options: CycleGuardOptions,
@@ -253,13 +278,31 @@ async function readComponent(
       depth: 0,
       overrideAccess: true,
     });
-  } catch {
-    // A read that raised establishes nothing, which is not the same as a row
-    // that is not there.
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return "absent";
+    // Anything else establishes nothing, which is not the same as a row that is
+    // not there.
     return undefined;
   }
   if (row === null || row === undefined) return "absent";
+  if (!isRowFor(row, id)) return undefined;
   return usageIn(row, options);
+}
+
+/**
+ * Whether a returned row is the component that was asked for.
+ *
+ * A row carrying no `id` KEY is accepted: field-level access can drop it from a
+ * presentation, and the read was still addressed by id. A row that HAS the key
+ * answered with an identity, and the only identity that satisfies this is the
+ * one requested — anything else is a redirected or replaced response, which
+ * cannot stand in for the component whose references are being judged.
+ */
+function isRowFor(row: unknown, id: string): boolean {
+  if (typeof row !== "object" || row === null) return false;
+  const record = row as Record<string, unknown>;
+  if (!Object.hasOwn(record, "id")) return true;
+  return record.id === id;
 }
 
 /** The ids a stored row's document places, under the site's cap. */

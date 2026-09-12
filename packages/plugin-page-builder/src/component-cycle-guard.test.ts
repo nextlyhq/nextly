@@ -14,6 +14,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -65,6 +66,10 @@ function api(rows: {
   stored?: Record<string, string[]>;
   draft?: Record<string, string[]>;
   unreadable?: readonly string[];
+  /** Ids the store no longer holds, which the real API answers by throwing. */
+  deleted?: readonly string[];
+  /** An id whose read answers with a row claiming to be another. */
+  redirect?: Record<string, string>;
 }) {
   const asked: {
     id: string;
@@ -89,9 +94,17 @@ function api(rows: {
       if (rows.unreadable?.includes(a.id) === true) {
         throw new Error("this row could not be read");
       }
+      // What the real Direct API does for a row that is not there: it THROWS
+      // NOT_FOUND unless errors are disabled, rather than answering null.
+      if (rows.deleted?.includes(a.id) === true) {
+        throw NextlyError.notFound({ message: `no component ${a.id}` });
+      }
       const from = a.draft === true ? rows.draft : rows.stored;
       const ids = from?.[a.id];
-      return ids === undefined ? null : { id: a.id, [FIELD]: places(...ids) };
+      if (ids === undefined) return null;
+      // A hook may answer with a row that is not the one asked for.
+      const answeredAs = rows.redirect?.[a.id] ?? a.id;
+      return { id: answeredAs, [FIELD]: places(...ids) };
     },
     create: async () => ({}),
     delete: async () => ({}),
@@ -209,6 +222,108 @@ describe("saving a component that would reference itself", () => {
     const { nextly } = api({ stored: {} });
 
     await expect(c.run(saving("a", ["gone"], nextly))).resolves.toBeUndefined();
+  });
+
+  it("treats a component the store no longer holds as absent, not as unreadable", async () => {
+    /*
+     * The Direct API THROWS `NOT_FOUND` for a missing row rather than answering
+     * null. Caught as a failure, a saved reference to a component somebody
+     * deleted made the graph unknown — so every subsequent save of that
+     * component was refused until the reference was taken out by hand, for a
+     * state the renderer draws as a missing-component placeholder.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: ["gone"] }, deleted: ["gone"] });
+
+    await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
+  });
+
+  it("judges each lifecycle form on its own, so two forms cannot invent a chain", async () => {
+    /*
+     * A component's published and draft documents are alternatives: only one is
+     * what a reader receives. Unioned, published `b` naming `cc` and DRAFT `cc`
+     * naming `a` yield a → b → cc → a out of two references never live
+     * together, and a save that closes nothing is refused.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { b: ["cc"], cc: [] },
+      draft: { b: [], cc: ["a"] },
+    });
+
+    await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
+  });
+
+  it("still refuses a chain that closes WITHIN one form", async () => {
+    // The control for the case above: separating the forms must not stop it
+    // seeing a loop that is entirely inside one of them.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { b: ["cc"], cc: ["a"] },
+      draft: { b: [], cc: [] },
+    });
+
+    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+      /a → b → cc → a/
+    );
+  });
+
+  it("refuses when a by-id read answers with a row claiming another identity", async () => {
+    // A `beforeOperation` hook can rewrite the id the query uses and an
+    // `afterRead` hook can replace the response, so a lookup for `b` may answer
+    // with an unrelated acyclic row — and the loop through the real `b` would be
+    // approved on the strength of it.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { b: [], cc: [] },
+      redirect: { b: "cc" },
+    });
+
+    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+      /could not all be read/
+    );
+  });
+
+  it("allows a bulk write that cannot change the reference graph", async () => {
+    // The transaction refusal is about needing a graph READ. A bulk rename or
+    // status change carries no document, so there is nothing to read and
+    // nothing to refuse.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: {} });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { title: "Renamed in bulk" },
+        req: { nextly },
+        executor: {},
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows a bulk create the store has not named yet", async () => {
+    // Nothing can reference a row that does not exist, so the ordinary create
+    // path allows it — and being inside a transaction does not change that.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: {} });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "create",
+        data: { [FIELD]: places("b") },
+        req: { nextly },
+        executor: {},
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("refuses inside a caller-owned transaction rather than skipping the check", async () => {
