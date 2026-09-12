@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, number, text } from "../../../config";
+import { defineCollection, number, richText, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import {
   createTestNextly,
@@ -381,6 +381,96 @@ describe("a bulk write on a localized collection", () => {
     expect(rows.map(r => r.title)).toEqual(["plain"]);
   });
 
+  it("stores a localized rich-text value the companion column can hold", async () => {
+    // The headline case this change exists for, on the commonest translatable
+    // field there is. A rich-text value arrives as an object and its column is
+    // text-backed, so it has to be serialized BEFORE the split copies it into
+    // the companion payload — otherwise the driver is handed an object to bind
+    // and refuses it, and `createMany` fails every row exactly as it did
+    // before any of this.
+    process.env.DB_DIALECT = "sqlite";
+    const adapter = await createAdapter({
+      type: "sqlite",
+      memory: true,
+    } as Parameters<typeof createAdapter>[0]);
+    current = await createTestNextly({
+      adapter,
+      collections: [
+        defineCollection({
+          slug: "articles",
+          localized: true,
+          access: {
+            create: () => true,
+            read: () => true,
+            update: () => true,
+          },
+          fields: [text({ name: "title" }), richText({ name: "body" })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const handle = current;
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    const body = { root: { children: [{ type: "p", text: "hello" }] } };
+    // The second row is what discriminates. An OBJECT is encoded the same way
+    // by either route, because the SQLite adapter JSON-stringifies any object
+    // on its way to the driver — so an object alone cannot tell a shaped write
+    // from an unshaped one, and a test using only one would pass with the
+    // shaping removed. A BARE STRING can tell them apart: the field's own
+    // encoder makes it the JSON document `"plain"`, while the adapter's
+    // sanitizer passes a string straight through as `plain`, which is not a
+    // JSON document and which PostgreSQL and MySQL refuse for a json column.
+    const result = await entries.createEntries(
+      { collectionName: "articles", overrideAccess: true },
+      [
+        { title: "one", body },
+        { title: "two", body: "plain" },
+      ]
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.successful).toBe(2);
+
+    // Stored in the companion, as text the column can actually hold.
+    const rows = await handle.adapter.executeQuery<{
+      title: string;
+      body: unknown;
+      _locale: string;
+    }>(
+      'SELECT "title", "body", "_locale" FROM "dc_articles_locales" ORDER BY "title"'
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.map(r => r._locale)).toEqual(["en", "en"]);
+    expect(typeof rows[0].body).toBe("string");
+    expect(JSON.parse(rows[0].body as string)).toEqual(body);
+    // The discriminating one: a JSON document, not the bare characters.
+    expect(rows[1].body).toBe('"plain"');
+    expect(JSON.parse(rows[1].body as string)).toBe("plain");
+
+    // And a batch UPDATE of the same field has the same requirement.
+    const [created] = await handle.adapter.executeQuery<{ id: string }>(
+      `SELECT "id" FROM "dc_articles" WHERE "id" = '${
+        (
+          await handle.adapter.executeQuery<{ _parent: string }>(
+            `SELECT "_parent" FROM "dc_articles_locales" WHERE "title" = 'one'`
+          )
+        )[0]._parent
+      }'`
+    );
+    const edited = { root: { children: [{ type: "p", text: "edited" }] } };
+    const updated = await entries.updateEntries(
+      { collectionName: "articles", overrideAccess: true },
+      [{ id: created.id, data: { body: edited } }]
+    );
+    expect(updated.errors).toEqual([]);
+    const after = await handle.adapter.executeQuery<{ body: unknown }>(
+      `SELECT "body" FROM "dc_articles_locales" WHERE "_parent" = '${created.id}'`
+    );
+    expect(JSON.parse(after[0].body as string)).toEqual(edited);
+  });
+
   it("reports the prior translation as what changed, not the untranslated row", async () => {
     // The main table of a migrated localized collection holds no translatable
     // columns, so a `previous` built from it alone describes none of the values
@@ -579,6 +669,99 @@ describe("a bulk write that moves a localized collection's published state", () 
     expect(envelope.data?.status).toBe("draft");
 
     // The companion row is still a draft, which is what makes the above right.
+    const companion = await handle.adapter.executeQuery<{ _status: string }>(
+      `SELECT "_status" FROM "dc_posts_locales" WHERE "_parent" = '${row._parent}'`
+    );
+    expect(companion[0]._status).toBe("draft");
+  });
+
+  it("still announces a main-row publication when the translation was already published", async () => {
+    // The mirror of the case above, and the one a single collapsed event gets
+    // wrong in the other direction. The main row really does move draft ->
+    // published — the entry becomes publicly visible — while this locale's
+    // companion was published already, so the companion move is a no-op.
+    // Reading both ends from the translation would read published ->
+    // published and announce nothing at all.
+    const handle = await bootPerLocaleStatus();
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    await entries.createEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ title: "t", status: "draft" }]
+    );
+    const [row] = await handle.adapter.executeQuery<{ _parent: string }>(
+      'SELECT "_parent" FROM "dc_posts_locales" LIMIT 1'
+    );
+    await handle.adapter.executeQuery(
+      `UPDATE "dc_posts_locales" SET "_status" = 'published' WHERE "_parent" = '${row._parent}'`
+    );
+    const before = await handle.adapter.select<{ type: string }>(
+      "nextly_events"
+    );
+
+    const result = await entries.updateEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ id: row._parent, data: { status: "published" } }]
+    );
+    expect(result.errors).toEqual([]);
+
+    const after = await handle.adapter.select<{ type: string }>(
+      "nextly_events"
+    );
+    const added = after.slice(before.length).map(e => e.type);
+    // The entry became publicly visible, and the lifecycle says so.
+    expect(added).toContain("entry.published");
+    expect(added).toContain("entry.status_changed");
+  });
+
+  it("reports a translation created by the write as the draft it is", async () => {
+    // A locale with no companion row yet, patched with content only. The
+    // upsert creates the row, and `_status` lands on its column default — so
+    // the translation this write just made is a draft. Reporting the main
+    // row's status instead tells receivers a brand-new translation is already
+    // published.
+    const handle = await bootPerLocaleStatus();
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    await entries.createEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ title: "t", status: "published" }]
+    );
+    const [row] = await handle.adapter.executeQuery<{ _parent: string }>(
+      'SELECT "_parent" FROM "dc_posts_locales" LIMIT 1'
+    );
+    // The locale goes back to having no row at all, which is the state a
+    // never-translated language is in.
+    await handle.adapter.executeQuery(
+      `DELETE FROM "dc_posts_locales" WHERE "_parent" = '${row._parent}'`
+    );
+    const before = await handle.adapter.select<{ type: string }>(
+      "nextly_events"
+    );
+
+    const result = await entries.updateEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ id: row._parent, data: { title: "neu" } }]
+    );
+    expect(result.errors).toEqual([]);
+
+    const after = await handle.adapter.select<{
+      type: string;
+      payload: unknown;
+    }>("nextly_events");
+    const updates = after
+      .slice(before.length)
+      .filter(e => e.type === "entry.updated");
+    expect(updates).toHaveLength(1);
+    const envelope = (
+      typeof updates[0].payload === "string"
+        ? JSON.parse(updates[0].payload)
+        : updates[0].payload
+    ) as { data?: Record<string, unknown> };
+    expect(envelope.data?.status).toBe("draft");
+    // And that is what the row the upsert created actually holds.
     const companion = await handle.adapter.executeQuery<{ _status: string }>(
       `SELECT "_status" FROM "dc_posts_locales" WHERE "_parent" = '${row._parent}'`
     );

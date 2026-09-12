@@ -19,6 +19,42 @@
  */
 export const COMPANION_DEFAULT_STATUS = "draft";
 
+/**
+ * What a locale's publication status IS once this write has been applied.
+ *
+ * Three answers, in order, and the third is the one that is easy to miss: the
+ * status the write assigns; failing that the status the locale already had;
+ * failing that the column default — because a locale being translated for the
+ * first time has no companion row, and the upsert that creates one leaves
+ * `_status` on its DDL default.
+ *
+ * `null` means this write leaves the locale with no status of its own: either
+ * the entity keeps no per-locale status at all, or it writes no companion row,
+ * in which case the locale still has none. Claiming the default there would
+ * invent a draft nothing committed.
+ *
+ * One implementation because more than one write path needs the answer and a
+ * path that stops at the second case reports a brand-new translation with the
+ * MAIN row's status — telling receivers a translation is published when the
+ * row just written is a draft.
+ */
+export function resolveEffectiveLocaleStatus(args: {
+  /** Whether the companion carries a per-locale `_status` column at all. */
+  hasStatus: boolean;
+  /** Whether this write actually writes a companion row. */
+  writesCompanionRow: boolean;
+  /** The `_status` this write assigns, when it assigns one. */
+  requestedStatus: unknown;
+  /** The status this locale already had, or `null` when it had no row. */
+  committedStatus: string | null;
+}): string | null {
+  if (typeof args.requestedStatus === "string") return args.requestedStatus;
+  if (args.committedStatus !== null) return args.committedStatus;
+  return args.hasStatus && args.writesCompanionRow
+    ? COMPANION_DEFAULT_STATUS
+    : null;
+}
+
 /** Per-locale draft/publish state; present only when the entity has one. */
 export const COMPANION_STATUS_COLUMN = "_status";
 

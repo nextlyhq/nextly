@@ -115,6 +115,7 @@ import {
   COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
   COMPANION_STATUS_COLUMN,
+  resolveEffectiveLocaleStatus,
 } from "../../i18n/companion-columns";
 import {
   companionRowExists,
@@ -1694,12 +1695,7 @@ export class CollectionMutationService extends BaseService {
       }
     });
 
-    // Serialize JSON fields (richtext, blocks, array, group, json)
-    fields.forEach(field => {
-      if (isJsonFieldType(field.type, field) && data[field.name] != null) {
-        data[field.name] = toJsonColumnValue(data[field.name]);
-      }
-    });
+    this.serializeJsonFieldValues(data, fields);
 
     this.serializeHasManyRelationships(data, fields);
 
@@ -2493,6 +2489,114 @@ export class CollectionMutationService extends BaseService {
    * Mutates `finalData` in place. Idempotent: arrays become strings; existing
    * strings (e.g. when the caller pre-serialized) are not double-encoded.
    */
+  /**
+   * Put every JSON-backed value (rich text, blocks, array, group, json) into
+   * the form its column stores, in place.
+   *
+   * Its own method because more than one write path needs it and they must not
+   * each decide which field types count: a path that serializes only some of
+   * them hands the driver an object for a text-backed column, and SQLite
+   * rejects the bind outright rather than coercing it. The localized split in
+   * particular copies these values into the companion payload, so anything
+   * unserialized here fails at the companion write instead of the main one,
+   * where the cause is much harder to read.
+   */
+  /**
+   * Everything a CREATE does to its payload between the last hook and the
+   * write, and the three things it takes OUT of it.
+   *
+   * One implementation for the interactive create and the batch worker, which
+   * ran the same eleven steps in the same order in two places. That is the
+   * shape a step goes missing from: the JSON conversion was present in one and
+   * absent in the other for exactly as long as the two lists were maintained
+   * by hand, and a localized rich-text value reached its column unconverted as
+   * a result.
+   *
+   * The three values come back rather than staying on `finalData` because none
+   * of them has a column on the parent row — many-to-many links live in a
+   * junction table and field groups in their own `comp_` tables — so leaving
+   * any of them in place fails the insert.
+   *
+   * Generic in the field type so callers keep theirs: they go on to read
+   * relationship properties off the returned list.
+   */
+  private async prepareCreateWritePayload<
+    T extends {
+      type: string;
+      name: string;
+      options?: { relationType?: string };
+    },
+  >(
+    finalData: Record<string, unknown>,
+    fields: T[]
+  ): Promise<{
+    manyToManyFields: T[];
+    manyToManyData: Record<string, string[]>;
+    componentFieldData: Record<string, unknown>;
+  }> {
+    await hashPasswordFieldValues(finalData, fields);
+
+    // AFTER every mutating hook has run. A field-level
+    // beforeValidate/beforeChange hook can (re)introduce an own
+    // `status: undefined`, which names no status change but would otherwise be
+    // sanitized to SQL NULL on the raw-parameter path — silently unpublishing
+    // a published row, or nulling a create's draft default — without passing
+    // the publish/unpublish gate. The last status-touching step before the
+    // transition classification and the write, so the payload and the gate
+    // agree even when a hook set the undefined.
+    stripUndefinedStatus(finalData);
+
+    // Before the many-to-many extraction and the JSON conversion, and walking
+    // containers too: a reference left populated inside a group or repeater is
+    // serialized into the row as JSON and never read back as a reference.
+    normalizeRelationshipFields(finalData, fields as unknown as FieldConfig[]);
+    normalizeUploadFields(
+      finalData,
+      fields as unknown as Parameters<typeof normalizeUploadFields>[1]
+    );
+
+    // Only a UI-built many-to-many routes through a junction table. Code-first
+    // `hasMany: true` is a JSON array on the parent column, and is converted
+    // with the other JSON values instead.
+    const manyToManyFields = fields.filter(
+      f => f.type === "relationship" && f.options?.relationType === "manyToMany"
+    );
+    const manyToManyData: Record<string, string[]> = {};
+    for (const field of manyToManyFields) {
+      if (finalData[field.name]) {
+        manyToManyData[field.name] = Array.isArray(finalData[field.name])
+          ? (finalData[field.name] as string[])
+          : [finalData[field.name] as string];
+        delete finalData[field.name];
+      }
+    }
+
+    const componentFieldData = this.extractComponentFieldData(
+      finalData,
+      fields as unknown as Parameters<typeof this.extractComponentFieldData>[1]
+    );
+    return { manyToManyFields, manyToManyData, componentFieldData };
+  }
+
+  private serializeJsonFieldValues(
+    data: Record<string, unknown>,
+    // `hasMany`/`relationTo` are what tell a relationship that stores an array
+    // apart from one that stores a single id, which decides whether its value
+    // is JSON-backed at all.
+    fields: {
+      type: string;
+      name: string;
+      hasMany?: boolean;
+      relationTo?: unknown;
+    }[]
+  ): void {
+    for (const field of fields) {
+      if (isJsonFieldType(field.type, field) && data[field.name] != null) {
+        data[field.name] = toJsonColumnValue(data[field.name]);
+      }
+    }
+  }
+
   private serializeHasManyRelationships(
     finalData: Record<string, unknown>,
     fields: { type: string; name: string; hasMany?: boolean }[]
@@ -3145,58 +3249,8 @@ export class CollectionMutationService extends BaseService {
       // re-sanitize once more so the stored value stays URL-safe.
       await this.reSanitizeSlug(finalData, isSlugTaken);
 
-      await hashPasswordFieldValues(finalData, fields);
-
-      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
-      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
-      // `status: undefined`, which names no status change but would otherwise be
-      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
-      // published row, or nulling a create's draft default — without passing the
-      // publish/unpublish gate. Placed here, the last status-touching step before
-      // the transition classification and the write, so the write payload and the
-      // gate agree even when a hook set the undefined.
-      stripUndefinedStatus(finalData);
-
-      // Normalize relationship field values (extract IDs from objects with display properties)
-      // This must happen before many-to-many extraction and JSON serialization
-      // Walks containers too: a reference left populated inside a group or
-      // repeater is serialized to JSON as the row and never read back as a
-      // reference.
-      normalizeRelationshipFields(
-        finalData,
-        fields as unknown as FieldConfig[]
-      );
-
-      // Normalize upload field values (extract IDs from populated media objects)
-      normalizeUploadFields(finalData, fields);
-
-      // Separate regular fields from many-to-many relations
-      const manyToManyFields = fields.filter(
-        f =>
-          f.type === "relationship" &&
-          // Only UI-built manyToMany routes through a junction table.
-          // Code-first `hasMany: true` is stored as a JSON array on the
-          // parent column (see field-column-descriptor.ts kind="json")
-          // and is serialized later in the same finalData pass.
-          f.options?.relationType === "manyToMany"
-      );
-      const manyToManyData: Record<string, string[]> = {};
-
-      // Extract many-to-many data from finalData (after hooks)
-      manyToManyFields.forEach(field => {
-        if (finalData[field.name]) {
-          manyToManyData[field.name] = Array.isArray(finalData[field.name])
-            ? (finalData[field.name] as string[])
-            : [finalData[field.name] as string];
-          delete finalData[field.name]; // Remove from main insert
-        }
-      });
-
-      // Field-group values go to their own comp_{slug} tables, not this row.
-      const componentFieldData = this.extractComponentFieldData(
-        finalData,
-        fields
-      );
+      const { manyToManyFields, manyToManyData, componentFieldData } =
+        await this.prepareCreateWritePayload(finalData, fields);
 
       this.serializeHasManyRelationships(finalData, fields);
 
@@ -3244,15 +3298,7 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
-      // Serialize JSON fields (richtext, blocks, array, group, json)
-      fields.forEach(field => {
-        if (
-          isJsonFieldType(field.type, field) &&
-          finalData[field.name] != null
-        ) {
-          finalData[field.name] = toJsonColumnValue(finalData[field.name]);
-        }
-      });
+      this.serializeJsonFieldValues(finalData, fields);
 
       // Convert date-field strings into `Date` objects so Drizzle can bind
       // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
@@ -7024,13 +7070,12 @@ export class CollectionMutationService extends BaseService {
               const writesCompanionRow =
                 !!localizedUpdate &&
                 Object.keys(localizedUpdate.companionData).length > 0;
-              const effectiveLocaleStatus =
-                typeof companionStatus === "string"
-                  ? companionStatus
-                  : (committedLocaleStatus ??
-                    (localizedUpdate?.hasStatus && writesCompanionRow
-                      ? COMPANION_DEFAULT_STATUS
-                      : null));
+              const effectiveLocaleStatus = resolveEffectiveLocaleStatus({
+                hasStatus: localizedUpdate?.hasStatus === true,
+                writesCompanionRow,
+                requestedStatus: companionStatus,
+                committedStatus: committedLocaleStatus,
+              });
               // A partial translatable update only carries the *changed*
               // localized values in `localizedFieldValues`; the write locale's
               // other companion fields (set by a prior write, untouched here)
@@ -8482,65 +8527,13 @@ export class CollectionMutationService extends BaseService {
         await this.reSanitizeSlug(finalData, isSlugTaken);
       }
 
-      await hashPasswordFieldValues(finalData, fields);
+      const { manyToManyFields, manyToManyData, componentFieldData } =
+        await this.prepareCreateWritePayload(finalData, fields);
 
-      // Strip an explicit `status: undefined` AFTER every mutating hook has run.
-      // A field-level beforeValidate/beforeChange hook can (re)introduce an own
-      // `status: undefined`, which names no status change but would otherwise be
-      // sanitized to SQL NULL on the raw-parameter path — silently unpublishing a
-      // published row, or nulling a create's draft default — without passing the
-      // publish/unpublish gate. Placed here, the last status-touching step before
-      // the transition classification and the write, so the write payload and the
-      // gate agree even when a hook set the undefined.
-      stripUndefinedStatus(finalData);
-
-      // Normalize relationship field values (extract IDs from objects with display properties)
-      // This must happen before many-to-many extraction and JSON serialization
-      // Walks containers too: a reference left populated inside a group or
-      // repeater is serialized to JSON as the row and never read back as a
-      // reference.
-      normalizeRelationshipFields(
-        finalData,
-        fields as unknown as FieldConfig[]
-      );
-
-      // Normalize upload field values (extract IDs from populated media objects)
-      normalizeUploadFields(finalData, fields);
-
-      // Separate regular fields from many-to-many relations
-      const manyToManyFields = fields.filter(
-        f =>
-          f.type === "relationship" &&
-          // Only UI-built manyToMany routes through a junction table.
-          // Code-first `hasMany: true` is stored as a JSON array on the
-          // parent column (see field-column-descriptor.ts kind="json")
-          // and is serialized later in the same finalData pass.
-          f.options?.relationType === "manyToMany"
-      );
-      const manyToManyData: Record<string, string[]> = {};
-
-      manyToManyFields.forEach(field => {
-        if (finalData[field.name]) {
-          manyToManyData[field.name] = Array.isArray(finalData[field.name])
-            ? (finalData[field.name] as string[])
-            : [finalData[field.name] as string];
-          delete finalData[field.name];
-        }
-      });
-
-      // Field-group values live in their own comp_{slug} tables and have no
-      // column on the main row; left in place, the insert fails on the first
-      // one. Written after the row exists, below.
-      const componentFieldData = this.extractComponentFieldData(
-        finalData,
-        fields
-      );
-
+      // Before the localized split below, which copies these values into the
+      // companion payload for the row this create is about to insert.
+      this.serializeJsonFieldValues(finalData, fields);
       this.serializeHasManyRelationships(finalData, fields);
-
-      // Convert date-field strings into `Date` objects so Drizzle can bind
-      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
-      // failure mode this guards against.
       coerceDateFieldsToDate(finalData, fields);
 
       // Prepare entry data
@@ -9108,11 +9101,11 @@ export class CollectionMutationService extends BaseService {
         fields
       );
 
+      // Before the localized split below. The upsert writes these straight
+      // into an existing translation, so an unconverted value fails there
+      // rather than on the main row, where the cause reads plainly.
+      this.serializeJsonFieldValues(finalData, fields);
       this.serializeHasManyRelationships(finalData, fields);
-
-      // Convert date-field strings into `Date` objects so Drizzle can bind
-      // them to `timestamp` columns. See `coerceDateFieldsToDate` for the
-      // failure mode this guards against.
       coerceDateFieldsToDate(finalData, fields);
 
       // Update using transaction context
@@ -9259,10 +9252,20 @@ export class CollectionMutationService extends BaseService {
       // still a draft, would read `draft -> published` and announce
       // `entry.published` for a translation nothing published.
       const perLocaleStatus = localizedUpdate?.hasStatus === true;
+      // Whether a companion row is written at all decides whether this locale
+      // ends the write with a status of its own: a patch naming only shared
+      // fields writes none, and the locale keeps having none.
+      const writesCompanionRow =
+        !!localizedUpdate &&
+        Object.keys(localizedUpdate.companionData).length > 0;
       const localeStatusAfter = perLocaleStatus
-        ? ((localizedUpdate.companionData._status as string | undefined) ??
-          previousCompanionStatus)
-        : undefined;
+        ? resolveEffectiveLocaleStatus({
+            hasStatus: true,
+            writesCompanionRow,
+            requestedStatus: localizedUpdate.companionData._status,
+            committedStatus: previousCompanionStatus,
+          })
+        : null;
 
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
@@ -9342,6 +9345,24 @@ export class CollectionMutationService extends BaseService {
         if (field === "id") continue;
         (updated as Record<string, unknown>)[field] = value;
       }
+      // Whether this write put anything into one language in particular, named
+      // once because both the version and the events ask it.
+      //
+      // A status-only write looks like it should need a second clause and does
+      // not: `readCompanionLocalizedValues` resolves an absent translation to
+      // `null` rather than omitting it, so this map carries an entry for every
+      // localized field whenever there is a companion at all — including for a
+      // locale with no row yet. Adding `|| a status was written` would be
+      // unreachable.
+      const capturedLocaleState = Object.keys(localizedDocument).length > 0;
+      // The status the MAIN row now holds, read before the overlay below
+      // replaces it. The main row and a translation can move independently, so
+      // the two transitions are recorded separately and each needs its own
+      // pair of endpoints.
+      const mainStatusAfter = (updated as { status?: unknown }).status as
+        | string
+        | undefined;
+
       // And this language's own status, for the same reason its values are
       // overlaid: what is recorded describes one translation, and the main
       // row's status describes the entry. Without it the snapshot and the
@@ -9542,10 +9563,9 @@ export class CollectionMutationService extends BaseService {
           // version is tagged with it. Untagged, history reads the snapshot as
           // shared and a restore drops every per-locale field — or refuses,
           // on a collection where they all are.
-          localeTag:
-            Object.keys(localizedDocument).length > 0
-              ? localizedUpdate?.writeLocale
-              : undefined,
+          localeTag: capturedLocaleState
+            ? localizedUpdate?.writeLocale
+            : undefined,
         });
       }
       const eventFields = await this.webhookFieldTreeIfRecording(
@@ -9562,9 +9582,10 @@ export class CollectionMutationService extends BaseService {
           id: entryId,
           // The language this event describes. A receiver reads it from the
           // resource alone, so a localized write that omits it is delivered as
-          // belonging to no translation in particular.
-          ...(Object.keys(localizedDocument).length > 0 &&
-          localizedUpdate?.writeLocale
+          // belonging to no translation in particular. A write that moved only
+          // this locale's STATUS counts: it carries no field value, and
+          // counting field values alone would leave it unattributed.
+          ...(capturedLocaleState && localizedUpdate?.writeLocale
             ? { locale: localizedUpdate.writeLocale }
             : {}),
         },
@@ -9574,33 +9595,68 @@ export class CollectionMutationService extends BaseService {
         actor: eventActor,
       });
       if ((collection as { status?: boolean }).status === true) {
-        const statusRecorded = await this.recordStatusEvents(tx, {
-          collection: params.collectionName,
-          id: entryId,
-          // Same reason as the update event above.
-          ...(Object.keys(localizedDocument).length > 0 &&
-          localizedUpdate?.writeLocale
-            ? { locale: localizedUpdate.writeLocale }
-            : {}),
-          // Both ends of the move, read from the two documents that describe
-          // this language: `previousEntry` carries the companion's prior
-          // status and `updated` carries the one this write leaves. For a
-          // per-locale status that is the companion's, not the main row's — a
-          // German draft under a published entry transitions from `draft` —
-          // and taking the two from different rows would report a move nothing
-          // performed.
-          from: readStringField(previousEntry, "status") ?? null,
-          to: (updated as { status?: unknown }).status as
-            | string
-            | null
-            | undefined,
-          isCreate: false,
-          data: updatedDocument,
-          previous: previousDocument,
-          fields: eventFields,
-          actor: eventActor,
-        });
-        eventRecorded = eventRecorded || statusRecorded;
+        // A write can move the published state in two places that move
+        // independently, so each is recorded on its own terms — the same
+        // routing the single-entry update performs. Collapsing them into one
+        // event gets a case wrong in each direction: a content-only patch on a
+        // draft translation under a published entry announces a publication
+        // nothing performed, and a patch that really does publish the main row
+        // while the default translation was already published announces
+        // nothing at all.
+        const mainFrom = readStringField(existingEntry, "status") ?? null;
+        const companionStatusWritten =
+          typeof localizedUpdate?.companionData._status === "string";
+        const companionNext = companionStatusWritten
+          ? (localizedUpdate.companionData._status as string)
+          : undefined;
+        // The default locale's status lives on BOTH the main row and its
+        // companion, so an ordinary default-locale write records the same
+        // transition twice. Suppress the main-row event only when the
+        // companion write encodes that identical move — same from AND same to.
+        const companionEncodesMainTransition =
+          companionStatusWritten &&
+          previousCompanionStatus === mainFrom &&
+          companionNext === mainStatusAfter;
+
+        if (!companionEncodesMainTransition) {
+          // Described in main-row terms: the documents carry this locale's
+          // status overlaid, which is the other transition, not this one.
+          const mainStatusRecorded = await this.recordStatusEvents(tx, {
+            collection: params.collectionName,
+            id: entryId,
+            from: mainFrom,
+            to: mainStatusAfter,
+            isCreate: false,
+            data:
+              mainStatusAfter !== undefined
+                ? { ...updatedDocument, status: mainStatusAfter }
+                : updatedDocument,
+            previous:
+              previousDocument !== null
+                ? { ...previousDocument, status: mainFrom }
+                : previousDocument,
+            fields: eventFields,
+            actor: eventActor,
+          });
+          eventRecorded = eventRecorded || mainStatusRecorded;
+        }
+
+        if (companionStatusWritten) {
+          // This translation's own move, tagged with the language it describes.
+          const localeStatusRecorded = await this.recordStatusEvents(tx, {
+            collection: params.collectionName,
+            id: entryId,
+            locale: localizedUpdate?.writeLocale,
+            from: previousCompanionStatus,
+            to: companionNext,
+            isCreate: false,
+            data: updatedDocument,
+            previous: previousDocument,
+            fields: eventFields,
+            actor: eventActor,
+          });
+          eventRecorded = eventRecorded || localeStatusRecorded;
+        }
       }
 
       // Execute afterUpdate hooks (unless skipped)
