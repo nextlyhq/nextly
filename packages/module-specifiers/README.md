@@ -5,10 +5,14 @@ only by layering guards inside this repository, never published and never
 bundled into anything shipped.
 
 ```ts
+import { readFileSync } from "node:fs";
+
 import {
   importedSpecifiers,
   UNRESOLVABLE_SPECIFIER,
 } from "@nextlyhq/module-specifiers";
+
+const file = "src/index.ts";
 
 importedSpecifiers(readFileSync(file, "utf8"), file);
 ```

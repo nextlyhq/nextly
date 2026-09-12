@@ -32,12 +32,12 @@ import {
   getBlock,
   locateNode,
   makeNode,
+  placementTypesOf,
   placementVerdict,
   composedRootTypes,
   readableDefinition,
   resolveComponentInstances,
   COMPONENT_INSTANCE_TYPE,
-  isComponentInstance,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
@@ -469,7 +469,8 @@ export function catalogFrom(
  */
 export function patternEntriesFrom(
   patterns: readonly SavedPattern[],
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): PatternInsertEntry[] {
   const entries: PatternInsertEntry[] = [];
   for (const pattern of patterns) {
@@ -494,7 +495,7 @@ export function patternEntriesFrom(
     // it depends on the destination: per target it would re-walk every
     // pattern's forest on each keystroke of a filter, against a library the
     // design sizes at three thousand entries.
-    if (patternRefusal(document, nesting) !== undefined) continue;
+    if (patternRefusal(document, nesting, definitions) !== undefined) continue;
     entries.push({
       kind: "pattern",
       id: `${PATTERN_ENTRY_PREFIX}${pattern.id}`,
@@ -869,34 +870,13 @@ function rootsAllowedAt(
 /**
  * The block types a node ALREADY ON THE PAGE is judged by when it moves.
  *
- * The rule {@link entryAllowedAt} applies at the insert, asked of a node
- * instead of an entry: a block by its own type, an instance by the ROOTS of
- * the definition it draws — read through `definitions` exactly as its tile's
- * were. The instance node's own type is not a
- * registered block and the nesting source answers "no restriction" for it, so
- * a move judged by the node's type would let a component whose root belongs
- * only inside a Columns be dragged into a paragraph after its insert was
- * refused there.
- *
- * An instance that does not resolve — no definition, an unreadable one, a
- * root the resolver had to leave standing — is judged by its own type, which
- * is to say not at all. It draws as a placeholder wherever it sits, and
- * refusing to move one would pin a placeholder to the spot it was left in.
+ * The engine's rule, re-exported here because this is where the builder's
+ * placement questions are answered and every one of them asks it: the drag,
+ * the keyboard move, a pattern's roots, and — in the engine itself — the
+ * planners the click runs. One implementation, so an offer cannot resolve
+ * against a forest the mutation judges raw.
  */
-export function placementTypesOf(
-  node: BlockNode,
-  definitions?: ComponentLookup
-): readonly string[] {
-  if (definitions === undefined || !isComponentInstance(node)) {
-    return [node.type];
-  }
-  const componentId = node.props.componentId;
-  const drawn =
-    typeof componentId === "string"
-      ? offerableDefinition(definitions.get(componentId), definitions)
-      : undefined;
-  return drawn === undefined ? [node.type] : drawn.roots;
-}
+export { placementTypesOf };
 
 /**
  * Whether a block type may be placed at a target, by NAME.

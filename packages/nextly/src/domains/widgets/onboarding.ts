@@ -47,6 +47,9 @@
 import type { ConditionProbe } from "./condition-probe";
 import type { OnboardingStep } from "./onboarding-steps";
 
+/** A step no permission gates, as a predicate the walk below can call alike. */
+const ALWAYS = (): Promise<boolean> => Promise.resolve(true);
+
 /**
  * Every step, with the reader's progress through it.
  *
@@ -68,12 +71,42 @@ export async function onboardingSteps(
   // guaranteed-empty pass over an empty list.
   const hasContent = slugs.length > 0 && (await probe.hasContent());
 
-  return [
-    // True by construction: an unauthenticated caller never reaches this.
-    { id: "account", complete: true },
-    { id: "collection", complete: slugs.length > 0 },
-    { id: "entry", complete: hasContent },
+  const candidates: Array<
+    OnboardingStep & { offered: () => Promise<boolean> }
+  > = [
+    // True by construction: an unauthenticated caller never reaches this,
+    // and no permission gates having made the account one is already using.
+    { id: "account", complete: true, offered: ALWAYS },
+    {
+      id: "collection",
+      complete: slugs.length > 0,
+      offered: () => probe.mayCreateCollection(),
+    },
+    {
+      id: "entry",
+      complete: hasContent,
+      offered: () => probe.mayCreateEntry(),
+    },
   ];
+
+  const offered: OnboardingStep[] = [];
+  for (const { offered: mayPerform, ...step } of candidates) {
+    // 🔴 Asked only of an INCOMPLETE step, and the asymmetry is the design
+    // rather than an optimisation that leaked into the semantics. A finished
+    // step is a fact about the install's history, and history is not an offer:
+    // withholding it would shorten a reader's list by the very rows that show
+    // them how far the install has come. An UNFINISHED step is an offer, and
+    // an offer the reader cannot accept is the defect -- the link lands on a
+    // surface that refuses them, and `onboardingIsIncomplete` below stays true
+    // for as long as their account exists, pinning the card to their dashboard
+    // permanently.
+    //
+    // It is also what keeps a settled install off this path entirely: with
+    // every step complete no permission decision is taken at all, so the
+    // steady state costs nothing.
+    if (step.complete || (await mayPerform())) offered.push(step);
+  }
+  return offered;
 }
 
 /**
@@ -89,6 +122,14 @@ export async function onboardingSteps(
  * settles it. Left exhaustive because the same call draws the card, and the two
  * paths sharing one implementation is worth more than one skipped count on a
  * request that is about to make the same one.
+ *
+ * Reader-scoped through the steps themselves, which is what `onboardingSteps`
+ * filtering buys: a step this reader cannot perform is not in the list, so it
+ * cannot hold the condition true. Scoped any other way -- an aggregate taken
+ * over every step that EXISTS -- a reader who may read a collection and create
+ * nothing in it would have this answer true for the life of their account,
+ * with the card pinned to their dashboard offering an action that always
+ * fails. That is the opposite of what the lifecycle was built for.
  */
 export async function onboardingIsIncomplete(
   probe: ConditionProbe

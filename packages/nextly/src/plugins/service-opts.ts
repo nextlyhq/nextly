@@ -10,7 +10,7 @@ import type {
   CollectionEntry,
   CollectionService,
 } from "../services/collections/collection-service";
-import { listRoleSlugsForUser } from "../services/lib/permissions";
+import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
@@ -134,7 +134,22 @@ export interface ServiceOptsDeps {
   listRoleSlugs: (userId: string) => Promise<string[]>;
 }
 
-const REAL_DEPS: ServiceOptsDeps = { listRoleSlugs: listRoleSlugsForUser };
+/**
+ * The resolver that refuses rather than answering with an empty set.
+ *
+ * A role set nobody could read is not a role set. The swallowing resolver
+ * returns `[]` on a failed query, which is the safe direction for a rule that
+ * GRANTS on a role and the wrong one for a rule that WITHHOLDS on one:
+ * `user.role !== "suspended"` admits a caller whose roles the database
+ * declined to answer for, and no caller downstream can tell that empty set
+ * from a user who genuinely holds no roles.
+ *
+ * A throw here fails the plugin's call, which is the correct direction: an
+ * access decision taken on roles nobody could read is not a decision.
+ */
+const REAL_DEPS: ServiceOptsDeps = {
+  listRoleSlugs: listRoleSlugsForUserOrRefuse,
+};
 
 /**
  * Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`.

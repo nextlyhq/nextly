@@ -866,7 +866,88 @@ export function composedRootTypes(
     >(),
     rootsRead: new Map<string, RememberedRoots>(),
   };
-  return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
+  // The one boundary, at the published entry point rather than per definition,
+  // because the document's own roots are read by the same walk and no
+  // per-definition guard covers them.
+  //
+  // Caught rather than asked first, which is this module's usual answer to a
+  // stored shape: what raises here is a property ACCESSOR, and reading the
+  // property IS the raise, so there is no question to ask before it. An
+  // in-process caller can supply one — the lookup is a Map the host fills, not
+  // a document parsed from a response — and the RESOLVER survives such a node.
+  // A query the resolver outlives must not be what takes the editor down: its
+  // one caller builds the insert panel's catalogue, so a single unreadable
+  // definition would leave an author no panel at all.
+  //
+  // `undefined` is the answer already defined for a forest this cannot judge,
+  // and its callers already withhold the tile for it.
+  try {
+    return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The block types a NODE is judged by when the nesting rule is asked about it.
+ *
+ * A block answers with its own type. A component instance answers with the
+ * ROOTS of the definition it draws, read through the same lookup the canvas
+ * resolves against — because `nextly/component-instance` is not a registered
+ * block, and every rule spelled over types gets the wrong answer for it in
+ * both directions. A parent rule finds no restriction on the instance type and
+ * admits a component whose root belongs only inside a Columns; a slot naming
+ * what it admits does not name the instance type and bars every component from
+ * it, including the ones drawing exactly what the slot asks for.
+ *
+ * One rule and one implementation, because the palette, the keyboard move and
+ * the planners all ask it, and an offer that resolves against a forest the
+ * mutation does not resolve is an offer the click then refuses — or worse,
+ * accepts.
+ *
+ * An instance that does not resolve — no definition, an unreadable one, a
+ * definition composing to nothing, a root the resolver would leave standing —
+ * is judged by its own type, which is to say not at all. It draws as a
+ * placeholder wherever it sits, and refusing to carry one would pin a
+ * placeholder to the spot it was left in, or make a whole pattern unplaceable
+ * because one row of the library is gone.
+ *
+ * Without a lookup every node is judged by its own type. That is the answer a
+ * caller holding no library gets, and it is the behaviour every caller had
+ * before the lookup existed.
+ */
+export function placementTypesOf(
+  node: BlockNode,
+  definitions?: ComponentLookup
+): readonly string[] {
+  // Read defensively, because a STORED forest reaches this: the internal
+  // nesting walk says in as many words that a slot may hold anything, and
+  // asking what a node draws reads one field further than asking its type did.
+  // The planners shape-check their forest before they get here, so this is a
+  // boundary rather than the whole defence — what it must not do is turn a
+  // malformed entry into a raise where a refusal belongs.
+  const type = isPlainRecord(node) ? node.type : undefined;
+  // No type is no answer: the nesting rule has nothing to judge, and the shape
+  // rule refuses the node before anything is placed.
+  if (typeof type !== "string") return [];
+  if (definitions === undefined || type !== COMPONENT_INSTANCE_TYPE) {
+    return [type];
+  }
+  const props = (node as unknown as Record<string, unknown>).props;
+  const componentId = isPlainRecord(props) ? props.componentId : undefined;
+  if (typeof componentId !== "string") return [type];
+  // The lookup is READ inside the boundary, not before it. It is a
+  // caller-supplied object rather than a map this module builds, and the
+  // boundary inside the roots query does not cover a `get` that raises — which
+  // escapes to exactly the caller that boundary exists for.
+  try {
+    const document = readableDefinition(definitions.get(componentId));
+    if (document === undefined || document.nodes.length === 0) return [type];
+    const roots = composedRootTypes(document, definitions);
+    return roots === undefined || roots.length === 0 ? [type] : roots;
+  } catch {
+    return [type];
+  }
 }
 
 /** A definition's root types as answered once, and how deep an instance they hold for. */
@@ -896,14 +977,15 @@ interface RootsReader extends DefinitionReader {
 function rootTypesOf(
   nodes: readonly unknown[],
   reader: RootsReader,
-  scope: ComposedScope
+  scope: ComposedScope,
+  plans?: ReadonlyMap<string, NodePlan>
 ): readonly string[] | undefined {
   // A set kept in insertion order, so the answer lists types as the composed
   // forest would first meet them and a verdict's first refusal is the
   // forest's first.
   const out = new Set<string>();
   for (const node of nodes) {
-    const types = rootTypesOfNode(node, reader, scope);
+    const types = rootTypesOfNode(node, reader, scope, plans);
     if (types === undefined) return undefined;
     for (const type of types) out.add(type);
   }
@@ -914,7 +996,8 @@ function rootTypesOf(
 function rootTypesOfNode(
   node: unknown,
   reader: RootsReader,
-  scope: ComposedScope
+  scope: ComposedScope,
+  plans?: ReadonlyMap<string, NodePlan>
 ): readonly string[] | undefined {
   // A root the INLINER would drop stands for nothing: `cloneDefinitionForest`
   // skips a node that is not a record or whose id is not a string, so it never
@@ -922,21 +1005,61 @@ function rootTypesOfNode(
   // root the page never gets — and one whose every root is dropped would be
   // offered as placing something and place nothing.
   if (!isPlainRecord(node) || typeof node.id !== "string") return [];
+  // What the instance holding this definition decided about this very node.
+  // `cloneDefinitionNode` returns nothing at all for `visible === false`, so a
+  // root an override hides stands for no type — a component whose only root is
+  // hidden composes to nothing and must not be offered as placing anything.
+  // `true` is the other half of the same rule: it deletes the node's own gate
+  // before the instance branch is reached, so a gated root the instance turns
+  // on is expanded rather than left standing.
+  const shown = plans?.get(node.id)?.visible;
+  if (shown === false) return [];
   const { type } = node;
   // A node the inliner keeps and this cannot name: the nesting rule has no
   // type to judge, so the caller is told nothing rather than a guess.
   if (typeof type !== "string") return undefined;
   if (type !== COMPONENT_INSTANCE_TYPE) return [type];
+  return instanceRootTypes(node, reader, scope, shown === true);
+}
+
+/**
+ * What one INSTANCE root stands for: the root types of the definition it
+ * draws, or nothing where the resolver would leave it standing.
+ *
+ * `ungated` is the instance holding it having said "show this", which deletes
+ * the node's own gate before the resolver reaches its instance branch.
+ */
+function instanceRootTypes(
+  node: Record<string, unknown>,
+  reader: RootsReader,
+  scope: ComposedScope,
+  ungated: boolean
+): readonly string[] | undefined {
   // The resolver's own order: a gated instance is returned standing before
   // its id is even read, and an instance naming no component is malformed.
-  if (isConditionGated(node)) return undefined;
+  if (!ungated && isConditionGated(node)) return undefined;
   const componentId = componentIdOf(node);
   if (componentId === undefined) return undefined;
   // The refusals first, and the resolver's own — a cycle or the cap refuses
   // THIS instance whatever was answered for its definition elsewhere.
   const found = definitionFor(componentId, reader, scope);
   if (typeof found === "string") return undefined;
-  return definitionRootTypes(componentId, found, reader, scope);
+  return definitionRootTypes(componentId, found, reader, scope, node);
+}
+
+/**
+ * Whether any plan decides a node's visibility.
+ *
+ * The ordinary instance decides none — it overrides props, or nothing at all —
+ * and then its definition's roots are the definition's own, which is the answer
+ * worth remembering across every instance that points at it. Only an instance
+ * that hides or shows one of them asks a question of its own.
+ */
+function hidesOrShows(plans: ReadonlyMap<string, NodePlan>): boolean {
+  for (const plan of plans.values()) {
+    if (plan.visible !== undefined) return true;
+  }
+  return false;
 }
 
 /**
@@ -947,20 +1070,41 @@ function definitionRootTypes(
   componentId: string,
   definition: ComponentDocument,
   reader: RootsReader,
-  scope: ComposedScope
+  scope: ComposedScope,
+  instance: Record<string, unknown>
 ): readonly string[] | undefined {
-  const remembered = reader.rootsRead.get(componentId);
+  // The resolver's OWN planner, not a second reading of `props.overrides`: it
+  // is what decides a node's visibility when the page is drawn, it folds the
+  // chosen variant's presets under the instance's own answers, and a rule
+  // spelled twice is one that will eventually differ from the render.
+  const plans = planEdits(
+    definition,
+    instance as unknown as ResolvedBlockNode,
+    undefined,
+    false
+  );
+  const decided = hidesOrShows(plans);
+  // Remembered answers are a property of the DEFINITION. An instance that
+  // decides its visibility is asking a different question, so it neither reads
+  // the memo nor writes to it — two instances of one component can hide
+  // different roots, and the first would otherwise answer for the second.
+  const remembered = decided ? undefined : reader.rootsRead.get(componentId);
   if (remembered !== undefined && scope.depth <= remembered.depth) {
     return remembered.types;
   }
-  const types = rootTypesOf(definition.nodes, reader, {
-    depth: scope.depth + 1,
-    onPath: new Set(scope.onPath).add(componentId),
-  });
+  const types = rootTypesOf(
+    definition.nodes,
+    reader,
+    {
+      depth: scope.depth + 1,
+      onPath: new Set(scope.onPath).add(componentId),
+    },
+    decided ? plans : undefined
+  );
   // Only an ANSWER is remembered. A refusal under this instance can be a
   // property of where it sits — the cap, or a loop closed through the path
   // above — and the same definition may answer under the next.
-  if (types !== undefined) {
+  if (types !== undefined && !decided) {
     reader.rootsRead.set(componentId, { types, depth: scope.depth });
   }
   return types;
@@ -1906,7 +2050,8 @@ function isPathPrefix(shorter: string, longer: string): boolean {
  *
  * The value is read from the final props for a prop exposure, so it reflects
  * every write that reached it. For a `visibility` exposure there is no prop to
- * read — the winning write's decision IS the value.
+ * read — the winning write's decision IS the value, and where there is no
+ * write, the definition's own gate is ({@link inheritedVisibility}).
  */
 function exposedState(
   property: ExposedProperty,
@@ -1967,10 +2112,40 @@ function valueAt(
   props: ReadonlyMap<string, Record<string, unknown>>,
   nodes: ReadonlyMap<string, BlockNode>
 ): OverrideValue {
-  if (property.type === "visibility") return winner?.override.value;
+  if (property.type === "visibility") {
+    return winner === undefined
+      ? inheritedVisibility(nodes.get(property.nodeId))
+      : winner.override.value;
+  }
   const record =
     props.get(property.nodeId) ?? nodes.get(property.nodeId)?.props;
   return readPath(record, property.propPath);
+}
+
+/**
+ * What a `visibility` exposure reads when the instance has written nothing.
+ *
+ * The DEFINITION's own answer, which is `survivesGating` with no plan: a node
+ * carrying entry-field conditions is not served, and one carrying none is.
+ * Read from the target node rather than left blank, because blank is what a
+ * consumer reads as "nothing decides this" — and something does. An inspector
+ * drawing the row from a blank said "shown on this page" for a node the
+ * resolver keeps gated and the renderer's hidden-node pass withholds, which
+ * is the disagreement between the panel and the canvas that reading these
+ * rows from the resolver exists to prevent.
+ *
+ * `false` rather than a third value, because it is the decision in force and
+ * the row already says where it came from: `source` is `definition`, and
+ * `ownOverride` is false, so a surface can tell an inherited gate from an
+ * author's own hiding without a vocabulary of its own.
+ *
+ * An ungated node stays `undefined` — nothing is in force there, which is
+ * what a row with no override on a node with no gate means, and the surfaces
+ * already draw it as served.
+ */
+function inheritedVisibility(node: BlockNode | undefined): OverrideValue {
+  if (node === undefined) return undefined;
+  return isConditionGated(node) ? false : undefined;
 }
 
 /**
