@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-mcp",
-  "version": "0.0.2-alpha.65",
+  "version": "0.0.2-alpha.66",
   "description": "Experimental placeholder: the package for exposing a Nextly install to AI agents over the Model Context Protocol. Serves no endpoint yet",
   "license": "MIT",
   "type": "module",
@@ -29,7 +29,7 @@
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.65"
+    "nextly": "0.0.2-alpha.66"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
