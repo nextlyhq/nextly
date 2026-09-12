@@ -24,6 +24,7 @@ import {
   readPatternLibrary,
   type CollectionPage,
   type ComponentLibraryContext,
+  type ListPosition,
   type PatternLibraryContext,
 } from "./library-route";
 
@@ -68,6 +69,28 @@ function contextOver(
 }
 
 /**
+ * One page as the component route's own listing answers it: the rows, whether
+ * more exist, and the id the next page starts after.
+ *
+ * The stub computes the cursor the way the route does — the last row's id —
+ * so a fake that stops naming one is a fake that stopped modelling the
+ * service, rather than a walk that quietly changed.
+ */
+function pageOf(data: unknown[], hasMore: boolean): CollectionPage {
+  // Scanned BACKWARD, as production does. Inspecting only the final row makes
+  // the stub fall back to the offset where production would carry a cursor, so
+  // a page ending in an unreadable row exercises a different path here than the
+  // one that runs — and the pagination cases would pass about the wrong walk.
+  for (let i = data.length - 1; i >= 0; i -= 1) {
+    const row = data[i];
+    if (typeof row !== "object" || row === null) continue;
+    const id = (row as { id?: unknown }).id;
+    if (typeof id === "string" && id !== "") return { data, hasMore, next: id };
+  }
+  return { data, hasMore };
+}
+
+/**
  * A component-route context over the injected reads: a listing that answers
  * the pages given, and a by-id read that answers per id.
  *
@@ -84,11 +107,10 @@ function componentContext(
 ) {
   const queue = [...(components.pages ?? [])];
   const list = vi.fn(
-    (_slug: string, _page: number): Promise<CollectionPage> =>
-      Promise.resolve({
-        data: queue.shift() ?? [],
-        hasMore: queue.length > 0,
-      })
+    (_slug: string, _at: ListPosition): Promise<CollectionPage> => {
+      const data = queue.shift() ?? [];
+      return Promise.resolve(pageOf(data, queue.length > 0));
+    }
   );
   // The by-id read answers on the NEXT macrotask, and counts how many reads
   // are waiting at once: that is the observable of a walk that overlaps its
@@ -246,6 +268,34 @@ describe("how much of the library travels", () => {
     expect(patternReads(listEntries)).toBe(2);
     expect(library.items).toHaveLength(LIBRARY_PAGE_SIZE + 1);
     expect(library.meta.truncated).toBe(false);
+  });
+
+  it("takes its cursor from the greatest readable id on a page, not the last row", async () => {
+    /*
+     * Exercised HERE rather than on the component tier, because this is where
+     * the route's own `page()` runs: the component tier's listing is injected
+     * and a stub supplies the cursor, so a test there asserts the stub.
+     *
+     * A page can end in a row this reader cannot name — `readLibraryRow` skips
+     * those anyway. Taking the cursor from the final row would find none, and
+     * the walk would fall back to stepping by offset across a collection other
+     * authors are editing, which is the instability the cursor removes.
+     */
+    const { ctx, listEntries } = contextOver([
+      [row("a"), { title: "no id at all" }],
+      [row("b")],
+    ]);
+
+    const library = await readPatternLibrary(ctx);
+
+    // The second read asks for the rows AFTER the readable one, with the
+    // offset reset — not for page two of an offset walk.
+    const second = listEntries.mock.calls[1]?.[1] as
+      | { where?: unknown; pagination?: { page?: number } }
+      | undefined;
+    expect(second?.where).toEqual({ id: { greater_than: "a" } });
+    expect(second?.pagination?.page).toBe(1);
+    expect(library.items.map(p => p.id)).toEqual(["a", "b"]);
   });
 
   it("pages on what the SERVICE says, not on how many rows it could read", async () => {
@@ -701,19 +751,59 @@ describe("the component tier", () => {
     expect(library.meta.truncated).toBe(false);
   });
 
-  it("keys a component by the id the LISTING named, whatever the by-id row says its id is", async () => {
+  it("carries a component's KEYWORDS, which the palette searches", async () => {
+    // `LibraryComponent` derives from `SavedComponent`, and the catalogue
+    // builds a component tile's search terms from `keywords` exactly as it
+    // does a pattern's. Dropped here, a component whose useful terms are in
+    // neither its title nor its description could not be found by them.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: {
+          id: "a",
+          title: "A",
+          keywords: "hero banner masthead",
+          content: draft("x"),
+        },
+        // The ordinary row: a non-required field is stored as SQL NULL and
+        // read back with the KEY PRESENT, which the palette's reader expects
+        // as `null` rather than as absent.
+        b: { id: "b", title: "B", keywords: null, content: draft("y") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items[0]).toMatchObject({
+      keywords: "hero banner masthead",
+    });
+    expect(library.items[1]).toMatchObject({ keywords: null });
+  });
+
+  it("carries no keywords key for a row that has none at all", async () => {
+    // The control: a collection with no keywords field must not grow one.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a")]],
+      byId: { a: { id: "a", title: "A", content: draft("x") } },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items[0]).not.toHaveProperty("keywords");
+  });
+
+  it("keys a component by the id the LISTING named when the by-id row carries none", async () => {
     /*
-     * The by-id row is a PRESENTATION of the same row — an `afterRead` hook
-     * can rewrite or drop its `id` — while stored instances reference the id
-     * the collection holds, which is the one the listing named. Re-derived
-     * from the presentation, the client keyed its definitions by a name no
-     * instance uses, or dropped the component, and every instance of it drew
-     * as missing.
+     * The by-id row is a PRESENTATION of the same row — field-level access can
+     * drop its `id` — while stored instances reference the id the collection
+     * holds, which is the one the listing named. Re-derived from the
+     * presentation, the client dropped the component and every instance of it
+     * drew as missing.
      */
     const { ctx } = componentContext({
       pages: [[componentRow("a"), componentRow("b")]],
       byId: {
-        a: { id: "renamed", title: "A", content: draft("x") },
+        a: { title: "A", content: draft("x") },
         b: { title: "B", content: draft("y") },
       },
     });
@@ -725,12 +815,90 @@ describe("the component tier", () => {
       title: "A",
       document: draft("x"),
     });
-    // The second row lost its id AND its title in presentation: labelled by
-    // the id the listing named, as a row with no title is.
-    expect(library.items[1]).toMatchObject({
-      title: "B",
-      document: draft("y"),
+    expect(library.meta.truncated).toBe(false);
+  });
+
+  it("omits a component whose by-id row carries an id that is not a usable one", async () => {
+    /*
+     * A row with NO `id` key is the redaction case, and it is keyed by the
+     * listing. A row that HAS the key carrying `null`, a number or an empty
+     * string is a different thing: it answered with an identity, and that
+     * identity is not the one asked for. Read as "carries no id" its content
+     * would be served under the listing's name.
+     */
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b"), componentRow("c")]],
+      byId: {
+        a: { id: null, title: "A", content: draft("x") },
+        b: { id: 7, title: "B", content: draft("y") },
+        c: { id: "", title: "C", content: draft("z") },
+      },
     });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items).toEqual([]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("omits a component whose by-id row names a DIFFERENT id, and says the tier was cut", async () => {
+    /*
+     * The complement of the rule above, and the reason it is not "trust the
+     * listing's id whatever comes back". A `beforeOperation` hook can redirect
+     * the read, so the row answering for `a` may be `b`'s. Keyed by the
+     * listing, `b`'s draft would be served under `a`'s name: the canvas draws
+     * one component's content wherever the other is placed, with nothing
+     * anywhere saying so. Left out instead, and the tier is reported cut — a
+     * tile the author cannot see, with a sentence explaining why.
+     */
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: { id: "b", title: "B", content: draft("y") },
+        b: { id: "b", title: "B", content: draft("y") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["b"]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("omits a component whose document field the read did not return at all", async () => {
+    /*
+     * A stored-empty row answers with the key PRESENT and null — the field
+     * layer writes an unset non-required field as SQL NULL and reads it back
+     * that way — and it is a legal row the panel skips. A field-level access
+     * rule or an `afterRead` hook that removes the field answers with no key
+     * at all, which is a row this caller may not read whole. Flattened into
+     * one `null`, the tier reported itself complete while the client lacked a
+     * definition every instance of it needs.
+     */
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: { id: "a", title: "A" },
+        b: { id: "b", title: "B", content: draft("y") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["b"]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("keeps a component whose document field is stored EMPTY, and the library stays whole", async () => {
+    // The control for the rule above: null is an answer, and a legal one.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a")]],
+      byId: { a: { id: "a", title: "A", content: null } },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items).toEqual([{ id: "a", title: "A", document: null }]);
     expect(library.meta.truncated).toBe(false);
   });
 
@@ -746,6 +914,100 @@ describe("the component tier", () => {
 
     expect(library.items.map(c => c.id)).toEqual(["b"]);
     expect(library.meta.truncated).toBe(true);
+  });
+
+  it("pages from the greatest readable id, not the last row", async () => {
+    /*
+     * A page can end in a row whose id this caller cannot read — those rows are
+     * skipped by the completion anyway. Taking the cursor from the final row
+     * would find none, and the walk would fall back to stepping by offset
+     * across a collection other authors are editing, which is the instability
+     * the cursor exists to remove. Reading them once more costs nothing;
+     * losing the position costs a definition.
+     */
+    const list = vi.fn((_slug: string, at: ListPosition) => {
+      if (at.after === undefined) {
+        return Promise.resolve(
+          pageOf([componentRow("a"), { title: "no id at all" }], true)
+        );
+      }
+      return Promise.resolve(pageOf([componentRow("b")], false));
+    });
+    const ctx: ComponentLibraryContext = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      components: {
+        list,
+        read: (_slug: string, id: string) =>
+          Promise.resolve({ id, title: `Component ${id}`, content: draft(id) }),
+      },
+      store: DEFAULT_COMPONENT_STORE,
+    };
+
+    const library = await readComponentLibrary(ctx);
+
+    // The second page was asked for AFTER the readable row, with the offset
+    // reset — not as page two of an offset walk.
+    expect(list.mock.calls.map(call => call[1])).toEqual([
+      { page: 1 },
+      { after: "a", page: 1 },
+    ]);
+    expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("loses no component when a row is removed from the listing between pages", async () => {
+    /*
+     * Paged by OFFSET, the walk reads a moving collection: another author
+     * deleting a row that sorts before the next offset shifts every later row
+     * back one, and the row that moved across the boundary is never listed.
+     * It is therefore never completed, `omitted` stays false, and the response
+     * says `truncated: false` — a library reported whole while the canvas
+     * lacks a definition and draws every instance of it as missing.
+     *
+     * Paged from the last id SEEN, the same deletion moves nothing: the next
+     * page is the rows after that id, whatever happened before it.
+     */
+    const ids = Array.from(
+      { length: COMPONENT_LIST_PAGE_SIZE + 1 },
+      (_, i) => `c${String(i).padStart(2, "0")}`
+    );
+    let listing = [...ids];
+    const list = vi.fn((_slug: string, at: ListPosition) => {
+      // The collection as the service reads it: the rows after the given id,
+      // then the asked-for page of those.
+      const beyond =
+        at.after === undefined
+          ? listing
+          : listing.filter(id => id > (at.after as string));
+      const from = (at.page - 1) * COMPONENT_LIST_PAGE_SIZE;
+      const slice = beyond.slice(from, from + COMPONENT_LIST_PAGE_SIZE);
+      const hasMore = from + slice.length < beyond.length;
+      // Another author deletes the first row while page one is in the client's
+      // hands, before the walk asks for page two.
+      listing = listing.filter(id => id !== ids[0]);
+      return Promise.resolve(
+        pageOf(
+          slice.map(id => componentRow(id)),
+          hasMore
+        )
+      );
+    });
+    const ctx: ComponentLibraryContext = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      components: {
+        list,
+        read: (_slug: string, id: string) =>
+          Promise.resolve({ id, title: `Component ${id}`, content: draft(id) }),
+      },
+      store: DEFAULT_COMPONENT_STORE,
+    };
+
+    const library = await readComponentLibrary(ctx);
+
+    // Every row the collection held when the walk began, none twice.
+    expect(library.items.map(c => c.id)).toEqual(ids);
+    expect(library.meta.truncated).toBe(false);
   });
 
   it("overlaps its by-id reads, boundedly, and admits them in listing order", async () => {
@@ -889,7 +1151,11 @@ describe("the component tier", () => {
 
     const library = await readComponentLibrary(ctx);
 
-    expect(list.mock.calls.map(call => call[1])).toEqual([1, 2]);
+    // The first page from the start, the second from the id the first named.
+    expect(list.mock.calls.map(call => call[1])).toEqual([
+      { page: 1 },
+      { after: "a", page: 1 },
+    ]);
     expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
   });
 

@@ -19,7 +19,11 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/use-resting-page-render
  */
-import { previewContainerFor } from "@nextlyhq/blocks-engine";
+import {
+  componentUsageIn,
+  previewContainerFor,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { usePluginClientConfig } from "@nextlyhq/plugin-sdk/admin";
 import { useId, useMemo } from "react";
@@ -39,6 +43,31 @@ import {
 import type { SiteStyleState } from "./PageBuilderCard";
 import { useSiteStyle } from "./site-style-client";
 
+/**
+ * Whether a resting document needs this site's component definitions.
+ *
+ * A page that places no instance resolves nothing against them, so the
+ * miniature is identical without them — and this surface is every entry form
+ * holding a blocks field, while the read is the whole component tier: one
+ * listing over every row, a read of its own per row to reach the working
+ * draft, bounded at sixteen mebibytes.
+ *
+ * An UNREAD prefix counts as placing one. A document past the site's node cap
+ * answers `complete: false`, and "names nothing" is what an unread document
+ * looks like too — so the read is made, and the miniature draws what it drew
+ * before rather than a page of could-not-be-loaded markers.
+ *
+ * Exported for its own test: the cap-cut case needs a cap it can reach, and
+ * the site's is thousands of nodes.
+ */
+export function placesComponents(
+  document: BlockDocument,
+  maxNodes: number
+): boolean {
+  const usage = componentUsageIn(document.nodes, maxNodes);
+  return !usage.complete || usage.ids.length > 0;
+}
+
 export interface RestingPageRender {
   /** The site's compiled sheet, as the renderer takes it. */
   siteStyles: PageRendererProps["siteStyles"];
@@ -52,9 +81,14 @@ export interface RestingPageRender {
 
 /**
  * @param source - the plugin source whose client config carries the settings
+ * @param document - the page this draws, which decides whether the component
+ *   tier is read at all
  * @returns what the entry screen hands the card
  */
-export function useRestingPageRender(source: string): RestingPageRender {
+export function useRestingPageRender(
+  source: string,
+  document: BlockDocument
+): RestingPageRender {
   const clientConfig = usePluginClientConfig(source);
 
   const configStyle = useMemo(
@@ -82,8 +116,22 @@ export function useRestingPageRender(source: string): RestingPageRender {
    * The same read the editor makes, so the two share one cache entry, and at
    * the same DRAFT posture: the miniature shows the author their own page, and
    * the component they are mid-edit on is the one they expect to see in it.
+   *
+   * Asked only for a document that PLACES one. The read is the whole tier —
+   * one listing plus a read per component, bounded at sixteen mebibytes — and
+   * it was made on every mount of every entry form holding a blocks field,
+   * including the ones whose page holds no instance to resolve.
    */
-  const library = useComponentLibrary();
+  const limits = useMemo(
+    () => readDocumentLimits(clientConfig),
+    [clientConfig]
+  );
+  const library = useComponentLibrary({
+    enabled: useMemo(
+      () => placesComponents(document, limits.maxNodes),
+      [document, limits.maxNodes]
+    ),
+  });
   const { definitions } = library;
 
   const render = useMemo(
@@ -95,10 +143,10 @@ export function useRestingPageRender(source: string): RestingPageRender {
         // Deliberately unset. This surface shows the page as PUBLISHED, and a
         // class alternative beside each pseudo-class rule would let it paint a
         // hover appearance nobody is causing.
-        limits: readDocumentLimits(clientConfig),
+        limits,
         definitions,
       }),
-    [siteStyle, clientConfig, previewContainer, definitions]
+    [siteStyle, clientConfig, previewContainer, limits, definitions]
   );
 
   return {

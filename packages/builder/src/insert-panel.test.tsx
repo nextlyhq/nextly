@@ -1426,6 +1426,72 @@ describe("the component tier", () => {
     expect(screen.queryByRole("option", { name: /Wrapped column/ })).toBeNull();
   });
 
+  it("PLACES a pattern whose nested instance draws what the slot admits", () => {
+    // The click plans against the same lookup the tile was judged by. Without
+    // it the planner reads the nested node as `nextly/component-instance`,
+    // which a slot naming its admissions does not name — so the tile was
+    // offered, the click planned nothing, and the panel closed on an
+    // unchanged page with no reason given.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/row",
+          editor: { label: "Row" },
+          slots: { children: { allow: ["acme/cell"] } },
+        },
+        { ...base, name: "acme/cell", editor: { label: "Cell" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const cell = {
+      id: "cellish",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/cell", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+    const holding = {
+      id: "holding",
+      title: "Row of one",
+      document: {
+        formatVersion: 1,
+        kind: "pattern",
+        nodes: [
+          {
+            id: "p1",
+            type: "acme/row",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                {
+                  id: "p2",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: "cellish" },
+                },
+              ],
+            },
+          },
+        ],
+      } as unknown as BlockDocument,
+    };
+    const editor = editorSpy(documentOf());
+    render(
+      <InsertPanel
+        editor={editor}
+        patterns={[holding]}
+        componentDefinitions={lookupFor(cell)}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("option", { name: /Row of one/ }));
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
   it("offers no component for which the host supplied no definition", () => {
     // A tile places an instance the canvas resolves against its lookup; with
     // no definition there, the instance would be drawn as missing the moment
