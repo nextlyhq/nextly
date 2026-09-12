@@ -470,9 +470,21 @@ function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
  * cannot parse answers TRUE — the conservative reading, since "I could not
  * check" must not become "there is nothing to worry about".
  */
-async function singlesHoldBlocks(
+export async function singlesHoldBlocks(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
 ): Promise<boolean> {
+  // The count the first page reported. This walk pages by OFFSET, so it carries
+  // the same shift as the collection registry above: a Single deleted behind the
+  // cursor moves the rest back and one is never read. Here the missed row would
+  // be a Single that HOLDS blocks, so the answer flips from "content this index
+  // cannot reach" to "none" — and completeness is granted over a homepage whose
+  // components read as used by nothing.
+  //
+  // `true` is the refusal on every unreadable shape in this function, and a
+  // changed population is one: it means content may be out of reach, which is
+  // what withholds completeness.
+  let expected: number | undefined;
+
   for (let offset = 0; ; offset += REGISTRY_PAGE_SIZE) {
     const listed: unknown = await ctx.services.singles.list({
       offset,
@@ -482,6 +494,8 @@ async function singlesHoldBlocks(
     const rows = (listed as { data?: unknown }).data;
     const total = (listed as { total?: unknown }).total;
     if (!Array.isArray(rows) || typeof total !== "number") return true;
+    expected ??= total;
+    if (total !== expected) return true;
 
     for (const row of rows) {
       if (blocksFieldsOf(row as { fields?: unknown }).length > 0) return true;
@@ -513,10 +527,26 @@ const REGISTRY_PAGE_SIZE = 100;
  * rather than what was collected so far — because a short list here is
  * indistinguishable from a small site.
  */
-async function registeredCollectionSlugs(
+export async function registeredCollectionSlugs(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0]
 ): Promise<readonly string[] | undefined> {
   const slugs: string[] = [];
+
+  // The row count the first page reported, so a population that CHANGED while
+  // this walked is refused rather than partially read. The listing pages by
+  // offset, so deleting a row the walk has already passed shifts everything
+  // behind it back and the next page starts one row late — the row that crossed
+  // the boundary is never seen. It gets no scopes, completion is judged against
+  // a list missing it, and health reports the index whole while that
+  // collection's documents are unindexed. That is the confident-zero this
+  // enumeration exists to remove, arriving through the paging.
+  //
+  // The service offers no cursor, only `page`/`limit`, so a keyset walk is not
+  // available here. Comparing the total is what IS available, and it catches
+  // the deletion this fails on. It does not catch a delete and a create in the
+  // same window, which leaves the count unchanged — stated rather than implied,
+  // because a fence that reads as complete is worse than one with a named edge.
+  let expected: number | undefined;
 
   for (let page = 1; ; page += 1) {
     const listed: unknown = await ctx.services.collections.listCollections(
@@ -529,11 +559,20 @@ async function registeredCollectionSlugs(
     );
 
     const rows = (listed as { data?: unknown }).data;
-    const pagination = (listed as { pagination?: { hasMore?: unknown } })
-      .pagination;
-    if (!Array.isArray(rows) || typeof pagination?.hasMore !== "boolean") {
+    const pagination = (
+      listed as {
+        pagination?: { hasMore?: unknown; total?: unknown };
+      }
+    ).pagination;
+    if (
+      !Array.isArray(rows) ||
+      typeof pagination?.hasMore !== "boolean" ||
+      typeof pagination.total !== "number"
+    ) {
       return undefined;
     }
+    expected ??= pagination.total;
+    if (pagination.total !== expected) return undefined;
 
     for (const row of rows) {
       const slug = (row as { slug?: unknown }).slug;
