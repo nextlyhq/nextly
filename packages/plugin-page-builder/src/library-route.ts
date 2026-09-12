@@ -596,16 +596,28 @@ function identityOf(
  * caller should see it.
  *
  * The id is the LISTING's, never the by-id row's. That row is a presentation
- * of the same record — an `afterRead` hook may rewrite or drop its `id` —
- * while stored instances reference the id the collection holds, which is the
- * one the listing named. Keyed by the presentation, the client's definitions
- * answer to a name no instance uses and every instance of it draws as
- * missing. Everything else — the title, the category, the description and the
- * content — is the by-id row's, because that is the one carrying the draft.
+ * of the same record — field-level access may drop its `id` — while stored
+ * instances reference the id the collection holds, which is the one the
+ * listing named. Keyed by the presentation, the client's definitions answer to
+ * a name no instance uses and every instance of it draws as missing.
+ * Everything else — the title, the category, the description and the content —
+ * is the by-id row's, because that is the one carrying the draft.
+ *
+ * A row naming a DIFFERENT id is the other thing that can produce: a
+ * `beforeOperation` hook can redirect the read, so the record answering for
+ * one component may be another's. Taking the listing's id then serves one
+ * component's draft under the other's name, and nothing anywhere says so.
+ * Nothing is taken from it at all.
  *
  * `document: null` for a row the read found but which holds no content — a
- * legal row, and one the panel will skip — and `undefined` for no row at all,
- * which the caller reports as a cut library rather than a missing key.
+ * legal row, and one the panel will skip, because the field layer writes an
+ * unset non-required field as SQL `NULL` and reads it back with the key
+ * PRESENT. A row with no key at all is a different answer: field-level access
+ * or an `afterRead` hook removed the field, so this caller did not read the
+ * row whole, and a definition the client needs is missing rather than empty.
+ *
+ * `undefined` for every one of those, which the caller reports as a cut
+ * library rather than as a missing key.
  */
 function withDraftDocument(
   data: unknown,
@@ -614,7 +626,13 @@ function withDraftDocument(
 ): LibraryComponent | undefined {
   if (typeof data !== "object" || data === null) return undefined;
   const record = data as Record<string, unknown>;
+  const own = record.id;
+  if (typeof own === "string" && own !== "" && own !== id) return undefined;
   const title = record.title;
+  // `hasOwn`, not `in`: the field name is the site's to configure, and one
+  // naming something on `Object.prototype` would read a function as a
+  // document.
+  if (!Object.hasOwn(record, field)) return undefined;
   const content = record[field];
   return {
     id,

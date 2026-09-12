@@ -701,19 +701,18 @@ describe("the component tier", () => {
     expect(library.meta.truncated).toBe(false);
   });
 
-  it("keys a component by the id the LISTING named, whatever the by-id row says its id is", async () => {
+  it("keys a component by the id the LISTING named when the by-id row carries none", async () => {
     /*
-     * The by-id row is a PRESENTATION of the same row — an `afterRead` hook
-     * can rewrite or drop its `id` — while stored instances reference the id
-     * the collection holds, which is the one the listing named. Re-derived
-     * from the presentation, the client keyed its definitions by a name no
-     * instance uses, or dropped the component, and every instance of it drew
-     * as missing.
+     * The by-id row is a PRESENTATION of the same row — field-level access can
+     * drop its `id` — while stored instances reference the id the collection
+     * holds, which is the one the listing named. Re-derived from the
+     * presentation, the client dropped the component and every instance of it
+     * drew as missing.
      */
     const { ctx } = componentContext({
       pages: [[componentRow("a"), componentRow("b")]],
       byId: {
-        a: { id: "renamed", title: "A", content: draft("x") },
+        a: { title: "A", content: draft("x") },
         b: { title: "B", content: draft("y") },
       },
     });
@@ -725,12 +724,67 @@ describe("the component tier", () => {
       title: "A",
       document: draft("x"),
     });
-    // The second row lost its id AND its title in presentation: labelled by
-    // the id the listing named, as a row with no title is.
-    expect(library.items[1]).toMatchObject({
-      title: "B",
-      document: draft("y"),
+    expect(library.meta.truncated).toBe(false);
+  });
+
+  it("omits a component whose by-id row names a DIFFERENT id, and says the tier was cut", async () => {
+    /*
+     * The complement of the rule above, and the reason it is not "trust the
+     * listing's id whatever comes back". A `beforeOperation` hook can redirect
+     * the read, so the row answering for `a` may be `b`'s. Keyed by the
+     * listing, `b`'s draft would be served under `a`'s name: the canvas draws
+     * one component's content wherever the other is placed, with nothing
+     * anywhere saying so. Left out instead, and the tier is reported cut — a
+     * tile the author cannot see, with a sentence explaining why.
+     */
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: { id: "b", title: "B", content: draft("y") },
+        b: { id: "b", title: "B", content: draft("y") },
+      },
     });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["b"]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("omits a component whose document field the read did not return at all", async () => {
+    /*
+     * A stored-empty row answers with the key PRESENT and null — the field
+     * layer writes an unset non-required field as SQL NULL and reads it back
+     * that way — and it is a legal row the panel skips. A field-level access
+     * rule or an `afterRead` hook that removes the field answers with no key
+     * at all, which is a row this caller may not read whole. Flattened into
+     * one `null`, the tier reported itself complete while the client lacked a
+     * definition every instance of it needs.
+     */
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: { id: "a", title: "A" },
+        b: { id: "b", title: "B", content: draft("y") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items.map(c => c.id)).toEqual(["b"]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
+  it("keeps a component whose document field is stored EMPTY, and the library stays whole", async () => {
+    // The control for the rule above: null is an answer, and a legal one.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a")]],
+      byId: { a: { id: "a", title: "A", content: null } },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items).toEqual([{ id: "a", title: "A", document: null }]);
     expect(library.meta.truncated).toBe(false);
   });
 
