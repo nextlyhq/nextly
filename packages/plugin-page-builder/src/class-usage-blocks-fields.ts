@@ -182,8 +182,19 @@ export function blocksFieldSurvey(
 ): BlocksFieldSurvey {
   const fields = collection?.fields;
   if (!Array.isArray(fields)) return { addressable: [], unaddressable: false };
-  const collectionLocalized = collection?.localized === true;
+  return walkDeclarations(fields, collection?.localized === true);
+}
 
+/**
+ * The walk itself, over a field list already known to be one.
+ *
+ * Split from the shape guards above so this function is about the traversal —
+ * the cursor stack, the cycle set and the two accumulators — and nothing else.
+ */
+function walkDeclarations(
+  fields: readonly unknown[],
+  collectionLocalized: boolean
+): BlocksFieldSurvey {
   let unaddressable = false;
   const found: BlocksFieldDescriptor[] = [];
   const seen = new Set<string>();
@@ -226,39 +237,20 @@ export function blocksFieldSurvey(
     const field = frame.fields[frame.index];
     frame.index += 1;
 
-    const children = presentationalChildren(field);
-    if (children !== null) {
-      const group = field as object;
-      if (expanded.has(group)) continue;
-      expanded.add(group);
-      // A presentational group stores nothing of its own, so its children keep
-      // the frame's addressability rather than gaining or losing it.
-      stack.push({
-        fields: children,
-        index: 0,
-        addressable: frame.addressable,
-      });
-      continue;
-    }
-
-    // Any OTHER container of declarations — a named group, a repeater, anything
-    // that nests fields under its own key. Not descended into for addressing,
-    // which is the deliberate behaviour; descended into here so a blocks field
-    // inside one is NOTICED rather than silently absent. Asked structurally
-    // rather than by listing container type names, so a container this package
-    // has not met yet is noticed too.
-    const nested = nestedDeclarations(field);
-    if (nested !== null) {
+    const step = stepFor(field, frame.addressable, collectionLocalized);
+    if (step.kind === "skip") continue;
+    if (step.kind === "descend") {
       const container = field as object;
       if (expanded.has(container)) continue;
       expanded.add(container);
-      stack.push({ fields: nested, index: 0, addressable: false });
+      stack.push({
+        fields: step.fields,
+        index: 0,
+        addressable: step.addressable,
+      });
       continue;
     }
-
-    const descriptor = readBlocksField(field, collectionLocalized);
-    if (descriptor === null) continue;
-    if (!frame.addressable) {
+    if (!step.addressable) {
       // Found, and unreachable. Recorded as a fact about the collection rather
       // than as a descriptor: enumerating a scope for it would file rows no
       // rebuild can reconcile and no sweep can clear.
@@ -268,12 +260,54 @@ export function blocksFieldSurvey(
     // A duplicate name is one subject, not two. Enumerating it twice would
     // reconcile the same rows twice in one pass, and the second pass reads the
     // first one's inserts as rows the document no longer justifies.
-    if (seen.has(descriptor.name)) continue;
-    seen.add(descriptor.name);
-    found.push(descriptor);
+    if (seen.has(step.descriptor.name)) continue;
+    seen.add(step.descriptor.name);
+    found.push(step.descriptor);
   }
 
   return { addressable: found, unaddressable };
+}
+
+/** What the walk does with one declaration. */
+type FieldStep =
+  | {
+      kind: "descend";
+      fields: readonly unknown[];
+      /** Whether a blocks field found below can be enumerated. */
+      addressable: boolean;
+    }
+  | { kind: "field"; descriptor: BlocksFieldDescriptor; addressable: boolean }
+  | { kind: "skip" };
+
+/**
+ * Which of the three a declaration is, decided in one place.
+ *
+ * Kept out of the walk so the loop is about the stack and the accumulators. The
+ * two descents are different answers to one question and belong beside each
+ * other: a PRESENTATIONAL group's children live at the parent path and keep the
+ * frame's addressability, while any OTHER container nests its children under its
+ * own key — those are walked only so a blocks field inside one is NOTICED, never
+ * to enumerate it.
+ */
+function stepFor(
+  field: unknown,
+  addressable: boolean,
+  collectionLocalized: boolean
+): FieldStep {
+  const children = presentationalChildren(field);
+  if (children !== null) {
+    return { kind: "descend", fields: children, addressable };
+  }
+
+  const nested = nestedDeclarations(field);
+  if (nested !== null) {
+    return { kind: "descend", fields: nested, addressable: false };
+  }
+
+  const descriptor = readBlocksField(field, collectionLocalized);
+  return descriptor === null
+    ? { kind: "skip" }
+    : { kind: "field", descriptor, addressable };
 }
 
 /**
