@@ -1071,7 +1071,13 @@ export class CollectionMutationService extends BaseService {
       entryId,
       createdDocument,
       eventActor,
-      args.fields
+      args.fields,
+      // Every side effect of this create describes the same language the values
+      // were written in. A receiver reads the locale from the resource, so one
+      // that omits it is delivered as belonging to no translation in
+      // particular — and they must not disagree with each other about which
+      // translation they are reporting.
+      args.localeTag
     );
     eventRecorded = eventRecorded || curatedCreateRecorded;
     // A create landing directly on `published` is also a publish lifecycle
@@ -1082,6 +1088,7 @@ export class CollectionMutationService extends BaseService {
       const createdStatusRecorded = await this.recordStatusEvents(tx, {
         collection: args.collectionName,
         id: entryId,
+        ...(args.localeTag ? { locale: args.localeTag } : {}),
         from: null,
         to: args.entry.status as string | null | undefined,
         isCreate: true,
@@ -1101,6 +1108,9 @@ export class CollectionMutationService extends BaseService {
         {
           id: entryId,
           slug: readStringField(args.entry, "slug"),
+          // Without it the locale-specific tag for this id is never flushed,
+          // so the new translation stays behind a cached miss.
+          ...(args.localeTag ? { locale: args.localeTag } : {}),
         }
       ),
     };
@@ -1393,10 +1403,22 @@ export class CollectionMutationService extends BaseService {
     // resolved: resolving issues a pooled query, which waits for the
     // connection this transaction holds, and on PostgreSQL a query against a
     // missing relation marks the whole transaction aborted — after which the
-    // real write dies naming an innocent statement. Every path that opens a
-    // write transaction resolves readiness before opening it (the batch
-    // services call `warmLocalizedReadiness`), so the answer is already known
-    // by the time this asks. Unknown is handled below as any other
+    // real write dies naming an innocent statement.
+    //
+    // What that costs, stated rather than assumed: the cached read answers
+    // `ready` or nothing at all, so a verdict nobody warmed is indistinguishable
+    // here from a collection that was never migrated, and both take the
+    // pre-migration fallback below. The entry points that open their OWN
+    // transaction warm it first (`warmLocalizedReadiness` in the batch
+    // services), so they always have an answer. The `*InTransaction` entry
+    // points cannot: the transaction is the caller's and already open, and
+    // warming inside it is the very thing this avoids. A caller that opens its
+    // own transaction without warming therefore gets the fallback, which is
+    // right for a collection whose values still live on the main table and
+    // fatal for one localized from creation — the driver rejects the write, as
+    // it did before any of this. Refusing on an unknown verdict instead would
+    // turn the first case into an error to buy a better message for the
+    // second. Unknown is handled below as any other
     // not-ready answer is, which is the same fallback as before.
     const readiness = executor
       ? cachedCompanionReadiness(this.adapter, companion.companionTableName)
@@ -5066,17 +5088,37 @@ export class CollectionMutationService extends BaseService {
       }
       lockedStatus = (lockedRow.status as string | undefined) ?? null;
     }
-    const op = resolvePublishTransition(lockedStatus, args.nextStatus);
+    return this.denyIfTransitionUngranted(
+      lockedStatus,
+      args.nextStatus,
+      args.auth
+    );
+  }
+
+  /**
+   * The denial a status move earns, or `null` when it needs no grant.
+   *
+   * A write can move the published state in more than one place — the main row's
+   * `status`, and, on a localized collection, the write locale's companion
+   * `_status` — and each has to be judged against the status THAT place
+   * currently holds. One implementation answers for both: asking the question
+   * twice would let the two readings drift, and a gate that drifts toward
+   * permissive is a gate that stops gating.
+   *
+   * Permission is pre-resolved and read here without a query, so a caller
+   * lacking publish-<slug> / unpublish-<slug> is denied regardless of ownership.
+   * That is the whole decision: there is no document-dependent rule to judge
+   * against the row-locked document, so a transition is admitted or refused on
+   * the caller's grant alone.
+   */
+  private denyIfTransitionUngranted(
+    currentStatus: string | null,
+    nextStatus: unknown,
+    auth: TransitionAuthorization
+  ): CollectionServiceResult | null {
+    const op = resolvePublishTransition(currentStatus, nextStatus);
     if (!op) return null;
-    // Permission first (pre-resolved, no DB read): a caller lacking publish-<slug>
-    // / unpublish-<slug> is denied regardless of ownership.
-    const permissionDenied =
-      op === "publish" ? args.auth.publishDenied : args.auth.unpublishDenied;
-    if (permissionDenied) return permissionDenied;
-    // The permission check above is the whole decision. There is no
-    // document-dependent rule to judge against the row-locked document, so a
-    // transition is admitted or refused on the caller's grant alone.
-    return null;
+    return op === "publish" ? auth.publishDenied : auth.unpublishDenied;
   }
 
   /**
@@ -9161,6 +9203,50 @@ export class CollectionMutationService extends BaseService {
             tx.getDrizzle()
           );
 
+      // This locale's committed status, and its translations, as they stand
+      // BEFORE anything is written. Both describe the prior state, so both have
+      // to be read before the write that replaces it — read afterwards they
+      // would describe the result and silently agree with it.
+      //
+      // Read under the row lock the transition gate above already took, so the
+      // values are the committed ones and a concurrent writer cannot slip
+      // between the two.
+      let previousCompanionStatus: string | null = null;
+      const previousLocalizedValues = localizedUpdate
+        ? await this.readCompanionLocalizedValues(
+            tx,
+            params.collectionName,
+            entryId,
+            localizedUpdate.writeLocale
+          )
+        : {};
+      if (localizedUpdate?.hasStatus) {
+        // Gated on `hasStatus`: companion `_status` exists only on collections
+        // migrated for per-locale status, and querying it otherwise fails the
+        // whole write.
+        previousCompanionStatus = await this.readCompanionStatus(
+          tx,
+          localizedUpdate.companionTableName,
+          entryId,
+          localizedUpdate.writeLocale
+        );
+        // A write moves the published state in two places, and the gate must
+        // fire if EITHER makes a transition the caller cannot make. The main
+        // row was judged above; this judges the write locale's companion
+        // `_status`, which the upsert below writes. Checking only the main row
+        // misses the state a reconcile can leave — a draft `_status` under a
+        // published entry — where the main-row reading is `published ->
+        // published`, a no-op needing no grant, while the companion write
+        // publishes the translation.
+        const companionDenied = this.denyIfTransitionUngranted(
+          previousCompanionStatus,
+          localizedUpdate.companionData._status,
+          transitionAuth
+        );
+        // Before the UPDATE, so a denial leaves nothing written for this row.
+        if (companionDenied) return companionDenied;
+      }
+
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -9219,18 +9305,19 @@ export class CollectionMutationService extends BaseService {
       // translatable update carries just the changed values, and the main row
       // holds no translatable ones at all — so a snapshot built from those two
       // would record a document missing every field this write did not touch,
-      // and a restore from it would drop them. Read the companion row for the
-      // write locale on the transaction (read-your-writes, so the upsert above
-      // is included) and overlay what this write set, the way the single-entry
-      // update composes the same document. Keyed by field name.
+      // and a restore from it would drop them.
+      //
+      // Derived from the values read BEFORE the write rather than read back
+      // after it. The upsert writes exactly the fields this write set, so the
+      // row it leaves is the prior row overlaid with those values — which is
+      // what this composes, field for field, without a second query. Deriving
+      // it also means no read stands between the write and the commit: a
+      // read-back that failed here would leave the main row already updated,
+      // and a caller that tolerates per-item failures would commit it without
+      // the version or the event that describe it. Keyed by field name.
       const localizedDocument = localizedUpdate
         ? {
-            ...(await this.readCompanionLocalizedValues(
-              tx,
-              params.collectionName,
-              entryId,
-              localizedUpdate.writeLocale
-            )),
+            ...previousLocalizedValues,
             ...localizedUpdate.localizedFieldValues,
           }
         : {};
@@ -9239,16 +9326,39 @@ export class CollectionMutationService extends BaseService {
         (updated as Record<string, unknown>)[field] = value;
       }
 
+      // The row as it stood before this write, in the language this write
+      // describes. The main row carries no translatable values and, for a
+      // per-locale status, no current status either — both live in the
+      // companion — so `existingEntry` alone describes the prior state of a
+      // localized entry only in the fields that are not translated. Everything
+      // below that reports on the PREVIOUS state reads this rather than the
+      // main row: what a receiver is told changed, and which URL stops being
+      // valid, are both claims about the translation.
+      const previousEntry: Record<string, unknown> = {
+        ...existingEntry,
+        ...previousLocalizedValues,
+        ...(previousCompanionStatus !== null
+          ? { status: previousCompanionStatus }
+          : {}),
+      };
+
       // Compute the intent from the updated row and the pre-update row, before
       // the after-hooks run or redaction can strip the slug. The previous slug
-      // (from existingEntry) lets a batch rename bust the old slug tag too.
+      // lets a batch rename bust the old slug tag too — taken from the prior
+      // translation, since a localized `slug` lives in the companion and the
+      // main row's copy would leave the old URL cached.
       revalidationIntent = buildEntryRevalidationIntent(
         params.collectionName,
         readRevalidateConfig(collection),
         {
           id: entryId,
           slug: readStringField(updated as Record<string, unknown>, "slug"),
-          previousSlug: readStringField(existingEntry, "slug"),
+          previousSlug: readStringField(previousEntry, "slug"),
+          // The language this write describes, so the locale-specific tag is
+          // busted rather than only the unqualified one.
+          ...(localizedUpdate?.writeLocale
+            ? { locale: localizedUpdate.writeLocale }
+            : {}),
         }
       );
 
@@ -9291,7 +9401,7 @@ export class CollectionMutationService extends BaseService {
           collectionName: params.collectionName,
           tableName,
           entryId,
-          parentRow: this.readShapeEventDocument(existingEntry, fields),
+          parentRow: this.readShapeEventDocument(previousEntry, fields),
           fields,
           manyToManyFields,
           // A held edit needs the live relations regardless of what is being
@@ -9447,7 +9557,11 @@ export class CollectionMutationService extends BaseService {
           localizedUpdate?.writeLocale
             ? { locale: localizedUpdate.writeLocale }
             : {}),
-          from: readStringField(existingEntry, "status") ?? null,
+          // The status this language was at, which for a per-locale status is
+          // the companion's and not the main row's: a German draft under a
+          // published entry transitions from `draft`, and reporting the main
+          // row's `published` would describe a move that never happened.
+          from: readStringField(previousEntry, "status") ?? null,
           to: (updated as { status?: unknown }).status as
             | string
             | null
