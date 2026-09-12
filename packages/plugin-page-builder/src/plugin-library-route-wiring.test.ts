@@ -89,6 +89,38 @@ describe("the component library route is contributed beside it", () => {
     expect(renamed).toBe("read-host_components");
   });
 
+  it("gates on a CONFIGURED store literally, even when its name collides with the plugin's own", () => {
+    /*
+     * The scope's `collection` helper resolves a slug the PLUGIN declared
+     * through the host's rename. A configured store is not that: the read uses
+     * the slug literally, so the gate has to as well.
+     *
+     * The two disagree exactly when a host renames the contributed
+     * `components` collection and then points the store at a different one
+     * that happens to be called `components`. Resolved through the helper, the
+     * gate demands read on the RENAMED collection while the handler reads the
+     * configured one — so a caller holding `read-components` is refused, and
+     * one holding the renamed permission is admitted to a collection that
+     * permission says nothing about.
+     */
+    const routes =
+      pageBuilder({
+        componentReadiness: { collection: COMPONENTS_SLUG, field: "blocks" },
+      }).contributes?.routes ?? [];
+    const required = routes.find(
+      route => route.path === COMPONENT_LIBRARY_ROUTE_PATH
+    )?.requiredPermission;
+
+    const slug = (required as (scope: PermissionScope) => string)({
+      plugin: "@nextlyhq/plugin-page-builder",
+      collection: (declared, action) =>
+        `${action}-${declared === COMPONENTS_SLUG ? "host_components" : declared}`,
+      single: (declared, action) => `${action}-${declared}`,
+    });
+
+    expect(slug).toBe("read-components");
+  });
+
   it("gates on the collection the plugin was told components live in, when it was told one", () => {
     // The readiness notice already follows `componentReadiness.collection`;
     // the editor's read follows the same statement, so a host that keeps its
