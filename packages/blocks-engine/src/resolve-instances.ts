@@ -1003,9 +1003,25 @@ function rootTypesOfNode(
   // type to judge, so the caller is told nothing rather than a guess.
   if (typeof type !== "string") return undefined;
   if (type !== COMPONENT_INSTANCE_TYPE) return [type];
+  return instanceRootTypes(node, reader, scope, shown === true);
+}
+
+/**
+ * What one INSTANCE root stands for: the root types of the definition it
+ * draws, or nothing where the resolver would leave it standing.
+ *
+ * `ungated` is the instance holding it having said "show this", which deletes
+ * the node's own gate before the resolver reaches its instance branch.
+ */
+function instanceRootTypes(
+  node: Record<string, unknown>,
+  reader: RootsReader,
+  scope: ComposedScope,
+  ungated: boolean
+): readonly string[] | undefined {
   // The resolver's own order: a gated instance is returned standing before
   // its id is even read, and an instance naming no component is malformed.
-  if (shown !== true && isConditionGated(node)) return undefined;
+  if (!ungated && isConditionGated(node)) return undefined;
   const componentId = componentIdOf(node);
   if (componentId === undefined) return undefined;
   // The refusals first, and the resolver's own — a cycle or the cap refuses
