@@ -936,10 +936,18 @@ export function placementTypesOf(
   const props = (node as unknown as Record<string, unknown>).props;
   const componentId = isPlainRecord(props) ? props.componentId : undefined;
   if (typeof componentId !== "string") return [type];
-  const document = readableDefinition(definitions.get(componentId));
-  if (document === undefined || document.nodes.length === 0) return [type];
-  const roots = composedRootTypes(document, definitions);
-  return roots === undefined || roots.length === 0 ? [type] : roots;
+  // The lookup is READ inside the boundary, not before it. It is a
+  // caller-supplied object rather than a map this module builds, and the
+  // boundary inside the roots query does not cover a `get` that raises — which
+  // escapes to exactly the caller that boundary exists for.
+  try {
+    const document = readableDefinition(definitions.get(componentId));
+    if (document === undefined || document.nodes.length === 0) return [type];
+    const roots = composedRootTypes(document, definitions);
+    return roots === undefined || roots.length === 0 ? [type] : roots;
+  } catch {
+    return [type];
+  }
 }
 
 /** A definition's root types as answered once, and how deep an instance they hold for. */

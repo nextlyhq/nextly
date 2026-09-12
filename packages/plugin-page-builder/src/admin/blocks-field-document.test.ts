@@ -105,37 +105,47 @@ describe("canEditBlocks", () => {
   });
 });
 
+/**
+ * The fixture builders both `withoutSelf` suites read from.
+ *
+ * At module scope because the two suites ask one question of one graph — which
+ * components a candidate reaches — and a second copy of the builders is a
+ * second definition of what a component, an instance and the walk's inputs ARE.
+ * Only the row shapes stay per suite: one offers components, the other patterns.
+ */
+const instanceOf = (componentId: string, id: string): BlockNode => ({
+  id,
+  type: COMPONENT_INSTANCE_TYPE,
+  version: 1,
+  props: { componentId },
+});
+const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes,
+});
+const text = (id: string): BlockNode => ({
+  id,
+  type: "core/text",
+  version: 1,
+  props: {},
+});
+/** What the walk reads: the canvas's lookup, the site's caps, and whether the library read was whole. */
+const graphOf = (
+  definitions: ComponentLookup,
+  limits: DocumentLimits = DEFAULT_LIMITS,
+  whole = true
+): ComponentGraph => ({ definitions, limits, whole });
+/** A component document being edited, and the form naming its row. */
+const editing: BlockDocument = componentOf([text("own")]);
+const identity = { documentId: "a" };
+
 describe("withoutSelf", () => {
-  const instanceOf = (componentId: string, id: string): BlockNode => ({
-    id,
-    type: COMPONENT_INSTANCE_TYPE,
-    version: 1,
-    props: { componentId },
-  });
-  const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "component",
-    nodes,
-  });
-  const text = (id: string): BlockNode => ({
-    id,
-    type: "core/text",
-    version: 1,
-    props: {},
-  });
   const row = (id: string, document: ComponentDocument): SavedComponent => ({
     id,
     title: id,
     document,
   });
-  const editing: BlockDocument = componentOf([text("own")]);
-  const identity = { documentId: "a" };
-  /** What the walk reads: the canvas's lookup, the site's caps, and whether the library read was whole. */
-  const graphOf = (
-    definitions: ComponentLookup,
-    limits: DocumentLimits = DEFAULT_LIMITS,
-    whole = true
-  ): ComponentGraph => ({ definitions, limits, whole });
 
   it("leaves out the row being edited and every row that reaches it, at any depth", () => {
     const a = row("a", componentOf([text("t")]));
@@ -348,23 +358,6 @@ describe("withoutSelf", () => {
 });
 
 describe("withoutSelfPatterns", () => {
-  const instanceOf = (componentId: string, id: string): BlockNode => ({
-    id,
-    type: COMPONENT_INSTANCE_TYPE,
-    version: 1,
-    props: { componentId },
-  });
-  const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "component",
-    nodes,
-  });
-  const text = (id: string): BlockNode => ({
-    id,
-    type: "core/text",
-    version: 1,
-    props: {},
-  });
   const patternOf = (id: string, nodes: BlockNode[]): SavedPattern => ({
     id,
     title: id,
@@ -374,13 +367,6 @@ describe("withoutSelfPatterns", () => {
       nodes,
     },
   });
-  const editing: BlockDocument = componentOf([text("own")]);
-  const identity = { documentId: "a" };
-  const graphOf = (
-    definitions: ComponentLookup,
-    limits: DocumentLimits = DEFAULT_LIMITS,
-    whole = true
-  ): ComponentGraph => ({ definitions, limits, whole });
 
   it("leaves out a pattern that places the component being edited, and one that reaches it through another", () => {
     // Saving a placed component as a pattern keeps its instance node, so a
