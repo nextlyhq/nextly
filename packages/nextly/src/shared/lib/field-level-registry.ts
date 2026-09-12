@@ -157,7 +157,17 @@ export interface FieldFunctions {
   fields?: Record<string, FieldFunctions>;
 }
 
-type EntityKind = "collection" | "single";
+/**
+ * What a registration is keyed by.
+ *
+ * A field group joins the two entity kinds because it has the same problem and
+ * only the registry solves it: its fields are read from a stored definition on
+ * every write, and a function does not survive being stored. What is CONSUMED
+ * from a field group's entry today is the `defaultValue` alone. Its `access`
+ * rules and hooks are captured by the same walk but nothing reads them for a
+ * field group, so registering one does not mean they are enforced.
+ */
+type EntityKind = "collection" | "single" | "fieldGroup";
 type Store = Map<string, Record<string, FieldFunctions>>;
 
 const GLOBAL_KEY = "__nextlyFieldFunctionRegistry";
