@@ -458,6 +458,55 @@ describe("a link and a visibility exposure", () => {
     });
   });
 
+  it("shows a row the DEFINITION gates as not shown, and turns it on by writing true", () => {
+    /*
+     * The component's own rule is not always "shown". A definition node
+     * carrying entry-field conditions is withheld by the renderer's
+     * hidden-node pass, and the resolver keeps the gate for it to act on — so
+     * a checkbox drawn from "no override written" told the author the node was
+     * on this page while the canvas did not draw it.
+     *
+     * Clicking it writes `true`, which is the one thing that removes the
+     * component's gate for this instance.
+     */
+    const gated = () =>
+      header({
+        nodes: [
+          {
+            id: "h1",
+            type: "acme/cta",
+            version: 1,
+            props: { text: "Read more", href: "/docs" },
+            visibility: {
+              conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+            },
+          } as never,
+        ],
+        exposed: [
+          {
+            id: "shown",
+            label: "Newsletter form",
+            nodeId: "h1",
+            propPath: "visibility",
+            type: "visibility",
+          },
+        ],
+      });
+    const editor = mount(instance(), gated());
+    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+
+    expect(box.getAttribute("aria-checked")).toBe("false");
+    // And not as the author's own doing: there is nothing of theirs to reset.
+    expect(screen.queryByRole("button", { name: /reset/i })).toBeNull();
+
+    fireEvent.click(box);
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { shown: true },
+    });
+  });
+
   it("shows a hidden row unchecked — cleared included, which the page reads as hidden — and shows it again by writing true", () => {
     const hidden = mount(instance({ overrides: { shown: false } }), linked());
     const box = screen.getByRole("checkbox", { name: "Newsletter form" });
