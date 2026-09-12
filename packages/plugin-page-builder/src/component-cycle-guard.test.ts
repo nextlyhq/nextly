@@ -57,6 +57,42 @@ const places = (...ids: string[]) => ({
 });
 
 /**
+ * A definition that places `stored` and EXPOSES that node's componentId.
+ *
+ * The shape a placement-level override needs on the other end: without a
+ * declared exposure there is no id for an override to name.
+ */
+const exposesItsPlacement = (stored: string) => ({
+  ...places(stored),
+  exposed: [
+    {
+      id: "swap",
+      label: "Which",
+      nodeId: "n0",
+      propPath: "componentId",
+      type: "select",
+    },
+  ],
+});
+
+/** A document placing `target`, with overrides aimed at the target's exposures. */
+const placesWithOverrides = (
+  target: string,
+  overrides: Record<string, unknown>
+) => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes: [
+    {
+      id: "n0",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: target, overrides },
+    },
+  ],
+});
+
+/**
  * A store of components, read by id.
  *
  * `stored` and `draft` are separate so a test can put a reference in one form
@@ -70,6 +106,10 @@ function api(rows: {
   deleted?: readonly string[];
   /** An id whose read answers with a row claiming to be another. */
   redirect?: Record<string, string>;
+  /** Ids whose read answers with a row carrying no `id` at all, as an `afterRead` can. */
+  stripId?: readonly string[];
+  /** Ids answered with a WHOLE document, for shapes `places()` cannot express. */
+  documents?: Record<string, unknown>;
 }) {
   const asked: {
     id: string;
@@ -116,8 +156,18 @@ function api(rows: {
         override: a.overrideAccess,
       });
       refuseWhereTheStoreWould(a.id);
+      // A document supplied WHOLE, for the exposures and node overrides the
+      // `places()` shorthand cannot express. Checked before the shorthand, which
+      // answers `null` for any id it holds no entry for.
+      const whole = rows.documents?.[a.id];
+      if (whole !== undefined) return { id: a.id, [FIELD]: whole };
       const ids = documentFor(a.id, a.draft === true);
       if (ids === undefined) return null;
+      // A hook may also remove the id entirely, which leaves a response that
+      // cannot be confirmed as the subject's document.
+      if (rows.stripId?.includes(a.id) === true) {
+        return { [FIELD]: places(...ids) };
+      }
       // A hook may answer with a row that is not the one asked for.
       const answeredAs = rows.redirect?.[a.id] ?? a.id;
       return { id: answeredAs, [FIELD]: places(...ids) };
@@ -156,6 +206,12 @@ const saving = (id: string, ids: string[], nextly: unknown) => ({
 const publishing = (id: string, ids: string[], nextly: unknown) => ({
   ...saving(id, ids, nextly),
   data: { status: "published", [FIELD]: places(...ids) },
+});
+
+/** An UNPUBLISH: it names a status, and the status takes the row out of public reach. */
+const unpublishing = (id: string, ids: string[], nextly: unknown) => ({
+  ...saving(id, ids, nextly),
+  data: { status: "draft", [FIELD]: places(...ids) },
 });
 
 /** A status-ONLY publish, which carries no document and promotes the draft. */
@@ -199,8 +255,11 @@ describe("saving a component that would reference itself", () => {
     register(c.ctx);
     const { nextly } = api({ stored: { b: ["cc"], cc: ["a"] } });
 
+    // `cc` is redacted: the author's document places `b`, and `cc` was reached
+    // only by a read made as the system. The actionable half survives — the
+    // placement to remove is the first hop, which is always their own.
     await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
-      /a → b → cc → a/
+      /a → b → … → a/
     );
   });
 
@@ -334,7 +393,7 @@ describe("saving a component that would reference itself", () => {
     });
 
     await expect(c.run(publishing("a", ["b"], nextly))).rejects.toThrow(
-      /a → b → cc → a/
+      /a → b → … → a/
     );
   });
 
@@ -364,6 +423,136 @@ describe("saving a component that would reference itself", () => {
     await expect(c.run(publishing("a", ["b"], nextly))).rejects.toThrow(
       /a → b → a/
     );
+  });
+
+  it("does NOT judge the published graph when the write UNPUBLISHES", async () => {
+    /*
+     * `status: "draft"` names a status, so the live row is written and any
+     * pending draft is consumed — but the row stops being publicly resolvable,
+     * so the component LEAVES the public graph rather than joining it with new
+     * edges. A reader following a chain into it gets a missing-component
+     * placeholder, not a loop.
+     *
+     * Judging the published graph here refuses an unpublish that closes
+     * nothing: published `b` names `a`, `b`'s own draft is empty, so the only
+     * cycle is assembled out of a document no public read can reach.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: ["a"] }, draft: { b: [] } });
+
+    await expect(
+      c.run(unpublishing("a", ["b"], nextly))
+    ).resolves.toBeUndefined();
+  });
+
+  it("still refuses an unpublish whose loop is in the PREVIEW graph", async () => {
+    // The control. Without it, skipping a form for every unpublish would
+    // satisfy the case above and let an unpublish close a preview loop.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [] }, draft: { b: ["a"] } });
+
+    await expect(c.run(unpublishing("a", ["b"], nextly))).rejects.toThrow(
+      /a → b → a/
+    );
+  });
+
+  it("refuses a by-id read whose answer carries no id at all", async () => {
+    /*
+     * An `afterRead` hook can strip `id`. Accepted, a lookup for `b` retargeted
+     * to an acyclic row would stand in for `b`'s placements and the chain
+     * through the real `b` would be approved. `recordOf` in
+     * `class-usage-runtime.ts` already refuses every response whose id is not
+     * the subject's, for the same reason.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [] }, stripId: ["b"] });
+
+    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+      /could not all be read/
+    );
+  });
+
+  it("does not name a component the author's own document never placed", async () => {
+    // The walk reads as the system, so a path can run through a component this
+    // caller is denied. Printing it would hand them an identifier for the price
+    // of a save they already know fails.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: ["secret"], secret: ["a"] } });
+
+    const refused = await c
+      .run(saving("a", ["b"], nextly))
+      .then(() => null)
+      .catch((error: Error) => error.message);
+
+    expect(refused).toContain("a → b → … → a");
+    expect(refused).not.toContain("secret");
+  });
+
+  it("collapses a run of private components into ONE gap", async () => {
+    // Otherwise the number of ellipses counts them out, which reports the shape
+    // of the part of the graph being withheld.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { b: ["p1"], p1: ["p2"], p2: ["p3"], p3: ["a"] },
+    });
+
+    const refused = await c
+      .run(saving("a", ["b"], nextly))
+      .then(() => null)
+      .catch((error: Error) => error.message);
+
+    expect(refused).toContain("a → b → … → a");
+  });
+
+  it("refuses an override the PLACEMENT installs on the component it places", async () => {
+    /*
+     * The edge neither document names. A's node places B and carries overrides
+     * aimed at B's exposures; B exposes one of its own nested instances'
+     * `componentId`, so the override re-points it at A. A scans as referencing
+     * B, B scans as referencing C, and the loop is in neither scan — while the
+     * resolver applies the placement's overrides before expanding B and reaches
+     * A → B → A.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ documents: { b: exposesItsPlacement("cc") } });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesWithOverrides("b", { swap: "a" }) },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/a → a/);
+  });
+
+  it("allows a placement whose override names something harmless", async () => {
+    // The control: it is the override's TARGET that decides, not the presence of
+    // overrides on a placement. Otherwise every instance the inspector has ever
+    // edited would be unsavable.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: { b: exposesItsPlacement("cc") },
+      stored: { cc: [] },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesWithOverrides("b", { swap: "cc" }) },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("judges the document a status-only publish PROMOTES", async () => {

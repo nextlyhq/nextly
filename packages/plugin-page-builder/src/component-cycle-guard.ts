@@ -43,16 +43,6 @@
  * not skippable, which is a core capability rather than a hook. Recorded as
  * `finding:cycle-guard-is-skippable-by-import` with what it would take.
  *
- * A reference a NESTED instance's own overrides install. A variant this document
- * declares is covered (see {@link componentReferencesIn}), because the exposure
- * it writes through is declared in the same document. An instance node placing B
- * can also carry `props.overrides` aimed at B's exposures, and reading those
- * needs B's definition to map an exposure id to a node and a prop path — so the
- * edge belongs to the PLACEMENT rather than to either document, and the walk
- * here keys a component's placements by id alone. Closing it means reading every
- * reachable definition before computing any edge, which is a different walk;
- * filed as `finding:cycle-guard-misses-placement-level-overrides`.
- *
  * Two saves closing a loop between them AT THE SAME MOMENT. This walk runs
  * before its own write commits and takes no lock the other write contends for,
  * and a plugin hook has no transaction to enlist in — the same window
@@ -81,7 +71,8 @@
  */
 import {
   componentReach,
-  componentReferencesIn,
+  componentReachIn,
+  componentReferencesFrom,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
@@ -154,13 +145,16 @@ async function refuseACycle(
   // to it. See {@link subjectOf} for why a supplied id is not that id.
   if (self === null) return;
 
-  const submitted = placesOf(context, options);
   // Carries no document AND promotes nothing, so it cannot move an edge. A bulk
   // rename or a metadata edit is this. Whether a malformed value is a legal one
   // is the field's own validation to answer, and refusing here would report a
   // shape problem as a reference problem.
-  const promotes = namesAStatus(context);
-  if (submitted === "not-a-document" && !promotes) return;
+  //
+  // The status this write will persist decides BOTH which forms it reaches and
+  // whether a document-less write is graph-neutral.
+  const submitted = submittedDocument(context, options);
+  const next = nextStatusOf(context);
+  if (submitted === "not-a-document" && next === undefined) return;
 
   // AFTER the checks above, so a write that cannot change the reference graph is
   // not refused for being in a transaction. None of them needs a graph read, so
@@ -193,20 +187,28 @@ async function refuseACycle(
   // that draft, so that is the document to judge — a cycle written into a draft
   // before this guard existed, or through a write that skipped it, would
   // otherwise reach the live library on a publish this never inspected.
-  const places =
+  const promoted =
     submitted === "not-a-document"
-      ? await pendingPlaces(self, options, nextly)
-      : submitted;
+      ? await pendingDocument(self, options, nextly)
+      : ({ kind: "document", document: submitted.document } as const);
   // No pending document to promote after all. Nothing changes and nothing is
   // judged, rather than a refusal for a row this could not find.
-  if (places === "nothing-to-judge") return;
+  if (promoted.kind === "absent") return;
+  if (promoted.kind === "unreadable") {
+    throw refusal(
+      `This component cannot be saved: its own stored document could not be ` +
+        `read, so whether it would end up referencing itself could not be ` +
+        `established.`
+    );
+  }
+  const document = promoted.document;
 
   await refuseIfReached({
     options,
     nextly,
     self,
-    places,
-    forms: formsChangedBy(promotes),
+    document,
+    forms: formsChangedBy(next),
   });
 }
 
@@ -215,12 +217,17 @@ async function refuseIfReached(args: {
   options: CycleGuardOptions;
   nextly: CycleGuardDirectApi;
   self: string;
-  places: readonly string[] | undefined;
+  document: unknown;
   forms: readonly boolean[];
 }): Promise<void> {
-  const { options, nextly, self, places, forms } = args;
+  const { options, nextly, self, document, forms } = args;
   for (const draft of forms) {
-    const graph = await placementsReachedFrom(places, options, nextly, draft);
+    // One reader per FORM. A component's published and draft documents are
+    // different documents, so a cache shared across the two would answer the
+    // second walk with the first one's reading.
+    const read = documentReader(options, nextly, draft);
+    const places = await reachableFrom(document, options, read);
+    const graph = await placementsReachedFrom(places, options, read);
     const verdict = componentReach({
       places,
       self,
@@ -236,9 +243,47 @@ async function refuseIfReached(args: {
     }
     throw refusal(
       `This component cannot be saved because it would reference itself: ` +
-        `${verdict.path.join(" → ")}. Remove that placement and save again.`
+        `${namedPath(verdict.path, places, self)}. Remove that placement and ` +
+        `save again.`
     );
   }
+}
+
+/**
+ * The loop as the SAVING AUTHOR may be told it.
+ *
+ * The walk reads with `overrideAccess: true`, because a component this author
+ * cannot see still renders and a chain through it still closes. The MESSAGE
+ * cannot inherit that: printing every id in a system-level path tells a caller
+ * who may update A the identifier of a component they are denied read access to,
+ * for the price of one save they already know will fail.
+ *
+ * What survives is what the author demonstrably already holds — the subject, and
+ * the ids their own submitted document places. They wrote those. Everything
+ * reached BEYOND them came from a read made as the system, and collapses to a
+ * single `…` however many components it spans, so the shape of the private part
+ * of the graph is not reported either.
+ *
+ * The actionable half is kept by construction: the placement to remove is the
+ * first hop, and the first hop is always one of their own.
+ */
+function namedPath(
+  path: readonly string[],
+  places: readonly string[] | undefined,
+  self: string
+): string {
+  const own = new Set([self, ...(places ?? [])]);
+  const shown: string[] = [];
+  for (const id of path) {
+    if (own.has(id)) {
+      shown.push(id);
+      continue;
+    }
+    // One ellipsis per RUN, so a chain through six private components reads as
+    // one gap rather than counting them out.
+    if (shown[shown.length - 1] !== "…") shown.push("…");
+  }
+  return shown.join(" → ");
 }
 
 /**
@@ -260,9 +305,16 @@ async function refuseIfReached(args: {
  *   live graph as well refuses a save that closes nothing: live B naming A while
  *   B's own draft is empty makes A → live B → A out of an edge the preview
  *   never has and a document the live row never receives.
- * - **A status named.** Core writes the live row and promotes any pending draft
- *   into it, consuming the draft — so both forms end up holding that document
- *   and both are judged.
+ * - **`status: "published"`.** Core writes the live row and promotes any pending
+ *   draft into it, consuming the draft — so both forms end up holding that
+ *   document and both are judged.
+ * - **`status: "draft"`, an UNPUBLISH.** Core writes the live row and consumes
+ *   the draft the same way, but the row is no longer publicly resolvable, so the
+ *   component leaves the public graph rather than joining it with new edges. A
+ *   reader following a chain into it gets a missing-component placeholder, not a
+ *   loop. Judging the published graph here refuses an unpublish that closes
+ *   nothing: published B naming A, with B's own draft empty, yields
+ *   A → published B → A out of a document no public read can reach.
  *
  * Where the split is NOT in force for this collection a status-less write goes
  * straight to the live row, and this would then judge the wrong form. It does
@@ -270,12 +322,12 @@ async function refuseIfReached(args: {
  * overlay, a `draft: true` read answers with the live row for every component,
  * so the preview graph IS the live graph and judging one judges both.
  */
-function formsChangedBy(promotes: boolean): readonly boolean[] {
-  return promotes ? [false, true] : [true];
+function formsChangedBy(next: string | undefined): readonly boolean[] {
+  return next === "published" ? [false, true] : [true];
 }
 
 /**
- * What the component's PENDING form places, for a write that promotes it.
+ * The document a write that promotes will put live, for one carrying none.
  *
  * Read through the same overlay a preview does — core's own words for it are
  * "the overlay returns the draft (or the live row when none exists)" — so a
@@ -283,13 +335,12 @@ function formsChangedBy(promotes: boolean): readonly boolean[] {
  * That costs one read and answers `none` for any library without a loop, which
  * is the cheap direction; the alternative is not noticing a promoted cycle.
  */
-async function pendingPlaces(
+async function pendingDocument(
   self: string,
   options: CycleGuardOptions,
   nextly: CycleGuardDirectApi
-): Promise<readonly string[] | undefined | "nothing-to-judge"> {
-  const pending = await readComponent(self, options, nextly, true);
-  return pending === "absent" ? "nothing-to-judge" : pending;
+): Promise<ReadDocument> {
+  return readComponent(self, options, nextly, true);
 }
 
 /**
@@ -304,9 +355,11 @@ async function pendingPlaces(
  * for the document: a later `beforeChange` handler can add or remove `status`
  * after this has judged, and no plugin can be last.
  */
-function namesAStatus(context: unknown): boolean {
+function nextStatusOf(context: unknown): string | undefined {
   const data = fieldOf(context, "data");
-  return data !== undefined && data.status !== undefined;
+  if (data === undefined) return undefined;
+  const status = data.status;
+  return typeof status === "string" ? status : undefined;
 }
 
 /**
@@ -329,8 +382,7 @@ function namesAStatus(context: unknown): boolean {
 async function placementsReachedFrom(
   places: readonly string[] | undefined,
   options: CycleGuardOptions,
-  nextly: CycleGuardDirectApi,
-  draft: boolean
+  read: DocumentReader
 ): Promise<Map<string, readonly string[]>> {
   const graph = new Map<string, readonly string[]>();
   if (places === undefined) return graph;
@@ -343,18 +395,109 @@ async function placementsReachedFrom(
     if (seen.size >= MOST_COMPONENTS_READ) return graph;
     seen.add(id);
 
-    const named = await readComponent(id, options, nextly, draft);
+    const read_ = await read(id);
     // A component nobody supplied places nothing further, and the resolver
     // draws it as missing. That is not a loop.
-    if (named === "absent") {
+    if (read_.kind === "absent") {
       graph.set(id, []);
       continue;
     }
+    if (read_.kind === "unreadable") continue;
+
+    const named = await reachableFrom(read_.document, options, read);
     if (named === undefined) continue;
     graph.set(id, named);
     pending.push(...named);
   }
   return graph;
+}
+
+/**
+ * Every component ONE document can reach, placements included.
+ *
+ * Three sources, and the third is the one no single-document scan has:
+ *
+ * 1. the ids its nodes carry;
+ * 2. the ids its own VARIANTS can install on those nodes;
+ * 3. the ids each of its placing NODES installs on the definition IT PLACES.
+ *
+ * The third needs the placed definition, because an override names an exposure
+ * id and only that definition says which node and prop path the id writes to.
+ * So this reads one level ahead — through the same cache the walk uses, so a
+ * definition read here is not read again when the walk reaches it.
+ *
+ * `undefined` where any of it could not be established, which the walk reads as
+ * unknown rather than as placing nothing.
+ */
+async function reachableFrom(
+  document: unknown,
+  options: CycleGuardOptions,
+  read: DocumentReader
+): Promise<readonly string[] | undefined> {
+  // ONE walk for both the ids and the nodes that name them. A prefix of either
+  // is a prefix of the answer, and the missing tail is exactly where an
+  // unnoticed edge would be.
+  const survey = componentReachIn(document, options.limits.maxNodes);
+  if (!survey.complete) return undefined;
+
+  const ids = new Set<string>(survey.ids);
+  for (const placement of survey.placements) {
+    const target = await read(placement.target);
+    // A placement of something nobody supplied installs nothing: there is no
+    // definition to write an exposure onto, and the resolver draws the node as
+    // missing.
+    if (target.kind === "absent") continue;
+    if (target.kind === "unreadable") return undefined;
+    for (const id of componentReferencesFrom(target.document, placement.node)) {
+      ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * One form of one component's stored document, or why it is not available.
+ *
+ * A discriminated result rather than the document with sentinels beside it: a
+ * stored document is `unknown`, and a union with `unknown` in it collapses to
+ * `unknown` — so every sentinel comparison would type-check against anything.
+ */
+type ReadDocument =
+  | { readonly kind: "document"; readonly document: unknown }
+  /** No such row. The resolver draws a placement of it as missing, not as a loop. */
+  | { readonly kind: "absent" }
+  /** Read, and not establishable as this component's document. */
+  | { readonly kind: "unreadable" };
+
+/** Reads one component's document, once per walk. */
+type DocumentReader = (id: string) => Promise<ReadDocument>;
+
+/**
+ * Reads each component's document ONCE per walk.
+ *
+ * The cache is what keeps the placement pass affordable: computing a document's
+ * edges reads every definition it places, and the walk then visits those same
+ * definitions. Without it a library where many components place one shared
+ * component would read that component once per placement.
+ *
+ * It also makes the answer consistent. A definition read twice in one walk could
+ * come back differently — a concurrent write, a hook answering from a cache —
+ * and a graph assembled from two readings of one component is a graph no reader
+ * ever receives.
+ */
+function documentReader(
+  options: CycleGuardOptions,
+  nextly: CycleGuardDirectApi,
+  draft: boolean
+): DocumentReader {
+  const held = new Map<string, ReadDocument>();
+  return async id => {
+    const seen = held.get(id);
+    if (seen !== undefined) return seen;
+    const read = await readComponent(id, options, nextly, draft);
+    held.set(id, read);
+    return read;
+  };
 }
 
 /**
@@ -378,7 +521,7 @@ async function readComponent(
   options: CycleGuardOptions,
   nextly: CycleGuardDirectApi,
   draft: boolean
-): Promise<readonly string[] | "absent" | undefined> {
+): Promise<ReadDocument> {
   let row: unknown;
   try {
     row = await nextly.findByID({
@@ -394,59 +537,63 @@ async function readComponent(
       overrideAccess: true,
     });
   } catch (error) {
-    if (NextlyError.isNotFound(error)) return "absent";
+    if (NextlyError.isNotFound(error)) return { kind: "absent" };
     // Anything else establishes nothing, which is not the same as a row that is
     // not there.
-    return undefined;
+    return { kind: "unreadable" };
   }
-  if (row === null || row === undefined) return "absent";
-  if (!isRowFor(row, id)) return undefined;
-  return usageIn(row, options);
+  if (row === null || row === undefined) return { kind: "absent" };
+  if (!isRowFor(row, id)) return { kind: "unreadable" };
+  if (typeof row !== "object") return { kind: "unreadable" };
+  // The DOCUMENT, not the ids it names. What a document reaches depends on the
+  // definitions it places, so the caller resolves that with every read in hand.
+  return {
+    kind: "document",
+    document: (row as Record<string, unknown>)[options.documentField],
+  };
 }
 
 /**
  * Whether a returned row is the component that was asked for.
  *
- * A row carrying no `id` KEY is accepted: field-level access can drop it from a
- * presentation, and the read was still addressed by id. A row that HAS the key
- * answered with an identity, and the only identity that satisfies this is the
- * one requested — anything else is a redirected or replaced response, which
- * cannot stand in for the component whose references are being judged.
+ * Equality on the id, and nothing else satisfies it — a row carrying NO `id` at
+ * all included. The looser rule this replaced accepted a key-less row on the
+ * grounds that the read was addressed by id anyway, and that is the case an
+ * `afterRead` hook can manufacture: a lookup for B retargeted to an acyclic C
+ * whose response omits `id` would be read as B's placements, and the chain
+ * through the real B approved.
+ *
+ * The same package already decided this, in the same direction, for the same
+ * reason. `recordOf` in `class-usage-runtime.ts` requires `record.id ===
+ * subject.entityKey` and says why in its own docblock: a read hook can retarget
+ * the query and another can rewrite the answer, so a response that cannot be
+ * confirmed as the subject's is refused rather than used. Two rules for one
+ * question is how they come to disagree.
+ *
+ * The cost is the one that docblock names: a components collection whose
+ * `afterRead` strips or rewrites `id` cannot have this guard evaluated, and
+ * every save on it is refused for an unreadable graph. That is a loud,
+ * diagnosable refusal rather than a silently approved cycle.
  */
 function isRowFor(row: unknown, id: string): boolean {
   if (typeof row !== "object" || row === null) return false;
-  const record = row as Record<string, unknown>;
-  if (!Object.hasOwn(record, "id")) return true;
-  return record.id === id;
-}
-
-/** The ids a stored row's document can reach, under the site's cap. */
-function usageIn(
-  row: unknown,
-  options: CycleGuardOptions
-): readonly string[] | undefined {
-  if (typeof row !== "object" || row === null) return undefined;
-  const document = (row as Record<string, unknown>)[options.documentField];
-  // A row whose document is missing or malformed places nothing, and the
-  // renderer draws it as such. That is not a loop, so it is `[]` rather than the
-  // unknown a caller would refuse on.
-  const usage = componentReferencesIn(document, options.limits.maxNodes);
-  return usage.complete ? usage.ids : undefined;
+  return (row as Record<string, unknown>).id === id;
 }
 
 /**
- * What the document being SAVED places, `undefined` where the cap could not
- * read it whole, and `"not-a-document"` where the write carries no document at
- * all.
+ * The document this write carries, or `"not-a-document"` where it carries none.
  *
- * The incoming value rather than the stored one, which is the point of asking
- * at write time: the stored copy is the version being replaced, and it is the
- * new placements that can close a loop.
+ * The incoming value rather than the stored one, which is the point of asking at
+ * write time: the stored copy is the version being replaced, and it is the new
+ * placements that can close a loop.
+ *
+ * The DOCUMENT rather than the ids it names, because what a document reaches
+ * depends on the definitions it places — see {@link reachableFrom}.
  */
-function placesOf(
+function submittedDocument(
   context: unknown,
   options: CycleGuardOptions
-): readonly string[] | undefined | "not-a-document" {
+): { readonly document: unknown } | "not-a-document" {
   const data = fieldOf(context, "data");
   if (data === undefined) return "not-a-document";
   if (!Object.hasOwn(data, options.documentField)) return "not-a-document";
@@ -456,8 +603,9 @@ function placesOf(
   }
   const nodes = (document as { nodes?: unknown }).nodes;
   if (!Array.isArray(nodes)) return "not-a-document";
-  const usage = componentReferencesIn(document, options.limits.maxNodes);
-  return usage.complete ? usage.ids : undefined;
+  // Wrapped, because a bare `unknown` in a union with the sentinel collapses to
+  // `unknown` and every comparison against it would then type-check.
+  return { document };
 }
 
 /**
