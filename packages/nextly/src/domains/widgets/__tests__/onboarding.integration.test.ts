@@ -245,19 +245,20 @@ describe("onboarding steps against a real instance", () => {
     expect(await onboardingIsIncomplete(conditionProbe(admin))).toBe(false);
   });
 
-  it("offers a builder the collection step and NOT the entry step", async () => {
-    // 🔴 Creating a collection is not being able to write a row in it.
-    // `seedPermissionsForCollection` assigns a new collection's CRUD
-    // permissions to `super_admin` alone, so this caller would not acquire
-    // `create-<new-slug>` -- and might not even be able to read what they
-    // made. Offering the entry step on the strength of the definition grant
-    // hands them a step they still cannot finish, which is the defect this
-    // predicate exists to prevent, moved one collection later.
+  it("offers a stamped key NEITHER step, because it could finish neither", async () => {
+    // 🔴 Holding the definition grant is not being able to finish the
+    // collection step. `seedPermissionsForCollection` assigns a new
+    // collection's CRUD permissions to `super_admin` alone, so this caller
+    // creates the collection, gains no `read-<slug>` for it, and finds the
+    // step still outstanding -- permanently. Offering it moved the defect one
+    // action later rather than fixing it.
     //
-    // The caller is a KEY stamped with the definition grant and no read grant,
-    // which is the shape that separates the two predicates: its readable set
-    // is empty while its collection answer is unambiguously yes. A session
-    // caller answers no to both and could not tell them apart.
+    // The entry step is withheld for the reason it always was: nothing
+    // readable is in reach, and the definition grant is not a substitute.
+    //
+    // A KEY is the discriminating caller: a session super admin holds the same
+    // grant AND would read what it creates, so it is still offered the step --
+    // the case below.
     await createTestNextly({
       collections: [
         defineCollection({
@@ -273,11 +274,74 @@ describe("onboarding steps against a real instance", () => {
 
     const steps = await stepsFor(builder);
 
-    expect(steps.collection).toBe(false);
+    expect(steps.collection).toBeUndefined();
     expect(steps.entry).toBeUndefined();
-    // Still incomplete: there IS something this reader can do, and the card
-    // stays until they have done it.
-    expect(await onboardingIsIncomplete(conditionProbe(builder))).toBe(true);
+    // Only the account remains, and it is already done -- so nothing is
+    // offered and the card stays off their dashboard entirely.
+    expect(Object.keys(steps)).toEqual(["account"]);
+    expect(await onboardingIsIncomplete(conditionProbe(builder))).toBe(false);
+  });
+
+  it("offers it to a KEY already stamped with a read grant to create into", async () => {
+    // 🔴 A key never GAINS a grant -- it is judged on the scope stamped into
+    // it when it was minted -- but a permission may be pre-seeded, and the
+    // read decision accepts a key's exact `read-<slug>` once that collection
+    // exists. So a key holding `read-reports` finishes this step by creating
+    // `reports`, and refusing every key hid a step that WAS finishable.
+    await createTestNextly({ collections: [] }).then(t => {
+      current = t;
+      return refreshCollectionSources();
+    });
+
+    const stampedToRead: ReadCaller = {
+      user: { id: "key-2", roles: [] },
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["manage-settings", "read-reports"],
+      },
+    };
+
+    expect((await stepsFor(stampedToRead)).collection).toBe(false);
+  });
+
+  it("DOES offer it to a super admin, who would read what they create", async () => {
+    // The must-differ half, and without it "offered to nobody" satisfies the
+    // case above. The instance's FIRST user is its super admin, so this is the
+    // one caller for whom creating a collection also makes it readable -- and
+    // it is exactly the reader a fresh install has.
+    // NO collections, which is the only way the step is INCOMPLETE for a super
+    // admin: they can read every collection that exists, so any fixture with
+    // one completes the step and completion short-circuits the predicate --
+    // the test would pass without exercising it at all.
+    const t = await createTestNextly({ collections: [] });
+    current = t;
+    await refreshCollectionSources();
+
+    const users = (
+      t.nextly as unknown as {
+        users: {
+          create: (a: { data: Record<string, unknown> }) => Promise<{
+            item: { id: string };
+          }>;
+        };
+      }
+    ).users;
+    const owner = await users.create({
+      data: {
+        email: "owner@example.com",
+        password: "Password123!",
+        name: "Owner",
+        isActive: true,
+      },
+    });
+
+    const superAdmin: ReadCaller = {
+      user: { id: owner.item.id, roles: [] },
+    };
+    const steps = await stepsFor(superAdmin);
+
+    expect(steps.collection).toBe(false);
+    expect(await onboardingIsIncomplete(conditionProbe(superAdmin))).toBe(true);
   });
 
   it("offers nothing to a reader with no collection in reach and no way to make one", async () => {

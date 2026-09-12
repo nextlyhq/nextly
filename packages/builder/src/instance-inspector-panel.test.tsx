@@ -383,6 +383,206 @@ describe("a choice with an empty option", () => {
   });
 });
 
+describe("a link and a visibility exposure", () => {
+  const linked = () =>
+    header({
+      nodes: [
+        {
+          id: "h1",
+          type: "acme/cta",
+          version: 1,
+          props: { text: "Read more", href: "/docs" },
+        },
+      ],
+      exposed: [
+        {
+          id: "cta",
+          label: "Call to action",
+          nodeId: "h1",
+          propPath: "href",
+          type: "link",
+        },
+        {
+          id: "shown",
+          label: "Newsletter form",
+          nodeId: "h1",
+          propPath: "visibility",
+          type: "visibility",
+        },
+      ],
+    });
+
+  it("edits a link as the address it holds, and clears it when emptied", () => {
+    // The same field a url prop gets in the block inspector, keyed for an
+    // address. Emptied, it clears rather than writing "" — an href of ""
+    // points at the page itself.
+    const editor = mount(instance(), linked());
+    const field = screen.getByRole("textbox", {
+      name: "Call to action",
+    }) as HTMLInputElement;
+
+    expect(field.value).toBe("/docs");
+    expect(field.inputMode).toBe("url");
+    fireEvent.change(field, { target: { value: "https://example.test/go" } });
+    fireEvent.blur(field);
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { cta: "https://example.test/go" },
+    });
+    cleanup();
+
+    const emptied = mount(instance({ overrides: { cta: "/go" } }), linked());
+    const again = screen.getByRole("textbox", { name: "Call to action" });
+    fireEvent.change(again, { target: { value: "" } });
+    fireEvent.blur(again);
+    expect(appliedProps(emptied)).toEqual({
+      componentId: "header",
+      overrides: { cta: { $unset: true } },
+    });
+  });
+
+  it("still offers a SELECT's options when its stored value is structured", () => {
+    // Unlike a text field, a select does not carry the old value into what it
+    // writes: choosing an option replaces it outright. So a junk value there is
+    // repairable by using the control, and hiding it would strand the property.
+    mount(instance({ overrides: { tone: { unexpected: true } } }), header());
+
+    expect(screen.getByRole("combobox", { name: "Tone" })).toBeDefined();
+  });
+
+  it("still offers the field for a CLEARED text row, so the author can put a value back", () => {
+    // A clear is a blank the field is meant to show, not a value the control
+    // cannot hold — read as unrepresentable, clearing a property would make it
+    // permanently uneditable.
+    mount(instance({ overrides: { cta: { $unset: true } } }), linked());
+
+    expect(
+      screen.getByRole("textbox", { name: "Call to action" })
+    ).toBeDefined();
+  });
+
+  it("shows a STRUCTURED value rather than offering to overwrite it with text", () => {
+    /*
+     * `OverrideValue` is unconstrained, so a host block may declare a link prop
+     * as an object. A text control renders one as an empty field — there is no
+     * string to show — and the first edit replaces the whole value with
+     * whatever was typed into that blank, losing the rest of it silently.
+     *
+     * Shown read-only instead, through the same note a type this panel cannot
+     * edit yet uses: the author sees what is there and nothing overwrites it.
+     */
+    const editor = mount(
+      instance({ overrides: { cta: { href: "/docs", rel: "nofollow" } } }),
+      linked()
+    );
+
+    expect(
+      screen.queryByRole("textbox", { name: "Call to action" })
+    ).toBeNull();
+    expect(screen.getByText(/nofollow/)).toBeDefined();
+    // Nothing to type into means nothing written: the value is intact.
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("shows an inherited visibility row as shown, and hides it by writing false", () => {
+    // Inherited is the component's own rule, which is shown unless the
+    // definition gates the node itself; the resolver reads `false` as hidden
+    // and `true` as shown, and nothing else.
+    const editor = mount(instance(), linked());
+    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(box);
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { shown: false },
+    });
+  });
+
+  it("shows a row the DEFINITION gates as not shown, and turns it on by writing true", () => {
+    /*
+     * The component's own rule is not always "shown". A definition node
+     * carrying entry-field conditions is withheld by the renderer's
+     * hidden-node pass, and the resolver keeps the gate for it to act on — so
+     * a checkbox drawn from "no override written" told the author the node was
+     * on this page while the canvas did not draw it.
+     *
+     * Clicking it writes `true`, which is the one thing that removes the
+     * component's gate for this instance.
+     */
+    const gated = () =>
+      header({
+        nodes: [
+          {
+            id: "h1",
+            type: "acme/cta",
+            version: 1,
+            props: { text: "Read more", href: "/docs" },
+            visibility: {
+              conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+            },
+          } as never,
+        ],
+        exposed: [
+          {
+            id: "shown",
+            label: "Newsletter form",
+            nodeId: "h1",
+            propPath: "visibility",
+            type: "visibility",
+          },
+        ],
+      });
+    const editor = mount(instance(), gated());
+    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+
+    expect(box.getAttribute("aria-checked")).toBe("false");
+    // And not as the author's own doing: there is nothing of theirs to reset.
+    expect(screen.queryByRole("button", { name: /reset/i })).toBeNull();
+
+    fireEvent.click(box);
+
+    expect(appliedProps(editor)).toEqual({
+      componentId: "header",
+      overrides: { shown: true },
+    });
+  });
+
+  it("shows a hidden row unchecked — cleared included, which the page reads as hidden — and shows it again by writing true", () => {
+    const hidden = mount(instance({ overrides: { shown: false } }), linked());
+    const box = screen.getByRole("checkbox", { name: "Newsletter form" });
+    expect(box.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(box);
+    expect(appliedProps(hidden)).toEqual({
+      componentId: "header",
+      overrides: { shown: true },
+    });
+    cleanup();
+
+    mount(instance({ overrides: { shown: { $unset: true } } }), linked());
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Newsletter form" })
+        .getAttribute("aria-checked")
+    ).toBe("false");
+    expect(screen.getByText("Cleared")).toBeDefined();
+  });
+
+  it("offers the reset on a visibility override, which returns it to the component's rule", () => {
+    const editor = mount(instance({ overrides: { shown: false } }), linked());
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset Newsletter form to the component's value",
+      })
+    );
+
+    expect(appliedProps(editor)).toStrictEqual({ componentId: "header" });
+  });
+});
+
 /**
  * A select offering `""` and `"\u0000"`: both are legal option values, and a
  * spelling that gave `""` a sentinel of its own made the two one item value.

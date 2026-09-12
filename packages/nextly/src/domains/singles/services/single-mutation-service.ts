@@ -59,6 +59,7 @@ import {
   applyFieldWriteAccess,
   attachFieldValidators,
   runFieldHooks,
+  writeAccessGrants,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -128,6 +129,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { assertDraftsMayBePromoted } from "./promote-gate";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -648,6 +650,17 @@ export class SingleMutationService extends BaseService {
           throw NextlyError.validation({ errors: validationIssues });
         }
       }
+
+      // 6.3. A publish promotes the held pending change, and that content has
+      // been judged only once, when it was SAVED. The gate that judges it
+      // again runs inside the write transaction, on the draft that transaction
+      // has locked. The one thing it cannot do there is resolve the caller's
+      // grants, which queries the pooled connection the transaction is
+      // holding, so that is resolved here and handed in.
+      const promoteGrants = writeAccessGrants(
+        options.user,
+        options.authenticatedScope
+      );
 
       // 6.25. Single-level beforeChange hooks, on data the validation gate has
       // just passed. The declaration used to register onto `beforeUpdate`,
@@ -1320,6 +1333,52 @@ export class SingleMutationService extends BaseService {
                 singleDraftLocale
               );
               if (pendingDraft) {
+                // Judged here, on the draft this transaction has LOCKED, and
+                // after the hooks that decide the status. Before the
+                // transaction the gate could only judge a copy of the world as
+                // it was: another writer saving a draft in between, or a
+                // `beforeChange` hook turning a status-less edit into a
+                // publish, would both leave the checked document and the
+                // written document different documents.
+                // Narrowed once for the gate's arguments; the fold below
+                // already runs under the same non-null condition.
+                const promotedInto = existingDoc;
+                await assertDraftsMayBePromoted(
+                  [
+                    {
+                      locale: singleDraftLocale ?? null,
+                      snapshot: pendingDraft.snapshot,
+                    },
+                  ],
+                  {
+                    slug,
+                    entryId: promotedInto.id,
+                    fields: fieldConfigs,
+                    user: options.user,
+                    overrideAccess: options.overrideAccess,
+                    authenticatedScope: options.authenticatedScope,
+                    // Resolved on the pooled connection before this
+                    // transaction opened.
+                    grants: promoteGrants,
+                    // A snapshot belongs to this document, so its identity is
+                    // this document's. Supplying both ahead of the spread
+                    // satisfies the stored-document shape without asserting
+                    // one, and lets the snapshot's own values win.
+                    toLogical: doc =>
+                      this.queryService.deserializeJsonFields(
+                        {
+                          id: promotedInto.id,
+                          updatedAt: promotedInto.updatedAt,
+                          ...doc,
+                        },
+                        singleMeta.fields
+                      ),
+                    liveStoredFor: () => Promise.resolve(promotedInto),
+                    callerData: currentData,
+                    localizedFieldNames,
+                    enforceLocalizedRequired,
+                  }
+                );
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.

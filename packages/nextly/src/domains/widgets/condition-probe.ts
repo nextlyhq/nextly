@@ -33,6 +33,7 @@ import {
   COLLECTION_DEFINITION_ACTION,
   COLLECTION_DEFINITION_RESOURCE,
 } from "../../auth/collection-definition-policy";
+import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
 import {
@@ -63,10 +64,11 @@ export interface ConditionProbe {
   /**
    * Whether this reader could create a COLLECTION, resolved at most once.
    *
-   * The grant is `auth/collection-definition-policy`'s, which is what the
-   * schema route and the dispatcher's definition branch both enforce, asked
-   * through the same door they ask through -- so this cannot drift from the
-   * refusal a reader would actually meet.
+   * Two halves: may they DEFINE one (the grant
+   * `auth/collection-definition-policy` names, which the schema route and the
+   * dispatcher both enforce), and would they be able to READ the result. The
+   * second is what makes the step finishable -- a new collection's permissions
+   * are seeded to `super_admin` alone.
    */
   mayCreateCollection(): Promise<boolean>;
 }
@@ -84,14 +86,35 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   };
 
   const mayCreateCollection = (): Promise<boolean> => {
-    // Through the same decision the entry predicate uses, and for the same
-    // reason: a key's stamped grant alone is not what a route enforces.
-    createCollection ??= callerMayPerform(
-      caller.authenticatedScope,
-      COLLECTION_DEFINITION_ACTION,
-      COLLECTION_DEFINITION_RESOURCE,
-      caller.user
-    );
+    // 🔴 May create AND would be able to READ what they created. Both halves,
+    // because the step completes when this reader can read a collection, and
+    // `seedPermissionsForCollection` assigns a new collection's CRUD
+    // permissions to `super_admin` alone. A caller holding the definition
+    // grant and nothing else creates the collection, gains no `read-<slug>`
+    // for it, and finds the step still outstanding -- permanently, which is
+    // the defect this predicate exists to prevent, moved one action later.
+    //
+    // The readability half is DERIVED from the seeding policy rather than
+    // restated here. `wouldReadOwnNewCollection` lives beside the declaration
+    // the seeder assigns by, so if creation ever begins granting the creator --
+    // or the assignment moves to another role -- this follows instead of
+    // silently disagreeing. Asserted in one place, the two could only drift in
+    // ways nothing reports: a step hidden after it became finishable, or
+    // offered after it stopped being.
+    createCollection ??= (async () => {
+      const mayDefine = await callerMayPerform(
+        caller.authenticatedScope,
+        COLLECTION_DEFINITION_ACTION,
+        COLLECTION_DEFINITION_RESOURCE,
+        caller.user
+      );
+      if (!mayDefine) return false;
+      return wouldReadOwnNewCollection({
+        userId: caller.user.id,
+        isApiKey: caller.authenticatedScope?.actorType === "apiKey",
+        permissions: caller.authenticatedScope?.permissions ?? [],
+      });
+    })();
     return createCollection;
   };
 
