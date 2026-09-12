@@ -557,6 +557,38 @@ export class DynamicCollectionService extends BaseService {
    * would not.
    */
   /**
+   * Refuse a junction move whose destination name the database already holds.
+   *
+   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`) naming the table
+   */
+  private async refuseJunctionMovesOntoLiveTables(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): Promise<void> {
+    for (const move of this.schemaService.junctionMoves(
+      tableName,
+      oldFields,
+      newFields
+    )) {
+      if (!(await this.adapter.tableExists(move.to.table))) continue;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "JUNCTION_TABLE_IN_USE",
+            message:
+              `Junction table "${move.from.table}" cannot move to ` +
+              `"${move.to.table}": a table of that name already exists in the ` +
+              `database. Choose another name, or drop that table first.`,
+          },
+        ],
+        logContext: { from: move.from.table, to: move.to.table },
+      });
+    }
+  }
+
+  /**
    * The fields a save defines itself, validated: names lower-cased, the
    * reserved fields dropped, every name checked, and no two many-to-many
    * fields sharing one junction table — asked through the schema service's own
@@ -997,6 +1029,18 @@ export class DynamicCollectionService extends BaseService {
 
       const oldUserFields = (collection.fields || []).filter(
         (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
+      );
+
+      // Asked here rather than in the generator, because only this side can
+      // ask the database. The generator refuses a move onto a table this
+      // collection's own fields name; a junction left behind by an older
+      // migration is invisible to it, and the rename would meet that table at
+      // apply time — in production, where a migration can no longer be
+      // refused and the registry has already recorded the new name.
+      await this.refuseJunctionMovesOntoLiveTables(
+        collection.tableName,
+        oldUserFields,
+        userDefinedFields
       );
 
       // Pass status flags so the alter migration can ADD/DROP the

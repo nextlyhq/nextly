@@ -2101,6 +2101,25 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
     ];
   }
 
+  /**
+   * The junctions this save would carry to a new name, source and destination.
+   *
+   * Published for the save boundary, which can do what this generator cannot:
+   * ask the database whether a destination name is already taken. The tables
+   * a collection's own fields name are visible here and refused here; one left
+   * behind by an older migration is not, and a rename onto it fails at apply
+   * time — in production, where a migration can no longer be refused.
+   */
+  junctionMoves(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): Array<{ from: JunctionShape; to: JunctionShape }> {
+    return this.junctionCarries(tableName, oldFields, newFields).filter(
+      move => move.from.table !== move.to.table
+    );
+  }
+
   /** Every junction table a field list names, by name. */
   private junctionTables(
     tableName: string,
@@ -2161,6 +2180,35 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
     before: Map<string, JunctionTable>,
     after: Map<string, JunctionTable>
   ): void {
+    // One table cannot become two. A definition saved before shared junctions
+    // were refused can name the same table from two fields, and giving each of
+    // them a table of its own asks this save to rename one table twice: the
+    // first statement succeeds, the second meets a table that is no longer
+    // there, and the migration stops half-applied with the registry already
+    // recording both new names.
+    const sources = new Map<string, JunctionShape>();
+    for (const { from, to } of carries) {
+      if (from.table === to.table) continue;
+      const twin = sources.get(from.table);
+      if (twin) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fields",
+              code: "JUNCTION_TABLE_IN_USE",
+              message:
+                `Junction table "${from.table}" cannot move to both ` +
+                `"${twin.table}" and "${to.table}" in one save: there is one ` +
+                `table, and a link does not record which field made it. Give ` +
+                `one field its own junction table per save, or remove one of ` +
+                `the fields first.`,
+            },
+          ],
+          logContext: { from: from.table, to: [twin.table, to.table] },
+        });
+      }
+      sources.set(from.table, to);
+    }
     for (const { from, to } of carries) {
       if (from.table === to.table) continue;
       const stays = after.get(from.table)?.fields[0];

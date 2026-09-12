@@ -116,7 +116,8 @@ describe("the Builder's save paths ask the ownership rule", () => {
   ];
 
   function builder(
-    registry: Record<string, unknown>
+    registry: Record<string, unknown>,
+    liveTables: string[] = []
   ): DynamicCollectionService {
     const logger = {
       info: () => {},
@@ -126,6 +127,9 @@ describe("the Builder's save paths ask the ownership rule", () => {
     };
     const adapter = {
       getCapabilities: () => ({ dialect: "sqlite" as const }),
+      // The only database question these cases reach: whether a junction's
+      // destination name is already taken.
+      tableExists: (name: string) => Promise.resolve(liveTables.includes(name)),
     } as unknown as ConstructorParameters<typeof DynamicCollectionService>[0];
     const service = new DynamicCollectionService(adapter, logger);
     (service as unknown as { registryService: unknown }).registryService =
@@ -148,6 +152,57 @@ describe("the Builder's save paths ask the ownership rule", () => {
       service.generateCollection({ name: "posts", fields: colliding } as never)
     );
     expect(code).toBe("JUNCTION_TABLE_SHARED");
+  });
+
+  it("refuses moving a junction onto a table the database already holds", async () => {
+    // The generator can only see the tables this collection's own fields
+    // name; a junction left by an older migration is invisible to it, and the
+    // rename would fail at apply time.
+    const service = builder(
+      {
+        getCollection: async () => ({
+          name: "posts",
+          tableName: "dc_posts",
+          fields: [relationship("tags", "manyToMany", "old_links")],
+        }),
+      },
+      ["taken_links"]
+    );
+    const code = await codeOf(
+      service.generateCollectionUpdate("posts", {
+        fields: [relationship("tags", "manyToMany", "taken_links")],
+      } as never)
+    );
+    expect(code).toBe("JUNCTION_TABLE_IN_USE");
+  });
+
+  it("allows the move when that name is free", async () => {
+    // The control: the same edit, with nothing at the destination. It gets
+    // past the refusal (and fails later for want of a real database), so the
+    // case above cannot be passing because every update is refused.
+    const service = builder(
+      {
+        getCollection: async () => ({
+          name: "posts",
+          tableName: "dc_posts",
+          fields: [relationship("tags", "manyToMany", "old_links")],
+        }),
+      },
+      []
+    );
+    const error = await service
+      .generateCollectionUpdate("posts", {
+        fields: [relationship("tags", "manyToMany", "free_links")],
+      } as never)
+      .catch((e: unknown) => e);
+    const code =
+      NextlyError.is(error) &&
+      (
+        (error as NextlyError).publicData as
+          | { errors?: Array<{ code: string }> }
+          | undefined
+      )?.errors?.[0]?.code;
+    expect(code).not.toBe("JUNCTION_TABLE_IN_USE");
   });
 
   it("refuses the collision when a collection is updated", async () => {

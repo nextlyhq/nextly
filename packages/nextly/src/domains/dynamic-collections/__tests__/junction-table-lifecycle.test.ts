@@ -436,6 +436,28 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       ).toBe("JUNCTION_TABLE_IN_USE");
     });
 
+    it("refuses to split one table between two fields in a single save", () => {
+      // A legacy definition where two fields share a table, and this save
+      // gives each its own: one table cannot become two, and renaming it
+      // twice leaves the second statement meeting a table that is gone.
+      const shared = { junctionTable: "shared_links" };
+      expect(
+        codeOf(() =>
+          service().generateAlterTableMigration(
+            "dc_posts",
+            [
+              manyToMany("tags", "tags", shared),
+              manyToMany("labels", "tags", shared),
+            ],
+            [
+              manyToMany("tags", "tags", { junctionTable: "tag_links" }),
+              manyToMany("labels", "tags", { junctionTable: "label_links" }),
+            ]
+          )
+        )
+      ).toBe("JUNCTION_TABLE_IN_USE");
+    });
+
     it("refuses to carry a table onto one that already exists", () => {
       // `labels` goes in the same save, but its table still holds its links
       // when the rename would land on it.
