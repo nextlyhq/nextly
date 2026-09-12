@@ -26,7 +26,7 @@ import {
   registerResolvedSource,
   sourceResolver,
 } from "../resolved-sources";
-import { clearSources, registerSource } from "../sources";
+import { clearSources, listSources, registerSource } from "../sources";
 
 const caller = { user: { id: "user-1", roles: ["editor"] } };
 
@@ -37,6 +37,22 @@ const revenueSource = {
   supports: ["count"] as const,
   fields: [{ name: "total", type: "number" as const }],
 };
+
+/**
+ * The id the source store actually holds for the one `plugin:` source a case
+ * registered.
+ *
+ * Read back from the store rather than assumed, because the case that needs it
+ * is about an id whose every read can differ -- naming the expected value here
+ * would assert the drift instead of detecting it.
+ */
+function publishedPluginSourceId(): string {
+  const ids = listSources()
+    .filter(source => source.kind === "plugin")
+    .map(source => source.id);
+  expect(ids).toHaveLength(1);
+  return ids[0] as string;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -84,9 +100,10 @@ describe("a plugin's widget source", () => {
 
   it("refuses a query naming a field the source never declared", async () => {
     // The resolver is never reached. Validation runs against the plugin's OWN
-    // declared field list first, which is what makes the resolver signature a
-    // boundary: by the time it is called, no string in the query is one the
-    // caller invented.
+    // declared field list first, so a field name the source never published
+    // cannot reach it. That bounds the SHAPE of the question and nothing more:
+    // operand VALUES stay caller-controlled, which is why `resolved-sources.ts`
+    // makes validating them the resolver's job rather than promising it here.
     const resolve = vi.fn();
     registerResolvedSource(revenueSource, resolve);
 
@@ -164,5 +181,47 @@ describe("a plugin's widget source", () => {
     );
 
     expect(result).toEqual({ op: "count", total: 9 });
+  });
+
+  it("keys the resolver under the id the SOURCE store published", async () => {
+    // 🔴 The atomicity the one-call signature promises, against an `id` that
+    // answers differently on each read. An accessor and a Proxy trap are both
+    // ordinary JavaScript and a plugin's source object is the plugin's, so the
+    // host cannot assume a property is a stored value. Registration reads `id`
+    // on the way in, so keying the resolver by reading it AGAIN files it under
+    // a key no source claims -- the source publishes, every query for it fails
+    // as unanswerable, and nothing reports the mismatch.
+    let reads = 0;
+    const drifting = {
+      get id() {
+        reads += 1;
+        return `plugin:acme/drift-${reads}`;
+      },
+      label: "Drifting",
+      kind: "plugin" as const,
+      supports: ["count"] as const,
+      fields: [{ name: "total", type: "number" as const }],
+    };
+
+    const resolve = vi
+      .fn()
+      .mockResolvedValue({ op: "count" as const, total: 7 });
+    registerResolvedSource(drifting, resolve);
+
+    // More than one read happened, or the case is not exercising anything.
+    expect(reads).toBeGreaterThan(1);
+
+    // The id the store published is the one a reader can address, so it is the
+    // one the resolver has to be under. Asked of the store rather than of a
+    // literal: which read wins is the registry's business, and pinning it here
+    // would make this test a copy of the implementation.
+    const published = publishedPluginSourceId();
+    expect(sourceResolver(published)).toBe(resolve);
+
+    const result = await executeWidgetQuery(
+      validateWidgetQuery({ source: published, op: "count" }),
+      caller
+    );
+    expect(result).toEqual({ op: "count", total: 7 });
   });
 });

@@ -444,10 +444,18 @@ function preparedSource(
   return snapshot(source);
 }
 
-/** Register a source. Throws if it is malformed, or if the id is already taken. */
-export function registerSource(source: WidgetSource): void {
+/**
+ * Register a source. Throws if it is malformed, or if the id is already taken.
+ *
+ * Returns the detached copy that was stored, so a caller writing a SECOND store
+ * beside this one keys it from the value this one actually holds rather than by
+ * reading the registrant's object again. `registerResolvedSource` is that
+ * caller, and the atomicity its single signature promises depends on it.
+ */
+export function registerSource(source: WidgetSource): WidgetSource {
   const prepared = preparedSource(source, id => store().has(id));
   store().set(prepared.id, prepared);
+  return prepared;
 }
 
 export function getSource(id: string): WidgetSource | undefined {

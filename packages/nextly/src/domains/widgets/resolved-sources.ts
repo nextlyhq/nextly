@@ -53,8 +53,9 @@
  * That a resolver consults `caller`. It cannot: the host hands over the caller
  * and the resolver decides what to do with it. Pairing the source and the
  * resolver in one call makes "registered but unanswerable" unrepresentable, and
- * the signature forecloses SSRF — neither proves a third party authorized
- * anything. WordPress has required a `permission_callback` on every REST route
+ * validating the query keeps a malformed question out — neither proves a third
+ * party authorized anything, and neither is the SSRF bound the section above
+ * declines to claim. WordPress has required a `permission_callback` on every REST route
  * since 5.5 and plugins still ship `__return_true` for it (CVE-2026-4019,
  * CVE-2026-4020); Payload's Local API disables access control by default. A
  * required field is not an enforced check.
@@ -133,6 +134,14 @@ function resolvers(): Map<string, SourceResolver> {
  * The source then goes through `registerSource`, the same door a collection
  * source uses, so its shape is validated by the same rules and a duplicate id
  * is refused the same way.
+ *
+ * 🔴 The resolver is keyed from the snapshot `registerSource` RETURNS, never by
+ * reading `source.id` a second time. `source` belongs to the plugin, and `id`
+ * may be an accessor or a Proxy trap rather than a stored string -- so a second
+ * read can answer differently and file the resolver under a key no source
+ * claims. The published source would then fail every query as unanswerable,
+ * which is the exact state one call exists to make unreachable: two reads of a
+ * caller-owned property are two values, however atomic the signature looks.
  */
 export function registerResolvedSource(
   source: ResolvedWidgetSource,
@@ -149,8 +158,8 @@ export function registerResolvedSource(
         `"${String(source?.kind)}"`,
     });
   }
-  registerSource(source);
-  resolvers().set(source.id, resolve);
+  const registered = registerSource(source);
+  resolvers().set(registered.id, resolve);
 }
 
 /** The resolver for `sourceId`, or `undefined` when nothing answers it. */
