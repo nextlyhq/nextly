@@ -40,8 +40,7 @@
  * can store a component referencing itself without this handler being called at
  * all, and ordinary document validation does not look across rows. Nothing a
  * plugin can register closes that: the invariant needs a write boundary that is
- * not skippable, which is a core capability rather than a hook. Recorded as
- * `finding:cycle-guard-is-skippable-by-import` with what it would take.
+ * not skippable, which is a core capability rather than a hook.
  *
  * Two saves closing a loop between them AT THE SAME MOMENT. This walk runs
  * before its own write commits and takes no lock the other write contends for,

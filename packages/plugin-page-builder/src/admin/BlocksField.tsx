@@ -578,8 +578,9 @@ function namedBy(
   // one level for every further level of nesting overrides flow through.
   //
   // The consequence is that this can OFFER a tile whose save the write refuses —
-  // a trap rather than a corruption, since the write is exact. Recorded as
-  // `finding:insert-panel-approximates-what-the-write-composes` with the options.
+  // a trap rather than a corruption, since the write is exact. Closing it means
+  // composing the ONE candidate being inserted rather than every candidate in
+  // the filter, which is affordable where composing the list is not.
   //
   // ONE walk for both: the ids the definition reaches, and the nodes it reaches
   // through. The second is the edge that belongs to the PLACEMENT — a node here

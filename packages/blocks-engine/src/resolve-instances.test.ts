@@ -2523,7 +2523,7 @@ describe("componentReferencesIn", () => {
   const plain = component([node("t")]);
 
   it("finds the id only a variant installs, which the raw scan cannot see", () => {
-    // The two answers differ, which is the whole finding: `b` is what the node
+    // The two answers differ, and that difference is the point: `b` is what the node
     // stores and `a` is what resolves when the variant is picked.
     expect(componentUsageIn(swappable.nodes).ids).toEqual(["b"]);
     expect(componentReferencesIn(swappable).ids).toEqual(["b", "a"]);
