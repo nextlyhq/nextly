@@ -27,6 +27,9 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0"
+  },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
     "nextly": "0.0.2-alpha.65"

@@ -2,11 +2,15 @@
  * `@nextlyhq/plugin-mcp` — the first-party Model Context Protocol server for
  * Nextly.
  *
- * EXPERIMENTAL. The package is published so its name is claimed and its release
- * train is proven, and so that the protocol surface can land in small reviewable
- * pieces rather than as one drop. It contributes NOTHING yet: installing it
- * today changes no route, no field and no permission, which
- * `__tests__/plugin.test.ts` asserts rather than leaves to be believed.
+ * EXPERIMENTAL. The surface lands in small reviewable pieces rather than as one
+ * drop, and this piece is the transport: an address that speaks the protocol
+ * and exposes nothing through it. No tool, resource or prompt is registered
+ * yet, so a client that connects finds a server with no capabilities.
+ *
+ * Installing the package still changes nothing. The endpoint exists only once
+ * an operator passes `enabled: true`, and while it is off the plugin
+ * contributes no route at all, which `__tests__/plugin.test.ts` asserts rather
+ * than leaves to be believed.
  *
  * Framework-agnostic by construction. The protocol surface is a request
  * handler, so nothing here couples to `next` or `react` and a headless install
@@ -18,6 +22,9 @@ import { createRequire } from "node:module";
 
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 
+import { resolveAllowedHosts } from "./transport/allowed-hosts";
+import { mcpEndpointRoutes } from "./transport/endpoint";
+
 // Read from the manifest so the declared version cannot drift from what ships.
 // A hand-copied string agrees on the day it is written; this is the same reason
 // the other first-party plugins read theirs.
@@ -25,6 +32,9 @@ const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
 };
+
+/** The endpoint's address within the host application's Nextly handler mount. */
+const DEFAULT_ENDPOINT_PATH = "/mcp";
 
 export interface McpPluginOptions {
   /**
@@ -37,6 +47,31 @@ export interface McpPluginOptions {
    * anybody deciding to. An operator turns this on.
    */
   enabled?: boolean;
+  /**
+   * Hostnames the endpoint may be reached on.
+   *
+   * A request addressed to any other name is refused, which is what makes a
+   * name an attacker controls useless even when it resolves to this server. Any
+   * form of an address is accepted and reduced to its hostname, so
+   * `https://cms.example.com`, `cms.example.com` and `cms.example.com:3000` are
+   * one entry; IPv6 needs its brackets (`[::1]`).
+   *
+   * Left unset, the endpoint answers on the hostname of `NEXT_PUBLIC_APP_URL`,
+   * which is the address the install already states about itself. With neither,
+   * it answers only on localhost, so a development install works and a deployed
+   * one that has said nothing about its address refuses rather than guesses.
+   *
+   * Setting this REPLACES that default rather than adding to it. Naming your
+   * own hostnames is a statement about which names are legitimate, and a list
+   * that quietly kept localhost would not be the list you wrote.
+   */
+  allowedHosts?: string[];
+  /**
+   * Where the endpoint answers, within the host application's Nextly handler
+   * mount. Defaults to `/mcp`, so an app serving Nextly from `/admin/api`
+   * publishes `https://<host>/admin/api/mcp`.
+   */
+  path?: string;
 }
 
 /**
@@ -46,7 +81,7 @@ export interface McpPluginOptions {
  * rather than a signature change for everyone who has already installed it.
  */
 export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
-  const { enabled = false } = options;
+  const { enabled = false, path = DEFAULT_ENDPOINT_PATH } = options;
 
   return definePlugin({
     // Carried on the definition, not merely resolved. Core reads an OMITTED
@@ -67,7 +102,22 @@ export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
     license: "MIT",
     admin: {
       description:
-        "Experimental placeholder. Serves no endpoint yet. When it does, it will expose this install's schema and content to AI agents over the Model Context Protocol, read-only, and only once enabled.",
+        "Experimental. Serves a Model Context Protocol endpoint for AI agents when enabled, authenticated like every other Nextly route. It exposes no tools yet, so an agent that connects can read nothing.",
     },
+    // Contributed only while the endpoint is on. Core independently skips a
+    // disabled plugin's routes, so the two agree rather than one relying on the
+    // other: this is the half testable from inside the package, and core's is
+    // the half that holds for a definition built any other way.
+    ...(enabled
+      ? {
+          contributes: {
+            routes: mcpEndpointRoutes({
+              allowedHosts: resolveAllowedHosts(options.allowedHosts),
+              path,
+              version: PLUGIN_VERSION,
+            }),
+          },
+        }
+      : {}),
   });
 }

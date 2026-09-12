@@ -28,13 +28,17 @@ describe("the plugin is published and inert", () => {
     expect(mcpPlugin().version).toBe(manifest.version);
   });
 
-  it("contributes nothing, so installing it changes no behaviour", () => {
+  it("contributes nothing while it is off, so installing it changes nothing", () => {
     // The property the README states. Asserted over the WHOLE definition rather
     // than over a list of keys someone remembered: a contribution added in a
     // later change fails here, which is where the decision to start serving
     // should be made deliberately.
     const definition = mcpPlugin() as Record<string, unknown>;
     const contributing = [
+      // The key every contribution actually travels under. Listing only the
+      // individual kinds leaves the one that carries them, so a plugin that
+      // began serving an endpoint would satisfy the whole list.
+      "contributes",
       "routes",
       "fields",
       "collections",
@@ -92,6 +96,15 @@ describe("the plugin is published and inert", () => {
     // The control. `enabled: false` on every path satisfies the case above and
     // would leave the option inert once the transport lands.
     expect(mcpPlugin({ enabled: true }).enabled).toBe(true);
+  });
+
+  it("serves the endpoint only once an operator turns it on", () => {
+    // The other half of the case above, and the one that matters now that
+    // there is something to serve. `enabled` reads as a flag either way; what
+    // decides whether an install answers on the protocol is whether the route
+    // exists at all.
+    expect(mcpPlugin().contributes).toBeUndefined();
+    expect(mcpPlugin({ enabled: true }).contributes?.routes).toHaveLength(3);
   });
 
   it("reports as disabled through the rule core actually applies", () => {

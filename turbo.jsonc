@@ -123,6 +123,7 @@
     "PERMISSION_CACHE_MEMORY_SIZE",
     "PERMISSION_CACHE_TTL_SECONDS",
     "PUBLIC_URL",
+    "NEXT_PUBLIC_APP_URL", // @nextlyhq/plugin-mcp: default hostname the MCP endpoint answers on
     "TEST_DATABASE_URL",
     "TEST_MYSQL_URL",
     "TEST_POSTGRES_URL",
