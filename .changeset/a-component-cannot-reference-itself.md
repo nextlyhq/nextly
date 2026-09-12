@@ -39,8 +39,22 @@ saving against a library read that had gone stale, closed a loop anyway.
 
 The write now refuses, naming the chain to break — `Hero → Banner → Hero` —
 rather than leaving the author to find which placement did it. The check reads
-each referenced component as it currently stands, in both its published and its
-unpublished form, and refuses rather than guessing when it cannot read them all.
+each referenced component as it currently stands, and refuses rather than
+guessing when it cannot read them all.
+
+A component's VARIANTS count as references. A variant may preset an exposed
+`componentId`, which re-points a nested instance at a different component
+entirely — so a definition whose stored ids look harmless can still resolve back
+to itself once that variant is picked. Both the insert panel and the write now
+judge a definition by what it can reach under any variant it offers, so the
+editor no longer offers a component the save would refuse.
+
+It judges the lifecycle form the write actually changes. An ordinary editor save
+is stored as a working draft and leaves the published row alone, so it is checked
+against what a preview would show; publishing checks the live library as well.
+Publishing an accumulated draft is checked too, even when the request carries
+nothing but the new status — that is the write that brings the draft's content
+live.
 
 It is deliberately a refusal rather than a warning: the author who closes a loop
 is not the person who sees the gap, so a notice would go to someone who has no
