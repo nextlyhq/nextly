@@ -73,7 +73,7 @@ import { BaseService } from "../../../shared/base-service";
 import type { WhereFilter } from "../query/query-operators";
 
 import type { CollectionMetadataService } from "./collection-metadata-service";
-import type { BatchOperationResult } from "./collection-types";
+import type { BatchOperationResult, BulkUpdateEntry } from "./collection-types";
 import { forwardedFromContext } from "./forwarded-context";
 
 /**
@@ -670,6 +670,65 @@ export class CollectionService extends BaseService {
         ...forwardedFromContext(context),
       },
       data
+    );
+  }
+
+  /**
+   * Bulk-update entries in a single transaction.
+   *
+   * Each entry names the row it patches, so one call can apply a DIFFERENT
+   * patch per row. Applying the SAME patch to several rows is the same call
+   * with the patch repeated, which is why there is one method rather than two:
+   * a by-filter variant could express only the second, and would need its own
+   * access, hook and revalidation pass to do it.
+   *
+   * Partial success, like `createMany`: a failed entry does not stop the rest,
+   * and the ones that committed are reported in `ids`.
+   *
+   * 🔴 `errors[].index` indexes the `entries` array THIS caller passed, so the
+   * row a failure is about is `entries[index].id`. The result shape is shared
+   * with the creates, which have no caller-supplied ids to key failures by.
+   *
+   * @param collectionName - Name of the collection
+   * @param entries - `{ id, data }` per row; `data` is a partial patch
+   * @param context - Request context (carries `overrideAccess` for elevation)
+   * @returns Per-batch result: counts, updated ids, and index-keyed failures
+   *
+   * @experimental Graduates per D55 once a first-party plugin exercises it in
+   *   production; `packages/plugin-sdk/STABILITY.md` is the authority.
+   */
+  async updateMany(
+    collectionName: string,
+    entries: BulkUpdateEntry[],
+    context: RequestContext
+  ): Promise<BatchOperationResult> {
+    // Refused for the same reason `createMany` refuses it: the bulk pipeline
+    // takes no locale at all, so one accepted here would be dropped on the way
+    // in and every row written to the default language while the call reported
+    // success. A caller told nothing is worse off than a caller told no.
+    if (context.locale !== undefined) {
+      throw NextlyError.invalidInput({
+        message:
+          "updateMany cannot write in a locale; update the rows one at a time with updateEntry.",
+        logContext: {
+          reason: "update-many-locale-unsupported",
+          collectionName,
+          locale: context.locale,
+        },
+      });
+    }
+
+    this.logger.debug("Updating entries (bulk)", {
+      collectionName,
+      count: entries.length,
+    });
+
+    return this.entryService.updateEntries(
+      {
+        collectionName,
+        ...forwardedFromContext(context),
+      },
+      entries
     );
   }
 

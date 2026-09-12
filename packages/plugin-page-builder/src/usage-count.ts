@@ -68,12 +68,18 @@ export interface UsageCount {
 }
 
 /**
- * The column a document is identified by in every usage index.
+ * The two columns that together identify a document in every usage index.
  *
- * `entityKey` holds the document's id, and it is the same column in each index
- * because the six subject columns are the shared half of the row. Grouping by
- * it is what turns rows into documents.
+ * `entityKey` holds the document's id and `entity` the collection it lives in,
+ * and both are the same columns in each index because the six subject columns
+ * are the shared half of the row. A document is the PAIR: ids are minted per
+ * collection, so two tracked collections can each hold a document with the
+ * same id — restored or imported records do — and grouping by the id alone
+ * folds those into one bucket. The count then reads below the truth while
+ * presenting itself as exact, which is the one answer a safe delete must never
+ * be handed.
  */
+const COLLECTION_COLUMN = "entity";
 const DOCUMENT_COLUMN = "entityKey";
 
 /**
@@ -104,18 +110,42 @@ export async function countDocumentsUsing<TRow extends UsageSubject>(args: {
   // what the argument already said.
   if (args.referenceId === "") return { documents: 0, complete: true };
 
-  const grouped = await args.read({
-    where: args.index.whereReferencing(args.referenceId),
-    groupBy: DOCUMENT_COLUMN,
-  });
-  const documents = grouped.bucketCount;
+  const referencing = args.index.whereReferencing(args.referenceId);
 
-  // Three conditions in one expression, and no ordering between them can drop
-  // one: this read reached its cap, some document in the index was never
-  // readable, or some scope was never walked. Only the first is about this
-  // component; the other two were resolved once for the whole screen.
+  // Which collections hold a reference at all, then the documents in EACH.
+  // The grouped read takes one column, so the pair is asked as two questions:
+  // grouping by the id across every collection at once is the fold described
+  // above, and grouping by collection alone counts collections, not documents.
+  const collections = await args.read({
+    where: referencing,
+    groupBy: COLLECTION_COLUMN,
+  });
+
+  let documents = 0;
+  let truncated = collections.truncated;
+  let placeable = true;
+  for (const entity of collections.buckets) {
+    // A row naming no collection is a document this cannot place, and a count
+    // that dropped it would be a floor presenting itself as exact.
+    if (entity === null) {
+      placeable = false;
+      continue;
+    }
+    const inCollection = await args.read({
+      where: { ...referencing, [COLLECTION_COLUMN]: { equals: entity } },
+      groupBy: DOCUMENT_COLUMN,
+    });
+    documents += inCollection.buckets.length;
+    truncated ||= inCollection.truncated;
+  }
+
+  // Four conditions in one expression, and no ordering between them can drop
+  // one: a read reached its cap, a row could not be placed in a collection,
+  // some document in the index was never readable, or some scope was never
+  // walked. The first two are about this component; the other two were
+  // resolved once for the whole screen.
   return {
     documents,
-    complete: !grouped.truncated && indexIsWhole(args.health),
+    complete: !truncated && placeable && indexIsWhole(args.health),
   };
 }

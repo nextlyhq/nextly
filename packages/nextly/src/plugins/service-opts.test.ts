@@ -328,3 +328,44 @@ describe("resolveServiceOpts — the caller's own scope", () => {
     ).toEqual({ overrideAccess: true });
   });
 });
+
+describe("verified claims on the supplied identity", () => {
+  it("survive into the identity the access rule is judged on", async () => {
+    // 🔴 `readCaller` spreads `auth.claims` onto the user it builds, so a
+    // caller handed to a plugin carries what the token proved. Rebuilt from
+    // id/name/email/roles alone, a code-defined `access` rule reading one of
+    // those claims saw a DIFFERENT caller than the endpoint authenticated --
+    // and an absence-tolerant rule like `user.plan !== "suspended"` then
+    // GRANTS where it should deny.
+    const resolved = await resolveServiceOpts({
+      as: "user",
+      user: {
+        id: "user-1",
+        email: "a@example.com",
+        tenant: "acme",
+        plan: "suspended",
+      } as never,
+    });
+
+    const judged = resolved.user as unknown as Record<string, unknown>;
+    expect(judged.tenant).toBe("acme");
+    expect(judged.plan).toBe("suspended");
+    // The declared fields still come from the identity, not from the spread.
+    expect(judged.id).toBe("user-1");
+    expect(judged.email).toBe("a@example.com");
+  });
+
+  it("adds nothing for an identity carrying only the declared fields", async () => {
+    // The must-differ half: without it, a version that attached some fixed
+    // object to every caller would satisfy the case above.
+    const resolved = await resolveServiceOpts({
+      as: "user",
+      user: { id: "user-2", email: "b@example.com" } as never,
+    });
+
+    const judged = resolved.user as unknown as Record<string, unknown>;
+    expect(judged.tenant).toBeUndefined();
+    expect(judged.plan).toBeUndefined();
+    expect(judged.id).toBe("user-2");
+  });
+});

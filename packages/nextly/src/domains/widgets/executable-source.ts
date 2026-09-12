@@ -21,13 +21,13 @@
  * @module domains/widgets/executable-source
  */
 
+import { sourceResolver, type SourceResolver } from "./resolved-sources";
 import {
   failUnavailableSourceOrOp,
   getSource,
   sourceTarget,
   type WidgetSource,
 } from "./sources";
-import { systemResolver, type SystemSourceResolver } from "./system-sources";
 
 /**
  * A resolved source together with HOW it is answered.
@@ -42,7 +42,8 @@ import { systemResolver, type SystemSourceResolver } from "./system-sources";
  * branch makes the disagreement unrepresentable rather than merely unlikely.
  */
 export type ExecutableSource =
-  | { kind: "system"; source: WidgetSource; resolve: SystemSourceResolver }
+  | { kind: "system"; source: WidgetSource; resolve: SourceResolver }
+  | { kind: "plugin"; source: WidgetSource; resolve: SourceResolver }
   | { kind: "collection"; source: WidgetSource }
   | { kind: "single"; source: WidgetSource };
 
@@ -57,6 +58,12 @@ const READS_AN_ENTITY: Record<ExecutableSource["kind"], boolean> = {
   collection: true,
   single: true,
   system: false,
+  // A plugin source's rows are not an entity the permission table names, for
+  // the same reason a system source's are not: whatever they are, they are the
+  // plugin's own, and the `read-<slug>` gate would be asking about a collection
+  // that does not exist. Its `requiredPermission` stays advisory, as every
+  // source's is.
+  plugin: false,
 };
 
 /**
@@ -95,28 +102,42 @@ export function resolveExecutableSource(sourceId: string): ExecutableSource {
   if (!source) {
     failUnavailableSourceOrOp(`unknown source "${sourceId}" at execution`);
   }
-  // A SYSTEM source is executable exactly when something registered a resolver
-  // for it. The two halves are published together, so a source with no
-  // resolver means a registration that never completed rather than a caller
-  // asking for something reasonable -- and it answers like every other dead
-  // end, because saying which is which would confirm the source exists.
-  if (source.kind === "system") {
-    const resolve = systemResolver(source.id);
+  // A RESOLVER-ANSWERED source -- core's own or a plugin's -- is executable
+  // exactly when something registered a resolver for it. The two halves are
+  // published together, so a source with no resolver means a registration that
+  // never completed rather than a caller asking for something reasonable --
+  // and it answers like every other dead end, because saying which is which
+  // would confirm the source exists. One branch for both kinds, because the
+  // question ("what answers this id") and the store are one.
+  if (source.kind === "system" || source.kind === "plugin") {
+    const resolve = sourceResolver(source.id);
     if (!resolve) {
       failUnavailableSourceOrOp(
-        `system source "${sourceId}" has no registered resolver`
+        `${source.kind} source "${sourceId}" has no registered resolver`
       );
     }
-    return { kind: "system", source, resolve };
+    return { kind: source.kind, source, resolve };
   }
   // A single is executable the way a collection is: its one document is read
   // through the Direct API with the caller, and the executor decides what
   // that read looks like.
   if (source.kind === "single") return { kind: "single", source };
-  if (source.kind !== "collection") {
-    failUnavailableSourceOrOp(
-      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections, singles and system sources are`
-    );
-  }
-  return { kind: "collection", source };
+  if (source.kind === "collection") return { kind: "collection", source };
+
+  // 🔴 Unreachable through the type, and kept anyway. Every member of
+  // `WIDGET_SOURCE_KINDS` is now executable, so the compiler narrows this to
+  // `never` -- which is a statement about TypeScript callers, not about the
+  // values that arrive. A source built by a plugin compiled separately, by
+  // JavaScript, or through a cast can still carry a kind this function has
+  // never heard of, and the alternative to refusing it is falling through to
+  // the collection arm with an id that names no collection.
+  //
+  // It costs nothing: the branch reads a value already in hand and never runs.
+  // Widened through a `string` local because a template literal cannot
+  // interpolate `never` -- the narrowing is what makes the cheap guard look
+  // impossible, so the widening says out loud that it is deliberate.
+  const unexpected: string = source.kind;
+  failUnavailableSourceOrOp(
+    `source "${sourceId}" has kind "${unexpected}", which is not executable; only collections, singles, system and plugin sources are`
+  );
 }

@@ -29,15 +29,59 @@ const WHOLE: UsageIndexHealth = {
   anyUndetermined: false,
 };
 
-/** A grouped reader answering a fixed result, and recording what it was asked. */
+/**
+ * A grouped reader over ONE collection, answering a fixed document result and
+ * recording what it was asked.
+ *
+ * The count asks two questions — which collections hold a reference, then the
+ * documents in each — so the fake answers the first with a single collection
+ * and the second with `answer`. `bucketCount` stands for how many document
+ * buckets that one collection returns.
+ */
 function reader(answer: { bucketCount: number; truncated: boolean }) {
+  return routedReader({
+    collections: { buckets: ["pages"], truncated: false },
+    perCollection: { pages: answer },
+  });
+}
+
+/**
+ * A grouped reader over several collections.
+ *
+ * `collections` answers the grouping by collection; `perCollection` answers
+ * the grouping by document for each, keyed by the collection's name. A read
+ * for a collection this was not told about answers nothing, loudly.
+ */
+function routedReader(answers: {
+  collections: { buckets: readonly (string | null)[]; truncated: boolean };
+  perCollection: Record<string, { bucketCount: number; truncated: boolean }>;
+}) {
   const asked: {
     where: Record<string, { equals: string }>;
     groupBy: string;
   }[] = [];
+  // Document ids are minted PER collection, so two collections each holding
+  // one document both hold `doc-0` — which is the collision this exists to
+  // model, and why an unfiltered read below folds them.
+  const docsIn = (answer: { bucketCount: number }) =>
+    Array.from({ length: answer.bucketCount }, (_, i) => `doc-${i}`);
   const read: GroupedUsageReader = async args => {
     asked.push(args);
-    return answer;
+    if (args.groupBy === "entity") return answers.collections;
+    const entity = args.where.entity?.equals;
+    if (entity === undefined) {
+      // Grouped by id across every collection at once, as a real database
+      // answers it: the same id in two collections is ONE bucket. A count
+      // asking this way gets the folded number, which is the defect.
+      const all = Object.values(answers.perCollection);
+      return {
+        buckets: [...new Set(all.flatMap(docsIn))],
+        truncated: all.some(a => a.truncated),
+      };
+    }
+    const answer = answers.perCollection[entity];
+    if (answer === undefined) throw new Error(`no answer for ${entity}`);
+    return { buckets: docsIn(answer), truncated: answer.truncated };
   };
   return { read, asked };
 }
@@ -57,16 +101,22 @@ describe("counting the documents that use something", () => {
       health: WHOLE,
     });
 
+    // By collection first, then by document WITHIN it — the pair is what
+    // identifies a document once one index spans several collections.
     expect({ count, groupedBy: asked.map(a => a.groupBy) }).toEqual({
       count: { documents: 2, complete: true },
-      groupedBy: ["entityKey"],
+      groupedBy: ["entity", "entityKey"],
     });
   });
 
-  it("spends exactly ONE query, because the rest was resolved for the screen", async () => {
+  it("never re-asks the index-wide health, which was resolved for the screen", async () => {
     // The index-wide half of `complete` is the same answer for every component
     // in a library, so asking it here would issue one duplicate query per tile.
     // A hundred-component screen paid a hundred of them to learn one fact.
+    //
+    // What this component DOES spend is one query to learn which collections
+    // reference it and one per collection found — and every one of those is
+    // about this component, not about the index.
     const { read, asked } = reader({ bucketCount: 1, truncated: false });
 
     await countDocumentsUsing({
@@ -76,7 +126,67 @@ describe("counting the documents that use something", () => {
       health: WHOLE,
     });
 
-    expect(asked.length).toBe(1);
+    expect(asked.map(a => a.groupBy)).toEqual(["entity", "entityKey"]);
+    // And the second is scoped to the collection the first named.
+    expect(asked[1]?.where.entity).toEqual({ equals: "pages" });
+  });
+
+  it("counts a document in EACH collection when two share an id", async () => {
+    // Ids are minted per collection, so a restored or imported record can give
+    // `pages` and `posts` a document with the same id. Grouped by id alone they
+    // are one bucket, and the count reads one document where there are two —
+    // below the truth, while everything else about the index says exact.
+    const { read } = routedReader({
+      collections: { buckets: ["pages", "posts"], truncated: false },
+      perCollection: {
+        pages: { bucketCount: 1, truncated: false },
+        posts: { bucketCount: 1, truncated: false },
+      },
+    });
+
+    const count = await countDocumentsUsing({
+      index: componentUsageIndex,
+      read,
+      referenceId: "header",
+      health: WHOLE,
+    });
+
+    expect(count).toEqual({ documents: 2, complete: true });
+  });
+
+  it("is a floor when one collection's read was cut off, whatever the others said", async () => {
+    const { read } = routedReader({
+      collections: { buckets: ["pages", "posts"], truncated: false },
+      perCollection: {
+        pages: { bucketCount: 3, truncated: false },
+        posts: { bucketCount: 50, truncated: true },
+      },
+    });
+
+    const count = await countDocumentsUsing({
+      index: componentUsageIndex,
+      read,
+      referenceId: "header",
+      health: WHOLE,
+    });
+
+    expect(count).toEqual({ documents: 53, complete: false });
+  });
+
+  it("is a floor when a row names no collection, since that document cannot be placed", async () => {
+    const { read } = routedReader({
+      collections: { buckets: ["pages", null], truncated: false },
+      perCollection: { pages: { bucketCount: 2, truncated: false } },
+    });
+
+    const count = await countDocumentsUsing({
+      index: componentUsageIndex,
+      read,
+      referenceId: "header",
+      health: WHOLE,
+    });
+
+    expect(count).toEqual({ documents: 2, complete: false });
   });
 
   it("reports a capped answer as INCOMPLETE rather than as the total", async () => {

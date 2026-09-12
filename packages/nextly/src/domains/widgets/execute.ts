@@ -27,6 +27,7 @@ import type { WhereFilter } from "../collections/query/query-operators";
 
 import { resolveExecutableSource } from "./executable-source";
 import type { WidgetQuery } from "./query";
+import type { ResolverOptions } from "./resolved-sources";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
   failUnavailableSourceOrOp,
@@ -377,7 +378,8 @@ function projectedTo(
 
 export async function executeWidgetQuery(
   query: WidgetQuery,
-  caller: ReadCaller
+  caller: ReadCaller,
+  opts?: ResolverOptions
 ): Promise<WidgetResult> {
   const executable = resolveExecutableSource(query.source);
 
@@ -386,8 +388,17 @@ export async function executeWidgetQuery(
   // `ReleasesService.find` asks its own `authorize` before it reads -- so a
   // filter applied here would be a second implementation of a rule this module
   // cannot see, agreeing on the day it is written and drifting afterwards.
-  if (executable.kind === "system") {
-    return executable.resolve(query, caller);
+  if (executable.kind === "system" || executable.kind === "plugin") {
+    // One arm for both, because the contract is one. A plugin's resolver is
+    // handed exactly what core's is and is trusted exactly as far.
+    //
+    // 🔴 The query reaching it is VALIDATED, not SANITISED. Its field names,
+    // operators and operand shapes were checked against the source's own
+    // declaration; the operand VALUES were not, and a caller who may place a
+    // widget chooses them. A resolver that uses one as a destination is
+    // exploitable, which is why `resolved-sources` states that as the
+    // contract's rule rather than implying the host removed the possibility.
+    return executable.resolve(query, caller, opts);
   }
 
   const source = executable.source;
