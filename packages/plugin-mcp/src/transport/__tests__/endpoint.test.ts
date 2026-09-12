@@ -202,10 +202,9 @@ describe("the endpoint speaks the protocol", () => {
     }
   });
 
-  it("checks the address before the protocol sees the request", async () => {
-    // A refused request must not reach the protocol at all. Asked of a method
-    // the protocol would answer 405: a 403 here proves the guard ran first,
-    // where a 405 would prove it ran second or not at all.
+  it("refuses on the address even where the protocol would have answered", async () => {
+    // A `GET` is something the protocol has its own answer for, and the refusal
+    // still wins. Status alone cannot say which ran first, though — see below.
     const response = await routeFor("GET").handler(
       new Request(ENDPOINT, {
         method: "GET",
@@ -215,6 +214,24 @@ describe("the endpoint speaks the protocol", () => {
     );
 
     expect(response.status).toBe(403);
+  });
+
+  it("does not let the protocol read a request it refused", async () => {
+    // What "before" means, observably. The protocol consumes the request body,
+    // so an untouched body is proof it never saw this one — where a status code
+    // is equally produced by a guard consulted afterwards and preferred.
+    const refused = initialize({ host: "evil.example.com" });
+    await routeFor("POST").handler(refused, NO_CONTEXT);
+
+    expect(refused.bodyUsed).toBe(false);
+
+    // The control. Without it, an untouched body is equally satisfied by a
+    // protocol that reads nothing at all, and the assertion above would hold
+    // against a handler wired to nothing.
+    const served = initialize({ host: "cms.example.com" });
+    await routeFor("POST").handler(served, NO_CONTEXT);
+
+    expect(served.bodyUsed).toBe(true);
   });
 });
 
