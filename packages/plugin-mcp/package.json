@@ -1,7 +1,7 @@
 {
   "name": "@nextlyhq/plugin-mcp",
   "version": "0.0.2-alpha.65",
-  "description": "Experimental: exposes a Nextly install's schema and content to AI agents over the Model Context Protocol, read-only",
+  "description": "Experimental placeholder: the package for exposing a Nextly install to AI agents over the Model Context Protocol. Serves no endpoint yet",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

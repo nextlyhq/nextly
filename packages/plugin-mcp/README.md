@@ -1,7 +1,9 @@
 # @nextlyhq/plugin-mcp
 
-**Experimental.** Exposes a Nextly install's schema and content to AI agents
-over the [Model Context Protocol](https://modelcontextprotocol.io), read-only.
+**Experimental, and inert today.** This is the package that will expose a Nextly
+install's schema and content to AI agents over the
+[Model Context Protocol](https://modelcontextprotocol.io), read-only. It does
+not do so yet.
 
 This release contains the package and its plugin definition only. It serves no
 protocol endpoint yet: installing it changes no route, no field and no
