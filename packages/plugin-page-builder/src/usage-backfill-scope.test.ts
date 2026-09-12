@@ -118,30 +118,65 @@ describe("the key a completed scope is recorded under", () => {
 });
 
 describe("which derivation a recorded scope belongs to", () => {
+  const INDEXES = {
+    classIndex: "nx_pb_class_usage",
+    componentIndex: "nx_pb_component_usage",
+  } as const;
+  const LIMITS = { maxDepth: 10, maxNodes: 500, maxBytes: 1000 };
+  const base = { limits: LIMITS, ...INDEXES };
+
   it("changes when any bound the index is derived under changes", async () => {
     // A scope records WHICH documents were walked; the generation records what
     // they were read as. The index is derived under the same bounds the
     // renderer draws with, so moving them makes every recorded scope stale.
-    const base = { maxDepth: 10, maxNodes: 500, maxBytes: 1000 };
+    expect(
+      backfillGeneration({ ...base, limits: { ...LIMITS, maxNodes: 400 } })
+    ).not.toBe(backfillGeneration(base));
+    expect(
+      backfillGeneration({ ...base, limits: { ...LIMITS, maxDepth: 9 } })
+    ).not.toBe(backfillGeneration(base));
+    expect(
+      backfillGeneration({ ...base, limits: { ...LIMITS, maxBytes: 999 } })
+    ).not.toBe(backfillGeneration(base));
+  });
 
-    expect(backfillGeneration({ ...base, maxNodes: 400 })).not.toBe(
-      backfillGeneration(base)
-    );
-    expect(backfillGeneration({ ...base, maxDepth: 9 })).not.toBe(
-      backfillGeneration(base)
-    );
-    expect(backfillGeneration({ ...base, maxBytes: 999 })).not.toBe(
-      backfillGeneration(base)
+  it("changes when either index collection is remapped", async () => {
+    /*
+     * A host may `.rename()` either index. Core then registers the new slug as
+     * a new, EMPTY collection and keeps the old one as an orphan — so progress
+     * recorded against the old one certifies rows nothing reads. Unchanged, the
+     * generation would accept those rows for the empty index and health would
+     * report its zero counts as exact, which is what permits deleting a
+     * component every existing document still uses.
+     */
+    expect(
+      backfillGeneration({ ...base, classIndex: "site_class_usage" })
+    ).not.toBe(backfillGeneration(base));
+    expect(
+      backfillGeneration({ ...base, componentIndex: "site_component_usage" })
+    ).not.toBe(backfillGeneration(base));
+  });
+
+  it("cannot be forged by a slug that looks like another derivation", async () => {
+    // The separator has to be one a slug cannot contain. A slug matches
+    // /^[a-z][a-z0-9_-]*$/, so it may contain the `x` this once joined on —
+    // and two different derivations serialising to one string is a fence that
+    // fails in the direction that accepts stale progress.
+    // These two collide EXACTLY under an `x` join — "…xaxxb" both ways — and
+    // differ under one a slug cannot contain. Picking any two unequal slugs
+    // would pass either way and prove nothing about the separator.
+    expect(
+      backfillGeneration({ ...base, classIndex: "ax", componentIndex: "b" })
+    ).not.toBe(
+      backfillGeneration({ ...base, classIndex: "a", componentIndex: "xb" })
     );
   });
 
-  it("is the same for the same bounds, so steady configuration keeps its progress", async () => {
+  it("is the same for the same derivation, so steady configuration keeps its progress", async () => {
     // The control. A generation that differed every call would invalidate all
     // progress on every pass — the backfill would never finish, and it would
     // look like a site too large to walk rather than like a broken key.
-    const limits = { maxDepth: 10, maxNodes: 500, maxBytes: 1000 };
-
-    expect(backfillGeneration({ ...limits })).toBe(backfillGeneration(limits));
+    expect(backfillGeneration({ ...base })).toBe(backfillGeneration(base));
   });
 
   it("leaves the scope KEY alone, so a re-walk reconciles rather than orphans", async () => {
@@ -157,8 +192,6 @@ describe("which derivation a recorded scope belongs to", () => {
     } as const;
 
     const key = backfillScopeKey(scope);
-    expect(key).not.toContain(
-      backfillGeneration({ maxDepth: 10, maxNodes: 500, maxBytes: 1000 })
-    );
+    expect(key).not.toContain(backfillGeneration(base));
   });
 });

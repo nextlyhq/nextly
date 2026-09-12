@@ -126,11 +126,44 @@ export function backfillScopeKey(scope: BackfillScope): string {
  * it. A generation invalidates progress while the identity stays put, so the
  * same scope is walked again and its existing rows are reconciled rather than
  * orphaned.
+ *
+ * ## Why the INDEX collections are part of it
+ *
+ * A generation says what the documents were read as; it also has to say where
+ * the result was put. A host may `.rename()` either usage index, and core then
+ * registers the new slug as a new code-first collection while keeping the old
+ * one as an orphan — so the rows this progress certifies sit in a table nothing
+ * reads any more, and the new index is EMPTY. With the bounds unchanged the
+ * generation would be unchanged too, the completed-scope rows would be accepted
+ * against that empty index, and health would report its zero counts as exact. A
+ * count of zero reported as exact is what permits deleting a component every
+ * existing document still uses, which is the outcome this index exists to stop.
+ *
+ * BOTH indexes, not only the one being read: a scope's walk writes to each, so a
+ * scope recorded before either was remapped is not finished work after it.
  */
-export function backfillGeneration(limits: DocumentLimits): string {
+export function backfillGeneration(derivation: {
+  limits: DocumentLimits;
+  /** The RESOLVED slug class-usage rows were written to. */
+  classIndex: string;
+  /** The RESOLVED slug component-usage rows were written to. */
+  componentIndex: string;
+}): string {
+  const { limits, classIndex, componentIndex } = derivation;
   // Spelled out rather than JSON-stringified: key order in a serialisation is
   // not part of the type, so a refactor that reorders the interface would
-  // silently invalidate every site's progress. Naming each bound means a change
+  // silently invalidate every site's progress. Naming each part means a change
   // to what the generation covers has to be written here.
-  return [limits.maxDepth, limits.maxNodes, limits.maxBytes].join("x");
+  //
+  // `|` rather than the `x` this used while it held only numbers: a slug matches
+  // /^[a-z][a-z0-9_-]*$/ and so may contain an `x`, which would let two
+  // different (bounds, slug) tuples serialise to one string. A fence that cannot
+  // tell two derivations apart fails in the direction that accepts stale work.
+  return [
+    limits.maxDepth,
+    limits.maxNodes,
+    limits.maxBytes,
+    classIndex,
+    componentIndex,
+  ].join("|");
 }
