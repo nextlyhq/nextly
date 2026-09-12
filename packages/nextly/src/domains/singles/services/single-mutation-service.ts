@@ -19,6 +19,8 @@
  * @since 1.0.0
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, type Column } from "drizzle-orm";
@@ -1320,12 +1322,102 @@ export class SingleMutationService extends BaseService {
                 singleDraftLocale
               );
               if (pendingDraft) {
+                // What the promotion will actually store: the held draft with
+                // the caller's own payload over it, in the logical shape the
+                // rules are written against. The gates below run on THIS, not
+                // on the caller's payload.
+                //
+                // Both gates ran at step 6.1/6.2 against the caller's payload,
+                // which for a publish is just `{ status }`. The draft's content
+                // was judged when it was SAVED, and everything about that
+                // judgement can have changed since: a field rule may now deny
+                // this publisher a value the author was allowed to write, and
+                // the schema may have tightened under a value that was legal
+                // when it was held. The collection publish path gates its
+                // promotion for the same reason.
+                //
+                // Run here, on the draft this transaction has already read,
+                // rather than on an advisory copy read before it: it costs no
+                // extra query and it judges the exact snapshot about to be
+                // written rather than one that could have moved since.
+                const promotedDocument: Record<string, unknown> = {
+                  ...(pendingDraft.snapshot as Record<string, unknown>),
+                  ...serializedData,
+                };
+                // Field rules first, and here they REFUSE rather than strip.
+                //
+                // Stripping is right on an ordinary write, where the denied
+                // value is the caller's own input and dropping it costs them
+                // nothing they did not already have. A promotion is not that:
+                // the value belongs to whoever saved the draft, and a
+                // successful publish CONSUMES the draft. Stripping would
+                // publish everything else, delete the pending change, and take
+                // the one edit this publisher may not write with it. The author
+                // would be left with no draft and no value, told nothing.
+                //
+                // Judged on what would CHANGE, not on what the snapshot holds:
+                // a draft snapshot is a full copy of the document, so a denied
+                // field appears in every one of them. Only a denied field whose
+                // promoted value differs from the live row is a change this
+                // publisher is not allowed to make.
+                const permitted = { ...promotedDocument };
+                await applyFieldWriteAccess({
+                  kind: "single",
+                  slug,
+                  data: permitted,
+                  operation: "update",
+                  user: options.user,
+                  overrideAccess: options.overrideAccess,
+                  id: existingDoc.id,
+                });
+                const live = (existingDeserialized ?? {}) as Record<
+                  string,
+                  unknown
+                >;
+                const deniedChanges = Object.keys(promotedDocument).filter(
+                  key =>
+                    !Object.prototype.hasOwnProperty.call(permitted, key) &&
+                    !isDeepStrictEqual(promotedDocument[key], live[key])
+                );
+                if (deniedChanges.length > 0) {
+                  throw NextlyError.validation({
+                    errors: deniedChanges.map(path => ({
+                      path,
+                      code: "FORBIDDEN",
+                      message:
+                        "The pending change edits this field and you do not have permission to write it, so it cannot be published. The change is kept.",
+                    })),
+                    logContext: {
+                      cause: "promote-denied-field",
+                      slug,
+                      fields: deniedChanges,
+                    },
+                  });
+                }
+                // Then the schema's own rules, which REFUSE, naming each field
+                // that fails. Publishing content that violates the current
+                // contract is worse than refusing to publish it, and the author
+                // cannot fix what they are not told.
+                const promoteIssues = await validateEntryData(
+                  relationshipValidationView(promotedDocument, fieldConfigs),
+                  attachFieldValidators("single", slug, fieldConfigs),
+                  {
+                    mode: "update",
+                    req: options.user ? { user: options.user } : {},
+                    localizedFieldNames,
+                    enforceLocalizedRequired,
+                  }
+                );
+                if (promoteIssues.length > 0) {
+                  throw NextlyError.validation({ errors: promoteIssues });
+                }
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
-                // field now.
+                // field now. Split from the FILTERED document, so a value the
+                // field rules just removed is not written after all.
                 ({ main: mainPayload, companion: companionData } =
                   splitPendingChange(
-                    pendingDraft.snapshot,
+                    promotedDocument,
                     companion && companionPhysicallyExists ? companion : null,
                     updatePayload
                   ));
