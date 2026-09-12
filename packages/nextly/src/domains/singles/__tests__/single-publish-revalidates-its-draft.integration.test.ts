@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { defineSingle, group, text } from "../../../config";
+import type { HookContext } from "../../../hooks/types";
 import { createAdapter } from "../../../database/factory";
 import {
   createTestNextly,
@@ -54,7 +55,12 @@ afterEach(async () => {
  * database file, once without it and once with, is how a draft held under an
  * older schema is reproduced: the value was legal when it was saved.
  */
-async function boot(strict: boolean): Promise<SingleEntryService> {
+async function boot(
+  strict: boolean,
+  /** Turns any write into a publish, deciding the status after the gate's old
+   * pre-hook position and before the promotion. */
+  publishFromHook = false
+): Promise<SingleEntryService> {
   process.env.DB_DIALECT = "sqlite";
   const adapter = await createAdapter({
     type: "sqlite",
@@ -68,6 +74,18 @@ async function boot(strict: boolean): Promise<SingleEntryService> {
         status: true,
         versions: { drafts: true },
         access: { read: () => true, update: () => true },
+        hooks: {
+          beforeChange: [
+            (ctx: HookContext) => {
+              const data = ctx.data as Record<string, unknown>;
+              // Only in the case that asks for it, and only on the write under
+              // test, so every other write here still holds its edit.
+              return publishFromHook && data.siteName === "Edited"
+                ? { ...data, status: "published" }
+                : data;
+            },
+          ],
+        },
         fields: [
           text({ name: "siteName" }),
           // A JSON-backed field, so every case here also proves the gate reads
@@ -75,6 +93,19 @@ async function boot(strict: boolean): Promise<SingleEntryService> {
           // string that was written; judged as-is, the validator calls it an
           // invalid type and an ordinary publish is refused.
           group({ name: "seo", fields: [text({ name: "metaTitle" })] }),
+          // A denied field NESTED in a group. The rules remove it from inside
+          // the container, which leaves the container itself present.
+          group({
+            name: "ops",
+            fields: [
+              text({
+                name: "runbook",
+                access: {
+                  update: ({ req }) => req.user?.email === BOSS.email,
+                },
+              }),
+            ],
+          }),
           text({
             name: "guarded",
             access: { update: ({ req }) => req.user?.email === BOSS.email },
@@ -326,5 +357,59 @@ describe("a Single's publish re-judges the draft it promotes", () => {
       },
     });
     expect(drafts).toHaveLength(1);
+  });
+  it("catches a denied field NESTED inside a group", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      { siteName: "Live", status: "published" },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { ops: { runbook: "internal" } },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    const published = await singles.update(
+      SLUG,
+      { status: "published" },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    // Named at its own depth, so the author can see which child is at fault.
+    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+  });
+
+  it("gates a publish a beforeChange hook decides on", async () => {
+    // The caller sends no status; the hook turns the write into a publish. A
+    // gate placed before the hooks would never see this one.
+    const singles = await boot(false, true);
+    await singles.update(
+      SLUG,
+      { siteName: "Live", status: "published" },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { guarded: "secret" },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    const published = await singles.update(
+      SLUG,
+      { siteName: "Edited" },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
   });
 });
