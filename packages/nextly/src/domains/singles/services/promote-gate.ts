@@ -81,9 +81,11 @@ export interface PromoteGateContext {
    */
   toLogical: (doc: Record<string, unknown>) => Record<string, unknown>;
   /**
-   * The live row for one language, as STORED, used to decide whether promoting
-   * a denied field would change anything. It goes through `toLogical` here, as
-   * the snapshot does, so both sides of the comparison are one representation.
+   * The live row for one language, as STORED. It is both the base the promoted
+   * document is built on and the side a denied field is compared against, so
+   * one read answers "what will this row hold" and "is that a change". It goes
+   * through `toLogical` here, as the snapshot does, so both are one
+   * representation.
    *
    * A read's expanded document is the wrong source: it turns an upload or a
    * relationship into the document behind the identifier, so an untouched
@@ -138,17 +140,29 @@ export async function assertDraftsMayBePromoted(
   }
 
   for (const { locale, values } of logical) {
-    // The final shared state with only THIS language's translations over it,
-    // then the caller's payload. Spreading the whole snapshot here instead
-    // would put back the shared values a later language overwrote, and refuse
-    // a publish whose committed document is perfectly valid.
-    const promoted: Record<string, unknown> = { ...shared };
+    // What this language's row will HOLD once the write lands, which is the
+    // only document either check has any business judging.
+    //
+    // Built on the live row for that language, because a snapshot carries only
+    // what its write carried: a localized Single keeps each translation on its
+    // own companion row, so a draft that edits one translated field has no
+    // property for the others and they stay exactly as they are. Judged
+    // without them, a partial draft is refused for missing required siblings
+    // the write never touches. A non-localized snapshot is a full copy of the
+    // document, so there it overlays everything and this changes nothing.
+    //
+    // Then the final shared state, then only THIS language's translations, then
+    // the caller's payload. Spreading the whole snapshot instead would put back
+    // the shared values a later language overwrote and refuse a publish whose
+    // committed document is perfectly valid.
+    const live = ctx.toLogical(asRecord(await ctx.liveStoredFor(locale)));
+    const promoted: Record<string, unknown> = { ...live, ...shared };
     for (const [key, value] of Object.entries(values)) {
       if (ctx.localizedFieldNames.has(key)) promoted[key] = value;
     }
     Object.assign(promoted, ctx.callerData ?? {});
 
-    await assertNoDeniedChange(values, locale, ctx);
+    await assertNoDeniedChange(promoted, live, locale, ctx);
     await assertSchemaStillAccepts(promoted, ctx);
   }
 }
@@ -171,12 +185,21 @@ function asRecord(value: unknown): Record<string, unknown> {
  * draft for someone who can write the field.
  *
  * Judged in STORED shape, on both sides, and on what would CHANGE rather than
- * on what the snapshot holds: a snapshot is a full copy of the document, so a
- * denied field appears in every one of them, and only a value that differs
- * from what is live is a change being made.
+ * on what the document holds: the promoted document holds every field, so a
+ * denied one appears in all of them, and only a value that differs from what
+ * is live is a change being made.
+ *
+ * Judged on the PROMOTED document rather than on the snapshot that contributed
+ * it, because a field rule reads its siblings. A draft whose protected field
+ * was allowed while `kind` was `public` can be published in the same breath as
+ * `kind: "private"`, and a rule shown the snapshot alone answers for a document
+ * that is not the one being written. It cuts the other way too: a shared value
+ * one language's snapshot changes and a later language's overwrites never
+ * reaches the row, so judging the snapshot refuses an edit the write discards.
  */
 async function assertNoDeniedChange(
-  logicalSnapshot: Record<string, unknown>,
+  promoted: Record<string, unknown>,
+  live: Record<string, unknown>,
   locale: string | null,
   ctx: PromoteGateContext
 ): Promise<void> {
@@ -185,7 +208,7 @@ async function assertNoDeniedChange(
   // original: the deletion would land on both, and the comparison below would
   // then see a container still present and report nothing denied while the
   // write persisted the forbidden nested edit.
-  const permitted = detachData(logicalSnapshot);
+  const permitted = detachData(promoted);
   await applyFieldWriteAccess({
     kind: "single",
     slug: ctx.slug,
@@ -198,17 +221,15 @@ async function assertNoDeniedChange(
     id: ctx.entryId,
   });
 
-  const denied = deniedPaths(logicalSnapshot, permitted, "");
+  const denied = deniedPaths(promoted, permitted, "");
   if (denied.length === 0) return;
 
   // Both sides through the same conversion, so a JSON-backed value is an
   // object on both and an upload or a relationship is the identifier it is
   // stored as on both. Compared across representations, an untouched field
   // reads as an edit and a publish nobody objected to is refused.
-  const live = ctx.toLogical(asRecord(await ctx.liveStoredFor(locale)));
   const deniedChanges = denied.filter(
-    path =>
-      !isDeepStrictEqual(valueAt(logicalSnapshot, path), valueAt(live, path))
+    path => !isDeepStrictEqual(valueAt(promoted, path), valueAt(live, path))
   );
   if (deniedChanges.length === 0) return;
 
@@ -289,9 +310,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * a document that violates the contract. The promoted document is the whole
  * document, so it is judged whole.
  *
- * Judged on the snapshot being promoted and never on the live document: a
- * schema change must not block someone from fixing and republishing content
- * that has nothing to do with it.
+ * Judged on the document the write produces, which is the live row with this
+ * pending change over it. A value the draft does not carry is judged as it
+ * already stands: that is what stops a localized Single's untouched
+ * translations, which live on the companion row and appear in no snapshot,
+ * from reading as missing and refusing a partial draft. It also means a schema
+ * tightened under an untouched value refuses the publish rather than
+ * committing a row that violates the contract.
  */
 async function assertSchemaStillAccepts(
   promoted: Record<string, unknown>,

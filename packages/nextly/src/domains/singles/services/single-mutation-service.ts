@@ -661,10 +661,22 @@ export class SingleMutationService extends BaseService {
       // AWAITED, not merely constructed: `callerAccessGrants` is lazy, and a
       // resolver first asked from inside the transaction does its lookups
       // there, which is the hang this avoids.
-      const promoteGrants = await resolvedCallerGrants(
-        options.user,
-        options.authenticatedScope
-      );
+      //
+      // Only where a pending change can exist to promote. Whether THIS write
+      // publishes one is not knowable yet, since a `beforeChange` hook can set
+      // the status and the draft is read under the row lock, but a Single with
+      // no published state or no drafts can never reach the gate at all. Left
+      // unconditional, every authenticated update paid for the roles and
+      // permissions queries to answer a question it would never ask. A trusted
+      // write skips them for the same reason: `applyFieldWriteAccess` returns
+      // on `overrideAccess` before it looks at grants.
+      const mayReachPromoteGate =
+        (singleMeta as { status?: boolean }).status === true &&
+        singleMeta.versions?.drafts?.enabled === true &&
+        options.overrideAccess !== true;
+      const promoteGrants = mayReachPromoteGate
+        ? await resolvedCallerGrants(options.user, options.authenticatedScope)
+        : undefined;
 
       // 6.25. Single-level beforeChange hooks, on data the validation gate has
       // just passed. The declaration used to register onto `beforeUpdate`,
