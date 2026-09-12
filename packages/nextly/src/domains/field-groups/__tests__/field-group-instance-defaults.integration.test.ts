@@ -166,4 +166,61 @@ describe("a new field-group instance takes its declared defaults (integration)",
       { heading: "Given", tone: "calm" },
     ]);
   });
+  it("applies a FUNCTION default declared on a field-group child", async () => {
+    current = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "fnhero",
+          fields: [
+            text({ name: "mode", defaultValue: "dark" }),
+            // A function cannot be stored, so the stored definition this write
+            // reads carries nothing for it. It resolves from the live config.
+            text({
+              name: "label",
+              defaultValue: d => `mode-${String(d.mode)}`,
+            }),
+          ],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "fnpages",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "hero", component: "fnhero" }),
+            fieldGroup({
+              name: "slides",
+              component: "fnhero",
+              repeatable: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler = current.getService("collectionsHandler");
+
+    const created = await handler.createEntry(
+      { collectionName: "fnpages", overrideAccess: true },
+      { title: "Home", hero: {}, slides: [{ mode: "light" }] }
+    );
+    expect(created.success, JSON.stringify(created)).toBe(true);
+
+    const read = await handler.getEntry({
+      collectionName: "fnpages",
+      entryId: (created.data as { id: string }).id,
+      overrideAccess: true,
+    });
+    const data = read.data as {
+      hero?: { mode?: string; label?: string };
+      slides?: Array<{ mode?: string; label?: string }>;
+    };
+    // Resolved against the instance built so far, as it is for a collection
+    // field: the constant before it is visible to the function after it.
+    expect(data.hero).toMatchObject({ mode: "dark", label: "mode-dark" });
+    // A supplied sibling value is what the function reads, not the default.
+    expect(data.slides?.[0]).toMatchObject({
+      mode: "light",
+      label: "mode-light",
+    });
+  });
 });

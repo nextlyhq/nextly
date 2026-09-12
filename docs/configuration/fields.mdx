@@ -1025,20 +1025,22 @@ Static value or `(data) => value` function. The function form receives the docum
 Both forms are applied on the server, so a default holds for every write
 path that applies defaults, not only for the admin form. On an ordinary
 collection create through the REST or Direct API, an omitted field takes its
-default before any hook runs, at every depth: a group's children, each
-supplied repeater row's children, and the children of each new field-group
-instance. A function default is read from the live config, since a
+default before any hook runs, at every depth: a group's children and each
+supplied repeater row's children. A new field-group instance also fills its own
+children's defaults, but LATER: a field group's rows are written in their own
+pass after the entry's hooks have run, so the parent's hooks see such a child as
+absent and cannot read or derive from the value that will be stored. A function
+default is read from the live config, since a
 collection's stored definition cannot hold a function, and it receives the
 data built so far at its own level: the document for a top-level field, the
 group or the row for a nested one. Rows are never invented; `minRows` is a
 validation rule, not an instruction to create rows.
 
-Inside a reusable field group, only a constant default applies. A field
-group's fields are read from its stored definition on every write, and a
-function cannot be stored, so a `defaultValue` written as a function on a
-field-group child is not applied anywhere: not on a collection create, not on
-a Single's first read, and not in the admin form. Give a field-group child a
-constant default, or set the value from the parent's own field.
+A field-group child takes its default the same way, constant or function. Its
+fields are read from a stored definition, which cannot carry a function, so the
+function form is read from the live config exactly as a collection's is. It
+resolves against the instance being built, so a child may compute from a sibling
+that was defaulted before it.
 
 A Single's first read creates its row with the same defaults, top-level and
 nested, with two exceptions: a default on a `fieldGroup` field itself is
