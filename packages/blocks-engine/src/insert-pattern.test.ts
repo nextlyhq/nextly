@@ -12,12 +12,8 @@ import { describe, expect, it } from "vitest";
 import { applyOps } from "./ops";
 import { planInsertPattern, type StoredPattern } from "./composition-planners";
 import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
-import type {
-  BlockDocument,
-  BlockNode,
-  ComponentDocument,
-  ComponentLookup,
-} from "./document";
+import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
+import type { ComponentLookup } from "./resolve-instances";
 import { walkNodes } from "./tree";
 
 function node(

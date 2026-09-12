@@ -867,7 +867,26 @@ export function composedRootTypes(
     >(),
     rootsRead: new Map<string, RememberedRoots>(),
   };
-  return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
+  // The one boundary, at the published entry point rather than per definition,
+  // because the document's own roots are read by the same walk and no
+  // per-definition guard covers them.
+  //
+  // Caught rather than asked first, which is this module's usual answer to a
+  // stored shape: what raises here is a property ACCESSOR, and reading the
+  // property IS the raise, so there is no question to ask before it. An
+  // in-process caller can supply one — the lookup is a Map the host fills, not
+  // a document parsed from a response — and the RESOLVER survives such a node.
+  // A query the resolver outlives must not be what takes the editor down: its
+  // one caller builds the insert panel's catalogue, so a single unreadable
+  // definition would leave an author no panel at all.
+  //
+  // `undefined` is the answer already defined for a forest this cannot judge,
+  // and its callers already withhold the tile for it.
+  try {
+    return rootTypesOf(document.nodes, reader, ROOT_SCOPE);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
