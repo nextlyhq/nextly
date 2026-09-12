@@ -142,6 +142,24 @@ export function backfillScopeKey(scope: BackfillScope): string {
  * BOTH indexes, not only the one being read: a scope's walk writes to each, so a
  * scope recorded before either was remapped is not finished work after it.
  */
+/**
+ * The revision of the DERIVATION ITSELF — the code, not the configuration.
+ *
+ * The bounds and the index slugs say what the documents were read as and where
+ * the result was put. Neither moves when a RELEASE changes what
+ * `classUsageOf`/`componentUsageOf` extract from one document. A fix that starts
+ * finding a reference the old code missed would leave every already-walked scope
+ * recorded, so the component it now finds stays at an exact zero until each
+ * document happens to be saved — an exact count over rows the current code would
+ * not produce.
+ *
+ * BUMP THIS whenever what a walk extracts from a document changes. Not when the
+ * walk gets faster, not when a bound moves (the bounds are in the key already),
+ * and not when this file is edited — only when the same document under the same
+ * bounds would now yield different rows.
+ */
+const DERIVATION_REVISION = 1;
+
 export function backfillGeneration(derivation: {
   limits: DocumentLimits;
   /** The RESOLVED slug class-usage rows were written to. */
@@ -160,6 +178,7 @@ export function backfillGeneration(derivation: {
   // different (bounds, slug) tuples serialise to one string. A fence that cannot
   // tell two derivations apart fails in the direction that accepts stale work.
   return [
+    DERIVATION_REVISION,
     limits.maxDepth,
     limits.maxNodes,
     limits.maxBytes,
