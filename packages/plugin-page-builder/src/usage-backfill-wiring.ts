@@ -11,7 +11,7 @@
  */
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
-import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import {
   rebuildPageBuilderUsageIndexes,
   type ClassUsageRebuildReport,
@@ -32,7 +32,14 @@ import {
 /** What the wiring must be able to ask of the host, named structurally. */
 export interface BackfillHost {
   /** The trusted Direct API, resolved per pass rather than captured. */
-  nextly: () => ClassUsageDirectApi;
+  /**
+   * The Direct API, resolved when a pass actually needs it.
+   *
+   * A PROMISE because the plugin entry that supplies it must not import
+   * `nextly/runtime` at module scope: that entry is isomorphic and reachable
+   * from a browser bundle, and the runtime graph reaches a dozen Node built-ins.
+   */
+  nextly: () => Promise<ClassUsageDirectApi>;
   /**
    * Every collection slug that EXISTS, from the live registry.
    *
@@ -96,6 +103,37 @@ export interface BackfillHost {
 export async function backfillScopes(
   host: BackfillHost
 ): Promise<readonly BackfillScope[]> {
+  return (await backfillSurvey(host)).scopes;
+}
+
+/** What one registry walk found: the scopes, and whether any content is out of reach. */
+export interface BackfillSurvey {
+  scopes: readonly BackfillScope[];
+  /**
+   * Whether any tracked collection declares a blocks field no scope can cover.
+   *
+   * A blocks field nested under a named group has no addressable subject, so no
+   * scope is enumerated for it and no hook reconciles it — see
+   * {@link blocksFieldSurvey}. Unlike a Single, nothing else reports it, so
+   * "every scope walked" would be vacuously true for a collection whose only
+   * blocks field is nested, and health would call an index that never saw those
+   * references exact.
+   *
+   * Answered from the SAME walk that builds the scopes, because a second walk
+   * over the registry is a second answer to one question and would also double
+   * the registry reads a health render costs.
+   */
+  unaddressable: boolean;
+}
+
+/**
+ * The scopes a backfill must cover, and what it cannot reach, in one walk.
+ *
+ * {@link backfillScopes} is the narrow view, derived from this.
+ */
+export async function backfillSurvey(
+  host: BackfillHost
+): Promise<BackfillSurvey> {
   const slugs = await host.collectionSlugs();
   if (slugs === undefined) {
     throw new Error(
@@ -105,6 +143,7 @@ export async function backfillScopes(
 
   const locales = host.locales();
   const scopes: BackfillScope[] = [];
+  let unaddressable = false;
 
   for (const slug of slugs) {
     const collection = await host.resolveCollection(slug);
@@ -113,7 +152,12 @@ export async function backfillScopes(
     // is an ordinary event, and its rows are the delete hook's to clear.
     if (collection === null || collection === undefined) continue;
 
-    const fields = blocksFieldsOf(collection);
+    const survey = blocksFieldSurvey(collection);
+    const fields = survey.addressable;
+    // Recorded before the early return below, so a collection whose ONLY blocks
+    // field is nested — which contributes no scope — still reports that the
+    // index cannot cover it.
+    if (survey.unaddressable) unaddressable = true;
     // Asked BEFORE the field check would be wasteful, and asked at all only
     // for collections that actually carry a blocks field: the draft split is a
     // read, and a site's other collections are the majority.
@@ -129,7 +173,7 @@ export async function backfillScopes(
     );
   }
 
-  return scopes;
+  return { scopes, unaddressable };
 }
 
 /**
@@ -143,18 +187,22 @@ export async function backfillScopes(
 export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
   return {
     scopes: () => backfillScopes(host),
-    state: () =>
+    state: async () =>
       usageBackfillStateStore(
-        host.nextly(),
+        await host.nextly(),
         host.slugs().backfillState,
         // Read PER PASS, like every other host accessor: a host can reconfigure
         // the bounds while a backfill is in flight, and the pass that notices
         // should be the next one rather than whichever one happened to build
         // the store.
-        backfillGeneration(host.limits())
+        backfillGeneration({
+          limits: host.limits(),
+          classIndex: host.slugs().classIndex,
+          componentIndex: host.slugs().componentIndex,
+        })
       ),
     rebuild: async scope => {
-      const nextly = host.nextly();
+      const nextly = await host.nextly();
       const slugs = host.slugs();
       const report = await rebuildPageBuilderUsageIndexes({
         documents: usageRebuildDocumentStore(nextly),

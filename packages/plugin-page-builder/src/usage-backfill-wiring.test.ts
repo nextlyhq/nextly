@@ -11,7 +11,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { backfillScopes, type BackfillHost } from "./usage-backfill-wiring";
+import {
+  backfillScopes,
+  backfillSurvey,
+  type BackfillHost,
+} from "./usage-backfill-wiring";
 
 const NOT_USED = () => {
   throw new Error("the scope enumeration should not have reached this");
@@ -112,5 +116,75 @@ describe("enumerating the scopes a site currently has", () => {
     );
 
     expect(scopes).toHaveLength(4);
+  });
+});
+
+/**
+ * Content the scopes cannot cover, reported rather than left absent.
+ *
+ * A blocks field nested under a named group has no addressable subject, so no
+ * scope is enumerated for it. That stays. What changed is that it is no longer
+ * SILENT: "every scope walked" is vacuously true for a collection whose only
+ * blocks field is nested, and health would report an index that never saw those
+ * references as exact — which is the one answer a safe delete must never get.
+ */
+describe("reporting content no scope can cover", () => {
+  it("reports a collection whose ONLY blocks field is nested", async () => {
+    const survey = await backfillSurvey(
+      host({
+        resolveCollection: async () => ({
+          fields: [
+            {
+              type: "group",
+              name: "hero",
+              fields: [{ type: "blocks", name: "content" }],
+            },
+          ],
+        }),
+      })
+    );
+
+    // No scope — and the reason no scope exists is now visible.
+    expect(survey.scopes).toEqual([]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("reports one that sits BESIDE a field it can address", async () => {
+    // The case a "did this collection contribute any scopes" check cannot see:
+    // the collection walks its own scope to completion and the nested field is
+    // still never indexed.
+    const survey = await backfillSurvey(
+      host({
+        resolveCollection: async () => ({
+          fields: [
+            { type: "blocks", name: "body" },
+            {
+              type: "group",
+              name: "hero",
+              fields: [{ type: "blocks", name: "content" }],
+            },
+          ],
+        }),
+      })
+    );
+
+    expect(survey.scopes.length).toBe(1);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("CONTROL: an ordinary site reports nothing out of reach", async () => {
+    // Without this, reporting every site as unreachable would satisfy both
+    // cases above and withhold completeness from every installation for ever.
+    const survey = await backfillSurvey(host({}));
+
+    expect(survey.scopes.length).toBe(1);
+    expect(survey.unaddressable).toBe(false);
+  });
+
+  it("answers the same scopes as backfillScopes, which is derived from it", async () => {
+    const one = host({});
+    expect(await backfillScopes(one)).toEqual(
+      (await backfillSurvey(one)).scopes
+    );
   });
 });

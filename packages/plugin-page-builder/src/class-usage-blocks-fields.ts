@@ -145,10 +145,46 @@ export interface BlocksFieldsCollection {
 export function blocksFieldsOf(
   collection: BlocksFieldsCollection | null | undefined
 ): BlocksFieldDescriptor[] {
+  return blocksFieldSurvey(collection).addressable;
+}
+
+/** What one collection declares, split by whether this index can address it. */
+export interface BlocksFieldSurvey {
+  /** The fields a scope can be enumerated for, in declaration order. */
+  addressable: BlocksFieldDescriptor[];
+  /**
+   * Whether the collection ALSO declares a blocks field this cannot address.
+   *
+   * A blocks field nested under a named group — or any other container that
+   * stores its children under its own key — has no subject the row model can
+   * name, so no scope is enumerated for it and no hook reconciles it. That is
+   * deliberate, and on its own it is a gap the completeness flag has to know
+   * about: a collection whose only blocks field is nested contributes no scope,
+   * so "every scope walked" is vacuously true and health reports an index that
+   * never saw those references as exact. A count of zero reported as exact is
+   * what licenses deleting a component those documents still render.
+   *
+   * Reported from the SAME traversal that collects the addressable ones, rather
+   * than by a second walk: two walks over one configuration agree on the day
+   * they are written, and the one that drifts here fails by staying silent.
+   */
+  unaddressable: boolean;
+}
+
+/**
+ * Every blocks field a collection declares, told apart by addressability.
+ *
+ * {@link blocksFieldsOf} is the narrow view of this, derived from it rather than
+ * computed beside it.
+ */
+export function blocksFieldSurvey(
+  collection: BlocksFieldsCollection | null | undefined
+): BlocksFieldSurvey {
   const fields = collection?.fields;
-  if (!Array.isArray(fields)) return [];
+  if (!Array.isArray(fields)) return { addressable: [], unaddressable: false };
   const collectionLocalized = collection?.localized === true;
 
+  let unaddressable = false;
   const found: BlocksFieldDescriptor[] = [];
   const seen = new Set<string>();
   // Groups already expanded, by IDENTITY. This is what makes the walk finite,
@@ -173,9 +209,13 @@ export function blocksFieldsOf(
   // has committed, where a throw reports a failed save for one that succeeded.
   // A cursor holds each list where it is and reads one field at a time, so no
   // length is ever material.
-  const stack: { fields: readonly unknown[]; index: number }[] = [
-    { fields, index: 0 },
-  ];
+  // `addressable` travels with the frame: a nested container's children are
+  // walked only to NOTICE a blocks field there, never to enumerate one.
+  const stack: {
+    fields: readonly unknown[];
+    index: number;
+    addressable: boolean;
+  }[] = [{ fields, index: 0, addressable: true }];
 
   while (stack.length > 0) {
     const frame = stack[stack.length - 1];
@@ -191,12 +231,40 @@ export function blocksFieldsOf(
       const group = field as object;
       if (expanded.has(group)) continue;
       expanded.add(group);
-      stack.push({ fields: children, index: 0 });
+      // A presentational group stores nothing of its own, so its children keep
+      // the frame's addressability rather than gaining or losing it.
+      stack.push({
+        fields: children,
+        index: 0,
+        addressable: frame.addressable,
+      });
+      continue;
+    }
+
+    // Any OTHER container of declarations — a named group, a repeater, anything
+    // that nests fields under its own key. Not descended into for addressing,
+    // which is the deliberate behaviour; descended into here so a blocks field
+    // inside one is NOTICED rather than silently absent. Asked structurally
+    // rather than by listing container type names, so a container this package
+    // has not met yet is noticed too.
+    const nested = nestedDeclarations(field);
+    if (nested !== null) {
+      const container = field as object;
+      if (expanded.has(container)) continue;
+      expanded.add(container);
+      stack.push({ fields: nested, index: 0, addressable: false });
       continue;
     }
 
     const descriptor = readBlocksField(field, collectionLocalized);
     if (descriptor === null) continue;
+    if (!frame.addressable) {
+      // Found, and unreachable. Recorded as a fact about the collection rather
+      // than as a descriptor: enumerating a scope for it would file rows no
+      // rebuild can reconcile and no sweep can clear.
+      unaddressable = true;
+      continue;
+    }
     // A duplicate name is one subject, not two. Enumerating it twice would
     // reconcile the same rows twice in one pass, and the second pass reads the
     // first one's inserts as rows the document no longer justifies.
@@ -205,5 +273,19 @@ export function blocksFieldsOf(
     found.push(descriptor);
   }
 
-  return found;
+  return { addressable: found, unaddressable };
+}
+
+/**
+ * The child declarations of a container this index does not address, or null.
+ *
+ * The complement of {@link presentationalChildren}: that one names the
+ * containers whose children belong to THIS level, and this one names every
+ * other container of declarations, so a blocks field nested in one can be
+ * noticed without being enumerated.
+ */
+function nestedDeclarations(value: unknown): readonly unknown[] | null {
+  if (typeof value !== "object" || value === null) return null;
+  const field = value as { fields?: unknown };
+  return Array.isArray(field.fields) ? field.fields : null;
 }

@@ -27,7 +27,7 @@ import {
   usageCountReader,
 } from "./class-usage-runtime";
 import { backfillGeneration } from "./usage-backfill-scope";
-import { backfillScopes, type BackfillHost } from "./usage-backfill-wiring";
+import { backfillSurvey, type BackfillHost } from "./usage-backfill-wiring";
 import type { UsageIndex, UsageSubject } from "./usage-index";
 import {
   readUsageIndexHealth,
@@ -67,19 +67,33 @@ export function usageHealthService(
   return {
     read: async (index, indexCollection) => {
       const installed = host();
-      const nextly = installed.nextly();
+      const nextly = await installed.nextly();
+
+      // ONE registry walk, both answers. Asking for the scopes and for what the
+      // scopes cannot reach separately would walk the registry twice per health
+      // render and let the two answers come from different moments.
+      const survey = await backfillSurvey(installed);
 
       return readUsageIndexHealth({
         index,
         read: usageCountReader(nextly, indexCollection),
         backfill: {
-          scopes: () => backfillScopes(installed),
+          scopes: () => Promise.resolve(survey.scopes),
           state: usageBackfillStateStore(
             nextly,
             installed.slugs().backfillState,
-            backfillGeneration(installed.limits())
+            backfillGeneration({
+              limits: installed.limits(),
+              classIndex: installed.slugs().classIndex,
+              componentIndex: installed.slugs().componentIndex,
+            })
           ),
-          unreachable: () => installed.singlesHoldBlocks(),
+          // Either kind of out-of-reach content withholds completeness, and they
+          // are independent: a Single holds blocks no plugin can read, and a
+          // nested blocks field has no subject a row can name. A site can have
+          // one, both or neither.
+          unreachable: async () =>
+            survey.unaddressable || (await installed.singlesHoldBlocks()),
         },
       });
     },
