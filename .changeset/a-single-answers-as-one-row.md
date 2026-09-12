@@ -1,29 +1,30 @@
 ---
-"@nextlyhq/adapter-drizzle": patch
-"@nextlyhq/adapter-mysql": patch
-"@nextlyhq/adapter-postgres": patch
-"@nextlyhq/adapter-sqlite": patch
+"nextly": patch
+"create-nextly-app": patch
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
 "@nextlyhq/blocks-engine": patch
 "@nextlyhq/blocks-react": patch
-"@nextlyhq/builder": patch
-"create-nextly-app": patch
-"@nextlyhq/eslint-config": patch
-"@nextlyhq/eslint-plugin": patch
-"@nextlyhq/module-specifiers": patch
-"nextly": patch
-"@nextlyhq/plugin-form-builder": patch
-"@nextlyhq/plugin-page-builder": patch
-"@nextlyhq/plugin-sdk": patch
-"@nextlyhq/plugin-seo": patch
-"@nextlyhq/prettier-config": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
 "@nextlyhq/storage-s3": patch
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
-"@nextlyhq/ui": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 A `single:<slug>` widget source is executable.
@@ -84,3 +85,32 @@ Under `next dev`, a single whose fields you edit keeps its source and its
 status card: the reload re-marks an edited single's migration as applied from
 the sync's own report, as it already did for an edited collection, instead of
 leaving the row `pending` for the rest of the session.
+
+A widget query asking for `draft` or `published` from a source that has no
+publish lifecycle is now refused, instead of being accepted and answered as if
+no state had been named. Nothing downstream could apply such a selector, so
+the two mutually exclusive questions came back with one answer and the card
+said nothing about having been ignored. `status: "all"` is unaffected: it
+claims no lifecycle, and it is what the generated count, recent and timeline
+cards send.
+
+A single whose metadata a `next dev` reload could not store now keeps its
+widget sources withheld even when the rest of its kind synced cleanly. The
+singles sync reports a per-single refusal without failing the scope, so a
+reload that refused one single had been clearing the whole deferral set and
+republishing that single's stale field list.
+
+A `next dev` reload whose metadata sync fails now withholds that kind's widget
+sources rather than publishing them over tables the apply has already moved,
+and a single the sync refused no longer has its migration recorded as applied
+-- a label that persists, so the old field list came back against the new
+table on the next restart. A boot also starts with nothing withheld: the
+refusals one boot recorded are its own, and a slug held over from a previous
+boot kept its source and cards hidden for the life of the process.
+
+A collection or single whose registry row was written and whose permission
+seeding then failed keeps its widget source and has its migration marked
+applied. Both registries report such an entity in `errors` as well as in
+`created`, and reading the error alone withheld a source whose stored metadata
+was in fact current -- permanently, since every later pass read the same report
+the same way.
