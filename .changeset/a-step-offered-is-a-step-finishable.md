@@ -32,3 +32,7 @@ would be able to READ what they create. A new collection's permissions are
 seeded to the super-admin role alone, so a caller holding the definition grant
 and nothing else created the collection, gained no read on it, and found the
 step outstanding permanently -- with the card pinned to their dashboard.
+
+An API key stamped with a read grant is offered the step it can finish: a key
+never gains a permission, but a pre-seeded `read-<slug>` lets it create that
+collection and read it afterwards.

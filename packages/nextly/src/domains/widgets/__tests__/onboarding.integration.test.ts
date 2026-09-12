@@ -282,6 +282,28 @@ describe("onboarding steps against a real instance", () => {
     expect(await onboardingIsIncomplete(conditionProbe(builder))).toBe(false);
   });
 
+  it("offers it to a KEY already stamped with a read grant to create into", async () => {
+    // 🔴 A key never GAINS a grant -- it is judged on the scope stamped into
+    // it when it was minted -- but a permission may be pre-seeded, and the
+    // read decision accepts a key's exact `read-<slug>` once that collection
+    // exists. So a key holding `read-reports` finishes this step by creating
+    // `reports`, and refusing every key hid a step that WAS finishable.
+    await createTestNextly({ collections: [] }).then(t => {
+      current = t;
+      return refreshCollectionSources();
+    });
+
+    const stampedToRead: ReadCaller = {
+      user: { id: "key-2", roles: [] },
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["manage-settings", "read-reports"],
+      },
+    };
+
+    expect((await stepsFor(stampedToRead)).collection).toBe(false);
+  });
+
   it("DOES offer it to a super admin, who would read what they create", async () => {
     // The must-differ half, and without it "offered to nobody" satisfies the
     // case above. The instance's FIRST user is its super admin, so this is the

@@ -35,7 +35,6 @@ import {
 } from "../../auth/collection-definition-policy";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import { isSuperAdmin } from "../../services/lib/permissions";
 
 import {
   readableCollectionSlugs,
@@ -110,9 +109,10 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
         caller.user
       );
       if (!mayDefine) return false;
-      return wouldReadOwnNewCollection(isSuperAdmin, {
+      return wouldReadOwnNewCollection({
         userId: caller.user.id,
         isApiKey: caller.authenticatedScope?.actorType === "apiKey",
+        permissions: caller.authenticatedScope?.permissions ?? [],
       });
     })();
     return createCollection;

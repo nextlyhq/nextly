@@ -1,5 +1,5 @@
 /**
- * Who receives a newly created entity's permissions, declared once.
+ * Who can end up able to READ a collection they create, declared once.
  *
  * 🔴 Two places need this answer and they must not each carry it. The SEEDER
  * assigns a new collection's freshly created CRUD permissions to one role. The
@@ -13,34 +13,58 @@
  * offer one that had stopped being. Neither shows up as a failure anywhere --
  * the reader just sees a checklist that is wrong about them.
  *
+ * So the recipient is named ONCE below and the predicate is computed FROM it.
+ * Sharing only the literal was not enough: a previous revision kept the
+ * membership test hard-coded as `isSuperAdmin` beside the constant, so moving
+ * the recipient would have moved the seeder and left the predicate behind.
+ *
  * @module auth/new-entity-access-policy
  */
+
+import { listRoleSlugsForUser } from "../services/lib/permissions";
 
 /**
  * The role slug a newly seeded entity's permissions are assigned to.
  *
- * Read by `PermissionSeedService.assignNewPermissionsToSuperAdmin`, which
- * performs the assignment, and by {@link wouldReadOwnNewCollection}, which
- * answers whether a given caller is on the receiving end of it.
+ * `PermissionSeedService.assignNewPermissionsToSuperAdmin` selects the role by
+ * it, and {@link wouldReadOwnNewCollection} tests membership of it.
  */
 export const NEW_ENTITY_PERMISSION_ROLE = "super-admin";
 
+/** How the caller a widget resolver holds is described to this policy. */
+export interface NewEntityAccessCaller {
+  userId: string;
+  /** An API key is judged on the scope stamped into it, never on its owner's roles. */
+  isApiKey: boolean;
+  /** The key's own stamped permission slugs. Empty for a session caller. */
+  permissions: readonly string[];
+}
+
 /**
- * Whether this caller would hold read on a collection they create.
+ * Whether this caller could end up reading a collection they create.
  *
- * Derived from the policy above rather than asserted beside it: the seeding
- * assigns to {@link NEW_ENTITY_PERMISSION_ROLE}, so the question is whether
- * this caller holds that role, and `isSuperAdmin` is the membership test for it
- * -- it resolves role inheritance, which a flat slug comparison would miss.
+ * Two routes, because two things can make a not-yet-existing collection
+ * readable, and only one of them is the seeding.
  *
- * An API KEY is never on the receiving end, whoever owns it: a key is judged on
- * the scope stamped into it when it was minted, and a role gaining a permission
- * afterwards does not widen a key that was already issued.
+ * A SESSION caller reaches it through the seeding: they hold
+ * {@link NEW_ENTITY_PERMISSION_ROLE}, so the permissions the seeder assigns
+ * land on a role they are in. Membership is read from their role slugs rather
+ * than through a named super-admin test, so the constant above is genuinely
+ * the single point of change.
+ *
+ * An API KEY reaches it a different way and must not be refused outright. A
+ * key never GAINS a grant -- it is judged on the scope stamped into it when it
+ * was minted -- but a permission may be pre-seeded, and `canReadEntity` accepts
+ * a key's exact `read-<slug>` grant once that collection exists. So a key
+ * stamped `read-reports` can finish the step by creating `reports`, and the
+ * step is finishable exactly when it carries some read grant to create into.
  */
 export async function wouldReadOwnNewCollection(
-  isSuperAdmin: (userId: string) => Promise<boolean>,
-  caller: { userId: string; isApiKey: boolean }
+  caller: NewEntityAccessCaller
 ): Promise<boolean> {
-  if (caller.isApiKey) return false;
-  return isSuperAdmin(caller.userId);
+  if (caller.isApiKey) {
+    return caller.permissions.some(slug => slug.startsWith("read-"));
+  }
+  const roles = await listRoleSlugsForUser(caller.userId);
+  return roles.includes(NEW_ENTITY_PERMISSION_ROLE);
 }
