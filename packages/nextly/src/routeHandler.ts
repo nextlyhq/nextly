@@ -101,6 +101,10 @@ import {
 import { postWidgetQuery } from "./api/widget-query";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import { runWithCallerScope } from "./auth/caller-scope";
+import {
+  COLLECTION_DEFINITION_ACTION,
+  COLLECTION_DEFINITION_RESOURCE,
+} from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
@@ -866,8 +870,16 @@ async function resolveAuthorization(
       const slug = routeParams?.collectionName || "";
       return requireCollectionAccess(req, "read", slug);
     }
-    // Definition mutations (create/update/delete collection) → manage-settings
-    return requirePermission(req, "manage", "settings");
+    // Definition mutations (create/update/delete collection). The grant is
+    // declared once, in `auth/collection-definition-policy`, because the
+    // onboarding checklist asks the same question to decide whether to OFFER
+    // the step -- and a copy there would go on asking for a grant this route
+    // had stopped requiring.
+    return requirePermission(
+      req,
+      COLLECTION_DEFINITION_ACTION,
+      COLLECTION_DEFINITION_RESOURCE
+    );
   }
 
   // --- Singles endpoints ---

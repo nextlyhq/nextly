@@ -707,6 +707,7 @@ describe("what the editor reads before anyone asks for it", () => {
     // identity assertions below would be comparing `undefined` to `undefined`.
     const canvas = recorded("canvas");
     const panel = recorded("insertPanel");
+    const inspector = recorded("inspector");
     const render = canvas.render as {
       definitions: Map<string, unknown>;
       limits: unknown;
@@ -718,6 +719,14 @@ describe("what the editor reads before anyone asks for it", () => {
       patterns: "ready",
       components: "cut",
     });
+    // And the inspector reads the SAME map, so a selected instance's rows come
+    // from the document the canvas draws, with the rows that carry its title.
+    const library = inspector.componentLibrary as {
+      definitions: unknown;
+      components: unknown;
+    };
+    expect(library.definitions).toBe(render.definitions);
+    expect(library.components).toBe(items);
   });
 });
 
@@ -943,7 +952,9 @@ describe("what a component's own content field may offer", () => {
 });
 
 /** A recorder's props, asserted present so a missing render cannot read as equal. */
-function recorded(key: "canvas" | "insertPanel"): Record<string, unknown> {
+function recorded(
+  key: "canvas" | "insertPanel" | "inspector"
+): Record<string, unknown> {
   const props = seen[key];
   if (props === undefined) throw new Error(`the ${key} never rendered`);
   return props;
