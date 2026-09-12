@@ -68,13 +68,10 @@ import type {
   NestingRefusal,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
+import { placementVerdict } from "@nextlyhq/blocks-engine";
 
 import type { Point, Rect } from "./geometry";
-import {
-  blockAllowedAt,
-  type PlacementTarget,
-  type SlotSource,
-} from "./inserter";
+import type { PlacementTarget, SlotSource } from "./inserter";
 import type { OpPosition } from "./ops";
 
 /**
@@ -461,8 +458,16 @@ export function movingSubtree(
 
 /** What {@link resolveDrop} needs to answer a pointer. */
 export interface DropQuery {
-  /** The block being dragged, as its registered type name. */
-  readonly blockName: string;
+  /**
+   * The block types the placement is judged by.
+   *
+   * One for a block, its registered type name. Several for a component
+   * instance: the ROOTS of the definition it draws, resolved as its tile was
+   * (`placementTypesOf`), because the instance node's own type is not a
+   * registered block and the nesting source answers "no restriction" for it.
+   * Every type must be admitted, as every root of a pattern must be.
+   */
+  readonly blockNames: readonly string[];
   /**
    * Nodes the drop may not land inside: the dragged block and its descendants.
    *
@@ -532,7 +537,11 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
   const region = regionAt(query.regions, pointer, query.forbiddenParents);
   if (region === undefined) return { kind: "none" };
 
-  const verdict = blockAllowedAt(query.blockName, region.target, query.nesting);
+  const verdict = placementVerdict(
+    query.blockNames,
+    region.target,
+    query.nesting
+  );
   if (!verdict.allowed) {
     return {
       kind: "refused",

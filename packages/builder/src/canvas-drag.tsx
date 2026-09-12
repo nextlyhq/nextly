@@ -41,7 +41,11 @@
  * @module canvas-drag
  */
 
-import type { BlockNode, NestingSource } from "@nextlyhq/blocks-engine";
+import type {
+  BlockNode,
+  ComponentLookup,
+  NestingSource,
+} from "@nextlyhq/blocks-engine";
 import { findNode } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
@@ -71,7 +75,7 @@ import {
   scrollableAncestor,
   type CanvasPointerPoints,
 } from "./geometry-dom";
-import type { SlotSource } from "./inserter";
+import { placementTypesOf, type SlotSource } from "./inserter";
 import { lockBlockingMove } from "./locking";
 import type { OpPosition } from "./ops";
 import {
@@ -218,6 +222,13 @@ export interface UseCanvasDragOptions {
   /** The nesting rule, asked before any position is offered. */
   nesting: NestingSource;
   /**
+   * The definitions the canvas draws instances from, so a MOVED instance is
+   * judged by the roots of the definition it draws rather than by its own
+   * type, which the nesting rule cannot restrict. Absent, an instance moves
+   * anywhere — the posture of a host that resolves nothing.
+   */
+  definitions?: ComponentLookup;
+  /**
    * The canvas root, for a drag that begins outside it.
    *
    * Optional, and its absence means only that {@link CanvasDrag.beginInsertDrag}
@@ -334,6 +345,12 @@ interface Gesture {
   readonly rects: RectSource;
   readonly forbiddenParents: ReadonlySet<string>;
   readonly blockName: string;
+  /**
+   * What the placement is judged by: the block's own type, or an instance's
+   * resolved roots. Computed once at the press — the definitions a drag
+   * resolves against do not change mid-gesture.
+   */
+  readonly blockNames: readonly string[];
   /** False until the pointer has travelled far enough to mean a drag. */
   active: boolean;
   switchState: TargetSwitchState;
@@ -439,6 +456,7 @@ export function useCanvasDrag({
   editor,
   slots,
   nesting,
+  definitions,
   canvasRoot,
   activationPx = DEFAULT_ACTIVATION_PX,
   switchPx = DEFAULT_SWITCH_PX,
@@ -453,8 +471,8 @@ export function useCanvasDrag({
 
   // Read at event time rather than closed over, so a handler bound on one render
   // never patches a document that a later edit has already replaced.
-  const latest = React.useRef({ editor, slots, nesting });
-  latest.current = { editor, slots, nesting };
+  const latest = React.useRef({ editor, slots, nesting, definitions });
+  latest.current = { editor, slots, nesting, definitions };
 
   /**
    * Undo the document-level listening an insert-drag needs, or nothing.
@@ -544,6 +562,7 @@ export function useCanvasDrag({
         rects,
         forbiddenParents: movingSubtree(current.document, nodeId),
         blockName: node.type,
+        blockNames: placementTypesOf(node, latest.current.definitions),
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
@@ -578,7 +597,7 @@ export function useCanvasDrag({
     (drag: Gesture, pointer: CanvasPointerPoints) => {
       const resolution = resolveDrop(
         {
-          blockName: drag.blockName,
+          blockNames: drag.blockNames,
           forbiddenParents: drag.forbiddenParents,
           regions: drag.regions,
           rects: drag.rects,
@@ -830,6 +849,10 @@ export function useCanvasDrag({
     (subject: DragSubject, at: OpPosition) => {
       const { editor: current } = latest.current;
       if (subject.kind === "move") {
+        // Whether the PAGE still composes with the node there — an instance
+        // carried ahead of another takes the budget that one had — is the
+        // editor's own apply's to refuse, and to say why; a null here is that
+        // refusal.
         current.apply({ kind: "move", id: subject.nodeId, to: at });
         return;
       }
@@ -1043,6 +1066,7 @@ export function useCanvasDrag({
         // being detached here, so there is no subtree to exclude.
         forbiddenParents: new Set<string>(),
         blockName: entry.blockName,
+        blockNames: [entry.blockName],
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),

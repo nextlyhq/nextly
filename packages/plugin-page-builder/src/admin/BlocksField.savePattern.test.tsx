@@ -95,6 +95,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => ({}),
+  // No document around the field: the state every case here was written
+  // against, and the one that offers every component.
+  useDocumentIdentity: () => null,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   usePluginRoute: () => ({
     data: undefined,
     pending: false,

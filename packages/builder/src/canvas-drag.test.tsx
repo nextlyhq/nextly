@@ -18,7 +18,7 @@
  * @module canvas-drag.test
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
 import {
@@ -26,6 +26,10 @@ import {
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type ComponentLookup,
+  type DocumentLimits,
+  type NestingSource,
+  DEFAULT_LIMITS,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
@@ -98,15 +102,42 @@ function documentOf(nodes: BlockNode[]): BlockDocument {
 /** The editor the last render produced, for asserting what a drop did. */
 let editorRef: EditorState | null = null;
 
-function Host({ document }: { document: BlockDocument }): React.JSX.Element {
-  const editor = useEditorState({ initialDocument: document });
+/**
+ * Everything is permitted, so a refused placement never masks a case that is
+ * about the gesture rather than about nesting.
+ */
+const PERMISSIVE: NestingSource = {
+  parentsOf: () => undefined,
+  slotAllowOf: () => undefined,
+};
+
+function Host({
+  document,
+  nesting = PERMISSIVE,
+  definitions,
+  limits,
+  onRefused,
+}: {
+  document: BlockDocument;
+  nesting?: NestingSource;
+  definitions?: ComponentLookup;
+  limits?: DocumentLimits;
+  onRefused?: (refusal: { sentence: string }) => void;
+}): React.JSX.Element {
+  // The editor is where room is judged; the drag hands it the move and the
+  // editor tells the host why when it refuses.
+  const editor = useEditorState({
+    initialDocument: document,
+    ...(limits === undefined ? {} : { limits }),
+    ...(definitions === undefined ? {} : { definitions }),
+    ...(onRefused === undefined ? {} : { onRefused }),
+  });
   editorRef = editor;
   const drag = useCanvasDrag({
     editor,
     slots: registrySlotSource(),
-    // Everything is permitted, so a refused placement never masks a case that
-    // is about the gesture rather than about nesting.
-    nesting: { parentsOf: () => undefined, slotAllowOf: () => undefined },
+    nesting,
+    ...(definitions === undefined ? {} : { definitions }),
   });
 
   return (
@@ -443,6 +474,128 @@ describe("useCanvasDrag", () => {
     expect(indicator(container)).toBeNull();
     release(root, 200, 190);
     expect(editorRef?.document.nodes.map(n => n.id)).toEqual(order);
+  });
+
+  it("judges a moved component instance by the roots of its definition", () => {
+    // The instance node's type is not a registered block, and the nesting
+    // rule answers "no restriction" for it — so a component whose root
+    // belongs only inside a Columns, refused at the insert, could be dragged
+    // into the page root afterwards. Judged by what it draws, the same move
+    // is refused; without the definitions there is nothing to judge it by,
+    // and it moves — which is the control that proves the roots did it.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const nesting: NestingSource = {
+      parentsOf: type => (type === "test/item" ? ["test/columns"] : undefined),
+      slotAllowOf: () => undefined,
+    };
+    const definitions: ComponentLookup = new Map([
+      [
+        "c",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [node("d1", "test/item")],
+        } as BlockDocument,
+      ],
+    ]);
+    const instance = {
+      ...node("i1", "nextly/component-instance"),
+      props: { componentId: "c" },
+    } as BlockNode;
+    const page = () => documentOf([instance, node("b", "test/heading")]);
+
+    const judged = render(
+      <Host document={page()} nesting={nesting} definitions={definitions} />
+    );
+    layout(judged.container, { i1: 100, b: 100 });
+    const root = rootOf(judged.container);
+    press(root, blockElement(judged.container, "i1"), 200, 50);
+    moveTo(root, 200, 190);
+    release(root, 200, 190);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["i1", "b"]);
+    judged.unmount();
+
+    const unjudged = render(<Host document={page()} nesting={nesting} />);
+    layout(unjudged.container, { i1: 100, b: 100 });
+    const root2 = rootOf(unjudged.container);
+    press(root2, blockElement(unjudged.container, "i1"), 200, 50);
+    moveTo(root2, 200, 190);
+    release(root2, 200, 190);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual(["b", "i1"]);
+  });
+
+  it("hands a move to the editor, which refuses one the page has no room for and says why", () => {
+    // The budget is spent in document order. Two instances of a three-node
+    // component on a page with room for one: carrying the second ahead of
+    // the first takes the budget the first had, and the page would draw a
+    // placeholder where a component stood. The editor's own apply asks the
+    // resolver with the move applied, under its caps, and tells the host why;
+    // the control moves a block on the same page.
+    registerBlocks(BLOCKS as never, { source: "canvas-drag-test" });
+    const three: BlockDocument = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        node("d1", "test/heading"),
+        node("d2", "test/heading"),
+        node("d3", "test/heading"),
+      ],
+    } as BlockDocument;
+    const definitions: ComponentLookup = new Map([["three", three]]);
+    const instance = (id: string): BlockNode =>
+      ({
+        ...node(id, "nextly/component-instance"),
+        props: { componentId: "three" },
+      }) as BlockNode;
+    const page = () =>
+      documentOf([
+        node("p0", "test/heading"),
+        instance("first"),
+        instance("second"),
+      ]);
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 6 };
+
+    const raise = vi.fn();
+    const refused = render(
+      <Host
+        document={page()}
+        definitions={definitions}
+        limits={limits}
+        onRefused={refusal => raise(refusal.sentence)}
+      />
+    );
+    layout(refused.container, { p0: 100, first: 100, second: 100 });
+    const root = rootOf(refused.container);
+    // From the bottom to just below the top block: ahead of "first".
+    press(root, blockElement(refused.container, "second"), 200, 250);
+    moveTo(root, 200, 110);
+    release(root, 200, 110);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual([
+      "p0",
+      "first",
+      "second",
+    ]);
+    expect(raise).toHaveBeenCalledWith(expect.stringMatching(/no room left/));
+    refused.unmount();
+
+    const allowed = render(
+      <Host
+        document={page()}
+        definitions={definitions}
+        limits={limits}
+        onRefused={refusal => raise(refusal.sentence)}
+      />
+    );
+    layout(allowed.container, { p0: 100, first: 100, second: 100 });
+    const root2 = rootOf(allowed.container);
+    press(root2, blockElement(allowed.container, "p0"), 200, 50);
+    moveTo(root2, 200, 290);
+    release(root2, 200, 290);
+    expect(editorRef?.document.nodes.map(n => n.id)).toEqual([
+      "first",
+      "second",
+      "p0",
+    ]);
   });
 
   it("ignores a press that is not the primary button", () => {

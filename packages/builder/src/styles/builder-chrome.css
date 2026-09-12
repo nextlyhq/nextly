@@ -222,6 +222,30 @@
 }
 
 /*
+ * The library-cut notice sits between the placement line and the tiles, and
+ * closes with the same rule the placement line does, so the list below starts
+ * under one divider whichever of the two comes last.
+ */
+.nx-insert-panel__cut {
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/*
+ * The retry inside a notice: a link-shaped control in the sentence that
+ * explains it, rather than a button beside it, because the sentence is short
+ * and the action is its last clause.
+ */
+.nx-insert-panel__retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--nx-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/*
  * Tiles, three to a row.
  *
  * The count comes from the panel as `--nx-insert-columns` rather than being
@@ -248,6 +272,37 @@
   grid-template-columns: repeat(var(--nx-insert-columns, 3), minmax(0, 1fr));
   gap: 0.375rem;
   padding: 0.125rem 0.5rem 0.5rem;
+}
+
+/*
+ * The tier badge: what placing the tile does, where that is not obvious.
+ *
+ * Small and quiet, because it is a qualifier on the label rather than a second
+ * label — the same weight the description strip uses, so the tile's hierarchy
+ * stays name first. Token colours only, so it reads in both themes.
+ */
+.nx-insert-panel__tier {
+  display: inline-block;
+  margin-top: 0.125rem;
+  padding: 0 0.3125rem;
+  border-radius: 999px;
+  font-size: 0.5625rem;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+/*
+ * A component is a LINK, which is the tier an author most needs to notice:
+ * editing the definition later changes this page too. The accent tint says
+ * "this one is different" without making the tile itself louder.
+ */
+.nx-insert-panel__tier[data-tier="component"] {
+  color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
 }
 
 .nx-insert-panel__label {

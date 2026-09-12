@@ -23,7 +23,7 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
-import { refreshCollectionSources } from "../domains/widgets/collection-sources";
+import { refreshContentSources } from "../domains/widgets/collection-widgets";
 import { conditionProbe } from "../domains/widgets/condition-probe";
 import { onboardingSteps } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
@@ -161,11 +161,11 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
  * `onboarding:incomplete` widget condition is derived from, so the card and the
  * rule that decides whether to offer it cannot disagree.
  *
- * The source registry is REFRESHED first, exactly as the layout endpoint does
- * before resolving anything. Boot does not publish it, and the steps read it to
- * learn which collections exist -- without this an install with content would
- * report every step outstanding, which is the answer that keeps the card on
- * screen forever.
+ * The source registry is REFRESHED first -- both kinds, through the one
+ * refresh the layout and query endpoints call before resolving anything. Boot
+ * does not publish it, and the steps read it to learn which collections exist
+ * -- without this an install with content would report every step
+ * outstanding, which is the answer that keeps the card on screen forever.
  *
  * Caching: `private, no-store`. The answer is per reader, and a shared cache
  * serving one reader's progress to another would leak which collections exist.
@@ -174,7 +174,7 @@ export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  await refreshCollectionSources();
+  await refreshContentSources();
   const caller = await readCaller(auth);
   // The same probe the layout read builds, so this endpoint and the condition
   // that decides whether the card is offered resolve the reader's collections

@@ -3,12 +3,16 @@
 /**
  * Everything the entry screen needs to draw this site's page, as one answer.
  *
- * The resting state has to read four separate things before it can draw a
+ * The resting state has to read five separate things before it can draw a
  * faithful page — the site's style, whether that read has arrived, the site's
- * config, and a container name for its own box — and getting any one of them
- * wrong produces a page that looks right and is not. Assembled inline they were
- * six hooks in a field control whose job is to decide which of two surfaces to
- * render, and the reading of each was easy to get subtly wrong in isolation.
+ * config, a container name for its own box, and the component definitions its
+ * instances resolve against — and getting any one of them wrong produces a
+ * page that looks right and is not. Assembled inline they were six hooks in a
+ * field control whose job is to decide which of two surfaces to render, and
+ * the reading of each was easy to get subtly wrong in isolation. The fifth was
+ * simply missing: a component placed in the editor drew on the canvas and
+ * became the could-not-be-loaded marker in the miniature the moment the editor
+ * closed.
  *
  * Gathered here they are one unit with one contract, and the field asks a
  * question rather than performing a derivation.
@@ -24,6 +28,10 @@ import { siteSheet } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
 import {
+  useComponentLibrary,
+  type ComponentLibraryState,
+} from "./component-library-client";
+import {
   pageRenderInputs,
   readDocumentLimits,
   type PageRenderInputs,
@@ -36,6 +44,8 @@ export interface RestingPageRender {
   siteStyles: PageRendererProps["siteStyles"];
   /** Whether that sheet is usable yet, and why not when it is not. */
   styleState: SiteStyleState;
+  /** Whether the component definitions are usable yet, and the way to ask again. */
+  components: { state: ComponentLibraryState; retry: () => void };
   /** The rest of this site's rendering, from the derivation the canvas asks. */
   render: PageRenderInputs;
 }
@@ -68,6 +78,14 @@ export function useRestingPageRender(source: string): RestingPageRender {
     [containerId]
   );
 
+  /*
+   * The same read the editor makes, so the two share one cache entry, and at
+   * the same DRAFT posture: the miniature shows the author their own page, and
+   * the component they are mid-edit on is the one they expect to see in it.
+   */
+  const library = useComponentLibrary();
+  const { definitions } = library;
+
   const render = useMemo(
     () =>
       pageRenderInputs({
@@ -78,8 +96,9 @@ export function useRestingPageRender(source: string): RestingPageRender {
         // class alternative beside each pseudo-class rule would let it paint a
         // hover appearance nobody is causing.
         limits: readDocumentLimits(clientConfig),
+        definitions,
       }),
-    [siteStyle, clientConfig, previewContainer]
+    [siteStyle, clientConfig, previewContainer, definitions]
   );
 
   return {
@@ -96,6 +115,8 @@ export function useRestingPageRender(source: string): RestingPageRender {
      * comparison is true on success too.
      */
     styleState: pending ? "pending" : error !== null ? "unavailable" : "ready",
+    // The same three states the read already names, and the retry it holds.
+    components: { state: library.state, retry: library.retry },
     render,
   };
 }

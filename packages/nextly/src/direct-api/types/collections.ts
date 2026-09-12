@@ -181,6 +181,19 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
   draft?: boolean;
 
   /**
+   * As {@link FindArgs.status}, and present for the reason a by-id read needs
+   * it as much as a list does: an untrusted read that states nothing is bounded
+   * to public states -- `resolveStatusFilter`'s default -- so a row that has
+   * never been published answers 404 to the very caller `find({ status: "all" })`
+   * just listed it for. `draft: true` does not reach that row either: the
+   * working-draft overlay runs only on a row the lifecycle filter let through.
+   *
+   * The query service has always accepted this; only the Direct API dropped it,
+   * and a caller passing it before this field existed was silently ignored.
+   */
+  status?: "published" | "draft" | "all";
+
+  /**
    * Specific fields to include/exclude.
    */
   select?: Record<string, boolean>;

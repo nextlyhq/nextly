@@ -33,6 +33,7 @@ import {
 } from "../../shared/addressable-fields";
 
 import { registerBuiltInSources } from "./built-in-sources";
+import { deferredEntities } from "./deferred-entities";
 
 /**
  * The slice of a `dynamic_collections` row this needs.
@@ -117,7 +118,7 @@ function storedAtThisLevel(container: UnvalidatedContainer): boolean {
  * level. That walk is also iterative and cycle-guarded, so a group that
  * contains itself terminates instead of overflowing the stack.
  */
-function readableFields(fields: unknown): Array<{
+export function readableFields(fields: unknown): Array<{
   name: string;
   type: string;
   label?: string;
@@ -250,50 +251,21 @@ const TABLE_PRESENT_STATUSES: ReadonlySet<string> = new Set([
   "applied",
 ]);
 
-function statusClaimsPresent(collection: RegisteredCollection): boolean {
-  const status = (collection as { migrationStatus?: unknown }).migrationStatus;
+export function statusClaimsPresent(entity: {
+  migrationStatus?: unknown;
+}): boolean {
+  const status = entity.migrationStatus;
   if (status === undefined) return true;
   return typeof status === "string" && TABLE_PRESENT_STATUSES.has(status);
 }
 
 /**
- * Collections whose stored metadata is known to be AHEAD of their table.
- *
- * 🔴 The one thing table existence cannot tell you, and the reason existence
- * alone is not enough. A reload writes the new field list to
- * `dynamic_collections` for EVERY configured collection -- the sync payload is
- * built from the whole config and knows nothing about what applied -- while
- * refusing the DDL for a collection whose change it classified unsafe. That
- * collection then keeps its OLD table, which exists, alongside a NEW field list
- * that the table never received.
- *
- * Verified structurally, such a collection publishes a source naming columns
- * the database does not have, and a widget query validates against the source
- * and then fails against the table. Withholding it is the older, duller outcome
- * and the right one: a card that is missing is better than a card that errors.
- *
- * This is the "applied-schema signal" that `migration_status` is trying and
- * failing to be. It is deliberately NOT read from that column: the label is
- * also set by writers that never deferred anything, which is what made it
- * unusable in the first place. The reload knows which collections it refused,
- * so it says so directly.
+ * Collections whose stored metadata is known to be AHEAD of their table; the
+ * store and its reasoning live in `deferred-entities.ts`, shared with the
+ * singles for the reload that decides both at once.
  */
-const globalForDeferred = globalThis as unknown as {
-  __nextly_widgetDeferredCollections?: Set<string>;
-};
-
 function deferredCollections(): ReadonlySet<string> {
-  return globalForDeferred.__nextly_widgetDeferredCollections ?? new Set();
-}
-
-/**
- * Record which collections a reload declined to apply DDL for.
- *
- * Replaces the set rather than adding to it, so a collection whose later reload
- * succeeds stops being deferred without anyone having to remember to clear it.
- */
-export function setDeferredCollections(slugs: readonly string[]): void {
-  globalForDeferred.__nextly_widgetDeferredCollections = new Set(slugs);
+  return deferredEntities("collection");
 }
 
 /**
@@ -323,7 +295,7 @@ export function setDeferredCollections(slugs: readonly string[]): void {
  *   deployed Builder collection whose migration ran but whose row nobody marked
  *   keeps its cards hidden. A hidden card is quiet and recoverable; a card
  *   querying a column the table lacks is neither.
- * - {@link setDeferredCollections} covers what the label cannot -- a reload that
+ * - `setDeferredEntities` covers what the label cannot -- a reload that
  *   refused a collection's DDL while its metadata was written regardless.
  *
  * That false negative is a defect in the WRITERS of `migration_status`, and it
