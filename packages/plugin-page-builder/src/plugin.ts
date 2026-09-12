@@ -26,7 +26,7 @@ import {
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { patternCapabilityRoute } from "./capability-route";
-import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
 import {
   CLASS_USAGE_INDEX_SLUG,
@@ -484,6 +484,9 @@ export async function singlesHoldBlocks(
   // changed population is one: it means content may be out of reach, which is
   // what withholds completeness.
   let expected: number | undefined;
+  // The slugs configuration still declares, read once. A row whose source is
+  // `code` and whose slug is not in here is a leftover, not a Single.
+  const declared = declaredSingleSlugs(ctx);
 
   for (let offset = 0; ; offset += REGISTRY_PAGE_SIZE) {
     const listed: unknown = await ctx.services.singles.list({
@@ -497,15 +500,83 @@ export async function singlesHoldBlocks(
     expected ??= total;
     if (total !== expected) return true;
 
-    for (const row of rows) {
-      if (blocksFieldsOf(row as { fields?: unknown }).length > 0) return true;
-    }
+    if (rowsHoldBlocks(rows, declared)) return true;
 
     // Bounded by BOTH, so neither a `total` that disagrees with the rows nor an
     // empty page can spin this. An empty page with work still claimed is the
     // shape that would otherwise loop for ever.
     if (rows.length === 0 || offset + rows.length >= total) return false;
   }
+}
+
+/** Whether any row on one page is a live Single declaring blocks content. */
+function rowsHoldBlocks(
+  rows: readonly unknown[],
+  declared: ReadonlySet<string> | undefined
+): boolean {
+  for (const row of rows) {
+    // An ORPHAN says nothing about content that exists. Removing a code-first
+    // Single from config leaves its registry row readable until someone runs
+    // the destructive cleanup — `PluginSinglesService.list` documents that,
+    // says such a row carries `source: "code"`, and says a caller who must
+    // exclude them can, because `source` is on every record and a plugin holds
+    // `ctx.config.singles`. It is not filtered at that layer because doing so
+    // after pagination would return short pages and a total describing one of
+    // them.
+    //
+    // Counted here, a removed Single kept `unreachable` true for ever and no
+    // count could become exact for content the app no longer has.
+    if (isOrphanedSingle(row, declared)) continue;
+    // The FULL survey, not the addressable half. A Single declaring its blocks
+    // field under a named group — or behind a field-group reference — returns
+    // an empty addressable list, and reading only that reported "this Single
+    // holds no blocks" for content no scope will ever index. The collection side
+    // already asks it this way; asking differently here is how the two come to
+    // disagree about the same declaration.
+    const survey = blocksFieldSurvey(row as { fields?: unknown });
+    if (survey.addressable.length > 0 || survey.unaddressable) return true;
+  }
+  return false;
+}
+
+/** The slugs the app's configuration still declares as Singles. */
+function declaredSingleSlugs(ctx: {
+  config?: { singles?: unknown };
+}): ReadonlySet<string> | undefined {
+  const singles = ctx.config?.singles;
+  // No list at all is not an empty list. A config shape this cannot read must
+  // not be treated as declaring nothing, which would make every registry row an
+  // orphan and hide real content from the completeness answer.
+  if (!Array.isArray(singles)) return undefined;
+  const slugs = new Set<string>();
+  for (const single of singles) {
+    const slug = (single as { slug?: unknown } | null)?.slug;
+    if (typeof slug === "string" && slug.length > 0) slugs.add(slug);
+  }
+  return slugs;
+}
+
+/**
+ * Whether a registry row is a removed code-first Single rather than a live one.
+ *
+ * Only a `code` row can be one: a Builder-made Single exists nowhere else, so
+ * its registry row IS the declaration and configuration says nothing about it.
+ *
+ * Anything this cannot read is NOT an orphan. A row with no readable slug, or a
+ * configuration this could not enumerate, keeps the Single counted — the
+ * direction that withholds completeness rather than the one that grants it over
+ * content nobody looked at.
+ */
+function isOrphanedSingle(
+  row: unknown,
+  declared: ReadonlySet<string> | undefined
+): boolean {
+  if (declared === undefined) return false;
+  const record = row as { source?: unknown; slug?: unknown } | null;
+  if (record?.source !== "code") return false;
+  const slug = record.slug;
+  if (typeof slug !== "string" || slug.length === 0) return false;
+  return !declared.has(slug);
 }
 
 /** How many registry rows one page of the collection listing asks for. */

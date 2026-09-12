@@ -42,9 +42,13 @@ function registry(
 }
 
 /** A singles registry that answers pages from a script, one per call. */
-function singles(pages: { rows: unknown[]; total: number }[]) {
+function singles(
+  pages: { rows: unknown[]; total: number }[],
+  config: unknown = { singles: [] }
+) {
   let call = 0;
   return {
+    config,
     services: {
       singles: {
         list: async () => {
@@ -58,6 +62,25 @@ function singles(pages: { rows: unknown[]; total: number }[]) {
     },
   } as never;
 }
+
+/** A code-first Single the configuration no longer declares. */
+const SLUG_CODE_GONE = {
+  slug: "gone",
+  source: "code",
+  fields: [{ type: "blocks", name: "content" }],
+};
+/** A code-first Single the configuration still declares. */
+const SLUG_CODE_HOME = {
+  slug: "home",
+  source: "code",
+  fields: [{ type: "blocks", name: "content" }],
+};
+/** A Single the Builder made, which no configuration ever declares. */
+const SLUG_BUILDER_MADE = {
+  slug: "made",
+  source: "builder",
+  fields: [{ type: "blocks", name: "content" }],
+};
 
 describe("enumerating the collection registry while it changes", () => {
   it("REFUSES when the population shrinks between pages", async () => {
@@ -136,6 +159,105 @@ describe("asking whether a Single holds blocks while the registry changes", () =
           { rows: [withoutBlocks], total: 3 },
         ])
       )
+    ).resolves.toBe(true);
+  });
+
+  it("withholds completeness for a Single whose blocks field is NESTED", async () => {
+    /*
+     * `blocksFieldsOf` returns an empty addressable list for a blocks field under
+     * a named group, so reading only that half said "this Single holds no
+     * blocks" for content no scope will ever index — and let every collection
+     * scope complete while health reported an exact zero.
+     *
+     * The collection side already asks the full survey; asking differently here
+     * is how the two come to disagree about the same declaration.
+     */
+    await expect(
+      singlesHoldBlocks(
+        singles([
+          {
+            rows: [
+              {
+                fields: [
+                  {
+                    type: "group",
+                    name: "hero",
+                    fields: [{ type: "blocks", name: "content" }],
+                  },
+                ],
+              },
+            ],
+            total: 1,
+          },
+        ])
+      )
+    ).resolves.toBe(true);
+  });
+
+  it("withholds completeness for a Single behind a field-group reference", async () => {
+    await expect(
+      singlesHoldBlocks(
+        singles([
+          {
+            rows: [
+              {
+                fields: [
+                  { type: "fieldGroup", name: "seo", fieldGroup: "seo" },
+                ],
+              },
+            ],
+            total: 1,
+          },
+        ])
+      )
+    ).resolves.toBe(true);
+  });
+
+  it("ignores a removed code-first Single whose registry row survives", async () => {
+    /*
+     * Removing a code-first Single from config leaves its registry row readable
+     * until the destructive cleanup runs, carrying `source: "code"` — which
+     * `PluginSinglesService.list` documents and deliberately does not filter,
+     * because filtering after pagination returns short pages. Counted here, a
+     * removed Single kept `unreachable` true for ever, so no count could become
+     * exact for content the app no longer has.
+     */
+    await expect(
+      singlesHoldBlocks(
+        singles([{ rows: [SLUG_CODE_GONE], total: 1 }], {
+          singles: [{ slug: "still-here" }],
+        })
+      )
+    ).resolves.toBe(false);
+  });
+
+  it("CONTROL: a code-first Single still declared is counted", async () => {
+    // Without this, filtering every `code` row would satisfy the case above and
+    // hide every configured Single from the completeness answer.
+    await expect(
+      singlesHoldBlocks(
+        singles([{ rows: [SLUG_CODE_HOME], total: 1 }], {
+          singles: [{ slug: "home" }],
+        })
+      )
+    ).resolves.toBe(true);
+  });
+
+  it("counts a BUILDER-made Single, whose registry row IS its declaration", async () => {
+    // Configuration says nothing about one, so absence from it is not evidence
+    // that it was removed.
+    await expect(
+      singlesHoldBlocks(
+        singles([{ rows: [SLUG_BUILDER_MADE], total: 1 }], { singles: [] })
+      )
+    ).resolves.toBe(true);
+  });
+
+  it("counts everything when the configuration cannot be enumerated", async () => {
+    // An unreadable config is not an empty one: read as declaring nothing, every
+    // row becomes an orphan and completeness is granted over the whole site.
+    await expect(
+      singlesHoldBlocks(singles([{ rows: [SLUG_CODE_HOME], total: 1 }], {}))
     ).resolves.toBe(true);
   });
 
