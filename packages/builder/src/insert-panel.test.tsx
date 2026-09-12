@@ -30,10 +30,15 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
+  DEFAULT_LIMITS,
+  type DocumentLimits,
   registerBlocks,
   type BlockDocument,
+  type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
+import { NoticeSinkProvider } from "./builder-notices";
 import { InsertPanel } from "./insert-panel";
 import type { EditorState } from "./editor-state";
 import { EMPTY_SELECTION } from "./selection";
@@ -79,13 +84,17 @@ function documentOf(nodes: BlockDocument["nodes"] = []): BlockDocument {
  * site shows up here. A test that rebuilt the expected op from the same inputs
  * would keep passing after someone edited the line it exists to watch.
  */
-function editorSpy(document: BlockDocument): EditorState & {
+function editorSpy(
+  document: BlockDocument,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): EditorState & {
   apply: ReturnType<typeof vi.fn>;
   applyAll: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
 } {
   return {
     document,
+    limits,
     selectedId: null,
     selection: EMPTY_SELECTION,
     select: vi.fn(),
@@ -1340,5 +1349,508 @@ describe("InsertPanel and the pattern tier", () => {
 
     expect(tile("Hero")).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Broken" })).toBeNull();
+  });
+});
+
+describe("the component tier", () => {
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  function headerComponent() {
+    return {
+      id: "header",
+      title: "Header",
+      category: "Sections",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/text", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+  }
+
+  /** The canvas's lookup, holding these rows' definitions. */
+  function lookupFor(
+    ...rows: { id: string; document: ComponentDocument }[]
+  ): Map<string, ComponentDocument> {
+    return new Map(rows.map(row => [row.id, row.document]));
+  }
+
+  it("withholds a PATTERN whose root is an instance the destination refuses", () => {
+    // A pattern is copied in as it stands, so a saved-from-a-component pattern
+    // carries the instance node; judged by that node's own type it was offered
+    // at the root while the component's own tile was refused there.
+    registerBlocks(
+      [
+        { ...base, name: "acme/column", parent: ["acme/columns"] },
+        { ...base, name: "acme/columns", slots: { children: {} } },
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const column = {
+      id: "column",
+      title: "Column",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/column", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+    const wrapping = {
+      id: "wrapped",
+      title: "Wrapped column",
+      document: {
+        formatVersion: 1,
+        kind: "pattern",
+        nodes: [
+          {
+            id: "p1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "column" },
+          },
+        ],
+      } as unknown as BlockDocument,
+    };
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        patterns={[wrapping]}
+        componentDefinitions={lookupFor(column)}
+      />
+    );
+
+    expect(screen.getByRole("option", { name: /Text/ })).toBeDefined();
+    expect(screen.queryByRole("option", { name: /Wrapped column/ })).toBeNull();
+  });
+
+  it("PLACES a pattern whose nested instance draws what the slot admits", () => {
+    // The click plans against the same lookup the tile was judged by. Without
+    // it the planner reads the nested node as `nextly/component-instance`,
+    // which a slot naming its admissions does not name — so the tile was
+    // offered, the click planned nothing, and the panel closed on an
+    // unchanged page with no reason given.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/row",
+          editor: { label: "Row" },
+          slots: { children: { allow: ["acme/cell"] } },
+        },
+        { ...base, name: "acme/cell", editor: { label: "Cell" } },
+      ] as never,
+      { source: "acme" }
+    );
+    const cell = {
+      id: "cellish",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/cell", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+    const holding = {
+      id: "holding",
+      title: "Row of one",
+      document: {
+        formatVersion: 1,
+        kind: "pattern",
+        nodes: [
+          {
+            id: "p1",
+            type: "acme/row",
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                {
+                  id: "p2",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: "cellish" },
+                },
+              ],
+            },
+          },
+        ],
+      } as unknown as BlockDocument,
+    };
+    const editor = editorSpy(documentOf());
+    render(
+      <InsertPanel
+        editor={editor}
+        patterns={[holding]}
+        componentDefinitions={lookupFor(cell)}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("option", { name: /Row of one/ }));
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no component for which the host supplied no definition", () => {
+    // A tile places an instance the canvas resolves against its lookup; with
+    // no definition there, the instance would be drawn as missing the moment
+    // it landed. The row alone is not enough to offer it.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[headerComponent()]}
+      />
+    );
+
+    // The block tier is drawn — the control that the panel rendered at all.
+    expect(screen.getByRole("option", { name: /Text/ })).toBeDefined();
+    expect(screen.queryByRole("option", { name: /Header/ })).toBeNull();
+  });
+
+  it("offers a supplied component beside the blocks, marked as LINKED", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[headerComponent()]}
+        componentDefinitions={lookupFor(headerComponent())}
+      />
+    );
+
+    expect(tile("Text")).toBeTruthy();
+    const header = tile("Header");
+    // The visible badge, for a sighted author choosing between look-alikes.
+    expect(header.querySelector(".nx-insert-panel__tier")?.textContent).toBe(
+      "Linked"
+    );
+    // And the same promise where a screen reader hears it: in the description
+    // read after the name, NOT in the name — which stays exactly the visible
+    // label so a spoken command still matches what is written on the tile.
+    expect(header.getAttribute("aria-label")).toBe("Header");
+    const described = document.getElementById(
+      header.getAttribute("aria-describedby") ?? ""
+    );
+    expect(described?.textContent).toMatch(/^Placed as a link/);
+    // A block tile carries no such promise, visible or spoken.
+    expect(tile("Text").querySelector(".nx-insert-panel__tier")).toBeNull();
+  });
+
+  it("places a chosen component as ONE instance node, copying nothing", () => {
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const editor = editorSpy(documentOf());
+    const onInsert = vi.fn();
+    render(
+      <InsertPanel
+        editor={editor}
+        components={[headerComponent()]}
+        componentDefinitions={lookupFor(headerComponent())}
+        onInsert={onInsert}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("option", { name: /Header/ }));
+
+    // `apply` and not `applyAll`: an instance is one node, not a forest, and
+    // there is nothing to plan — the definition's content stays where it is.
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    const op = editor.apply.mock.calls[0][0] as {
+      kind: string;
+      node: { id: string; type: string; props: unknown; slots?: unknown };
+    };
+    expect(op.kind).toBe("insert");
+    expect(op.node.type).toBe(COMPONENT_INSTANCE_TYPE);
+    expect(op.node.props).toEqual({ componentId: "header" });
+    // Nothing of the definition's tree travelled into the page.
+    expect(op.node.slots).toBeUndefined();
+    expect(op.node.id).not.toBe("d1");
+    expect(editor.select).toHaveBeenCalledWith(op.node.id);
+    expect(onInsert).toHaveBeenCalledWith(op.node);
+  });
+
+  it("offers nothing for a component the destination could not take", () => {
+    // Judged by the definition's ROOT. A column may only live inside columns,
+    // and this page's insertion point is the root — so the tile is withheld
+    // rather than offered and refused on click.
+    registerBlocks(
+      [
+        { ...base, name: "acme/text" },
+        { ...base, name: "acme/column", parent: ["acme/columns"] },
+      ] as never,
+      { source: "acme" }
+    );
+    const columnOnly = {
+      ...headerComponent(),
+      id: "col",
+      title: "Column card",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/column", version: 1, props: {} }],
+      } as unknown as ComponentDocument,
+    };
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[columnOnly, headerComponent()]}
+        componentDefinitions={lookupFor(columnOnly, headerComponent())}
+      />
+    );
+
+    expect(screen.getByRole("option", { name: /Header/ })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Column card/ })).toBeNull();
+  });
+
+  it("hands a placement to the editor's apply, which is what judges the page's room for it", () => {
+    // The tile is offered — room is a property of the page, not of the
+    // definition — and the insert asks the resolver with the node in place.
+    // A page of two nodes under a cap of four cannot hold a three-node
+    // definition composed, so nothing is applied and the author is told.
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const three = {
+      ...headerComponent(),
+      id: "three",
+      title: "Three up",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [1, 2, 3].map(n => ({
+          id: `d${n}`,
+          type: "acme/text",
+          version: 1,
+          props: {},
+        })),
+      } as unknown as ComponentDocument,
+    };
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "p1", type: "acme/text", version: 1, props: {} },
+        { id: "p2", type: "acme/text", version: 1, props: {} },
+      ],
+    } as unknown as BlockDocument;
+    // Room is the EDITOR's question, asked of every accepted group by its own
+    // apply under the caps it enforces; the panel hands the insert over and
+    // treats a null as the refusal it is. Pinned here so the panel cannot
+    // grow a second answer in front of that one.
+    const editor = editorSpy(page, { ...DEFAULT_LIMITS, maxNodes: 4 });
+    render(
+      <InsertPanel
+        editor={editor}
+        components={[three]}
+        componentDefinitions={new Map([["three", three.document]])}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("option", { name: /Three up/ }));
+
+    expect(editor.apply).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "insert" })
+    );
+  });
+
+  it("resolves a definition's own instances through the CANVAS's lookup before offering it", () => {
+    // A definition whose root is an instance of another component is judged by
+    // what that instance draws — and can only be once the lookup the canvas
+    // resolves against is handed in. Without it the root cannot be determined
+    // and the tile is withheld; with it, the root is the header's text and the
+    // page root takes it.
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const header = headerComponent();
+    const wrapper = {
+      ...headerComponent(),
+      id: "wrapper",
+      title: "Wrapped header",
+      document: {
+        formatVersion: 1,
+        kind: "component",
+        nodes: [
+          {
+            id: "w1",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "header" },
+          },
+        ],
+      } as unknown as ComponentDocument,
+    };
+
+    const { unmount } = render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[wrapper]}
+        // The wrapper is in the lookup; only what its root names is not.
+        componentDefinitions={lookupFor(wrapper)}
+      />
+    );
+    expect(screen.queryByRole("option", { name: /Wrapped header/ })).toBeNull();
+    unmount();
+
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        components={[wrapper]}
+        componentDefinitions={lookupFor(header, wrapper)}
+      />
+    );
+    expect(screen.getByRole("option", { name: /Wrapped header/ })).toBeTruthy();
+  });
+});
+
+describe("when the library was cut, or could not be read", () => {
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  /** The notices, or none: they are status regions, so that is how they are found. */
+  function notices(): HTMLElement[] {
+    return screen.queryAllByRole("status");
+  }
+
+  it("says nothing when every tier arrived whole, or is still arriving", () => {
+    // The control for the cases below, and the ordinary state: a notice that
+    // was always on screen would be one an author learns to read past.
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    expect(notices()).toEqual([]);
+
+    cleanup();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "ready", components: "ready" }}
+      />
+    );
+    expect(notices()).toEqual([]);
+  });
+
+  it("names the component tier as cut, and says what a left-out component looks like on the page", () => {
+    // The second sentence is the one nothing else says: an instance of a
+    // component the read left out draws as could-not-be-loaded, which without
+    // this reads as a component somebody deleted.
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ components: "cut" }}
+      />
+    );
+
+    const [status] = notices();
+    expect(status?.textContent).toContain("some components are not offered");
+    expect(status?.textContent).toContain("could not be loaded");
+    expect(status?.textContent).not.toContain("patterns");
+  });
+
+  it("names the pattern tier as cut without the sentence about the page", () => {
+    // A pattern left out is one the author cannot insert and nothing more: it
+    // was copied into the page when placed, so no instance of it can be
+    // waiting on the library.
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "cut" }}
+      />
+    );
+
+    const [status] = notices();
+    expect(status?.textContent).toContain("some patterns are not offered");
+    expect(status?.textContent).not.toContain("could not be loaded");
+  });
+
+  it("names both tiers in one sentence when both were cut", () => {
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "cut", components: "cut" }}
+      />
+    );
+
+    expect(notices()[0]?.textContent).toContain(
+      "some patterns and components are not offered"
+    );
+  });
+
+  it("says when a tier could not be read at all, apart from a cut one, and offers the retry", () => {
+    // Two different sentences for two different states — "some were left
+    // out" and "none could be loaded" — and only the second has a remedy the
+    // author can reach from here.
+    const retry = vi.fn();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "cut", components: "unavailable", retry }}
+      />
+    );
+
+    const [cut, unavailable] = notices();
+    expect(cut?.textContent).toContain("some patterns are not offered");
+    expect(unavailable?.textContent).toContain(
+      "components could not be loaded, so none are offered"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when a tier could not be RE-read, apart from one never read, and offers the retry", () => {
+    // A third sentence for a third state. The tiles are the last answer the
+    // host holds, so "none are offered" would be false beside them; what is
+    // true is that they may be out of date, and that a component on the page
+    // draws as it was rather than as it is.
+    const retry = vi.fn();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "stale", components: "stale", retry }}
+      />
+    );
+
+    const [stale] = notices();
+    expect(stale?.textContent).toContain(
+      "patterns and components could not be reloaded, so those offered may be out of date"
+    );
+    expect(stale?.textContent).toContain("draws as it was");
+    expect(stale?.textContent).not.toContain("none are offered");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the page sentence off a stale pattern tier", () => {
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ patterns: "stale" }}
+      />
+    );
+
+    expect(notices()[0]?.textContent).toContain(
+      "patterns could not be reloaded"
+    );
+    expect(notices()[0]?.textContent).not.toContain("draws as it was");
+  });
+
+  it("offers no retry when the host supplied none", () => {
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        library={{ components: "unavailable" }}
+      />
+    );
+
+    expect(notices()[0]?.textContent).toContain("could not be loaded");
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 });

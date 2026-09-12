@@ -48,7 +48,6 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { PaginatedResponse } from "../../types/pagination";
-import type { AccessControlService } from "../access";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
 import type { FieldGroupDataService } from "../field-groups/field-group-data-service";
@@ -90,7 +89,6 @@ export class CollectionEntryService extends BaseService {
     collectionService: DynamicCollectionService,
     relationshipService: CollectionRelationshipService,
     hookRegistry: HookRegistry,
-    accessControlService: AccessControlService,
     fieldGroupDataService?: FieldGroupDataService,
     rbacAccessControlService?: RBACAccessControlService,
     /** Normalized localization config (i18n M4) — forwarded to the query service. */
@@ -130,8 +128,6 @@ export class CollectionEntryService extends BaseService {
     this.accessService = new CollectionAccessService(
       adapter,
       logger,
-      collectionService,
-      accessControlService,
       rbacAccessControlService
     );
     this.hookService = new CollectionHookService(hookRegistry);
@@ -201,7 +197,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
-    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    /** Route authorization already ran the coarse RBAC gate, so it is skipped. */
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
@@ -228,7 +224,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
-    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    /** Route authorization already ran the coarse RBAC gate, so it is skipped. */
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
@@ -298,7 +294,7 @@ export class CollectionEntryService extends BaseService {
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
-    /** Route authorization already ran the coarse RBAC gate; stored rules run. */
+    /** Route authorization already ran the coarse RBAC gate, so it is skipped. */
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
@@ -997,6 +993,7 @@ export class CollectionEntryService extends BaseService {
        */
       disableRevalidate?: boolean;
       user?: UserContext;
+      overrideAccess?: boolean;
       authenticatedScope?: AuthenticatedScope;
     },
     entries: BulkUpdateEntry[],

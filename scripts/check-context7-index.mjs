@@ -22,8 +22,9 @@
  *   node scripts/check-context7-index.mjs
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 
 export const LIBRARY = "/nextlyhq/nextly";
 /** Overridable so a test can point the script at a port nothing listens on. */
@@ -65,31 +66,120 @@ function listField(config, name) {
  * The one root file the configuration means to keep.
  *
  * Context7 reads every root Markdown file whatever `folders` says, and the configuration
- * names the rest to exclude them. A cited root file that is neither the README nor named
- * there, such as a CHANGELOG Context7's defaults are trusted to drop, is a file the index
- * holds that the configuration never agreed to.
+ * names the rest to exclude them; its own default exclusions apply only to a configuration
+ * that names none, so nothing is trusted to them. A cited root file that is neither the
+ * README nor named is a file the index holds that the configuration never agreed to.
  */
 function isKeptRoot(path) {
   return path === README;
 }
 
+function isRoot(path) {
+  return !path.includes("/");
+}
+
+/** Whether a path has a segment a crawler may skip unasked: `.changeset/`, `.github/`. */
+function isHidden(path) {
+  return path.split("/").some(segment => segment.startsWith("."));
+}
+
+/** The listed folder a path sits under, or none. */
+function folderOf(path, folders) {
+  return folders.find(folder => path.startsWith(`${folder}/`));
+}
+
+/** Whether a path sits under one of the folders: the same lookup, read as a yes or no. */
 function isInside(path, folders) {
-  return folders.some(folder => path.startsWith(`${folder}/`));
+  return folderOf(path, folders) !== undefined;
 }
 
 /**
- * Why one cited path disagrees with the configuration, or `null`.
- *
- * A file must sit under a listed folder, or be the README; anything else the index cites is
- * a file it holds that the configuration never agreed to.
+ * What Context7 excludes on its own when a configuration names nothing. Its documentation
+ * leaves open whether these also apply to a configuration that names exclusions, so a
+ * file they name cannot witness a rule: its absence could be theirs. Read broader than
+ * the documented patterns on purpose; a candidate skipped is only the next one chosen.
  */
+const DEFAULT_FILES = /^(?:changelog\.mdx?|license\.md|code_of_conduct\.md)$/i;
+const DEFAULT_FOLDERS =
+  /archive|deprecated|legacy|previous|outdated|superseded|^old$|^zh-|^i18n$/i;
+
+function namedByDefaults(path) {
+  const segments = path.split("/");
+  return (
+    DEFAULT_FILES.test(segments.at(-1)) ||
+    segments.slice(0, -1).some(segment => DEFAULT_FOLDERS.test(segment))
+  );
+}
+
+/**
+ * How well a file witnesses a rule that excludes a set, lower first.
+ *
+ * The best witness is a file only the rule keeps out: absent, it shows the rule took. A
+ * hidden path may be skipped unasked and a file Context7's defaults name may be dropped by
+ * them, so such a file is asked only when the set holds nothing better; absent, it still
+ * shows the set is out one way or another, and retrievable, it still shows the rule did
+ * not take. A root file is held whatever `folders` says, so under that rule it can only be
+ * retrievable, and naming it in `excludeFiles` is the fix; it never witnesses that rule.
+ */
+const PREFERRED = 0;
+const FALLBACK = 1;
+const NEVER = null;
+
+function witnessRank(path) {
+  return isHidden(path) || namedByDefaults(path) ? FALLBACK : PREFERRED;
+}
+
+/**
+ * The rules a path is excluded by, first applicable first. An exclusion wins over an
+ * inclusion, which is the precedence Context7 documents for `excludeFolders` against
+ * `folders`; then a file must sit under a listed folder or be the README. An `excludeFiles`
+ * entry is a filename, not a path, and takes a file of that name anywhere in the tree.
+ *
+ * Each rule says what a cited path under it means, and names the set it excludes, so that
+ * one tracked file of the set can be probed to show the rule took. A rule that excludes
+ * files by name is witnessed by one of them, the root file first in git's order; a rule
+ * that excludes a folder or everything outside the listed ones, by a file it would
+ * otherwise hold.
+ */
+const EXCLUSION_RULES = [
+  {
+    applies: (path, config) =>
+      listField(config, "excludeFiles").includes(basename(path)),
+    indexed: path => `${path} is in excludeFiles and was indexed anyway`,
+    set: path => `excludeFiles entry ${basename(path)}`,
+    // The entry names the file, so the root one is the witness and a file of
+    // the same name elsewhere stands in only when there is no root one.
+    rank: path => (isRoot(path) ? PREFERRED : witnessRank(path)),
+  },
+  {
+    applies: (path, config) =>
+      isInside(path, listField(config, "excludeFolders")),
+    indexed: path =>
+      `${path} is under an excludeFolders entry and was indexed anyway`,
+    set: (path, config) =>
+      `excludeFolders entry ${folderOf(path, listField(config, "excludeFolders"))}`,
+    rank: witnessRank,
+  },
+  {
+    applies: (path, config) =>
+      !isInside(path, listField(config, "folders")) && !isKeptRoot(path),
+    indexed: (path, config) =>
+      `${path} is outside folders ${JSON.stringify(listField(config, "folders"))} and is not the README, and was indexed`,
+    set: (path, config) =>
+      `folders ${JSON.stringify(listField(config, "folders"))}`,
+    rank: path => (isRoot(path) ? NEVER : witnessRank(path)),
+  },
+];
+
+/** The first rule that excludes a path, or `null` when the configuration keeps it. */
+function excludingRule(path, config) {
+  return EXCLUSION_RULES.find(rule => rule.applies(path, config)) ?? null;
+}
+
+/** Why one cited path disagrees with the configuration, or `null`. */
 export function citationFinding(path, config) {
-  const folders = listField(config, "folders");
-  if (listField(config, "excludeFiles").includes(path)) {
-    return `${path} is in excludeFiles and was indexed anyway`;
-  }
-  if (isInside(path, folders) || isKeptRoot(path)) return null;
-  return `${path} is outside folders ${JSON.stringify(folders)} and is not the README, and was indexed`;
+  const rule = excludingRule(path, config);
+  return rule ? rule.indexed(path, config) : null;
 }
 
 /**
@@ -106,18 +196,6 @@ export function citationFindings(cited, config) {
   return [...cited].map(path => citationFinding(path, config)).filter(Boolean);
 }
 
-/**
- * A sentence the index must be able to return, taken from the file rather than written
- * here, so a rewrite of the page cannot leave this comparing against words that no longer
- * exist. The first second-level heading is specific enough to belong to one page.
- */
-export function firstHeading(text, name) {
-  const match = /^##\s+(.+)$/m.exec(text);
-  if (!match)
-    throw new Error(`${name}: no second-level heading to use as a marker`);
-  return match[1].trim();
-}
-
 /** Every heading in a file, top-level and second-level, in order. */
 export function headings(text) {
   return [...text.matchAll(/^#{1,2}\s+(.+)$/gm)].map(match => match[1].trim());
@@ -132,31 +210,55 @@ function markerLines(text) {
 }
 
 /**
- * A sentence of a file that no documentation page contains.
+ * A sentence of a file that none of the other texts contains.
  *
  * The probe asks the index for the sentence and reads the answer, so a heading the docs
  * also use would find the docs: "Overview" and "packages" both do. Headings are tried
  * first, then any line of prose, which is what a one-line `CLAUDE.md` has. `null` means
  * the file offers nothing to ask for, and the caller must not read that as a pass.
  */
-export function probeMarker(text, corpus) {
+export function probeMarker(text, others) {
   const candidates = [...headings(text), ...markerLines(text)];
-  return candidates.find(candidate => !corpus.includes(candidate)) ?? null;
+  const shared = candidate => others.some(other => other.includes(candidate));
+  return candidates.find(candidate => !shared(candidate)) ?? null;
 }
 
-/** The documentation, concatenated, for deciding what a marker must not share. */
-function docsCorpus(root) {
-  const out = [];
-  const walk = dir => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".mdx"))
-        out.push(readFileSync(full, "utf-8"));
+/** The Markdown and MDX files git tracks, which is the set Context7 can have read. */
+function trackedText(root) {
+  const out = execFileSync(
+    "git",
+    ["ls-files", "-z", "--", "*.md", "*.mdx", "**/*.md", "**/*.mdx"],
+    {
+      cwd: root,
+      encoding: "utf-8",
     }
-  };
-  walk(join(root, "docs"));
-  return out.join("\n");
+  );
+  return out.split("\0").filter(Boolean);
+}
+
+/**
+ * The text of every tracked Markdown file, by path, read once for a run.
+ *
+ * A probe returns whatever the index holds for a topic and cannot say which file it came
+ * from, so a marker shared with any other file the index may hold would answer for the
+ * wrong one: "Quickstart" heads the root README and two package READMEs. Every marker is
+ * therefore chosen against everything else here, and a run chooses one per kept control
+ * and per excluded set, so the tree is read once and each choice reads the same map.
+ * Tracked files only, because an untracked note on one checkout is not something Context7
+ * has read.
+ */
+export function readCorpus(root) {
+  return new Map(
+    trackedText(root).map(name => [
+      name,
+      readFileSync(join(root, name), "utf-8"),
+    ])
+  );
+}
+
+/** Every text of the corpus but one file's: what a marker for that file must not share. */
+function othersOf(corpus, name) {
+  return [...corpus].filter(([other]) => other !== name).map(([, text]) => text);
 }
 
 /**
@@ -192,7 +294,10 @@ async function retrievable(get, api, marker, name) {
   if (answer.status !== 200) {
     throw new Unanswerable(`probing for ${name} answered ${answer.status}`);
   }
-  return answer.body.includes(marker);
+  return {
+    found: answer.body.includes(marker),
+    cites: citedPaths(answer.body),
+  };
 }
 
 /** A JSON body, or `Unanswerable`: a truncated or non-JSON answer is no verdict either. */
@@ -204,33 +309,85 @@ function parseAnswer(body, what) {
   }
 }
 
-/** The library's search entry, once it exists and has finished indexing. */
-async function finalizedEntry(get, api) {
+/** The search results as a list, or `Unanswerable` when the answer has another shape. */
+async function searchResults(get, api) {
   const search = await get(
     `${api}/search?query=${encodeURIComponent("nextly")}`
   );
   if (search.status !== 200)
     throw new Unanswerable(`search answered ${search.status}`);
-  const entry = parseAnswer(search.body, "search").results?.find(
-    result => result.id === LIBRARY
+  const { results } = parseAnswer(search.body, "search");
+  if (!Array.isArray(results))
+    throw new Unanswerable("search answered without a list of results");
+  return results;
+}
+
+/** The library's search entry, once it exists and has finished indexing. */
+async function finalizedEntry(get, api) {
+  const entry = (await searchResults(get, api)).find(
+    result => result?.id === LIBRARY
   );
   if (!entry) {
     throw new Unanswerable(
       `${LIBRARY} is not in Context7's search results; register it first`
     );
   }
-  if (entry.state !== "finalized") {
+  if (entry.state !== "finalized")
     throw new Unanswerable(`${LIBRARY} is in state "${entry.state}"`);
-  }
   return entry;
 }
 
-/** A marker for a file, or `Unanswerable` when the file offers nothing to ask for. */
-function markerFor(root, name, corpus) {
-  const marker = probeMarker(readFileSync(join(root, name), "utf-8"), corpus);
+/** A marker for a tracked file, or `Unanswerable` when it offers nothing of its own to ask for. */
+export function markerFor(corpus, name) {
+  if (!corpus.has(name))
+    throw new Unanswerable(
+      `${name} is not tracked, so the index cannot have read it`
+    );
+  const marker = probeMarker(corpus.get(name), othersOf(corpus, name));
   if (marker === null)
-    throw new Unanswerable(`${name} offers no sentence to ask for`);
+    throw new Unanswerable(`${name} offers no sentence of its own to ask for`);
   return marker;
+}
+
+/**
+ * One tracked file for each set the configuration excludes, with a sentence of its own.
+ *
+ * A rule takes for its whole set or for none of it, so one file answers for the set, where
+ * the sample of citations can miss a small folder entirely. The files are taken by rank,
+ * then in git's order, and the first with a sentence of its own is the witness; a set whose
+ * files all share every sentence cannot be probed and says so rather than passing. A set
+ * with no tracked file excludes nothing, and one whose files can never witness it (root
+ * files under the folders rule) is the citation rule's business; neither is probed.
+ */
+export function witnesses(corpus, config) {
+  const sets = new Map();
+  for (const name of corpus.keys()) {
+    const rule = excludingRule(name, config);
+    const rank = rule?.rank(name);
+    if (!rule || rank === NEVER) continue;
+    const set = rule.set(name, config);
+    if (!sets.has(set)) sets.set(set, []);
+    sets.get(set).push({ name, rank });
+  }
+  return [...sets].map(([set, files]) => ({
+    set,
+    ...witnessOf(
+      corpus,
+      set,
+      files.sort((a, b) => a.rank - b.rank).map(file => file.name)
+    ),
+  }));
+}
+
+/** The first of a set's files that offers a sentence of its own, with that sentence. */
+function witnessOf(corpus, set, names) {
+  for (const name of names) {
+    const marker = probeMarker(corpus.get(name), othersOf(corpus, name));
+    if (marker !== null) return { name, marker };
+  }
+  throw new Unanswerable(
+    `no file of ${set} offers a sentence of its own to ask for`
+  );
 }
 
 /**
@@ -241,52 +398,47 @@ function markerFor(root, name, corpus) {
  * since the citation sample cannot. A control that fails is a finding, and the exclusions
  * are then not probed at all: their absences would prove nothing.
  */
-async function keptControls({ root, api, get, corpus }) {
-  const kept = [
-    [
-      DOCS_WITNESS,
-      firstHeading(
-        readFileSync(join(root, DOCS_WITNESS), "utf-8"),
-        DOCS_WITNESS
-      ),
-    ],
-    [README, markerFor(root, README, corpus)],
-  ];
+async function keptControls({ corpus, api, get }) {
+  const kept = [DOCS_WITNESS, README].map(name => [
+    name,
+    markerFor(corpus, name),
+  ]);
   const findings = [];
   for (const [name, marker] of kept) {
-    if (await retrievable(get, api, marker, name)) continue;
+    const answer = await retrievable(get, api, marker, name);
+    // The sentence must come back AND be cited from the file it was taken from: a
+    // marker answered from some other file would be a control that never looked.
+    if (answer.found && answer.cites.has(name)) continue;
     findings.push(
-      `the index cannot return "${marker}" from ${name}; an absence would prove nothing`
+      `the index cannot return "${marker}" cited from ${name}; an absence would prove nothing`
     );
   }
   return findings;
 }
 
 /**
- * Every excluded file, probed for a sentence of its own. Not a sample of them, and one
- * that offers nothing to ask for stops the run: a "not probed" would read as a pass to
- * whoever only sees the status.
+ * Every set the configuration excludes, probed through its witness for a sentence of its
+ * own. Not a sample of the sets: each rule gets its probe, and a witness that offers
+ * nothing to ask for stops the run, since a "not probed" would read as a pass to whoever
+ * only sees the status.
  */
-async function exclusionFindings({ root, api, get, config, corpus }) {
+async function exclusionFindings({ corpus, api, get, config }) {
   const findings = [];
-  for (const name of listField(config, "excludeFiles")) {
-    if (!existsSync(join(root, name))) continue;
-    const marker = markerFor(root, name, corpus);
-    if (await retrievable(get, api, marker, name)) {
-      findings.push(
-        `"${marker}" from ${name} is retrievable; its exclusion did not take`
-      );
-    }
+  for (const { set, name, marker } of witnesses(corpus, config)) {
+    const answer = await retrievable(get, api, marker, name);
+    if (!answer.found && !answer.cites.has(name)) continue;
+    findings.push(
+      `${name} is retrievable ("${marker}" came back, or the file was cited); ${set} did not take`
+    );
   }
   return findings;
 }
 
 /** The findings the index earns against the configuration, given a working library. */
-async function indexFindings({ root, api, get, config, cited }) {
-  const corpus = docsCorpus(root);
+async function indexFindings({ corpus, api, get, config, cited }) {
   const findings = [
     ...citationFindings(cited, config),
-    ...(await keptControls({ root, api, get, corpus })),
+    ...(await keptControls({ corpus, api, get })),
   ];
   if (
     findings.some(finding => finding.includes("an absence would prove nothing"))
@@ -295,7 +447,7 @@ async function indexFindings({ root, api, get, config, cited }) {
   }
   return [
     ...findings,
-    ...(await exclusionFindings({ root, api, get, config, corpus })),
+    ...(await exclusionFindings({ corpus, api, get, config })),
   ];
 }
 
@@ -339,9 +491,10 @@ export async function verify({ root, api = API, get = fetchText }) {
       throw new Unanswerable(`${LIBRARY} answered ${dump.status}`);
     const cited = citedPaths(dump.body);
 
+    const corpus = readCorpus(root);
     return report(
       cited,
-      await indexFindings({ root, api, get, config, cited })
+      await indexFindings({ corpus, api, get, config, cited })
     );
   } catch (error) {
     if (error instanceof Unanswerable) {

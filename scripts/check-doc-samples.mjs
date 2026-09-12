@@ -350,6 +350,35 @@ export const isModule = (code, extension = "tsx") => {
  * by the next deploy. This is where they can actually be fixed, so this is
  * where they are gated.
  */
+/**
+ * The README of every package and template, which is documentation a user
+ * meets BEFORE anything under `docs/`.
+ *
+ * These carry install and usage examples, and until they were added here
+ * nothing compiled them: `check-docs-compile` reads `docs/` and this gate read
+ * `docs/`, so the first code a reader copies was the only code no gate had an
+ * opinion about. One of them called `defineConfig` without importing it, which
+ * is a paste that cannot work and which review rather than tooling caught.
+ *
+ * Collected here rather than by a second checker so they pass through the
+ * SAME extraction, the same reader-owned classification and the same ratchet.
+ * A parallel gate would need its own copy of all three, and a second baseline
+ * is a second thing that goes stale — which this repository has already been
+ * red over once.
+ */
+const README_ROOTS = ["packages", "templates"];
+
+function readmePages() {
+  return README_ROOTS.flatMap(base => {
+    const dir = join(ROOT, base);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(dir, entry.name, "README.md"))
+      .filter(file => existsSync(file));
+  });
+}
+
 export function collectDocSamples() {
   const root = join(ROOT, "docs");
   if (!existsSync(root)) return null;
@@ -365,7 +394,7 @@ export function collectDocSamples() {
           ? [join(dir, e.name)]
           : []
     );
-  const pages = walk(root).map(full => ({
+  const pages = [...walk(root), ...readmePages()].map(full => ({
     file: relative(ROOT, full),
     text: readFileSync(full, "utf-8"),
   }));

@@ -82,37 +82,21 @@ describe("instance accessors are published where their callers can reach them", 
     expect(doc).toContain("plugin code doing server work outside a route");
   });
 
-  it("does not forbid the callers it names, however the prohibition is worded", () => {
-    // A list of forbidden phrasings is the wrong shape for this. "must not
-    // call" was covered and "should not call" was not, and the next wording
-    // nobody anticipates passes just as easily. So it is structural instead.
-    //
-    // Every sentence mentioning this function's audience is examined, and none
-    // of them may be a prohibition. A docblock cannot then name plugins as
-    // callers in one breath and warn them off in the next, whatever verb it
-    // reaches for.
+  it("marks the async accessor public, and never internal", () => {
+    // Whether a SENTENCE forbids the callers the block names is a question
+    // about English: a pattern asked it misses the next wording ("must never
+    // be used by") or catches a description ("is never used before boot"). The
+    // TSDoc release tag is the same statement as data. `@internal` is how this
+    // repository says "not for consumers", so the block carries `@public` and
+    // must not carry `@internal`, and a reader who adds a prose ban beside a
+    // `@public` tag has written a contradiction the tag decides.
     const doc = docblockFor(
       initSource,
       "export async function getCachedNextly"
     );
 
-    const sentences = doc
-      .replace(/^\s*\*+ ?/gm, "")
-      .split(/(?<=[.:])\s+/)
-      .map(line => line.trim())
-      .filter(line => /plugin|user code|caller/i.test(line));
-
-    // The control. With nothing matched the assertion below is vacuous, and
-    // would stay green through a docblock that never names the audience at all.
-    expect(sentences.length).toBeGreaterThan(0);
-
-    const forbidding = sentences.filter(line =>
-      /\b(do not|don't|does not|must not|should not|never|cannot|not for|internal use only)\b/i.test(
-        line
-      )
-    );
-
-    expect(forbidding).toEqual([]);
+    expect(doc).toMatch(/^\s*\*\s*@public\s*$/m);
+    expect(doc).not.toMatch(/@internal\b/);
   });
 
   it("does not claim the root avoids the Next peer dependency", () => {

@@ -898,18 +898,16 @@ export class CollectionBulkService extends BaseService {
     // access denial is a request-level authorization failure, not a per-item
     // partial failure. Throw NextlyError.forbidden so the dispatcher emits
     // a 403 error envelope instead of a 200 with a synthetic empty-id row.
-    const accessDenied = await this.accessService.checkCollectionAccess(
-      params.collectionName,
-      "update",
-      accessUser,
-      undefined,
-      undefined,
-      params.overrideAccess,
-      params.routeAuthorized,
+    const accessDenied = await this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: "update",
+      user: accessUser,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       // A scoped API key is judged on its own grants here too, so the session
       // super-admin bypass does not apply to it on the collection-level gate.
-      params.authenticatedScope
-    );
+      authenticatedScope: params.authenticatedScope,
+    });
     if (accessDenied) {
       throw NextlyError.forbidden({
         logContext: {
@@ -923,35 +921,12 @@ export class CollectionBulkService extends BaseService {
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
     // UPDATE access was already checked above, so this runs with overrideAccess
     // to skip the READ rules (a role allowed to update but not read must still
-    // see its targets) and `status: "all"` to keep drafts enumerable — but it
-    // is constrained to rows the caller may actually UPDATE via the update
-    // owner constraint. That means an owner-only update enumerates only owned
-    // rows, so non-updatable ids are never surfaced as per-id failures or
-    // counted against the limit. getOwnerConstraint returns null for trusted /
-    // super-admin callers and for non-owner-only rules, so those enumerate all
-    // matching rows. Each row is still gated per-row in bulkUpdateEntries.
-    const updateOwnerConstraint = await this.accessService.getOwnerConstraint(
-      params.collectionName,
-      "update",
-      params.user,
-      params.overrideAccess,
-      // Scope the enumeration too: a super-admin-owned key on an owner-only
-      // collection must enumerate only its own rows, so the response ids, counts,
-      // and limit check never expose rows the owner constraint should hide.
-      params.authenticatedScope
-    );
-    const updateEnumerationWhere: WhereFilter = updateOwnerConstraint
-      ? {
-          and: [
-            params.where,
-            {
-              [updateOwnerConstraint.field]: {
-                equals: updateOwnerConstraint.value,
-              },
-            },
-          ],
-        }
-      : params.where;
+    // see its targets) and `status: "all"` to keep drafts enumerable. The
+    // collection-level update gate above is what decides whether this caller
+    // may update here at all; there is no per-row update predicate left to
+    // narrow the enumeration by, so it enumerates every matching row. Each row
+    // is still gated per-row in bulkUpdateEntries.
+    const updateEnumerationWhere: WhereFilter = params.where;
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
       where: updateEnumerationWhere,
@@ -1104,18 +1079,16 @@ export class CollectionBulkService extends BaseService {
     // 1. Check collection-level access FIRST. Phase 4.5: collection-wide
     // access denial is a request-level error, not a per-item failure;
     // throw so the dispatcher emits a 403 error envelope.
-    const accessDenied = await this.accessService.checkCollectionAccess(
-      params.collectionName,
-      "delete",
-      accessUser,
-      undefined,
-      undefined,
-      params.overrideAccess,
-      params.routeAuthorized,
+    const accessDenied = await this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: "delete",
+      user: accessUser,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
       // Judge a scoped API key on its own delete grant at the gate, so a
       // super-admin-owned key without delete fails fast rather than enumerating.
-      params.authenticatedScope
-    );
+      authenticatedScope: params.authenticatedScope,
+    });
     if (accessDenied) {
       throw NextlyError.forbidden({
         logContext: {
@@ -1128,32 +1101,12 @@ export class CollectionBulkService extends BaseService {
 
     // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
     // the READ rules (a role allowed to delete but not read must still see its
-    // targets) and `status: "all"` keeps drafts enumerable, but the delete
-    // owner constraint scopes it to rows the caller may actually DELETE, so an
-    // owner-only delete enumerates only owned rows and never surfaces
-    // non-deletable ids. Null for trusted / super-admin / non-owner-only rules
-    // (enumerate all). Each row is still gated per-row in bulkDeleteEntries.
-    const deleteOwnerConstraint = await this.accessService.getOwnerConstraint(
-      params.collectionName,
-      "delete",
-      params.user,
-      params.overrideAccess,
-      // A scoped API key must keep the owner predicate even when owned by a
-      // super-admin, so a where-clause delete only enumerates rows the key owns.
-      params.authenticatedScope
-    );
-    const deleteEnumerationWhere: WhereFilter = deleteOwnerConstraint
-      ? {
-          and: [
-            params.where,
-            {
-              [deleteOwnerConstraint.field]: {
-                equals: deleteOwnerConstraint.value,
-              },
-            },
-          ],
-        }
-      : params.where;
+    // targets) and `status: "all"` keeps drafts enumerable. The collection-level
+    // delete gate above decides whether this caller may delete here at all;
+    // there is no per-row delete predicate left to scope the enumeration by, so
+    // it enumerates every matching row. Each row is still gated per-row in
+    // bulkDeleteEntries.
+    const deleteEnumerationWhere: WhereFilter = params.where;
     const listResult = await this.queryService.listEntries({
       collectionName: params.collectionName,
       where: deleteEnumerationWhere,
@@ -1304,20 +1257,17 @@ export class CollectionBulkService extends BaseService {
     // can seed without an ambient user.
     const accessUser = params.overrideAccess ? undefined : params.user;
     const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>(
-        params.collectionName,
-        "create",
-        accessUser,
-        undefined,
-        undefined,
-        params.overrideAccess,
-        undefined,
+      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+        collectionName: params.collectionName,
+        operation: "create",
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
         // Judge a scoped API key on its OWN create grant, not the key owner's:
         // otherwise a super-admin-owned key without create-<slug> could batch
         // create via this collection-level gate (the transition pre-resolve
         // below already carries the scope, but this gate ran without it).
-        params.authenticatedScope
-      );
+        authenticatedScope: params.authenticatedScope,
+      });
     if (accessDenied) {
       // All entries fail due to access denial
       return {
@@ -1454,19 +1404,14 @@ export class CollectionBulkService extends BaseService {
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
     const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>(
-        params.collectionName,
-        "create",
-        params.user,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+        collectionName: params.collectionName,
+        operation: "create",
+        user: params.user,
         // Judge a scoped API key on its OWN create grant, not the key owner's.
-        params.authenticatedScope,
-        undefined,
-        tx.getDrizzle()
-      );
+        authenticatedScope: params.authenticatedScope,
+        executor: tx.getDrizzle(),
+      });
     if (accessDenied) {
       return {
         successful: 0,
@@ -1552,6 +1497,13 @@ export class CollectionBulkService extends BaseService {
     params: {
       collectionName: string;
       user?: UserContext;
+      /**
+       * D35 system elevation, as on `createEntries`: the collection gate, the
+       * transition pre-resolve and every per-entry write skip access. Without
+       * it a trusted batch update had no trusted path: a seed or an internal
+       * caller with no user was judged as an anonymous one at the gate.
+       */
+      overrideAccess?: boolean;
       authenticatedScope?: AuthenticatedScope;
     },
     entries: BulkUpdateEntry[],
@@ -1567,22 +1519,20 @@ export class CollectionBulkService extends BaseService {
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For update, we check access without document since we don't have it yet
     // Owner-only checks will be done per-entry when we fetch the document
+    const accessUser = params.overrideAccess ? undefined : params.user;
     const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>(
-        params.collectionName,
-        "update",
-        params.user,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+        collectionName: params.collectionName,
+        operation: "update",
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
         // Judge a scoped API key on its OWN update grant, not the key owner's:
         // otherwise a super-admin-owned key without update-<slug> could
         // batch-update via this collection-level gate (the transition
         // pre-resolve below already carries the scope, but this gate ran without
         // it).
-        params.authenticatedScope
-      );
+        authenticatedScope: params.authenticatedScope,
+      });
     if (accessDenied) {
       // All entries fail due to access denial
       return {
@@ -1603,7 +1553,8 @@ export class CollectionBulkService extends BaseService {
     const transitionAuth =
       await this.mutationService.resolveTransitionAuthorization({
         collectionName: params.collectionName,
-        accessUser: params.user,
+        accessUser,
+        overrideAccess: params.overrideAccess,
         authenticatedScope: params.authenticatedScope,
       });
 
@@ -1717,19 +1668,14 @@ export class CollectionBulkService extends BaseService {
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
     const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>(
-        params.collectionName,
-        "update",
-        params.user,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+        collectionName: params.collectionName,
+        operation: "update",
+        user: params.user,
         // Judge a scoped API key on its OWN update grant, not the key owner's.
-        params.authenticatedScope,
-        undefined,
-        tx.getDrizzle()
-      );
+        authenticatedScope: params.authenticatedScope,
+        executor: tx.getDrizzle(),
+      });
     if (accessDenied) {
       return {
         successful: 0,
@@ -1829,11 +1775,11 @@ export class CollectionBulkService extends BaseService {
     // Note: For delete, we check access without document since we don't have it yet
     // Owner-only checks will be done per-entry when we fetch the document
     const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>(
-        params.collectionName,
-        "delete",
-        params.user
-      );
+      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+        collectionName: params.collectionName,
+        operation: "delete",
+        user: params.user,
+      });
     if (accessDenied) {
       // All entries fail due to access denial
       return {
@@ -1988,18 +1934,12 @@ export class CollectionBulkService extends BaseService {
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
     const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>(
-        params.collectionName,
-        "delete",
-        params.user,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        tx.getDrizzle()
-      );
+      await this.accessService.checkCollectionAccess<BatchOperationResult>({
+        collectionName: params.collectionName,
+        operation: "delete",
+        user: params.user,
+        executor: tx.getDrizzle(),
+      });
     if (accessDenied) {
       return {
         successful: 0,
@@ -2160,6 +2100,7 @@ export class CollectionBulkService extends BaseService {
       collectionName: string;
       user?: UserContext;
       authenticatedScope?: AuthenticatedScope;
+      overrideAccess?: boolean;
       /** Named so the per-item write's request facts survive the narrowing. */
       request?: Request;
     },

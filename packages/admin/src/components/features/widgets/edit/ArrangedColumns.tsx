@@ -58,9 +58,22 @@ function EmptyArrangement({
       data-testid="widget-grid-empty"
       className="col-span-full rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
     >
-      {isEditing
-        ? "Every card is put away. Add one back below, or reset to the default arrangement."
-        : "Your dashboard has no cards on it. Edit it to bring one back, or reset to the default arrangement."}
+      {isEditing ? (
+        "Every card is put away. Add one back below, or reset to the default arrangement."
+      ) : (
+        <>
+          Your dashboard has no cards on it.{" "}
+          {/* Editing is offered from `md` up, so the way back is said per
+              width: naming a control a narrow screen does not show would
+              send the reader looking for it. */}
+          <span className="hidden md:inline">
+            Edit it to bring one back, or reset to the default arrangement.
+          </span>
+          <span className="md:hidden">
+            Edit it on a larger screen to bring one back.
+          </span>
+        </>
+      )}
     </p>
   );
 }

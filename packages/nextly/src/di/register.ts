@@ -94,6 +94,8 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
+import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
+import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { HookRegistry } from "../hooks/hook-registry";
@@ -106,6 +108,7 @@ import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import { openBootMigrationsGate } from "../init/boot-migrations-gate";
+import { unwrittenSlugs } from "../init/sync-outcome";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -125,7 +128,10 @@ import { resolvePlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
-import { applyPluginSchemaContributionsDeferred } from "../plugins/schema/apply-contributions";
+import {
+  applyPluginSchemaContributionsDeferred,
+  assertRegisteredKeepTheirKind,
+} from "../plugins/schema/apply-contributions";
 import { reconcileBuilderContributions } from "../plugins/schema/reconcile-builder-contributions";
 import {
   collectUnresolvedRelationTargets,
@@ -838,6 +844,17 @@ export async function registerServices(
     // below keeps a plugin-free or unchanged boot write-free (no registry
     // writes, no DDL, no apply-helper imports) — the byte-for-byte no-op path.
     const builderEntities = await loadBuilderEntities(adapter);
+
+    assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
+
+    // 🔴 One slug belongs to one KIND, and this is the first point in the boot
+    // that can see both sides of it: the fold refused a plugin taking a slug
+    // the config's own entities hold, but the Builder's entities live in the
+    // `dynamic_*` tables and were unknowable then. Refused here rather than at
+    // registration, where whichever of the two registers second is rejected by
+    // a message naming neither the other kind nor its owner -- and where, for
+    // a permission named `read-<slug>` and a code rule resolved by slug alone,
+    // the install would be ambiguous even if both could be stored.
     const { entities, unresolved } = reconcileBuilderContributions(
       deferredExtends,
       builderEntities
@@ -1863,6 +1880,32 @@ function registerCodeDefinedAccess(
   }
 }
 
+/**
+ * Replace one kind's deferral set from a boot sync that actually RAN.
+ *
+ * 🔴 Called only after the sync resolved, never from the reset that precedes
+ * it. `resetWidgetRegistries` runs before any metadata has been synced, so
+ * clearing there would publish "nothing is withheld" on the strength of work
+ * that has not happened -- and the sync can then fail and be caught, leaving
+ * the registry as stale as the previous reload found it while the set says
+ * otherwise. Replacing it HERE means a previous boot's refusal is cleared by
+ * the pass that earned the right to clear it, and retained when the sync
+ * throws, because this line is never reached.
+ *
+ * The set is the slugs whose registry WRITE did not land -- not everything the
+ * sync reported an error for. A slug that errored AFTER its row was written
+ * has current metadata, and withholding its source would hide a working card.
+ */
+async function publishBootDeferrals(
+  kind: DeferrableEntityKind,
+  syncResult: unknown
+): Promise<void> {
+  const { setDeferredEntities } = await import(
+    "../domains/widgets/deferred-entities"
+  );
+  setDeferredEntities(kind, unwrittenSlugs(syncResult));
+}
+
 async function syncCodeFirstCollections(
   adapter: DrizzleAdapter,
   logger: Logger,
@@ -1949,6 +1992,11 @@ async function syncCodeFirstCollections(
   logger.info?.(
     `Collections registered: ${syncResult.created.length} created, ${syncResult.updated.length} updated, ${syncResult.unchanged.length} unchanged`
   );
+
+  // This boot has now spoken for the collections: whatever a previous boot's
+  // reload refused is either fixed or reported here, so its set is replaced
+  // rather than inherited.
+  await publishBootDeferrals("collection", syncResult);
 
   // On a fresh database the dynamic_collections table hasn't been created
   // by migrations yet, so every sync fails with "does not exist". That's
@@ -2499,19 +2547,29 @@ async function syncCodeFirstSingles(
       webhooks: storedWebhookRecording(single.webhooks),
     }));
 
+  // Declared out here so the per-single failures can be judged AFTER the catch
+  // below. Judged inside it, the refusal this raises would be caught by the
+  // same catch and turned back into the warning it exists to replace.
+  let singleSyncResult: Awaited<
+    ReturnType<SingleRegistryService["syncCodeFirstSingles"]>
+  > | null = null;
   try {
-    const singleSyncResult = await singleRegistry.syncCodeFirstSingles(
+    singleSyncResult = await singleRegistry.syncCodeFirstSingles(
       codeFirstSingleConfigs
     );
     logger.info?.(
       `Singles registered: ${singleSyncResult.created.length} created, ${singleSyncResult.updated.length} updated, ${singleSyncResult.unchanged.length} unchanged`
     );
+    // The singles' half of the same statement, on the path where their sync
+    // actually ran.
+    await publishBootDeferrals("single", singleSyncResult);
     // Expose the live code-first snapshot (for function/structured defaults)
-    // only for singles that synced: a failed slug's serialized metadata did not
-    // advance, so it is kept off the snapshot and falls back to those fields.
-    const failedSingleSlugs = new Set(
-      singleSyncResult.errors.map(entry => entry.slug)
-    );
+    // only for singles that synced. Narrowed to the writes that did NOT land:
+    // a slug the sync pushed onto `created` or `updated` before its permission
+    // seeding threw appears in `errors` too, and its row is current -- keeping
+    // its PRIOR snapshot there would pair new fields with stale metadata, the
+    // very thing this option exists to prevent.
+    const failedSingleSlugs = new Set(unwrittenSlugs(singleSyncResult));
     singleRegistry.setCodeFirstSingles(transformedConfig.singles, {
       keepPriorFor: failedSingleSlugs,
     });
@@ -2520,6 +2578,44 @@ async function syncCodeFirstSingles(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
     );
     return;
+  }
+
+  // 🔴 The same reading the collections sync makes of its own errors, and for
+  // the same reason. On a fresh database the registry table does not exist yet
+  // and every entry fails that way, which must not stop the app from reaching
+  // `/setup`. ANY OTHER failure means this single did not register at all -- a
+  // slug a collection already owns is refused right here, by the guard that
+  // keeps one slug to one kind -- and the app then ran without it, answering
+  // not-found for a single the config declares. Reported rather than
+  // swallowed, so the boot says which single and why.
+  if (singleSyncResult.errors.length > 0) {
+    const allAreMissingTable = singleSyncResult.errors.every(
+      entry =>
+        entry.error.includes("does not exist") ||
+        entry.error.includes("no such table") ||
+        entry.error.includes("doesn't exist")
+    );
+    if (allAreMissingTable) {
+      logger.warn?.(
+        `Singles sync skipped (database tables not yet created — run migrations first). ${singleSyncResult.errors.length} single(s) deferred.`
+      );
+    } else {
+      // `NextlyError`, unlike the bare throw the collections path still
+      // carries: the slugs and the driver's words are operator detail, so they
+      // ride in `logContext` while the thrown message stays canonical.
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage: `Failed to register ${singleSyncResult.errors.length} single(s)`,
+        logContext: {
+          reason: "single-sync-failed",
+          singles: singleSyncResult.errors.map(entry => ({
+            slug: entry.slug,
+            error: entry.error,
+          })),
+        },
+      });
+    }
   }
 
   // dynamic_singles) only describe what SHOULD exist; the actual storage

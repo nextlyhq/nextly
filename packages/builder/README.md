@@ -195,7 +195,7 @@ import { BuilderShell } from "@nextlyhq/builder/shell";
 // Server-callable. No React in any of them.
 import { BUILDER_PACKAGE_NAME, rectToHost } from "@nextlyhq/builder";
 import { fitsFullShell, PANEL_BOUNDS } from "@nextlyhq/builder/shell-state";
-import { rectToHost } from "@nextlyhq/builder/geometry";
+import { pointToCanvas } from "@nextlyhq/builder/geometry";
 ```
 
 The split is not tidiness. A banner applies to a whole artifact and everything

@@ -7,10 +7,10 @@
  * rather than the coarser one that is easier to ask for.
  *
  * The route gate they each run first is per-SLUG RBAC, and it is one axis short
- * of the question. A Single can carry stored access rules — owner-only, role
- * based, custom — that deny a caller holding the coarse permission, and those
- * rules are evaluated against the loaded document rather than the request. A
- * gate that stops at the permission therefore authorizes a disclosure the real
+ * of the question. A Single's own read is additionally bounded by its
+ * draft/published lifecycle and by whether the document exists at all, neither
+ * of which the coarse permission expresses. A gate that stops at the permission
+ * therefore authorizes a disclosure the real
  * operation would refuse.
  *
  * **`routeAuthorized` is the CALLER's to state, and it is required.** It tells
@@ -31,7 +31,6 @@
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors/nextly-error";
-import { AccessControlService } from "../../../services/access/access-control-service";
 import type { UserContext } from "../types";
 
 import { checkSingleAccess } from "./single-query-service";
@@ -41,7 +40,7 @@ export interface SingleAccessSubject {
   user: UserContext;
   /**
    * A scoped API key is judged on its OWN grant, so a key owned by a super
-   * admin does not inherit that owner's stored rules.
+   * admin does not inherit that owner's session bypass.
    */
   actor?: AuthenticatedScope;
   /**
@@ -56,9 +55,9 @@ export interface SingleAccessSubject {
   routeAuthorized: boolean;
   /**
    * Which translation is being authorized. A localized Single is a different
-   * document per language, and an owner-only or custom rule can answer
-   * differently for each — so a probe that reads the default translation
-   * authorizes a document the caller may not be asking about.
+   * document per language, and its lifecycle can differ per language — so a
+   * probe that reads the default translation authorizes a document the caller
+   * may not be asking about.
    */
   locale?: string;
 }
@@ -124,10 +123,9 @@ export async function singleDocumentReadable(
  * restricts updates, a caller can read the published document and would
  * otherwise be handed the author's unpublished edits.
  *
- * The row is loaded through the adapter rather than taken from a read result,
- * because an owner-only rule compares against the STORED values and
- * `checkSingleAccess` refuses outright when such a rule has no document — while
- * a read result is presentation data an `afterRead` hook may have reshaped.
+ * A Single with no materialized row is not editable, and that is settled
+ * against the STORED row through the adapter rather than against a read result,
+ * which is presentation data an `afterRead` hook may have reshaped.
  */
 export async function singleDocumentEditable(
   slug: string,
@@ -151,11 +149,6 @@ export async function singleDocumentEditable(
     overrideAccess: false,
     routeAuthorized,
     rbacAccessControlService: getService("rbacAccessControlService"),
-    // Stateless evaluator for the Single's stored rules; it holds no
-    // per-request state, so constructing one here matches the write path.
-    accessControlService: new AccessControlService(),
-    accessRules: record.accessRules,
-    document,
     ...(actor === undefined ? {} : { authenticatedScope: actor }),
     logger: getService("logger"),
   });

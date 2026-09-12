@@ -111,14 +111,25 @@ const fakeService = {
 };
 
 function widget(patch: Partial<WidgetDefinition>): WidgetDefinition {
-  return {
+  const definition = {
     id: "core/one",
     title: "One",
     archetype: "custom",
     defaultSize: "full",
     component: "core#One",
     ...patch,
-  } as WidgetDefinition;
+  };
+  // A key set to `undefined` is one JSON drops, and a registration carrying
+  // one is not one the admin may receive -- so a patch that unsets the base
+  // fixture's `component` removes the key rather than voiding it.
+  return withoutUndefined(definition) as WidgetDefinition;
+}
+
+/** `value` less every key set to `undefined`. */
+function withoutUndefined<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as Partial<T>;
 }
 
 function getReq(): Request {
@@ -132,8 +143,14 @@ function getReq(): Request {
  * a test that changes its fixtures cannot leave a stale literal behind that
  * happens to still pass.
  */
-function scopeFor(visibleIds?: string[]): string {
-  return visibilityToken(visibleIds ?? listWidgets().map(w => w.id));
+function scopeFor(
+  visibleIds?: string[],
+  heldActionGates: string[] = []
+): string {
+  return visibilityToken(
+    visibleIds ?? listWidgets().map(w => w.id),
+    heldActionGates
+  );
 }
 
 function putReq(body: unknown): Request {
@@ -496,7 +513,7 @@ describe("opaque config survives the response pipeline", () => {
               },
             ],
             version: 0,
-            scope: visibilityToken(["core/a"]),
+            scope: visibilityToken(["core/a"], []),
           })
         ),
     ],
@@ -845,6 +862,74 @@ describe("PUT /api/dashboard/layout", () => {
 
     expect(res.status).toBe(409);
     expect(saved).toBeUndefined();
+  });
+
+  it("refuses a write once the reader has gained a SHORTCUT'S permission, with the cards unchanged", async () => {
+    // 🔴 The token is also what tells the admin its workspace payload is
+    // stale, and that payload withholds the shortcuts a reader may not see. A
+    // token of the ids alone stood still here -- the cards are the same
+    // cards -- so the newly permitted shortcut stayed withheld until some
+    // unrelated refresh. The view IS stale, and the guard says so.
+    registerWidget(
+      widget({
+        id: "core/tools",
+        archetype: "actions",
+        component: undefined,
+        actions: [
+          { label: "Search", href: "/admin/search" },
+          {
+            label: "Publish",
+            href: "/admin/publish",
+            requiredPermission: "publish-notes",
+          },
+        ],
+      })
+    );
+    // The client read while the shortcut's grant was absent...
+    const before = scopeFor(["core/tools"]);
+    // ...and holds it by the time the write arrives.
+    callerHoldsPermission.mockResolvedValue(true);
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          {
+            id: "p1",
+            widgetId: "core/tools",
+            column: 0,
+            order: 0,
+            hidden: false,
+          },
+        ],
+        version: 0,
+        scope: before,
+      })
+    );
+
+    expect(res.status).toBe(409);
+    expect(saved).toBeUndefined();
+    // The control: the token the reader would be handed NOW is accepted.
+    const now = await bodyOf(await getWidgetLayout(getReq()));
+    expect(now.scope).toBe(scopeFor(["core/tools"], ["publish-notes"]));
+    expect(now.scope).not.toBe(before);
+  });
+
+  it("hands the same token to the same reader twice", async () => {
+    // The other control: a token that moved on every read would refuse
+    // every write.
+    registerWidget(
+      widget({
+        id: "core/tools",
+        archetype: "actions",
+        component: undefined,
+        actions: [
+          { label: "Publish", href: "/x", requiredPermission: "publish-notes" },
+        ],
+      })
+    );
+    const first = await bodyOf(await getWidgetLayout(getReq()));
+    const second = await bodyOf(await getWidgetLayout(getReq()));
+    expect(first.scope).toBe(second.scope);
   });
 
   it("requires the scope token rather than treating it as optional", async () => {

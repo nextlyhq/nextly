@@ -27,6 +27,7 @@ import {
   attachFieldValidators,
   clearFieldFunctions,
   getFieldFunctions,
+  readAccessGrants,
   type ReadAccessRedactions,
   registerFieldFunctions,
   runFieldHooks,
@@ -122,6 +123,41 @@ describe("field access can ask what the caller is granted", () => {
     expect(listEffectivePermissions).toHaveBeenCalledTimes(1);
   });
 
+  it("reads grants once across two read passes handed one resolver", async () => {
+    // A read that redacts before its hooks and again after runs two passes
+    // over one document. Each pass builds its own resolver unless handed one,
+    // and two lookups can answer with two authorities if grants change in
+    // between; one resolver is one lookup and one answer.
+    listEffectivePermissions.mockResolvedValue(["pages:read"]);
+    registerFieldFunctions("collection", "pages", [
+      {
+        name: "secret",
+        access: {
+          read: ({ permissions }: { permissions: string[] }) =>
+            permissions.includes("pages:read"),
+        },
+      },
+    ]);
+    const grants = readAccessGrants({ id: "u1" });
+    const entry: Record<string, unknown> = { secret: "s" };
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug: "pages",
+      entry,
+      user: { id: "u1" },
+      grants,
+    });
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug: "pages",
+      entry,
+      user: { id: "u1" },
+      grants,
+    });
+    expect(entry).toEqual({ secret: "s" });
+    expect(listEffectivePermissions).toHaveBeenCalledTimes(1);
+  });
+
   it("makes no lookup at all when no rule runs", async () => {
     registerFieldFunctions("collection", "pages", [
       { name: "title", validate: () => true },
@@ -149,6 +185,119 @@ describe("field access can ask what the caller is granted", () => {
     });
     // Fail CLOSED: an unreadable grant set is not an open one.
     expect(data).toEqual({ title: "Home" });
+  });
+});
+
+describe("what a field hook is handed as data", () => {
+  // Run through the real dispatcher with real handlers, because the claim is
+  // about what reaches a handler and a spied dispatcher cannot say. A
+  // regression that gave each handler a fresh one-field object would pass any
+  // assertion made on the dispatcher's arguments.
+
+  it("hands a top-level hook the record, so it can read and change a sibling", async () => {
+    let seenSummary: unknown;
+    registerFieldFunctions("collection", "pages", [
+      {
+        name: "title",
+        type: "text",
+        hooks: {
+          beforeChange: [
+            ({
+              value,
+              data,
+            }: {
+              value: unknown;
+              data: Record<string, unknown>;
+            }) => {
+              seenSummary = data.summary;
+              data.summary = "rewritten by the title hook";
+              return value;
+            },
+          ],
+        },
+      },
+      { name: "summary", type: "text" },
+    ]);
+    const data: Record<string, unknown> = { title: "Home", summary: "kept" };
+
+    await runFieldHooks({
+      kind: "collection",
+      slug: "pages",
+      phase: "beforeChange",
+      data,
+      operation: "create",
+    });
+
+    expect(seenSummary).toBe("kept");
+    expect(data.summary).toBe("rewritten by the title hook");
+  });
+
+  it("hands a nested hook its own row, not the top-level document", async () => {
+    let seen: Record<string, unknown> | undefined;
+    registerFieldFunctions("collection", "pages", [
+      { name: "title" },
+      {
+        name: "sections",
+        type: "repeater",
+        fields: [
+          {
+            name: "heading",
+            type: "text",
+            hooks: {
+              beforeChange: [
+                ({
+                  value,
+                  data,
+                }: {
+                  value: unknown;
+                  data: Record<string, unknown>;
+                }) => {
+                  seen = data;
+                  return value;
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+    const data: Record<string, unknown> = {
+      title: "Home",
+      sections: [{ heading: "Intro", body: "..." }],
+    };
+
+    await runFieldHooks({
+      kind: "collection",
+      slug: "pages",
+      phase: "beforeChange",
+      data,
+      operation: "create",
+    });
+
+    // The containing row, which carries `body` and not `title`.
+    expect(seen).toEqual({ heading: "Intro", body: "..." });
+    expect(seen).not.toHaveProperty("title");
+  });
+
+  it("skips a hook whose field is absent from the data", async () => {
+    const calls: string[] = [];
+    registerFieldFunctions("collection", "pages", [
+      {
+        name: "summary",
+        type: "text",
+        hooks: { beforeChange: [() => (calls.push("summary"), undefined)] },
+      },
+    ]);
+
+    await runFieldHooks({
+      kind: "collection",
+      slug: "pages",
+      phase: "beforeChange",
+      data: { title: "only the title was sent" },
+      operation: "update",
+    });
+
+    expect(calls).toEqual([]);
   });
 });
 

@@ -27,6 +27,7 @@
  * @module admin/BlocksField.restingState.test
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   getBlock,
   type BlockDocument,
@@ -41,25 +42,52 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
   { data: undefined, isPending: false, error: null };
 
+/**
+ * What the component route answers with for the test in hand.
+ *
+ * `undefined` — a site with no components — is what every case not about
+ * instances was written against; the one that is puts a definition here.
+ */
+let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
+
+/** Every plugin route a render actually asked for, in order. */
+const fetched: string[] = [];
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // Present because the mock REPLACES the module wholesale: an export the
   // subject imports and this omits is a missing-export error rather than an
   // unused stub.
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => undefined,
+  // No document around the field: the state every case here was written
+  // against, and the one that offers every component.
+  useDocumentIdentity: () => null,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   /*
-   * The library read. Absent here rather than stubbed with patterns, because
-   * these cases are about other surfaces and an offered pattern would change
-   * what the palette contains. `pending: false` says the read ANSWERED with
-   * nothing, which is the site with an empty library — the state every one of
-   * these cases was written against.
+   * The plugin's reads. The component route is the one the resting card makes,
+   * and it is discriminated by PATH so the answer meant for it cannot reach a
+   * read of something else. Everything else answers nothing: `pending: false`
+   * says the read ANSWERED with nothing, which is the site with an empty
+   * library — the state every one of these cases was written against.
    */
-  usePluginRoute: () => ({
-    data: undefined,
-    pending: false,
-    error: null,
-    refetch: () => {},
-  }),
+  usePluginRoute: (args: { path: string; enabled?: boolean }) => {
+    // Modelled the way TanStack treats a disabled query: nothing is requested,
+    // and it stays `pending` because it never ran. A stub that answered anyway
+    // could not tell a read that was made from one that was not.
+    const enabled = args.enabled !== false;
+    if (enabled) fetched.push(args.path);
+    return {
+      data:
+        enabled && args.path === "/library/components"
+          ? componentAnswer
+          : undefined,
+      pending: !enabled,
+      error: null,
+      refetch: () => {},
+    };
+  },
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -101,14 +129,52 @@ const DOCUMENT = {
 
 const MINIATURE = '[data-slot="page-miniature-surface"]';
 
+const DEFINITION_TEXT = "The words inside the component";
+
+/** A page holding ONE instance, and nothing of what the instance draws. */
+const PAGE_WITH_INSTANCE = {
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: [
+    {
+      id: "i1",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "header" },
+    },
+  ],
+} as unknown as BlockDocument;
+
+/** The definition that instance points at, as the component route answers it. */
+const HEADER_DEFINITION = {
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes: [
+    {
+      id: "d1",
+      type: TEXT.name,
+      version: TEXT.version,
+      props: { text: DEFINITION_TEXT },
+    },
+  ],
+};
+
 /** A form around the field, since it reads its value through a form control. */
-function Host({ readOnly = false }: { readOnly?: boolean }): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: DOCUMENT } });
+function Host({
+  readOnly = false,
+  document = DOCUMENT,
+}: {
+  readOnly?: boolean;
+  document?: BlockDocument;
+}): React.JSX.Element {
+  const { control } = useForm({ defaultValues: { body: document } });
   return <BlocksField name="body" control={control} readOnly={readOnly} />;
 }
 
 beforeEach(() => {
   siteStyleRead = { data: undefined, isPending: false, error: null };
+  componentAnswer = undefined;
+  fetched.length = 0;
 });
 
 afterEach(() => {
@@ -126,6 +192,58 @@ describe("the entry form at rest", () => {
 
     expect(container.querySelector(MINIATURE)).not.toBeNull();
     expect(container.textContent).toContain(PAGE_TEXT);
+  });
+
+  it("draws a placed component from the definition the component route answered", () => {
+    // The card draws the page with the SAME renderer the canvas does, and that
+    // renderer inlines an instance from a map it is handed — with no map, every
+    // instance is the could-not-be-loaded marker. Measured before this read
+    // reached the card: a component placed in the editor drew on the canvas
+    // and became that marker the moment the author pressed Done.
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: HEADER_DEFINITION }],
+      meta: { count: 1, truncated: false },
+    };
+
+    const { container } = render(<Host document={PAGE_WITH_INSTANCE} />);
+
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(container.textContent).toContain(DEFINITION_TEXT);
+  });
+
+  it("draws nothing of a component the route did not answer with", () => {
+    // The control for the case above: the definition's words reach the card
+    // through the read and through nothing else.
+    const { container } = render(<Host document={PAGE_WITH_INSTANCE} />);
+
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(container.textContent).not.toContain(DEFINITION_TEXT);
+  });
+
+  it("does not read the component library for a page that places no component", () => {
+    /*
+     * This surface is EVERY entry form holding a blocks field, and the read is
+     * the whole component tier: one listing over every row, a read of its own
+     * per row to reach the working draft, bounded at sixteen mebibytes. A page
+     * that places no instance resolves nothing against any of it, so the
+     * miniature is identical without it.
+     *
+     * The card must not sit waiting on it either — a read that never runs
+     * never stops pending, and a surface keyed on that would wait forever.
+     */
+    const { container } = render(<Host />);
+
+    expect(fetched).not.toContain("/library/components");
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(container.textContent).toContain(PAGE_TEXT);
+  });
+
+  it("reads it for a page that places one", () => {
+    // The control: the rule is what the DOCUMENT holds, not a read this
+    // surface never makes.
+    render(<Host document={PAGE_WITH_INSTANCE} />);
+
+    expect(fetched).toContain("/library/components");
   });
 
   it("does not put the block's type name on the screen", () => {

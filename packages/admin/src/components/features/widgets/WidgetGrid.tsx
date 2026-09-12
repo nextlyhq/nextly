@@ -167,6 +167,7 @@ export function WidgetGrid() {
     moveColumn,
     hasArrangement,
     sensors,
+    announcements,
     handleDragEnd,
   } = useDashboardArrangement(declared, layout, announceColumn);
 
@@ -276,6 +277,7 @@ export function WidgetGrid() {
         // of one column resolves to its neighbour.
         collisionDetection={closestCorners}
         onDragEnd={handleDragEnd}
+        accessibility={{ announcements }}
       >
         <ArrangedColumns
           columns={columns}

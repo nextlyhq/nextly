@@ -57,6 +57,7 @@
 
 import type {
   BlockDocument,
+  DefinitionsById,
   DocumentLimits,
   RemotePatternInput,
   SiteSheetInput,
@@ -110,6 +111,15 @@ export function pageStyleTrace(
      * compile the page never ran, and says so confidently.
      */
     readonly limits?: DocumentLimits;
+    /**
+     * The component definitions the canvas resolves instances against.
+     *
+     * The fifth input of the kind `limits` describes, and it fails the same
+     * way: a trace compiled without them leaves every instance unresolved, so
+     * the composed nodes the canvas draws — and every declaration they carry
+     * — are missing from the cascade the inspector reads its provenance from.
+     */
+    readonly definitions?: DefinitionsById;
   }
 ): PageStyleCascade | undefined {
   return compileTrace({
@@ -121,5 +131,8 @@ export function pageStyleTrace(
       : { remotePatterns: options.remotePatterns }),
     ...(options?.blocks === undefined ? {} : { blocks: options.blocks }),
     ...(options?.limits === undefined ? {} : { limits: options.limits }),
+    ...(options?.definitions === undefined
+      ? {}
+      : { definitions: options.definitions }),
   });
 }

@@ -39,7 +39,13 @@
 
 import { refreshCollectionSources } from "./collection-sources";
 import { isValidWidgetId, type WidgetDefinition } from "./definition";
-import { listSources, type WidgetSource } from "./sources";
+import { refreshSingleSources } from "./single-sources";
+import {
+  listSources,
+  sourceKindFromId,
+  sourceTarget,
+  type WidgetSource,
+} from "./sources";
 
 /** How many rows a generated list asks for. The renderer draws at most five. */
 const LIST_ROWS = 5;
@@ -63,7 +69,14 @@ const TABLE_ROWS = 5;
  */
 function widgetId(
   source: WidgetSource,
-  kind: "count" | "recent" | "table" | "stats" | "timeline" | "breakdown"
+  kind:
+    | "count"
+    | "recent"
+    | "table"
+    | "stats"
+    | "timeline"
+    | "breakdown"
+    | "status"
 ): string | undefined {
   // 🔴 An underscore is legal in a collection slug (`SLUG_PATTERN` permits it)
   // and illegal in a widget id, so `customer_notes` produced an id the registry
@@ -75,8 +88,12 @@ function widgetId(
   // handled where the whole set is known, in `collectionWidgets`, because a
   // collision is a property of the INSTALL rather than of either collection --
   // deciding it here would need one of the two to win arbitrarily.
-  const slug = source.id.slice("collection:".length).replaceAll("_", "-");
-  const id = `collection/${slug}-${kind}`;
+  //
+  // The namespace is the source's KIND -- `collection/` or `single/` -- so a
+  // collection and a single sharing a slug, which the registries permit,
+  // derive cards that cannot collide with each other.
+  const slug = sourceTarget(source.id).replaceAll("_", "-");
+  const id = `${sourceKindFromId(source.id)}/${slug}-${kind}`;
   // ASKED rather than assumed. A widget id is `namespace/name` in lowercase
   // slug form -- two segments, so the kind is a suffix rather than a third
   // segment -- and a collection slug that cannot produce one is skipped instead
@@ -490,6 +507,69 @@ export function collectionWidgets(
 }
 
 /**
+ * The status card for a single: the one document, as its lifecycle state and
+ * when it last changed.
+ *
+ * A single has one document, so the only card worth deriving is the one that
+ * says what state it is in: a `list` of one row, its label the publish state
+ * where the single has a lifecycle and the last change otherwise, and the
+ * last change as the detail line. A count of one row is a constant and a
+ * timeline over one row is a point, so neither is offered.
+ *
+ * The footer link opens the single itself, which is where a reader who sees
+ * "draft" goes next.
+ */
+function singleStatusWidget(
+  source: WidgetSource
+): WidgetDefinition | undefined {
+  if (!source.supports.includes("list")) return undefined;
+  const id = widgetId(source, "status");
+  if (id === undefined) return undefined;
+  const slug = sourceTarget(source.id);
+  return {
+    id,
+    title: source.label,
+    description:
+      source.lifecycleStatus === true
+        ? `Whether ${source.label} is published, and when it last changed`
+        : `When ${source.label} last changed`,
+    archetype: "list",
+    defaultSize: "sm",
+    query: {
+      source: source.id,
+      op: "list",
+      status: "all",
+      select:
+        source.lifecycleStatus === true
+          ? ["status", "updatedAt"]
+          : ["updatedAt"],
+    },
+    link: { label: `Open ${source.label}`, href: `/admin/singles/${slug}` },
+  };
+}
+
+/**
+ * Every generated card the given single sources support, in source order.
+ *
+ * Pure, like {@link collectionWidgets}, and with the same collision rule: two
+ * singles reducing to one id cost both their card.
+ */
+export function singleWidgets(
+  sources: readonly WidgetSource[]
+): WidgetDefinition[] {
+  const claimed = new Map<string, number>();
+  const candidates: WidgetDefinition[] = [];
+  for (const source of sources) {
+    if (source.kind !== "single") continue;
+    const widget = singleStatusWidget(source);
+    if (!widget) continue;
+    claimed.set(widget.id, (claimed.get(widget.id) ?? 0) + 1);
+    candidates.push(widget);
+  }
+  return candidates.filter(widget => claimed.get(widget.id) === 1);
+}
+
+/**
  * The generated set, pinned where every other boot-time widget store is.
  *
  * On `globalThis` so it survives the module re-evaluation Next.js and Turbopack
@@ -512,6 +592,21 @@ export function generatedWidgets(): WidgetDefinition[] {
 }
 
 /**
+ * Rebuild every content source -- both kinds -- from the live registries.
+ *
+ * ONE refresh for the two kinds, and the one every request-time consumer
+ * calls: the layout and the query endpoint both resolve whatever a reader
+ * asks against these sources, and boot publishes none of them. A consumer
+ * that refreshed one kind and not the other would answer for a single only
+ * when some earlier request happened to have refreshed it -- which is how a
+ * `single:` query through the query endpoint was refused as unknown on a cold
+ * process while the same query through the layout endpoint ran.
+ */
+export async function refreshContentSources(): Promise<void> {
+  await Promise.all([refreshCollectionSources(), refreshSingleSources()]);
+}
+
+/**
  * Re-derive the generated set from the install's current collections.
  *
  * Refreshes the SOURCES first, because the widgets are derived from them: a
@@ -519,86 +614,49 @@ export function generatedWidgets(): WidgetDefinition[] {
  * without this produces a set one request out of date.
  */
 export async function refreshCollectionWidgets(): Promise<void> {
-  await refreshCollectionSources();
-  setGeneratedWidgets(collectionWidgets(listSources()));
+  // Both kinds of content source, then both kinds of card from the one
+  // source list: a single's card is derived the way a collection's is, and a
+  // refresh that rebuilt one kind and not the other would offer cards for a
+  // single deleted since beside none for one created since.
+  await refreshContentSources();
+  const sources = listSources();
+  setGeneratedWidgets([
+    ...collectionWidgets(sources),
+    ...singleWidgets(sources),
+  ]);
 }
 
 /**
- * The generated cards a given reader may be told about.
- *
- * 🔴 FILTERED, and by the permission rather than by anything the client does.
- * A generated card's id, title and query all name a COLLECTION, so publishing
- * the whole set discloses the slug and the existence of every collection in the
- * install to any authenticated reader — including the ones the layout endpoint
- * and the query endpoint deliberately hide from them. That the admin would not
- * draw the card is not a control: the payload is JSON, and reading it is the
- * bypass.
- *
- * 🔴 And a card whose id a CONTRIBUTION already claims is dropped. The admin
- * reads this array as the registration channel, and `mergeCollision` gives a
- * registration authority over the title, archetype, query, size and permission
- * of a colliding contribution — so publishing a generated card under an id a
- * plugin declared would replace that plugin's card with core's guess in the
- * grid, while the server's canonical set kept the plugin's. The two would draw
- * and place different declarations. `canonicalWidgets` already resolves this
- * collision in the contribution's favour; this is the same answer, not a second
- * one.
- *
- * 🔴 A generated card carries NO `requiredPermission`, and the server is what
- * gates it. The permission the client could check is `read-<slug>` read off the
- * flat `/me/permissions` list, and that list does not hold a grant that exists
- * only in a collection's code-defined `access.read` — so a reader the server
- * approved had both cards discarded by the grid, for a query it would have
- * answered. One gate, on the side that can see every rule.
- *
- * 🔴 `allow` is asked about the COLLECTION, and the difference is an API key. `callerHoldsPermission` judges a
- * key on its stamped grant alone, while `canReadEntity` — which the widget query
- * endpoint uses — also evaluates the collection's code-defined `access.read`. A
- * key stamped `read-secret` that those rules reject is refused by the query and
- * would have been told the collection exists by this payload. The two must
- * answer the same question, so this one asks the query path's.
- *
- * Asked once per distinct collection by the caller, which batches those
- * decisions — asking here per widget would fire two checks for every one.
- */
-export function readableGeneratedWidgets(
-  allow: (collectionSlug: string) => boolean,
-  declaredIds: ReadonlySet<string>
-): WidgetDefinition[] {
-  return generatedWidgets().filter(widget => {
-    if (declaredIds.has(widget.id)) return false;
-    const slug = generatedCollectionSlug(widget);
-    // A generated card that names no collection cannot be checked against one,
-    // so it is withheld rather than published. This is unreachable today --
-    // every card here is built from a `collection:` source -- and the branch is
-    // free: it decides from a value already in hand, and refusing is the only
-    // safe answer for a card whose subject cannot be identified.
-    return slug !== undefined && allow(slug);
-  });
-}
-
-/**
- * The collection a generated card is about, taken from the query it will run.
+ * The content entity a generated card is about, taken from the query it will
+ * run: a collection's slug from a `collection:` source, a single's from a
+ * `single:` one.
  *
  * From `query.source` rather than by unpicking the widget id, because the
  * source is what the read is actually performed against — the id is a display
  * identity that happens to be derived from the same slug, and checking access
  * against a name rather than against the thing being read is how the two come
- * apart.
+ * apart. Both kinds answer here because the read gate is one question either
+ * way: `canReadEntity` resolves a slug against the collection and single
+ * registries alike.
  */
-function collectionOf(source: unknown): string | undefined {
+function entityOf(source: unknown): string | undefined {
   if (typeof source !== "string") return undefined;
-  const prefix = "collection:";
-  return source.startsWith(prefix) ? source.slice(prefix.length) : undefined;
+  const kind = sourceKindFromId(source);
+  if (kind !== "collection" && kind !== "single") return undefined;
+  return sourceTarget(source);
 }
 
+/**
+ * The slug of the collection or single a generated card reads, or `undefined`
+ * for a card whose subject cannot be identified.
+ */
 export function generatedCollectionSlug(
   widget: WidgetDefinition
 ): string | undefined {
   // 🔴 Read from the CELLS as well as the top-level query. A `stats` card has
   // no `query` of its own, so deriving from that field alone answered
-  // `undefined` for every health card -- and `readableGeneratedWidgets`
-  // withholds a card whose subject it cannot identify, which is the correct
+  // `undefined` for every health card -- and the reader gate withholds a
+  // card whose subject it cannot identify, which is the correct
   // refusal applied to a wrong answer. The cards were generated, registered,
   // and then silently never published.
   const sources = widget.query
@@ -606,7 +664,7 @@ export function generatedCollectionSlug(
     : (widget.cells ?? []).map(cell => cell.query.source);
   if (sources.length === 0) return undefined;
 
-  const slugs = sources.map(collectionOf);
+  const slugs = sources.map(entityOf);
   // Every cell must name the SAME collection. A card reading two of them cannot
   // be gated by one permission, so it is refused rather than checked against
   // whichever slug happened to come first -- the access decision and the rows

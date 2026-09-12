@@ -1,5 +1,5 @@
 /**
- * What a request with no user meets on the way through, at both layers.
+ * What a request with no user meets on the way through `checkCollectionAccess`.
  *
  * The gate is two things, and only one of them needs a user. The DB PERMISSION
  * check does, so it does not run for an anonymous caller. The collection's own
@@ -7,20 +7,17 @@
  * consulted. Treating the two as one is what left `access: { create: false }`
  * accepted at boot and never asked.
  *
- * The stored rules run regardless, and are where an `owner-only` rule refuses:
- * it has nobody to compare against and denies. So skipping the permission check
- * is not a way past the rules, and the three layers must not be confused for
- * one another.
+ * With no rule governing the operation, the request falls through to the
+ * permission-less default and is allowed. Publishing is the exception, refused
+ * in this service before the default is reached.
  *
- * Driven through `checkCollectionAccess` with the real leaf evaluator, because
- * this is a claim about how the layers combine. Calling the evaluator directly
- * proves only the leaf, and would stay green if this service ever stopped
- * running the stored rules when a user is absent.
+ * The pairing is the point. A service that denied every anonymous request would
+ * pass the publish case while being wrong about the read, and one that never
+ * refused would pass the read while letting an unauthenticated caller publish.
+ * Both directions are asserted here, and each is the other's control.
  */
 
 import { describe, it, expect, vi } from "vitest";
-
-import { AccessControlService } from "../../../services/access/access-control-service";
 
 import { CollectionAccessService } from "./collection-access-service";
 
@@ -28,78 +25,54 @@ import {
   createMockDb,
   createMockAdapter,
   silentLogger,
-  createMockCollection,
-  createMockCollectionService,
 } from "../__tests__/collection-test-helpers";
 
-function buildService(accessRules: Record<string, unknown>) {
+function buildService() {
   // Spied rather than stubbed away: "was this consulted" is half of what these
   // tests assert.
   const rbac = {
     checkAccess: vi.fn().mockResolvedValue(true),
-    // Answers `undefined`: no code-defined rule, so the stored rules decide.
+    // Answers `undefined`: no code-defined rule governs the operation.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     getRegisteredAccess: vi.fn().mockReturnValue(undefined),
   };
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
     silentLogger as never,
-    createMockCollectionService(
-      createMockCollection({ accessRules }) as never
-    ) as never,
-    // The real one. A stub here would decide the outcome this test is about.
-    new AccessControlService() as never,
     rbac as never
   );
   return { service, rbac };
 }
 
 describe("checkCollectionAccess with no user", () => {
-  it("denies an owner-only write through the stored rule", async () => {
-    const { service, rbac } = buildService({ update: { type: "owner-only" } });
+  it("allows an ordinary operation and never asks the permission check", async () => {
+    const { service, rbac } = buildService();
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      undefined
-    );
-
-    expect(result?.success).toBe(false);
-    expect(result?.statusCode).toBe(403);
-    // The gate was never asked, and the refusal still happened. This is the
-    // pairing: what a missing user skips is the permission check, not the rule.
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
-  });
-
-  it("allows an operation the collection states no rule for", async () => {
-    // The positive control, and the surprising half: absent means public. A
-    // service that denied every anonymous request would pass the case above
-    // while being wrong about this one.
-    const { service, rbac } = buildService({ read: { type: "owner-only" } });
-
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "update",
-      undefined
-    );
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "update",
+      user: undefined,
+    });
 
     expect(result).toBeNull();
+    // What a missing user skips is the permission check: there are no
+    // permissions to look up for a caller with no identity.
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
   it("applies the collection's inline code rule, which needs no user", async () => {
-    // The layer the doc on `resolveContent` said could not run. A code rule
-    // reads what it is given, and an anonymous caller is a thing it can be
-    // given: `user: null`, no roles. So it is consulted, and its refusal is the
-    // answer, even though the permission check beside it never runs.
-    const { service, rbac } = buildService({});
+    // A code rule reads what it is given, and an anonymous caller is a thing
+    // it can be given: `user: null`, no roles. So it is consulted, and its
+    // refusal is the answer, even though the permission check beside it never
+    // runs.
+    const { service, rbac } = buildService();
     rbac.checkAnonymousCodeAccess.mockResolvedValue(false);
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "read",
-      undefined
-    );
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "read",
+      user: undefined,
+    });
 
     expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalledWith({
       operation: "read",
@@ -110,33 +83,63 @@ describe("checkCollectionAccess with no user", () => {
     expect(rbac.checkAccess).not.toHaveBeenCalled();
   });
 
-  it("lets the stored rules decide when no inline rule governs the operation", async () => {
+  it("falls through to the public default when no inline rule governs the operation", async () => {
     // The control that keeps the case above from meaning "anonymous is denied".
     // `undefined` is no opinion, not a refusal, so a collection with no inline
     // rule for this operation still reads as it always did.
-    const { service, rbac } = buildService({});
+    const { service, rbac } = buildService();
     rbac.checkAnonymousCodeAccess.mockResolvedValue(undefined);
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "read",
-      undefined
-    );
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "read",
+      user: undefined,
+    });
 
     expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalled();
     expect(result).toBeNull();
   });
 
-  it("refuses publish with no user and no rule for it", async () => {
-    // The exception to that default, decided in this service rather than the
-    // leaf: publishing anonymously needs a rule that says so.
-    const { service } = buildService({ read: { type: "public" } });
+  it("refuses publish with no user", async () => {
+    const { service, rbac } = buildService();
 
-    const result = await service.checkCollectionAccess(
-      "posts",
-      "publish",
-      undefined
-    );
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: undefined,
+    });
+
+    expect(result?.success).toBe(false);
+    expect(result?.statusCode).toBe(403);
+    // Decided in this service rather than by the permission check, which was
+    // never reached.
+    expect(rbac.checkAccess).not.toHaveBeenCalled();
+  });
+
+  it("refuses publish with no user even when the inline rule would admit", async () => {
+    // Publishing has no identity to stamp, so a rule that admits the anonymous
+    // caller does not lift the refusal: the rule is asked, and then overruled.
+    const { service, rbac } = buildService();
+    rbac.checkAnonymousCodeAccess.mockResolvedValue(true);
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "publish",
+      user: undefined,
+    });
+
+    expect(result?.success).toBe(false);
+    expect(result?.statusCode).toBe(403);
+  });
+
+  it("refuses unpublish with no user", async () => {
+    const { service } = buildService();
+
+    const result = await service.checkCollectionAccess({
+      collectionName: "posts",
+      operation: "unpublish",
+      user: undefined,
+    });
 
     expect(result?.success).toBe(false);
     expect(result?.statusCode).toBe(403);

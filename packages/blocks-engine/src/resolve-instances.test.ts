@@ -15,12 +15,18 @@ import {
   type BlockNode,
   type ComponentDocument,
 } from "./document";
-import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
+import {
+  DEFAULT_LIMITS,
+  MAX_COMPOSED_DEPTH,
+  MAX_ENVELOPE_ENTRIES,
+} from "./limits";
 import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
   componentUsageIn,
+  composedRootTypes,
   instanceExposure,
+  readableDefinition,
   resolveComponentInstances,
   type DefinitionsById,
   type ResolvedBlockNode,
@@ -1598,6 +1604,58 @@ describe("resolveComponentInstances bounds", () => {
     expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
     expect(idsOf(result.document)).toEqual(["i1"]);
   });
+
+  describe("what a supplied definition has to be, published for the surfaces that read one", () => {
+    // ONE rule, read by the resolver and by whoever draws an inspector from
+    // the same lookup: a surface accepting what the resolver refuses would
+    // offer editable rows for a component the page shows as a placeholder.
+    // Each refusal below is also what the resolver reports as `unreadable`,
+    // asserted beside it so the two cannot drift.
+    const unreadable = (supplied: unknown) => {
+      const doc = page([instance("i1", "hero")]);
+      const result = resolveComponentInstances(
+        doc,
+        defs({ hero: supplied as BlockDocument })
+      );
+      return result.unresolved.map(e => e.reason);
+    };
+
+    it("reads a component document in this build's format", () => {
+      const definition = component([node("d1")]);
+
+      expect(readableDefinition(definition)).toBe(definition);
+      expect(unreadable(definition)).toEqual([]);
+    });
+
+    it("refuses a document of another kind", () => {
+      const supplied = page([node("d1")]);
+
+      expect(readableDefinition(supplied)).toBeUndefined();
+      expect(unreadable(supplied)).toEqual(["unreadable"]);
+    });
+
+    it("refuses a component in a format this build does not read", () => {
+      // Spelled as what arrives from storage: a record, not this build's type.
+      const supplied = {
+        ...component([node("d1")]),
+        formatVersion: DOCUMENT_FORMAT_VERSION + 1,
+      } as unknown as BlockDocument;
+
+      expect(readableDefinition(supplied)).toBeUndefined();
+      expect(unreadable(supplied)).toEqual(["unreadable"]);
+    });
+
+    it("refuses a value whose nodes are not a list, and nothing at all", () => {
+      const supplied = {
+        ...component([]),
+        nodes: "oops",
+      } as unknown as BlockDocument;
+
+      expect(readableDefinition(supplied)).toBeUndefined();
+      expect(unreadable(supplied)).toEqual(["unreadable"]);
+      expect(readableDefinition(undefined)).toBeUndefined();
+    });
+  });
 });
 
 describe("a node that spells a DOM id twice and renders one", () => {
@@ -2464,6 +2522,81 @@ describe("instanceExposure", () => {
     expect(state?.cleared).toBe(false);
   });
 
+  it("reports a visibility exposure's INHERITED gate, so a panel does not call a gated node shown", () => {
+    /*
+     * The resolver is the oracle. A definition node carrying entry-field
+     * conditions is not served — `survivesGating` with no plan says so, and
+     * the composed forest keeps the gate for the renderer's hidden-node pass
+     * to act on. Read as "no override, so nothing in force", an inspector drew
+     * the row checked and said the node was shown on this page while the
+     * canvas withheld it.
+     */
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const showGated = {
+      id: "showGated",
+      label: "Banner",
+      nodeId: "d1",
+      propPath: "hidden",
+      type: "visibility",
+    } as const;
+    const showPlain = { ...showGated, id: "showPlain", nodeId: "d2" } as const;
+    const definition = component(
+      [node("d1", { visibility: gate as BlockNode["visibility"] }), node("d2")],
+      { exposed: [showGated, showPlain] }
+    );
+
+    const [gated, plain] = instanceExposure(
+      definition,
+      instance("i1", "hero")
+    ).properties;
+
+    expect(gated?.value).toBe(false);
+    // Where it came from, so a surface can tell an inherited gate from an
+    // author's own hiding without a vocabulary of its own.
+    expect(gated?.source).toBe("definition");
+    expect(gated?.cleared).toBe(false);
+    // The control: a node with no gate has nothing in force, and is served.
+    expect(plain?.value).toBeUndefined();
+
+    // And the oracle itself: one root keeps its gate, the other does not.
+    const resolved = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: definition })
+    );
+    expect(
+      resolved.document.nodes.map(root => root.visibility !== undefined)
+    ).toEqual([true, false]);
+  });
+
+  it("lets the instance's own override win over the inherited gate, either way", () => {
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const showGated = {
+      id: "showGated",
+      label: "Banner",
+      nodeId: "d1",
+      propPath: "hidden",
+      type: "visibility",
+    } as const;
+    const definition = component(
+      [node("d1", { visibility: gate as BlockNode["visibility"] })],
+      { exposed: [showGated] }
+    );
+
+    const on = instanceExposure(
+      definition,
+      instance("i1", "hero", { overrides: { showGated: true } })
+    ).properties[0];
+    expect(on?.value).toBe(true);
+    expect(on?.source).toBe("instance");
+
+    const off = instanceExposure(
+      definition,
+      instance("i1", "hero", { overrides: { showGated: false } })
+    ).properties[0];
+    expect(off?.value).toBe(false);
+    expect(off?.source).toBe("instance");
+  });
+
   it("attributes a variant's value to the VARIANT, not to the author", () => {
     const node = instance("i1", "hero", { variant: "loud" });
     const [state] = instanceExposure(hero, node).properties;
@@ -2854,6 +2987,133 @@ describe("instanceExposure", () => {
     expect(ab?.shadowedBy).toBeUndefined();
   });
 
+  it("keeps an ancestor's remaining value when a descendant is cleared", () => {
+    // `a.b` cleared deletes only `b`; the page keeps `{ a: { c: "keep" } }`.
+    // Reading the ancestor's winning write as "the sentinel, so cleared"
+    // would report `a` as gone while the page still renders its other key.
+    const nested = component(
+      [node("d1", { props: { a: { b: "base", c: "keep" } } })],
+      {
+        exposed: [
+          { ...headline, id: "parent", propPath: "a" },
+          { ...headline, id: "child", propPath: "a.b" },
+        ],
+      }
+    );
+    const node1 = instance("i1", "hero", {
+      overrides: { child: { $unset: true } },
+    });
+
+    const [parent, child] = instanceExposure(nested, node1).properties;
+
+    expect(parent?.value).toEqual({ c: "keep" });
+    expect(parent?.cleared).toBe(false);
+    expect(parent?.shadowedBy).toBe("child");
+    expect(child?.cleared).toBe(true);
+    expect(child?.value).toBeUndefined();
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: nested })
+    );
+    expect(rendered.document.nodes[0]!.props.a).toEqual({ c: "keep" });
+  });
+
+  it("does not count an override on a path the resolver refuses as in force", () => {
+    // An empty path, a doubled dot, or one over the segment limit is one the
+    // resolver declines to write. Treating its override as applied would
+    // attribute an unrendered value to the instance — and let it win a
+    // collision over a write that did land.
+    const broken = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        { ...headline, id: "good", propPath: "text" },
+        { ...headline, id: "bad", propPath: "a..b" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { good: "GOOD", bad: "BAD" },
+    });
+
+    const [good, bad] = instanceExposure(broken, node1).properties;
+
+    expect(good?.value).toBe("GOOD");
+    expect(good?.source).toBe("instance");
+    expect(bad?.source).toBe("definition");
+    expect(bad?.value).toBeUndefined();
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: broken })
+    );
+    expect(rendered.document.nodes[0]!.props).toEqual({ text: "GOOD" });
+  });
+
+  it("reports a cleared visibility as cleared with NO value, not the sentinel", () => {
+    // The winning write on a visibility row IS the `$unset` object. Handing
+    // that back as `value` breaks the promise that a cleared row has none —
+    // and a control drawn from it would show an object where it expects blank.
+    const gated = component([node("d1")], {
+      exposed: [{ ...headline, propPath: "", type: "visibility" }],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { headline: { $unset: true } },
+    });
+
+    const [state] = instanceExposure(gated, node1).properties;
+
+    expect(state?.cleared).toBe(true);
+    expect(state?.value).toBeUndefined();
+  });
+
+  it("marks a row cleared when an ANCESTOR path was cleared by another exposure", () => {
+    // Clearing `a` removes `a.b` with it. The child row's value is gone
+    // because somebody deliberately removed it, and reporting that as merely
+    // superseded would make the removal indistinguishable from a definition
+    // that never held `a.b` at all.
+    const nested = component([node("d1", { props: { a: { b: "base" } } })], {
+      exposed: [
+        { ...headline, id: "parent", propPath: "a" },
+        { ...headline, id: "child", propPath: "a.b" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { parent: { $unset: true } },
+    });
+
+    const [parent, child] = instanceExposure(nested, node1).properties;
+
+    expect(parent?.cleared).toBe(true);
+    expect(child?.cleared).toBe(true);
+    expect(child?.value).toBeUndefined();
+    expect(child?.shadowedBy).toBe("parent");
+
+    const rendered = resolveComponentInstances(
+      page([node1]),
+      defs({ hero: nested })
+    );
+    expect(rendered.document.nodes[0]!.props).toEqual({});
+  });
+
+  it("marks a row cleared when the SAME path was cleared by another exposure", () => {
+    const twoPointers = component([node("d1", { props: { text: "base" } })], {
+      exposed: [
+        { ...headline, id: "first" },
+        { ...headline, id: "second" },
+      ],
+    });
+    const node1 = instance("i1", "hero", {
+      overrides: { first: "MINE", second: { $unset: true } },
+    });
+
+    const [first, second] = instanceExposure(twoPointers, node1).properties;
+
+    expect(second?.cleared).toBe(true);
+    // The earlier row's target was erased by the later clear.
+    expect(first?.cleared).toBe(true);
+    expect(first?.value).toBeUndefined();
+    expect(first?.shadowedBy).toBe("second");
+  });
+
   it("has no path value for a visibility exposure", () => {
     // `visibility` decides whether the node is served at all; it names no prop,
     // so reading `propPath` off the definition would report an unrelated value.
@@ -2867,5 +3127,480 @@ describe("instanceExposure", () => {
     const [state] = instanceExposure(gated, instance("i1", "hero")).properties;
 
     expect(state?.value).toBeUndefined();
+  });
+});
+
+describe("composedRootTypes", () => {
+  // The types at the roots of a document AS THE RESOLVER WOULD COMPOSE IT,
+  // read without composing it. The resolver is the oracle in every case: the
+  // query must answer the TYPES the composed forest's roots would have — each
+  // once, in the order first met, because its one consumer asks whether every
+  // type may sit somewhere and reads each type once — or nothing where the
+  // resolver would leave a root standing.
+  const resolvedRoots = (doc: BlockDocument, definitions: DefinitionsById) =>
+    resolveComponentInstances(doc, definitions).document.nodes.map(
+      root => root.type
+    );
+  const resolvedRootTypes = (
+    doc: BlockDocument,
+    definitions: DefinitionsById
+  ) => [...new Set(resolvedRoots(doc, definitions))];
+
+  it("answers a block's own type, and a root instance's definition's roots, nested — each type once, in the order first met", () => {
+    const definitions = defs({
+      header: component([node("d1"), box("d2", [node("d3")])]),
+      wrapper: component([instance("w1", "header"), node("w2")]),
+    });
+    const doc = component([instance("i1", "wrapper"), node("n1")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual([
+      "core/text",
+      "core/box",
+    ]);
+    expect(composedRootTypes(doc, definitions)).toEqual(
+      resolvedRootTypes(doc, definitions)
+    );
+    // The composed forest's roots are four; the answer names two types. A
+    // placement verdict reads each type once, so the repeats would only make
+    // the answer as long as the forest.
+    expect(resolvedRoots(doc, definitions)).toHaveLength(4);
+  });
+
+  it("leaves out a root a nested instance's OWN override hides", () => {
+    // The gate the query already knew about is the node's own `conditions`,
+    // which the resolver leaves standing for a later pass. An override is a
+    // different mechanism and the resolver acts on it here: the node and its
+    // subtree are gone from the composed forest, so the type it would have
+    // contributed is not a type anything places.
+    const definitions = defs({
+      inner: component([node("d1", { type: "core/column" }), node("d2")], {
+        exposed: [
+          {
+            id: "showCol",
+            label: "Column",
+            nodeId: "d1",
+            propPath: "hidden",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+    const doc = component([
+      instance("n1", "inner", { overrides: { showCol: false } }),
+    ]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(composedRootTypes(doc, definitions)).toEqual(
+      resolvedRootTypes(doc, definitions)
+    );
+    // The control: the same definition placed by an instance that decides
+    // nothing still answers both types.
+    const plain = component([instance("n1", "inner")]);
+    expect(composedRootTypes(plain, definitions)).toEqual([
+      "core/column",
+      "core/text",
+    ]);
+  });
+
+  it("answers NOTHING at all for a component whose every root an override hides", () => {
+    // Offered, it would be a tile placing a component that draws nothing.
+    const definitions = defs({
+      inner: component([node("d1", { type: "core/column" })], {
+        exposed: [
+          {
+            id: "showCol",
+            label: "Column",
+            nodeId: "d1",
+            propPath: "hidden",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+    const doc = component([
+      instance("n1", "inner", { overrides: { showCol: false } }),
+    ]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual([]);
+    expect(resolvedRoots(doc, definitions)).toEqual([]);
+  });
+
+  it("counts a gated root the instance's override turns ON", () => {
+    // The other half of the same rule: `visible === true` deletes the node's
+    // own gate before the instance branch is reached, so a gated root the
+    // author explicitly turned on is expanded rather than left standing.
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const definitions = defs({
+      leaf: component([node("l1", { type: "core/column" })]),
+      inner: component(
+        [instance("d1", "leaf") as BlockNode, node("d2")].map((n, i) =>
+          i === 0 ? { ...n, visibility: gate } : n
+        ) as BlockNode[],
+        {
+          exposed: [
+            {
+              id: "showLeaf",
+              label: "Leaf",
+              nodeId: "d1",
+              propPath: "hidden",
+              type: "visibility",
+            },
+          ],
+        }
+      ),
+    });
+    const off = component([instance("n1", "inner")]);
+    const on = component([
+      instance("n1", "inner", { overrides: { showLeaf: true } }),
+    ]);
+
+    // Gated and untouched: the resolver leaves that root standing, so the
+    // query answers nothing rather than a type.
+    expect(composedRootTypes(off, definitions)).toBeUndefined();
+    // Turned on: it is expanded, and its definition's root is what it draws.
+    expect(composedRootTypes(on, definitions)).toEqual([
+      "core/column",
+      "core/text",
+    ]);
+    expect(composedRootTypes(on, definitions)).toEqual(
+      resolvedRootTypes(on, definitions)
+    );
+  });
+
+  it("does not let one instance's decision answer for another's", () => {
+    // A definition's roots are remembered per query; an instance that hides a
+    // root is asking a question of its own, and the memo must not carry its
+    // answer to the next instance of the same component.
+    const definitions = defs({
+      inner: component([node("d1", { type: "core/column" }), node("d2")], {
+        exposed: [
+          {
+            id: "showCol",
+            label: "Column",
+            nodeId: "d1",
+            propPath: "hidden",
+            type: "visibility",
+          },
+        ],
+      }),
+    });
+    const hiddenFirst = component([
+      instance("n1", "inner", { overrides: { showCol: false } }),
+      instance("n2", "inner"),
+    ]);
+    const plainFirst = component([
+      instance("n1", "inner"),
+      instance("n2", "inner", { overrides: { showCol: false } }),
+    ]);
+
+    // Both types either way — the plain instance still contributes the column
+    // the hidden one did not — and in the order the composed forest first
+    // meets them, which the hidden root moves.
+    expect(composedRootTypes(hiddenFirst, definitions)).toEqual([
+      "core/text",
+      "core/column",
+    ]);
+    expect(composedRootTypes(plainFirst, definitions)).toEqual([
+      "core/column",
+      "core/text",
+    ]);
+    for (const doc of [hiddenFirst, plainFirst]) {
+      expect(composedRootTypes(doc, definitions)).toEqual(
+        resolvedRootTypes(doc, definitions)
+      );
+    }
+  });
+
+  it("answers nothing for a root the resolver would leave standing: missing, another kind, a cycle, the composition cap", () => {
+    const missing = component([instance("i1", "nobody")]);
+    const wrongKind = component([instance("i1", "page")]);
+    const loop = component([instance("i1", "loop")]);
+    const definitions = defs({
+      page: page([node("p1")]),
+      loop: component([instance("l1", "loop")]),
+    });
+
+    for (const doc of [missing, wrongKind, loop]) {
+      expect(composedRootTypes(doc, definitions)).toBeUndefined();
+      expect(resolvedRoots(doc, definitions)).toEqual([
+        COMPONENT_INSTANCE_TYPE,
+      ]);
+    }
+
+    // A chain one longer than the cap: the resolver refuses the deepest
+    // instance for composed depth, so the outermost root cannot be answered.
+    const chain: Record<string, BlockDocument> = {};
+    for (let level = 0; level <= MAX_COMPOSED_DEPTH; level += 1) {
+      chain[`c${String(level)}`] = component([
+        level === MAX_COMPOSED_DEPTH
+          ? node("leaf")
+          : instance(`i${String(level)}`, `c${String(level + 1)}`),
+      ]);
+    }
+    const deep = component([instance("top", "c0")]);
+    expect(composedRootTypes(deep, defs(chain))).toBeUndefined();
+    expect(
+      resolvedRoots(deep, defs(chain)).includes(COMPONENT_INSTANCE_TYPE)
+    ).toBe(true);
+  });
+
+  it("answers nothing for a gated root instance, which the resolver leaves standing, and keeps a gated block", () => {
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const definitions = defs({ header: component([node("d1")]) });
+    const gatedInstance = component([
+      instance("i1", "header", {}, { visibility: gate } as Partial<BlockNode>),
+    ]);
+    const gatedBlock = component([
+      node("n1", { visibility: gate } as Partial<BlockNode>),
+    ]);
+
+    expect(composedRootTypes(gatedInstance, definitions)).toBeUndefined();
+    expect(resolvedRoots(gatedInstance, definitions)).toEqual([
+      COMPONENT_INSTANCE_TYPE,
+    ]);
+    expect(composedRootTypes(gatedBlock, definitions)).toEqual(["core/text"]);
+    expect(resolvedRoots(gatedBlock, definitions)).toEqual(["core/text"]);
+  });
+
+  it("passes over a root the resolver DROPS, and keeps the roots beside it", () => {
+    /*
+     * `cloneDefinitionForest` skips a node it cannot clone — one that is not a
+     * record, or whose id is not a string — so such a root never lands on the
+     * page. Counted here, a component would be offered, and refused, by the
+     * type of a root the page never gets; and one whose every root is dropped
+     * would be offered as placing something and place nothing.
+     */
+    const idless = {
+      type: "core/box",
+      version: 1,
+      props: {},
+    } as unknown as BlockNode;
+    const definitions = defs({
+      partial: component([idless, node("ok")]),
+      allDropped: component([idless, null as unknown as BlockNode]),
+    });
+    const doc = component([instance("i1", "partial")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(composedRootTypes(doc, definitions)).toEqual(
+      resolvedRootTypes(doc, definitions)
+    );
+
+    const nothing = component([instance("i2", "allDropped")]);
+    expect(composedRootTypes(nothing, definitions)).toEqual([]);
+    expect(resolvedRoots(nothing, definitions)).toEqual([]);
+  });
+
+  it("answers an empty list for a definition whose roots compose to nothing", () => {
+    const definitions = defs({ empty: component([]) });
+
+    expect(
+      composedRootTypes(component([instance("i1", "empty")]), definitions)
+    ).toEqual([]);
+  });
+
+  it("walks the definition again for an instance that decides, rather than taking the answer given for another", () => {
+    // Counted rather than compared, because the query answers a UNION over
+    // the roots: the plain instance that filled the memo contributes the very
+    // types the memo holds, so a deciding instance wrongly served from it
+    // still lands inside the same set. The invariant is that it is not served
+    // from it at all — one instance's decision is not an answer about the
+    // definition, and the next caller to ask a narrower question would get
+    // the first instance's.
+    let walks = 0;
+    const roots = [node("d1", { type: "core/column" }), node("d2")];
+    const inner = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      exposed: [
+        {
+          id: "showCol",
+          label: "Column",
+          nodeId: "d1",
+          propPath: "hidden",
+          type: "visibility",
+        },
+      ],
+      get nodes() {
+        walks += 1;
+        return roots;
+      },
+    } as unknown as ComponentDocument;
+    const lookup = defs({ inner });
+
+    // Two plain instances: the second takes the first's remembered answer.
+    composedRootTypes(
+      component([instance("n1", "inner"), instance("n2", "inner")]),
+      lookup
+    );
+    const plain = walks;
+
+    // The same pair, with the second deciding: one more read of the roots,
+    // because it answers for itself.
+    walks = 0;
+    composedRootTypes(
+      component([
+        instance("n1", "inner"),
+        instance("n2", "inner", { overrides: { showCol: false } }),
+      ]),
+      lookup
+    );
+
+    expect(walks).toBe(plain + 1);
+  });
+
+  it("answers nothing, rather than throwing, for a stored node whose own fields throw", () => {
+    // The resolver is the oracle here too, and it SURVIVES this: a definition
+    // carrying a throwing accessor — which an in-process host can supply, as
+    // the neighbouring test's counting getter shows — composes without
+    // raising. This query read the same fields with no boundary, so the one
+    // caller that cannot afford to raise, the palette building its catalogue,
+    // took the whole panel down over a definition the canvas draws.
+    const throwing = (): BlockNode => {
+      const bad: Record<string, unknown> = { id: "d1", version: 1, props: {} };
+      Object.defineProperty(bad, "type", {
+        enumerable: true,
+        get: () => {
+          throw new Error("unreadable");
+        },
+      });
+      return bad as unknown as BlockNode;
+    };
+    const definitions = defs({ bad: component([throwing()]) });
+
+    // In a definition the query follows into.
+    const viaInstance = component([instance("i1", "bad")]);
+    expect(() =>
+      resolveComponentInstances(page([instance("p1", "bad")]), definitions)
+    ).not.toThrow();
+    expect(composedRootTypes(viaInstance, definitions)).toBeUndefined();
+
+    // And at the document's own root, which no per-definition boundary covers.
+    const atRoot = component([throwing()]);
+    expect(composedRootTypes(atRoot, definitions)).toBeUndefined();
+  });
+
+  it("reads each definition once, however many roots point at it", () => {
+    // What makes the query cheap where the resolver is not: a definition is
+    // read once per query rather than cloned once per instance, so a library
+    // of wrappers around one large definition costs its roots, not its size.
+    let reads = 0;
+    const big = component([
+      box(
+        "b1",
+        Array.from({ length: 200 }, (_, i) => node(`n${String(i)}`))
+      ),
+    ]);
+    const lookup: DefinitionsById = new Map([["big", big]]);
+    const counting = {
+      has: (id: string) => lookup.has(id),
+      get: (id: string) => {
+        reads += 1;
+        return lookup.get(id);
+      },
+    };
+    const doc = component([
+      instance("i1", "big"),
+      instance("i2", "big"),
+      instance("i3", "big"),
+    ]);
+
+    expect(composedRootTypes(doc, counting)).toEqual(["core/box"]);
+    expect(reads).toBe(1);
+  });
+
+  it("walks each definition's roots once per query, however many instances point at it, at any depth", () => {
+    /*
+     * Reading a definition once is not enough: a definition read once and
+     * WALKED once per instance costs its roots per instance, and a definition
+     * whose roots are instances of another multiplies — three levels of two
+     * hundred is eight million root visits, and the answer was as long. The
+     * roots of a definition, once answered, are remembered for the query.
+     *
+     * Observed on the leaf's root node: its `type` is read by the walk and by
+     * nothing else, so the count is the number of times the leaf was walked.
+     */
+    const WIDTH = 200;
+    let leafWalks = 0;
+    const leafRoot = { id: "leaf", version: 1, props: {} };
+    Object.defineProperty(leafRoot, "type", {
+      enumerable: true,
+      get: () => {
+        leafWalks += 1;
+        return "core/text";
+      },
+    });
+    const many = (id: string, of: string) =>
+      Array.from({ length: WIDTH }, (_, i) =>
+        instance(`${id}-${String(i)}`, of)
+      );
+    const definitions = defs({
+      leaf: component([leafRoot as BlockNode]),
+      mid: component(many("m", "leaf")),
+      top: component(many("t", "mid")),
+    });
+    const doc = component([instance("i1", "top")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(leafWalks).toBe(1);
+  });
+
+  it("does not reuse roots answered nearer the surface where the composition cap refuses them deeper down", () => {
+    /*
+     * The one thing a remembered answer depends on besides the definition is
+     * how deep the instance sits: the cap refuses an instance at the depth
+     * limit, so a definition answered at the surface can be one the resolver
+     * leaves standing five levels down. Remembered answers carry the depth
+     * they were answered at and serve only the same depth or nearer.
+     *
+     * `c4` is met first at the surface, where everything under it fits, and
+     * then at the bottom of a chain, where the instance inside it is one
+     * past the cap.
+     */
+    const chain: Record<string, BlockDocument> = {};
+    for (let level = 0; level < MAX_COMPOSED_DEPTH; level += 1) {
+      chain[`c${String(level)}`] = component([
+        instance(`i${String(level)}`, `c${String(level + 1)}`),
+      ]);
+    }
+    chain[`c${String(MAX_COMPOSED_DEPTH)}`] = component([node("leaf")]);
+    const definitions = defs(chain);
+    const deepest = `c${String(MAX_COMPOSED_DEPTH - 1)}`;
+    const doc = component([
+      instance("shallow", deepest),
+      instance("deep", "c0"),
+    ]);
+
+    expect(composedRootTypes(doc, definitions)).toBeUndefined();
+    expect(
+      resolvedRoots(doc, definitions).includes(COMPONENT_INSTANCE_TYPE)
+    ).toBe(true);
+    // The control: met at the surface alone, the same definition answers.
+    expect(
+      composedRootTypes(component([instance("shallow", deepest)]), definitions)
+    ).toEqual(["core/text"]);
+  });
+
+  it("reuses roots answered deeper down where they are met nearer the surface", () => {
+    // The other direction is safe: what fit at depth four fits at depth one.
+    // A query meeting the deep reference first must still answer the shallow
+    // one, and from the remembered walk rather than a second one.
+    let walks = 0;
+    const leafRoot = { id: "leaf", version: 1, props: {} };
+    Object.defineProperty(leafRoot, "type", {
+      enumerable: true,
+      get: () => {
+        walks += 1;
+        return "core/text";
+      },
+    });
+    const definitions = defs({
+      leaf: component([leafRoot as BlockNode]),
+      wrap: component([instance("w1", "leaf")]),
+    });
+    const doc = component([instance("deep", "wrap"), instance("near", "leaf")]);
+
+    expect(composedRootTypes(doc, definitions)).toEqual(["core/text"]);
+    expect(walks).toBe(1);
   });
 });

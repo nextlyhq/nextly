@@ -1,13 +1,16 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
+import { buildUserContext } from "../auth/user-context";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
+import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
 import type {
   CollectionEntry,
   CollectionService,
 } from "../services/collections/collection-service";
+import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
@@ -16,9 +19,10 @@ import type { AuthUser } from "../types/auth";
  * Default: `system` when no `user` is supplied (no-user → system). Validation/
  * hooks/events ALWAYS run, even under `system` — only the access check is bypassed.
  *
- * Under `as:'user'`, RBAC is enforced by `user.id` (DB lookup). Code-defined
- * `access` rules that read `ctx.user.role` see it empty — pass `system`, or rely on
- * DB RBAC, for now (documented v1 limitation).
+ * Under `as:'user'`, RBAC is enforced by `user.id` (DB lookup), and the caller's
+ * roles are resolved so a code-defined `access` rule reading `ctx.user.role` or
+ * `ctx.user.roles` sees the same caller a session request would. A caller that
+ * arrived on an API key is judged on the KEY's roles, never its owner's.
  */
 export interface ServiceOpts {
   /**
@@ -78,17 +82,148 @@ export interface ServiceOpts {
    * do, never widens it.
    */
   authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * The content locale this operation reads or writes in.
+   *
+   * DATA, like `context`: which translation a localized field answers with, or
+   * which one a write stores into. Absent means the site's default locale,
+   * which is what every plugin call has silently meant — the request context
+   * always carried this pair, and the facade always accepted it, but nothing
+   * on the plugin path could say it. So a plugin serving a French page read
+   * English content, and a form redirecting to a picked page answered
+   * `/thanks` for a visitor who was on `/merci`.
+   *
+   * The same spelling as `RequestContext` and the wire's `?locale=`, so a
+   * route can hand through what it was given, and what it was given is judged
+   * here and below rather than trusted. One language code, only. The
+   * selectors the core understands elsewhere — `*`, which moves every
+   * translation's lifecycle in one write, and `all`, which answers a read
+   * with one value per language — are refused at this boundary, because a
+   * value forwarded from a query string must never be able to publish every
+   * translation of a document, and no plugin has a designed use for either;
+   * a plugin that needs the sweep needs a surface that says so by name.
+   *
+   * The collection services decide what an unconfigured code means, and they
+   * decide it differently by verb: a READ resolves it to the default, so a
+   * wrong query string still shows a page; a WRITE is refused (`400`), so a
+   * typo cannot overwrite the default language's content. `createMany`
+   * refuses any locale at all, by name — its bulk pipeline cannot perform the
+   * localized split, and accepting a value it could not honour would file the
+   * rows under the default language silently.
+   */
+  locale?: string;
+
+  /**
+   * Which locale a missing translation falls back to, or `false` for none.
+   *
+   * Absent means the configured fallback chain, which is right for a read
+   * that wants SOMETHING to show. `false` is for a read that must know
+   * whether the translation exists — a sitemap deciding whether to list a
+   * language, say — and would be misled by the default's value standing in.
+   */
+  fallbackLocale?: string | false;
 }
 
-/** Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`. */
-export function resolveServiceOpts(opts: ServiceOpts): {
+/**
+ * What resolving a caller needs from the outside: the roles a user holds, by
+ * slug. Injectable so the translation is tested without a database; the facade
+ * wrapper supplies the real lookup.
+ */
+export interface ServiceOptsDeps {
+  listRoleSlugs: (userId: string) => Promise<string[]>;
+}
+
+/**
+ * The resolver that refuses rather than answering with an empty set.
+ *
+ * A role set nobody could read is not a role set. The swallowing resolver
+ * returns `[]` on a failed query, which is the safe direction for a rule that
+ * GRANTS on a role and the wrong one for a rule that WITHHOLDS on one:
+ * `user.role !== "suspended"` admits a caller whose roles the database
+ * declined to answer for, and no caller downstream can tell that empty set
+ * from a user who genuinely holds no roles.
+ *
+ * A throw here fails the plugin's call, which is the correct direction: an
+ * access decision taken on roles nobody could read is not a decision.
+ */
+const REAL_DEPS: ServiceOptsDeps = {
+  listRoleSlugs: listRoleSlugsForUserOrRefuse,
+};
+
+/**
+ * Translate {@link ServiceOpts} into the facade's `{ user, overrideAccess }`.
+ *
+ * A caller is built by `buildUserContext`, the one constructor every
+ * authenticated path uses, with the roles it holds resolved here. Built by hand
+ * with `role: ""`, as it was, a code-defined rule such as
+ * `req.user?.role === "editor"` refused every caller on the plugin path, while
+ * the same caller's own request passed it; and a negative rule granted what it
+ * was written to refuse. The permission list stays empty: the access services
+ * resolve permissions from the id, and from the key's own scope when there is
+ * one.
+ *
+ * The roles are the KEY's when the caller arrived on one. `user` names the
+ * key's owner, and a stored role rule reads `user.roles` with no scope in
+ * front of it, so the owner's roles here let a viewer key minted by an
+ * administrator satisfy an administrators-only rule, and refused a key
+ * holding the very role the rule names because its owner did not. The REST
+ * path answers the same question with `resolveRoleSlugs`: a key's roles as
+ * authentication resolved them, an account's from the database. A scope that
+ * carries none falls back to the account, as `apiKeyWriteAllowed` does.
+ */
+export async function resolveServiceOpts(
+  opts: ServiceOpts,
+  deps: ServiceOptsDeps = REAL_DEPS
+): Promise<{
   user?: RequestContext["user"];
   authenticatedScope?: AuthenticatedScope;
   overrideAccess: boolean;
   context?: Record<string, unknown>;
   request?: Request;
-} {
-  const { as, user, context, request } = opts;
+  locale?: string;
+  fallbackLocale?: string | false;
+}> {
+  const { as, user } = opts;
+  // `?locale=` with nothing after it reaches a route as the empty string, and
+  // a route forwarding what it was given hands that on. It is not a language
+  // and not a selector: the write path takes any falsy locale as "none named"
+  // and would file the write under the default language, which is the one
+  // wrong code the documented refusal would not catch. It names nothing, so it
+  // travels as nothing — the same reading the wire gives an absent parameter.
+  const locale = opts.locale === "" ? undefined : opts.locale;
+  // A selector is not a language. `*` is the every-locale lifecycle sweep
+  // and `all` the every-translation read; both are core vocabulary a plugin
+  // has no designed use for, and a route forwarding `?locale=` must not be
+  // able to reach the sweep by accident. Refused before any branch, so no
+  // branch can carry one.
+  if (locale !== undefined && isLocaleSelector(locale)) {
+    throw NextlyError.invalidInput({
+      message: "locale must name one language.",
+      logContext: {
+        reason: "service-opts-locale-selector",
+        locale,
+      },
+    });
+  }
+  // What travels whatever the caller is, built once. Each branch below used to
+  // write its own literal of these, and a literal drops whatever it does not
+  // name: that is how the locale a plugin could not say stayed unsayable —
+  // there was no field to forget, and adding one to three literals is adding
+  // it to two. Spread this and a branch cannot lose a field the others carry.
+  //
+  // The pair is present only when the plugin named it. A key holding
+  // `undefined` and no key read the same to every consumer today, but they are
+  // different claims — "no locale" and "the locale is undefined" — and only
+  // the absence says the facade is deciding the default, not being handed one.
+  const carried = {
+    context: opts.context,
+    request: opts.request,
+    ...(locale !== undefined ? { locale } : {}),
+    ...(opts.fallbackLocale !== undefined
+      ? { fallbackLocale: opts.fallbackLocale }
+      : {}),
+  };
   // The caller's own scope wins when named; otherwise the one the dispatcher
   // pinned for this request. A route that omits it is the common case, not the
   // exception, so the ambient value is what makes the key's grants reach the
@@ -99,29 +234,41 @@ export function resolveServiceOpts(opts: ServiceOpts): {
   // `user`, because that shape already means "system" and quietly changing it
   // would elevate nothing and demote every existing plugin call at once.
   if (as === "public") {
-    return { overrideAccess: false, context, request };
+    return { overrideAccess: false, ...carried };
   }
 
   const wantsUser = as === "user" || (as === undefined && user !== undefined);
   if (wantsUser) {
     if (!user) {
-      throw new NextlyError({
-        code: "INVALID_INPUT",
-        statusCode: 400,
-        publicMessage: "Permission configuration is invalid.",
-        logMessage: "ServiceOpts as:'user' requires a `user`",
+      throw NextlyError.invalidInput({
+        message: "Permission configuration is invalid.",
         logContext: { reason: "service-opts-user-missing" },
       });
     }
+    const identity = buildUserContext({
+      id: user.id,
+      name: user.name ?? undefined,
+      email: user.email,
+      // Copied: the scope's arrays are frozen, and the caller object is the
+      // mutable shape every consumer of it is typed against.
+      roles: authenticatedScope?.roles
+        ? [...authenticatedScope.roles]
+        : await deps.listRoleSlugs(user.id),
+    });
     return {
       overrideAccess: false,
-      user: { id: user.id, email: user.email, role: "", permissions: [] },
-      context,
-      request,
+      user: {
+        ...identity,
+        id: user.id,
+        email: user.email,
+        role: identity.role ?? "",
+        permissions: [],
+      },
+      ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
-  return { overrideAccess: true, context, request };
+  return { overrideAccess: true, ...carried };
 }
 
 /**
@@ -136,7 +283,8 @@ type AccessMethod =
   | "updateEntry"
   | "deleteEntry"
   | "count"
-  | "createMany";
+  | "createMany"
+  | "updateMany";
 
 const CONTEXT_INDEX: Record<AccessMethod, number> = {
   createEntry: 2,
@@ -147,6 +295,9 @@ const CONTEXT_INDEX: Record<AccessMethod, number> = {
   // D56 additions — trailing context at arg index 2.
   count: 2,
   createMany: 2,
+  // The entries carry their own ids, so the context stays at index 2 as on
+  // `createMany` rather than moving out to make room for one.
+  updateMany: 2,
 };
 
 /**
@@ -220,7 +371,8 @@ export type PluginCollectionService = Omit<
  * `overrideAccess` directly.
  */
 export function wrapCollectionsForPlugin(
-  collections: CollectionService
+  collections: CollectionService,
+  deps: ServiceOptsDeps = REAL_DEPS
 ): PluginCollectionService {
   return new Proxy(collections, {
     get(target, prop, receiver) {
@@ -235,7 +387,10 @@ export function wrapCollectionsForPlugin(
         prop as string
       ];
       return async (...args: unknown[]) => {
-        const resolved = resolveServiceOpts((args[idx] as ServiceOpts) ?? {});
+        const resolved = await resolveServiceOpts(
+          (args[idx] as ServiceOpts) ?? {},
+          deps
+        );
         const next = [...args];
         // Spread rather than named one by one. Rebuilding this literal is
         // what kept a plugin from reaching the hook context, and the same

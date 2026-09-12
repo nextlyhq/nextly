@@ -204,6 +204,29 @@ export function assertNoPasswordDefault(
 }
 
 /**
+ * {@link assertNoPasswordDefault} for every child of a group or repeater, at
+ * any depth: a nested default is resolved onto the same direct insert, which
+ * never hashes, so a password child's default would be stored in plaintext.
+ */
+export function assertNoNestedPasswordDefault(
+  field: { name?: string; type?: string; fields?: unknown },
+  singleSlug: string
+): void {
+  if (!Array.isArray(field.fields)) return;
+  for (const child of field.fields as {
+    name?: string;
+    type?: string;
+    fields?: unknown;
+    defaultValue?: unknown;
+  }[]) {
+    if (child.defaultValue !== undefined) {
+      assertNoPasswordDefault(child, singleSlug);
+    }
+    assertNoNestedPasswordDefault(child, singleSlug);
+  }
+}
+
+/**
  * Get a type-appropriate default value for a field type.
  * Used when a required field has no explicit defaultValue.
  */
@@ -648,6 +671,28 @@ export function normalizeUploadFields(
  * single-query-service). Once those migrate to throw-based handlers,
  * buildSingleErrorResult and the SingleResult error branch can be deleted.
  */
+/**
+ * The envelope for a Single this read answers no document for: one that is
+ * not registered, or one holding nothing the caller's status view may see.
+ *
+ * ONE shape for both, deliberately. A draft-only Single and a nonexistent one
+ * answer a public caller identically, so the existence of unpublished work
+ * stays invisible -- the message is the same and so is the payload.
+ * `publicData.single` names only what the caller already named: which Single
+ * this refusal is ABOUT. That is what lets a caller reading the Single on
+ * behalf of a card tell the read's own refusal from a `NOT_FOUND` a hook or a
+ * related read raised for something else, without the two cases above coming
+ * apart.
+ */
+export function singleAbsentResult(slug: string): SingleResult {
+  return {
+    success: false,
+    statusCode: 404,
+    message: `Single "${slug}" not found`,
+    publicData: { single: slug },
+  };
+}
+
 export function buildSingleErrorResult(
   error: unknown,
   defaultMessage: string

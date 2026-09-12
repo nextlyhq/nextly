@@ -1,8 +1,8 @@
 /**
  * Read-side helpers: `nextlyTags` builds the same `nextly:*` scheme the write
  * side busts, and `cachedFind`/`applyCache` cache a read under a caller-scoped
- * key. Includes the two-user owner-only leak guard the F1 read-path design
- * requires: distinct callers must not share a cache entry.
+ * key. Includes the two-user leak guard the F1 read-path design requires:
+ * distinct callers must not share a cache entry.
  */
 import { describe, expect, it, vi } from "vitest";
 

@@ -1,8 +1,8 @@
 {
   "coverage": {
-    "pages": 50,
-    "samples": 343,
-    "compiled": 210
+    "pages": 70,
+    "samples": 391,
+    "compiled": 246
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -186,8 +186,8 @@
       "compiled": 4
     },
     "docs/plugins/services.mdx": {
-      "samples": 4,
-      "compiled": 0
+      "samples": 7,
+      "compiled": 1
     },
     "docs/plugins/testing.mdx": {
       "samples": 1,
@@ -204,6 +204,86 @@
     "docs/webhooks/retention.mdx": {
       "samples": 2,
       "compiled": 1
+    },
+    "docs/widgets/index.mdx": {
+      "samples": 1,
+      "compiled": 0
+    },
+    "packages/adapter-mysql/README.md": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "packages/adapter-postgres/README.md": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "packages/adapter-sqlite/README.md": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "packages/admin/README.md": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "packages/blocks-react/README.md": {
+      "samples": 4,
+      "compiled": 4
+    },
+    "packages/builder/README.md": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "packages/module-specifiers/README.md": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "packages/nextly/README.md": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "packages/plugin-form-builder/README.md": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "packages/plugin-mcp/README.md": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "packages/plugin-page-builder/README.md": {
+      "samples": 5,
+      "compiled": 4
+    },
+    "packages/plugin-sdk/README.md": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "packages/plugin-seo/README.md": {
+      "samples": 7,
+      "compiled": 4
+    },
+    "packages/storage-s3/README.md": {
+      "samples": 4,
+      "compiled": 1
+    },
+    "packages/storage-uploadthing/README.md": {
+      "samples": 1,
+      "compiled": 1
+    },
+    "packages/storage-vercel-blob/README.md": {
+      "samples": 2,
+      "compiled": 1
+    },
+    "packages/ui/README.md": {
+      "samples": 3,
+      "compiled": 3
+    },
+    "templates/blog/README.md": {
+      "samples": 2,
+      "compiled": 1
+    },
+    "templates/plugin/README.md": {
+      "samples": 1,
+      "compiled": 1
     }
   },
   "pages": {
@@ -215,8 +295,12 @@
     "docs/plugins/author-guide.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
     "docs/plugins/lifecycle.mdx": 2,
+    "packages/blocks-react/README.md": 1,
+    "packages/builder/README.md": 1,
+    "packages/plugin-seo/README.md": 2,
     "docs/database/mysql.mdx": 3,
-    "docs/guides/isr-caching.mdx": 1
+    "docs/guides/isr-caching.mdx": 1,
+    "docs/plugins/services.mdx": 4
   },
   "findings": {
     "docs/getting-started/quick-start.mdx": {
@@ -267,6 +351,21 @@
       "#1 error TS2304: Cannot find name 'a'.": 1,
       "#1 error TS2304: Cannot find name 'b'.": 1
     },
+    "packages/blocks-react/README.md": {
+      "#3 error TS2304: Cannot find name 'myPosts'.": 1
+    },
+    "packages/builder/README.md": {
+      "#0 error TS2304: Cannot find name 'router'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'MyPanel'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'MyInspector'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'MyTopBar'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'MyBreadcrumb'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'MyCanvas'.": 1
+    },
+    "packages/plugin-seo/README.md": {
+      "#2 error TS7031: Binding element 'params' implicitly has an 'any' type.": 1,
+      "#2 error TS2304: Cannot find name 'getPostBySlug'.": 1
+    },
     "docs/database/mysql.mdx": {
       "#6 error TS2304: Cannot find name 'orderData'.": 1,
       "#6 error TS2304: Cannot find name 'stockUpdate'.": 1,
@@ -275,6 +374,12 @@
     "docs/guides/isr-caching.mdx": {
       "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/plugins/services.mdx": {
+      "#5 error TS2304: Cannot find name 'ctx'.": 2,
+      "#5 error TS2304: Cannot find name 'slug'.": 2,
+      "context #4 error TS2304: Cannot find name 'ctx'.": 1,
+      "context #4 error TS2304: Cannot find name 'slug'.": 1
     },
     "docs/api-reference/direct-api.mdx": {
       "suppressed #36 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
@@ -301,6 +406,20 @@
     "docs/guides/email.mdx": {
       "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
       "reader-file #5 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
+    },
+    "packages/nextly/README.md": {
+      "uninstalled #1 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1
+    },
+    "packages/plugin-sdk/README.md": {
+      "uninstalled #1 error TS2307: Cannot find module '@acme/nextly-plugin-hello' or its corresponding type declarations.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'MyPluginOptions'.": 1,
+      "reader-name #0 error TS2304: Cannot find name 'Greetings'.": 1
+    },
+    "templates/blog/README.md": {
+      "uninstalled #1 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1
+    },
+    "templates/plugin/README.md": {
+      "uninstalled #0 error TS2307: Cannot find module '{{pluginName}}' or its corresponding type declarations.": 1
     },
     "docs/api-reference/rest-api.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
@@ -342,6 +461,12 @@
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
+    },
+    "packages/admin/README.md": {
+      "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "packages/plugin-page-builder/README.md": {
+      "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/form-builder.mdx": {
       "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,

@@ -99,8 +99,8 @@ export const OWNER_QUERY_COLUMNS = new Set(["created_by", "createdBy"]);
 /**
  * Remove any owner-column condition from a client-supplied `where` tree
  * (recursing through `and`/`or`), so a REST caller cannot filter/count by the
- * system owner column. The service's own owner-only constraint is added
- * separately, downstream of this, and is unaffected.
+ * system owner column, which is stamped by the write path rather than being
+ * something a reader may query on.
  */
 const stripOwnerFromWhere = (node: unknown): unknown => {
   if (Array.isArray(node)) {

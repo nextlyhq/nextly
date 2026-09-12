@@ -93,6 +93,19 @@ export interface CollectionArtifacts {
   };
 }
 
+/**
+ * The fields every dynamic collection has without being asked: the system adds
+ * them, so a save never defines them, and the UI may send them back with the
+ * complete field list on an update.
+ */
+const RESERVED_FIELD_NAMES: readonly string[] = [
+  "id",
+  "title",
+  "slug",
+  "created_at",
+  "updated_at",
+];
+
 export interface CreateCollectionInput {
   name: string;
   label?: string;
@@ -412,24 +425,7 @@ export class DynamicCollectionService extends BaseService {
       throw new Error(`Collection "${normalizedName}" already exists`);
     }
 
-    const normalizedFields = data.fields.map(f => ({
-      ...f,
-      name: f.name.toLowerCase(),
-    }));
-
-    // Reserved fields are auto-added by the system and should not be user-defined.
-    const reservedFieldNames = [
-      "id",
-      "title",
-      "slug",
-      "created_at",
-      "updated_at",
-    ];
-    const userDefinedFields = normalizedFields.filter(
-      f => !reservedFieldNames.includes(f.name)
-    );
-
-    this.validationService.validateFieldNames(userDefinedFields);
+    const userDefinedFields = this.userFieldsOf(data.fields, tableName);
 
     const id = this.generateId();
 
@@ -560,6 +556,58 @@ export class DynamicCollectionService extends BaseService {
    * resolved form would resolve twice and could write a row `migrate:create`
    * would not.
    */
+  /**
+   * Refuse a junction move whose destination name the database already holds.
+   *
+   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`) naming the table
+   */
+  private async refuseJunctionMovesOntoLiveTables(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): Promise<void> {
+    for (const move of this.schemaService.junctionMoves(
+      tableName,
+      oldFields,
+      newFields
+    )) {
+      if (!(await this.adapter.tableExists(move.to.table))) continue;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "JUNCTION_TABLE_IN_USE",
+            message:
+              `Junction table "${move.from.table}" cannot move to ` +
+              `"${move.to.table}": a table of that name already exists in the ` +
+              `database. Choose another name, or drop that table first.`,
+          },
+        ],
+        logContext: { from: move.from.table, to: move.to.table },
+      });
+    }
+  }
+
+  /**
+   * The fields a save defines itself, validated: names lower-cased, the
+   * reserved fields dropped, every name checked, and no two many-to-many
+   * fields sharing one junction table — asked through the schema service's own
+   * naming, which is what the DDL is written with.
+   */
+  private userFieldsOf(
+    fields: FieldDefinition[],
+    tableName: string
+  ): FieldDefinition[] {
+    const userDefinedFields = fields
+      .map(f => ({ ...f, name: f.name.toLowerCase() }))
+      .filter(f => !RESERVED_FIELD_NAMES.includes(f.name));
+    this.validationService.validateFieldNames(userDefinedFields);
+    this.validationService.validateJunctionOwnership(userDefinedFields, field =>
+      this.schemaService.junctionTableNameFor(tableName, field)
+    );
+    return userDefinedFields;
+  }
+
   private manifestEntityFor(
     slug: string,
     data: CreateCollectionInput,
@@ -969,40 +1017,30 @@ export class DynamicCollectionService extends BaseService {
         this.localizationConfigured
       );
     }
-    const reservedForFields = [
-      "id",
-      "title",
-      "slug",
-      "created_at",
-      "updated_at",
-    ];
     const existingUserFieldsForTransition = (collection.fields || []).filter(
-      (f: FieldDefinition) => !reservedForFields.includes(f.name)
+      (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
     );
 
     if (updates.fields !== undefined) {
-      const normalizedFields = updates.fields.map(f => ({
-        ...f,
-        name: f.name.toLowerCase(),
-      }));
-
-      // Reserved fields are auto-added by the system; the UI may include them
-      // when sending back the complete field list during an update operation.
-      const reservedFieldNames = [
-        "id",
-        "title",
-        "slug",
-        "created_at",
-        "updated_at",
-      ];
-      const userDefinedFields = normalizedFields.filter(
-        f => !reservedFieldNames.includes(f.name)
+      const userDefinedFields = this.userFieldsOf(
+        updates.fields,
+        collection.tableName
       );
 
-      this.validationService.validateFieldNames(userDefinedFields);
-
       const oldUserFields = (collection.fields || []).filter(
-        (f: FieldDefinition) => !reservedFieldNames.includes(f.name)
+        (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
+      );
+
+      // Asked here rather than in the generator, because only this side can
+      // ask the database. The generator refuses a move onto a table this
+      // collection's own fields name; a junction left behind by an older
+      // migration is invisible to it, and the rename would meet that table at
+      // apply time — in production, where a migration can no longer be
+      // refused and the registry has already recorded the new name.
+      await this.refuseJunctionMovesOntoLiveTables(
+        collection.tableName,
+        oldUserFields,
+        userDefinedFields
       );
 
       // Pass status flags so the alter migration can ADD/DROP the
@@ -1045,10 +1083,11 @@ export class DynamicCollectionService extends BaseService {
         // Detected from the FULL lists: a renamed LOCALIZED field-group field
         // sits in neither shared list, and its association migration must not
         // be excluded along with its column handling.
-        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
-          oldUserFields,
-          userDefinedFields
-        );
+        const groupAssociationRename =
+          this.schemaService.detectFieldGroupAssociationRename(
+            oldUserFields,
+            userDefinedFields
+          );
         const mainSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldShared,
@@ -1056,6 +1095,9 @@ export class DynamicCollectionService extends BaseService {
           {
             wasStatus,
             hasStatus,
+            // The junction tables are decided on the full lists: a localized
+            // many-to-many sits in neither shared list and still has one.
+            junctionFields: { old: oldUserFields, new: userDefinedFields },
             ...(await liveTable()),
             // Strict only when an association rename will occur: the table
             // names are a precondition of THAT migration, and requiring them
@@ -1101,10 +1143,11 @@ export class DynamicCollectionService extends BaseService {
           localMigrationSQL = assemble(localCompanionSQL);
         }
       } else {
-        const groupAssociationRename = this.schemaService.detectFieldGroupAssociationRename(
-          oldUserFields,
-          userDefinedFields
-        );
+        const groupAssociationRename =
+          this.schemaService.detectFieldGroupAssociationRename(
+            oldUserFields,
+            userDefinedFields
+          );
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldUserFields,
@@ -1216,14 +1259,16 @@ export class DynamicCollectionService extends BaseService {
 
   generateDropTableMigration(
     collectionName: string,
-    tableName: string
+    tableName: string,
+    fields: FieldDefinition[] = []
   ): {
     migrationSQL: string;
     migrationFileName: string;
   } {
     return this.schemaService.generateDropTableMigration(
       collectionName,
-      tableName
+      tableName,
+      fields
     );
   }
 

@@ -11,10 +11,8 @@ vi.mock("../../../di/container", () => ({ container: { get: vi.fn() } }));
 
 import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
-import {
-  refreshCollectionSources,
-  setDeferredCollections,
-} from "../collection-sources";
+import { refreshCollectionSources } from "../collection-sources";
+import { setDeferredEntities } from "../deferred-entities";
 import {
   clearSources,
   getSource,
@@ -89,7 +87,7 @@ beforeEach(() => {
   clearSources();
   // The refusal set is pinned on `globalThis`, so without this one test's
   // deferral outlives it and satisfies the next test's assertion.
-  setDeferredCollections([]);
+  setDeferredEntities("collection", []);
   setNextlyLogger({
     error: () => {},
     warn: () => {},
@@ -578,7 +576,7 @@ describe("a collection whose table is not there yet", () => {
     // its OLD table, which exists, beside a NEW field list the table never
     // received. Verified structurally it would publish a source naming columns
     // the database does not have, and the query fails after validating.
-    setDeferredCollections(["drafts"]);
+    setDeferredEntities("collection", ["drafts"]);
     registryHoldsWithTables(
       [
         {
@@ -601,7 +599,7 @@ describe("a collection whose table is not there yet", () => {
     // observed table. A collection edited after a healthy apply still carries
     // `applied` from the previous cycle while its new fields sit unapplied, so a
     // guard that only overrode the structural answer would publish it.
-    setDeferredCollections(["posts"]);
+    setDeferredEntities("collection", ["posts"]);
     registryHoldsWithTables(
       [
         {
@@ -634,12 +632,12 @@ describe("a collection whose table is not there yet", () => {
     };
 
     return (async () => {
-      setDeferredCollections(["posts"]);
+      setDeferredEntities("collection", ["posts"]);
       registryHolds([row]);
       await refreshCollectionSources();
       expect(getSource("collection:posts")).toBeUndefined();
 
-      setDeferredCollections([]);
+      setDeferredEntities("collection", []);
       await refreshCollectionSources();
       expect(getSource("collection:posts")).toBeDefined();
     })();

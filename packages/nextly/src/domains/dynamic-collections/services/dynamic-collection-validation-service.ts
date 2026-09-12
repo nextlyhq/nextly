@@ -11,7 +11,9 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
  * static analyzers.
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
@@ -221,6 +223,44 @@ export class DynamicCollectionValidationService {
       if (field.type === "relationship") {
         this.validateRelationshipField(field);
       }
+    }
+  }
+
+  /**
+   * Two many-to-many fields may not store their links in one junction table.
+   * A link row carries the two collections' ids and nothing that says which
+   * field made it, so the fields would read each other's links, and removing
+   * either field would take the other's table with it. Asked of the name each
+   * field RESOLVES to — its `junctionTable`, or the generated name — through
+   * the caller's resolver, which must be the one the DDL is written with: an
+   * author may name a table exactly what another field's generated name is.
+   *
+   * @throws NextlyError (validation, `JUNCTION_TABLE_SHARED`) naming both fields and the table
+   */
+  validateJunctionOwnership(
+    fields: FieldDefinition[],
+    junctionTableFor: (field: FieldDefinition) => string
+  ): void {
+    const owners = new Map<string, string>();
+    for (const field of fields.filter(usesJunctionTable)) {
+      const table = junctionTableFor(field);
+      const owner = owners.get(table);
+      if (owner !== undefined) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fields",
+              code: "JUNCTION_TABLE_SHARED",
+              message:
+                `Fields "${owner}" and "${field.name}" both store their links in ` +
+                `junction table "${table}". Each many-to-many field needs a ` +
+                `junction table of its own.`,
+            },
+          ],
+          logContext: { fields: [owner, field.name], junctionTable: table },
+        });
+      }
+      owners.set(table, field.name);
     }
   }
 

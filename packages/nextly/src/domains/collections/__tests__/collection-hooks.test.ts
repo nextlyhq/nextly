@@ -28,7 +28,7 @@ import {
   createMockCollectionService,
   createMockRelationshipService,
   createMockHookRegistry,
-  createMockAccessControlService,
+  createMockRbacAccessControlService,
   createMockComponentDataService,
   createMockCollection,
   createSampleEntry,
@@ -137,9 +137,8 @@ describe("CollectionEntryService — Hook Contracts", () => {
       createMockCollectionService() as never,
       createMockRelationshipService() as never,
       mockHookRegistry as never,
-      createMockAccessControlService() as never,
       createMockComponentDataService() as never,
-      undefined
+      createMockRbacAccessControlService() as never
     );
   });
 
@@ -464,9 +463,8 @@ describe("CollectionEntryService — Hook Contracts", () => {
         cs as never,
         createMockRelationshipService() as never,
         mockHookRegistry as never,
-        createMockAccessControlService() as never,
         createMockComponentDataService() as never,
-        undefined
+        createMockRbacAccessControlService() as never
       );
 
       selectData.rows = [{ id: "new-1", title: "Test" }];
@@ -501,9 +499,8 @@ describe("CollectionEntryService — Hook Contracts", () => {
         cs as never,
         createMockRelationshipService() as never,
         mockHookRegistry as never,
-        createMockAccessControlService() as never,
         createMockComponentDataService() as never,
-        undefined
+        createMockRbacAccessControlService() as never
       );
 
       selectData.rows = [{ id: "new-1", title: "Test" }];
@@ -527,9 +524,8 @@ describe("CollectionEntryService — Hook Contracts", () => {
         cs as never,
         createMockRelationshipService() as never,
         mockHookRegistry as never,
-        createMockAccessControlService() as never,
         createMockComponentDataService() as never,
-        undefined
+        createMockRbacAccessControlService() as never
       );
 
       selectData.rows = [{ id: "new-1", title: "Test" }];

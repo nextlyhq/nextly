@@ -51,6 +51,7 @@ jobs:
             blocks-react
             builder
             plugin-form-builder
+            plugin-mcp
             plugin-page-builder
             plugin-seo
             plugin-sdk

@@ -31,20 +31,14 @@
  * @module api/widget-layout
  */
 
-import {
-  readableEntities,
-  type ReadAccessCaller,
-} from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import {
-  allWidgets,
   declaredWidgets,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
-import { refreshCollectionWidgets } from "../domains/widgets/collection-widgets";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import {
   MAX_LAYOUT_BYTES,
@@ -64,10 +58,7 @@ import {
   readColumnCount,
   type ColumnCount,
 } from "../domains/widgets/layout";
-import {
-  holdsWidgetPermission,
-  permissionVerdicts,
-} from "../domains/widgets/visibility";
+import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
@@ -246,57 +237,6 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
 }
 
 /**
- * The widgets this caller is permitted to know exist.
- *
- * A widget with no `requiredPermission` is visible to any authenticated
- * reader -- that is what omitting it means, and it is what core's own four
- * cards rely on. A widget that declares one is asked about, and the decision is
- * taken through the same bounded rounds `authorizationGroups` prescribes for
- * the query batch: a permission check resolves a session caller through a
- * per-user TTL cache, so firing thirty of them at once makes every one a miss.
- *
- * Verdicts are memoized per SLUG, not per widget: several widgets commonly
- * name the same permission, and asking twice is two database reads for one
- * answer.
- */
-
-async function visibleWidgets(
-  caller: ReadAccessCaller
-): Promise<CanonicalWidget[]> {
-  // Same freshness the admin's own payload gets. Without this the endpoint
-  // would place and offer a set derived on some earlier request -- a collection
-  // created since would have no card to add, and one deleted since would still
-  // be offered and then refused on save.
-  await refreshCollectionWidgets();
-  const all = allWidgets();
-
-  const verdicts = await permissionVerdicts(
-    all.map(widget => widget.requiredPermission),
-    caller
-  );
-
-  // 🔴 A GENERATED card is gated on its collection, not on a declared
-  // permission — it carries none. `callerHoldsPermission` judges an API key on
-  // its stamped grant alone, while `canReadEntity` also evaluates the
-  // collection's code-defined rules, and the widget query endpoint asks the
-  // second. A key those rules reject had the card offered here and every query
-  // for it refused. The same question, asked once per collection.
-  const readable = await readableEntities(
-    all
-      .map(widget => widget.collection)
-      .filter((slug): slug is string => slug !== undefined),
-    caller
-  );
-
-  return all.filter(widget => {
-    if (widget.generated === true) {
-      return widget.collection !== undefined && readable.has(widget.collection);
-    }
-    return holdsWidgetPermission(widget.requiredPermission, verdicts);
-  });
-}
-
-/**
  * The version the client must echo back.
  *
  * An unreadable row keeps its real version rather than reporting 0. Reporting 0
@@ -318,15 +258,15 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   const reader = await readCaller(auth);
   const caller = readAccessCaller(reader);
 
-  const [stored, permitted] = await Promise.all([
+  const [stored, audience] = await Promise.all([
     service.getLayout(SCOPE_KIND, caller.userId),
-    visibleWidgets(caller),
+    widgetAudience(caller),
   ]);
   // A SECOND pass, after the permission gate and never folded into it. The gate
   // decides what this reader may be told exists; this decides which transient
   // cards are worth showing right now, and a lapsed onboarding card is not a
   // refusal.
-  const widgets = await widgetsWhoseConditionHolds(permitted, reader);
+  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
 
   const source: LayoutSource = stored.layout ? "own" : "default";
   const placements = visibleArrangement(stored.layout, widgets);
@@ -363,7 +303,13 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // client guessing it would draw a DIFFERENT arrangement from the stored
       // one and then save that back.
       columnCount: stored.layout?.columnCount ?? DEFAULT_COLUMN_COUNT,
-      scope: visibilityToken(widgets.map(w => w.id)),
+      scope: visibilityToken(
+        widgets.map(w => w.id),
+        audience.heldActionGates
+      ),
+      // The audience the workspace payload is built for, so the admin can tell
+      // the payload it holds apart from the one this reader would be sent now.
+      audience: audience.token,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
@@ -537,10 +483,8 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // different set can never match: with a transient card filtered out of the
   // GET and left in here, every save on an install that has any content would
   // answer 409 and no reader could rearrange their dashboard at all.
-  const widgets = await widgetsWhoseConditionHolds(
-    await visibleWidgets(caller),
-    reader
-  );
+  const audience = await widgetAudience(caller);
+  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
   const visibleIds = new Set(widgets.map(widget => widget.id));
 
   // 🔴 BEFORE the per-placement checks below, and before the write. The row's
@@ -554,7 +498,10 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // has just become INVISIBLE would otherwise be rejected below as naming an
   // unavailable widget, telling the client its body is malformed when what it
   // actually holds is a stale view.
-  const scope = visibilityToken(widgets.map(widget => widget.id));
+  const scope = visibilityToken(
+    widgets.map(widget => widget.id),
+    audience.heldActionGates
+  );
   if (submittedScope !== scope) {
     throw NextlyError.conflict({
       reason: "state",

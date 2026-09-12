@@ -20,7 +20,7 @@ import type {
   SingleAccessControl,
 } from "../shared/types/access";
 
-import { codeAccessAllows, getRBACService } from "./entity-read-access";
+import { codeAccessAllows, getRBACService } from "./code-access";
 import type { RequestActorType } from "./request-actor";
 
 /**

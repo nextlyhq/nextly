@@ -29,10 +29,6 @@ import {
   readRevalidateConfig,
 } from "../../../revalidation/intent-builders";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
-import {
-  AccessControlService,
-  isSuperAdminContext,
-} from "../../../services/access";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
@@ -73,29 +69,16 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { checkSingleAccess } from "./single-query-service";
+import { assertDraftsMayBePromoted } from "./promote-gate";
+import {
+  checkSingleAccess,
+  type SingleQueryService,
+} from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
   buildSingleWebhookDoc,
   readCompanionLocaleValues,
 } from "./single-webhook-doc";
-
-/**
- * Thrown inside the write transaction when the under-lock document-rule
- * re-check refuses the publish, so the whole transaction rolls back with
- * nothing written. The resolved 403 is carried on a variable rather than on the
- * error: the adapter re-wraps this as a database error while unwinding, so
- * `instanceof` no longer identifies it by the time the catch runs.
- */
-class SinglePublishDeniedError extends NextlyError {
-  constructor() {
-    super({
-      code: "FORBIDDEN",
-      publicMessage: "Publishing this document is not allowed.",
-    });
-    this.name = "SinglePublishDeniedError";
-  }
-}
 
 /**
  * What a publish-all reports back: the document it acted on, and the status it
@@ -127,8 +110,6 @@ interface PublishPlan {
   fieldConfigs: FieldConfig[];
   recordingEnabled: boolean;
   actor: ReturnType<typeof actorForWrite>;
-  /** Set by `authorizePublish`: re-judge the stored rule under the row lock. */
-  deferDocumentRule: boolean;
 }
 
 /** What the committed transaction tells the caller it owes afterwards. */
@@ -141,38 +122,7 @@ interface PublishOutcome {
   eventRecorded: boolean;
 }
 
-/**
- * Whether this Single's stored publish rule has to be re-judged against the
- * ROW, inside the transaction, rather than decided here.
- *
- * Only owner-only and custom rules depend on the document; the rest — public,
- * authenticated, role-based — need none, so deciding them up front costs
- * nothing and keeps the transaction shorter.
- *
- * A session super-admin bypasses stored rules on every transport (matching
- * `checkSingleAccess`) but NOT via a scoped API key, so no document rule is
- * installed for them: the under-lock evaluation does not re-apply the bypass
- * and would otherwise 403 an admin on an owner-only Single they do not own.
- */
-function deferDocumentRule(
-  singleMeta: DynamicSingleRecord,
-  options: PublishAllSingleLocalesOptions
-): boolean {
-  if (options.overrideAccess) return false;
-  const isSuperAdminSession =
-    isSuperAdminContext(options.user) &&
-    options.authenticatedScope?.actorType !== "apiKey";
-  if (isSuperAdminSession) return false;
-  const publishRule = singleMeta.accessRules?.publish as
-    | { type?: string }
-    | undefined;
-  return publishRule?.type === "owner-only" || publishRule?.type === "custom";
-}
-
 export class SinglePublishAllService extends BaseService {
-  /** Evaluator for a Single's stored access rules (stateless, zero-arg). */
-  private readonly accessControlService: AccessControlService;
-
   /** Stateless version-capture service, used inside the publish transaction. */
   private readonly versionCapture = new VersionCaptureService();
 
@@ -183,11 +133,10 @@ export class SinglePublishAllService extends BaseService {
     private readonly fieldGroupDataService?: FieldGroupDataService,
     private readonly rbacAccessControlService?: RBACAccessControlService,
     private readonly localization?: SanitizedLocalizationConfig,
-    accessControlService?: AccessControlService
+    /** Reads the promote gate needs: the logical shape, and the live document. */
+    private readonly queryService?: SingleQueryService
   ) {
     super(adapter, logger);
-    this.accessControlService =
-      accessControlService ?? new AccessControlService();
   }
 
   /**
@@ -208,12 +157,6 @@ export class SinglePublishAllService extends BaseService {
   ): Promise<SingleResult<PublishAllSingleResult>> {
     this.logger.debug("Publishing all languages of a Single", { slug });
 
-    // Set when the under-lock document-rule re-check refuses the publish.
-    // Declared out here so the catch can return the resolved 403 rather than a
-    // 500: the sentinel thrown inside the transaction is re-wrapped as the
-    // adapter unwinds, so its type is no longer recoverable there.
-    let publishDenied: SingleResult<PublishAllSingleResult> | undefined;
-
     try {
       const resolved = await this.resolvePublishTarget(slug, options);
       if ("result" in resolved) return resolved.result;
@@ -222,12 +165,19 @@ export class SinglePublishAllService extends BaseService {
       const denial = await this.authorizePublish(plan, options);
       if (denial) return denial;
 
+      // Every language's pending change is promoted below, so every one of
+      // them is judged first, against the schema and the permissions as they
+      // stand now. Before the transaction, because a field's `access` rule and
+      // its `validate` are user code and resolving the caller's grants issues
+      // its own pooled queries: run inside the open transaction on a small
+      // pool they would wait for the connection it holds.
+      //
+      // The same gate the ordinary publish path runs. Two gates would be two
+      // answers to one question, and this is the path that had none.
+      await this.assertPendingChangesMayBePromoted(plan, options);
+
       const outcome = await withVersionConflictRetry(() =>
-        this.adapter.transaction(tx =>
-          this.commitPublish(tx, plan, options, denied => {
-            publishDenied = denied;
-          })
-        )
+        this.adapter.transaction(tx => this.commitPublish(tx, plan, options))
       );
 
       // The document was deleted out from under the publish: nothing was
@@ -259,9 +209,6 @@ export class SinglePublishAllService extends BaseService {
           : undefined,
       };
     } catch (error) {
-      // A publish refused by the under-lock re-check aborts the transaction;
-      // return the 403 it resolved rather than a 500.
-      if (publishDenied) return publishDenied;
       if (error instanceof NextlyError) throw error;
       throw NextlyError.internal({
         cause: error instanceof Error ? error : undefined,
@@ -328,13 +275,10 @@ export class SinglePublishAllService extends BaseService {
       overrideAccess: options.overrideAccess,
       // The route ran the `update` gate already (against an API key's scope
       // where applicable), so skip only that redundant RBAC re-check; the
-      // publish gate still runs, and stored rules still run here.
+      // publish gate still runs.
       routeAuthorized: options.routeAuthorized,
       rbacAccessControlService: this.rbacAccessControlService,
       authenticatedScope: options.authenticatedScope,
-      accessControlService: this.accessControlService,
-      accessRules: singleMeta.accessRules,
-      document: existingDoc,
       logger: this.logger,
     });
     if (accessDenied) return { result: accessDenied };
@@ -364,7 +308,6 @@ export class SinglePublishAllService extends BaseService {
         fieldConfigs: singleMeta.fields ?? [],
         recordingEnabled: isOutboxRecordingActive("single", slug),
         actor: actorForWrite(options.actor ?? null, options.user),
-        deferDocumentRule: false,
       },
     };
   }
@@ -413,24 +356,11 @@ export class SinglePublishAllService extends BaseService {
    *
    * Checked directly rather than through a transition, since this publishes
    * companion locales even when the main row is already published.
-   *
-   * A document-dependent (owner-only/custom) rule is DEFERRED to the under-lock
-   * re-check, so it is judged against the row this publish actually overwrites:
-   * a rule keyed on a mutable field a concurrent writer changed must not be
-   * decided on the stale pre-transaction read. A session super-admin bypasses
-   * stored rules on every transport (matching `checkSingleAccess`) but NOT via
-   * a scoped API key, so no document rule is installed for them — the
-   * under-lock evaluation does not re-apply the bypass and would otherwise 403
-   * an admin on an owner-only Single they do not own.
-   *
-   * Mutates `plan.deferDocumentRule`, which the transaction reads.
    */
   private async authorizePublish(
     plan: PublishPlan,
     options: PublishAllSingleLocalesOptions
   ): Promise<SingleResult<PublishAllSingleResult> | undefined> {
-    plan.deferDocumentRule = deferDocumentRule(plan.singleMeta, options);
-
     return (
       (await checkSingleAccess({
         slug: plan.slug,
@@ -444,10 +374,6 @@ export class SinglePublishAllService extends BaseService {
         // A scoped API key is judged on its own `publish-{slug}` grant, not the
         // key owner's — the route checked only `update` against the scope.
         authenticatedScope: options.authenticatedScope,
-        accessControlService: this.accessControlService,
-        accessRules: plan.singleMeta.accessRules,
-        document: plan.existingDoc,
-        deferStoredRuleEval: plan.deferDocumentRule,
         logger: this.logger,
       })) ?? undefined
     );
@@ -463,16 +389,14 @@ export class SinglePublishAllService extends BaseService {
   private async commitPublish(
     tx: TransactionContext,
     plan: PublishPlan,
-    options: PublishAllSingleLocalesOptions,
-    onDenied: (denial: SingleResult<PublishAllSingleResult>) => void
+    options: PublishAllSingleLocalesOptions
   ): Promise<PublishOutcome> {
     const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
 
     // Lock the main row up front. One read serves three needs: it is the
     // liveness check (a row deleted between the pre-transaction read and this
     // lock is gone here, so the publish writes and records nothing); it carries
-    // the committed status the transition is judged against; and it is the
-    // document the deferred publish rule re-checks.
+    // the committed status the transition is judged against.
     const lockedRow = await tx.selectOne<Record<string, unknown>>(
       singleMeta.tableName,
       { where: this.whereEq("id", existingDoc.id), forUpdate: true }
@@ -480,13 +404,6 @@ export class SinglePublishAllService extends BaseService {
     if (!lockedRow) {
       return { documentVanished: true, committed: false, eventRecorded: false };
     }
-
-    await this.assertPublishAllowedUnderLock(
-      plan,
-      options,
-      lockedRow,
-      onDenied
-    );
 
     // Each locale's committed `_status` BEFORE the bulk flip below, so a real
     // draft->published transition can be told from a locale that was already
@@ -539,49 +456,6 @@ export class SinglePublishAllService extends BaseService {
       committed: hasMainStatus || priorCompanionStatuses.size > 0,
       eventRecorded,
     };
-  }
-
-  /**
-   * Re-judge a deferred document-dependent publish rule against the row read
-   * UNDER the lock, before any write, so a concurrent change to a field the
-   * rule inspects is accounted for. Throwing rolls the publish back with
-   * nothing written.
-   */
-  private async assertPublishAllowedUnderLock(
-    plan: PublishPlan,
-    options: PublishAllSingleLocalesOptions,
-    lockedRow: Record<string, unknown>,
-    onDenied: (denial: SingleResult<PublishAllSingleResult>) => void
-  ): Promise<void> {
-    const storedRules = plan.singleMeta.accessRules;
-    if (!plan.deferDocumentRule || !storedRules) return;
-
-    const docResult = await this.accessControlService.evaluateAccess(
-      storedRules,
-      "publish",
-      {
-        user: options.user
-          ? {
-              id: options.user.id,
-              role: options.user.role,
-              roles: options.user.roles,
-              email: options.user.email,
-            }
-          : undefined,
-      },
-      plan.existingDoc.id,
-      lockedRow
-    );
-    if (docResult.allowed) return;
-
-    onDenied({
-      success: false,
-      statusCode: 403,
-      message:
-        docResult.reason ??
-        `Access denied: publish on single "${plan.slug}" is not permitted`,
-    });
-    throw new SinglePublishDeniedError();
   }
 
   /**
@@ -655,6 +529,79 @@ export class SinglePublishAllService extends BaseService {
       },
       mainRowTransitioned,
     };
+  }
+
+  /**
+   * Judge every pending change this publish would promote, and refuse the
+   * whole publish if any of them may not be.
+   *
+   * Refusing all-or-nothing matches what the write does: `promotePendingChanges`
+   * applies every language's change and then deletes them all in one
+   * transaction, so publishing some and refusing others would leave a caller
+   * with no way to say what happened.
+   */
+  private async assertPendingChangesMayBePromoted(
+    plan: PublishPlan,
+    options: PublishAllSingleLocalesOptions
+  ): Promise<void> {
+    const { slug, singleMeta, existingDoc, companion, fieldConfigs } = plan;
+    if (singleMeta.versions?.drafts?.enabled !== true) return;
+    const reader = this.queryService;
+    // Constructed without a reader only by a caller that built this service
+    // directly. The gate cannot run blind, and silently skipping it would make
+    // this the unjudged path again, so say so rather than pass.
+    if (!reader) {
+      throw NextlyError.internal({
+        logContext: {
+          cause: "publish-all-without-reader",
+          slug,
+          detail:
+            "Publishing every language needs the read service to judge each pending change.",
+        },
+      });
+    }
+
+    const pending = await new VersionsRepository(
+      this.adapter
+    ).findAllWorkingDrafts({
+      scopeKind: "single",
+      scopeSlug: slug,
+      entryId: existingDoc.id,
+    });
+    if (pending.length === 0) return;
+
+    const localizedFieldNames = new Set(
+      (companion?.localizedFields ?? []).map(f => f.name)
+    );
+    await assertDraftsMayBePromoted(
+      pending.map(draft => ({
+        locale: draft.locale ?? null,
+        snapshot: draft.snapshot,
+      })),
+      {
+        slug,
+        entryId: existingDoc.id,
+        fields: fieldConfigs,
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+        toLogical: doc =>
+          reader.deserializeJsonFields(
+            { id: existingDoc.id, updatedAt: existingDoc.updatedAt, ...doc },
+            singleMeta.fields
+          ),
+        liveDocumentFor: async locale =>
+          (
+            await reader.get(slug, {
+              locale: locale ?? undefined,
+              overrideAccess: true,
+            })
+          ).data,
+        localizedFieldNames,
+        // This publish makes every language live, so every language's required
+        // values are enforced: none of them is falling back to another.
+        enforceLocalizedRequired: true,
+      }
+    );
   }
 
   /**

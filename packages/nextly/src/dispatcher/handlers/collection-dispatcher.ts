@@ -113,6 +113,7 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
 import { assertSchemaVersionMatch } from "./schema-version-guard";
@@ -177,11 +178,11 @@ function formatToastSummary(summary: {
  * a takedown being denied for a user the route had already authorized.
  *
  * The parameters are forwarded rather than defaulted for reasons that apply to
- * both: `userRoles` so role-based access and stored rules evaluate against the
- * real user; `routeAuthorized` to attest that the route middleware already ran
- * the RBAC/code-access gate, so the entry service skips only that redundant
- * re-check while stored rules and field-level write access still run — never
- * inferred from a userId; and `authenticatedScope` so a scoped API key's own
+ * both: `userRoles` so role-based access evaluates against the real user;
+ * `routeAuthorized` to attest that the route middleware already ran the
+ * RBAC/code-access gate, so the entry service skips only that redundant
+ * re-check while field-level write access still runs — never inferred from a
+ * userId; and `authenticatedScope` so a scoped API key's own
  * `publish-`/`unpublish-` grant is judged, since the route authorized this POST
  * only as an `update`.
  */
@@ -412,15 +413,17 @@ const COLLECTIONS_METHODS: Record<
     // reading that stops at the first page, and everything past it is
     // unreachable. The singles dispatcher resolves its allowlist the same way.
     execute: async (svc, p) => {
-      const userId = p._authenticatedUserId
-        ? String(p._authenticatedUserId)
-        : undefined;
-
-      // The SHARED resolver, which the singles listing asks too. `undefined`
-      // means no filter — an unauthenticated caller, gated at the route layer,
-      // or a super admin. An empty list means nothing is visible, which the
-      // registry short-circuits to a zero-row, zero-total answer.
-      const slugAllowlist = await readableSlugAllowlist(userId);
+      // The SHARED resolver, which the singles listing asks too, handed the
+      // SAME caller every other read decision takes. `undefined` means no
+      // filter — an unauthenticated caller, gated at the route layer, or a
+      // session super admin. An empty list means nothing is visible, which
+      // the registry short-circuits to a zero-row, zero-total answer.
+      const slugAllowlist = await readableSlugAllowlist(
+        p._authenticatedUserId
+          ? readAccessCallerForDispatch(p, userFromParams(p))
+          : undefined,
+        "collection"
+      );
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -1177,13 +1180,11 @@ const COLLECTIONS_METHODS: Record<
       // the default filter.
       const status = parseStatusParam(p.status);
 
-      // Forward the caller so the service evaluates the collection's stored
-      // read rules for them: role-based rules, and owner-only scoping folded
-      // into the SQL predicate. Without a user the service can only apply the
-      // rule-less default, so an admin-configured "owner-only read" silently
-      // returned every row over HTTP. `routeAuthorized` attests that the route
-      // already ran the coarse RBAC gate, so only that re-check is skipped:
-      // stored rules still run (mirrors the write paths and singles).
+      // Forward the caller so the service evaluates the collection's read gate
+      // for them. Without a user the service falls through to the
+      // permission-less default and returns every row over HTTP.
+      // `routeAuthorized` attests that the route already ran the coarse RBAC
+      // gate, so only that re-check is skipped.
       const user = readAuthenticatedUser(p);
 
       const result = await svc.listEntries({
@@ -1293,8 +1294,8 @@ const COLLECTIONS_METHODS: Record<
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (stored rules +
-          // field-level write access still run). Never inferred from userId.
+          // so the handler skips only that redundant re-check (field-level
+          // write access still runs). Never inferred from userId.
           routeAuthorized: true,
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
@@ -1320,8 +1321,8 @@ const COLLECTIONS_METHODS: Record<
       // listEntries.
       const status = parseStatusParam(p.status);
       // Same caller context as listEntries. Fetching one document by id is the
-      // path where a missing user matters most: without it an owner-only rule
-      // could not deny a direct read of someone else's entry.
+      // path where a missing user matters most: without it the gate falls
+      // through to the permission-less default on a direct read.
       const user = readAuthenticatedUser(p);
 
       const result = await svc.getEntry({
@@ -1389,8 +1390,8 @@ const COLLECTIONS_METHODS: Record<
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (stored rules +
-          // field-level write access still run). Never inferred from userId.
+          // so the handler skips only that redundant re-check (field-level
+          // write access still runs). Never inferred from userId.
           routeAuthorized: true,
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
@@ -1438,8 +1439,8 @@ const COLLECTIONS_METHODS: Record<
         // `entry.deleted` outbox event — same attribution as create/update.
         actor: readAuthenticatedActor(p),
         // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (stored rules +
-        // field-level write access still run). Never inferred from userId.
+        // the handler skips only that redundant re-check (field-level write
+        // access still runs). Never inferred from userId.
         routeAuthorized: true,
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
@@ -1486,8 +1487,8 @@ const COLLECTIONS_METHODS: Record<
         // entry's `entry.deleted` event — same attribution as single delete.
         actor: readAuthenticatedActor(p),
         // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (stored rules +
-        // field-level write access still run). Never inferred from userId.
+        // the handler skips only that redundant re-check (field-level write
+        // access still runs). Never inferred from userId.
         routeAuthorized: true,
         // Carry the key's scope so each per-id delete is judged on the key's OWN
         // grant, not the key owner's super-admin roles.
@@ -1539,8 +1540,8 @@ const COLLECTIONS_METHODS: Record<
           : undefined,
         userRoles: readAuthenticatedRoles(p),
         // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (stored rules +
-        // field-level write access still run). Never inferred from userId.
+        // the handler skips only that redundant re-check (field-level write
+        // access still runs). Never inferred from userId.
         routeAuthorized: true,
         // The route authorized `update` against the key's scope, never
         // publish/unpublish — carry the scope so each per-id transition is
@@ -1608,8 +1609,8 @@ const COLLECTIONS_METHODS: Record<
             : undefined,
           userRoles: readAuthenticatedRoles(p),
           // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (stored rules +
-          // field-level write access still run). Never inferred from userId.
+          // so the handler skips only that redundant re-check (field-level
+          // write access still runs). Never inferred from userId.
           routeAuthorized: true,
           // The route authorized `update` against the key's scope, never
           // publish/unpublish — carry the scope so the collection-level gate and
@@ -1655,8 +1656,8 @@ const COLLECTIONS_METHODS: Record<
           : undefined,
         userRoles: readAuthenticatedRoles(p),
         // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (stored rules +
-        // field-level write access still run). Never inferred from userId.
+        // the handler skips only that redundant re-check (field-level write
+        // access still runs). Never inferred from userId.
         routeAuthorized: true,
         // A duplicate is a create; carry the scope so a create-as-published is
         // judged on the key's OWN publish grant, never the key owner's.

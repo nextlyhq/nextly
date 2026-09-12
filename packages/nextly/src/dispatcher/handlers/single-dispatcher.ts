@@ -114,6 +114,7 @@ import {
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
@@ -427,7 +428,7 @@ async function requireLiveSingleId(slug: string): Promise<string> {
  * request.
  *
  * Both write handlers need the same shape and for the same reasons: the decoded
- * role SET, so role-based stored rules and the super-admin bypass evaluate
+ * role SET, so role-based access and the super-admin bypass evaluate
  * against the real authorized scope; and a representative singular `role`, for a
  * rule or a field-level `access` callback reading `req.user.role`. Two copies
  * agreed the day they were written and would drift the moment either learned a
@@ -476,17 +477,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
-      const userId = p._authenticatedUserId
-        ? String(p._authenticatedUserId)
-        : undefined;
-
       // Resolved BEFORE the registry call, through the SHARED resolver the
-      // collections listing asks too. Super admins and unauthenticated callers
-      // (gated at the route layer) pass through with `undefined`, which means
-      // "no filter"; an authenticated non-super-admin gets an explicit list,
-      // possibly empty, which the registry short-circuits to a zero-row,
-      // zero-total response.
-      const slugAllowlist = await readableSlugAllowlist(userId);
+      // collections listing asks too, and handed the SAME caller every other
+      // read decision takes -- so a Single a code rule admits is listed here
+      // exactly when the dashboard offers a card for it. Session super admins
+      // and unauthenticated callers (gated at the route layer) pass through
+      // with `undefined`, which means "no filter"; anyone else gets an
+      // explicit list, possibly empty, which the registry short-circuits to a
+      // zero-row, zero-total response.
+      const user = authenticatedSingleUser(p);
+      const slugAllowlist = await readableSlugAllowlist(
+        user ? readAccessCallerForDispatch(p, user) : undefined,
+        "single"
+      );
 
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,

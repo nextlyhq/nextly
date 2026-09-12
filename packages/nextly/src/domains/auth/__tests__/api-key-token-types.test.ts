@@ -3,20 +3,44 @@ import { randomUUID } from "crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
-import { listRoleSlugsForUser } from "../../../services/lib/permissions";
+import {
+  isSuperAdmin,
+  listRoleSlugsForUser,
+  listRoleSlugsForUserOrRefuse,
+} from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import {
   ApiKeyService,
   invalidateApiKeyPermissionsCache,
 } from "../services/api-key-service";
 
-// Mock listRoleSlugsForUser — it uses a global db singleton (not the test DB).
-// We must mock it so tests do not depend on the runtime database connection.
-// The path the subject imports: `api-key-service` reads
-// `listRoleSlugsForUser` from `services/lib/permissions`, and a factory
-// registered against any other specifier leaves the real one in place.
-vi.mock("../../../services/lib/permissions", () => ({
+// Mock the RBAC resolvers — they read a global db singleton (not the test DB).
+// We must mock them so tests do not depend on the runtime database connection.
+// The path the subject imports: `api-key-service` reads `listRoleSlugsForUserOrRefuse`
+// and `isSuperAdmin` from `services/lib/permissions`, and a factory registered
+// against any other specifier leaves the real ones in place.
+//
+// DERIVED from the real module rather than written as a closed literal: the
+// subject imports more from it than these two, and a literal answers
+// `undefined` for whatever it does not name. That has now broken this file
+// twice, once when the facade began resolving roles and once when the key cache
+// began reading the RBAC revision, and in both cases the failure was in a suite
+// that had nothing to do with the change. `isSuperAdmin` is
+// the canonical resolver (inheritance and its cache are proven in its own
+// suite, and end to end in `plugin-route-key-scope.integration.test.ts`); here
+// it answers by id, so what this suite proves is what the service does with
+// the answer.
+vi.mock("../../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../services/lib/permissions")
+  >()),
+  isSuperAdmin: vi.fn(),
+  // Both, so a case can assert WHICH resolver the service asks. Mocking only
+  // the one it currently calls proves that a rejection propagates and nothing
+  // about whether the swallowing sibling was the one consulted — which is the
+  // whole property here, since that sibling answers `[]` instead of refusing.
   listRoleSlugsForUser: vi.fn(),
+  listRoleSlugsForUserOrRefuse: vi.fn(),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,6 +72,7 @@ function createTestAdapter(db: unknown) {
 const KEY_A = "test-key-a";
 const KEY_B = "test-key-b";
 const KEY_CACHE = "test-key-cache";
+const KEY_SUPER = "test-key-super";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test suite
@@ -86,6 +111,8 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
   beforeEach(async () => {
     testDb = await createTestDb();
     service = new ApiKeyService(createTestAdapter(testDb.db), noopLogger);
+    // Nobody is a super-admin unless a case says so.
+    vi.mocked(isSuperAdmin).mockResolvedValue(false);
 
     // ── Users ────────────────────────────────────────────────────────────────
     userId = randomUUID();
@@ -208,6 +235,7 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
     invalidateApiKeyPermissionsCache(KEY_A);
     invalidateApiKeyPermissionsCache(KEY_B);
     invalidateApiKeyPermissionsCache(KEY_CACHE);
+    invalidateApiKeyPermissionsCache(KEY_SUPER);
     await testDb.reset();
     testDb.close();
     vi.resetAllMocks();
@@ -373,6 +401,139 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
       });
     });
 
+    // ── a super-admin's key ────────────────────────────────────────────────
+    describe("a key created by a super-admin", () => {
+      /**
+       * A super-admin who holds NO permission rows, which is what an install
+       * looks like whose first user came before the setup grant, and what
+       * every install drifts toward: the role is granted the rows that exist
+       * at setup and never the ones a later collection adds. Their power is
+       * the bypass, so the session never notices; a key copies the rows.
+       *
+       * Whether they are one is the canonical resolver's answer, mocked by id
+       * above; no `user_roles` row is seeded because the service must not
+       * read one. It did, directly, and a role that INHERITS super-admin was
+       * a super-admin to every other gate and an ordinary user to its key.
+       */
+      let superAdminId: string;
+
+      beforeEach(async () => {
+        superAdminId = randomUUID();
+        vi.mocked(isSuperAdmin).mockImplementation(
+          async id => id === superAdminId
+        );
+        await testDb.db.insert(testDb.schema.users).values({
+          id: superAdminId,
+          email: `super-${superAdminId}@example.com`,
+          isActive: true,
+        });
+        // A permission a package stopped declaring: kept in the table so a
+        // grant survives, and never copied to a key that inherits nothing else new.
+        await testDb.db.insert(testDb.schema.permissions).values({
+          id: randomUUID(),
+          name: "Read Legacy",
+          slug: "read-legacy",
+          action: "read",
+          resource: "legacy",
+          orphanedAt: new Date(),
+        });
+      });
+
+      it("read-only: holds every read-* permission the install declares, from the catalogue", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect([...slugs].sort()).toEqual([
+          "read-media",
+          "read-posts",
+          "read-users",
+        ]);
+      });
+
+      it("read-only: still cannot write, whoever created it", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs.some(s => !s.startsWith("read-"))).toBe(false);
+      });
+
+      it("full-access: holds every permission the install declares", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect([...slugs].sort()).toEqual([
+          "create-posts",
+          "delete-posts",
+          "read-media",
+          "read-posts",
+          "read-users",
+          "update-posts",
+        ]);
+      });
+
+      it("holds a permission added after the role was granted, which no role copy would", async () => {
+        // The drift the catalogue exists for: a collection added after setup.
+        await testDb.db.insert(testDb.schema.permissions).values({
+          id: randomUUID(),
+          name: "Read Events",
+          slug: "read-events",
+          action: "read",
+          resource: "events",
+        });
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs).toContain("read-events");
+      });
+
+      it("never inherits a permission the install stopped declaring", async () => {
+        const slugs = await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(slugs).not.toContain("read-legacy");
+      });
+
+      it("is the control that an ordinary creator still copies their own rows only", async () => {
+        // The editor's read-only key is judged the way it was: their rows,
+        // not the catalogue. `read-media` is in the catalogue and not theirs.
+        const slugs = await service.resolveApiKeyPermissions(
+          "read-only",
+          null,
+          userId,
+          KEY_A
+        );
+        expect(slugs).not.toContain("read-media");
+      });
+
+      it("asks the resolver every other gate asks, for the owner and nobody else", async () => {
+        // The control on the question itself. A direct read of `user_roles`
+        // would answer these cases identically for a directly-assigned role
+        // and differently for an inherited one; only the call proves the
+        // service asks the canonical resolver rather than its own rows.
+        await service.resolveApiKeyPermissions(
+          "full-access",
+          null,
+          superAdminId,
+          KEY_SUPER
+        );
+        expect(vi.mocked(isSuperAdmin).mock.calls).toEqual([[superAdminId]]);
+      });
+    });
     // ── role-based ─────────────────────────────────────────────────────────
 
     describe("role-based token type", () => {
@@ -583,8 +744,10 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
     // ── read-only ──────────────────────────────────────────────────────────
 
     describe("read-only token type", () => {
-      it("should delegate to listRoleSlugsForUser and return the creator's role slugs", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce(["editor"]);
+      it("should delegate to listRoleSlugsForUserOrRefuse and return the creator's role slugs", async () => {
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
+          "editor",
+        ]);
 
         const roles = await service.resolveApiKeyRoles(
           "read-only",
@@ -592,12 +755,60 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
           userId
         );
 
-        expect(vi.mocked(listRoleSlugsForUser)).toHaveBeenCalledWith(userId);
+        expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith(
+          userId
+        );
         expect(roles).toEqual(["editor"]);
       });
 
+      it("refuses when the roles could not be read, rather than answering none", async () => {
+        // A key's roles populate `authenticatedScope.roles`, which a stored
+        // role rule reads directly. An unreadable lookup arriving as `[]` is
+        // indistinguishable there from an owner who holds no roles, so a rule
+        // that WITHHOLDS on a role authorizes the very request it exists to
+        // refuse. The refusal has to survive this call rather than be
+        // flattened into an answer.
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockRejectedValueOnce(
+          new Error("roles unreadable")
+        );
+
+        await expect(
+          service.resolveApiKeyRoles("read-only", null, userId)
+        ).rejects.toThrow("roles unreadable");
+      });
+
+      it("asks the refusing resolver and not the one that swallows", async () => {
+        // The discriminating control. The case above mocks whichever resolver
+        // the service calls, so it passes on EITHER wiring: the swallowing one
+        // rejects too, once a test tells it to. Only naming the door
+        // separates a key whose unreadable roles refuse from one whose
+        // unreadable roles read as none.
+        vi.mocked(listRoleSlugsForUser).mockClear();
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockClear();
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([]);
+
+        await service.resolveApiKeyRoles("read-only", null, userId);
+
+        expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith(
+          userId
+        );
+        expect(vi.mocked(listRoleSlugsForUser)).not.toHaveBeenCalled();
+      });
+
+      it("still answers when the lookup works, which is what makes that a refusal", async () => {
+        // The control. A method that threw unconditionally would satisfy the
+        // case above, and would refuse every key in the install.
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
+          "viewer",
+        ]);
+
+        await expect(
+          service.resolveApiKeyRoles("read-only", null, userId)
+        ).resolves.toEqual(["viewer"]);
+      });
+
       it("should return multiple slugs when the creator has multiple roles", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce([
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
           "editor",
           "viewer",
         ]);
@@ -615,8 +826,10 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
     // ── full-access ────────────────────────────────────────────────────────
 
     describe("full-access token type", () => {
-      it("should delegate to listRoleSlugsForUser and return the creator's role slugs", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce(["super-admin"]);
+      it("should delegate to listRoleSlugsForUserOrRefuse and return the creator's role slugs", async () => {
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([
+          "super-admin",
+        ]);
 
         const roles = await service.resolveApiKeyRoles(
           "full-access",
@@ -624,12 +837,14 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
           userId
         );
 
-        expect(vi.mocked(listRoleSlugsForUser)).toHaveBeenCalledWith(userId);
+        expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith(
+          userId
+        );
         expect(roles).toEqual(["super-admin"]);
       });
 
       it("should return empty array when creator has no roles", async () => {
-        vi.mocked(listRoleSlugsForUser).mockResolvedValueOnce([]);
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([]);
 
         const roles = await service.resolveApiKeyRoles(
           "full-access",

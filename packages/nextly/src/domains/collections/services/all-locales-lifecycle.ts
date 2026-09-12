@@ -95,8 +95,8 @@ export interface AllLocalesLifecycleParams {
   overrideAccess?: boolean;
   /**
    * Set by the REST dispatcher: the route already authorized this POST as
-   * `update`, so the preliminary update gate skips its redundant RBAC re-check
-   * (its stored rules still run). The lifecycle gate is unaffected.
+   * `update`, so the preliminary update gate skips its redundant RBAC re-check.
+   * The lifecycle gate is unaffected.
    */
   routeAuthorized?: boolean;
   /**

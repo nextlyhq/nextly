@@ -254,6 +254,237 @@ describe("a form that redirects to a picked page", () => {
   });
 });
 
+describe("a form submitted in the visitor's language", () => {
+  /**
+   * A page whose URL differs by language: `thanks` in English, `merci` in
+   * French. The target used to be read with no locale, so the default's slug
+   * answered whoever asked, and a French visitor was sent to `/thanks`.
+   */
+  const localizedPages = defineCollection({
+    slug: "pages",
+    localized: true,
+    fields: [text({ name: "title" }), text({ name: "slug", localized: true })],
+  });
+
+  async function bootLocalized() {
+    const { plugin, config } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [localizedPages],
+      localization: { locales: ["en", "fr"], defaultLocale: "en" },
+    });
+    const page = await current.nextly.create({
+      collection: "pages",
+      data: { title: "Thank you", slug: "thanks" },
+    });
+    const pageId = (page as { item: { id: string } }).item.id;
+    await current.nextly.update({
+      collection: "pages",
+      id: pageId,
+      data: { slug: "merci" },
+      locale: "fr",
+    });
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: pageId },
+        },
+      },
+    });
+    const getService = ((name: string) =>
+      name === "db" ? {} : current?.getService(name as never)) as never;
+    const pluginContext = createPluginContext(
+      getService,
+      current.hooks as never
+    );
+    return (locale?: string, request?: Request) =>
+      submitForm(
+        { formSlug: "contact", data: { message: "bonjour" }, locale, request },
+        { pluginContext, pluginConfig: config }
+      );
+  }
+
+  it("is sent to the page's URL in that language", async () => {
+    const submit = await bootLocalized();
+    const result = await submit("fr");
+    expect(result.success).toBe(true);
+    expect(result.redirect).toBe("/merci");
+  });
+
+  it("is sent to the default's URL when no language is named", async () => {
+    // The control, and the promise to every existing caller: a submission
+    // that names no locale is answered exactly as before.
+    const submit = await bootLocalized();
+    const result = await submit(undefined);
+    expect(result.redirect).toBe("/thanks");
+  });
+
+  it("is sent to the default's URL for a language the site does not have", async () => {
+    // A wrong or forged `?locale=` is not a reason to strand a visitor who
+    // filled the form in: the services resolve an unconfigured code to the
+    // default, and the submission is still stored.
+    const submit = await bootLocalized();
+    const result = await submit("xx");
+    expect(result.success).toBe(true);
+    expect(result.redirect).toBe("/thanks");
+  });
+
+  it("reads the target on the request the host handed over", async () => {
+    /*
+     * A hook on the target collection that selects content by a header, or
+     * applies only to a browser, reads `ctx.req.http` and stands down when it
+     * is absent. A host route hands its request to `submitForm`, and the
+     * target read is the visitor's read — so the hook must see the request
+     * there. Observed from the hook itself: nothing else can tell a read that
+     * carried the request from one that ran as a job.
+     *
+     * Through the handler rather than the built-in route on purpose. Inside a
+     * route the core pins the request for the whole handler, so a hook sees
+     * it whether or not this read forwarded it, and a test there passed with
+     * the forward removed. A host calling the handler outside a route has no
+     * such scope, which is exactly where the forward decides the answer.
+     */
+    const submit = await bootLocalized();
+    let sawRequest: boolean | undefined;
+    current!.hooks.register("beforeRead", "pages", ctx => {
+      sawRequest = ctx.req?.http !== undefined;
+    });
+    const result = await submit(
+      "fr",
+      new Request("http://localhost/contact", { method: "POST" })
+    );
+    expect(result.redirect).toBe("/merci");
+    expect(sawRequest).toBe(true);
+  });
+
+  it("reads the target as background work when no request was given", async () => {
+    // The control: a host calling the handler with no request is a server,
+    // and the target read must look like one to a hook scoped to a visitor.
+    const submit = await bootLocalized();
+    let sawRequest: boolean | undefined;
+    current!.hooks.register("beforeRead", "pages", ctx => {
+      sawRequest = ctx.req?.http !== undefined;
+    });
+    expect((await submit("fr")).redirect).toBe("/merci");
+    expect(sawRequest).toBe(false);
+  });
+
+  it("treats the read wildcard as no language, not as every language", async () => {
+    // `all` asks the services for every translation at once, which answers
+    // the slug with one value per language. A URL cannot be built from that,
+    // so a valid redirect would have resolved to nothing — after the
+    // submission succeeded.
+    const submit = await bootLocalized();
+    const result = await submit("all");
+    expect(result.success).toBe(true);
+    expect(result.redirect).toBe("/thanks");
+  });
+});
+
+describe("a public visitor and a translation that is not published yet", () => {
+  /**
+   * The target collection has the publish lifecycle AND is localized, so a
+   * translation publishes on its own. The English page is live; the French
+   * translation has a slug but is still a draft.
+   *
+   * A trusted read admits every draft, and the reachability check reads the
+   * main row — which says "published" — so a French visitor would be sent to
+   * the draft's URL. The target is read as the visitor instead, and a public
+   * read withholds a draft translation and answers with the published default.
+   */
+  const lifecyclePages = defineCollection({
+    slug: "pages",
+    localized: true,
+    status: true,
+    fields: [text({ name: "title" }), text({ name: "slug", localized: true })],
+  });
+
+  async function bootWithFrenchDraft() {
+    const { plugin, config } = formBuilder({
+      redirectRelationships: { pages: "/{slug}" },
+    });
+    current = await createTestNextly({
+      plugins: [plugin],
+      collections: [lifecyclePages],
+      localization: { locales: ["en", "fr"], defaultLocale: "en" },
+    });
+    const page = await current.nextly.create({
+      collection: "pages",
+      data: { title: "Thank you", slug: "thanks", status: "published" },
+    });
+    const pageId = (page as { item: { id: string } }).item.id;
+    // The French slug exists, unpublished.
+    await current.nextly.update({
+      collection: "pages",
+      id: pageId,
+      data: { slug: "merci", status: "draft" },
+      locale: "fr",
+    });
+    await current.nextly.create({
+      collection: "forms",
+      data: {
+        name: "Contact",
+        slug: "contact",
+        status: "published",
+        fields: [{ type: "text", name: "message", label: "Message" }],
+        settings: {
+          confirmationType: "relationship",
+          redirectPage: { relationTo: "pages", value: pageId },
+        },
+      },
+    });
+    const getService = ((name: string) =>
+      name === "db" ? {} : current?.getService(name as never)) as never;
+    const pluginContext = createPluginContext(
+      getService,
+      current.hooks as never
+    );
+    const submitAsVisitor = () =>
+      submitForm(
+        {
+          formSlug: "contact",
+          data: { message: "bonjour" },
+          locale: "fr",
+          access: { as: "public" },
+        },
+        { pluginContext, pluginConfig: config }
+      );
+    const publishFrench = () =>
+      current!.nextly.update({
+        collection: "pages",
+        id: pageId,
+        data: { status: "published" },
+        locale: "fr",
+      });
+    return { submitAsVisitor, publishFrench };
+  }
+
+  it("is sent to the published default, never to the draft translation", async () => {
+    const { submitAsVisitor } = await bootWithFrenchDraft();
+    const result = await submitAsVisitor();
+    expect(result.success).toBe(true);
+    expect(result.redirect).toBe("/thanks");
+  });
+
+  it("is sent to the translation once it is published", async () => {
+    // The control that keeps the case above honest: the same page, the same
+    // visitor, and only the French publication state changed. Without it,
+    // "always answer the default" would pass the test above.
+    const { submitAsVisitor, publishFrench } = await bootWithFrenchDraft();
+    await publishFrench();
+    const result = await submitAsVisitor();
+    expect(result.redirect).toBe("/merci");
+  });
+});
+
 describe("saving a form that redirects to a page", () => {
   /** Create through the collection, which is what the browser posts to. */
   async function create(settings: Record<string, unknown>) {

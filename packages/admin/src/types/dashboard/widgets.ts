@@ -105,6 +105,8 @@ export interface DashboardWidget {
    * must hide.
    */
   actions?: WidgetAction[];
+  /** Present for `text`: the markdown the host draws, validated non-blank at boot. */
+  content?: string;
   link?: { label: string; href: string };
   /**
    * The DECLARED default position, ascending; absent means "after everything
@@ -185,4 +187,12 @@ export interface DashboardLayoutResponse {
    * arrangement was read. Echoed back on write; a mismatch is a 409.
    */
   scope: string;
+  /**
+   * An opaque token for the audience the workspace payload is built for --
+   * the cards this reader may see and the shortcut gates they hold inside
+   * them. The workspace payload carries the same token as `widgetAudience`;
+   * when the two differ, the payload was built for a different reader state
+   * than this layout, and is read again.
+   */
+  audience: string;
 }

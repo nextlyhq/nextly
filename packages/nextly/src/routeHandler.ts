@@ -101,20 +101,20 @@ import {
 import { postWidgetQuery } from "./api/widget-query";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import { runWithCallerScope } from "./auth/caller-scope";
+import {
+  COLLECTION_DEFINITION_ACTION,
+  COLLECTION_DEFINITION_RESOURCE,
+} from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
-import { readableEntities } from "./auth/entity-read-access";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
-import { contributedWidgets } from "./domains/widgets/canonical";
-import {
-  generatedCollectionSlug,
-  generatedWidgets,
-  readableGeneratedWidgets,
-  refreshCollectionWidgets,
-} from "./domains/widgets/collection-widgets";
-import type { WidgetDefinition } from "./domains/widgets/definition";
+import type { WidgetAction } from "./domains/widgets/definition";
+import { visibilityToken } from "./domains/widgets/layout";
 import { publishableWidgets } from "./domains/widgets/publish";
-import { listWidgets } from "./domains/widgets/registry";
+import {
+  widgetAudience,
+  type WidgetAudience,
+} from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -128,7 +128,11 @@ import {
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
-import { buildPluginAdminMeta } from "./plugins/admin-meta";
+import type { PluginAdminWidget } from "./plugins/admin-contributions";
+import {
+  buildPluginAdminMeta,
+  type PluginAdminMeta,
+} from "./plugins/admin-meta";
 import {
   pluginRouteAuthRequired,
   runPluginRoute,
@@ -768,10 +772,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * Read methods that still need resolved role slugs, even though reads normally
  * skip the lookup.
  *
- * Every method here evaluates the caller's stored access rules through
- * `checkCollectionAccess`, which reads roles twice over: the super-admin bypass
- * is keyed on the role set (`isSuperAdminContext`), and stored role-based rules
- * match against the roles forwarded in the request context. A caller arriving
+ * Every method here runs the caller through `checkCollectionAccess`, which
+ * reads roles twice over: the super-admin bypass is keyed on the role set
+ * (`isSuperAdminContext`), and the RBAC gate matches the caller's permissions
+ * against the roles forwarded in the request context. A caller arriving
  * without roles is therefore treated as a non-super-admin holding no roles, so
  * a role-based rule denies a legitimately permitted reader and a super-admin
  * loses the bypass and gets owner-filtered instead.
@@ -787,10 +791,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * silently ignores the rule it was configured with is the worse tradeoff.
  */
 const ROLE_AWARE_READ_METHODS = new Set([
-  // The autosave reads evaluate the document's stored access rules through the
-  // same gate the version reads use, so they need resolved roles for the same
-  // reason: without them a caller arrives as a non-super-admin holding no
-  // roles, and a role-based rule answers not-found for the author whose own
+  // The autosave reads run through the same gate the version reads use, so
+  // they need resolved roles for the same reason: without them a caller arrives
+  // as a non-super-admin holding no roles, and the gate answers not-found for
+  // the author whose own
   // recovery point it is.
   "getEntryAutosave",
   "getSingleAutosave",
@@ -811,8 +815,8 @@ const ROLE_AWARE_READ_METHODS = new Set([
  *
  * Resolving roles costs a permissions query for session auth, so it is opt-in:
  * collection and single mutations consume them for hook context and access
- * rules, and the reads in {@link ROLE_AWARE_READ_METHODS} consume them to
- * evaluate stored rules. Every other route reads no roles and must not pay for
+ * rules, and the reads in {@link ROLE_AWARE_READ_METHODS} consume them to run
+ * the access gate. Every other route reads no roles and must not pay for
  * the lookup.
  */
 function needsResolvedRoles(
@@ -866,8 +870,16 @@ async function resolveAuthorization(
       const slug = routeParams?.collectionName || "";
       return requireCollectionAccess(req, "read", slug);
     }
-    // Definition mutations (create/update/delete collection) → manage-settings
-    return requirePermission(req, "manage", "settings");
+    // Definition mutations (create/update/delete collection). The grant is
+    // declared once, in `auth/collection-definition-policy`, because the
+    // onboarding checklist asks the same question to decide whether to OFFER
+    // the step -- and a copy there would go on asking for a grant this route
+    // had stopped requiring.
+    return requirePermission(
+      req,
+      COLLECTION_DEFINITION_ACTION,
+      COLLECTION_DEFINITION_RESOURCE
+    );
   }
 
   // --- Singles endpoints ---
@@ -1589,6 +1601,79 @@ async function handleServiceRequest(
 // ============================================================================
 
 /**
+ * The audience of a route that publishes no widget at all.
+ *
+ * The public branding route passes this: it answers before a session exists,
+ * so there is no reader to ask about, and it discards the workspace half that
+ * would carry the cards anyway. Withholding everything is the direction that
+ * cannot disclose, which is why it is the value spelled out rather than a
+ * default the next caller inherits without noticing.
+ */
+const NO_WIDGETS: WidgetAudience = {
+  visible: [],
+  declared: new Set(),
+  generated: [],
+  holds: () => false,
+  heldActionGates: new Set(),
+  token: visibilityToken([], []),
+};
+
+/**
+ * One declaration with the actions this reader may not see withheld.
+ *
+ * An `actions` widget's shortcuts each carry a gate of their own, and a
+ * shortcut is a label and an href: shipped whole and hidden by the browser
+ * afterwards, the protected ones are readable from the payload regardless.
+ * Filtered on the same reading the card's own gate gets. A declaration
+ * without actions passes through untouched.
+ */
+function actionsForAudience<
+  W extends { id: string; actions?: readonly WidgetAction[] },
+>(widget: W, audience: WidgetAudience): W {
+  if (widget.actions === undefined) return widget;
+  return {
+    ...widget,
+    actions: widget.actions.filter(action =>
+      audience.holds(action.requiredPermission)
+    ),
+  };
+}
+
+/**
+ * One plugin's projection with the widgets this reader may not see withheld.
+ *
+ * 🔴 Withheld HERE, on the server, because a contributed widget is its whole
+ * declaration: a `text` widget carries its prose and an `actions` widget its
+ * links. The browser applies the same gate before drawing, and that is not a
+ * control -- the payload is JSON, and reading it is the bypass. The key is
+ * dropped rather than left as an empty array, which is the shape the
+ * projection gives a plugin that contributed none.
+ *
+ * 🔴 And ONLY the declaration that won its id. Two plugins may contribute the
+ * same id; `canonicalWidgets` and the admin's resolver both keep the FIRST,
+ * so the first is the one the reader's verdict is about -- and a later
+ * duplicate, gated on something the reader lacks and carrying its own prose,
+ * would ship under the winner's clearance if the payload were filtered by id
+ * alone. `shipped` runs across the plugins in the order they were declared,
+ * which is the order both resolvers walk.
+ */
+function widgetsForAudience(
+  plugin: PluginAdminMeta,
+  audience: WidgetAudience,
+  shipped: Set<string>
+): PluginAdminMeta {
+  if (plugin.widgets === undefined) return plugin;
+  const { widgets, ...rest } = plugin;
+  const visible: PluginAdminWidget[] = [];
+  for (const widget of widgets) {
+    if (!audience.declared.has(widget.id) || shipped.has(widget.id)) continue;
+    shipped.add(widget.id);
+    visible.push(actionsForAudience(widget, audience));
+  }
+  return visible.length > 0 ? { ...rest, widgets: visible } : rest;
+}
+
+/**
  * The admin metadata, separated by the audience each half is answerable to.
  *
  * `branding` is what the sign-in screen draws with, so it has to be readable
@@ -1603,13 +1688,14 @@ async function handleServiceRequest(
  */
 async function buildAdminMeta(
   /**
-   * Cards core DERIVED for this reader's readable collections.
+   * The widgets THIS reader may be told exist, from every channel.
    *
-   * A parameter rather than a call, because which of them a reader may be told
-   * about depends on the reader and this builder is shared with the PUBLIC
-   * branding route. Empty for that route, which discards `workspace` anyway.
+   * A parameter rather than a call, because the answer depends on the reader
+   * and this builder is shared with the PUBLIC branding route, which passes
+   * {@link NO_WIDGETS} and discards `workspace` anyway. Required rather than
+   * defaulted, so a new caller has to say who is asking.
    */
-  generatedForCaller: WidgetDefinition[] = []
+  audience: WidgetAudience
 ): Promise<{
   branding: Record<string, unknown>;
   workspace: Record<string, unknown>;
@@ -1669,7 +1755,11 @@ async function buildAdminMeta(
   // Collect plugin metadata from registered plugins with host override
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
-  const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
+  const shipped = new Set<string>();
+  const plugins = buildPluginAdminMeta(
+    config?.plugins ?? [],
+    pluginOverrides
+  ).map(plugin => widgetsForAudience(plugin, audience, shipped));
   if (plugins.length > 0) {
     workspace.plugins = plugins;
 
@@ -1714,10 +1804,25 @@ async function buildAdminMeta(
   // half already describes the RUNNING installation rather than the configured
   // one -- `showBuilder` from the live resolver, `customGroups` from the
   // database -- is the same property this relies on.
-  const widgets = [...publishableWidgets(), ...generatedForCaller];
+  //
+  // 🔴 Filtered for the reader, like the contributions above. A registration
+  // is a whole declaration -- a `text` widget's prose, an `actions` widget's
+  // links -- so shipping every one and leaving the browser to hide the gated
+  // cards hands a reader the contents of a card they may not see.
+  const widgets = [
+    ...publishableWidgets()
+      .filter(widget => audience.declared.has(widget.id))
+      .map(widget => actionsForAudience(widget, audience)),
+    ...audience.generated,
+  ];
   if (widgets.length > 0) {
     workspace.widgets = widgets;
   }
+  // The audience both widget channels above were filtered for, as the layout
+  // read also reports it: the admin compares the two to learn that a payload
+  // it has held for minutes was built for a different reader than the layout
+  // in front of it -- a grant, a role change -- and reads it again.
+  workspace.widgetAudience = audience.token;
 
   // Override config branding with DB values when available
   try {
@@ -1806,7 +1911,7 @@ export { withSessionCacheHeaders };
  * choose those fields rather than this package.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
-  const { branding } = await buildAdminMeta();
+  const { branding } = await buildAdminMeta(NO_WIDGETS);
   return respondAdminMeta(branding);
 }
 
@@ -1843,62 +1948,25 @@ async function handleAdminMetaWorkspaceRequest(
   // of the running one.
   await ensureServicesInitialized();
 
-  // Re-derived per request, and HERE rather than inside `buildAdminMeta`. A
-  // collection drawn in the Schema Builder exists the moment it is saved, so a
-  // set frozen at boot describes an install that has since changed -- and in
-  // production "the next restart" means the next deploy.
+  // 🔴 Which widgets this reader may be told about is decided HERE rather than
+  // inside `buildAdminMeta`, and by the SAME implementation the layout endpoint
+  // places and offers with, so the two cannot disagree about what a reader may
+  // see. A declaration is its whole content -- a generated card's id, title and
+  // query all name a COLLECTION, a `text` widget carries its prose -- so
+  // publishing the whole set and leaving the browser to hide the gated ones
+  // would disclose every collection in the install and the body of every gated
+  // card to any authenticated caller. That the admin would not draw the card
+  // is not a control; the payload is JSON, and reading it is the bypass.
   //
-  // 🔴 Only on this route. `buildAdminMeta` is shared with the PUBLIC branding
-  // handler, which deliberately does not initialise services: refreshing there
+  // `widgetAudience` re-derives the generated cards per request, which is why
+  // it runs on this route and not in the shared builder: the PUBLIC branding
+  // handler deliberately does not initialise services, and refreshing there
   // asked an empty container for the collection registry on every anonymous
-  // login-page request, logging a registry-unavailable error for a payload that
-  // discards `workspace.widgets` anyway -- and, once initialised, made a cheap
-  // branding read load every collection's schema from the database.
-  await refreshCollectionWidgets();
-
-  // 🔴 The generated cards are resolved HERE rather than inside `buildAdminMeta`,
-  // because which of them a reader may be told about depends on the reader.
-  // Their id, title and query all name a COLLECTION, so publishing the whole
-  // set would disclose the slug and the existence of every collection in the
-  // install to any authenticated caller — including the ones the layout and
-  // query endpoints deliberately hide from them. That the admin would not draw
-  // the card is not a control; the payload is JSON, and reading it is the
-  // bypass. The verdicts come from the same implementation the layout endpoint
-  // filters with, so the two cannot disagree about what this reader may see.
+  // login-page request, for a payload that discards the cards anyway.
   const caller = readAccessCaller(await readCaller(auth));
-  // The verdict the QUERY path takes. `canReadEntity` evaluates a collection's
-  // code-defined `access.read` as well as the stamped grant, and
-  // `callerHoldsPermission` does not -- so an API key those rules reject is
-  // refused by the query endpoint and would have been told the collection
-  // exists by this payload. One question, one answer.
-  const readableCollectionSlugs = await readableEntities(
-    generatedWidgets()
-      .map(generatedCollectionSlug)
-      .filter((slug): slug is string => slug !== undefined),
-    caller
-  );
-  const readable = readableGeneratedWidgets(
-    slug => readableCollectionSlugs.has(slug),
-    // Every DECLARED id, registrations included. Filtering only contributions
-    // left a registration colliding with a generated card published TWICE in
-    // this payload -- once as itself and once as core's derived guess -- and the
-    // canonical set resolves that collision in the registration's favour, so the
-    // two halves of the response disagreed about which declaration the card is.
-    //
-    // 🔴 From `listWidgets()`, the registry ITSELF, not from the publishable
-    // projection of it. `publishableWidgets` drops a definition that cannot
-    // survive `JSON.stringify` -- a `BigInt` in `query.where`, say -- and that
-    // definition is still in the registry, so `canonicalWidgets` still resolves
-    // its id to the registration. Detecting collisions against the narrower set
-    // would publish core's generated card under an id the server had already
-    // given to somebody else, which is the same disagreement one level down.
-    new Set([
-      ...contributedWidgets().map(widget => widget.id),
-      ...listWidgets().map(widget => widget.id),
-    ])
-  );
+  const audience = await widgetAudience(caller);
 
-  const { workspace } = await buildAdminMeta(readable);
+  const { workspace } = await buildAdminMeta(audience);
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 

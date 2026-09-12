@@ -7,7 +7,6 @@ import {
 import type {
   DeleteOptions,
   SelectOptions,
-  UpdateOptions,
   UpsertOptions,
   WhereClause,
 } from "../types";
@@ -18,7 +17,6 @@ describe("createTransactionForwarders", () => {
     const mockDelegator: TransactionCrudDelegator = {
       select: vi.fn().mockResolvedValue([{ id: "1" }]),
       selectOne: vi.fn(),
-      update: vi.fn(),
       delete: vi.fn(),
       upsert: vi.fn(),
       updateCount: vi.fn(),
@@ -46,7 +44,6 @@ describe("createTransactionForwarders", () => {
     const mockDelegator: TransactionCrudDelegator = {
       select: vi.fn(),
       selectOne: vi.fn().mockResolvedValue({ id: "1", name: "Alice" }),
-      update: vi.fn(),
       delete: vi.fn(),
       upsert: vi.fn(),
       updateCount: vi.fn(),
@@ -69,38 +66,22 @@ describe("createTransactionForwarders", () => {
     );
   });
 
-  it("forwards update with the transaction executor", async () => {
-    const mockExecutor = { name: "tx-executor" };
+  it("does not forward update: the transaction's update is adapter-built", () => {
+    // The pooled `update` writes the columns the runtime model declares; a
+    // transaction's update has to reach the columns the physical table has,
+    // so each adapter builds it beside its transactional `insert`. A forwarder
+    // here would put the model-bound builder back in front of it.
     const mockDelegator: TransactionCrudDelegator = {
       select: vi.fn(),
       selectOne: vi.fn(),
-      update: vi.fn().mockResolvedValue([{ id: "1", name: "Bob" }]),
       delete: vi.fn(),
       upsert: vi.fn(),
       updateCount: vi.fn(),
     };
 
-    const forwarders = createTransactionForwarders(
-      mockDelegator,
-      () => mockExecutor
-    );
-    const data = { name: "Bob" };
-    const where: WhereClause = {
-      and: [{ column: "id", op: "=", value: "1" }],
-    };
-    const options: UpdateOptions = { returning: ["id", "name"] };
+    const forwarders = createTransactionForwarders(mockDelegator, () => ({}));
 
-    const result = await forwarders.update("users", data, where, options);
-
-    expect(result).toEqual([{ id: "1", name: "Bob" }]);
-    expect(mockDelegator.update).toHaveBeenCalledTimes(1);
-    expect(mockDelegator.update).toHaveBeenCalledWith(
-      "users",
-      data,
-      where,
-      options,
-      mockExecutor
-    );
+    expect(Object.hasOwn(forwarders, "update")).toBe(false);
   });
 
   it("forwards delete with the transaction executor", async () => {
@@ -108,7 +89,6 @@ describe("createTransactionForwarders", () => {
     const mockDelegator: TransactionCrudDelegator = {
       select: vi.fn(),
       selectOne: vi.fn(),
-      update: vi.fn(),
       delete: vi.fn().mockResolvedValue(1),
       upsert: vi.fn(),
       updateCount: vi.fn(),
@@ -140,7 +120,6 @@ describe("createTransactionForwarders", () => {
     const mockDelegator: TransactionCrudDelegator = {
       select: vi.fn(),
       selectOne: vi.fn(),
-      update: vi.fn(),
       delete: vi.fn(),
       upsert: vi.fn().mockResolvedValue({ id: "1", email: "test@example.com" }),
       updateCount: vi.fn(),
@@ -170,7 +149,6 @@ describe("createTransactionForwarders", () => {
     const mockDelegator: TransactionCrudDelegator = {
       select: vi.fn(),
       selectOne: vi.fn(),
-      update: vi.fn(),
       delete: vi.fn(),
       upsert: vi.fn(),
       updateCount: vi.fn(),
@@ -198,7 +176,6 @@ describe("createTransactionForwarders — updateCount", () => {
     const mockDelegator: TransactionCrudDelegator = {
       select: vi.fn(),
       selectOne: vi.fn(),
-      update: vi.fn(),
       delete: vi.fn(),
       upsert: vi.fn(),
       updateCount: vi.fn().mockResolvedValue(1),

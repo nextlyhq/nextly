@@ -61,7 +61,6 @@ import {
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
-import type { CollectionAccessRules } from "../../../services/access";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type {
   CollectionRelationshipService,
@@ -85,6 +84,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
+  getFieldFunctions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
 import {
@@ -198,7 +198,6 @@ import {
   getTableName,
   generateSlug,
 } from "./collection-utils";
-import { ownerSafetyNetApplies } from "./owner-safety-net";
 
 /** The Drizzle executor shape the companion-join readers accept (a transaction
  * handle's `getDrizzle()` result, or the pooled `this.db`). */
@@ -371,20 +370,6 @@ class StatusTransitionDeniedError extends NextlyError {
 export interface TransitionAuthorization {
   publishDenied: CollectionServiceResult | null;
   unpublishDenied: CollectionServiceResult | null;
-  /**
-   * Pre-fetched inputs for the document-dependent (owner-only) publish/unpublish
-   * check, or `null` when none applies. The permission fields above cannot judge
-   * an owner-only rule up front because it needs the specific row (which is only
-   * known under the lock); this carries the rules + user so the in-transaction
-   * step can evaluate the owner against the row-locked document with no metadata
-   * or permission read. `null` for a trusted write, a super-admin session, or a
-   * collection without an owner-only transition rule — in which case the
-   * transaction path skips the document check entirely.
-   */
-  documentRule: {
-    accessRules: CollectionAccessRules;
-    user: UserContext | undefined;
-  } | null;
 }
 
 /**
@@ -405,17 +390,17 @@ interface DeleteEntryWriteParams {
   collectionName: string;
   user?: UserContext;
   /**
-   * Honoured only by the owner-predicate gate. The access-service gate hard-
-   * codes `undefined` for it, as the transaction API always has.
+   * Not consulted on this path. The batch caller honours it at its
+   * once-per-batch gate, and the transaction API's gate never received it.
    */
   overrideAccess?: boolean;
   /**
    * The caller's own grants when they arrived on an API key.
    *
-   * Reaches `getOwnerConstraint`, which uses it to decide whether the
-   * super-admin bypass applies. Without it a key OWNED by a super-admin skipped
-   * the owner predicate on a transactional delete — the bypass belongs to the
-   * session path, never to a key issued narrower than the account behind it.
+   * Pinned as the ambient scope for the whole operation, so every gate below
+   * judges the key on its own grants rather than its owner's — the super-admin
+   * bypass belongs to the session path, never to a key issued narrower than
+   * the account behind it.
    */
   authenticatedScope?: AuthenticatedScope;
   /** Who performed the delete, recorded on the outbox event. */
@@ -425,7 +410,7 @@ interface DeleteEntryWriteParams {
 /** The only things that differ between the two delete entry points. */
 interface DeleteEntryWriteOptions {
   /** Which shape of the row gate to apply — see the comment at its use. */
-  rowGate: "access-service" | "owner-predicate";
+  rowGate: "access-service" | "batch-hoisted";
   /** Run user hooks. Access and recording are NOT hooks and always run. */
   runHooks: boolean;
   /** Name the missing id in a 404, so a failing batch item is identifiable. */
@@ -463,11 +448,11 @@ interface UpdateEntryWriteParams {
 interface UpdateEntryWriteOptions {
   /**
    * Which shape of the row gate to apply. `access-service` asks
-   * `checkCollectionAccess` for the whole verdict; `owner-predicate` folds an
-   * owner filter into the fetch and re-checks it afterwards. See the comment
-   * at the use site for why both exist.
+   * `checkCollectionAccess` for the whole verdict; `batch-hoisted` asks
+   * nothing here, because the batch caller ran that gate once before the
+   * transaction opened. See the comment at the use site.
    */
-  rowGate: "access-service" | "owner-predicate";
+  rowGate: "access-service" | "batch-hoisted";
   /**
    * Run user hooks. All-or-nothing on purpose. Validation, access and
    * recording are NOT hooks and always run.
@@ -1478,6 +1463,73 @@ export class CollectionMutationService extends BaseService {
    * write. `manyToManyFields` is passed in rather than recomputed because the
    * caller reuses the same list for the junction rewrite later in the write.
    */
+  /**
+   * Field-group values, removed from a write payload for their own tables.
+   *
+   * Mutates `data` in place, since it is the object that continues to the
+   * main-row write, and returns what was taken out keyed by field name. The
+   * one implementation every write path shapes with: the ordinary create and
+   * update each carried a copy and the transactional writes carried none,
+   * and that difference was an insert that failed on the first field group
+   * and an update that dropped it without a word.
+   */
+  private extractComponentFieldData(
+    data: Record<string, unknown>,
+    fields: FieldDefinition[]
+  ): Record<string, unknown> {
+    const componentFieldData: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (isFieldGroupField(field) && data[field.name] !== undefined) {
+        componentFieldData[field.name] = data[field.name];
+        delete data[field.name];
+      }
+    }
+    return componentFieldData;
+  }
+
+  /**
+   * Write extracted field-group values on the caller's transaction.
+   *
+   * No locale: the transactional writes take none, so a localized component
+   * writes the default locale, as the rest of that path does. Readiness is
+   * read rather than resolved here, which is why a caller that opens its own
+   * transaction warms it first (`warmLocalizedReadiness`).
+   *
+   * A failure here is a write-integrity failure: the parent row is already
+   * written, and a component instance is validated by its own pass inside the
+   * field-group service, so a bad instance surfaces only now. Reported as a
+   * soft per-item failure, a batch under `stopOnError: false` would carry on
+   * and commit a row without the component it promised; marked, the batch
+   * loop aborts and the transaction rolls back, and a single transactional
+   * write rethrows into its caller's transaction the same way.
+   */
+  private async saveComponentFieldDataInTx(
+    tx: TransactionContext,
+    args: {
+      parentId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      data: Record<string, unknown>;
+      user?: UserContext;
+    }
+  ): Promise<void> {
+    if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
+      return;
+    }
+    try {
+      await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+        parentId: args.parentId,
+        parentTable: args.tableName,
+        fields: args.fields as unknown as FieldConfig[],
+        data: args.data,
+        locale: undefined,
+        req: args.user ? { user: args.user } : {},
+      });
+    } catch (error: unknown) {
+      throw markWriteIntegrityFailure(error);
+    }
+  }
+
   private shapeWriteParts(
     data: Record<string, unknown>,
     fields: FieldDefinition[],
@@ -1511,15 +1563,8 @@ export class CollectionMutationService extends BaseService {
       }
     });
 
-    // Extract component field data (stored in separate comp_{slug} tables)
-    // Component fields should not be stored in the collection table
-    const componentFieldData: Record<string, unknown> = {};
-    fields.forEach(field => {
-      if (isFieldGroupField(field) && data[field.name] !== undefined) {
-        componentFieldData[field.name] = data[field.name];
-        delete data[field.name]; // Remove from main update
-      }
-    });
+    // Field-group values go to their own comp_{slug} tables, not this row.
+    const componentFieldData = this.extractComponentFieldData(data, fields);
 
     // Normalize relationship data inside repeater/group fields before serialization.
     // The admin panel may send full relationship objects ({id, title, slug, ...})
@@ -2742,7 +2787,7 @@ export class CollectionMutationService extends BaseService {
    * Applies collection-level access control and hooks.
    *
    * Security checks are applied in order:
-   * 1. Collection-level access (AccessControlService)
+   * 1. Collection-level access (the RBAC gate)
    *
    * @param params - Collection name and optional user context
    * @param body - Entry data to create
@@ -2802,18 +2847,16 @@ export class CollectionMutationService extends BaseService {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
       // 1. Check collection-level access FIRST
-      const accessDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "create",
-        accessUser,
-        undefined,
-        undefined,
-        params.overrideAccess,
-        params.routeAuthorized,
+      const accessDenied = await this.accessService.checkCollectionAccess({
+        collectionName: params.collectionName,
+        operation: "create",
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
         // A scoped API key is judged on its own grants here too, so the session
         // super-admin bypass does not apply to it on the create gate.
-        params.authenticatedScope
-      );
+        authenticatedScope: params.authenticatedScope,
+      });
       if (accessDenied) {
         return accessDenied;
       }
@@ -2860,7 +2903,13 @@ export class CollectionMutationService extends BaseService {
       // of write access matches generation, so a field the caller may not
       // create is not reintroduced.
       const seededBody: Record<string, unknown> = { ...body };
-      applyFieldDefaults(seededBody, fields);
+      // The stored fields carry constant defaults; a function default exists
+      // only in the live config, which the registry captured at boot.
+      applyFieldDefaults(
+        seededBody,
+        fields,
+        getFieldFunctions("collection", params.collectionName)
+      );
 
       const beforeOpArgs =
         await this.hookService.hookRegistry.executeBeforeOperation({
@@ -3062,16 +3111,11 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
-      // Extract component field data (stored in separate comp_{slug} tables)
-      // Component fields should not be stored in the collection table
-      // Extract component field data for separate storage in comp_{slug} tables
-      const componentFieldData: Record<string, unknown> = {};
-      fields.forEach(field => {
-        if (isFieldGroupField(field) && finalData[field.name] !== undefined) {
-          componentFieldData[field.name] = finalData[field.name];
-          delete finalData[field.name]; // Remove from main insert
-        }
-      });
+      // Field-group values go to their own comp_{slug} tables, not this row.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
 
       this.serializeHasManyRelationships(finalData, fields);
 
@@ -3179,8 +3223,8 @@ export class CollectionMutationService extends BaseService {
         ...stripImmutableSystemFields(finalData, "collection"),
         created_at: now,
         updated_at: now,
-        // Stamp the row owner with the creating user's id so owner-only access
-        // works zero-config. Null for system/seed creates (no user context).
+        // Stamp the row owner with the creating user's id, so a consumer can
+        // tell who made the row. Null for system/seed creates (no user context).
         created_by: params.user?.id ?? null,
       };
       const entryData: Record<string, unknown> = {};
@@ -3218,11 +3262,6 @@ export class CollectionMutationService extends BaseService {
         previousStatus: null,
         nextStatus: finalData.status,
         accessUser,
-        // A create has no prior row, so a document-dependent (owner-only/custom)
-        // publish rule is judged against the row this create will persist. Pass
-        // it so a custom rule inspecting the document does not see `data`
-        // undefined and wrongly allow (or deny) a create-as-published.
-        document: entryData,
         overrideAccess: params.overrideAccess,
         authenticatedScope: params.authenticatedScope,
       });
@@ -3712,7 +3751,7 @@ export class CollectionMutationService extends BaseService {
    * Applies collection-level access control and hooks.
    *
    * Security checks are applied in order:
-   * 1. Collection-level access (AccessControlService)
+   * 1. Collection-level access (the RBAC gate)
    *
    * @param params - Collection name, entry ID, and optional user context
    * @param body - Update data
@@ -3958,19 +3997,17 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      const accessDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "update",
-        accessUser,
-        params.entryId,
-        existingEntry,
-        params.overrideAccess,
+      const accessDenied = await this.accessService.checkCollectionAccess({
+        collectionName: params.collectionName,
+        operation: "update",
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
         // The route already ran the `update` gate (against the API key's scope,
         // when applicable), so skip the redundant RBAC re-check here; the publish
         // gate below still runs.
-        params.routeAuthorized,
-        params.authenticatedScope
-      );
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+      });
       if (accessDenied) return accessDenied;
 
       // The draft/published lifecycle flag on the collection config, NOT the
@@ -4011,9 +4048,7 @@ export class CollectionMutationService extends BaseService {
       // directly rather than via a transition, since it publishes companion
       // locales even when the main row is already published. Runs only once
       // there is actually something publishable.
-      // Defer a document-dependent (owner-only/custom) publish rule to the
-      // under-lock re-check so it is judged against the row-locked document, not
-      // the stale pre-transaction `existingEntry` — a custom rule keyed on a
+
       // Readiness for this collection AND for every field-group type it can hold, resolved on the
       // pool before the transaction opens. The snapshot built inside it reads all of them, and
       // there it can only READ a verdict — resolving issues a query, and a query against a missing
@@ -4029,42 +4064,18 @@ export class CollectionMutationService extends BaseService {
         locale: undefined,
       });
 
-      // mutable field (e.g. an approval flag a concurrent writer clears) must
-      // decide on the committed value this publish will overwrite.
-      const publishStoredRules = this.accessService.getAccessRules(
-        publishCollection as Record<string, unknown>
-      );
-      // Keyed by the direction, not hardcoded to `publish`. `publish` and
-      // `unpublish` are separate rule kinds, and a collection may define a
-      // document-dependent rule for one and a static rule for the other — so
-      // asking whether "the publish rule" is document-dependent decides
-      // deferral for a withdrawal by inspecting a rule that will never judge it.
-      const deferPublishDocumentRule =
-        this.accessService.isDocumentDependentRule(
-          publishStoredRules?.[direction.accessAction]
-        );
-      const publishDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        direction.accessAction,
-        accessUser,
-        params.entryId,
-        existingEntry,
-        params.overrideAccess,
+      const publishDenied = await this.accessService.checkCollectionAccess({
+        collectionName: params.collectionName,
+        operation: direction.accessAction,
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
         // Not route-authorized as publish: the POST was authorized as `update`,
         // so the publish permission is checked here.
-        false,
+        routeAuthorized: false,
         // Judge a scoped API key on its own `publish-<slug>` grant.
-        params.authenticatedScope,
-        deferPublishDocumentRule
-      );
+        authenticatedScope: params.authenticatedScope,
+      });
       if (publishDenied) return publishDenied;
-      const publishDocumentRule = deferPublishDocumentRule
-        ? this.accessService.resolveTransitionDocumentRule(
-            publishCollection as Record<string, unknown>,
-            accessUser,
-            params.authenticatedScope
-          )
-        : null;
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
@@ -4179,29 +4190,9 @@ export class CollectionMutationService extends BaseService {
             .limit(1)) as (Record<string, unknown> | undefined)[];
           const preImageRow = lockedSchemaRow ?? existingEntry;
 
-          // Re-check a deferred document-dependent (owner-only/custom) publish
-          // rule against the row read UNDER the lock, before the status write, so
-          // a concurrent change to a field the rule inspects is accounted for.
-          // Throwing here rolls the publish back with nothing written.
-          if (publishDocumentRule) {
-            {
-              const documentDenied =
-                await this.accessService.evaluateTransitionDocumentRule(
-                  publishDocumentRule.accessRules,
-                  // The action this transition is actually performing. Hardcoded
-                  // to "publish" it would enforce the publish rule against a
-                  // withdrawal — admitting one its own unpublish rule denies,
-                  // and refusing one on the strength of an unrelated rule.
-                  direction.accessAction,
-                  publishDocumentRule.user,
-                  lockedRow
-                );
-              if (documentDenied) {
-                publishDocDenied = documentDenied;
-                throw new StatusTransitionDeniedError();
-              }
-            }
-          }
+          // No under-lock re-check: the transition gate judges the caller and
+          // the operation, not the row, so re-reading the row-locked document
+          // could not change its answer.
           // Each locale's committed per-locale status BEFORE the bulk companion
           // flip below, so a real draft->published transition can be told from a
           // locale that was already live. Read under the lock and inside the
@@ -4805,10 +4796,9 @@ export class CollectionMutationService extends BaseService {
   /**
    * Whether this user may update the entry, decided without writing anything.
    *
-   * The same load-then-check `updateEntry` performs, so it sees the
-   * collection's stored per-document rules — owner-only and role-based — which
-   * coarse RBAC does not express. For callers that write something OTHER than
-   * the document and must still be held to the document's update rules;
+   * The same load-then-check `updateEntry` performs. For callers that write
+   * something OTHER than the document and must still be held to its update
+   * gate;
    * version history is one. Sharing this path rather than restating the
    * decision elsewhere is what stops the gate drifting from the writer.
    */
@@ -4828,8 +4818,8 @@ export class CollectionMutationService extends BaseService {
       params.collectionName
     );
 
-    // Loaded because owner-only rules compare against the stored row; without
-    // it those rules cannot be evaluated at all.
+    // Loaded because the hooks below are shown the row as it stands, and a
+    // write to a row that is not there is a not-found rather than a refusal.
     const [existingEntry] = await this.db
       .select()
       .from(schema)
@@ -4841,20 +4831,18 @@ export class CollectionMutationService extends BaseService {
     // the difference between them be probed.
     if (!existingEntry) return false;
 
-    const denied = await this.accessService.checkCollectionAccess(
-      params.collectionName,
-      "update",
-      params.user,
-      params.entryId,
-      existingEntry,
+    const denied = await this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: "update",
+      user: params.user,
       // Never overridden: this exists to APPLY the document's rules, so a
       // caller that could opt out of them would defeat the point.
-      false,
-      params.routeAuthorized,
+      overrideAccess: false,
+      routeAuthorized: params.routeAuthorized,
       // A scoped API key is judged on its own update grant, so the session
       // super-admin bypass does not apply to a super-admin-owned key here.
-      params.authenticatedScope
-    );
+      authenticatedScope: params.authenticatedScope,
+    });
     return denied === null;
   }
 
@@ -4888,8 +4876,6 @@ export class CollectionMutationService extends BaseService {
     previousStatus: string | null;
     nextStatus: unknown;
     accessUser?: UserContext;
-    entryId?: string;
-    document?: Record<string, unknown>;
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult | null> {
@@ -4903,13 +4889,11 @@ export class CollectionMutationService extends BaseService {
     );
     if (!operation) return null;
 
-    return this.accessService.checkCollectionAccess(
-      args.collectionName,
+    return this.accessService.checkCollectionAccess({
+      collectionName: args.collectionName,
       operation,
-      args.accessUser,
-      args.entryId,
-      args.document,
-      args.overrideAccess,
+      user: args.accessUser,
+      overrideAccess: args.overrideAccess,
       // NOT route-authorized, even on a REST write. `routeAuthorized` means the
       // route middleware already ran this exact RBAC check — but the route
       // authorizes a document PATCH/create as `update`/`create`, never as
@@ -4917,11 +4901,11 @@ export class CollectionMutationService extends BaseService {
       // does not hold. Passing it through would skip the RBAC check for the very
       // permission this gate exists to enforce, letting any caller who may
       // update/create also publish.
-      false,
+      routeAuthorized: false,
       // A scoped API key is judged on its own publish/unpublish grant here, not
       // the key owner's.
-      args.authenticatedScope
-    );
+      authenticatedScope: args.authenticatedScope,
+    });
   }
 
   /**
@@ -4949,69 +4933,39 @@ export class CollectionMutationService extends BaseService {
     executor?: unknown;
   }): Promise<TransitionAuthorization> {
     if (args.overrideAccess) {
-      return { publishDenied: null, unpublishDenied: null, documentRule: null };
+      return { publishDenied: null, unpublishDenied: null };
     }
     const collection = await this.collectionService.getCollection(
       args.collectionName,
       args.executor
     );
     if ((collection as { status?: boolean }).status !== true) {
-      return { publishDenied: null, unpublishDenied: null, documentRule: null };
+      return { publishDenied: null, unpublishDenied: null };
     }
-    // A document-dependent stored rule (owner-only or custom) must NOT be judged
-    // docless here: owner-only would defer anyway, but a custom rule that denies
-    // on absent `id`/`data` would cache a false denial that pre-empts the
-    // under-lock recheck. Skip the stored-rule eval for such ops (the RBAC/
-    // permission gate still runs) and evaluate the rule against the locked row
-    // below via `documentRule`.
-    const accessRules = this.accessService.getAccessRules(
-      collection as Record<string, unknown>
-    );
-    const deferPublish = this.accessService.isDocumentDependentRule(
-      accessRules?.publish
-    );
-    const deferUnpublish = this.accessService.isDocumentDependentRule(
-      accessRules?.unpublish
-    );
     // Resolve both concurrently; each is judged on the caller's own grant (a
     // scoped API key on its scope), never route-authorized — the route attested
     // update/create, never publish/unpublish.
     const [publishDenied, unpublishDenied] = await Promise.all([
-      this.accessService.checkCollectionAccess(
-        args.collectionName,
-        "publish",
-        args.accessUser,
-        undefined,
-        undefined,
-        args.overrideAccess,
-        false,
-        args.authenticatedScope,
-        deferPublish,
-        args.executor
-      ),
-      this.accessService.checkCollectionAccess(
-        args.collectionName,
-        "unpublish",
-        args.accessUser,
-        undefined,
-        undefined,
-        args.overrideAccess,
-        false,
-        args.authenticatedScope,
-        deferUnpublish,
-        args.executor
-      ),
+      this.accessService.checkCollectionAccess({
+        collectionName: args.collectionName,
+        operation: "publish",
+        user: args.accessUser,
+        overrideAccess: args.overrideAccess,
+        routeAuthorized: false,
+        authenticatedScope: args.authenticatedScope,
+        executor: args.executor,
+      }),
+      this.accessService.checkCollectionAccess({
+        collectionName: args.collectionName,
+        operation: "unpublish",
+        user: args.accessUser,
+        overrideAccess: args.overrideAccess,
+        routeAuthorized: false,
+        authenticatedScope: args.authenticatedScope,
+        executor: args.executor,
+      }),
     ]);
-    // Owner-only / custom publish/unpublish rules cannot be judged above because
-    // they need the specific row (only known under the lock). Pre-fetch the rules
-    // + user off the already-loaded collection so the in-transaction step
-    // evaluates them against the row-locked document with no further metadata read.
-    const documentRule = this.accessService.resolveTransitionDocumentRule(
-      collection as Record<string, unknown>,
-      args.accessUser,
-      args.authenticatedScope
-    );
-    return { publishDenied, unpublishDenied, documentRule };
+    return { publishDenied, unpublishDenied };
   }
 
   /**
@@ -5035,9 +4989,7 @@ export class CollectionMutationService extends BaseService {
       nextStatus: unknown;
       isCreate: boolean;
       auth: TransitionAuthorization;
-      // The row a create will persist (owner-stamped `created_by` + final
-      // status/data). A create has no prior row to lock, so a deferred
-      // owner-only/custom publish rule is judged against this instead.
+      /** The row a create will persist. A create has no prior row to lock. */
       createDocument?: Record<string, unknown>;
     }
   ): Promise<CollectionServiceResult | null> {
@@ -5053,9 +5005,7 @@ export class CollectionMutationService extends BaseService {
       // miss a concurrent writer's publish/unpublish committed since, leaving the
       // TOCTOU window open on MySQL. A `FOR UPDATE` read always sees the latest
       // committed row; SQLite skips the lock (BEGIN IMMEDIATE already serializes
-      // its writers) and its committed read is already current. The full row (not
-      // just status) is read so an owner-only rule can be judged against the
-      // locked owner column below.
+      // its writers) and its committed read is already current.
       lockedRow = await tx.selectOne<Record<string, unknown>>(args.tableName, {
         where: this.whereEq("id", args.entryId),
         forUpdate: true,
@@ -5083,23 +5033,9 @@ export class CollectionMutationService extends BaseService {
     const permissionDenied =
       op === "publish" ? args.auth.publishDenied : args.auth.unpublishDenied;
     if (permissionDenied) return permissionDenied;
-    // Then the document-dependent (owner-only/custom) rule. Pre-resolved rules +
-    // user are carried on `auth`, so this reads no metadata or permission storage
-    // inside the transaction. For an update it is judged against the row-locked
-    // document; for a create there is no prior row, so it is judged against the
-    // row this create will persist — a deferred owner-only/custom publish rule
-    // must still gate a create that lands directly on published (otherwise a
-    // public create + owner-only publish could anonymously publish, or a custom
-    // publish rule returning false would be skipped on creates).
-    const documentForRule = lockedRow ?? args.createDocument ?? null;
-    if (args.auth.documentRule && documentForRule) {
-      return this.accessService.evaluateTransitionDocumentRule(
-        args.auth.documentRule.accessRules,
-        op,
-        args.auth.documentRule.user,
-        documentForRule
-      );
-    }
+    // The permission check above is the whole decision. There is no
+    // document-dependent rule to judge against the row-locked document, so a
+    // transition is admitted or refused on the caller's grant alone.
     return null;
   }
 
@@ -5556,18 +5492,16 @@ export class CollectionMutationService extends BaseService {
       //
       // A rule that must be judged against the row as locked belongs in the
       // under-lock re-check the publish path already uses, not here.
-      const accessDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "update",
-        accessUser,
-        params.entryId,
-        existingEntry,
-        params.overrideAccess,
-        params.routeAuthorized,
+      const accessDenied = await this.accessService.checkCollectionAccess({
+        collectionName: params.collectionName,
+        operation: "update",
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
         // A scoped API key is judged on its own grants here too, so the session
         // super-admin bypass does not apply to it on the update gate.
-        params.authenticatedScope
-      );
+        authenticatedScope: params.authenticatedScope,
+      });
       if (accessDenied) {
         return accessDenied;
       }
@@ -5917,18 +5851,11 @@ export class CollectionMutationService extends BaseService {
       // here would let `status: 0`/`false` slip an unpublish past the gate.
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
-      // The guard carries the pre-resolved PERMISSION denial (document-
-      // independent) plus, when the op's stored rule is document-dependent
-      // (owner-only/custom), the rules to re-evaluate against the ROW-LOCKED
-      // document inside the transaction — so a custom rule keyed on a mutable
-      // field is not judged against the stale pre-transaction `existingEntry`.
+      // The guard carries the pre-resolved PERMISSION denial, judged off this
+      // transaction's connection so the under-lock step needs no DB read.
       let transitionGuard: {
         op: "publish" | "unpublish";
         permissionDenied: CollectionServiceResult | null;
-        documentRule: {
-          accessRules: CollectionAccessRules;
-          user: UserContext | undefined;
-        } | null;
       } | null = null;
       if (
         collectionHasStatus &&
@@ -5937,50 +5864,31 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const storedRules = this.accessService.getAccessRules(
-          collection as Record<string, unknown>
-        );
-        const deferDocumentRule = this.accessService.isDocumentDependentRule(
-          storedRules?.[transitionOp]
-        );
         const permissionDenied = await this.accessService.checkCollectionAccess(
-          params.collectionName,
-          transitionOp,
-          accessUser,
-          params.entryId,
-          existingEntry,
-          params.overrideAccess,
-          // Never route-authorized: the route authorizes the write as `update`,
-          // never as `publish`/`unpublish`, so the RBAC check must run.
-          false,
-          // A scoped API key is judged on its OWN publish/unpublish grant here,
-          // not the key owner's — the route only checked `update` against the
-          // key's scope.
-          params.authenticatedScope,
-          deferDocumentRule
+          {
+            collectionName: params.collectionName,
+            operation: transitionOp,
+            user: accessUser,
+            overrideAccess: params.overrideAccess,
+            // Never route-authorized: the route authorizes the write as `update`,
+            // never as `publish`/`unpublish`, so the RBAC check must run.
+            routeAuthorized: false,
+            // A scoped API key is judged on its OWN publish/unpublish grant here,
+            // not the key owner's — the route only checked `update` against the
+            // key's scope.
+            authenticatedScope: params.authenticatedScope,
+          }
         );
-        // Pre-fetch the document-dependent rule + user so the in-transaction step
-        // evaluates it against the row-locked document with no further metadata read.
-        const documentRule = deferDocumentRule
-          ? this.accessService.resolveTransitionDocumentRule(
-              collection as Record<string, unknown>,
-              accessUser,
-              params.authenticatedScope
-            )
-          : null;
-        if (permissionDenied || documentRule) {
+        if (permissionDenied) {
           transitionGuard = {
             op: transitionOp,
             permissionDenied,
-            documentRule,
           };
         }
       }
 
       // Wrap main update and component data save in a transaction so that
       // a component save failure rolls back the entry update — no partial state.
-      // tx.execute() is used for the UPDATE so it runs on the same DB client
-      // as the transaction (unlike tx.update() which delegates to the pool).
       // Resolved versioning config persisted on the collection (or null when
       // unversioned); read once so the in-tx capture below can skip cheaply.
       const versionsConfig = (collection as Record<string, unknown>)
@@ -6554,24 +6462,8 @@ export class CollectionMutationService extends BaseService {
                 transitionDeniedResult = transitionGuard.permissionDenied;
                 throw new StatusTransitionDeniedError();
               }
-              // Then the deferred document-dependent (owner-only/custom) rule,
-              // judged against the ROW-LOCKED document (`preUpdateRow`) — not the
-              // stale pre-transaction `existingEntry` — so a custom rule keyed on
-              // a mutable field sees the committed value this update transitions
-              // from. Pure evaluation, no metadata or permission read.
-              if (transitionGuard.documentRule && preUpdateRow) {
-                const documentDenied =
-                  await this.accessService.evaluateTransitionDocumentRule(
-                    transitionGuard.documentRule.accessRules,
-                    transitionGuard.op,
-                    transitionGuard.documentRule.user,
-                    preUpdateRow as Record<string, unknown>
-                  );
-                if (documentDenied) {
-                  transitionDeniedResult = documentDenied;
-                  throw new StatusTransitionDeniedError();
-                }
-              }
+              // The permission above is the whole decision: no rule judges the
+              // row, so the row-locked document cannot change the answer.
             }
           }
 
@@ -6617,19 +6509,8 @@ export class CollectionMutationService extends BaseService {
                   transitionDeniedResult = transitionGuard.permissionDenied;
                   throw new StatusTransitionDeniedError();
                 }
-                if (transitionGuard.documentRule && preUpdateRow) {
-                  const promoteDenied =
-                    await this.accessService.evaluateTransitionDocumentRule(
-                      transitionGuard.documentRule.accessRules,
-                      transitionGuard.op,
-                      transitionGuard.documentRule.user,
-                      preUpdateRow as Record<string, unknown>
-                    );
-                  if (promoteDenied) {
-                    transitionDeniedResult = promoteDenied;
-                    throw new StatusTransitionDeniedError();
-                  }
-                }
+                // No per-row rule to enforce here; the permission above is the
+                // only gate a promotion has to pass.
               }
               // The snapshot is stored read-shaped, so buildRestorePayload turns
               // it into a safe update input (immutable ids stripped, removed
@@ -6712,16 +6593,6 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // Dialect-aware identifier quoting and placeholder syntax.
-          // PostgreSQL: "col" = $1   MySQL: `col` = ?   SQLite: "col" = $1 (convertPlaceholders handles →?)
-          const isMysql = this.dialect === "mysql";
-          const quoteId = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-          const sqlParams: unknown[] = [];
-          const makePlaceholder = () =>
-            this.dialect === "postgresql"
-              ? `$${sqlParams.length}` // length already incremented by push below
-              : "?";
-
           // A row becoming public for the first time records when, once and for good.
           //
           // `status` says what a document IS; nothing said what it HAS BEEN, so an unpublish
@@ -6803,26 +6674,23 @@ export class CollectionMutationService extends BaseService {
             updatePayload.firstPublishedAt = updateStamp;
           }
 
-          const setClauses = Object.entries(updatePayload)
-            .map(([key, val]) => {
-              sqlParams.push(val);
-              return `${quoteId(toSnakeCase(key))} = ${makePlaceholder()}`;
-            })
-            .join(", ");
-          sqlParams.push(params.entryId);
+          // Keyed by SQL column name, as the adapter takes it. A transaction's
+          // update is built by the adapter rather than by the query builder,
+          // which is what lets this write reach a column the runtime model
+          // has already moved to a companion table that does not exist yet
+          // (the localization transition window). A key whose value is
+          // `undefined` is not written; `null` clears the column.
+          const columns: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(updatePayload)) {
+            columns[toSnakeCase(key)] = value;
+          }
           // Skip the live-row UPDATE for a draft edit — the pending
           // change is stored as the working draft below, not written to the row.
           if (!storeAsWorkingDraft) {
-            await tx.execute(
-              `UPDATE ${quoteId(tableName)} SET ${setClauses} WHERE ${quoteId("id")} = ${makePlaceholder()}`,
-              sqlParams as (
-                | string
-                | number
-                | boolean
-                | Date
-                | null
-                | undefined
-              )[]
+            await tx.update(
+              tableName,
+              columns,
+              this.whereEq("id", params.entryId)
             );
           }
 
@@ -7848,7 +7716,7 @@ export class CollectionMutationService extends BaseService {
    * Applies collection-level access control and hooks.
    *
    * Security checks are applied in order:
-   * 1. Collection-level access (AccessControlService)
+   * 1. Collection-level access (the RBAC gate)
    *
    * @param params - Collection name, entry ID, and optional user context
    * @returns Deletion result or error
@@ -7861,8 +7729,8 @@ export class CollectionMutationService extends BaseService {
     actor?: RequestActor;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
-    /** When true, the route middleware already ran the RBAC gate; stored rules
-     * are still enforced. See CollectionAccessService.checkCollectionAccess. */
+    /** When true, the route middleware already ran the RBAC gate, so it is not
+     * run again. See CollectionAccessService.checkCollectionAccess. */
     routeAuthorized?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
@@ -7911,18 +7779,16 @@ export class CollectionMutationService extends BaseService {
       }
 
       // 1. Check collection-level access FIRST (with document for owner checks)
-      const accessDenied = await this.accessService.checkCollectionAccess(
-        params.collectionName,
-        "delete",
-        accessUser,
-        params.entryId,
-        entry,
-        params.overrideAccess,
-        params.routeAuthorized,
+      const accessDenied = await this.accessService.checkCollectionAccess({
+        collectionName: params.collectionName,
+        operation: "delete",
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
         // A scoped API key is judged on its own delete grant, so the session
         // super-admin bypass does not apply to a super-admin-owned key here.
-        params.authenticatedScope
-      );
+        authenticatedScope: params.authenticatedScope,
+      });
       if (accessDenied) {
         return accessDenied;
       }
@@ -8267,8 +8133,8 @@ export class CollectionMutationService extends BaseService {
     // The scope this write runs under becomes the ambient one for the whole
     // operation, not an argument handed to its first gate.
     //
-    // A write passes several: the coarse collection check, the owner predicate,
-    // and the field-level write and redaction passes. Only the first took an
+    // A write passes several: the coarse collection check and the field-level
+    // write and redaction passes. Only the first took an
     // `authenticatedScope` argument, so a caller that NARROWED its scope was
     // held to it once and judged on the request's original scope everywhere
     // after — a key that kept its write grant but surrendered a field grant
@@ -8324,22 +8190,19 @@ export class CollectionMutationService extends BaseService {
       // re-check. Skipped only when the caller already ran it — the batch
       // services check once per batch rather than once per entry.
       if (options.enforceCollectionAccess) {
-        const accessDenied = await this.accessService.checkCollectionAccess(
-          params.collectionName,
-          "create",
-          params.user,
-          undefined,
-          undefined,
-          params.overrideAccess,
-          params.routeAuthorized,
+        const accessDenied = await this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: "create",
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
           // The caller's OWN scope when it narrowed one. Passing `undefined`
-          // sent the gate to the scope pinned for the request, which is the
+          // sends the gate to the scope pinned for the request, which is the
           // full one — so a route that gave up a grant before a transactional
-          // write was still judged on the grant it surrendered.
-          params.authenticatedScope,
-          undefined,
-          txExecutor
-        );
+          // write would still be judged on the grant it surrendered.
+          authenticatedScope: params.authenticatedScope,
+          executor: txExecutor,
+        });
         if (accessDenied) {
           return accessDenied;
         }
@@ -8359,7 +8222,6 @@ export class CollectionMutationService extends BaseService {
       let currentData: Record<string, unknown> = options.shapeCallerObject
         ? body
         : { ...body };
-
       // Shared context between all hooks in this request
       // Seeded from the caller, like the non-transactional pipelines. An
       // empty literal here meant a hook context reached every write EXCEPT
@@ -8584,6 +8446,14 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-group values live in their own comp_{slug} tables and have no
+      // column on the main row; left in place, the insert fails on the first
+      // one. Written after the row exists, below.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
+
       this.serializeHasManyRelationships(finalData, fields);
 
       // Convert date-field strings into `Date` objects so Drizzle can bind
@@ -8608,8 +8478,8 @@ export class CollectionMutationService extends BaseService {
         // unknown key is present, so bulk create needs the real column names.)
         created_at: nowForTxCreate,
         updated_at: nowForTxCreate,
-        // Stamp the row owner with the creating user's id so owner-only access
-        // works zero-config. Null for system/seed creates (no user context).
+        // Stamp the row owner with the creating user's id, so a consumer can
+        // tell who made the row. Null for system/seed creates (no user context).
         created_by: params.user?.id ?? null,
       };
 
@@ -8661,6 +8531,14 @@ export class CollectionMutationService extends BaseService {
       // Insert using transaction context
       const entry = await tx.insert<unknown>(tableName, entryData, {
         returning: "*",
+      });
+
+      await this.saveComponentFieldDataInTx(tx, {
+        parentId: (entry as { id: string }).id,
+        tableName,
+        fields,
+        data: componentFieldData,
+        user: params.user,
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -8787,8 +8665,8 @@ export class CollectionMutationService extends BaseService {
     // The scope this write runs under becomes the ambient one for the whole
     // operation, not an argument handed to its first gate.
     //
-    // A write passes several: the coarse collection check, the owner predicate,
-    // and the field-level write and redaction passes. Only the first took an
+    // A write passes several: the coarse collection check and the field-level
+    // write and redaction passes. Only the first took an
     // `authenticatedScope` argument, so a caller that NARROWED its scope was
     // held to it once and judged on the request's original scope everywhere
     // after — a key that kept its write grant but surrendered a field grant
@@ -8833,40 +8711,10 @@ export class CollectionMutationService extends BaseService {
           tx.getDrizzle()
         );
 
-      // When update access is `owner-only`, fold the ownership
-      // predicate into the SQL WHERE clause of the initial fetch. A
-      // non-owner sees a 404, never gets the row back, and the
-      // post-fetch check below stays as a defense-in-depth guard for
-      // any future caller that might mutate the fetch logic.
-      // Two shapes of the same question — may this user write this row. The
-      // batch worker folds an owner predicate into the fetch, so a row the
-      // caller may not touch never leaves the database; the transaction API
-      // fetches by id and asks the access service, which also applies RBAC and
-      // route authorization. They are not interchangeable, so the caller picks
-      // one and neither path's behaviour moves.
-      const ownerConstraint =
-        options.rowGate === "owner-predicate"
-          ? await this.accessService.getOwnerConstraint(
-              params.collectionName,
-              "update",
-              params.user,
-              // A trusted override must not have an owner predicate forced onto its
-              // fetch, or it would 404 rows it is entitled to update.
-              params.overrideAccess,
-              // A scoped API key keeps the owner predicate even when owned by a
-              // super-admin, so a batch update judges the key on its OWN grant.
-              params.authenticatedScope,
-              // Bound to the caller's transaction connection so the metadata read does
-              // not re-enter the pool from inside the transaction.
-              tx.getDrizzle()
-            )
-          : null;
-      const fetchWhere = ownerConstraint
-        ? this.whereAnd({
-            id: entryId,
-            [ownerConstraint.field]: ownerConstraint.value,
-          })
-        : this.whereEq("id", entryId);
+      // No owner predicate: write access is decided for the collection rather
+      // than per row, so the fetch is by id alone and the access service holds
+      // the whole verdict.
+      const fetchWhere = this.whereEq("id", entryId);
 
       // Fetch existing entry first (needed for owner checks and hooks). Lock the
       // row (`forUpdate`, a no-op on SQLite, which already serializes writers) so
@@ -8889,63 +8737,25 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      if (options.rowGate === "owner-predicate") {
-        // Defense-in-depth: the WHERE-clause filter above is the
-        // load-bearing check. This explicit comparison is a safety net
-        // that fires only if a future refactor accidentally weakens the
-        // fetch query — at which point we'd rather return 403 than
-        // silently let a non-owner through.
-        const accessRules = this.accessService.getAccessRules(
-          collection as Record<string, unknown>
-        );
-
-        // Captured so the branch body reads the SAME rule the decision was made
-        // about, rather than resolving it a second time.
-        const ownerRule = accessRules?.update;
-        if (
-          ownerRule &&
-          params.user &&
-          ownerSafetyNetApplies({
-            ruleIsOwnerOnly: ownerRule.type === "owner-only",
-            hasUser: true,
-            overrideAccess: Boolean(params.overrideAccess),
-            isSuperAdmin: this.accessService.isSuperAdmin(params.user),
-            scope: params.authenticatedScope,
-          })
-        ) {
-          // Default to the auto-stamped system owner column (snake_case, matching
-          // the runtime schema and raw rows) so zero-config owner-only works.
-          const ownerField = ownerRule.ownerField ?? "created_by";
-          const ownerId = existingEntry[ownerField];
-          if (ownerId !== params.user.id) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: "You can only update your own entries",
-              data: null,
-            };
-          }
-        }
+      if (options.rowGate === "batch-hoisted") {
+        // Nothing to re-check per row. The batch worker's caller hoists the
+        // collection-level update gate out of the loop, and there is no
+        // row-ownership rule left for a safety net to compare against.
       } else {
-        // The transaction API asks the access service for the whole verdict:
-        // RBAC, stored rules and the owner check together, judged on the row it
-        // just fetched, with the caller's overrideAccess / routeAuthorized
-        // forwarded.
-        const accessDenied = await this.accessService.checkCollectionAccess(
-          params.collectionName,
-          "update",
-          params.user,
-          entryId,
-          existingEntry,
-          params.overrideAccess,
-          params.routeAuthorized,
+        // The transaction API asks the access service for the whole verdict,
+        // with the caller's overrideAccess / routeAuthorized forwarded.
+        const accessDenied = await this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: "update",
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
           // See the create path: without this a narrowed scope never reaches
           // the gate, because the transaction methods sit outside the plugin
           // facade's re-pinning wrapper.
-          params.authenticatedScope,
-          undefined,
-          tx.getDrizzle()
-        );
+          authenticatedScope: params.authenticatedScope,
+          executor: tx.getDrizzle(),
+        });
         if (accessDenied) {
           return accessDenied;
         }
@@ -9156,6 +8966,14 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
+      // Field-group values have no column on the main row. Left in place they
+      // were dropped by the UPDATE without an error, so the row reported
+      // success and the component table kept its old value.
+      const componentFieldData = this.extractComponentFieldData(
+        finalData,
+        fields
+      );
+
       this.serializeHasManyRelationships(finalData, fields);
 
       // Convert date-field strings into `Date` objects so Drizzle can bind
@@ -9244,7 +9062,10 @@ export class CollectionMutationService extends BaseService {
             tableName,
             {
               ...stripImmutableSystemFields(finalData, "collection"),
-              updatedAt: nowForUpdate,
+              // The SQL name: a dynamic table keys its system columns by it,
+              // and the adapter-built update refuses a key that names no
+              // column rather than dropping it.
+              updated_at: nowForUpdate,
               ...(updateStamp ? { first_published_at: updateStamp } : {}),
             },
             this.whereEq("id", entryId),
@@ -9331,7 +9152,7 @@ export class CollectionMutationService extends BaseService {
             collection,
             collectionHasStatus:
               (collection as { status?: boolean }).status === true,
-            componentFieldData: {},
+            componentFieldData,
             draftLocale: draftLocale,
             fields,
             manyToManyData,
@@ -9380,6 +9201,18 @@ export class CollectionMutationService extends BaseService {
             );
           }
         }
+      }
+
+      // Component rows are live content like the junction rows above, so a
+      // held edit keeps them in the draft (stored above) rather than here.
+      if (!storeAsWorkingDraft) {
+        await this.saveComponentFieldDataInTx(tx, {
+          parentId: entryId,
+          tableName,
+          fields,
+          data: componentFieldData,
+          user: params.user,
+        });
       }
 
       // Record a durable version snapshot and the outbox event on the caller's
@@ -9568,8 +9401,8 @@ export class CollectionMutationService extends BaseService {
     // The scope this write runs under becomes the ambient one for the whole
     // operation, not an argument handed to its first gate.
     //
-    // A write passes several: the coarse collection check, the owner predicate,
-    // and the field-level write and redaction passes. Only the first took an
+    // A write passes several: the coarse collection check and the field-level
+    // write and redaction passes. Only the first took an
     // `authenticatedScope` argument, so a caller that NARROWED its scope was
     // held to it once and judged on the request's original scope everywhere
     // after — a key that kept its write grant but surrendered a field grant
@@ -9629,41 +9462,9 @@ export class CollectionMutationService extends BaseService {
         params.collectionName
       );
 
-      // When delete access is `owner-only`, fold the ownership
-      // predicate into the SQL WHERE clause of the initial fetch.
-      // The post-fetch check below remains as a defense-in-depth
-      // guard.
-      // Two shapes of the same question — may this user delete this row. The
-      // batch worker folds an owner predicate into the fetch so a row the caller
-      // may not touch never leaves the database; the transaction API fetches by
-      // id and asks the access service for the whole verdict. Selected by the
-      // caller so neither path's behaviour moves.
-      const ownerConstraint =
-        options.rowGate === "owner-predicate"
-          ? await this.accessService.getOwnerConstraint(
-              params.collectionName,
-              "delete",
-              params.user,
-              // A trusted override must not have an owner predicate forced onto its
-              // fetch, or it would 404 rows it is entitled to delete.
-              params.overrideAccess,
-              // The caller's scope, so a key owned by a super-admin does not
-              // take the bypass that belongs to a session. This worker used to
-              // pass nothing and say it carried no scoped-API-key context; it
-              // carries one whenever the caller had one, and resolving the owner
-              // predicate without it let such a key delete rows it does not own.
-              params.authenticatedScope,
-              // Bound to the caller's transaction connection so the metadata read does
-              // not re-enter the pool from inside the transaction.
-              tx.getDrizzle()
-            )
-          : null;
-      const fetchWhere = ownerConstraint
-        ? this.whereAnd({
-            id: entryId,
-            [ownerConstraint.field]: ownerConstraint.value,
-          })
-        : this.whereEq("id", entryId);
+      // No owner predicate: delete access is decided for the collection rather
+      // than per row, so the fetch is by id alone.
+      const fetchWhere = this.whereEq("id", entryId);
 
       // Fetch entry first (needed for owner checks and hooks)
       const entry = await tx.selectOne<Record<string, unknown>>(tableName, {
@@ -9681,62 +9482,24 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // See updateSingleEntryInTransaction for the rationale:
-      // WHERE-clause filter is load-bearing, this comparison is the
-      // safety net.
-      const accessRules = this.accessService.getAccessRules(
-        collection as Record<string, unknown>
-      );
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
       );
 
-      if (options.rowGate === "owner-predicate") {
-        // Captured so the branch body reads the SAME rule the decision was made
-        // about, rather than resolving it a second time.
-        const ownerRule = accessRules?.delete;
-        if (
-          ownerRule &&
-          params.user &&
-          ownerSafetyNetApplies({
-            ruleIsOwnerOnly: ownerRule.type === "owner-only",
-            hasUser: true,
-            overrideAccess: Boolean(params.overrideAccess),
-            isSuperAdmin: this.accessService.isSuperAdmin(params.user),
-            scope: params.authenticatedScope,
-          })
-        ) {
-          // Default to the auto-stamped system owner column (snake_case, matching
-          // the runtime schema and raw rows) so zero-config owner-only works.
-          const ownerField = ownerRule.ownerField ?? "created_by";
-          const ownerId = entry[ownerField];
-          if (ownerId !== params.user.id) {
-            return {
-              success: false,
-              statusCode: 403,
-              message: "You can only delete your own entries",
-              data: null,
-            };
-          }
-        }
+      if (options.rowGate === "batch-hoisted") {
+        // Nothing to re-check per row: the batch caller hoists the
+        // collection-level delete gate out of its loop, and no row-ownership
+        // rule remains for a safety net to compare against.
       } else {
-        // The transaction API asks the access service for the whole verdict —
-        // RBAC, stored rules and the owner check together — judged on the row it
-        // just fetched.
+        // The transaction API asks the access service for the whole verdict.
         const accessDenied = await this.accessService.checkCollectionAccess<{
           deleted: boolean;
-        }>(
-          params.collectionName,
-          "delete",
-          params.user,
-          entryId,
-          entry,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          tx.getDrizzle()
-        );
+        }>({
+          collectionName: params.collectionName,
+          operation: "delete",
+          user: params.user,
+          executor: tx.getDrizzle(),
+        });
         if (accessDenied) {
           return accessDenied;
         }
@@ -10048,7 +9811,7 @@ export class CollectionMutationService extends BaseService {
    *
    * The batch services check collection access and resolve the publish
    * transition ONCE per batch, before the transaction opens, so this per-entry
-   * path applies the owner predicate directly — see `updateEntryWrite`.
+   * path runs no collection gate of its own — see `updateEntryWrite`.
    *
    * @param skipHooks - Skip user hooks; a bulk-import option, not a fast path
    *   around validation, access or recording, none of which are hooks.
@@ -10062,7 +9825,7 @@ export class CollectionMutationService extends BaseService {
   ): Promise<CollectionServiceResult<unknown>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.updateEntryWrite(tx, params, entryId, body, {
-        rowGate: "owner-predicate",
+        rowGate: "batch-hoisted",
         runHooks: !skipHooks,
         identifyMissingEntry: true,
         failureMessage: "Failed to update entry",
@@ -10074,8 +9837,8 @@ export class CollectionMutationService extends BaseService {
    * Delete one entry of a batch, on the batch's shared transaction.
    *
    * The batch services check collection access ONCE per batch, before the
-   * transaction opens, so this per-entry path applies the owner predicate
-   * directly — see `deleteEntryWrite`.
+   * transaction opens, so this per-entry path runs no collection gate of its
+   * own — see `deleteEntryWrite`.
    *
    * @param skipHooks - Skip user hooks; a bulk-import option, not a fast path
    *   around access or recording, neither of which is a hook.
@@ -10088,7 +9851,7 @@ export class CollectionMutationService extends BaseService {
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.deleteEntryWrite(tx, params, entryId, {
-        rowGate: "owner-predicate",
+        rowGate: "batch-hoisted",
         runHooks: !skipHooks,
         identifyMissingEntry: true,
         failureMessage: "Failed to delete entry",

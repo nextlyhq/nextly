@@ -31,7 +31,7 @@ import {
   createMockCollectionService,
   createMockRelationshipService,
   createMockHookRegistry,
-  createMockAccessControlService,
+  createMockRbacAccessControlService,
   createMockComponentDataService,
   createSampleEntry,
 } from "./collection-test-helpers";
@@ -217,9 +217,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
   let mockCollectionService: ReturnType<typeof createMockCollectionService>;
   let mockRelationshipService: ReturnType<typeof createMockRelationshipService>;
   let mockHookRegistry: ReturnType<typeof createMockHookRegistry>;
-  let mockAccessControlService: ReturnType<
-    typeof createMockAccessControlService
-  >;
+  let mockRbac: ReturnType<typeof createMockRbacAccessControlService>;
   let mockComponentDataService: ReturnType<
     typeof createMockComponentDataService
   >;
@@ -241,7 +239,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
     mockCollectionService = createMockCollectionService();
     mockRelationshipService = createMockRelationshipService();
     mockHookRegistry = createMockHookRegistry();
-    mockAccessControlService = createMockAccessControlService();
+    mockRbac = createMockRbacAccessControlService();
     mockComponentDataService = createMockComponentDataService();
 
     service = new CollectionEntryService(
@@ -251,9 +249,8 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       mockCollectionService as never,
       mockRelationshipService as never,
       mockHookRegistry as never,
-      mockAccessControlService as never,
       mockComponentDataService as never,
-      undefined
+      mockRbac as never
     );
   });
 
@@ -268,14 +265,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "New Post" }
       );
 
-      expect(mockAccessControlService.evaluateAccess).toHaveBeenCalled();
+      expect(mockRbac.checkAccess).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
-      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "Not authorized to create",
-      });
+      mockRbac.checkAccess.mockResolvedValueOnce(false);
 
       const result = await service.createEntry(
         { collectionName: "posts", user: { id: "user-1" } },
@@ -294,8 +288,8 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "Direct API Post" }
       );
 
-      // Should not fail on access — evaluateAccess may or may not be called,
-      // but checkCollectionAccess returns null when overrideAccess is true
+      // checkCollectionAccess returns null when overrideAccess is true, so
+      // the write is never gated.
       expect(result.success).toBe(true);
     });
 
@@ -327,6 +321,40 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         "beforeCreate",
         expect.any(Object)
       );
+    });
+
+    it("runs field-level beforeChange after collection-level beforeChange", async () => {
+      // The field phase is the last HOOK before the write and is handed the
+      // record, so a collection-level beforeChange is not the final word on any
+      // field. Core normalisation still follows both, so neither is the final
+      // STEP. Payload dispatches the two levels in this order too.
+      selectData.rows = [{ id: "new-1", title: "New Post" }];
+
+      await service.createEntry(
+        { collectionName: "posts" },
+        { title: "Ordered Post" }
+      );
+
+      // The registry mock is an untyped record, so its call list is too;
+      // the parameter is named as what a recorded call is.
+      const collectionPhase = mockHookRegistry.execute.mock.calls.findIndex(
+        (call: unknown[]) => call[0] === "beforeChange"
+      );
+      expect(collectionPhase, "collection beforeChange ran").toBeGreaterThan(
+        -1
+      );
+
+      const fieldPhase = runFieldHooksSpy.mock.calls.findIndex(
+        call => (call[0] as { phase?: string }).phase === "beforeChange"
+      );
+      expect(fieldPhase, "field beforeChange ran").toBeGreaterThan(-1);
+
+      // Invocation order across two different mocks, since neither list alone
+      // can say which came first.
+      const collectionOrder =
+        mockHookRegistry.execute.mock.invocationCallOrder[collectionPhase];
+      const fieldOrder = runFieldHooksSpy.mock.invocationCallOrder[fieldPhase];
+      expect(collectionOrder).toBeLessThan(fieldOrder!);
     });
 
     it("should execute afterCreate hooks", async () => {
@@ -446,14 +474,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         user: { id: "user-1", role: "viewer" },
       });
 
-      expect(mockAccessControlService.evaluateAccess).toHaveBeenCalled();
+      expect(mockRbac.checkAccess).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
-      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "Not authorized",
-      });
+      mockRbac.checkAccess.mockResolvedValueOnce(false);
 
       const result = await service.getEntry({
         collectionName: "posts",
@@ -547,15 +572,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "Updated" }
       );
 
-      expect(mockAccessControlService.evaluateAccess).toHaveBeenCalled();
+      expect(mockRbac.checkAccess).toHaveBeenCalled();
     });
 
     it("should return 403 when access denied", async () => {
       selectData.rows = [createSampleEntry()];
-      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "Not authorized to update",
-      });
+      mockRbac.checkAccess.mockResolvedValueOnce(false);
 
       const result = await service.updateEntry(
         {
@@ -584,10 +606,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       registerFieldFunctions("collection", "posts", [
         { name: "title", type: "text", access: { update: titleFieldAccess } },
       ]);
-      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "Not authorized to update",
-      });
+      mockRbac.checkAccess.mockResolvedValueOnce(false);
 
       await service.updateEntry(
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
@@ -717,15 +736,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         user: { id: "user-1", role: "editor" },
       });
 
-      expect(mockAccessControlService.evaluateAccess).toHaveBeenCalled();
+      expect(mockRbac.checkAccess).toHaveBeenCalled();
     });
 
     it("should return 403 when access denied", async () => {
       selectData.rows = [createSampleEntry()];
-      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "Not authorized to delete",
-      });
+      mockRbac.checkAccess.mockResolvedValueOnce(false);
 
       const result = await service.deleteEntry({
         collectionName: "posts",

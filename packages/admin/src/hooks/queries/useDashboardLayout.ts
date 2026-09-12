@@ -34,10 +34,14 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 
-import { useSchemaUpdateInvalidation } from "@admin/hooks/useSchemaUpdateInvalidation";
+import {
+  ADMIN_WORKSPACE_KEY,
+  useSchemaUpdateInvalidation,
+} from "@admin/hooks/useSchemaUpdateInvalidation";
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import type { AdminBranding } from "@admin/types/branding";
 import type {
   DashboardLayoutResponse,
   WidgetPlacement,
@@ -135,6 +139,40 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     () => queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY }),
     [queryClient]
   );
+
+  // 🔴 The workspace payload is held fresh for minutes, and it is built for
+  // one audience -- the cards this reader may see and the shortcut gates
+  // inside them. A grant, a role change or a plugin registering elsewhere
+  // moves that audience, and a payload built for the old one has no
+  // declaration for a card the server now places and withholds a shortcut
+  // newly permitted. Both responses carry the token of the audience they were
+  // built for, so each layout read compares its own with the payload's and
+  // reads the payload again when they differ.
+  //
+  // Compared, not remembered: an earlier version re-read only when the
+  // layout's token MOVED between two of its reads, and so assumed the first
+  // token it saw described the cached payload -- a payload cached before a
+  // grant met a first dashboard visit after it, and was kept.
+  //
+  // On a LAYOUT read, and never on a workspace update. At a layout read the
+  // layout is the freshest answer, so a payload that disagrees is the stale
+  // side; reacting to the payload as well could re-read one against the other
+  // indefinitely. A payload that carries no token says nothing either way.
+  const audience = query.data?.audience;
+  const readAt = query.dataUpdatedAt;
+  useEffect(() => {
+    if (audience === undefined || readAt === 0) return;
+    const heldForAnother = queryClient
+      .getQueriesData<AdminBranding>({ queryKey: ADMIN_WORKSPACE_KEY })
+      .some(
+        ([, payload]) =>
+          payload?.widgetAudience !== undefined &&
+          payload.widgetAudience !== audience
+      );
+    if (heldForAnother) {
+      void queryClient.invalidateQueries({ queryKey: ADMIN_WORKSPACE_KEY });
+    }
+  }, [audience, readAt, queryClient]);
 
   const save = useMutation({
     mutationFn: (input: SaveLayoutInput) =>

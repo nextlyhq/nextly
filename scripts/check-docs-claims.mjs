@@ -28,6 +28,10 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
+import { compile } from "@mdx-js/mdx";
+
+import { splitFrontmatter } from "./check-docs-compile.mjs";
+
 /**
  * Files come from git's index, not from a directory walk.
  *
@@ -126,7 +130,31 @@ const context7Finding = (check, message) => ({
  * no description leaves nothing to follow; and a description that merely differs from the
  * core package's is the drift that lets the others happen unnoticed. `undefined` is the
  * untracked file, `null` the unreadable one.
+ *
+ * Last, the exclusions are held to the shapes their readers understand. Context7 matches
+ * `excludeFiles` by filename, so an entry that is not one, a path or a pattern, excludes
+ * nothing; and the index verifier, `check-context7-index`, reads `excludeFolders` as
+ * plain paths, so a pattern there is a rule it could never witness. What is accepted is
+ * named rather than what is refused: a list of the metacharacters a pattern may use has
+ * no end, and the names in this repository are plain. A field that is present and not a
+ * list of strings is refused first: normalised to an empty list it would read as "nothing
+ * excluded" here while the operator meant the opposite.
  */
+const LIST_FIELDS = ["folders", "excludeFolders", "excludeFiles"];
+const isStringList = value =>
+  Array.isArray(value) && value.every(entry => typeof entry === "string");
+const malformedLists = config =>
+  LIST_FIELDS.filter(name => name in config && !isStringList(config[name]));
+const listOf = value => (isStringList(value) ? value : []);
+/** A filename as Context7 matches one, and as git spells one segment of a path. */
+const LITERAL_NAME = /^[A-Za-z0-9._-]+$/;
+const isLiteralName = entry =>
+  LITERAL_NAME.test(entry) && entry !== "." && entry !== "..";
+/** A path as git supplies one: literal names joined by `/`. */
+const isLiteralPath = entry => entry.split("/").every(isLiteralName);
+const notFilenames = value => listOf(value).filter(entry => !isLiteralName(entry));
+const notPaths = value => listOf(value).filter(entry => !isLiteralPath(entry));
+
 const CONTEXT7_RULES = [
   [
     config => config === undefined,
@@ -172,11 +200,35 @@ const CONTEXT7_RULES = [
         `description differs from packages/${CORE_PACKAGE}/package.json; one sentence says what this is`
       ),
   ],
+  [
+    config => malformedLists(config).length > 0,
+    config =>
+      context7Finding(
+        "context7-exclusion",
+        `${malformedLists(config).join(", ")} must be a list of strings; read as empty, the field would exclude nothing`
+      ),
+  ],
+  [
+    config => notFilenames(config.excludeFiles).length > 0,
+    config =>
+      context7Finding(
+        "context7-exclusion",
+        `excludeFiles names ${notFilenames(config.excludeFiles).join(", ")}, which is not a filename; Context7 matches the field by filename, so a path or a pattern excludes nothing`
+      ),
+  ],
+  [
+    config => notPaths(config.excludeFolders).length > 0,
+    config =>
+      context7Finding(
+        "context7-exclusion",
+        `excludeFolders names ${notPaths(config.excludeFolders).join(", ")}, which is not a plain path; check-context7-index reads plain paths, docs/archive, and cannot witness a pattern`
+      ),
+  ],
 ];
 
 export function context7Findings(config, coreDescription) {
   const rule = CONTEXT7_RULES.find(([applies]) => applies(config, coreDescription));
-  return rule ? rule[1]() : null;
+  return rule ? rule[1](config) : null;
 }
 
 /**
@@ -499,36 +551,167 @@ const REPO_LINK = /github\.com\/nextlyhq\/nextly\/(?:blob|tree|raw)\/([^\s)\]"'`
 
 const HEX_REF = /^[0-9a-f]{7,40}$/i;
 
-/** Markdown links pointing inside the docs site, e.g. `[Preview](/docs/preview)`. */
-const INTERNAL_DOCS_LINK = /\]\((\/docs\/[^)\s]*)\)/g;
+/** The syntax-tree nodes that carry a destination: a link, an image, a reference definition. */
+const DESTINATION_NODES = new Set(["link", "image", "definition"]);
 
 /**
- * A link written as a path from the FILE: `../configuration/index.mdx`, `./x.mdx`,
- * `../packages/...`.
- *
- * Five of these existed beside three hundred and eighty `/docs/...` links, and every one was
- * outside the check above, which reads only the root-relative form. Two pointed at repository
- * source files and were broken everywhere; three pointed at sibling pages and rendered as
- * written on the site, which had nothing resolving them. One spelling, the guarded one, is
- * the boundary: a docs page links to another page by its URL, and to source by its GitHub URL.
+ * The JSX a page may write a destination into: an `<img>` is an image and an `<a>` a link,
+ * each by the attribute that carries it. Only a literal string is read; an expression is a
+ * value the page computes, which a scan of the source cannot know.
  */
-const FILE_PATH_LINK = /(?<!\\)\]\((\.\.?\/[^)\s]*)\)|^ {0,3}\[[^\]\n]+\]:[ \t]*(\.\.?\/\S*)/g;
+const JSX_DESTINATIONS = new Map([
+  ["img", ["src", "image"]],
+  ["a", ["href", "link"]],
+]);
+const JSX_NODES = new Set(["mdxJsxFlowElement", "mdxJsxTextElement"]);
+
+/** The destination a JSX element carries, as `{ url, type }`, or `null`. */
+function jsxDestination(node) {
+  const carried = JSX_NODES.has(node.type) ? JSX_DESTINATIONS.get(node.name) : undefined;
+  if (!carried) return null;
+  const [attribute, type] = carried;
+  const found = (node.attributes ?? []).find(
+    candidate => candidate.type === "mdxJsxAttribute" && candidate.name === attribute
+  );
+  return typeof found?.value === "string" ? { url: found.value, type } : null;
+}
+
+function hasDestination(node) {
+  return DESTINATION_NODES.has(node.type) || jsxDestination(node) !== null;
+}
 
 /**
- * The text with everything Markdown does not render as prose blanked, line for line.
+ * What a destination is, for the wording and the rule it is held to.
  *
- * A fenced sample that demonstrates a link, an inline code span, or an MDX comment is not a
- * link; a check that read them as one would refuse a page for teaching the syntax. Blanked
- * rather than removed so a finding still names the line it was read from: every newline is
- * kept and every other character inside becomes a space. A fence closes only on its own
- * marker, so a tilde fence holding backticks is one block.
+ * A definition carries no kind of its own: `[pic]: diagram.png` is an image when
+ * `![d][pic]` uses it and a link when `[d][pic]` does. Read as an image whenever an
+ * image reference uses it, since that is the reading under which a relative
+ * destination is broken.
  */
-export function codeBlanked(text) {
-  const blank = fragment => fragment.replace(/[^\n]/g, " ");
-  return text
-    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, blank)
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, blank)
-    .replace(/(`+)[^`\n][\s\S]*?\1/g, blank);
+function destinationKind(node, imageIds) {
+  if (node.type === "definition" && imageIds.has(node.identifier)) return "image";
+  return node.type;
+}
+
+/** The identifiers every image reference in a tree uses. */
+function imageReferenceIds(nodes) {
+  return new Set(
+    nodes.filter(node => node.type === "imageReference").map(node => node.identifier)
+  );
+}
+
+/** Every node under one, itself included, in document order. */
+function nodesOf(node) {
+  return [node, ...(node.children ?? []).flatMap(nodesOf)];
+}
+
+/**
+ * Every destination a file holds, read off its syntax tree, with the node that holds it.
+ *
+ * Read off the tree rather than matched in the text, because the text has no end of
+ * spellings: `[x](../y.mdx "title")`, `[x](<../y.mdx>)`, a bare `[x](y.mdx)`, and a
+ * reference definition `[x]: ../y.mdx` are four the patterns this replaced had learned one
+ * at a time, and a fenced sample, an inline code span and an MDX comment were three places
+ * the same patterns had to be taught not to look. A `link` node is a rendered link and a
+ * `code` node is not, by construction. An `image` is a destination too: the patterns saw
+ * `![d](./x.png)` only because it shares `](` with a link, and the tree names it outright.
+ * So is an `<img src>` or an `<a href>` written as JSX, which compiles and renders
+ * whatever its attribute says; a literal one is read, an expression is left to the page.
+ *
+ * Frontmatter is taken off first, the way the site's loader takes it off, or the compiler
+ * would read the YAML as Markdown. A block that is not YAML is left in and read as
+ * Markdown instead, a rule and a paragraph, so the links after it are still read: the
+ * compile check reports a docs page's frontmatter, but a README is not a docs page and
+ * this is the only check that reads its links. A page the compiler cannot parse yields no
+ * destinations; the compile check reports that one.
+ */
+async function linkDestinations(text, mdx) {
+  const links = [];
+  const collect = skipped => () => tree => {
+    const nodes = nodesOf(tree);
+    const imageIds = imageReferenceIds(nodes);
+    for (const node of nodes.filter(hasDestination)) {
+      const jsx = jsxDestination(node);
+      links.push({
+        url: jsx ? jsx.url : node.url,
+        type: jsx ? jsx.type : destinationKind(node, imageIds),
+        line: (node.position?.start.line ?? 0) + skipped,
+      });
+    }
+  };
+  const { body, skipped } = frontmatterOrMarkdown(text);
+  try {
+    await compile(body, { format: mdx ? "mdx" : "md", remarkPlugins: [collect(skipped)] });
+  } catch (error) {
+    // A parse failure is the compiler's, carries its position, and is the
+    // compile check's to report. Anything else is this scan's own failure, and
+    // read as "no destinations" it would pass every link on the page.
+    if (!isParseFailure(error)) throw error;
+    return [];
+  }
+  return links;
+}
+
+/**
+ * Whether a compile error is the parser refusing the page, as against a fault in a plugin.
+ * The parser's message carries the position and a `reason`, which is what the compile
+ * check reports; its `name` is the position, so it is not the thing to test.
+ */
+function isParseFailure(error) {
+  return typeof error?.reason === "string" && "line" in error;
+}
+
+/** The text with its frontmatter taken off, or the whole text when the block is not YAML. */
+function frontmatterOrMarkdown(text) {
+  try {
+    return splitFrontmatter(text);
+  } catch {
+    return { body: text, skipped: 0 };
+  }
+}
+
+/**
+ * How a finding names a destination, by the node that carries it: what the page does with
+ * it, and what the site needs instead. A page is linked by its URL and source by its
+ * GitHub URL; an image has nothing served beside the page, so any relative one is a path.
+ */
+const DESTINATION_WORDING = {
+  link: {
+    verb: "links to",
+    remedy: "a page is linked by its URL, /docs/..., and source by its GitHub URL",
+    relativeIsPath: url => /^\.\.?\//.test(url) || /\.mdx?(?:[#?]|$)/i.test(url),
+    // A docs URL is right when a page answers there.
+    docsUrlFinding: resolves => (resolves ? null : "which is not a docs page"),
+    // Nothing under /docs is an image, whatever answers there.
+  },
+  image: {
+    verb: "embeds",
+    remedy: "the site serves no file beside a page, so an image is embedded by its URL",
+    relativeIsPath: () => true,
+    docsUrlFinding: () => "which is where pages are served, not files",
+  },
+};
+
+/** The wording for a destination's node; a definition reads as the link it defines. */
+function wordingFor(type) {
+  return DESTINATION_WORDING[type] ?? DESTINATION_WORDING.link;
+}
+
+/**
+ * The documentation route: its root, or anything under it.
+ *
+ * The boundary matters because the two wordings disagree about the root. A
+ * LINK to `/docs` is right, and `resolves` says so. An IMAGE there is wrong
+ * whatever answers, and a prefix test for `/docs/` never asked about the root
+ * at all, so `<img src="/docs">` was accepted by a rule that refuses
+ * `/docs/anything`. `/docsomething` is a different route and is not this one.
+ */
+const isDocsRoute = url => /^\/docs(?:[/#?]|$)/.test(url);
+
+/** A destination written as a path from the file rather than as a URL. */
+function isFilePath(url, type) {
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(url)) return false;
+  return wordingFor(type).relativeIsPath(url);
 }
 
 /**
@@ -924,12 +1107,14 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   }
 }
 
-function internalLinks(repoRoot, tracked, findings) {
+async function internalLinks(repoRoot, tracked, findings) {
   // The published pages are the docs tree, not every `.mdx` git tracks: a
   // package's README.mdx has GitHub as its surface and its own link rules.
   const pages = new Set(tracked.filter(rel => rel.startsWith("docs/") && rel.endsWith(".mdx")));
   const resolves = target => {
-    const path = target.split("#")[0].replace(/\/+$/, "");
+    // The query goes with the fragment: neither names a page, and the route
+    // root reached with either is still the route root.
+    const path = target.split(/[#?]/)[0].replace(/\/+$/, "");
     if (path === "/docs") return true;
     const rel = `docs${path.slice("/docs".length)}`;
     return pages.has(`${rel}.mdx`) || pages.has(`${rel}/index.mdx`);
@@ -944,29 +1129,24 @@ function internalLinks(repoRoot, tracked, findings) {
     } catch {
       continue;
     }
-    const lines = codeBlanked(text).split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      INTERNAL_DOCS_LINK.lastIndex = 0;
-      let match;
-      while ((match = INTERNAL_DOCS_LINK.exec(lines[i])) !== null) {
-        if (!resolves(match[1])) {
-          findings.push({
-            check: "internal-docs-link",
-            file: rel,
-            line: i + 1,
-            message: `links to ${match[1]}, which is not a docs page`,
-          });
-        }
-      }
-      // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
-      if (!pages.has(rel)) continue;
-      FILE_PATH_LINK.lastIndex = 0;
-      while ((match = FILE_PATH_LINK.exec(lines[i])) !== null) {
+    for (const { url, type, line } of await linkDestinations(text, rel.endsWith(".mdx"))) {
+      const { verb, remedy, docsUrlFinding } = wordingFor(type);
+      const docsUrl = isDocsRoute(url) ? docsUrlFinding(resolves(url)) : null;
+      if (docsUrl) {
         findings.push({
           check: "internal-docs-link",
           file: rel,
-          line: i + 1,
-          message: `links to ${match[1] ?? match[2]} as a file path; a page is linked by its URL, /docs/..., and source by its GitHub URL`,
+          line,
+          message: `${verb} ${url}, ${docsUrl}`,
+        });
+      }
+      // Only a published page: a README linking `./CONTRIBUTING.md` is a link GitHub renders.
+      if (pages.has(rel) && isFilePath(url, type)) {
+        findings.push({
+          check: "internal-docs-link",
+          file: rel,
+          line,
+          message: `${verb} ${url} as a file path; ${remedy}`,
         });
       }
     }
@@ -1979,7 +2159,7 @@ export async function runChecks({
     exemption("documented-key-prefix"),
     repairs
   );
-  internalLinks(repoRoot, tracked, findings);
+  await internalLinks(repoRoot, tracked, findings);
   pluginRouteMount(repoRoot, tracked, findings, exemption("plugin-route-mount"));
   metaReachability(repoRoot, tracked, findings);
 

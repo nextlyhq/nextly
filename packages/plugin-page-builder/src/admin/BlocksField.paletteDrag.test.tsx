@@ -18,12 +18,23 @@
  * @module admin/BlocksField.paletteDrag.test
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
-import { CAPABILITY_ROUTE_PATH, LIBRARY_ROUTE_PATH } from "../library-contract";
+import {
+  CAPABILITY_ROUTE_PATH,
+  COMPONENT_LIBRARY_ROUTE_PATH,
+  LIBRARY_ROUTE_PATH,
+} from "../library-contract";
 
 /**
  * What the library route answers, for the one case that cares.
@@ -36,6 +47,34 @@ let libraryAnswer: { items: unknown[]; meta: unknown } | undefined;
 /** What the capability route answers. Mutable so a case can withhold the grant. */
 let capabilityAnswer: { mayCreate: boolean } | undefined;
 
+/** Which document the field is inside, or none. */
+let documentIdentity: {
+  kind: "collection" | "single";
+  slug: string;
+  documentId?: string;
+} | null = null;
+
+/**
+ * What the component route answers.
+ *
+ * Its own answer rather than the pattern library's: the two routes carry
+ * different rows under the same envelope, and a mock handing the pattern rows
+ * to the component read would put pattern documents in the definitions map.
+ */
+let componentAnswer: { items: unknown[]; meta: unknown } | undefined;
+/** The options the editor was built with, so a case can ask what caps it applies under. */
+let editorOptions: Record<string, unknown> | undefined;
+/** Records the options and contributes nothing to the editor stub's shape. */
+function recordEditorOptions(
+  options: Record<string, unknown>
+): Record<string, never> {
+  editorOptions = options;
+  return {};
+}
+
+/** What the component read reports beside its answer: a failed refresh keeps the answer. */
+let componentError: Error | null = null;
+
 /**
  * Which panel the shell stub asks for.
  *
@@ -44,8 +83,11 @@ let capabilityAnswer: { mayCreate: boolean } | undefined;
  */
 let shownPanel = "insert";
 
-/** How many times the LIBRARY was asked for. */
+/** How many times the whole LIBRARY was asked for — the panel's read. */
 let routeReads = 0;
+
+/** How many times the COMPONENT tier alone was asked for — the editor's read. */
+let componentReads = 0;
 
 /** How many times the capability route was asked for. */
 let capabilityReads = 0;
@@ -58,6 +100,7 @@ let capabilityReads = 0;
  */
 const paths = vi.hoisted(() => ({
   library: "/library",
+  components: "/library/components",
   capability: "/capability",
 }));
 
@@ -70,6 +113,7 @@ const seen: {
   dragOptions: Record<string, unknown> | undefined;
   toolbar: Record<string, unknown> | undefined;
   spacing: Record<string, unknown> | undefined;
+  keyboard: Record<string, unknown> | undefined;
 } = {
   inspector: undefined,
   canvas: undefined,
@@ -78,6 +122,7 @@ const seen: {
   dragOptions: undefined,
   toolbar: undefined,
   spacing: undefined,
+  keyboard: undefined,
 };
 
 /** What the recorded drag reports as in flight, per test. */
@@ -130,10 +175,15 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       topBar,
       children,
       renderPanel,
+      notices,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
+      notices?: {
+        notices: readonly { message: string }[];
+        raise: (message: string) => void;
+      };
       renderPanel?: (panel: string) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
@@ -152,6 +202,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          */}
         {renderPanel?.(shownPanel)}
         {children}
+        {/* The host's queue, drawn as the real shell draws it: a raise from
+            above the shell has nowhere else to become visible. */}
+        <div data-recorder="notices">
+          {notices?.notices.map(notice => notice.message).join(" | ")}
+        </div>
       </div>
     ),
     BreakpointManager: record("breakpoints"),
@@ -168,7 +223,17 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         <div data-recorder="canvas">{props.overlay as React.ReactNode}</div>
       );
     },
-    BlockKeyboardActions: passthrough,
+    // Passed through AND recorded: the canvas renders inside it, and what the
+    // host hands it decides how a keyboard move is judged.
+    BlockKeyboardActions: ({
+      children,
+      ...props
+    }: {
+      children?: React.ReactNode;
+    } & Record<string, unknown>): React.JSX.Element => {
+      seen.keyboard = props;
+      return <>{children}</>;
+    },
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
      * a stub would take the recorder below out of the tree along with it. The
@@ -202,7 +267,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         draggingBlockName,
       };
     },
-    useEditorState: () => ({
+    useEditorState: (options: Record<string, unknown>) => ({
+      ...recordEditorOptions(options),
       document: { formatVersion: 1, kind: "page", nodes: [] },
       selectedId: null,
       selection: { ids: [], primary: null },
@@ -228,6 +294,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    */
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
+  // Which document the field sits in. Mutable so one case can put the
+  // field inside a component's own row.
+  useDocumentIdentity: () => documentIdentity,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change
@@ -252,6 +324,19 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
         refetch: () => {},
       };
     }
+    // Two readers share the library route and differ in WHEN they read: the
+    // panel reads the whole library only while it is on screen, and the editor
+    // reads the component tier on every mount so the canvas can draw an
+    // instance. Counted apart, so a case about the one does not see the other.
+    if (args.path === paths.components) {
+      componentReads += 1;
+      return {
+        data: componentAnswer,
+        pending: false,
+        error: componentError,
+        refetch: () => {},
+      };
+    }
     routeReads += 1;
     return {
       data: libraryAnswer,
@@ -260,7 +345,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       refetch: () => {},
     };
   },
-  useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
+  // `schedule` too: the real hook offers it and the editor calls it on every
+  // document change, which a re-render after a raised notice is.
+  useDocumentCheckpoint: () => ({
+    record: () => {},
+    clear: () => {},
+    schedule: () => {},
+  }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
@@ -286,9 +377,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { BlocksField } = await import("./BlocksField");
 
 /** A form around the field, since it reads its value through a form control. */
-function Host(): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: undefined } });
+function Host({
+  document,
+}: {
+  document?: BlockDocument;
+} = {}): React.JSX.Element {
+  const { control } = useForm({ defaultValues: { body: document } });
   return <BlocksField name="body" control={control} />;
+}
+
+/** A component's own content, as its content field holds it. */
+function componentDocument(): BlockDocument {
+  return {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [],
+  } as unknown as BlockDocument;
 }
 
 /** Mount the field and open the editor, which is where the two surfaces live. */
@@ -303,6 +407,7 @@ beforeEach(() => {
   seen.canvas = undefined;
   seen.toolbar = undefined;
   seen.spacing = undefined;
+  seen.keyboard = undefined;
   draggingBlockName = null;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
@@ -313,8 +418,13 @@ afterEach(() => {
   // A leaked answer would make the next case's palette offer a pattern it was
   // not written for.
   libraryAnswer = undefined;
+  componentAnswer = undefined;
+  componentError = null;
+  editorOptions = undefined;
+  documentIdentity = null;
   shownPanel = "insert";
   routeReads = 0;
+  componentReads = 0;
   capabilityReads = 0;
   capabilityAnswer = { mayCreate: true };
 });
@@ -445,6 +555,7 @@ describe("what the editor reads before anyone asks for it", () => {
     // contract the mock would answer the wrong shape for both reads, and a
     // counter that never incremented would report perfect laziness.
     expect(paths.library).toBe(LIBRARY_ROUTE_PATH);
+    expect(paths.components).toBe(COMPONENT_LIBRARY_ROUTE_PATH);
     expect(paths.capability).toBe(CAPABILITY_ROUTE_PATH);
   });
 
@@ -471,6 +582,19 @@ describe("what the editor reads before anyone asks for it", () => {
     expect(routeReads).toBe(0);
   });
 
+  it("reads the COMPONENT tier on mount whichever panel is open", () => {
+    // The canvas needs definitions to draw an instance at all, and a page can
+    // hold instances before any panel is opened. This is the one library read
+    // that does not wait for the panel — and it asks for the component tier
+    // alone, so it does not drag the pattern tier along on every editor open.
+    shownPanel = "layers";
+
+    openEditor();
+
+    expect(componentReads).toBeGreaterThan(0);
+    expect(routeReads).toBe(0);
+  });
+
   it("reads it once the insert panel is the one on screen", () => {
     // The control. Without it the assertion above is satisfied by a hook that
     // never reads at all, which is the tier being unreachable again.
@@ -480,4 +604,358 @@ describe("what the editor reads before anyone asks for it", () => {
 
     expect(routeReads).toBeGreaterThan(0);
   });
+
+  it("builds the editor with the canvas's map, and a refusal it makes is drawn by the shell", () => {
+    // Room is judged in the editor's apply, which is built above the shell;
+    // its sentence has to reach the region the shell draws, so the host owns
+    // the queue and hands it over. Observed end to end: the refusal callback
+    // the editor was built with puts its sentence where the shell renders.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const render = recorded("canvas").render as { definitions: unknown };
+    expect(editorOptions?.definitions).toBe(render.definitions);
+    const onRefused = editorOptions?.onRefused as (r: {
+      sentence: string;
+    }) => void;
+    act(() => {
+      onRefused({ sentence: "This page has no room left for that component." });
+    });
+    expect(
+      document.querySelector('[data-recorder="notices"]')?.textContent
+    ).toContain("no room left");
+  });
+
+  it("builds the editor under the same caps the canvas draws under, so an apply agrees with the preflight", () => {
+    // The insert preflight and the canvas both judge under the site's caps;
+    // an editor built under the engine's defaults refuses, silently, an edit
+    // to a page legal only under a raised cap after both accepted it.
+    openEditor();
+
+    const render = recorded("canvas").render as { limits: unknown };
+    expect(editorOptions?.limits).toBe(render.limits);
+    expect(editorOptions?.limits).toBeDefined();
+  });
+
+  it("hands the drag the same map the canvas draws with, so a moved instance is judged by its roots", () => {
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const canvas = recorded("canvas");
+    const render = canvas.render as { definitions: unknown };
+    expect(seen.dragOptions?.definitions).toBe(render.definitions);
+  });
+
+  it("hands the keyboard verbs the same map, so a moved instance is judged by its roots on every route", () => {
+    // Alt+Arrow, the toolbar and the command palette all move through the
+    // keyboard verbs; judged by the instance node's own type they would lift
+    // a component whose root belongs only inside a container up to the root,
+    // where the same instance's drop is refused.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: false },
+    };
+
+    openEditor();
+
+    const render = recorded("canvas").render as { definitions: unknown };
+    expect(seen.keyboard?.definitions).toBe(render.definitions);
+    expect(render.definitions).toBeDefined();
+  });
+
+  it("hands the canvas and the panel ONE definitions map, and the panel the rows and the cut", () => {
+    // Three props from one read, asserted by identity where identity is the
+    // point: the map the panel resolves a tile's roots through must be the
+    // map the canvas draws with, or the two can judge one definition from two
+    // different documents. The rows are what the tiles are built from, and
+    // the cut is what the panel says beside them.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    const items = [{ id: "header", title: "Header", document: definition }];
+    componentAnswer = { items, meta: { count: 1, truncated: true } };
+    libraryAnswer = { items: [], meta: { count: 0, truncated: false } };
+
+    openEditor();
+
+    // Population first, once: every recorder must have rendered, or the
+    // identity assertions below would be comparing `undefined` to `undefined`.
+    const canvas = recorded("canvas");
+    const panel = recorded("insertPanel");
+    const inspector = recorded("inspector");
+    const render = canvas.render as {
+      definitions: Map<string, unknown>;
+      limits: unknown;
+    };
+    expect(render.definitions.get("header")).toBe(definition);
+    expect(panel.componentDefinitions).toBe(render.definitions);
+    expect(panel.components).toBe(items);
+    expect(panel.library).toMatchObject({
+      patterns: "ready",
+      components: "cut",
+    });
+    // And the inspector reads the SAME map, so a selected instance's rows come
+    // from the document the canvas draws, with the rows that carry its title.
+    const library = inspector.componentLibrary as {
+      definitions: unknown;
+      components: unknown;
+    };
+    expect(library.definitions).toBe(render.definitions);
+    expect(library.components).toBe(items);
+  });
 });
+
+describe("what the panel is told of a read that failed to refresh", () => {
+  it("names the tier stale, ahead of the cut its last answer carried", () => {
+    // The tiles stand — they are the last answer — so the panel is told they
+    // may be out of date rather than that none are offered. Ahead of the
+    // cut, because the cut describes the answer the retry replaces: a
+    // library reloaded whole is reported cut again.
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+    };
+    componentAnswer = {
+      items: [{ id: "header", title: "Header", document: definition }],
+      meta: { count: 1, truncated: true },
+    };
+    componentError = new Error("Forbidden");
+    libraryAnswer = { items: [], meta: { count: 0, truncated: false } };
+
+    openEditor();
+
+    const panel = recorded("insertPanel");
+    expect(panel.library).toMatchObject({
+      patterns: "ready",
+      components: "stale",
+    });
+    expect((panel.componentDefinitions as Map<string, unknown>).size).toBe(1);
+  });
+});
+
+describe("what a component's own content field may offer", () => {
+  const definition = {
+    formatVersion: 1,
+    kind: "component",
+    nodes: [{ id: "d1", type: "core/box", version: 1, props: {} }],
+  };
+  const rows = [
+    { id: "header", title: "Header", document: definition },
+    { id: "footer", title: "Footer", document: definition },
+  ];
+
+  it("leaves out the definition the field is editing, and keeps the map whole", () => {
+    // Placed, an instance of the definition inside itself is a cycle the
+    // resolver draws as a placeholder; the offer is where the field knows
+    // which row it is inside. The canvas still resolves every OTHER instance
+    // against the whole map.
+    componentAnswer = { items: rows, meta: { count: 2, truncated: false } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "header",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
+      "footer",
+    ]);
+    const canvas = recorded("canvas");
+    expect(
+      (canvas.render as { definitions: Map<string, unknown> }).definitions.has(
+        "header"
+      )
+    ).toBe(true);
+  });
+
+  it("leaves out every component that reaches the one being edited, however many steps away", () => {
+    // The direct case above is the shortest cycle, not the only one. Editing
+    // A while B holds an instance of A, placing B makes A → B → A; while C
+    // holds B, placing C makes A → C → B → A. Neither is visible against the
+    // saved map until A is saved, and then every page placing any of them
+    // draws a placeholder. Judged by what drawing each candidate READS
+    // through the canvas's own lookup, so the offer and the canvas agree on
+    // what a definition reaches.
+    const instanceOf = (componentId: string, id: string) => ({
+      id,
+      type: "nextly/component-instance",
+      version: 1,
+      props: { componentId },
+    });
+    const holding = (node: unknown) => ({
+      formatVersion: 1,
+      kind: "component",
+      nodes: [node],
+    });
+    const library = [
+      { id: "a", title: "A", document: definition },
+      { id: "b", title: "B", document: holding(instanceOf("a", "b-a")) },
+      { id: "c", title: "C", document: holding(instanceOf("b", "c-b")) },
+      { id: "d", title: "D", document: holding(instanceOf("footer", "d-f")) },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    componentAnswer = { items: library, meta: { count: 5, truncated: false } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
+      "d",
+      "footer",
+    ]);
+  });
+
+  it("judges what a candidate reaches under the SITE's node cap, and leaves out one the cap cannot read whole", () => {
+    // The walk over a definition is bounded, and a bound that ends it early
+    // leaves a prefix that names nothing past it. Read under the engine's
+    // default cap, a site that lowered its own would clear a candidate on a
+    // prefix; read under the site's, the same candidate is left out because
+    // it cannot be shown not to reach the row.
+    const text = (id: string) => ({
+      id,
+      type: "core/text",
+      version: 1,
+      props: {},
+    });
+    const library = [
+      { id: "a", title: "A", document: definition },
+      {
+        id: "wide",
+        title: "Wide",
+        document: {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [text("w1"), text("w2"), text("w3")],
+        },
+      },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    componentAnswer = { items: library, meta: { count: 3, truncated: false } };
+    clientConfig = { limits: { maxNodes: 2 } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    const panel = recorded("insertPanel");
+    expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
+      "footer",
+    ]);
+  });
+
+  it("leaves out a candidate reaching a component the library could not load whole, and keeps it when the library was whole", () => {
+    // A cut read leaves out rows the store holds, so a reference the canvas's
+    // lookup cannot follow may name the definition being edited; the field
+    // passes whether its read was whole, and the walk fails closed on a cut.
+    const library = [
+      { id: "a", title: "A", document: definition },
+      {
+        id: "c",
+        title: "C",
+        document: {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [
+            {
+              id: "c-b",
+              type: "nextly/component-instance",
+              version: 1,
+              props: { componentId: "omitted" },
+            },
+          ],
+        },
+      },
+      { id: "footer", title: "Footer", document: definition },
+    ];
+    documentIdentity = {
+      kind: "collection",
+      slug: "components",
+      documentId: "a",
+    };
+
+    componentAnswer = { items: library, meta: { count: 3, truncated: true } };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+    expect(
+      (recorded("insertPanel").components as { id: string }[]).map(c => c.id)
+    ).toEqual(["footer"]);
+    cleanup();
+
+    componentAnswer = { items: library, meta: { count: 3, truncated: false } };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+    expect(
+      (recorded("insertPanel").components as { id: string }[]).map(c => c.id)
+    ).toEqual(["c", "footer"]);
+  });
+
+  it("offers every component to a PAGE's field, whatever the page's id", () => {
+    // The control, and the rule's second half: a page is never inside a
+    // component, however the ids happen to fall.
+    componentAnswer = { items: rows, meta: { count: 2, truncated: false } };
+    documentIdentity = {
+      kind: "collection",
+      slug: "pages",
+      documentId: "header",
+    };
+
+    openEditor();
+
+    const panel = recorded("insertPanel");
+    expect(panel.components).toBe(rows);
+  });
+
+  it("offers every component to a component's field on a create form, which names no row", () => {
+    componentAnswer = { items: rows, meta: { count: 2, truncated: false } };
+    documentIdentity = { kind: "collection", slug: "components" };
+    render(<Host document={componentDocument()} />);
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+
+    expect(recorded("insertPanel").components).toBe(rows);
+  });
+});
+
+/** A recorder's props, asserted present so a missing render cannot read as equal. */
+function recorded(
+  key: "canvas" | "insertPanel" | "inspector"
+): Record<string, unknown> {
+  const props = seen[key];
+  if (props === undefined) throw new Error(`the ${key} never rendered`);
+  return props;
+}

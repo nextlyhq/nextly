@@ -30,6 +30,11 @@ beforeEach(() => {
     label: "Posts",
     kind: "collection",
     supports: ["count", "list"],
+    // Declared, because the queries below select lifecycle states. The `status`
+    // FIELD beside it does not imply the capability -- a collection with the
+    // lifecycle off may declare an ordinary user field of that name, and the
+    // two are indistinguishable in `fields`.
+    lifecycleStatus: true,
     fields: [
       { name: "title", type: "string" },
       { name: "status", type: "string" },
@@ -166,6 +171,85 @@ describe("validateWidgetQuery", () => {
         sort: "-secretScore",
       })
     ).toThrow(/sort references undeclared field "secretScore"/);
+  });
+
+  describe("a lifecycle selector against a source that has no lifecycle", () => {
+    /**
+     * A collection with the lifecycle OFF that declares an ordinary user field
+     * called `status`. The pair is the whole point: `fields` cannot tell this
+     * apart from a lifecycle collection, so a validator reading the field list
+     * would admit the selector this source cannot answer.
+     */
+    beforeEach(() => {
+      registerSource({
+        id: "collection:notes",
+        label: "Notes",
+        kind: "collection",
+        supports: ["count", "list"],
+        fields: [
+          { name: "title", type: "string" },
+          { name: "status", type: "string" },
+        ],
+      });
+    });
+
+    it.each(["draft", "published"] as const)(
+      "refuses %s, which nothing downstream could have applied",
+      status => {
+        expect(() =>
+          validateWidgetQuery({
+            source: "collection:notes",
+            op: "count",
+            status,
+          })
+        ).toThrow(/collection:notes has no draft\/published lifecycle/);
+      }
+    );
+
+    it('accepts "all", which claims no lifecycle and is what the generated cards send', () => {
+      const q = validateWidgetQuery({
+        source: "collection:notes",
+        op: "count",
+        status: "all",
+      });
+      expect(q.status).toBe("all");
+    });
+
+    it("refuses it for a single too, and still admits one that has the lifecycle", () => {
+      // Both kinds reach the same read plumbing, so the refusal is the
+      // source's capability rather than a rule per kind.
+      registerSource({
+        id: "single:site-settings",
+        label: "Site settings",
+        kind: "single",
+        supports: ["list"],
+        fields: [{ name: "siteName", type: "string" }],
+      });
+      registerSource({
+        id: "single:homepage",
+        label: "Homepage",
+        kind: "single",
+        supports: ["list"],
+        lifecycleStatus: true,
+        fields: [{ name: "headline", type: "string" }],
+      });
+
+      expect(() =>
+        validateWidgetQuery({
+          source: "single:site-settings",
+          op: "list",
+          status: "draft",
+        })
+      ).toThrow(/single:site-settings has no draft\/published lifecycle/);
+
+      expect(
+        validateWidgetQuery({
+          source: "single:homepage",
+          op: "list",
+          status: "draft",
+        }).status
+      ).toBe("draft");
+    });
   });
 
   it("clamps the limit rather than trusting it", () => {

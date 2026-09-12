@@ -28,6 +28,13 @@ permissions:
 # three merges in quick succession the third displaces the second while it is
 # still queued: the middle commit ends up cancelled regardless of
 # `cancel-in-progress`. Keyed by `github.sha`, there is nothing to displace.
+#
+# That every commit keeps its own group does not mean every commit does the
+# work. `changes` asks first whether a newer push to `main` already has a run
+# of this workflow, and a run that has been overtaken skips its jobs; queued
+# runs therefore start, ask and stop within seconds, and only the newest
+# tests. The queue stays short without anything being cancelled, and
+# `cancelled` keeps meaning what it says.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
@@ -54,8 +61,15 @@ jobs:
     name: Decide what this commit can affect
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `actions: read` for one question: whether a newer push to `main` already
+    # has a run of this workflow. Granted here alone, so no job that builds or
+    # tests holds it.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       inert: ${{ steps.decide.outputs.inert }}
+      superseded: ${{ steps.newer.outputs.superseded }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -67,13 +81,44 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # A push to `main` that a newer push has already overtaken can affect
+      # nothing: the newer run's verdict includes this commit. Asked before the
+      # diff, because a superseded run should not spend the diff either. The
+      # same step names the last commit this workflow actually tested, which is
+      # what the diff below compares against on `main`.
+      - name: Ask whether a newer push already covers this one
+        id: newer
+        uses: ./.github/actions/superseded-on-main
+        with:
+          workflow: ci.yml
+          substantive-job: Lint / Typecheck / Test / Build
+          token: ${{ github.token }}
+
       - name: Decide
         id: decide
         env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          # On a push to `main`, the diff base is the last commit this workflow
+          # actually TESTED, not merely the previous commit. A README-only push
+          # landing after a superseded code push would otherwise diff against
+          # that code push alone, read as inert, and leave the code untested.
+          # No fallback to `before` when no tested commit is known: that is
+          # the same hole with the history lookup failed, and an empty base
+          # below runs everything instead.
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.newer.outputs.last-tested-sha }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          SUPERSEDED: ${{ steps.newer.outputs.superseded }}
         run: |
           set -uo pipefail
+
+          # Superseded reads as inert to every job gated on `inert`, since the
+          # effect is the same: nothing here needs to run. The gate is told the
+          # REASON separately, so it never describes a superseded run as one
+          # that touched only inert paths.
+          if [ "$SUPERSEDED" = "true" ]; then
+            echo "inert=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Superseded::a newer push to main already has a run; this one skips its jobs."
+            exit 0
+          fi
 
           # Anything this job cannot read, it does not get to skip. Every early
           # exit here sets `inert=false`, so a broken comparison costs a full
@@ -85,7 +130,7 @@ jobs:
           }
 
           if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
-            fail_open "no base or head SHA for ${{ github.event_name }}; running everything."
+            fail_open "no tested base or no head SHA for ${{ github.event_name }}; running everything."
           fi
           # A first push to a branch reports an all-zero `before`, and a force
           # push can leave a base that is no longer fetchable.
@@ -200,7 +245,13 @@ jobs:
     name: Comment convention (describes code, not process)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
+    needs: changes
+    # Gated on supersession ALONE. A superseded run's newer sibling scans a
+    # tree that includes this commit, and a job that is skipped at the job
+    # level holds no runner, which is the point of skipping: this job was the
+    # one runner an overtaken run kept, for up to its timeout, while the gate
+    # waited on it.
+    #
     # Deliberately NOT gated on the inert decision, and not a dependent of the
     # build job. Its scope is DEFAULT_ROOTS in the script, which starts at the
     # repository root, so it covers paths the inert filter treats as unable to
@@ -209,7 +260,8 @@ jobs:
     # skipped, which is coverage on paper only.
     #
     # It needs no build and no database: the scan reads tracked files and one
-    # JSON record, so running it unconditionally costs seconds.
+    # JSON record, so running it on every non-superseded run costs seconds.
+    if: needs.changes.outputs.superseded != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -248,6 +300,13 @@ jobs:
       - name: Docs and README claims
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
+
+      # The pages under docs/ are compiled by nextlyhq.com, not here, so a page
+      # that does not parse merges green and breaks the site's next deploy.
+      # Compiled with the compiler the site's pipeline is built on.
+      - name: Docs pages compile
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:docs-compile
 
       # Both lanes select packages with a hand-written filter list, so a package
       # that gains a test task and is not added to one runs NOWHERE, and every
@@ -899,6 +958,7 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           INERT: ${{ needs.changes.outputs.inert }}
+          SUPERSEDED: ${{ needs.changes.outputs.superseded }}
         run: node scripts/ci-gate.mjs
 
   # The admin, in a real browser, against a real server and a real database.

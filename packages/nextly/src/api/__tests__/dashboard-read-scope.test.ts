@@ -60,7 +60,12 @@ vi.mock("../../init", () => ({
 // these directly, so stubbing them is what makes a real service runnable in a
 // unit test — the registered code rules above them are NOT stubbed, because
 // they are the subject.
-vi.mock("../../services/lib/permissions", () => ({
+// Derived from the real module, not a closed literal: this file does not use
+// the rest of it, but something in the graph it loads does, and a literal
+// answers `undefined` for every export it omits. Written as a literal it broke
+// on a change to the plugin facade that has nothing to do with the dashboard.
+vi.mock("../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../services/lib/permissions")>()),
   isSuperAdmin: vi.fn(),
   hasPermission: vi.fn(),
   listEffectivePermissions: vi.fn(),
@@ -86,8 +91,8 @@ const asMock = (fn: unknown): ReturnType<typeof vi.fn> =>
   fn as ReturnType<typeof vi.fn>;
 
 /** Two collections and one single, standing in for a real registry. */
-const COLLECTIONS = [{ slug: "posts" }, { slug: "pages" }];
-const SINGLES = [{ slug: "site-settings" }];
+const COLLECTIONS = ["posts", "pages"];
+const SINGLES = ["site-settings"];
 
 let rbac: RBACAccessControlService;
 
@@ -121,9 +126,9 @@ beforeEach(() => {
       case "rbacAccessControlService":
         return rbac;
       case "collectionRegistryService":
-        return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+        return { getAllSlugs: vi.fn().mockResolvedValue(COLLECTIONS) };
       case "singleRegistryService":
-        return { getAllSingles: vi.fn().mockResolvedValue(SINGLES) };
+        return { getAllSlugs: vi.fn().mockResolvedValue(SINGLES) };
       case "dashboardService":
         return { getStats };
       case "activityLogService":

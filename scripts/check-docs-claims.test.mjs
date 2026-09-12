@@ -301,6 +301,79 @@ describe("context7", () => {
     expect(checks).not.toContain("context7-description");
     expect(checks).not.toContain("context7-unreadable");
     expect(checks).not.toContain("retired-category");
+    expect(checks).not.toContain("context7-exclusion");
+  });
+
+  it("refuses an exclusion field that is not a list of strings rather than reading it as empty", async () => {
+    for (const [field, value] of [
+      ["excludeFiles", [42]],
+      ["excludeFolders", "docs/internal"],
+      ["folders", { docs: true }],
+    ]) {
+      const findings = await findingsFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": JSON.stringify({
+          projectTitle: "Nextly",
+          description: SENTENCE,
+          folders: ["docs"],
+          [field]: value,
+        }),
+      });
+      expect(
+        findings.filter(f => f.check === "context7-exclusion").map(f => f.message),
+        field
+      ).toEqual([expect.stringContaining(`${field} must be a list of strings`)]);
+    }
+  });
+
+  it("fires on an excludeFiles entry written as a path, which excludes nothing", async () => {
+    // Context7 matches the field by filename, and either separator makes a
+    // path: a backslash is not a filename either. The entry beside them is
+    // the control that a plain name passes.
+    const withPath = JSON.stringify({
+      projectTitle: "Nextly",
+      description: SENTENCE,
+      folders: ["docs"],
+      excludeFiles: ["AGENTS.md", "docs/internal/notes.md", "docs\\internal\\draft.md", "*.md"],
+    });
+    const findings = await findingsFor({
+      "packages/nextly/package.json": core(SENTENCE),
+      "context7.json": withPath,
+    });
+    const exclusion = findings.filter(f => f.check === "context7-exclusion");
+    expect(exclusion).toHaveLength(1);
+    expect(exclusion[0].message).toContain("docs/internal/notes.md, docs\\internal\\draft.md, *.md");
+    expect(exclusion[0].message).not.toContain("AGENTS.md");
+  });
+
+  it("fires on an excludeFolders pattern, which the index verifier cannot witness", async () => {
+    // Named by what is accepted, not by the metacharacters refused: a glob, a
+    // brace set, an extglob, a root anchor, a trailing slash, a parent segment,
+    // and a backslash path, which git's POSIX paths never match.
+    for (const entry of [
+      "**/internal",
+      "docs/{archive,legacy}",
+      "docs/@(archive|legacy)",
+      "./build",
+      "docs/old/",
+      "docs/../secret",
+      "docs\\internal",
+    ]) {
+      const withPattern = JSON.stringify({
+        projectTitle: "Nextly",
+        description: SENTENCE,
+        folders: ["docs"],
+        excludeFolders: ["docs/archive", entry],
+      });
+      const findings = await findingsFor({
+        "packages/nextly/package.json": core(SENTENCE),
+        "context7.json": withPattern,
+      });
+      const exclusion = findings.filter(f => f.check === "context7-exclusion");
+      expect(exclusion.map(f => f.message), entry).toEqual([
+        expect.stringContaining(`excludeFolders names ${entry}, which is not a plain path`),
+      ]);
+    }
   });
 });
 
@@ -1052,6 +1125,40 @@ describe("internal-docs-link", () => {
     }
   });
 
+  it("fires on every spelling of a file-path destination", async () => {
+    // Read off the syntax tree, so the forms the patterns had to learn one at
+    // a time are all one node: bare, titled, angle-bracketed, and a reference
+    // definition.
+    const page = [
+      "Bare [n](production-migrations.mdx), titled [t](../guides/next.mdx \"Next\"),",
+      "angled [a](<../x y.mdx>), reference [r][ref].",
+      "",
+      "[ref]: ../configuration/index.mdx",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({
+      "docs/guides/a.mdx": page,
+      "docs/guides/production-migrations.mdx": "# p\n",
+      "docs/guides/next.mdx": "# n\n",
+      "docs/configuration/index.mdx": "# c\n",
+    });
+    const links = findings.filter(f => f.check === "internal-docs-link");
+    expect(links.map(f => f.message.split(" as a file path")[0].replace("links to ", ""))).toEqual([
+      "production-migrations.mdx",
+      "../guides/next.mdx",
+      "../x y.mdx",
+      "../configuration/index.mdx",
+    ]);
+    expect(links.map(f => f.line)).toEqual([1, 1, 2, 4]);
+  });
+
+  it("names the file's own line, frontmatter included", async () => {
+    const findings = await findingsFor({
+      "docs/a.mdx": "---\ntitle: A\n---\n\nSee [gone](/docs/nope).\n",
+    });
+    expect(findings.filter(f => f.check === "internal-docs-link").map(f => f.line)).toEqual([5]);
+  });
+
   it("fires on a reference definition that points at a file", async () => {
     expect(
       await checksFor({
@@ -1098,6 +1205,115 @@ describe("internal-docs-link", () => {
         "docs/b.mdx": "# b\n",
       })
     ).not.toContain("internal-docs-link");
+  });
+
+  it("fires on an image embedded by a file path or at a docs URL, and says it is an image", async () => {
+    // The site serves nothing beside a page, so a bare `diagram.png` is as
+    // broken as `./diagram.png`; and `/docs/...` is where pages are served,
+    // not files, so an image there is wrong whether a page answers (`/docs/b`
+    // does) or not. The two absolute images are the control that an image by
+    // URL passes.
+    const page = [
+      "![d](./missing.png) ![e](diagram.png) ![f](/docs/nope) ![g](/docs/b)",
+      "![ok](https://example.com/x.png) ![ok](/images/x.png)",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page, "docs/b.mdx": "# b\n" });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => f.message)
+    ).toEqual([
+      "embeds ./missing.png as a file path; the site serves no file beside a page, so an image is embedded by its URL",
+      "embeds diagram.png as a file path; the site serves no file beside a page, so an image is embedded by its URL",
+      "embeds /docs/nope, which is where pages are served, not files",
+      "embeds /docs/b, which is where pages are served, not files",
+    ]);
+  });
+
+  it("refuses an image at the docs route ROOT, which a prefix test never asked about", async () => {
+    // `/docs` is a page, so a LINK there is right and `resolves` says so; an
+    // image there is wrong for the same reason `/docs/b` is, and a
+    // `startsWith("/docs/")` guard skipped the root entirely. The query and
+    // fragment forms are the same route reached three ways. The link beside
+    // each one is the control that the root stays a valid link destination,
+    // and `/docsguide` that a different route is untouched.
+    const page = [
+      '![a](/docs) ![b](/docs#intro) ![c](/docs?v=2) ![d](/docsguide.png)',
+      "[e](/docs) [f](/docs#intro) [g](/docs?v=2)",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => f.message)
+    ).toEqual([
+      "embeds /docs, which is where pages are served, not files",
+      "embeds /docs#intro, which is where pages are served, not files",
+      "embeds /docs?v=2, which is where pages are served, not files",
+    ]);
+  });
+
+  it("reads a reference-style image as an image, by the reference that uses its definition", async () => {
+    // `[pic]: diagram.png` is an image when `![d][pic]` uses it, and the link
+    // heuristic would let a bare `diagram.png` through. The link reference
+    // beside it is the control that a definition a link uses keeps link wording.
+    const page = [
+      "![d][pic] and [g][guide]",
+      "",
+      "[pic]: diagram.png",
+      "[guide]: guide.mdx",
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => f.message.split(";")[0])
+    ).toEqual([
+      "embeds diagram.png as a file path",
+      "links to guide.mdx as a file path",
+    ]);
+  });
+
+  it("reads a destination written as JSX, an <img src> as an image and an <a href> as a link", async () => {
+    // Both compile and render whatever the attribute says, so a file path in
+    // either is as broken as in Markdown. The expression-valued src is the
+    // control that only a literal is read, and the absolute one that an image
+    // by URL passes.
+    const page = [
+      'export const path = "./computed.png";',
+      "",
+      '<img src="./missing.png" alt="d" /> and <a href="../guide.mdx">guide</a>',
+      "",
+      '<img src={path} alt="e" /> <img src="/images/x.png" alt="ok" />',
+      "",
+    ].join("\n");
+    const findings = await findingsFor({ "docs/a.mdx": page });
+    expect(
+      findings.filter(f => f.check === "internal-docs-link").map(f => `${f.line} ${f.message.split(";")[0]}`)
+    ).toEqual(["3 embeds ./missing.png as a file path", "3 links to ../guide.mdx as a file path"]);
+  });
+
+  it("reads past an element named like an Object.prototype key, and a page that does not parse yields nothing", async () => {
+    // `<toString>` is an intrinsic element with a name every plain object
+    // answers `in` for; the lookup must not find a destination carrier there,
+    // and must not throw inside the compiler, where the catch would read a
+    // fault of this scan as the page not compiling and pass every link in it.
+    const findings = await findingsFor({
+      "docs/a.mdx": "<toString>x</toString> <constructor>y</constructor>\n\nSee [gone](/docs/nope).\n",
+      "docs/b.mdx": "<Callout>\n\n1. one\n   </Callout>\n\nSee [gone](/docs/nope).\n",
+    });
+    const links = findings.filter(f => f.check === "internal-docs-link");
+    expect(links.map(f => f.file)).toEqual(["docs/a.mdx"]);
+  });
+
+  it("keeps reading links past frontmatter that is not YAML, in a README as in a page", async () => {
+    // The compile check reports a docs page's frontmatter, but nothing else
+    // reads a README's links, so the block is read as Markdown and the link
+    // after it is still held. The line is the file's own, since nothing was
+    // taken off.
+    const findings = await findingsFor({
+      "README.md": "---\ntitle: [unterminated\n---\n\nSee [gone](/docs/nope).\n",
+      "docs/a.mdx": "---\ntitle: [unterminated\n---\n\nSee [gone](/docs/nope).\n",
+    });
+    const links = findings.filter(f => f.check === "internal-docs-link");
+    expect(links.map(f => `${f.file}:${f.line}`)).toEqual(["README.md:5", "docs/a.mdx:5"]);
   });
 });
 

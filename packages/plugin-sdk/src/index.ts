@@ -101,6 +101,20 @@ export { resolvedCollectionView } from "nextly";
 export { PLUGIN_CATEGORIES, isPluginCategory, pluginAdminSlug } from "nextly";
 
 /**
+ * Which `locale` values are instructions rather than languages.
+ * @experimental `isLocaleSelector` — a route that forwards `?locale=` into
+ *   `ctx.services` has to tell a visitor's language from the wildcards the
+ *   core reads as selectors, and the boundary that refuses those selectors
+ *   decides with this same function — so a plugin asks it rather than keeping
+ *   a list that agrees with the core's only until one of them gains an entry.
+ *   Here because this is the surface a plugin author may import from; the
+ *   same symbol on bare `nextly` is not part of the plugin contract. Exercised
+ *   by `plugin-form-builder`'s submission redirect; graduates per D55 once
+ *   that ships in a release.
+ */
+export { isLocaleSelector } from "nextly";
+
+/**
  * Core plugin contract types.
  * @public `PluginDefinition`, `PluginContributions`, `PluginContext`,
  *   `PluginPermission`, `PermissionSlug`, `ServiceOpts`, `AuthUser`.
@@ -233,7 +247,8 @@ export { NextlyError } from "nextly";
 /**
  * Managed data access (D56) — the `ctx.services.collections` surface: rich
  * queries (filters/sort/pagination/relations via QueryOptions), `count`, and
- * `createMany`. Aggregations beyond `count` use the raw `ctx.db` escape hatch
+ * `createMany`, and the batch update `updateMany` takes `BulkUpdateEntry[]`.
+ * Aggregations beyond `count` use the raw `ctx.db` escape hatch
  * (D33), which stays `@experimental`.
  *
  * @public Graduated in P9 — `plugin-form-builder` depends on it
@@ -244,6 +259,7 @@ export type {
   QueryOptions,
   PaginatedResult,
   BatchOperationResult,
+  BulkUpdateEntry,
 } from "nextly";
 
 /**
@@ -323,6 +339,7 @@ export type {
   PaginationMeta,
   PluginRoute,
   PluginRouteCaller,
+  PluginRouteIdentity,
   PluginRouteContext,
   PluginRouteHandler,
   PluginRouteMount,

@@ -379,18 +379,65 @@ Hooks let you run custom logic at specific points in a document's lifecycle. Eve
 
 ### Execution order
 
+Collection-level and [field-level](/docs/configuration/fields#hooks) hooks
+interleave. On a write:
+
 1. `beforeOperation`
-2. `beforeValidate` (create/update)
-3. **Validation** - the schema's declared rules are enforced
-4. `beforeChange` (create/update)
-5. **Database write or read**
-6. `afterChange` (create/update) **or** `afterRead` (reads)
-7. `beforeDelete` / `afterDelete` (deletes)
+2. `beforeValidate` (collection)
+3. `beforeValidate` (each field that declares one)
+4. **Validation** - the schema's declared rules are enforced
+5. `beforeChange` (collection)
+6. `beforeChange` (each field that declares one)
+7. **Database write**
+8. `afterChange` (collection), then `afterChange` (fields). On a **Single** this
+   pair is reversed: the field hooks run first, then the entity hook.
+
+A direct read runs `beforeOperation`, `beforeRead`, the query, then `afterRead`
+at the collection level and then per field. A row reached through relationship
+expansion is different: only the target collection's field-level `afterRead`
+runs on it, not its collection-level one, and it runs before the source
+collection's own `afterRead`. A delete runs `beforeOperation`, `beforeDelete`,
+the delete, then `afterDelete`.
 
 The validation gate is what separates the two write hooks. Use `beforeValidate`
 to supply or repair a value you want the rules applied to; use `beforeChange` to
 derive the value that gets stored, knowing the document has already passed them.
 What a `beforeChange` handler returns is written without being re-validated.
+
+<Callout type="warn">
+  **The field-level `beforeChange` is the last hook before the write.** A
+  top-level field hook is handed `data` alongside its own `value`, so it can
+  change other fields, not only its own. That means a collection-level
+  `beforeChange` is not the final word: a field hook registered later, by a
+  plugin or by the application, runs after it and can overwrite what it set.
+  There is no collection-level phase after the field hooks. This matches
+  Payload's ordering, so hooks written against that model behave the same here.
+
+  Four things bound what a field hook can guarantee:
+
+  - **It is the last phase, not the last step.** After every hook has run, core
+    still normalises the record before the write. On a collection, a `slug` is
+    re-sanitised, so a hook returning `"Changed By Hook"` stores
+    `changed-by-hook`; on a Single it is not, and that value is stored as
+    written. On both, password fields are hashed and relationship and upload
+    values are reduced to ids. A hook whose output must survive exactly cannot
+    rely on being last.
+  - **A later field hook can still change a sibling.** Field hooks run in
+    registration order over one shared `data` object, so a hook on an earlier
+    field that sets a sibling can be overwritten by that sibling's own hook.
+    What no longer follows is a collection-level phase.
+  - **It runs only when its field is in the data.** An update whose patch omits
+    the field, or an earlier hook that deleted the key, skips that field's hooks
+    entirely. A field hook is not a point that runs on every write.
+  - **`data` is the record so far, at the field's own level.** On an ordinary
+    create it is the submitted document with defaults, `slug` and
+    title already applied (a bulk or transactional create applies no defaults);
+    on an update it is the submitted patch, not the stored row, so an unchanged
+    sibling reads as `undefined`. For a field inside a group or a repeater it is
+    the containing row, not the top-level document. The
+    [field hooks](/docs/configuration/fields#hooks) section says what each
+    write path adds and when.
+</Callout>
 
 ### Hook handler signature
 

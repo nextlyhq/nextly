@@ -38,7 +38,11 @@ for all published packages. Status: alpha, all packages version in lockstep.
   `packages/telemetry` - shared tooling and support packages.
 - `apps/playground` - contributor dev harness (not published).
 - `e2e/` - Playwright suite. `docs/` - user docs (MDX, deployed to
-  nextlyhq.com/docs).
+  nextlyhq.com/docs). Nothing here renders them: the site fetches and
+  compiles them at its build, so `pnpm check:docs-compile` compiles every page
+  with the same MDX compiler, parses its frontmatter as the site's loader does,
+  and holds the components it uses to `docs/components.json`, the contract the
+  site registers from the other side. CI refuses a page that would not render.
 - `context7.json` - what Context7 indexes for coding agents: `docs/` and the
   root README, with every other root Markdown file excluded by name (Context7
   reads root-level Markdown whatever `folders` says). Its description is held
@@ -261,7 +265,8 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   Allowed PR scopes are package-based (`nextly`, `admin`, `admin-css`, `ui`,
   `adapter-postgres`, `adapter-mysql`, `adapter-sqlite`, `adapter-drizzle`,
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
-  `plugin-form-builder`, `plugin-page-builder`, `plugin-seo`, `plugin-sdk`,
+  `plugin-form-builder`, `plugin-mcp`, `plugin-page-builder`, `plugin-seo`,
+  `plugin-sdk`,
   `blocks-engine`, `blocks-react`, `builder`,
   `create-nextly-app`, `eslint-config`, `eslint-plugin`, `module-specifiers`,
   `prettier-config`, `tsconfig`,

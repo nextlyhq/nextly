@@ -13,7 +13,6 @@
  * - `label` instead of `labels` (singular only, no plural form needed)
  * - No `timestamps` column (Singles always have updatedAt)
  * - No `hooks` column (Singles use code-only hooks via defineSingle())
- * - `accessRules` for read/update only (no create/delete)
  *
  * @module schemas/dynamic-singles/postgres
  * @since 1.0.0
@@ -59,7 +58,6 @@ import type { ResolvedVersionsConfig } from "../versions/types";
 import type {
   SingleSource,
   SingleMigrationStatus,
-  SingleAccessRules,
   StoredWebhookRecording,
 } from "./types";
 
@@ -145,16 +143,6 @@ export const dynamicSinglesPg = pgTable(
      * Controls sidebar grouping, icon, visibility, etc.
      */
     admin: jsonb("admin").$type<SingleAdminOptions>(),
-
-    /**
-     * Access control rules for read/update operations.
-     * Used for UI-created Singles. Code-first Singles use
-     * function-based access in defineSingle().
-     *
-     * Note: Singles only support read and update operations.
-     * Documents are auto-created and cannot be deleted.
-     */
-    accessRules: jsonb("access_rules").$type<SingleAccessRules>(),
 
     // --------------------------------------------------------
     // Unified Model Fields

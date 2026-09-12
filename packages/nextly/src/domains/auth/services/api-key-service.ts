@@ -35,7 +35,7 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { toDbError } from "../../../database/errors";
@@ -66,7 +66,11 @@ import {
 // info (key id, role id, exceeded permission) moves from public message to logContext
 // per spec §13.8 (no identifiers/values in publicMessage).
 import { BaseService } from "../../../services/base-service";
-import { listRoleSlugsForUser } from "../../../services/lib/permissions";
+import {
+  isSuperAdmin,
+  listRoleSlugsForUserOrRefuse,
+  rbacRevision,
+} from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
 /** The three token types that determine how permissions are resolved at request time. */
@@ -261,7 +265,24 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
 // an ApiKeyService instance — same pattern as services/lib/permissions.ts.
 const _apiKeyPermissionsCache = new Map<
   string,
-  { grants: readonly GrantedPermission[]; cachedAt: number }
+  {
+    grants: readonly GrantedPermission[];
+    cachedAt: number;
+    /**
+     * The RBAC revision these grants were resolved under.
+     *
+     * Time alone is not enough. These grants are DERIVED from the same role and
+     * permission rows the RBAC caches hold, and nothing evicted them when a
+     * ROLE changed: `UserRoleService` evicts on assigning or unassigning a role
+     * to a user, and the role services only call `invalidatePermissionCache`,
+     * which knows nothing about keys. So revoking a role's inherited
+     * `super-admin` left a key holding the whole catalogue for the rest of this
+     * TTL, and changing a role's permissions left a role-based key holding the
+     * old set, which the comment in `UserRoleService` said was handled
+     * elsewhere and was not.
+     */
+    revision: number;
+  }
 >();
 const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -670,6 +691,11 @@ export class ApiKeyService extends BaseService {
    * - **role-based** — the assigned role's permission set.
    *   If the role has been deleted (`roleId === null`), returns `[]` and logs a warning.
    *
+   * A super-admin creator's "full permission set" is the catalogue, every
+   * permission the install declares, because a super-admin's power is a bypass
+   * and the role's own rows are the ones that existed at setup. The key's kind
+   * still bounds it: read-only stays read-only.
+   *
    * @param tokenType - The key's token type
    * @param roleId - The assigned role ID (only relevant for "role-based" keys)
    * @param userId - The key creator's user ID
@@ -723,9 +749,20 @@ export class ApiKeyService extends BaseService {
   ): Promise<readonly GrantedPermission[]> {
     const cacheKey = `apikey:${keyId}`;
     const now = Date.now();
+    // Read BEFORE the queries below, never after. An invalidation that lands
+    // while they are in flight would otherwise be stamped onto the result they
+    // return: the rows were read under the old revision and would be filed
+    // under the new one, so the next request reuses grants the change was
+    // meant to retire, for the whole TTL. Captured here, that entry is already
+    // behind when it is written and the next read re-resolves.
+    const resolvedUnder = rbacRevision();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
-    if (cached && now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS) {
+    if (
+      cached &&
+      now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS &&
+      cached.revision === resolvedUnder
+    ) {
       return cached.grants;
     }
 
@@ -742,7 +779,20 @@ export class ApiKeyService extends BaseService {
       }
       rows = await this.resolveRolePermissionRows(roleId);
     } else {
-      const all = await this.resolveUserPermissionRows(userId);
+      // A super-admin's power is a bypass, not a list. The role is granted
+      // every permission that exists when the install is set up and nothing
+      // grants it the ones a later collection adds, while the session never
+      // needs the rows. A key copies the rows, so a key of theirs held a stale
+      // subset at best and, on an install whose first user came before the
+      // grant, nothing: every request refused, and the first key an operator
+      // mints to try an integration with. The catalogue is what their key
+      // copies, bounded by the key's kind like anyone else's. Whether they are
+      // one is the session bypass's own question, asked of its own resolver:
+      // a role that inherits super-admin answers yes there, so it answers yes
+      // here, where a direct read of `user_roles` said no.
+      const all = (await isSuperAdmin(userId))
+        ? await this.resolveCataloguePermissionRows()
+        : await this.resolveUserPermissionRows(userId);
       // Still filtered on the STORED slug rather than on `action === "read"`.
       // A deliberately custom slug is supported, so the two disagree — a row
       // named `view-dashboard` on action `read` is excluded by the slug test
@@ -762,7 +812,11 @@ export class ApiKeyService extends BaseService {
     const grants = Object.freeze(
       dedupeGrants(rows).map(row => Object.freeze(row))
     );
-    _apiKeyPermissionsCache.set(cacheKey, { grants, cachedAt: now });
+    _apiKeyPermissionsCache.set(cacheKey, {
+      grants,
+      cachedAt: now,
+      revision: resolvedUnder,
+    });
     return grants;
   }
 
@@ -790,7 +844,9 @@ export class ApiKeyService extends BaseService {
    * - **role-based** — `[selectedRole.slug]`. Single lookup by the assigned `roleId`.
    *   If the role has been deleted (`roleId === null`), returns `[]`.
    * - **full-access / read-only** — creator's full assigned role slugs, resolved
-   *   via `listRoleSlugsForUser()`. Same set the user would see in a session context.
+   *   via `listRoleSlugsForUserOrRefuse()`. Same set the user would see in a
+   *   session context, and a lookup that could not run refuses instead of
+   *   answering with none.
    *
    * @param tokenType - The key's token type
    * @param roleId - The assigned role ID (only relevant for "role-based" keys)
@@ -815,7 +871,14 @@ export class ApiKeyService extends BaseService {
         : [];
     }
 
-    return listRoleSlugsForUser(userId);
+    // The refusing resolver, not the swallowing one. A key's roles populate
+    // `authenticatedScope.roles`, which every later role rule reads directly,
+    // so a failed lookup arriving as `[]` is indistinguishable from an owner
+    // who holds no roles — and a rule that WITHHOLDS on a role
+    // (`!roles.includes("suspended")`) then authorizes the request it exists
+    // to refuse. Failing the request is the correct direction: a decision taken
+    // on roles nobody could read is not a decision.
+    return listRoleSlugsForUserOrRefuse(userId);
   }
 
   private async resolveRolePermissionRows(
@@ -834,6 +897,27 @@ export class ApiKeyService extends BaseService {
       )
       .where(eq(this.rolePermissionsTable.roleId, roleId));
 
+    return rows as GrantedPermission[];
+  }
+
+  /**
+   * Every permission the install declares today, orphans left out.
+   *
+   * Read from the catalogue rather than from any role, because no role is
+   * kept complete: the super-admin role is granted the rows that exist at
+   * setup and never the ones a later collection adds. A permission a package
+   * stopped declaring stays in the table, marked, so a grant survives; a
+   * super-admin's key does not inherit it, since nothing else new can.
+   */
+  private async resolveCataloguePermissionRows(): Promise<GrantedPermission[]> {
+    const rows = await this.db
+      .select({
+        slug: this.permissionsTable.slug,
+        action: this.permissionsTable.action,
+        resource: this.permissionsTable.resource,
+      })
+      .from(this.permissionsTable)
+      .where(isNull(this.permissionsTable.orphanedAt));
     return rows as GrantedPermission[];
   }
 
@@ -1006,24 +1090,11 @@ export class ApiKeyService extends BaseService {
     if (tokenType !== "role-based") return;
     if (!roleId) return;
 
-    // Super-admin bypass: a super-admin can assign any role
-
-    const superAdminCheck = await this.db
-      .select({ id: this.rolesTable.id })
-      .from(this.userRolesTable)
-      .innerJoin(
-        this.rolesTable,
-        eq(this.userRolesTable.roleId, this.rolesTable.id)
-      )
-      .where(
-        and(
-          eq(this.userRolesTable.userId, creatorId),
-          eq(this.rolesTable.slug, "super-admin")
-        )
-      )
-      .limit(1);
-
-    if ((superAdminCheck as unknown[]).length > 0) return;
+    // Super-admin bypass: a super-admin can assign any role. Asked of the
+    // same resolver as the session bypass, so a role that INHERITS super-admin
+    // counts here exactly as it does there; a direct-row read of `user_roles`
+    // said no to such a creator while every other gate said yes.
+    if (await isSuperAdmin(creatorId)) return;
 
     const creatorRoleRows = await this.db
       .select({ roleId: this.userRolesTable.roleId })

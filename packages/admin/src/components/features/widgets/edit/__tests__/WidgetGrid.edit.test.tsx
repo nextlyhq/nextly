@@ -3,11 +3,18 @@
  * and what happens when the arrangement is not there.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { layOutStacked, recordDragRegion } from "@admin/__tests__/helpers/drag";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 import type { AdminBranding } from "@admin/types/branding";
@@ -76,6 +83,7 @@ function layout(
     version: 3,
     source: "own",
     scope: "tok",
+    audience: "aud",
     ...patch,
   };
 }
@@ -268,6 +276,76 @@ describe("moving a card without a drag", () => {
     expect(screen.getAllByTestId("widget-move-down")[0]).toHaveAttribute(
       "aria-label",
       "Move Widget core/a down, currently position 1 of 3"
+    );
+  });
+});
+
+describe("moving a card from the keyboard", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Enters edit mode and gives the three cells the geometry a column has. */
+  async function beginKeyboardEditing() {
+    renderGrid();
+    await beginEditing();
+    layOutStacked(
+      ["core/a", "core/b", "core/c"].map(id =>
+        screen.getByTestId(`widget-cell-${id}`)
+      ),
+      { height: 200, width: 400 }
+    );
+  }
+
+  it("says which card was picked up, and where it sits, by title", async () => {
+    // 🔴 dnd-kit's default reads the placement id aloud -- "Picked up
+    // draggable item p2" -- which names nothing a reader can see. The card is
+    // named by TITLE and placed in the same column-and-position terms the
+    // Move buttons announce a landing in, so a keyboard drag and a button
+    // move describe the same dashboard.
+    await beginKeyboardEditing();
+    const heard = recordDragRegion();
+    const handle = screen.getByRole("button", {
+      name: "Drag to reorder Widget core/b",
+    });
+    handle.focus();
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+
+    await waitFor(() =>
+      expect(heard).toContain(
+        "Picked up Widget core/b, column 1 of 3, position 2 of 3."
+      )
+    );
+    expect(heard.join(" ")).not.toContain("draggable item");
+    // The grid's OWN region is for landings. A pick-up is not one.
+    expect(screen.getByTestId("widget-grid-live").textContent).not.toMatch(
+      /Widget core\/b/
+    );
+  });
+
+  it("does not read a drop twice: dnd-kit is silent on landing, the grid speaks", async () => {
+    // 🔴 The grid already announces where a card landed, in the sentence its
+    // Move buttons use, so a keyboard drop spoken by dnd-kit as well would be
+    // heard twice in two wordings. Dropped in place here so no landing is
+    // due at all: the grid's region has nothing to say, and dnd-kit's must
+    // not fill the silence with a landing of its own.
+    await beginKeyboardEditing();
+    const heard = recordDragRegion();
+    const handle = screen.getByRole("button", {
+      name: "Drag to reorder Widget core/b",
+    });
+    handle.focus();
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    // `aria-pressed` exists only while the card is held; its arrival is the
+    // pick-up, its removal the drop. Waited on both rather than on silence,
+    // which is true before anything has happened.
+    await waitFor(() => expect(handle).toHaveAttribute("aria-pressed", "true"));
+
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    await waitFor(() => expect(handle).not.toHaveAttribute("aria-pressed"));
+    expect(heard.join(" ")).not.toMatch(/moved to|was dropped/);
+    expect(screen.getByTestId("widget-grid-live").textContent).not.toMatch(
+      /moved to/
     );
   });
 });
@@ -752,6 +830,48 @@ describe("an arrangement that already holds as many cards as a write may carry",
   // cannot reach the guard -- the click never fires -- so it passed with the
   // guard deleted, which is no coverage at all. The control that can fail is
   // the one on the pure function.
+});
+
+describe("below the md breakpoint", () => {
+  // jsdom lays nothing out, so a viewport cannot be narrowed here; what is
+  // asserted is the CAUSE -- the responsive classes -- on the exact elements
+  // the fold applies to, which is what a browser reads the width against.
+
+  it("does not offer editing: the entry control is hidden until md, by the breakpoint the grid folds at", async () => {
+    renderGrid();
+    const offer = await screen.findByTestId("dashboard-edit-offer");
+    expect(offer).toHaveClass("hidden", "md:flex");
+    expect(offer).toContainElement(screen.getByTestId("dashboard-edit-begin"));
+  });
+
+  it("keeps the way OUT at every width once an edit is under way", async () => {
+    // A window narrowed mid-edit must not trap the reader: the bar that holds
+    // Save and Cancel carries no fold, whatever the offer to enter did.
+    renderGrid();
+    await beginEditing();
+    const cancel = screen.getByTestId("dashboard-edit-cancel");
+    const bar = cancel.parentElement;
+    expect(bar).not.toBeNull();
+    expect(bar).not.toHaveClass("hidden");
+    expect(screen.queryByTestId("dashboard-edit-offer")).toBeNull();
+  });
+
+  it("tells a narrow-screen reader the way back is a larger screen", async () => {
+    // The empty arrangement names its way back, and the way back differs by
+    // width: naming a control a phone does not show would send the reader
+    // looking for it.
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, hidden: true },
+    ]);
+    renderGrid();
+    const empty = await screen.findByTestId("widget-grid-empty");
+    const wide = screen.getByText(/Edit it to bring one back/);
+    const narrow = screen.getByText(/Edit it on a larger screen/);
+    expect(empty).toContainElement(wide);
+    expect(empty).toContainElement(narrow);
+    expect(wide).toHaveClass("hidden", "md:inline");
+    expect(narrow).toHaveClass("md:hidden");
+  });
 });
 
 describe("an arrangement with nothing left on it", () => {

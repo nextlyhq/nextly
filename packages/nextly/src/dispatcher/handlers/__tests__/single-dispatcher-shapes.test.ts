@@ -553,7 +553,7 @@ describe("dispatchSingles getSingleDocument — read access forwarding", () => {
       // `user.role`; without it an authorized caller would have fields stripped.
       role: "editor",
     });
-    // The route ran the coarse RBAC gate already; the stored rule still runs.
+    // The route ran the coarse RBAC gate already, so it is not run again.
     expect(options.routeAuthorized).toBe(true);
   });
 

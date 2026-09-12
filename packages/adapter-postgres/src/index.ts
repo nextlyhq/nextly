@@ -89,6 +89,7 @@ import {
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
 
@@ -233,6 +234,13 @@ function applyHappyEyeballsTimeoutOnce(): void {
     // don't suffer this bug.
   }
 }
+
+/**
+ * How a date column's wall clock is spelled out when a write reads its row
+ * back: the stored value to the millisecond, with no zone for the driver to
+ * shift.
+ */
+const PG_WALL_CLOCK_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.MS';
 
 /**
  * PostgreSQL database adapter for Nextly.
@@ -931,6 +939,32 @@ export class PostgresAdapter extends DrizzleAdapter {
   /**
    * Creates a TransactionContext for the given client.
    */
+  /**
+   * The RETURNING entries that spell each date column's wall clock out as
+   * text, one per alias `dateWallClockAliases` chose. `to_char` renders the
+   * stored value without a zone, which is the only form node-postgres cannot
+   * shift on the way back.
+   */
+  private wallClockSpelling(
+    aliases: ReadonlyArray<{ sqlName: string; alias: string }>
+  ): string {
+    return aliases
+      .map(
+        a =>
+          `to_char(${this.escapeIdentifier(a.sqlName)}, '${PG_WALL_CLOCK_FORMAT}') AS ${this.escapeIdentifier(a.alias)}`
+      )
+      .join(", ");
+  }
+
+  /** A table-level `primaryKey({ columns })`, read through the PostgreSQL table config. */
+  protected override compositePrimaryKey(
+    tableObj: Record<string, unknown>
+  ): object[] {
+    return getTableConfig(tableObj as unknown as PgTable).primaryKeys.flatMap(
+      key => key.columns
+    );
+  }
+
   private createTransactionContext(client: PoolClient): TransactionContext {
     // Bind a Drizzle instance to this transaction's checked-out client so the
     // delegated CRUD methods run inside the transaction and see its uncommitted
@@ -1002,12 +1036,7 @@ export class PostgresAdapter extends DrizzleAdapter {
               : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
-          const spelled = aliases
-            .map(
-              a =>
-                `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
-            )
-            .join(", ");
+          const spelled = this.wallClockSpelling(aliases);
           sql += ` RETURNING ${returning}${spelled ? `, ${spelled}` : ""}`;
         }
 
@@ -1053,12 +1082,7 @@ export class PostgresAdapter extends DrizzleAdapter {
               : this.mapColumnNamesToSql(tableObj, ret)
                   .map(col => this.escapeIdentifier(col))
                   .join(", ");
-          const spelled = aliases
-            .map(
-              a =>
-                `to_char(${this.escapeIdentifier(a.sqlName)}, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS ${this.escapeIdentifier(a.alias)}`
-            )
-            .join(", ");
+          const spelled = this.wallClockSpelling(aliases);
           sql += ` RETURNING ${returning}${spelled ? `, ${spelled}` : ""}`;
         }
 
@@ -1067,6 +1091,17 @@ export class PostgresAdapter extends DrizzleAdapter {
           this.mapRowFromRawSql(tableObj, r, aliases)
         );
       },
+
+      // Adapter-built, as `insert` above is; `transactionUpdate` says why.
+      // A column the model does not declare binds natively, as every value
+      // on this path's insert does.
+      update: this.transactionUpdate(
+        txDb,
+        async statement => (await txDb().execute(statement)).rows,
+        // Structured values as JSON text: node-postgres would spell an array
+        // as a PostgreSQL array literal, which no JSON column accepts.
+        value => this.bindUnmodeledStructuredAsJson(value)
+      ),
 
       ...this.createTransactionForwarders(txDb),
 

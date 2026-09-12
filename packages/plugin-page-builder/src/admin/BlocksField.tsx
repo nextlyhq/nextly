@@ -47,9 +47,13 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
+  componentUsageIn,
+  isComponentDocument,
   newId,
   type BlockDocument,
+  type ComponentLookup,
   type DocumentKind,
+  type DocumentLimits,
   type BreakpointSet,
   type NamedClass,
   type SiteTokenSet,
@@ -62,6 +66,8 @@ import {
   DEFAULT_PREFERENCES,
   registrySlotSource,
   type LeftPanel,
+  type SavedComponent,
+  type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
@@ -78,11 +84,13 @@ import {
   BlockContextMenu,
   EditorCommandPalette,
   BuilderShell,
+  useNoticeQueue,
   Canvas,
   DropIndicator,
   EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
+  type LibraryTierState,
   selectionIsInspectable,
   pageStyleTrace,
   LayersPanel,
@@ -106,6 +114,7 @@ import {
 import {
   loadInlineRichTextEditor,
   useDocumentCheckpoint,
+  useDocumentIdentity,
   usePluginClientConfig,
   useEntryFieldsPanel,
   useReportUnsavedWork,
@@ -116,6 +125,7 @@ import {
 // and sonner keeps its queue in module state, so a toast published into another
 // bundled copy would never reach it.
 import {
+  Button,
   chordMatches,
   detectApplePlatform,
   parseKeys,
@@ -152,11 +162,18 @@ import {
 } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
+import {
+  useComponentLibrary,
+  type ComponentLibraryRead,
+} from "./component-library-client";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { useMayCreatePattern } from "./pattern-capability-client";
-import { usePatternLibrary } from "./pattern-library-client";
+import {
+  usePatternLibrary,
+  type LibraryReadState,
+} from "./pattern-library-client";
 import { SavePatternPrompt } from "./SavePatternPrompt";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
@@ -321,6 +338,207 @@ export function documentFrom(
 }
 
 /**
+ * The components a field may OFFER: every one the library holds, except the
+ * one whose own definition this field is editing and every one that reaches
+ * it.
+ *
+ * A component's content field is a blocks field like a page's, and the library
+ * it reads includes the very row being edited — whose saved definition does
+ * not yet hold the reference an author is about to place, so nothing in the
+ * offer refuses it. Placed, the instance points at the definition it sits in;
+ * saved, the resolver reads the loop as a cycle and draws a placeholder. The
+ * row is left out here, where the field knows which document it is inside.
+ *
+ * The row itself is the shortest loop, not the only one. A component that
+ * holds an instance of this one, placed here, closes the loop one step out;
+ * one that holds THAT closes it two steps out. None is visible against the
+ * saved map until this row is saved, and then every page placing any of them
+ * draws a placeholder. So a candidate is judged by its STORED graph: which
+ * components its definition names, and which those name, followed through
+ * the canvas's own lookup until this row is met or nothing is left. A walk
+ * over the graph rather than a composition of every row, for two reasons.
+ * A loop is a loop whatever one render happens to skip — an instance under
+ * an entry-field gate is served when its condition holds, and a chain past
+ * the composition cap is refused at render, not absent — so what a render
+ * READS under-answers the question. And composing three thousand rows to
+ * ask it clones every definition each row reaches, once per row.
+ *
+ * Whether the edit is inside a component at all is `editedComponentId`.
+ *
+ * Every read of the graph is bounded by the SITE's node cap, and a read the
+ * cap ends early is not "names nothing" — it is unread, and the candidate is
+ * left out; so is one whose graph reaches an id the lookup does not hold out
+ * of a library that was not read whole (`namedBy`).
+ *
+ * The pattern tier is filtered by the same rule and the same graph —
+ * {@link withoutSelfPatterns}.
+ *
+ * Exported for its own test, for the reason `documentFrom` is.
+ */
+export function withoutSelf(
+  components: readonly SavedComponent[],
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null,
+  graph: ComponentGraph
+): readonly SavedComponent[] {
+  const self = editedComponentId(editing, identity);
+  if (self === undefined) return components;
+  const kept = components.filter(
+    component =>
+      component.id !== self && !reachesFrom([component.id], self, graph)
+  );
+  // The same list when nothing was removed, so the panel's catalogue memo
+  // keeps its key.
+  return kept.length === components.length ? components : kept;
+}
+
+/**
+ * The patterns the panel may OFFER, by the same rule and the same graph.
+ *
+ * A pattern is a second way to copy a component into itself. Saving a
+ * selection keeps the nodes it held, and an instance node is one of them —
+ * so a pattern saved from a page that placed A carries an instance of A, and
+ * a pattern that places B carries A wherever B's definition reaches it. The
+ * component tier being filtered says nothing about either: they are
+ * different rows, out of a different collection, read by a different query.
+ *
+ * Left OUT rather than refused at the click, because the panel is where an
+ * author decides. A tile offered and then refused reads as a bug in the
+ * pattern; a tile that is not there while a component is open is the same
+ * sentence the component tier already tells.
+ *
+ * What a pattern names is read from the row's OWN document — there is no
+ * lookup entry to read it from — and everything past that first step is the
+ * component graph, walked exactly as {@link withoutSelf} walks it, from the
+ * same lookup the canvas resolves against.
+ */
+export function withoutSelfPatterns(
+  patterns: readonly SavedPattern[],
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null,
+  graph: ComponentGraph
+): readonly SavedPattern[] {
+  const self = editedComponentId(editing, identity);
+  if (self === undefined) return patterns;
+  const kept = patterns.filter(
+    pattern => !reachesFrom(namesOf(pattern, graph.limits), self, graph)
+  );
+  return kept.length === patterns.length ? patterns : kept;
+}
+
+/**
+ * The components a stored pattern places directly, or `undefined` when that
+ * cannot be told — which counts as reaching, for the reason {@link namedBy}
+ * gives: a prefix the node cap ended early names nothing, and so does a
+ * pattern nobody could read.
+ *
+ * A row carrying no document at all is not that case. The collection does not
+ * mark its blocks field required, so a titled row with no content is a legal
+ * row; it places nothing, and the catalogue skips it on its own.
+ */
+function namesOf(
+  pattern: SavedPattern,
+  limits: DocumentLimits
+): readonly string[] | undefined {
+  const nodes = pattern.document?.nodes;
+  if (nodes === undefined) return [];
+  const usage = componentUsageIn(nodes, limits.maxNodes);
+  return usage.complete ? usage.ids : undefined;
+}
+
+/**
+ * The component this field is editing, or `undefined` when it is not editing
+ * one.
+ *
+ * Judged by BOTH facts: the document being edited is a component, and the
+ * form names the row. Either alone is not enough — a page's field is never
+ * inside a component however the ids fall, and a component's field on a
+ * create form names no row yet and can place anything.
+ *
+ * Stated once because two filters ask it, and a rule spelled twice is one
+ * that will eventually differ between the tier that is filtered and the tier
+ * that is not.
+ */
+function editedComponentId(
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null
+): string | undefined {
+  const self = identity?.documentId;
+  return self !== undefined && isComponentDocument(editing) ? self : undefined;
+}
+
+/** What judging a candidate's graph reads. */
+export interface ComponentGraph {
+  /** The lookup the canvas resolves against; each walk starts from its copy. */
+  readonly definitions: ComponentLookup;
+  /** The site's caps: every read of a definition is bounded by its node cap. */
+  readonly limits: DocumentLimits;
+  /**
+   * Whether the library read was WHOLE. A read the ceiling or a permission
+   * cut leaves out rows the store holds, so an id the lookup does not hold
+   * may be one of them — and may name the definition being edited.
+   */
+  readonly whole: boolean;
+}
+
+/**
+ * Whether the graph grown from these components names the definition given,
+ * at any depth, through the lookup — or cannot be shown not to.
+ *
+ * The seeds are what a candidate places directly: one id for a component row,
+ * every id its document places for a pattern. `undefined` is a seed list
+ * nobody could read, which counts as reaching for the reason {@link namedBy}
+ * gives.
+ *
+ * Each definition is read once per question, the seeds' own included — a loop
+ * among other rows ends where it began rather than running on — and from the
+ * lookup's copy, which is what the canvas will draw.
+ */
+function reachesFrom(
+  seeds: readonly string[] | undefined,
+  id: string,
+  graph: ComponentGraph
+): boolean {
+  if (seeds === undefined || seeds.includes(id)) return true;
+  const pending = [...seeds];
+  const followed = new Set<string>();
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    if (followed.has(next)) continue;
+    followed.add(next);
+    const named = namedBy(next, graph);
+    if (named === undefined || named.includes(id)) return true;
+    pending.push(...named);
+  }
+  return false;
+}
+
+/**
+ * The components one definition names, or `undefined` when that cannot be
+ * told — which counts as reaching, and leaves the candidate out.
+ *
+ * Two reads cannot tell. One the node cap ended early answered with a
+ * PREFIX: a reference past it is invisible, so "names nothing" is what an
+ * unread definition looks like too. And an id the lookup does not hold, out
+ * of a library that was not read whole, may be a component the cut left out.
+ * Out of a WHOLE library the same id is one nobody supplied: it names nothing
+ * further, and the resolver draws it as missing. Failing closed refuses no
+ * legitimate offer — a definition the cap cannot read whole is one the
+ * resolver cannot inline under it either, and an author editing a component
+ * against a cut library is told the library was cut — and it is the
+ * direction to err in, because the other one is a saved loop every page then
+ * draws as a placeholder.
+ */
+function namedBy(
+  id: string,
+  { definitions, limits, whole }: ComponentGraph
+): readonly string[] | undefined {
+  const definition = definitions.get(id);
+  if (definition === undefined) return whole ? [] : undefined;
+  const usage = componentUsageIn(definition.nodes, limits.maxNodes);
+  return usage.complete ? usage.ids : undefined;
+}
+
+/**
  * Whether this field may be edited at all.
  *
  * Exported and tested apart from the render for the same reason `documentFrom`
@@ -382,7 +600,11 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
    * faithful-looking wrong page when got subtly wrong. They belong together and
    * not in a control whose job is choosing between two surfaces.
    */
-  const resting = useRestingPageRender(PLUGIN_SOURCE);
+  const restingDocument = useMemo(
+    () => documentFrom(field.value, kinds),
+    [field.value, kinds]
+  );
+  const resting = useRestingPageRender(PLUGIN_SOURCE, restingDocument);
 
   /*
    * Closed if the form becomes read-only while the editor is up.
@@ -412,9 +634,10 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     />
   ) : (
     <PageBuilderCard
-      document={documentFrom(field.value, kinds)}
+      document={restingDocument}
       siteStyles={resting.siteStyles}
       styleState={resting.styleState}
+      components={resting.components}
       render={resting.render}
       // The gate is passed through rather than restated: `canEditBlocks`
       // already answers it for the editor above, and two readings of "may this
@@ -1694,13 +1917,169 @@ function useDocumentDirty<TFieldValues extends FieldValues>(
  * registry and a list, and asking for its own data would make every host that
  * renders it depend on this plugin's route.
  */
-function InsertPanelWithLibrary(props: {
+/**
+ * What stands where the canvas will be, while a read it cannot draw without is
+ * still coming or has failed.
+ *
+ * The site's style gates the canvas in both states: without the sheet the page
+ * draws a plausible design the site does not have, and a failed read is fixed
+ * by reloading. The component read gates it only while PENDING — long enough
+ * to keep every instance from flashing as could-not-be-loaded and re-laying
+ * out when the read lands. A FAILED component read must not gate it: the
+ * route refuses a role that may edit pages but not read components, and a
+ * least-privilege page editor would otherwise lose the canvas for every page,
+ * block-only pages included. That state, and a read that failed to refresh
+ * what it had, are said beside the canvas instead — see
+ * {@link ComponentsUnavailableNote}.
+ *
+ * Only the canvas waits: the shell, the rail and the inspector are about the
+ * DOCUMENT, which is already in hand.
+ */
+function CanvasGate({
+  styleError,
+}: {
+  styleError: Error | null;
+}): React.JSX.Element {
+  if (styleError !== null) {
+    return (
+      <p className="nx-inspector__note" data-canvas-state="failed">
+        This site’s styles could not be loaded, so the canvas would not match
+        the published page. Reload to try again.
+      </p>
+    );
+  }
+  return (
+    <p className="nx-inspector__note" data-canvas-state="loading">
+      Loading this site’s styles and components…
+    </p>
+  );
+}
+
+/**
+ * That the component definitions could not be read, said ABOVE a canvas that
+ * still draws.
+ *
+ * The canvas is drawn without them — every instance on the page as the
+ * could-not-be-loaded marker — because refusing to draw at all would take the
+ * editor away from an author whose role simply cannot read components. What
+ * this adds is the sentence that tells the marker apart from a deleted
+ * component, and the one remedy reachable from here.
+ */
+function ComponentsUnavailableNote({
+  state,
+  retry,
+}: {
+  state: LibraryReadState;
+  retry: () => void;
+}): React.JSX.Element | null {
+  const sentence = COMPONENT_READ_NOTES[state];
+  if (sentence === undefined) return null;
+  return (
+    <p
+      className="nx-inspector__note"
+      role="status"
+      data-canvas-state={`components-${state}`}
+    >
+      {sentence}{" "}
+      <Button type="button" variant="ghost" size="sm" onClick={retry}>
+        Try again
+      </Button>
+    </p>
+  );
+}
+
+/**
+ * What is said beside the canvas of a component read that failed, by how it
+ * failed. Nothing for a read in flight or one that answered: the canvas
+ * waits on the first and draws from the second.
+ *
+ * The two sentences differ in what is true of the instances on the page. A
+ * read that never answered leaves them drawn as missing. One that answered
+ * once and could not answer again leaves them drawn from that answer, which
+ * an edit elsewhere may since have overtaken — so not missing, but possibly
+ * out of date.
+ */
+const COMPONENT_READ_NOTES: Readonly<
+  Partial<Record<LibraryReadState, string>>
+> = {
+  unavailable:
+    "This site’s components could not be loaded, so any placed on this page draw as missing.",
+  stale:
+    "This site’s components could not be reloaded, so any placed on this page may draw out of date.",
+};
+
+function InsertPanelWithLibrary({
+  components,
+  offerablePatterns,
+  ...props
+}: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
   categoryOrder: React.ComponentProps<typeof InsertPanel>["categoryOrder"];
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
+  /**
+   * The component tier, read by the EDITOR rather than here.
+   *
+   * The canvas needs the same definitions to draw an instance, and it needs
+   * them whether or not this panel is ever opened — so the editor makes that
+   * read once and hands it down WHOLE: the list the tiles are built from, the
+   * lookup the canvas resolves against — so a tile's roots are the roots the
+   * canvas will draw — and where the read stands, which the panel says.
+   */
+  components: ComponentLibraryRead;
+  /**
+   * The patterns this edit may offer, out of the rows read HERE.
+   *
+   * A pattern can place a component, so editing a component has to leave out
+   * the patterns that reach it — the same question the component tier is
+   * filtered by, and it needs the same graph. That graph and the facts it is
+   * asked against belong to the editor above, and the rows belong here, so
+   * the rule comes down and is applied where the rows are.
+   */
+  offerablePatterns: (
+    patterns: readonly SavedPattern[]
+  ) => readonly SavedPattern[];
 }): React.JSX.Element {
   const library = usePatternLibrary();
-  return <InsertPanel {...props} patterns={library.patterns} />;
+  const patterns = useMemo(
+    () => offerablePatterns(library.patterns),
+    [offerablePatterns, library.patterns]
+  );
+  return (
+    <InsertPanel
+      {...props}
+      patterns={patterns}
+      components={components.components}
+      componentDefinitions={components.definitions}
+      library={{
+        patterns: tierStateOf(library),
+        components: tierStateOf(components),
+        // Both reads asked again: the panel offers one retry, and a tier that
+        // was fine is refetched at no cost the author can see.
+        retry: () => {
+          library.retry();
+          components.retry();
+        },
+      }}
+    />
+  );
+}
+
+/**
+ * One tier's state as the panel says it, from the two facts a read carries.
+ *
+ * `unavailable` first, for the reason both reads name it first; then cut; and
+ * a read still in flight is `ready` — an empty tier that will fill in a moment
+ * is not one to explain.
+ */
+function tierStateOf(read: {
+  state: LibraryReadState;
+  truncated: boolean;
+}): LibraryTierState {
+  if (read.state === "unavailable") return "unavailable";
+  // A failed refresh before a cut: the answer the cut describes is the one
+  // the retry replaces, and a library reloaded whole is reported cut again.
+  if (read.state === "stale") return "stale";
+  return read.truncated ? "cut" : "ready";
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
@@ -1729,7 +2108,46 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => documentFrom(initialValue, kinds),
     [initialValue, kinds]
   );
-  const editor = useEditorState({ initialDocument });
+  const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
+  /*
+   * The site's document caps, read once.
+   *
+   * Four readers — the editor's own apply, the renderer inputs, which repair
+   * the document against them, the class-usage count and the drag. Read
+   * separately they would agree until the day one of them was pointed at a
+   * different config. The editor is the reader that must not be missed: an
+   * apply judged under the engine's defaults refuses, silently, an edit to a
+   * page that is legal only under a cap this site raised, after the insert's
+   * preflight and the canvas both accepted it.
+   */
+  const documentLimits = useMemo(
+    () => readDocumentLimits(clientConfig),
+    [clientConfig]
+  );
+  /*
+   * The site's component definitions, read once per editor and at DRAFT
+   * posture. Without them the renderer draws the could-not-be-loaded marker
+   * for every instance on the page, which is what the editor showed before
+   * this read: a component placed in the builder rendered on the site and
+   * nowhere an author could see while editing.
+   */
+  const componentLibrary = useComponentLibrary();
+  /*
+   * Where a refusal the editor makes is said. The shell provides a sink to
+   * everything it renders, and this editor is built ABOVE the shell — so the
+   * host owns the queue, hands it to the shell to draw and provide, and
+   * raises into it from here.
+   */
+  const notices = useNoticeQueue();
+  const editor = useEditorState({
+    initialDocument,
+    limits: documentLimits,
+    // The SAME map the canvas draws with, so an edit is refused when the page
+    // would no longer compose with it in — every surface reaches the page
+    // through this apply, and this is the one place the reason is known.
+    definitions: componentLibrary.definitions,
+    onRefused: refusal => notices.raise(refusal.sentence),
+  });
 
   /*
    * Dragging blocks on the canvas.
@@ -1798,21 +2216,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     () => ({ state: shownStyleState, onChange: setStyleState }),
     [shownStyleState]
   );
-  const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
-  /*
-   * Is a drag happening — of EITHER kind.
-   *
-   * Not `draggingId`, which is the moving node's id and is null for the whole
-   * of a drag from the palette: the block has no node until the release makes
-   * one. Chrome gated on the id stays up while an author drags a new block in,
-   * and the toolbar sits above the drop indicator, covering the position being
-   * aimed at.
-   *
-   * Derived once and shared by the three surfaces below, so they cannot come to
-   * disagree about what counts as a drag.
-   */
-  const dragging = drag.draggingBlockName !== null;
-
   /*
    * The empty-container appender's only read of a block's definition: its
    * accessible label. `{ get: getBlock }` satisfies its `BlockLookup` with no
@@ -1898,7 +2301,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * config and a malformed one both leave it on, because the default is the
    * behaviour a site that configured nothing asked for.
    */
-  const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
   const checklist = useBuilderChecklist({
     document: editor.document,
     enabled: clientConfig?.checklist !== false,
@@ -1963,18 +2365,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const remotePatterns = useMemo(
     () => readRemotePatterns(clientConfig?.remotePatterns),
-    [clientConfig]
-  );
-
-  /*
-   * The site's document caps, read once.
-   *
-   * Two readers now — the renderer inputs, which repair the document against
-   * them, and the class-usage count. Read separately they would agree until the
-   * day one of them was pointed at a different config.
-   */
-  const documentLimits = useMemo(
-    () => readDocumentLimits(clientConfig),
     [clientConfig]
   );
 
@@ -2159,6 +2549,76 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * beside each pseudo-class rule so it can show an author the state being
    * edited, and a surface showing the page as published must not have one.
    */
+
+  // The SAME map the canvas draws with, so a moved instance is judged by the
+  // roots it draws there rather than by its own, unrestricted type.
+  const drag = useCanvasDrag({
+    editor,
+    slots,
+    nesting,
+    canvasRoot,
+    definitions: componentLibrary.definitions,
+  });
+  /*
+   * Is a drag happening — of EITHER kind.
+   *
+   * Not `draggingId`, which is the moving node's id and is null for the whole
+   * of a drag from the palette: the block has no node until the release makes
+   * one. Chrome gated on the id stays up while an author drags a new block in,
+   * and the toolbar sits above the drop indicator, covering the position being
+   * aimed at.
+   *
+   * Derived once and shared by the three surfaces below, so they cannot come to
+   * disagree about what counts as a drag.
+   */
+  const dragging = drag.draggingBlockName !== null;
+
+  /*
+   * The rows the panel may OFFER: the library without the definition this very
+   * field is editing, when it is editing one. The MAP stays whole — the
+   * canvas still has to resolve every other instance, and an instance of the
+   * definition inside itself is the resolver's cycle to draw.
+   */
+  // Judged on the document the editor OPENED with: a document's kind does not
+  // change while it is edited, and the opening document is the one this
+  // field's own value described.
+  const identity = useDocumentIdentity();
+  /*
+   * Built once and asked by BOTH tiers: the components filter below and the
+   * patterns filter the panel runs on the rows it reads for itself. One
+   * object rather than two literals, so the two filters cannot come to walk
+   * different graphs — and so the callback handed down keeps its identity
+   * across renders the read did not change.
+   */
+  const componentGraph = useMemo<ComponentGraph>(
+    () => ({
+      definitions: componentLibrary.definitions,
+      limits: documentLimits,
+      whole: !componentLibrary.truncated,
+    }),
+    [componentLibrary.definitions, componentLibrary.truncated, documentLimits]
+  );
+  const offered = useMemo<ComponentLibraryRead>(() => {
+    const components = withoutSelf(
+      componentLibrary.components,
+      initialDocument,
+      identity,
+      componentGraph
+    );
+    return components === componentLibrary.components
+      ? componentLibrary
+      : { ...componentLibrary, components };
+  }, [componentLibrary, initialDocument, identity, componentGraph]);
+  /*
+   * The pattern tier is read inside the panel — it is mounted only while the
+   * panel is open — so the RULE comes down and the rows stay there.
+   */
+  const offerablePatterns = useCallback(
+    (patterns: readonly SavedPattern[]) =>
+      withoutSelfPatterns(patterns, initialDocument, identity, componentGraph),
+    [initialDocument, identity, componentGraph]
+  );
+
   const canvasRender = useMemo(
     () =>
       pageRenderInputs({
@@ -2167,8 +2627,18 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         previewContainer,
         previewStates: true,
         limits: documentLimits,
+        // The map's identity changes only when the read does, so this memo —
+        // and the resolution the canvas runs from it — is not redone per
+        // keystroke.
+        definitions: componentLibrary.definitions,
       }),
-    [canvasSiteStyle, clientConfig, previewContainer, documentLimits]
+    [
+      canvasSiteStyle,
+      clientConfig,
+      previewContainer,
+      documentLimits,
+      componentLibrary.definitions,
+    ]
   );
 
   /*
@@ -2342,7 +2812,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             editor.document,
             canvasRender.styleContext,
             siteSheet(canvasSiteStyle),
-            remotePatterns === undefined ? {} : { remotePatterns }
+            {
+              ...(remotePatterns === undefined ? {} : { remotePatterns }),
+              // The SAME map the canvas resolves against, under the SAME
+              // caps, so the cascade the inspector reads describes the
+              // composed tree on screen: neither one with every instance
+              // left unresolved, nor one composed past a cap the canvas
+              // stopped at.
+              definitions: canvasRender.definitions,
+              limits: canvasRender.limits,
+            }
           ),
     [
       editor.document,
@@ -2365,6 +2844,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * equal limits reached by different routes select different nodes — a class
    * on a node one walk reaches and the other does not would be reported as
    * absent from a page that renders it.
+   * Composed through the SAME map the canvas draws with, because the stored
+   * document holds one instance node where the canvas draws a definition: a
+   * class applied inside that definition is on the page as rendered, and a
+   * walk over the stored nodes alone would leave it out of the filter. The
+   * usage record asks a different question of the same walk — what this
+   * document itself references — and passes no map.
+   *
    *
    * `complete` is deliberately unread. It says whether the walk hit the
    * document's node ceiling, which bounds what this could CLAIM about usage —
@@ -2377,8 +2863,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     // lowered them renders under those, and a walk here under different bounds
     // selects different nodes — which would report a class as absent from a
     // page that renders it, or present on one that does not.
-    () => classUsageOf(editor.document, documentLimits),
-    [editor.document, documentLimits]
+    () =>
+      classUsageOf(editor.document, documentLimits, canvasRender.definitions),
+    [editor.document, documentLimits, canvasRender.definitions]
   );
 
   /*
@@ -2528,6 +3015,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   return (
     <div className="fixed inset-0 z-50 bg-background">
       <BuilderShell
+        notices={notices}
         onExit={done}
         availablePanels={
           entryFields === null
@@ -2639,6 +3127,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // inferring one from the document. Two refs would let the panel
             // read a canvas that is not the one on screen.
             canvasRoot={canvasElement}
+            // The SAME read the canvas resolves against, for the reason the
+            // ref is the same ref: a selected instance's rows are read from the
+            // very document the page is drawn from, and titled from the row
+            // the same read returned.
+            componentLibrary={componentLibrary}
             styleState={styleStateBinding}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
@@ -2711,6 +3204,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
+                components={offered}
+                offerablePatterns={offerablePatterns}
               />
             ),
             /*
@@ -2811,6 +3306,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           onEditText={inline.begin}
           onSaveAsPattern={savePattern.open}
           /*
+            The same map the canvas draws with, so a keyboard move of an
+            instance is judged by the roots it draws — as its drop is — rather
+            than by the instance node's own type, which the nesting rule
+            restricts nowhere.
+          */
+          definitions={componentLibrary.definitions}
+          /*
             Whether the author holds the grant the save is judged by, asked of
             the server because only it knows the RESOLVED collection: a site may
             rename it, and the browser knows the declared name alone. Passed
@@ -2856,15 +3358,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             the read is cached, so this is one brief state per session rather
             than one per opening.
           */}
-          {siteStylePending || siteStyleError !== null ? (
-            <p
-              className="nx-inspector__note"
-              data-canvas-state={siteStyleError === null ? "loading" : "failed"}
-            >
-              {siteStyleError === null
-                ? "Loading this site\u2019s styles\u2026"
-                : "This site\u2019s styles could not be loaded, so the canvas would not match the published page. Reload to try again."}
-            </p>
+          <ComponentsUnavailableNote
+            state={componentLibrary.state}
+            retry={componentLibrary.retry}
+          />
+          {siteStylePending ||
+          siteStyleError !== null ||
+          componentLibrary.state === "pending" ? (
+            <CanvasGate styleError={siteStyleError} />
           ) : (
             /*
               Wrapped rather than passed in, because the menu opens over the

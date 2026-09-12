@@ -54,7 +54,12 @@ import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
-import { patternLibraryRoute } from "./library-route";
+import {
+  componentLibraryRoute,
+  DEFAULT_COMPONENT_STORE,
+  patternLibraryRoute,
+  type ComponentStore,
+} from "./library-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
@@ -138,6 +143,29 @@ function pagePreviewBreakpoints(
 }
 
 /**
+ * Where the plugin was told component definitions live, for every reader.
+ *
+ * ONE derivation, handed to the editor's library route and to the readiness
+ * notice alike, so a host that keeps its definitions in a collection of its
+ * own says so once and both follow. Turned-off readiness says nothing about
+ * the store, so the editor reads the plugin's own — the honest default for a
+ * host whose definitions come from no collection at all, which no collection
+ * read can follow.
+ */
+function componentStoreOf(opts: PageBuilderOptions): ComponentStore {
+  const readiness = opts.componentReadiness;
+  if (readiness === false || readiness === undefined) {
+    return DEFAULT_COMPONENT_STORE;
+  }
+  return {
+    ...(readiness.collection === undefined
+      ? {}
+      : { collection: readiness.collection }),
+    field: readiness.field ?? COMPONENT_DOCUMENT_FIELD,
+  };
+}
+
+/**
  * Wire the publish-readiness notice, unless the host turned it off.
  *
  * Lifted out of `init` rather than left inline: initialisation is a list of
@@ -166,13 +194,13 @@ function registerReadinessNotice(
     // would ask about a table that does not exist and report every embedded
     // component as unpublished.
     componentCollection:
-      readiness?.collection ??
+      componentStoreOf(opts).collection ??
       ctx.self.collections[COMPONENTS_SLUG] ??
       COMPONENTS_SLUG,
     // Defaults to the field the RENDERER defaults to, so the check reads the
     // document the page draws from rather than every blocks field the store
     // happens to have.
-    componentField: readiness?.field ?? COMPONENT_DOCUMENT_FIELD,
+    componentField: componentStoreOf(opts).field,
     // The SAME bounds the renderer draws under, asked per call. A notice
     // derived under different ones names components inside a document the page
     // never renders.
@@ -224,22 +252,24 @@ export interface PageBuilderOptions {
    */
   limits?: DocumentLimits;
   /**
-   * Where publishing a page looks for the components it embeds, when it warns
-   * that some are not live.
+   * Where component definitions live: what publishing a page checks when it
+   * warns that some are not live, and what the EDITOR reads to draw them.
    *
    * Defaults to the component store this plugin contributes, which is where the
    * renderer reads them from unless a route says otherwise. A route MAY say
    * otherwise: `createBlocksPage` accepts `componentCollection` to name a
    * different store and `resolveComponents` to supply definitions from
    * somewhere that is not a collection at all. Neither is visible from here —
-   * the route is configured in the host's app, and this runs on the write path
-   * — so a host that redirected the renderer must redirect this too, or the
-   * notice judges the page against a store it does not render from and reports
-   * live components as missing.
+   * the route is configured in the host's app — so a host that redirected the
+   * renderer must redirect this too, or the notice judges the page against a
+   * store it does not render from and reports live components as missing, and
+   * the editor draws a different definition for the same id than the page
+   * does, or none. Naming `collection` and `field` here redirects both at once.
    *
    * `false` turns the notice off, which is the honest setting for a host whose
    * definitions come from a custom `resolveComponents` source: no collection
    * can answer the question, so asking one produces a warning about nothing.
+   * The editor then reads the plugin's own store, the one thing it can read.
    */
   componentReadiness?:
     | false
@@ -822,8 +852,14 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // the planner's answer and the planner needs the server's block
       // registry — the browser holds the core blocks and not the ones another
       // plugin declared.
+      //
+      // And the component definitions, on a route of their own: the canvas
+      // needs them on every editor mount to draw an instance at all, and a
+      // plugin route declares one permission, so the tier a role may read
+      // without the other has to be reachable without the other's gate.
       routes: [
         patternLibraryRoute(),
+        componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
         patternCapabilityRoute(),
       ],

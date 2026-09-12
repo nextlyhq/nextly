@@ -4,11 +4,10 @@
  * 🔴 The version table is keyed by (scopeKind, scopeSlug, entryId) and carries
  * no access rules of its own, so a read of it bounded only by collection name
  * answers about documents the ordinary read path would refuse. Entity-level
- * access decides whether a collection is IN REACH; a stored `owner-only` or
- * `custom` read rule then narrows which of its rows come back, and that second
- * axis is invisible to a slug filter. Without this pass the dashboard's cards
- * counted one author's documents for another and listed their entry ids and the
- * instants they were edited.
+ * access decides whether a collection is IN REACH; the read path then narrows
+ * which of its rows come back, and that second axis is invisible to a slug
+ * filter. Without this pass the dashboard's cards counted documents the caller
+ * cannot open and listed their entry ids and the instants they were edited.
  *
  * The decision itself belongs to {@link visibleDocuments}, which the activity
  * feed asks the same question of. This module is the TRANSLATION from a version

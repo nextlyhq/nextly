@@ -44,7 +44,9 @@ import {
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+
+import { markedElementOf } from "./style-subject";
 
 import {
   CANVAS_ROOT_CLASS,
@@ -55,6 +57,9 @@ import {
   LOCKED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
   canvasScale,
+  contextMenuTargetOf,
+  isOutermostForAddress,
+  nodeElement,
   nodeIdFromEvent,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
@@ -88,6 +93,261 @@ function block(id: string, label: string) {
     </section>
   );
 }
+
+/**
+ * A node the RENDERER inlined from a component definition.
+ *
+ * Its own id is re-minted during composition, so the page's document does not
+ * contain it — which is why an editor must answer with the host instance
+ * instead. Both markers are present exactly as `blocks-react` emits them.
+ */
+function definitionOwned(
+  id: string,
+  instanceId: string,
+  label: string,
+  children?: React.ReactNode
+) {
+  return (
+    <section {...{ [NODE_ID_ATTRIBUTE]: id, [INSTANCE_ATTRIBUTE]: instanceId }}>
+      <h2>
+        <span data-testid={`leaf-${id}`}>{label}</span>
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+describe("resolving a click inside a component instance", () => {
+  it("answers with the HOST INSTANCE for a node the definition supplied", () => {
+    // The definition's node ids are re-minted at composition, so `cx-remade` is
+    // an address the stored page does not contain. Answering with it hands the
+    // editor something it cannot select, edit or delete.
+    render(canvas(definitionOwned("cx-remade", "i1", "From the definition")));
+
+    expect(nodeIdFromEvent(screen.getByTestId("leaf-cx-remade"))).toBe("i1");
+  });
+
+  it("answers with its OWN id for slot content the page supplied", () => {
+    // THE case this whole design exists for, and the one `closest()` gets
+    // wrong. `page-own` belongs to the page and is deliberately unmarked, but
+    // it renders NESTED INSIDE the definition's marked box — so a walk upwards
+    // finds that box and hands back the component for a node the author can and
+    // should select directly. It is exactly what a marketer opened the editor
+    // to change.
+    render(
+      canvas(
+        definitionOwned(
+          "cx-remade",
+          "i1",
+          "From the definition",
+          block("page-own", "The page's own, in the slot")
+        )
+      )
+    );
+
+    expect(nodeIdFromEvent(screen.getByTestId("leaf-page-own"))).toBe(
+      "page-own"
+    );
+  });
+
+  it("reads an EMPTY instance marker as page-owned", () => {
+    // An address of "" is not selectable. The renderer never emits one — it
+    // treats an empty id as no provenance — but reading it as page-owned is the
+    // answer that leaves the element addressable by its own id rather than by
+    // nothing.
+    render(
+      canvas(
+        <section {...{ [NODE_ID_ATTRIBUTE]: "own", [INSTANCE_ATTRIBUTE]: "" }}>
+          <span data-testid="leaf-own">x</span>
+        </section>
+      )
+    );
+
+    expect(nodeIdFromEvent(screen.getByTestId("leaf-own"))).toBe("own");
+  });
+});
+
+describe("addressing a definition-owned element from every reader", () => {
+  it("gives the CONTEXT MENU the instance, not the re-minted id", () => {
+    // The menu's verbs act on the selection, and `applySelection` ignores an id
+    // the stored document does not contain — so a right-click inside a
+    // component left the PREVIOUS selection in place and Delete acted on a
+    // block nobody pointed at.
+    const { container } = render(
+      canvas(definitionOwned("cx-remade", "i1", "From the definition"))
+    );
+    const root = container.firstElementChild as Element;
+
+    expect(
+      contextMenuTargetOf(screen.getByTestId("leaf-cx-remade"), root)
+    ).toBe("i1");
+  });
+
+  it("still gives the menu a page-owned node its own id", () => {
+    // The control: an implementation that always answered with an instance
+    // would satisfy the case above and break every ordinary right-click.
+    const { container } = render(canvas(block("plain", "Ordinary")));
+    const root = container.firstElementChild as Element;
+
+    expect(contextMenuTargetOf(screen.getByTestId("leaf-plain"), root)).toBe(
+      "plain"
+    );
+  });
+
+  it("treats sibling copies of one node as each outermost", () => {
+    // A block that renders its child twice puts one id on two SIBLING elements,
+    // and both are renderings of that node. Marking or measuring only one
+    // outlines a single row of ten. Neither encloses the other, so enclosure is
+    // what separates this from a component's nested elements.
+    const { container } = render(
+      canvas(
+        <>
+          {block("twin", "First")}
+          {block("twin", "Second")}
+        </>
+      )
+    );
+    const root = container.querySelector(
+      `.${CANVAS_ROOT_CLASS}`
+    ) as HTMLElement;
+    const copies = container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}="twin"]`);
+
+    expect(copies).toHaveLength(2);
+    copies.forEach(copy => {
+      expect(isOutermostForAddress(copy, "twin", root)).toBe(true);
+    });
+  });
+
+  it("treats an instance's inner elements as NOT outermost", () => {
+    // The other half. Every element the definition contributed shares one
+    // address, nested — so marking all of them outlines everything inside the
+    // component, and measuring all of them keys the drag rectangle to whichever
+    // was visited last.
+    const { container } = render(
+      canvas(
+        definitionOwned(
+          "cx-outer",
+          "i1",
+          "Outer",
+          definitionOwned("cx-inner", "i1", "Inner")
+        )
+      )
+    );
+    const outer = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="cx-outer"]`
+    ) as Element;
+    const inner = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="cx-inner"]`
+    ) as Element;
+
+    const root = container.querySelector(
+      `.${CANVAS_ROOT_CLASS}`
+    ) as HTMLElement;
+
+    expect({
+      outer: isOutermostForAddress(outer, "i1", root),
+      inner: isOutermostForAddress(inner, "i1", root),
+    }).toEqual({ outer: true, inner: false });
+  });
+
+  it("does not let an enclosing canvas's marker reach into a nested canvas", () => {
+    // A canvas can render INSIDE a definition-owned element — component edit
+    // mode does — and ids are scoped per document, so the inner document may
+    // reuse the enclosing instance's address. An unbounded ancestor search
+    // finds the OUTER document's marker, calls the inner component nested
+    // inside itself, and leaves it with no outline and no drag rectangle.
+    const { container } = render(
+      canvas(
+        definitionOwned(
+          "cx-outer",
+          "i1",
+          "Outer",
+          canvas(definitionOwned("cx-inner", "i1", "Inner"))
+        )
+      )
+    );
+    const roots = container.querySelectorAll(`.${CANVAS_ROOT_CLASS}`);
+    const innerRoot = roots[1] as HTMLElement;
+    const inner = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="cx-inner"]`
+    ) as Element;
+
+    expect(roots).toHaveLength(2);
+    expect(isOutermostForAddress(inner, "i1", innerRoot)).toBe(true);
+  });
+});
+
+describe("the element a style reading is taken from", () => {
+  it("finds the element an INSTANCE renders as, not only a node's own", () => {
+    // An instance renders no element carrying its own id — it is replaced by
+    // the definition's tree — so a lookup over the node-id attribute alone
+    // finds nothing, and the style inspector reads the selected component's
+    // tag and orientation as unknown for as long as it is selected. The
+    // reverse lookup goes through the same rule the selection uses.
+    const { container } = render(
+      canvas(definitionOwned("cx-outer", "i1", "Outer"))
+    );
+    const root = container.querySelector(
+      `.${CANVAS_ROOT_CLASS}`
+    ) as HTMLElement;
+
+    expect(markedElementOf(root, "i1")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "cx-outer"
+    );
+    // And nothing for no root or no selection, which is what every caller of
+    // this adapter may hold.
+    expect(markedElementOf(null, "i1")).toBeUndefined();
+    expect(markedElementOf(root, null)).toBeUndefined();
+  });
+});
+
+describe("finding the element a selected node was rendered as", () => {
+  it("finds the instance's rendered box, which carries no node id of its own", () => {
+    // The inverse of the hit-test, and it has to answer the same addresses.
+    // Selecting inside a component yields an INSTANCE id — a real page node
+    // that renders no element of its own, because it was replaced by the
+    // definition's tree. Chrome measuring that selection would otherwise find
+    // nothing and draw nowhere.
+    const { container } = render(
+      canvas(definitionOwned("cx-remade", "i1", "From the definition"))
+    );
+    const root = container.firstElementChild as HTMLElement;
+
+    expect(nodeElement(root, "i1")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "cx-remade"
+    );
+  });
+
+  it("prefers a node's OWN element over one merely hosted by it", () => {
+    // Precedence stated rather than left to iteration order. The two cannot
+    // collide today — an instance is replaced rather than rendered — so without
+    // this the rule would be whichever the walk happened to reach first.
+    const { container } = render(
+      canvas(
+        <>
+          {definitionOwned("cx-remade", "shared", "Hosted")}
+          {block("shared", "The node's own")}
+        </>
+      )
+    );
+    const root = container.firstElementChild as HTMLElement;
+
+    expect(nodeElement(root, "shared")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "shared"
+    );
+  });
+
+  it("still finds an ordinary page node by its own id", () => {
+    // The control: without it, an implementation that only ever answered via
+    // the instance marker would satisfy the cases above.
+    const { container } = render(canvas(block("plain", "Ordinary")));
+    const root = container.firstElementChild as HTMLElement;
+
+    expect(nodeElement(root, "plain")?.getAttribute(NODE_ID_ATTRIBUTE)).toBe(
+      "plain"
+    );
+  });
+});
 
 describe("resolving a pointer target to the node that owns it", () => {
   it("walks up from a deep leaf to the block that rendered it", () => {
@@ -2353,6 +2613,31 @@ describe("forcing a state onto a tree React commits over time", () => {
         },
         {
           /*
+           * A block that draws a CANVAS INSIDE itself — the shape component edit
+           * mode produces — holding an instance whose address the outer document
+           * could also select. Ids are scoped per document, so that address
+           * belongs to the inner document, and only the inner canvas may mark it.
+           */
+          name: "acme/nests-a-canvas",
+          version: 1,
+          description: "A block holding a nested canvas.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className, [NODE_ID_ATTRIBUTE]: "host" },
+              createElement(
+                "div",
+                { className: CANVAS_ROOT_CLASS },
+                createElement("div", {
+                  [NODE_ID_ATTRIBUTE]: "cx-inner",
+                  [INSTANCE_ATTRIBUTE]: "i1",
+                })
+              )
+            ),
+        },
+        {
+          /*
            * A block that draws ITS OWN CHILD TWICE, which is what makes one
            * node id many elements. `core/collection-loop` renders its children
            * slot once per entry, so this is the shape of a shipping block
@@ -2420,6 +2705,42 @@ describe("forcing a state onto a tree React commits over time", () => {
       expect(copy.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
       expect(copy.className).toContain(previewStateClass("hover"));
     }
+  });
+
+  it("leaves a NESTED canvas's elements alone, whatever address it selects", async () => {
+    /*
+     * The outer canvas selects "i1". The only element carrying that address is
+     * inside a nested canvas root — another document's, since ids are scoped
+     * per document. Marking it would outline a block this selection is not in,
+     * and clearing it on a later pass would strip a mark the inner canvas set.
+     * The drag pass already leaves foreign canvases alone; this is the same
+     * rule on the selection pass.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "nest",
+                type: "acme/nests-a-canvas",
+                version: 1,
+                props: {},
+              },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="i1"
+      />
+    );
+    await act(async () => undefined);
+
+    const inner = document.querySelector(`[${NODE_ID_ATTRIBUTE}="cx-inner"]`);
+    expect(inner).not.toBeNull();
+    expect(inner?.hasAttribute(SELECTED_ATTRIBUTE)).toBe(false);
   });
 
   it("marks a node that arrives AFTER the commit the effect ran on", async () => {

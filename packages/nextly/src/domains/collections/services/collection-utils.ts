@@ -10,6 +10,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
 
 /**
  * Field types that are always stored as JSON in the database.
@@ -413,7 +414,7 @@ export function decodeJsonFieldValues(
           // Not JSON after all; the stored string is the value.
         }
       } else if (
-        locale === "all" &&
+        locale === EVERY_TRANSLATION &&
         isFieldLocalized(field, true) &&
         value !== null &&
         typeof value === "object"

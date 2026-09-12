@@ -40,6 +40,62 @@ Pick the elevation deliberately. A public route that lists published content sho
 `{ as: "system" }` (the data is public-derived); a route that returns a user's own
 records should use `{ as: "user", user: ctx.user ?? undefined }`.
 
+## Reading and writing in a locale
+
+On a localized site, name the language beside the elevation. `locale` decides which
+translation a read answers with and which one a write stores into; absent, it is the
+site's default, which is what every call has always meant.
+
+```ts
+// A French visitor's page reads French content.
+const frenchPage = await ctx.services.collections.findEntryById("pages", id, {
+  as: "system",
+  locale: "fr",
+});
+
+// A translation is written the same way: only the localized fields move.
+await ctx.services.collections.updateEntry(
+  "pages",
+  id,
+  { title: "Merci" },
+  { as: "system", locale: "fr" }
+);
+```
+
+A missing translation is answered by the site's fallback chain, which is right when the
+page has to show *something*. Pass `fallbackLocale: false` when the question is whether
+the translation *exists* — a sitemap deciding whether to list a language, say — and the
+default's value standing in would mislead you.
+
+What an unconfigured code means depends on the verb, and deliberately so. A **read**
+resolves it to the default, the same way `?locale=` does on the REST API, so a wrong
+query string still shows a page. A **write** is refused with a `400`, so a typo cannot
+overwrite the default language's content. `createMany` refuses any locale at all, by
+name: its bulk pipeline writes rows in one pass and cannot store a translation, and an
+option it accepted but could not honour would file every row under the default language
+and report success. Create the rows one at a time with `createEntry` instead.
+
+`locale` names **one** language. The selectors the core understands elsewhere — `*`,
+which moves every translation's lifecycle in one write, and `all`, which answers a read
+with one value per language — are refused here with a `400`, so a value forwarded from a
+query string can never publish every translation of a document by accident. A plugin
+that needs the every-locale sweep needs a surface that says so by name; there is none
+yet. A route that forwards `?locale=` and wants a wildcard to read as "no language" can
+ask the core which spellings are selectors — `isLocaleSelector` from
+`@nextlyhq/plugin-sdk`, `@experimental` until it ships in a release — rather than keep a
+list of its own. The same spellings are reserved at configuration — along
+with `none`, the wire's spelling of `fallbackLocale: false` — so a site cannot name a
+language `all` or `none`. An empty `locale` (what `?locale=` with nothing after it
+forwards) reads as no language named, not as a wrong one.
+
+`deleteEntry` refuses a locale too, by name: a delete removes the document and every
+translation with it, and there is no per-language delete — so `{ locale: "fr" }` would
+read as "remove the French translation" and remove the English, the German and the row.
+
+With that, the pair is spelled exactly as it is on the request context and on the wire,
+and a route can pass through what it was given: a wrong code shows the default on a
+read and is refused on a write, and a selector is refused on both.
+
 ## Collection methods
 
 `ctx.services.collections` exposes:
@@ -53,6 +109,7 @@ records should use `{ as: "user", user: ctx.user ?? undefined }`.
 | `deleteEntry(slug, id, opts?)` | Delete one. Returns `{ message, item: { id }, warnings? }`. |
 | `count(slug, where?, opts?)` | Count matching rows. |
 | `createMany(slug, rows, opts?)` | Bulk insert → `BatchOperationResult`. |
+| `updateMany(slug, entries, opts?)` | Bulk update, one `{ id, data }` per row → `BatchOperationResult`. |
 
 `ctx.services` also exposes `users`, `media`, and `email` services.
 
@@ -82,13 +139,74 @@ populating relations and is cheaper.
 
 ## Bulk operations
 
-`createMany` returns a `BatchOperationResult` with index-keyed errors, so a partial
-failure tells you exactly which rows failed:
+`createMany` and `updateMany` return a `BatchOperationResult`, so a partial failure
+tells you exactly which rows failed and leaves the rest committed:
 
 ```ts
 const res = await ctx.services.collections.createMany(slug, rows, { as: "system" });
 // { successful, failed, ids: string[], errors: [{ index, error }] }
 ```
+
+`updateMany` takes one `{ id, data }` per row, so a single call can apply a
+**different** patch to each row. Applying the same patch to many rows is the same
+call with the patch repeated:
+
+```ts
+const res = await ctx.services.collections.updateMany(
+  slug,
+  [
+    { id: "post-1", data: { status: "published" } },
+    { id: "post-2", data: { status: "archived", pinned: false } },
+  ],
+  { as: "system" }
+);
+```
+
+`errors[].index` indexes **the array you passed**, so the row a failure is about is
+`entries[index].id`. The result shape is shared with `createMany`, which has no
+caller-supplied ids to key its failures by.
+
+To update every row matching a filter, list them first and map the ids. There is no
+by-filter batch update, deliberately: a filter that matches more than the author meant
+is the failure this surface has no way to take back.
+
+`listEntries` returns one page, so page through it. The loop below re-reads page 1
+each time on purpose: every updated row leaves the `draft` filter, so the rows that
+still match move up into it.
+
+```ts
+let updated = 0;
+for (;;) {
+  const page = await ctx.services.collections.listEntries(
+    slug,
+    { where: { status: "draft" }, pagination: { limit: 100 }, depth: 0 },
+    { as: "system" }
+  );
+  if (page.data.length === 0) break;
+
+  const res = await ctx.services.collections.updateMany(
+    slug,
+    page.data.map((row: { id: string }) => ({
+      id: row.id,
+      data: { status: "published" },
+    })),
+    { as: "system" }
+  );
+  updated += res.successful;
+  // Nothing moved: the rest are failing rather than draining, so stop rather
+  // than read the same page forever.
+  if (res.successful === 0) break;
+}
+```
+
+When the patch does NOT change what the filter matches, page with
+`pagination: { page: n }` instead and stop when `pagination.hasMore` is false, or the
+loop above would re-read the same rows.
+
+Neither takes a `locale`: the bulk pipeline writes in one pass and cannot store a
+translation, so both refuse one by name rather than filing every row under the default
+language. Write the rows one at a time with `createEntry` or `updateEntry` when a
+language matters.
 
 ## Writes return an envelope
 

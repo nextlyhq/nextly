@@ -32,10 +32,19 @@ import {
   getBlock,
   locateNode,
   makeNode,
+  placementTypesOf,
   placementVerdict,
+  composedRootTypes,
+  readableDefinition,
+  resolveComponentInstances,
+  COMPONENT_INSTANCE_TYPE,
   type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
+  type ComponentLookup,
+  type ComponentUnresolvedReason,
+  type DocumentLimits,
   type NestingSource,
   type NestingVerdict,
   type PlacementTarget,
@@ -216,7 +225,86 @@ export interface PatternInsertEntry {
  * both halves optional and every consumer would branch on which half was
  * filled in — the branch this union makes the compiler check.
  */
-export type InsertEntry = BlockInsertEntry | PatternInsertEntry;
+export type InsertEntry =
+  | BlockInsertEntry
+  | PatternInsertEntry
+  | ComponentInsertEntry;
+
+/**
+ * A stored component definition, as the library hands it to the palette.
+ *
+ * The same shape and the same caveats as {@link SavedPattern}, because it is
+ * the same kind of row from a sibling collection: `keywords` is one stored
+ * string, and `document` may be `null` for a published row saved without
+ * content. Carried separately rather than widened onto `SavedPattern` because
+ * what the two are FOR differs — a pattern is copied in and forgets its source,
+ * a component is placed as one node that keeps pointing back — and a reader
+ * should be able to tell from the type which it holds.
+ */
+export interface SavedComponent {
+  /** The stored row's id, which an instance node points at. */
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly category?: string;
+  readonly keywords?: string | null;
+  readonly document?: ComponentDocument | null;
+  /**
+   * How many pages currently place it, when the library can say.
+   *
+   * Optional because the count is a separate read the library may not have
+   * made, and a tile that showed "used on 0 pages" for a count nobody took
+   * would be stating a fact it does not hold.
+   */
+  readonly usedOn?: number;
+}
+
+/**
+ * One offerable COMPONENT: a definition placed as a single instance node that
+ * keeps pointing back at it.
+ *
+ * The document travels with the entry for the reason a pattern's does — the
+ * palette judges placement from its roots — but what inserting it does is the
+ * opposite of a pattern: nothing from the document is copied into the page.
+ * One node is written, carrying the definition's id, and the renderer inlines
+ * the definition at read time. That is what makes an edit to the definition
+ * reach every page that placed it.
+ */
+export interface ComponentInsertEntry {
+  readonly kind: "component";
+  /** Prefixed, for the reason {@link PatternInsertEntry.id} is. */
+  readonly id: string;
+  /** The definition's stored id, which the instance node will point at. */
+  readonly componentId: string;
+  readonly label: string;
+  readonly description: string;
+  readonly category: string;
+  readonly keywords: readonly string[];
+  readonly icon?: string;
+  /**
+   * The definition the canvas resolves the placed instance against — the
+   * lookup's, by identity — which is what a preview of the tile draws.
+   */
+  readonly document: ComponentDocument;
+  /**
+   * The block types at the roots of the definition AS THE CANVAS WILL DRAW
+   * IT: a root that is itself an instance is followed into the definition it
+   * names, through the same lookup the canvas resolves against.
+   *
+   * A definition may hold instances of other components, at its root included,
+   * and an instance node's type is not a registered block — the nesting rule
+   * answers "no restriction" for a type it cannot resolve. Judging placement
+   * from the STORED roots would therefore offer a component whose real root is
+   * confined to one parent at any destination, and the canvas would then draw
+   * that root where it does not belong. The roots here are the block types
+   * that actually land — each type once, in the order first met, which is all
+   * a placement verdict reads. Read without composing the definition, because
+   * a library of small wrappers around one large definition would otherwise
+   * be cloned whole, once per wrapper, every time the panel opened.
+   */
+  readonly roots: readonly string[];
+  readonly usedOn?: number;
+}
 
 /**
  * How a caller answers for a block's declared child regions.
@@ -381,7 +469,8 @@ export function catalogFrom(
  */
 export function patternEntriesFrom(
   patterns: readonly SavedPattern[],
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): PatternInsertEntry[] {
   const entries: PatternInsertEntry[] = [];
   for (const pattern of patterns) {
@@ -406,7 +495,7 @@ export function patternEntriesFrom(
     // it depends on the destination: per target it would re-walk every
     // pattern's forest on each keystroke of a filter, against a library the
     // design sizes at three thousand entries.
-    if (patternRefusal(document, nesting) !== undefined) continue;
+    if (patternRefusal(document, nesting, definitions) !== undefined) continue;
     entries.push({
       kind: "pattern",
       id: `${PATTERN_ENTRY_PREFIX}${pattern.id}`,
@@ -433,6 +522,202 @@ export function patternEntriesFrom(
  * `core/heading#hero` and a pattern named `hero` compete for one id.
  */
 export const PATTERN_ENTRY_PREFIX = "pattern:";
+
+/** The same rule for a component's catalog id, in its own namespace. */
+export const COMPONENT_ENTRY_PREFIX = "component:";
+
+/**
+ * The component entries a library of stored definitions yields.
+ *
+ * Skipped, never refused: a row the palette has nothing to offer for — see
+ * {@link offerableDefinition} for which, and a row whose definition the
+ * canvas's lookup does not hold — produces no entry, because a tile that
+ * accepts a click and then fails is worse than no tile. The row supplies the
+ * label, category and usage; the definition judged and drawn is the lookup's. Where a
+ * definition's roots may sit on THIS page is asked per placement, by
+ * {@link entryAllowedAt}, exactly as a pattern's are.
+ */
+export function componentEntriesFrom(
+  components: readonly SavedComponent[],
+  definitions: ComponentLookup
+): ComponentInsertEntry[] {
+  const entries: ComponentInsertEntry[] = [];
+  for (const component of components) {
+    // The LOOKUP's definition, not the row's copy: it is what the canvas will
+    // resolve the placed instance against, so a row the lookup does not hold
+    // would place an instance drawn as missing, and a row whose copy differs
+    // would be judged by roots the canvas does not draw.
+    const offered = offerableDefinition(
+      definitions.get(component.id),
+      definitions
+    );
+    if (offered === undefined) continue;
+    entries.push({
+      kind: "component",
+      id: `${COMPONENT_ENTRY_PREFIX}${component.id}`,
+      componentId: component.id,
+      label: component.title,
+      description: component.description ?? "",
+      category: component.category ?? UNCATEGORISED,
+      keywords: keywordsOf(component.keywords),
+      ...offered,
+      ...(component.usedOn === undefined ? {} : { usedOn: component.usedOn }),
+    });
+  }
+  return entries;
+}
+
+/**
+ * What a stored row offers — the definition and the roots it draws — or
+ * nothing, when the palette has nothing to offer for the row.
+ *
+ * Nothing for a row with no document, one whose document the resolver would
+ * not read — not a component definition, another format, nodes that are not a
+ * list — or one with no roots: each is a legal stored row and none can be
+ * placed. A definition's INTERNAL nesting is not re-judged here — it was judged
+ * when the definition was saved, and it is the definition's own concern rather
+ * than the page's.
+ *
+ * The roots are read through `definitions` — the lookup the canvas resolves
+ * against, handed in rather than rebuilt from the list so the tile and the
+ * canvas cannot read two different maps — by the engine's own roots query,
+ * which follows a root instance into the definition it names without
+ * composing anything, and answers nothing where the resolver would leave a
+ * root STANDING. That is a root the canvas would draw as a placeholder and
+ * the nesting rule cannot judge: the component it points at is missing from
+ * the lookup, is this definition itself, or nests past the composition cap.
+ * A row whose roots compose to nothing is withheld too: a tile for it would
+ * be placed vacuously — no root type to refuse — and render nothing. An
+ * unresolvable instance BELOW the root is the definition's own concern,
+ * exactly as its internal nesting is, and does not withhold the tile.
+ *
+ * Room is NOT asked here. Whether a definition fits the page's caps is a
+ * property of the page that moves with every edit, and the click asks the
+ * resolver about it with the page in hand ({@link compositionRefusal}); a
+ * definition too large for the site's cap under any page is a tile whose
+ * every click says so.
+ *
+ * Read ONCE per row here rather than per placement inside
+ * {@link entryAllowedAt}, for the reason a pattern's preflight is: per target
+ * it would re-walk every definition on each keystroke of a filter.
+ */
+function offerableDefinition(
+  stored: BlockDocument | null | undefined,
+  definitions: ComponentLookup
+): Pick<ComponentInsertEntry, "document" | "roots"> | undefined {
+  // The resolver's OWN rule for a supplied definition, not the kind alone: a
+  // definition in a format this build does not read is left standing on the
+  // canvas, and a tile for it would place a placeholder.
+  const document = readableDefinition(stored ?? undefined);
+  if (document === undefined || document.nodes.length === 0) return undefined;
+  const roots = composedRootTypes(document, definitions);
+  if (roots === undefined || roots.length === 0) return undefined;
+  return { document, roots };
+}
+
+/**
+ * Why the edit that turned `before` into `after` would leave an instance
+ * standing on THIS page, or nothing when it would not.
+ *
+ * A definition is judged offerable on its own — its roots — but whether the
+ * page has ROOM for it is a property of the page: the resolver spends one
+ * node budget across every instance it inlines, in document order, and nests
+ * to a depth counted from the page root, so a page near its cap can hold the
+ * one stored instance node and then leave it unresolved when it renders. The
+ * op layer cannot see that (it counts stored nodes, and an instance is one),
+ * so the edit asks the RESOLVER ITSELF: the edited document is composed the
+ * way the canvas will compose it, and the reason the resolver gives is the
+ * reason the author is told.
+ *
+ * Asked of the two DOCUMENTS rather than of a placed node, because every
+ * edit asks the same question: a move carries an instance ahead of another
+ * and takes the budget that one had, or into another's slot content one
+ * composition deeper; a duplicate or a paste places a copy; a pattern brings
+ * instances of its own. What refuses is every instance the edit LEAVES
+ * STANDING that stood before it — a placed one, an instance nested inside its
+ * definition, which the resolver reports under an id it minted rather than
+ * the node's, and an instance already on the page that the edit takes the
+ * budget from. Each is a placeholder the edit would put on the page. An
+ * instance the page could not hold BEFORE the edit is not the edit's doing,
+ * so the two compositions are compared rather than the second read alone;
+ * the resolver mints an instance's ids from what it derives them from, so the
+ * same instance answers to the same id in both.
+ *
+ * Asked by the editor's own apply, once per accepted group, rather than by
+ * each surface before it applies: room is a property of the page that moves
+ * with every edit, every surface reaches the page through that apply, and a
+ * surface that asked for itself would be one more that could forget to. Two
+ * compositions per edit are cheap where one per tile per keystroke is not.
+ *
+ * `undefined` for "it composes", and for a reason that is not about room —
+ * a missing definition is the tile's concern and was judged when it was
+ * offered — so this refuses only what the page cannot hold. Judged under the
+ * same `limits` the edit was applied under, since the editor and the canvas
+ * both run under the site's.
+ */
+export function compositionRefusal(
+  before: BlockDocument,
+  after: BlockDocument,
+  definitions: ComponentLookup,
+  limits?: DocumentLimits
+): CompositionRefusal | undefined {
+  const options = limits === undefined ? {} : { limits };
+  const standing = new Set(
+    resolveComponentInstances(before, definitions, options).unresolved.map(
+      entry => entry.instanceId
+    )
+  );
+  const introduced = resolveComponentInstances(
+    after,
+    definitions,
+    options
+  ).unresolved.find(
+    entry => !standing.has(entry.instanceId) && entry.reason in ROOM_REFUSALS
+  );
+  if (introduced === undefined) return undefined;
+  const sentence = ROOM_REFUSALS[introduced.reason];
+  return sentence === undefined
+    ? undefined
+    : { reason: introduced.reason, sentence };
+}
+
+/** A refusal about room: the resolver's reason, and the words an author reads. */
+export interface CompositionRefusal {
+  readonly reason: ComponentUnresolvedReason;
+  readonly sentence: string;
+}
+
+/**
+ * The resolver's reasons that are about the PAGE having no room, each as the
+ * sentence the author reads. Every other reason — a missing definition, a
+ * cycle, a malformed row — is about the definition, and was the tile's
+ * concern when it was offered.
+ */
+const ROOM_REFUSALS: Readonly<
+  Partial<Record<ComponentUnresolvedReason, string>>
+> = {
+  budget:
+    "This page has no room left for that component: placing it would take the page past its block limit.",
+  "node-depth":
+    "That component's content would be nested too deeply here. Place it nearer the top of the page.",
+  "composed-depth":
+    "That component would be nested inside too many components here. Place it nearer the top of the page.",
+};
+
+/**
+ * The single node placing a component writes.
+ *
+ * ONE node, carrying the definition's id and nothing of its content. The
+ * renderer inlines the definition at read time, which is the whole point of
+ * placing a component rather than copying a pattern: an edit to the definition
+ * reaches this page without this page being touched. No variant and no
+ * overrides yet — an instance freshly placed inherits everything.
+ */
+export function nodeForComponentEntry(entry: ComponentInsertEntry): BlockNode {
+  return makeNode(COMPONENT_INSTANCE_TYPE, 1, {
+    componentId: entry.componentId,
+  });
+}
 
 /**
  * The author's stored search terms, as the list the palette matches.
@@ -523,10 +808,21 @@ function humanise(name: string): string {
 export function entryAllowedAt(
   entry: InsertEntry,
   target: PlacementTarget,
-  source: NestingSource
+  source: NestingSource,
+  definitions?: ComponentLookup
 ): NestingVerdict {
+  // A pattern and a component are both judged by their ROOTS. The instance
+  // node's own type is not a registered block, and the nesting source answers
+  // "no restriction" for a type it cannot resolve — so judging the instance by
+  // its type would let a component whose root is a section be placed inside a
+  // paragraph. The definition's roots are what will actually render there,
+  // and a component's were read through the canvas's lookup when it was
+  // offered.
   if (entry.kind === "pattern") {
-    return patternAllowedAt(entry.document, target, source);
+    return rootsAllowedAt(entry.document, target, source, definitions);
+  }
+  if (entry.kind === "component") {
+    return placementVerdict(entry.roots, target, source);
   }
   return blockAllowedAt(entry.blockName, target, source);
 }
@@ -550,18 +846,37 @@ export function entryAllowedAt(
  * rather than of the destination — it is the same wherever it is offered — so
  * it belongs to whatever judges the pattern itself, not to a question about
  * this target.
+ *
+ * Each root is resolved as a placed node is ({@link placementTypesOf}): a
+ * pattern is COPIED into the page as it stands, and one of its roots may be a
+ * component instance — saving a placed component as a pattern stores exactly
+ * that node. Judged by its own type, which is not a registered block and which
+ * the nesting source therefore restricts nowhere, such a pattern was offered
+ * where the component's own tile is refused.
  */
-function patternAllowedAt(
+function rootsAllowedAt(
   document: BlockDocument,
   target: PlacementTarget,
-  source: NestingSource
+  source: NestingSource,
+  definitions?: ComponentLookup
 ): NestingVerdict {
   return placementVerdict(
-    document.nodes.map(root => root.type),
+    document.nodes.flatMap(root => placementTypesOf(root, definitions)),
     target,
     source
   );
 }
+
+/**
+ * The block types a node ALREADY ON THE PAGE is judged by when it moves.
+ *
+ * The engine's rule, re-exported here because this is where the builder's
+ * placement questions are answered and every one of them asks it: the drag,
+ * the keyboard move, a pattern's roots, and — in the engine itself — the
+ * planners the click runs. One implementation, so an offer cannot resolve
+ * against a forest the mutation judges raw.
+ */
+export { placementTypesOf };
 
 /**
  * Whether a block type may be placed at a target, by NAME.
@@ -602,9 +917,12 @@ export function blockAllowedAt(
 export function allowedEntries<TEntry extends InsertEntry>(
   entries: readonly TEntry[],
   target: PlacementTarget,
-  source: NestingSource
+  source: NestingSource,
+  definitions?: ComponentLookup
 ): TEntry[] {
-  return entries.filter(entry => entryAllowedAt(entry, target, source).allowed);
+  return entries.filter(
+    entry => entryAllowedAt(entry, target, source, definitions).allowed
+  );
 }
 
 /**
