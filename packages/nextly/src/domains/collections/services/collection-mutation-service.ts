@@ -2911,24 +2911,27 @@ export class CollectionMutationService extends BaseService {
         params.user,
         params.authenticatedScope
       );
-      // Field write access runs HERE as well as below, the two passes the read
-      // path runs around its hooks and for the same reason.
+      // What a function default is allowed to READ, which is not the same as
+      // what this write is allowed to STORE.
       //
-      // A function default receives the data built so far. Judged only after
-      // the defaults, a field this caller may not create would still be sitting
-      // in the record while those functions ran, so a default could read the
-      // forbidden value and carry it into a field the caller IS allowed to
-      // write. The denied field was stripped and its value persisted anyway,
-      // one column across. Stripping first means the functions see what this
-      // caller was actually allowed to send.
+      // A function default receives the data built so far, and that data still
+      // holds every value the caller sent, including one a field rule denies
+      // them. Left alone, a default could read the forbidden value and carry it
+      // into a field the caller IS allowed to write: the denied field would be
+      // stripped below and its value persisted anyway, one column across.
       //
-      // The second pass below is not redundant: the hooks in between may put a
-      // denied key back, and that pass judges the key by its own rule on the
-      // value the hook wrote.
+      // So the rules are applied to a COPY, and the copy is what the functions
+      // read. Applying them to the record itself would be wrong in the other
+      // direction: a rule may depend on a sibling the caller omitted BECAUSE it
+      // has a default (`data.kind === "public"` where `kind` defaults to
+      // `public`), and judging that rule before the defaults exist denies it.
+      // Deleting the value then would lose it for good, since the pass that
+      // decides correctly runs after the defaults and has nothing left to keep.
+      const readableByDefaults: Record<string, unknown> = { ...seededBody };
       await applyFieldWriteAccess({
         kind: "collection",
         slug: params.collectionName,
-        data: seededBody,
+        data: readableByDefaults,
         operation: "create",
         user: params.user,
         authenticatedScope: params.authenticatedScope,
@@ -2940,7 +2943,8 @@ export class CollectionMutationService extends BaseService {
       applyFieldDefaults(
         seededBody,
         fields,
-        getFieldFunctions("collection", params.collectionName)
+        getFieldFunctions("collection", params.collectionName),
+        readableByDefaults
       );
 
       const beforeOpArgs =

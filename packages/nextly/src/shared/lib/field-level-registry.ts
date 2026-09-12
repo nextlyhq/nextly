@@ -288,25 +288,40 @@ export function registerFieldFunctions(
   }
 }
 
-/**
- * The whole registry as it stands, and the means to put it back.
- *
- * A config reload re-reads the live config and re-registers from it, which has
- * to happen before the reload knows it will land: the same optimistic terms the
- * field-type registry and the config's hooks are applied on. A reload that is
- * then abandoned must leave the retained config's functions in force, or an
- * access rule, hook or default from a config that never took effect would be
- * the one deciding writes.
- */
-export function snapshotFieldFunctions(): Store {
-  return new Map(store());
+/** One entity's live config, for a wholesale registry replacement. */
+export interface FieldFunctionSource {
+  kind: EntityKind;
+  slug: string;
+  fields: unknown[];
 }
 
-/** Put a {@link snapshotFieldFunctions} result back, discarding what is there. */
-export function restoreFieldFunctions(snapshot: Store): void {
+/**
+ * Rebuild the whole registry from the config that is now in force.
+ *
+ * Replacing rather than adding, because a reload can REMOVE an entity: a
+ * collection dropped from `nextly.config.ts` keeps its registry row and its
+ * table so an orphan sweep can find them later, so it stays addressable, and
+ * an entry left behind here would keep deciding its access, running its hooks
+ * and filling its defaults from a config that no longer declares it.
+ *
+ * Called at the reload's commit point, not when the new config is read. A
+ * reload that is refused after its DDL has run still parsed a valid config,
+ * and installing these early would leave a rule the process explicitly
+ * rejected deciding writes while every other service still ran the previous
+ * one.
+ */
+export function replaceFieldFunctions(
+  sources: readonly FieldFunctionSource[]
+): void {
+  const next: Store = new Map();
+  for (const source of sources) {
+    if (!source.slug || !Array.isArray(source.fields)) continue;
+    const map = collectFieldFunctions(source.fields);
+    if (map) next.set(key(source.kind, source.slug), map);
+  }
   const current = store();
   current.clear();
-  for (const [k, v] of snapshot) current.set(k, v);
+  for (const [k, v] of next) current.set(k, v);
 }
 
 export function getFieldFunctions(

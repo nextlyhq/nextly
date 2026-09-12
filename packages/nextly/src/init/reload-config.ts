@@ -1451,6 +1451,15 @@ async function applyReload(opts?: {
    */
   const reloadUndo: Array<() => void> = [];
   /**
+   * Installs the field-level registry the newly read config describes.
+   *
+   * Set once that config has been read and collected, and called only from
+   * `commitReload`. A reload abandoned before it is set, or one that never
+   * commits, leaves the previous registry in force by never having replaced
+   * it, so no rule from a refused config decides a write.
+   */
+  let commitFieldFunctions: (() => void) | undefined;
+  /**
    * Put the field-type registry and the config's hooks back when a reload does
    * not take effect.
    *
@@ -1538,30 +1547,27 @@ async function applyReload(opts?: {
     // direction that matters most for an access rule: a rule TIGHTENED in the
     // config was not the one being enforced.
     //
-    // Applied on the same optimistic terms as the field types above, and put
-    // back by the same undo, so a reload that is abandoned leaves the retained
-    // config's functions in force.
-    const {
-      registerFieldFunctions,
-      snapshotFieldFunctions,
-      restoreFieldFunctions,
-    } = await import("../shared/lib/field-level-registry");
-    const previousFieldFunctions = snapshotFieldFunctions();
-    reloadUndo.push(() => restoreFieldFunctions(previousFieldFunctions));
-    for (const collection of newConfig?.collections ?? []) {
-      const slug = (collection as { slug?: string }).slug;
-      const fields = (collection as { fields?: unknown[] }).fields;
-      if (slug && Array.isArray(fields)) {
-        registerFieldFunctions("collection", slug, fields);
-      }
-    }
-    for (const single of newConfig?.singles ?? []) {
-      const slug = (single as { slug?: string }).slug;
-      const fields = (single as { fields?: unknown[] }).fields;
-      if (slug && Array.isArray(fields)) {
-        registerFieldFunctions("single", slug, fields);
-      }
-    }
+    // Staged here and installed by `commitReload`, the same boundary the
+    // config's hooks and the retention policies are published from. A reload
+    // whose DDL succeeds and whose metadata sync then fails does not commit,
+    // and a rule from a config the process refused must not be the one
+    // deciding writes in the meantime.
+    const { replaceFieldFunctions } = await import(
+      "../shared/lib/field-level-registry"
+    );
+    const fieldFunctionSources = [
+      ...(newConfig?.collections ?? []).map(entity => ({
+        kind: "collection" as const,
+        slug: (entity as { slug?: string }).slug ?? "",
+        fields: (entity as { fields?: unknown[] }).fields ?? [],
+      })),
+      ...(newConfig?.singles ?? []).map(entity => ({
+        kind: "single" as const,
+        slug: (entity as { slug?: string }).slug ?? "",
+        fields: (entity as { fields?: unknown[] }).fields ?? [],
+      })),
+    ];
+    commitFieldFunctions = () => replaceFieldFunctions(fieldFunctionSources);
   } catch (err) {
     // The registry was rebuilt from the config that just failed; put the
     // working set back so the retained config keeps the behavior it was
@@ -1621,6 +1627,7 @@ async function applyReload(opts?: {
     if (committed) return;
     committed = true;
     commitConfigHooks();
+    commitFieldFunctions?.();
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows

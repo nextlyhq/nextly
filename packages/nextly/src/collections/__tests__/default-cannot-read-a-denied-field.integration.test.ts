@@ -91,4 +91,41 @@ describe("a function default cannot read a field the caller may not write", () =
     expect(row.secret).toBe("system-value");
     expect(row.derived).toBe("saw:system-value");
   });
+  it("keeps a value whose permission a DEFAULT establishes", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "gated",
+          fields: [
+            text({ name: "title" }),
+            text({ name: "kind", defaultValue: "public" }),
+            text({
+              name: "note",
+              access: {
+                create: ({ data }) =>
+                  (data as { kind?: string } | undefined)?.kind === "public",
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler = current.getService<"collectionsHandler">(
+      "collectionsHandler"
+    ) as unknown as CollectionsHandler;
+
+    const created = await handler.createEntry(
+      { collectionName: "gated", routeAuthorized: true, user: CALLER },
+      // `kind` is omitted on purpose: its default is what satisfies the rule
+      // guarding `note`.
+      { title: "t", note: "should survive" }
+    );
+
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const row = created.data as Record<string, unknown>;
+    expect(row.kind).toBe("public");
+    // The rules that decide what is STORED run after the defaults, so the
+    // value the caller sent is still there to be allowed.
+    expect(row.note).toBe("should survive");
+  });
 });
