@@ -75,14 +75,6 @@ export interface CollectionMetadata {
   schemaVersion?: number;
   migrationStatus?: MigrationStatus;
   lastMigrationId?: string;
-  accessRules?: {
-    create?: { type: string; allowedRoles?: string[] };
-    read?: { type: string; allowedRoles?: string[] };
-    update?: { type: string; allowedRoles?: string[] };
-    delete?: { type: string; allowedRoles?: string[] };
-    publish?: { type: string; allowedRoles?: string[] };
-    unpublish?: { type: string; allowedRoles?: string[] };
-  };
   /**
    * The canonical stored-hook shape, not a looser record: the registry row
    * these feed is typed with it, and the executor reads `config` and `order`
@@ -268,7 +260,6 @@ export class DynamicCollectionRegistryService extends BaseService {
       schemaVersion: metadata.schemaVersion ?? 1,
       migrationStatus: metadata.migrationStatus ?? "pending",
       lastMigrationId: metadata.lastMigrationId,
-      accessRules: metadata.accessRules,
       hooks: metadata.hooks,
       createdBy: metadata.createdBy,
     });
@@ -476,7 +467,6 @@ export class DynamicCollectionRegistryService extends BaseService {
             schemaVersion: this.dynamicCollections.schemaVersion,
             migrationStatus: this.dynamicCollections.migrationStatus,
             lastMigrationId: this.dynamicCollections.lastMigrationId,
-            accessRules: this.dynamicCollections.accessRules,
             createdBy: this.dynamicCollections.createdBy,
             createdAt: this.dynamicCollections.createdAt,
             updatedAt: this.dynamicCollections.updatedAt,

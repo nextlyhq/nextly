@@ -28,7 +28,7 @@ import {
   createMockCollectionService,
   createMockRelationshipService,
   createMockHookRegistry,
-  createMockAccessControlService,
+  createMockRbacAccessControlService,
   createMockComponentDataService,
   createMockCollection,
   createSampleEntry,
@@ -137,9 +137,7 @@ describe("CollectionEntryService — Query Contracts", () => {
   let mockCollectionService: ReturnType<typeof createMockCollectionService>;
   let mockRelationshipService: ReturnType<typeof createMockRelationshipService>;
   let mockHookRegistry: ReturnType<typeof createMockHookRegistry>;
-  let mockAccessControlService: ReturnType<
-    typeof createMockAccessControlService
-  >;
+  let mockRbac: ReturnType<typeof createMockRbacAccessControlService>;
   let mockComponentDataService: ReturnType<
     typeof createMockComponentDataService
   >;
@@ -155,7 +153,7 @@ describe("CollectionEntryService — Query Contracts", () => {
     mockCollectionService = createMockCollectionService();
     mockRelationshipService = createMockRelationshipService();
     mockHookRegistry = createMockHookRegistry();
-    mockAccessControlService = createMockAccessControlService();
+    mockRbac = createMockRbacAccessControlService();
     mockComponentDataService = createMockComponentDataService();
 
     service = new CollectionEntryService(
@@ -165,9 +163,8 @@ describe("CollectionEntryService — Query Contracts", () => {
       mockCollectionService as never,
       mockRelationshipService as never,
       mockHookRegistry as never,
-      mockAccessControlService as never,
       mockComponentDataService as never,
-      undefined // no RBAC service
+      mockRbac as never
     );
   });
 
@@ -521,7 +518,7 @@ describe("CollectionEntryService — Query Contracts", () => {
 
       await service.listEntries({
         collectionName: "posts",
-        // A super-admin owns the key. The scope is what keeps the owner-only
+        // A super-admin owns the key. The scope is what keeps the session
         // predicate in place, so a count taken without it takes the account's
         // bypass and reports the unscoped total beside filtered rows.
         user: { id: "user-1", roles: ["super-admin"] },
@@ -652,14 +649,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         user: { id: "user-1", role: "viewer" },
       });
 
-      expect(mockAccessControlService.evaluateAccess).toHaveBeenCalled();
+      expect(mockRbac.checkAccess).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
-      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
-        allowed: false,
-        reason: "Access denied",
-      });
+      mockRbac.checkAccess.mockResolvedValueOnce(false);
 
       const result = await service.countEntries({
         collectionName: "posts",
@@ -680,8 +674,9 @@ describe("CollectionEntryService — Query Contracts", () => {
       });
 
       expect(result.success).toBe(true);
-      // evaluateAccess should still be called (for getAccessQueryConstraint)
-      // but checkCollectionAccess should skip
+      // checkCollectionAccess returns null under overrideAccess, so the gate is
+      // skipped entirely.
+      expect(mockRbac.checkAccess).not.toHaveBeenCalled();
     });
 
     it("should return 500 when collection not found (no 404 distinction)", async () => {
@@ -772,10 +767,7 @@ describe("CollectionEntryService — Query Contracts", () => {
     });
 
     it("should return 403 when collection access is denied", async () => {
-      mockAccessControlService.evaluateAccess.mockResolvedValue({
-        allowed: false,
-        reason: "not allowed",
-      });
+      mockRbac.checkAccess.mockResolvedValueOnce(false);
 
       const result = await service.getEntry({
         collectionName: "posts",

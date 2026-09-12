@@ -245,24 +245,6 @@ export const dynamicCollectionsSqlite = sqliteTable(
     lastMigrationId: text("last_migration_id"),
 
     // --------------------------------------------------------
-    // Access Control
-    // --------------------------------------------------------
-
-    /**
-     * Optional per-operation access rules. Consumed by
-     * `CollectionAccessService`; stored as JSON because the rule shape
-     * evolves independently of the migration cycle.
-     */
-    accessRules: text("access_rules", { mode: "json" }).$type<{
-      create?: { type: string; allowedRoles?: string[] };
-      read?: { type: string; allowedRoles?: string[] };
-      update?: { type: string; allowedRoles?: string[] };
-      delete?: { type: string; allowedRoles?: string[] };
-      publish?: { type: string; allowedRoles?: string[] };
-      unpublish?: { type: string; allowedRoles?: string[] };
-    }>(),
-
-    // --------------------------------------------------------
     // Metadata
     // --------------------------------------------------------
 

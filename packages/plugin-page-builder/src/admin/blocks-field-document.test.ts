@@ -13,11 +13,19 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type ComponentLookup,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import type { SavedComponent } from "@nextlyhq/builder";
+import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import { describe, expect, it } from "vitest";
 
-import { canEditBlocks, documentFrom, withoutSelf } from "./BlocksField";
+import {
+  canEditBlocks,
+  documentFrom,
+  withoutSelf,
+  withoutSelfPatterns,
+  type ComponentGraph,
+} from "./BlocksField";
 
 describe("documentFrom", () => {
   it("keeps a document that already has nodes", () => {
@@ -122,6 +130,12 @@ describe("withoutSelf", () => {
   });
   const editing: BlockDocument = componentOf([text("own")]);
   const identity = { documentId: "a" };
+  /** What the walk reads: the canvas's lookup, the site's caps, and whether the library read was whole. */
+  const graphOf = (
+    definitions: ComponentLookup,
+    limits: DocumentLimits = DEFAULT_LIMITS,
+    whole = true
+  ): ComponentGraph => ({ definitions, limits, whole });
 
   it("leaves out the row being edited and every row that reaches it, at any depth", () => {
     const a = row("a", componentOf([text("t")]));
@@ -133,9 +147,12 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
-        r => r.id
-      )
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS)
+      ).map(r => r.id)
     ).toEqual(["d", "footer"]);
   });
 
@@ -170,7 +187,7 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS)
+      withoutSelf(library, editing, identity, graphOf(lookup, DEFAULT_LIMITS))
     ).toEqual([]);
   });
 
@@ -194,12 +211,17 @@ describe("withoutSelf", () => {
     };
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
-        r => r.id
-      )
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS)
+      ).map(r => r.id)
     ).toEqual(["x", "y", "s"]);
-    // x's question reads y then x; y's reads x then y; s's reads nobody.
-    expect(reads).toBe(5);
+    // Each question reads the candidate's own definition through the lookup,
+    // then what it names, once each: x reads x then y; y reads y then x; s
+    // reads s then nobody.
+    expect(reads).toBe(6);
   });
 
   it("leaves out a candidate whose graph could not be read whole under the site's cap, whether or not the readable prefix names the row", () => {
@@ -237,14 +259,19 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, limits).map(r => r.id)
+      withoutSelf(library, editing, identity, graphOf(lookup, limits)).map(
+        r => r.id
+      )
     ).toEqual(["small"]);
     // The SITE's cap, not the engine's default: under the default all three
     // are read whole, and only the one that names the row goes.
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS).map(
-        r => r.id
-      )
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS)
+      ).map(r => r.id)
     ).toEqual(["wide", "small"]);
   });
 
@@ -262,8 +289,35 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, limits).map(r => r.id)
+      withoutSelf(library, editing, identity, graphOf(lookup, limits)).map(
+        r => r.id
+      )
     ).toEqual([]);
+  });
+
+  it("fails closed on a reference the lookup cannot follow when the library read was cut, and follows nothing from it when it was whole", () => {
+    // A library the ceiling or a permission cut leaves out rows the store
+    // holds, so an id the lookup does not hold may be one of them — and may
+    // name the row being edited, closing the loop once saved. Read whole, the
+    // same id is one nobody supplied: it names nothing further, and the
+    // resolver draws it as missing.
+    const a = row("a", componentOf([text("t")]));
+    const viaOmitted = row("c", componentOf([instanceOf("b", "c-b")]));
+    const plain = row("p", componentOf([text("p1")]));
+    const library = [a, viaOmitted, plain];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(
+      withoutSelf(
+        library,
+        editing,
+        identity,
+        graphOf(lookup, DEFAULT_LIMITS, false)
+      ).map(r => r.id)
+    ).toEqual(["p"]);
+    expect(
+      withoutSelf(library, editing, identity, graphOf(lookup)).map(r => r.id)
+    ).toEqual(["c", "p"]);
   });
 
   it("reads each definition's references once per row, never its subtree", () => {
@@ -285,10 +339,129 @@ describe("withoutSelf", () => {
     const lookup = new Map(library.map(r => [r.id, r.document!]));
 
     expect(
-      withoutSelf(library, editing, identity, lookup, DEFAULT_LIMITS)
+      withoutSelf(library, editing, identity, graphOf(lookup, DEFAULT_LIMITS))
     ).toEqual([]);
     // One walk of the holder's own forest reads its slots once; a
     // composition would clone them.
     expect(descents).toBe(1);
+  });
+});
+
+describe("withoutSelfPatterns", () => {
+  const instanceOf = (componentId: string, id: string): BlockNode => ({
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId },
+  });
+  const componentOf = (nodes: BlockNode[]): ComponentDocument => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes,
+  });
+  const text = (id: string): BlockNode => ({
+    id,
+    type: "core/text",
+    version: 1,
+    props: {},
+  });
+  const patternOf = (id: string, nodes: BlockNode[]): SavedPattern => ({
+    id,
+    title: id,
+    document: {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "pattern",
+      nodes,
+    },
+  });
+  const editing: BlockDocument = componentOf([text("own")]);
+  const identity = { documentId: "a" };
+  const graphOf = (
+    definitions: ComponentLookup,
+    limits: DocumentLimits = DEFAULT_LIMITS,
+    whole = true
+  ): ComponentGraph => ({ definitions, limits, whole });
+
+  it("leaves out a pattern that places the component being edited, and one that reaches it through another", () => {
+    // Saving a placed component as a pattern keeps its instance node, so a
+    // pattern is a second way to copy a component into itself.
+    const lookup: ComponentLookup = new Map([
+      ["a", componentOf([text("t")])],
+      ["b", componentOf([instanceOf("a", "b-a")])],
+      ["far", componentOf([text("f")])],
+    ]);
+    const patterns = [
+      patternOf("direct", [instanceOf("a", "p-a")]),
+      patternOf("indirect", [text("t"), instanceOf("b", "p-b")]),
+      patternOf("blocks", [text("t")]),
+      patternOf("unrelated", [instanceOf("far", "p-f")]),
+    ];
+
+    expect(
+      withoutSelfPatterns(patterns, editing, identity, graphOf(lookup)).map(
+        p => p.id
+      )
+    ).toEqual(["blocks", "unrelated"]);
+  });
+
+  it("leaves out a pattern whose own forest the site's cap could not read whole", () => {
+    // A prefix that names nothing is what an unread pattern looks like too,
+    // so it is left out rather than offered on an answer nobody has.
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const long = patternOf("long", [
+      text("t1"),
+      text("t2"),
+      text("t3"),
+      instanceOf("a", "p-a"),
+    ]);
+
+    expect(
+      withoutSelfPatterns(
+        [long],
+        editing,
+        identity,
+        graphOf(lookup, {
+          ...DEFAULT_LIMITS,
+          maxNodes: 2,
+        })
+      ).map(p => p.id)
+    ).toEqual([]);
+  });
+
+  it("offers every pattern when the document being edited is not a component, or the form names no row", () => {
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const patterns = [patternOf("direct", [instanceOf("a", "p-a")])];
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [text("own")],
+    };
+
+    expect(withoutSelfPatterns(patterns, page, identity, graphOf(lookup))).toBe(
+      patterns
+    );
+    expect(withoutSelfPatterns(patterns, editing, null, graphOf(lookup))).toBe(
+      patterns
+    );
+  });
+
+  it("keeps the same list when nothing was removed, so the catalogue memo keeps its key", () => {
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const patterns = [patternOf("blocks", [text("t")])];
+
+    expect(
+      withoutSelfPatterns(patterns, editing, identity, graphOf(lookup))
+    ).toBe(patterns);
+  });
+
+  it("offers a pattern carrying no document at all", () => {
+    // A row whose blocks field was never filled is a legal stored row; it
+    // names no component, and the catalogue skips it on its own.
+    const lookup: ComponentLookup = new Map([["a", componentOf([text("t")])]]);
+    const empty: SavedPattern = { id: "empty", title: "Empty" };
+
+    expect(
+      withoutSelfPatterns([empty], editing, identity, graphOf(lookup))
+    ).toEqual([empty]);
   });
 });

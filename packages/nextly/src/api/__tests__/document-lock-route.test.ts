@@ -304,10 +304,10 @@ describe("document lock route", () => {
 
   it("asks whether THIS document may be updated, not documents of its kind", async () => {
     // 🔴 `update-<slug>` is the coarse route permission and says only the latter.
-    // A collection carrying an owner-only stored rule refuses the row while that
-    // permission still stands, so without this a non-owner claims a document
-    // every real update denies them - and the owner is shown a false holder and
-    // pushed to take over their own row.
+    // A document the caller cannot load - a draft they may not see, a row that
+    // is gone - is refused while that permission still stands, so without this a
+    // caller claims a document every real update denies them, and the real
+    // editor is shown a false holder and pushed to take over their own row.
     service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
 
     await acquireLock(post({ ...ref }));
@@ -321,7 +321,7 @@ describe("document lock route", () => {
     );
   });
 
-  it("refuses the claim when the stored rules refuse the row", async () => {
+  it("refuses the claim when the document gate refuses the row", async () => {
     // The real refusal, not a stand-in: the handler branches on what a
     // `NextlyError` is, and a look-alike is reported as a 500 while the
     // assertion below still reads "the claim did not happen".
@@ -356,8 +356,8 @@ describe("document lock route", () => {
 
   it("does not ask it of a release, so a refused row can still be given up", async () => {
     // Releasing is the opposite statement: this editor has STOPPED editing. The
-    // stored rules read the document, so the holder's own save can flip them
-    // mid-claim, and asking them here would refuse the departing editor's own
+    // document gate reads the row, so the holder's own save can flip its answer
+    // mid-claim, and asking it here would refuse the departing editor's own
     // DELETE and strand the claim until its lease lapsed - leaving colleagues a
     // holder who has already left. The claim token names the one acquisition
     // being given up, and the DELETE is fenced on it.

@@ -24,6 +24,7 @@ import type {
   PluginAdminCustomWidget,
   PluginAdminQuerylessWidget,
   PluginAdminTextWidget,
+  PluginAdminWidget,
   UnarmedQuerylessArchetype,
 } from "../admin-contributions";
 
@@ -71,3 +72,46 @@ expectTypeOf<{
   component: "acme#X";
   archetype: "metric";
 }>().toMatchTypeOf<PluginAdminCustomWidget>();
+
+// `content` is writable on `text` and nowhere else. The boot validator refuses
+// it on every other archetype, and an arm that left the field open accepted a
+// declaration boot then aborted on -- a component-only widget written inline
+// with prose, or a data widget carrying it after inference had widened it.
+expectTypeOf<{
+  id: string;
+  archetype: "text";
+  content: "notes";
+}>().toMatchTypeOf<PluginAdminWidget>();
+expectTypeOf<{
+  id: string;
+  component: "acme#X";
+  content: "notes";
+}>().not.toMatchTypeOf<PluginAdminWidget>();
+expectTypeOf<{
+  id: string;
+  archetype: "metric";
+  query: { source: "collection:posts"; op: "count" };
+  content: "notes";
+}>().not.toMatchTypeOf<PluginAdminWidget>();
+expectTypeOf<{
+  id: string;
+  archetype: "actions";
+  actions: [{ label: "Go"; href: "/go" }];
+  content: "notes";
+}>().not.toMatchTypeOf<PluginAdminWidget>();
+
+// A component beside a queryless archetype is not a fallback case: the prose
+// or the list is still required, and only the arm that requires it can say
+// so. The type routes the declaration there rather than accepting a text
+// widget with no text through the custom arm.
+expectTypeOf<{
+  id: string;
+  component: "acme#X";
+  archetype: "text";
+}>().not.toMatchTypeOf<PluginAdminWidget>();
+expectTypeOf<{
+  id: string;
+  component: "acme#X";
+  archetype: "text";
+  content: "notes";
+}>().toMatchTypeOf<PluginAdminWidget>();

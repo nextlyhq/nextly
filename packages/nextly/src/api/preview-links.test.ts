@@ -224,12 +224,11 @@ describe("mintPreviewLink for a Single", () => {
 
   /**
    * The route gate answers a COARSE question — may this caller update this slug
-   * — while a Single's stored rules are evaluated against the loaded document
-   * and can deny a caller who holds that permission. A link minted on the
-   * permission alone is a bearer credential for a draft the real update path
-   * refuses to show them.
+   * — while the real update path additionally requires the document to exist and
+   * to be reachable in the language asked for. A link minted on the permission
+   * alone is a bearer credential for a draft that path refuses to show them.
    */
-  describe("the Single's own stored rules", () => {
+  describe("the Single's own document gate", () => {
     it("refuses when the caller cannot see the document", async () => {
       singleReadable.mockResolvedValue(false);
 
@@ -1061,8 +1060,8 @@ describe("mintPreviewLink", () => {
         // The requested id, NOT the one the returned document carries.
         entryId: "7",
         // The route already ran the coarse `update` gate for this collection and
-        // this flag skips only that; stored owner-only/role/custom rules still
-        // evaluate against the loaded document.
+        // this flag skips only that; the document gate still runs against the
+        // loaded row.
         routeAuthorized: true,
       })
     );

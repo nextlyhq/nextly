@@ -7,6 +7,14 @@
  * leaving edit mode is a decision about the WHOLE arrangement — and because a
  * reader needs one place to look for "how do I get out of this".
  *
+ * Entering is offered from the `md` breakpoint up. Below it every card is full
+ * width in one column, so an arrangement is a stacked list with little to
+ * reorder, and touch drag is where accessibility regressions hide; the
+ * arrangement made on a wider screen still applies. The way OUT is not gated:
+ * an edit already in progress keeps its Save, Cancel and Reset at every width,
+ * so a window narrowed mid-edit never traps the reader in a mode they cannot
+ * leave.
+ *
  * @module components/features/widgets/edit/DashboardEditBar
  */
 
@@ -47,7 +55,15 @@ export function DashboardEditBar({
 }: DashboardEditBarProps) {
   if (!isEditing) {
     return (
-      <div className="flex justify-end">
+      // `hidden md:flex`: the same Tailwind breakpoint the grid folds to one
+      // column at (`sizes.ts`), so the offer and the fold cannot disagree the
+      // way a width read in JavaScript could. `display: none` also takes the
+      // control out of the accessibility tree, so it is not offered to a
+      // screen reader either.
+      <div
+        className="hidden justify-end md:flex"
+        data-testid="dashboard-edit-offer"
+      >
         <Button
           type="button"
           variant="outline"

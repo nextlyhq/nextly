@@ -2538,9 +2538,16 @@ export abstract class DrizzleAdapter {
   ): DatabaseError {
     const dbError = this.classifyError(error);
 
-    // Add operation context if not already present
-    if (!dbError.message.includes(operation)) {
-      dbError.message = `${operation} operation failed on table '${table}': ${dbError.message}`;
+    // Add operation context if not already present — asked of the context
+    // this method writes, not of the operation's bare name. A driver message
+    // that quotes the failed statement names the operation already (Drizzle's
+    // `Failed query: update "posts" set …` on PostgreSQL and MySQL, whose
+    // statements it spells in lower case), and so does any table or column
+    // whose name contains the word; neither says which operation failed on
+    // which table.
+    const context = `${operation} operation failed on table '${table}'`;
+    if (!dbError.message.includes(context)) {
+      dbError.message = `${context}: ${dbError.message}`;
     }
 
     if (!dbError.table) {

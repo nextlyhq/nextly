@@ -160,9 +160,10 @@ export interface InsertPanelProps {
    * that will actually land — so each offered definition is first resolved
    * through this, exactly as the canvas resolves the page. The canvas's own
    * lookup rather than one rebuilt from `components`, so the tile and the
-   * drawing cannot read two different maps. Defaults to an empty lookup, under
-   * which a definition whose root is an instance is withheld: its roots
-   * cannot be determined, so it cannot be judged.
+   * drawing cannot read two different maps. A row is offered only when this
+   * holds its definition, and judged by that copy: the placed instance is
+   * resolved against this lookup, so a row it lacks would land as a missing
+   * component. Defaults to an empty lookup, which offers no component.
    */
   componentDefinitions?: ComponentLookup;
   /**
@@ -688,7 +689,7 @@ export function InsertPanel({
   const catalog = React.useMemo<InsertEntry[]>(
     () => [
       ...catalogFrom(palette),
-      ...patternEntriesFrom(patterns ?? [], source),
+      ...patternEntriesFrom(patterns ?? [], source, componentDefinitions),
       ...componentEntriesFrom(
         components ?? [],
         componentDefinitions ?? NO_DEFINITIONS
@@ -730,7 +731,13 @@ export function InsertPanel({
         // search is a different message from "nothing can go here", and
         // filtering first would collapse them into one.
         groupByCategory(
-          filterEntries(allowedEntries(catalog, point.target, source), query),
+          filterEntries(
+            // The canvas's lookup travels with the question: a pattern whose
+            // root is a component instance is judged by what that component
+            // draws, as its own tile is.
+            allowedEntries(catalog, point.target, source, componentDefinitions),
+            query
+          ),
           categoryOrder
         );
 
@@ -871,7 +878,12 @@ export function InsertPanel({
       editor.document,
       { id: entry.patternId, document: entry.document },
       point.at,
-      source
+      source,
+      // The same lookup the catalogue judged the tile's roots by, so the offer
+      // and the mutation resolve one forest. Without it the planner reads a
+      // nested instance as its own unregistered type: unrestricted under a
+      // parent rule, and barred by any slot naming what it admits.
+      componentDefinitions
     );
     // A refusal here means the document moved underneath the panel: the
     // catalogue offers only patterns the planner accepts, judged against the

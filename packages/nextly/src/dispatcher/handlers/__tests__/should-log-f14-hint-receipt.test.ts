@@ -36,9 +36,9 @@ describe("shouldLogF14HintReceipt (F14 v1)", () => {
   });
 
   it("returns true when renames has at least one entry", () => {
-    expect(
-      shouldLogF14HintReceiptForTest({ renames: { title: "name" } })
-    ).toBe(true);
+    expect(shouldLogF14HintReceiptForTest({ renames: { title: "name" } })).toBe(
+      true
+    );
   });
 
   it("returns true for multiple rename pairs", () => {

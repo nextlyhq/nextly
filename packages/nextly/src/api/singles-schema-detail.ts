@@ -254,10 +254,6 @@ export const PATCH = withErrorHandler(
       updateData.webhooks = resolveBuilderWebhooks(body.webhooks === true);
     }
 
-    if (body.accessRules !== undefined) {
-      updateData.accessRules = body.accessRules;
-    }
-
     // Update Single (source: "ui" to enforce locking rules)
     const updated = await registry.updateSingle(slug, updateData, {
       source: "ui",

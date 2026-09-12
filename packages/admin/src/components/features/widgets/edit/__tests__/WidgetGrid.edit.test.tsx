@@ -831,6 +831,48 @@ describe("an arrangement that already holds as many cards as a write may carry",
   // the one on the pure function.
 });
 
+describe("below the md breakpoint", () => {
+  // jsdom lays nothing out, so a viewport cannot be narrowed here; what is
+  // asserted is the CAUSE -- the responsive classes -- on the exact elements
+  // the fold applies to, which is what a browser reads the width against.
+
+  it("does not offer editing: the entry control is hidden until md, by the breakpoint the grid folds at", async () => {
+    renderGrid();
+    const offer = await screen.findByTestId("dashboard-edit-offer");
+    expect(offer).toHaveClass("hidden", "md:flex");
+    expect(offer).toContainElement(screen.getByTestId("dashboard-edit-begin"));
+  });
+
+  it("keeps the way OUT at every width once an edit is under way", async () => {
+    // A window narrowed mid-edit must not trap the reader: the bar that holds
+    // Save and Cancel carries no fold, whatever the offer to enter did.
+    renderGrid();
+    await beginEditing();
+    const cancel = screen.getByTestId("dashboard-edit-cancel");
+    const bar = cancel.parentElement;
+    expect(bar).not.toBeNull();
+    expect(bar).not.toHaveClass("hidden");
+    expect(screen.queryByTestId("dashboard-edit-offer")).toBeNull();
+  });
+
+  it("tells a narrow-screen reader the way back is a larger screen", async () => {
+    // The empty arrangement names its way back, and the way back differs by
+    // width: naming a control a phone does not show would send the reader
+    // looking for it.
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, hidden: true },
+    ]);
+    renderGrid();
+    const empty = await screen.findByTestId("widget-grid-empty");
+    const wide = screen.getByText(/Edit it to bring one back/);
+    const narrow = screen.getByText(/Edit it on a larger screen/);
+    expect(empty).toContainElement(wide);
+    expect(empty).toContainElement(narrow);
+    expect(wide).toHaveClass("hidden", "md:inline");
+    expect(narrow).toHaveClass("md:hidden");
+  });
+});
+
 describe("an arrangement with nothing left on it", () => {
   it("KEEPS the way back when every card is put away", async () => {
     // 🔴 The dead end. Deriving the grid's rows from the arrangement meant an

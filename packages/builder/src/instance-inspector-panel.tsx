@@ -235,7 +235,11 @@ function ExposedField({
   onSet: (id: string, value: OverrideValue) => void;
   onReset: (id: string) => void;
 }): React.JSX.Element {
-  const id = `nx-exposed-${row.id}`;
+  // Unique per MOUNTED ROW, not per property: a page can hold two blocks
+  // fields, each with its own editor, and a fixed id per property made both
+  // labels resolve to the first editor's control — which then carried two
+  // labels and a doubled name, while the second's input had none.
+  const id = `${React.useId()}-${row.id}`;
   // What a reset would remove is this row's OWN override, which is not the
   // same fact as its source: a row shadowed by a neighbour holding the
   // override reads `instance` too, and a reset offered there removes nothing.

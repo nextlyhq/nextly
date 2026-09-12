@@ -898,7 +898,6 @@ export const nextlyTables: TableDefinition[] = [
         default: "pending",
       },
       { name: "last_migration_id", type: "text" },
-      { name: "access_rules", type: "jsonb" },
       {
         name: "created_by",
         type: "text",

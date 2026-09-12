@@ -2,13 +2,13 @@
  * Super-admin detection for stored-access-rule bypass.
  *
  * Shared by the collection and single access paths so the "super-admins bypass
- * stored rules on every transport" contract is evaluated identically wherever a
+ * the gate on every transport" contract is evaluated identically wherever a
  * caller's authorized scope is known.
  *
  * @module services/access/super-admin
  */
 
-/** Role slug that grants the full stored-rule bypass. */
+/** Role slug that grants the full access-gate bypass. */
 export const SUPER_ADMIN_SLUG = "super-admin";
 
 /** Minimal caller shape needed to decide super-admin status. */
@@ -28,7 +28,7 @@ interface RoleBearer {
  * in so a caller reaching us through a surface that only carries `{ id, role }`
  * (the Direct API collection namespace) still gets the bypass the changeset
  * promises on every transport. Callers that populate neither don't get the
- * bypass (fail-safe), falling through to the normal RBAC + stored-rule checks.
+ * bypass (fail-safe), falling through to the normal RBAC gate.
  */
 export function isSuperAdminContext(user?: RoleBearer): boolean {
   if (!user) return false;

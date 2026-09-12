@@ -129,23 +129,20 @@ interface ResolveContentOptionsBase {
    */
   cacheScope?: string;
   /**
-   * Whether to bypass the collection's read-access rules. Defaults to `false`,
-   * so a content route enforces STORED access policies: a rule-less (public)
-   * collection still renders, but one with a stored member-only/role-based read
-   * rule is hidden from an unauthenticated request (resolves to `null` →
-   * `notFound()`). Pass `true` for a fully trusted read. NOTE on anonymous
-   * scope: an anonymous read enforces stored rules that DENY outright
-   * (public/authenticated/role-based), and it enforces inline
-   * `defineCollection({ access })` code rules, which are handed a real
-   * anonymous context (`user: null`, no roles) and decide on it. What an
-   * anonymous read still cannot apply is a row-level CONSTRAINT rule
-   * (owner-only, or a custom rule returning a query predicate): those compare
-   * the row against somebody, and there is nobody to compare it to. Gate
-   * content that depends on a CONSTRAINT rule behind an authenticated read
-   * (pass a `user`) rather than relying on the anonymous default. CACHING: only a trusted (`overrideAccess: true`) read
-   * with no `user` is F1-cached — an enforced read is never cached (its access
-   * decision can't be invalidated on a policy change). A public site that wants
-   * cached pages should read its public content with `overrideAccess: true`.
+   * Whether to bypass the collection's read access. Defaults to `false`, so a
+   * content route enforces the collection's code-defined `access.read`: a
+   * collection that declares none still renders, and one whose rule refuses an
+   * anonymous caller is hidden from an unauthenticated request (resolves to
+   * `null` → `notFound()`). Pass `true` for a fully trusted read. NOTE on
+   * anonymous scope: the rule is handed a real anonymous context (`user:
+   * null`, no roles, no permissions) and decides on it, so a rule that admits
+   * only by role or permission refuses an anonymous read by construction —
+   * gate content meant for a signed-in audience behind an authenticated read
+   * (pass a `user`) rather than relying on the anonymous default. CACHING:
+   * only a trusted (`overrideAccess: true`) read with no `user` is F1-cached
+   * — an enforced read is never cached (its access decision can't be
+   * invalidated on a policy change). A public site that wants cached pages
+   * should read its public content with `overrideAccess: true`.
    */
   overrideAccess?: boolean;
   /**

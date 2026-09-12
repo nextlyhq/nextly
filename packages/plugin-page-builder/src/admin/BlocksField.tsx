@@ -67,6 +67,7 @@ import {
   registrySlotSource,
   type LeftPanel,
   type SavedComponent,
+  type SavedPattern,
 } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
@@ -362,14 +363,15 @@ export function documentFrom(
  * READS under-answers the question. And composing three thousand rows to
  * ask it clones every definition each row reaches, once per row.
  *
- * Judged by BOTH facts: the document being edited is a component, and the
- * form names the row. Either alone is not enough — a page's field is never
- * inside a component however the ids fall, and a component's field on a
- * create form names no row yet and can place anything.
+ * Whether the edit is inside a component at all is `editedComponentId`.
  *
  * Every read of the graph is bounded by the SITE's node cap, and a read the
  * cap ends early is not "names nothing" — it is unread, and the candidate is
- * left out (`reaches`).
+ * left out; so is one whose graph reaches an id the lookup does not hold out
+ * of a library that was not read whole (`namedBy`).
+ *
+ * The pattern tier is filtered by the same rule and the same graph —
+ * {@link withoutSelfPatterns}.
  *
  * Exported for its own test, for the reason `documentFrom` is.
  */
@@ -377,15 +379,13 @@ export function withoutSelf(
   components: readonly SavedComponent[],
   editing: BlockDocument,
   identity: { documentId?: string | undefined } | null,
-  definitions: ComponentLookup,
-  limits: DocumentLimits
+  graph: ComponentGraph
 ): readonly SavedComponent[] {
-  const self = identity?.documentId;
-  if (self === undefined || !isComponentDocument(editing)) return components;
+  const self = editedComponentId(editing, identity);
+  if (self === undefined) return components;
   const kept = components.filter(
     component =>
-      component.id !== self &&
-      !reaches(component, self, definitions, limits.maxNodes)
+      component.id !== self && !reachesFrom([component.id], self, graph)
   );
   // The same list when nothing was removed, so the panel's catalogue memo
   // keeps its key.
@@ -393,47 +393,149 @@ export function withoutSelf(
 }
 
 /**
- * Whether a component's stored graph names the definition given, at any
- * depth, through the lookup — or cannot be shown not to.
+ * The patterns the panel may OFFER, by the same rule and the same graph.
  *
- * Each definition is read once per question — a loop among other rows ends
- * where it began rather than running on — and one the lookup does not hold
- * names nothing further, which is the honest answer for a reference nothing
- * here can follow.
+ * A pattern is a second way to copy a component into itself. Saving a
+ * selection keeps the nodes it held, and an instance node is one of them —
+ * so a pattern saved from a page that placed A carries an instance of A, and
+ * a pattern that places B carries A wherever B's definition reaches it. The
+ * component tier being filtered says nothing about either: they are
+ * different rows, out of a different collection, read by a different query.
  *
- * Every read is bounded by the cap given, and a read the cap ends early has
- * answered with a PREFIX: a reference past it is invisible, so "names nothing"
- * is what an unread definition looks like too, and a candidate cleared on that
- * answer can close the loop through the part nobody read. So an incomplete
- * read counts as reaching, and the candidate is left out. That refuses no
- * legitimate offer — a definition the cap cannot read whole is one the
- * resolver cannot inline under that cap either — and it is the direction to
- * err in, because the other one is a saved loop every page then draws as a
- * placeholder.
+ * Left OUT rather than refused at the click, because the panel is where an
+ * author decides. A tile offered and then refused reads as a bug in the
+ * pattern; a tile that is not there while a component is open is the same
+ * sentence the component tier already tells.
+ *
+ * What a pattern names is read from the row's OWN document — there is no
+ * lookup entry to read it from — and everything past that first step is the
+ * component graph, walked exactly as {@link withoutSelf} walks it, from the
+ * same lookup the canvas resolves against.
  */
-function reaches(
-  component: SavedComponent,
+export function withoutSelfPatterns(
+  patterns: readonly SavedPattern[],
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null,
+  graph: ComponentGraph
+): readonly SavedPattern[] {
+  const self = editedComponentId(editing, identity);
+  if (self === undefined) return patterns;
+  const kept = patterns.filter(
+    pattern => !reachesFrom(namesOf(pattern, graph.limits), self, graph)
+  );
+  return kept.length === patterns.length ? patterns : kept;
+}
+
+/**
+ * The components a stored pattern places directly, or `undefined` when that
+ * cannot be told — which counts as reaching, for the reason {@link namedBy}
+ * gives: a prefix the node cap ended early names nothing, and so does a
+ * pattern nobody could read.
+ *
+ * A row carrying no document at all is not that case. The collection does not
+ * mark its blocks field required, so a titled row with no content is a legal
+ * row; it places nothing, and the catalogue skips it on its own.
+ */
+function namesOf(
+  pattern: SavedPattern,
+  limits: DocumentLimits
+): readonly string[] | undefined {
+  const nodes = pattern.document?.nodes;
+  if (nodes === undefined) return [];
+  const usage = componentUsageIn(nodes, limits.maxNodes);
+  return usage.complete ? usage.ids : undefined;
+}
+
+/**
+ * The component this field is editing, or `undefined` when it is not editing
+ * one.
+ *
+ * Judged by BOTH facts: the document being edited is a component, and the
+ * form names the row. Either alone is not enough — a page's field is never
+ * inside a component however the ids fall, and a component's field on a
+ * create form names no row yet and can place anything.
+ *
+ * Stated once because two filters ask it, and a rule spelled twice is one
+ * that will eventually differ between the tier that is filtered and the tier
+ * that is not.
+ */
+function editedComponentId(
+  editing: BlockDocument,
+  identity: { documentId?: string | undefined } | null
+): string | undefined {
+  const self = identity?.documentId;
+  return self !== undefined && isComponentDocument(editing) ? self : undefined;
+}
+
+/** What judging a candidate's graph reads. */
+export interface ComponentGraph {
+  /** The lookup the canvas resolves against; each walk starts from its copy. */
+  readonly definitions: ComponentLookup;
+  /** The site's caps: every read of a definition is bounded by its node cap. */
+  readonly limits: DocumentLimits;
+  /**
+   * Whether the library read was WHOLE. A read the ceiling or a permission
+   * cut leaves out rows the store holds, so an id the lookup does not hold
+   * may be one of them — and may name the definition being edited.
+   */
+  readonly whole: boolean;
+}
+
+/**
+ * Whether the graph grown from these components names the definition given,
+ * at any depth, through the lookup — or cannot be shown not to.
+ *
+ * The seeds are what a candidate places directly: one id for a component row,
+ * every id its document places for a pattern. `undefined` is a seed list
+ * nobody could read, which counts as reaching for the reason {@link namedBy}
+ * gives.
+ *
+ * Each definition is read once per question, the seeds' own included — a loop
+ * among other rows ends where it began rather than running on — and from the
+ * lookup's copy, which is what the canvas will draw.
+ */
+function reachesFrom(
+  seeds: readonly string[] | undefined,
   id: string,
-  definitions: ComponentLookup,
-  maxNodes: number
+  graph: ComponentGraph
 ): boolean {
-  const document = component.document;
-  if (document === undefined || document === null) return false;
-  const own = componentUsageIn(document.nodes, maxNodes);
-  if (!own.complete) return true;
-  const pending = own.ids;
+  if (seeds === undefined || seeds.includes(id)) return true;
+  const pending = [...seeds];
   const followed = new Set<string>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    if (next === id) return true;
     if (followed.has(next)) continue;
     followed.add(next);
-    const definition = definitions.get(next);
-    if (definition === undefined) continue;
-    const named = componentUsageIn(definition.nodes, maxNodes);
-    if (!named.complete) return true;
-    pending.push(...named.ids);
+    const named = namedBy(next, graph);
+    if (named === undefined || named.includes(id)) return true;
+    pending.push(...named);
   }
   return false;
+}
+
+/**
+ * The components one definition names, or `undefined` when that cannot be
+ * told — which counts as reaching, and leaves the candidate out.
+ *
+ * Two reads cannot tell. One the node cap ended early answered with a
+ * PREFIX: a reference past it is invisible, so "names nothing" is what an
+ * unread definition looks like too. And an id the lookup does not hold, out
+ * of a library that was not read whole, may be a component the cut left out.
+ * Out of a WHOLE library the same id is one nobody supplied: it names nothing
+ * further, and the resolver draws it as missing. Failing closed refuses no
+ * legitimate offer — a definition the cap cannot read whole is one the
+ * resolver cannot inline under it either, and an author editing a component
+ * against a cut library is told the library was cut — and it is the
+ * direction to err in, because the other one is a saved loop every page then
+ * draws as a placeholder.
+ */
+function namedBy(
+  id: string,
+  { definitions, limits, whole }: ComponentGraph
+): readonly string[] | undefined {
+  const definition = definitions.get(id);
+  if (definition === undefined) return whole ? [] : undefined;
+  const usage = componentUsageIn(definition.nodes, limits.maxNodes);
+  return usage.complete ? usage.ids : undefined;
 }
 
 /**
@@ -498,7 +600,11 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
    * faithful-looking wrong page when got subtly wrong. They belong together and
    * not in a control whose job is choosing between two surfaces.
    */
-  const resting = useRestingPageRender(PLUGIN_SOURCE);
+  const restingDocument = useMemo(
+    () => documentFrom(field.value, kinds),
+    [field.value, kinds]
+  );
+  const resting = useRestingPageRender(PLUGIN_SOURCE, restingDocument);
 
   /*
    * Closed if the form becomes read-only while the editor is up.
@@ -528,7 +634,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     />
   ) : (
     <PageBuilderCard
-      document={documentFrom(field.value, kinds)}
+      document={restingDocument}
       siteStyles={resting.siteStyles}
       styleState={resting.styleState}
       components={resting.components}
@@ -1904,6 +2010,7 @@ const COMPONENT_READ_NOTES: Readonly<
 
 function InsertPanelWithLibrary({
   components,
+  offerablePatterns,
   ...props
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
@@ -1919,12 +2026,28 @@ function InsertPanelWithLibrary({
    * canvas will draw — and where the read stands, which the panel says.
    */
   components: ComponentLibraryRead;
+  /**
+   * The patterns this edit may offer, out of the rows read HERE.
+   *
+   * A pattern can place a component, so editing a component has to leave out
+   * the patterns that reach it — the same question the component tier is
+   * filtered by, and it needs the same graph. That graph and the facts it is
+   * asked against belong to the editor above, and the rows belong here, so
+   * the rule comes down and is applied where the rows are.
+   */
+  offerablePatterns: (
+    patterns: readonly SavedPattern[]
+  ) => readonly SavedPattern[];
 }): React.JSX.Element {
   const library = usePatternLibrary();
+  const patterns = useMemo(
+    () => offerablePatterns(library.patterns),
+    [offerablePatterns, library.patterns]
+  );
   return (
     <InsertPanel
       {...props}
-      patterns={library.patterns}
+      patterns={patterns}
       components={components.components}
       componentDefinitions={components.definitions}
       library={{
@@ -2460,18 +2583,41 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // change while it is edited, and the opening document is the one this
   // field's own value described.
   const identity = useDocumentIdentity();
+  /*
+   * Built once and asked by BOTH tiers: the components filter below and the
+   * patterns filter the panel runs on the rows it reads for itself. One
+   * object rather than two literals, so the two filters cannot come to walk
+   * different graphs — and so the callback handed down keeps its identity
+   * across renders the read did not change.
+   */
+  const componentGraph = useMemo<ComponentGraph>(
+    () => ({
+      definitions: componentLibrary.definitions,
+      limits: documentLimits,
+      whole: !componentLibrary.truncated,
+    }),
+    [componentLibrary.definitions, componentLibrary.truncated, documentLimits]
+  );
   const offered = useMemo<ComponentLibraryRead>(() => {
     const components = withoutSelf(
       componentLibrary.components,
       initialDocument,
       identity,
-      componentLibrary.definitions,
-      documentLimits
+      componentGraph
     );
     return components === componentLibrary.components
       ? componentLibrary
       : { ...componentLibrary, components };
-  }, [componentLibrary, initialDocument, identity, documentLimits]);
+  }, [componentLibrary, initialDocument, identity, componentGraph]);
+  /*
+   * The pattern tier is read inside the panel — it is mounted only while the
+   * panel is open — so the RULE comes down and the rows stay there.
+   */
+  const offerablePatterns = useCallback(
+    (patterns: readonly SavedPattern[]) =>
+      withoutSelfPatterns(patterns, initialDocument, identity, componentGraph),
+    [initialDocument, identity, componentGraph]
+  );
 
   const canvasRender = useMemo(
     () =>
@@ -3059,6 +3205,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
                 components={offered}
+                offerablePatterns={offerablePatterns}
               />
             ),
             /*
