@@ -66,7 +66,11 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
-import { cloneDefault } from "../../../shared/lib/field-defaults";
+import type { ValidatableField } from "../../../shared/lib/entry-validation";
+import {
+  applyFieldDefaults,
+  cloneDefault,
+} from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   readAccessGrants,
@@ -127,6 +131,7 @@ import { resolveSingleForRequest } from "./ensure-runtime-table";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
+  assertNoNestedPasswordDefault,
   assertNoPasswordDefault,
   assertValidPluginDefault,
   buildSingleErrorResult,
@@ -407,6 +412,25 @@ export async function checkSingleAccess(params: {
  * document — those are exposed as public methods so that the mutation
  * service can reuse them without duplication.
  */
+/**
+ * Whether a field carries a name, as a narrowing the two default helpers can
+ * read: they address `logicalDefaults` by that name, so an unnamed layout
+ * container is not one of their arguments.
+ */
+function hasFieldName<T extends { name?: string }>(
+  field: T
+): field is T & { name: string } {
+  return typeof field.name === "string" && field.name.length > 0;
+}
+
+/**
+ * A record the nested walk can read children off: an array is a repeater's
+ * rows and is walked as rows, and a primitive holds no children at all.
+ */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export class SingleQueryService extends BaseService {
   /** Persists version snapshots; used when a versioned Single is auto-created. */
   private readonly versionCapture = new VersionCaptureService();
@@ -1387,13 +1411,18 @@ export class SingleQueryService extends BaseService {
       return dbValue;
     };
 
-    for (const field of singleMeta.fields) {
-      if (!("name" in field) || !field.name) continue;
-
-      // Prefer the live code-first field for the declared default: the
-      // serialized `field` has lost any `defaultValue` function/structured value.
-      const defaultSource = codeFirstFieldByName?.get(field.name) ?? field;
-
+    /**
+     * Resolve one top-level field's own default.
+     *
+     * Written as a function rather than inline so the loop below can fill a
+     * group's or a repeater's children straight after the field they belong
+     * to: the branches here end the field's turn, and as inline `continue`s
+     * they ended the whole iteration with them.
+     */
+    const resolveOwnDefault = async (
+      field: (typeof singleMeta.fields)[number] & { name: string },
+      defaultSource: (typeof singleMeta.fields)[number]
+    ): Promise<void> => {
       // Resolve the field's default (explicit defaultValue, else a required
       // field's type-default) once, regardless of whether it is localized — a
       // localized field's default must reach the companion just the same.
@@ -1433,7 +1462,7 @@ export class SingleQueryService extends BaseService {
           shouldTreatAsJson(field) && cloned !== undefined
             ? JSON.stringify(cloned)
             : cloned;
-        continue;
+        return;
       }
 
       // `title`/`slug` are reserved system identity keys, pre-seeded above with
@@ -1459,7 +1488,7 @@ export class SingleQueryService extends BaseService {
         // later as non-text, replacing a Single's seeded identity with an empty default on the
         // first read that created it.
         if (!desc || isTextStorageKind(desc.kind)) {
-          continue;
+          return;
         }
         if ("required" in field && field.required) {
           defaults[field.name] = getDefaultValue(field);
@@ -1468,13 +1497,112 @@ export class SingleQueryService extends BaseService {
           delete defaults[field.name];
           delete logicalDefaults[field.name];
         }
-        continue;
+        return;
       }
 
       if ("required" in field && field.required) {
         defaults[field.name] = getDefaultValue(field);
         logicalDefaults[field.name] = toLogical(field, defaults[field.name]);
       }
+    };
+
+    /**
+     * A contributed type's rules over every value a nested fill just resolved.
+     *
+     * The top-level loop asks `assertValidPluginDefault` about each value it
+     * resolves, because this row is inserted directly and nothing downstream
+     * would catch a value the field's own type rejects. A child of a group or
+     * of a repeater row is stored by the same insert and needs the same
+     * answer, and the fill resolves those without passing through that check.
+     *
+     * Only a value the fill ADDED is judged. One the caller's draft already
+     * carried is their value, not a default, and is validated where every
+     * supplied value is.
+     */
+    const assertNestedDefaultsValid = async (
+      fields: readonly ValidatableField[] | undefined,
+      filled: unknown,
+      before: unknown
+    ): Promise<void> => {
+      if (!fields) return;
+      if (Array.isArray(filled)) {
+        for (const [index, row] of filled.entries()) {
+          await assertNestedDefaultsValid(
+            fields,
+            row,
+            Array.isArray(before) ? before[index] : undefined
+          );
+        }
+        return;
+      }
+      if (!isPlainRecord(filled)) return;
+      const prior = isPlainRecord(before) ? before : undefined;
+      for (const child of fields) {
+        // A layout container holds no value of its own; its children are
+        // stored on this same object, so they are judged against it.
+        if (!child.name) {
+          await assertNestedDefaultsValid(child.fields, filled, before);
+          continue;
+        }
+        const value = filled[child.name];
+        if (value === undefined) continue;
+        const supplied =
+          prior !== undefined &&
+          Object.prototype.hasOwnProperty.call(prior, child.name);
+        if (!supplied) {
+          await assertValidPluginDefault(child, value, singleMeta.slug);
+        }
+        await assertNestedDefaultsValid(
+          child.fields,
+          value,
+          supplied ? prior[child.name] : undefined
+        );
+      }
+    };
+
+    /**
+     * Fill a group's or a repeater row's children.
+     *
+     * Filled through the same walk a collection create uses, over the live
+     * code-first field where there is one (its children still carry function
+     * defaults), so a nested default reaches the first-read row the way it
+     * reaches a created entry. A group whose children declare nothing stays
+     * absent rather than becoming an empty object.
+     */
+    const fillNestedDefaults = async (
+      field: (typeof singleMeta.fields)[number] & { name: string },
+      source: (typeof singleMeta.fields)[number]
+    ): Promise<void> => {
+      if (field.type !== "group" && field.type !== "repeater") return;
+      // A nested password default would be written in plaintext on this
+      // direct insert, exactly as a top-level one would.
+      assertNoNestedPasswordDefault(source, singleMeta.slug);
+      const before = logicalDefaults[field.name];
+      applyFieldDefaults(logicalDefaults, [source]);
+      const after = logicalDefaults[field.name];
+      if (after === before) return;
+      await assertNestedDefaultsValid(
+        (source as { fields?: readonly ValidatableField[] }).fields,
+        after,
+        before
+      );
+      defaults[field.name] =
+        shouldTreatAsJson(field) && after !== undefined
+          ? JSON.stringify(after)
+          : after;
+    };
+
+    for (const field of singleMeta.fields) {
+      if (!hasFieldName(field)) continue;
+      // Prefer the live code-first field for the declared default: the
+      // serialized `field` has lost any `defaultValue` function/structured value.
+      const source = codeFirstFieldByName?.get(field.name) ?? field;
+      await resolveOwnDefault(field, source);
+      // In declaration order, with the field it belongs to: a later top-level
+      // default is a function reading the document built so far, and filling
+      // every group after every top-level field would show it an empty group
+      // where the declaration order says a filled one stands.
+      await fillNestedDefaults(field, source);
     }
 
     // A date default resolves to a string (e.g. `() => new Date().toISOString()`),

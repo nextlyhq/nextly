@@ -15,6 +15,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAdapter } from "../../../database/factory";
+import { clearServices } from "../../../di/register";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
@@ -114,6 +115,13 @@ for (const leg of LEGS) {
             { name: "beta", type: "text" },
           ],
         });
+        // Then boot again over the same adapter, which is what the seed helper
+        // documents and what the other two-phase suites do. Saving a
+        // collection in the Builder registers its table with the schema
+        // resolver as part of the save; seeding straight into the database
+        // does not, and a write through the ORM has no table to resolve.
+        clearServices();
+        handle = await createTestNextly({ adapter: bootAdapter });
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
 
         const created = await h.createEntry(

@@ -930,11 +930,9 @@ rather than the top-level document.
 
 **Before the write** (`beforeValidate`, `beforeChange`), `data` is the record
 as transformed so far, not a copy of what the caller sent. On an ordinary
-create that means the request with constant field defaults applied before any
-hook runs, so a defaulted field's hook runs on a value nobody submitted (a
-function default is not applied on this path, see
-[`defaultValue`](#defaultvalue), so its field stays absent and its hooks are
-skipped like any other omitted field), and a
+create that means the request with field defaults applied before any hook
+runs, constant and function alike (see [`defaultValue`](#defaultvalue)), so a
+defaulted field's hook runs on a value nobody submitted, and a
 `slug` and title generated after the collection-level `beforeValidate` and
 before the first field-level hook, so a field hook can read them and a
 collection hook in that phase cannot. Field-level `access.create` and
@@ -1024,21 +1022,33 @@ text({
 
 Static value or `(data) => value` function. The function form receives the document data being created so you can compute defaults from sibling fields. Each field type's signature accepts the value type appropriate for that field.
 
-The two forms do not reach every write. On an ordinary collection create
-through the REST or Direct API, a constant default on a column-backed field
-of the collection is applied before any hook runs (a default declared on a
-field inside a reusable field group is not applied on that write, so an
-omitted child stays absent there); a function default is not, because a collection's fields reach that
-write path from their stored definition, which a function does not survive,
-so an omitted field with a function default is treated as absent: written
-without a value, or refused by validation if the field is also `required`. A
-Single's first-read auto-create holds the code config directly and resolves
-both forms for its top-level column-backed fields: a default on a field nested
-inside a `group` is not resolved there, a default on a `fieldGroup` field is
+Both forms are applied on the server, so a default holds for every write
+path that applies defaults, not only for the admin form. On an ordinary
+collection create through the REST or Direct API, an omitted field takes its
+default before any hook runs, at every depth: a group's children, each
+supplied repeater row's children, and the children of each new field-group
+instance. A function default is read from the live config, since a
+collection's stored definition cannot hold a function, and it receives the
+data built so far at its own level: the document for a top-level field, the
+group or the row for a nested one. Rows are never invented; `minRows` is a
+validation rule, not an instruction to create rows.
+
+Inside a reusable field group, only a constant default applies. A field
+group's fields are read from its stored definition on every write, and a
+function cannot be stored, so a `defaultValue` written as a function on a
+field-group child is not applied anywhere: not on a collection create, not on
+a Single's first read, and not in the admin form. Give a field-group child a
+constant default, or set the value from the parent's own field.
+
+A Single's first read creates its row with the same defaults, top-level and
+nested, with two exceptions: a default on a `fieldGroup` field itself is
 evaluated and then dropped because that field has no column on the row, and a
-password field's default of either form is refused because that path never
-hashes. Bulk creates (`createMany`) and
-creates inside a transaction apply no defaults of either form.
+password field's default, at any depth, is refused because that path never
+hashes.
+
+Bulk creates (`createMany`) and creates inside a transaction apply no defaults
+to the entry's own fields; a new field-group instance on those writes still
+takes its own defaults.
 
 ---
 
