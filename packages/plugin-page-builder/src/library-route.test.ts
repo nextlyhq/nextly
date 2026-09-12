@@ -24,6 +24,7 @@ import {
   readPatternLibrary,
   type CollectionPage,
   type ComponentLibraryContext,
+  type ListPosition,
   type PatternLibraryContext,
 } from "./library-route";
 
@@ -68,6 +69,27 @@ function contextOver(
 }
 
 /**
+ * One page as the component route's own listing answers it: the rows, whether
+ * more exist, and the id the next page starts after.
+ *
+ * The stub computes the cursor the way the route does — the last row's id —
+ * so a fake that stops naming one is a fake that stopped modelling the
+ * service, rather than a walk that quietly changed.
+ */
+function pageOf(data: unknown[], hasMore: boolean): CollectionPage {
+  const last = data[data.length - 1];
+  const id =
+    typeof last === "object" && last !== null
+      ? (last as { id?: unknown }).id
+      : undefined;
+  return {
+    data,
+    hasMore,
+    ...(typeof id === "string" && id !== "" ? { next: id } : {}),
+  };
+}
+
+/**
  * A component-route context over the injected reads: a listing that answers
  * the pages given, and a by-id read that answers per id.
  *
@@ -84,11 +106,10 @@ function componentContext(
 ) {
   const queue = [...(components.pages ?? [])];
   const list = vi.fn(
-    (_slug: string, _page: number): Promise<CollectionPage> =>
-      Promise.resolve({
-        data: queue.shift() ?? [],
-        hasMore: queue.length > 0,
-      })
+    (_slug: string, _at: ListPosition): Promise<CollectionPage> => {
+      const data = queue.shift() ?? [];
+      return Promise.resolve(pageOf(data, queue.length > 0));
+    }
   );
   // The by-id read answers on the NEXT macrotask, and counts how many reads
   // are waiting at once: that is the observable of a walk that overlaps its
@@ -802,6 +823,61 @@ describe("the component tier", () => {
     expect(library.meta.truncated).toBe(true);
   });
 
+  it("loses no component when a row is removed from the listing between pages", async () => {
+    /*
+     * Paged by OFFSET, the walk reads a moving collection: another author
+     * deleting a row that sorts before the next offset shifts every later row
+     * back one, and the row that moved across the boundary is never listed.
+     * It is therefore never completed, `omitted` stays false, and the response
+     * says `truncated: false` — a library reported whole while the canvas
+     * lacks a definition and draws every instance of it as missing.
+     *
+     * Paged from the last id SEEN, the same deletion moves nothing: the next
+     * page is the rows after that id, whatever happened before it.
+     */
+    const ids = Array.from(
+      { length: COMPONENT_LIST_PAGE_SIZE + 1 },
+      (_, i) => `c${String(i).padStart(2, "0")}`
+    );
+    let listing = [...ids];
+    const list = vi.fn((_slug: string, at: ListPosition) => {
+      // The collection as the service reads it: the rows after the given id,
+      // then the asked-for page of those.
+      const beyond =
+        at.after === undefined
+          ? listing
+          : listing.filter(id => id > (at.after as string));
+      const from = (at.page - 1) * COMPONENT_LIST_PAGE_SIZE;
+      const slice = beyond.slice(from, from + COMPONENT_LIST_PAGE_SIZE);
+      const hasMore = from + slice.length < beyond.length;
+      // Another author deletes the first row while page one is in the client's
+      // hands, before the walk asks for page two.
+      listing = listing.filter(id => id !== ids[0]);
+      return Promise.resolve(
+        pageOf(
+          slice.map(id => componentRow(id)),
+          hasMore
+        )
+      );
+    });
+    const ctx: ComponentLibraryContext = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      components: {
+        list,
+        read: (_slug: string, id: string) =>
+          Promise.resolve({ id, title: `Component ${id}`, content: draft(id) }),
+      },
+      store: DEFAULT_COMPONENT_STORE,
+    };
+
+    const library = await readComponentLibrary(ctx);
+
+    // Every row the collection held when the walk began, none twice.
+    expect(library.items.map(c => c.id)).toEqual(ids);
+    expect(library.meta.truncated).toBe(false);
+  });
+
   it("overlaps its by-id reads, boundedly, and admits them in listing order", async () => {
     // A library of three thousand completed one read at a time is three
     // thousand round trips in a row. Overlapped without bound, a page that
@@ -943,7 +1019,11 @@ describe("the component tier", () => {
 
     const library = await readComponentLibrary(ctx);
 
-    expect(list.mock.calls.map(call => call[1])).toEqual([1, 2]);
+    // The first page from the start, the second from the id the first named.
+    expect(list.mock.calls.map(call => call[1])).toEqual([
+      { page: 1 },
+      { after: "a", page: 1 },
+    ]);
     expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
   });
 
