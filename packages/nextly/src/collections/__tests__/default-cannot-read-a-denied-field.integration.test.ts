@@ -91,6 +91,47 @@ describe("a function default cannot read a field the caller may not write", () =
     expect(row.secret).toBe("system-value");
     expect(row.derived).toBe("saw:system-value");
   });
+  it("hides a denied field's OWN default from a later default", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "defaulted",
+          fields: [
+            text({ name: "title" }),
+            // Denied AND defaulted. Nothing the caller sends fills it, so the
+            // pass that runs before the defaults has no key to judge.
+            text({
+              name: "secret",
+              defaultValue: "s3cret",
+              access: { create: () => false },
+            }),
+            text({
+              name: "copy",
+              defaultValue: d => `saw:${String(d.secret)}`,
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler = current.getService<"collectionsHandler">(
+      "collectionsHandler"
+    ) as unknown as CollectionsHandler;
+
+    const created = await handler.createEntry(
+      { collectionName: "defaulted", routeAuthorized: true, user: CALLER },
+      { title: "t" }
+    );
+
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const row = created.data as Record<string, unknown>;
+    // The denied field takes no value, exactly as when the caller sends one.
+    expect(row.secret ?? null).toBeNull();
+    // And the field the caller MAY write did not become a copy of it. Stored
+    // the other way round, the document would describe a `secret` it does not
+    // hold, and the rule guarding it would be defeated one column across.
+    expect(row.copy).toBe("saw:undefined");
+  });
+
   it("keeps a value whose permission a DEFAULT establishes", async () => {
     current = await createTestNextly({
       collections: [

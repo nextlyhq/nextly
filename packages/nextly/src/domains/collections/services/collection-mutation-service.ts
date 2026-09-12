@@ -3125,6 +3125,38 @@ export class CollectionMutationService extends BaseService {
       // record: the deletion would land on the record too, which is the data
       // loss this whole arrangement exists to avoid, one level down.
       const readableByDefaults = detachData(seededBody);
+      const fieldFunctions = getFieldFunctions(
+        "collection",
+        params.collectionName
+      );
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: readableByDefaults,
+        operation: "create",
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        overrideAccess: params.overrideAccess,
+        grants: writeGrants,
+      });
+      // The view is defaulted BEFORE it is judged a second time, and both
+      // halves matter.
+      //
+      // Defaulted, because a rule may depend on a sibling the caller omitted
+      // because it has a default, and a view judged without it hides a value
+      // the caller may in fact write.
+      //
+      // Judged again, because a default of its own is a value like any other:
+      // a field the caller may not write still takes its declared default
+      // here, and left in the view a later function default would read it and
+      // carry it into a field they CAN write. The pass below removes the field
+      // it came from and keeps the copy, so the rule is defeated one column
+      // across.
+      //
+      // These fill the view only. The record is filled from it afterwards, so
+      // a default the rules removed here is one the record's own pass will not
+      // put back.
+      applyFieldDefaults(readableByDefaults, fields, fieldFunctions);
       await applyFieldWriteAccess({
         kind: "collection",
         slug: params.collectionName,
@@ -3140,7 +3172,7 @@ export class CollectionMutationService extends BaseService {
       applyFieldDefaults(
         seededBody,
         fields,
-        getFieldFunctions("collection", params.collectionName),
+        fieldFunctions,
         readableByDefaults
       );
 
