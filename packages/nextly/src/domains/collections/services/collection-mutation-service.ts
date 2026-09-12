@@ -9247,6 +9247,23 @@ export class CollectionMutationService extends BaseService {
         if (companionDenied) return companionDenied;
       }
 
+      // Where this language's publication state lives, before and after this
+      // write. On a collection that keeps status per language the companion row
+      // owns it, so BOTH readings have to come from there: what it held, and
+      // what this write leaves it holding — the value the patch set, or the one
+      // already there when the patch named no status.
+      //
+      // Taking one from the companion and the other from the main row reports a
+      // move no statement performed. A patch changing only translated content,
+      // under an entry whose main row is published while this translation is
+      // still a draft, would read `draft -> published` and announce
+      // `entry.published` for a translation nothing published.
+      const perLocaleStatus = localizedUpdate?.hasStatus === true;
+      const localeStatusAfter = perLocaleStatus
+        ? ((localizedUpdate.companionData._status as string | undefined) ??
+          previousCompanionStatus)
+        : undefined;
+
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -9324,6 +9341,14 @@ export class CollectionMutationService extends BaseService {
       for (const [field, value] of Object.entries(localizedDocument)) {
         if (field === "id") continue;
         (updated as Record<string, unknown>)[field] = value;
+      }
+      // And this language's own status, for the same reason its values are
+      // overlaid: what is recorded describes one translation, and the main
+      // row's status describes the entry. Without it the snapshot and the
+      // event report a translation as published while its companion row still
+      // reads draft.
+      if (typeof localeStatusAfter === "string") {
+        (updated as Record<string, unknown>).status = localeStatusAfter;
       }
 
       // The row as it stood before this write, in the language this write
@@ -9557,10 +9582,13 @@ export class CollectionMutationService extends BaseService {
           localizedUpdate?.writeLocale
             ? { locale: localizedUpdate.writeLocale }
             : {}),
-          // The status this language was at, which for a per-locale status is
-          // the companion's and not the main row's: a German draft under a
-          // published entry transitions from `draft`, and reporting the main
-          // row's `published` would describe a move that never happened.
+          // Both ends of the move, read from the two documents that describe
+          // this language: `previousEntry` carries the companion's prior
+          // status and `updated` carries the one this write leaves. For a
+          // per-locale status that is the companion's, not the main row's — a
+          // German draft under a published entry transitions from `draft` —
+          // and taking the two from different rows would report a move nothing
+          // performed.
           from: readStringField(previousEntry, "status") ?? null,
           to: (updated as { status?: unknown }).status as
             | string

@@ -530,6 +530,61 @@ describe("a bulk write that moves a localized collection's published state", () 
     expect(after[0]._status).toBe("published");
   });
 
+  it("announces no publication when a content-only patch leaves the translation a draft", async () => {
+    // The main row is published while this language's companion `_status` is
+    // still draft — the state a reconcile leaves — and the patch names no
+    // status at all. Nothing publishes the translation, so nothing may say it
+    // did: the status this write reports must come from the same row its prior
+    // status came from.
+    const handle = await bootPerLocaleStatus();
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    await entries.createEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ title: "t", status: "published" }]
+    );
+    const [row] = await handle.adapter.executeQuery<{ _parent: string }>(
+      'SELECT "_parent" FROM "dc_posts_locales" LIMIT 1'
+    );
+    await handle.adapter.executeQuery(
+      `UPDATE "dc_posts_locales" SET "_status" = 'draft' WHERE "_parent" = '${row._parent}'`
+    );
+    const before = await handle.adapter.select<{ type: string }>(
+      "nextly_events"
+    );
+
+    // Translated content only. No status named anywhere in the patch.
+    const result = await entries.updateEntries(
+      { collectionName: "posts", overrideAccess: true },
+      [{ id: row._parent, data: { title: "neu" } }]
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.successful).toBe(1);
+
+    const after = await handle.adapter.select<{
+      type: string;
+      payload: unknown;
+    }>("nextly_events");
+    const added = after.slice(before.length);
+    // No lifecycle event: this write moved no publication state.
+    expect(added.map(e => e.type).sort()).toEqual(["entry.updated"]);
+
+    // And what it recorded describes a draft translation, not a published one.
+    const envelope = (
+      typeof added[0].payload === "string"
+        ? JSON.parse(added[0].payload)
+        : added[0].payload
+    ) as { data?: Record<string, unknown> };
+    expect(envelope.data?.status).toBe("draft");
+
+    // The companion row is still a draft, which is what makes the above right.
+    const companion = await handle.adapter.executeQuery<{ _status: string }>(
+      `SELECT "_status" FROM "dc_posts_locales" WHERE "_parent" = '${row._parent}'`
+    );
+    expect(companion[0]._status).toBe("draft");
+  });
+
   it("names the language on every event a localized create derives", async () => {
     // A create landing on `published` emits a lifecycle event beside
     // `entry.created`. A receiver reads the language from the resource, so one
