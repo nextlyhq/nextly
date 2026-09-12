@@ -33,6 +33,7 @@ import {
   COLLECTION_DEFINITION_ACTION,
   COLLECTION_DEFINITION_RESOURCE,
 } from "../../auth/collection-definition-policy";
+import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { isSuperAdmin } from "../../services/lib/permissions";
 
@@ -94,21 +95,25 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
     // for it, and finds the step still outstanding -- permanently, which is
     // the defect this predicate exists to prevent, moved one action later.
     //
-    // The readability half is the super-admin bypass, asked directly: it is
-    // the only thing that makes a NOT-YET-EXISTING collection readable. An API
-    // key is judged on the scope stamped into it and gains nothing when a new
-    // collection appears, which `isSuperAdmin` answers correctly for it too --
-    // a key's own user id is its owner's, and the bypass belongs to a session.
-    // So the key branch is refused explicitly rather than left to that.
+    // The readability half is DERIVED from the seeding policy rather than
+    // restated here. `wouldReadOwnNewCollection` lives beside the declaration
+    // the seeder assigns by, so if creation ever begins granting the creator --
+    // or the assignment moves to another role -- this follows instead of
+    // silently disagreeing. Asserted in one place, the two could only drift in
+    // ways nothing reports: a step hidden after it became finishable, or
+    // offered after it stopped being.
     createCollection ??= (async () => {
-      if (caller.authenticatedScope?.actorType === "apiKey") return false;
       const mayDefine = await callerMayPerform(
         caller.authenticatedScope,
         COLLECTION_DEFINITION_ACTION,
         COLLECTION_DEFINITION_RESOURCE,
         caller.user
       );
-      return mayDefine && (await isSuperAdmin(caller.user.id));
+      if (!mayDefine) return false;
+      return wouldReadOwnNewCollection(isSuperAdmin, {
+        userId: caller.user.id,
+        isApiKey: caller.authenticatedScope?.actorType === "apiKey",
+      });
     })();
     return createCollection;
   };
