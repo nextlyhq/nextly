@@ -49,12 +49,18 @@ write contends for, and a plugin hook has no transaction to enlist in — so two
 saves that each read the other's document before either commits are both
 approved. Closing that needs a boundary the two writes share.
 
-A component's VARIANTS count as references. A variant may preset an exposed
-`componentId`, which re-points a nested instance at a different component
-entirely — so a definition whose stored ids look harmless can still resolve back
-to itself once that variant is picked. Both the insert panel and the write now
-judge a definition by what it can reach under any variant it offers, so the
-editor no longer offers a component the save would refuse.
+A component's VARIANTS and its PLACEMENTS count as references. A variant may
+preset an exposed `componentId`, and a placement may override one on the
+component it places — so a definition whose stored ids look harmless can still
+resolve back to itself. Both the insert panel and the write judge a definition by
+what it can reach that way, so the editor does not offer a component whose insert
+the save would refuse.
+
+The write goes further and asks the RENDERER. Overrides flow down through
+nesting, so a placement can re-point a node two levels below it and the loop
+exists in the composed tree while no pair of definitions names the other twice.
+A save is therefore judged by composing it with the same function that draws the
+page, which is the only answer guaranteed to match what a reader would see.
 
 It judges the lifecycle form the write actually changes. An ordinary editor save
 is stored as a working draft and leaves the published row alone, so it is checked

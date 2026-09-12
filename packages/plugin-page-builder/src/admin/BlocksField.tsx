@@ -570,6 +570,17 @@ function namedBy(
   // offer a component whose variant re-points a nested instance back at the one
   // being edited — an insert the author is invited to make and the save then
   // refuses.
+  // An APPROXIMATION of composition, deliberately. The WRITE asks the renderer
+  // itself, which cannot be afforded here: this filters every candidate in a
+  // library sized at three thousand entries, and composing each one is not a
+  // render-time cost. So this folds in what a definition's own variants install
+  // and what a placement installs on the definition it places, and is short by
+  // one level for every further level of nesting overrides flow through.
+  //
+  // The consequence is that this can OFFER a tile whose save the write refuses —
+  // a trap rather than a corruption, since the write is exact. Recorded as
+  // `finding:insert-panel-approximates-what-the-write-composes` with the options.
+  //
   // ONE walk for both: the ids the definition reaches, and the nodes it reaches
   // through. The second is the edge that belongs to the PLACEMENT — a node here
   // may carry overrides aimed at the exposures of the component IT places, which
