@@ -100,6 +100,13 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
       const state = await deps.state();
       const deadline = context.deadline.getTime();
 
+      // Read ONCE for the handler and threaded through every pass. The store
+      // answers this by paging the whole progress collection, so a pass that
+      // re-read it made the drain quadratic in the number of scopes — on a site
+      // of many small ones, most of the work was re-reading rows this same
+      // invocation had already read.
+      let completed: ReadonlySet<string> | undefined;
+
       for (;;) {
         // Checked BEFORE the work, never after: afterwards would always allow
         // one scope more than the budget, which on a slow scope is the entire
@@ -110,7 +117,9 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
           scopes,
           state,
           rebuild: deps.rebuild,
+          ...(completed === undefined ? {} : { completed }),
         });
+        completed = pass.completed;
 
         // Nothing outstanding, either because this pass finished the last scope
         // or because there was none to begin with. Returning rather than

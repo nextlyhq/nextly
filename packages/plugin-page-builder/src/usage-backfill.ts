@@ -64,6 +64,16 @@ export interface BackfillPass {
   walked: BackfillScope | null;
   /** Whether every scope that exists now is recorded as walked. */
   complete: boolean;
+  /**
+   * The completed set as this pass leaves it.
+   *
+   * Returned so a caller making SEVERAL passes in one handler can thread it
+   * rather than have each pass re-read the store. The production store answers
+   * `completed()` by paging the whole progress collection, so a handler that
+   * walks N scopes was paging it N times — quadratic in the number of scopes,
+   * and on a site of many small ones that is most of what the drain does.
+   */
+  completed: ReadonlySet<string>;
 }
 
 /**
@@ -100,8 +110,17 @@ export async function advanceBackfill(args: {
   state: BackfillStateStore;
   /** Repairs one scope, walking every document in it. */
   rebuild: (scope: BackfillScope) => Promise<void>;
+  /**
+   * What is already recorded, when the caller has just been told.
+   *
+   * Read from the store when absent. A caller threading it across passes gets
+   * the same answer for less work — and a more stable one: re-reading folds in
+   * whatever another instance recorded meanwhile, which makes the result depend
+   * on timing rather than on this handler.
+   */
+  completed?: ReadonlySet<string>;
 }): Promise<BackfillPass> {
-  const completed = await args.state.completed();
+  const completed = args.completed ?? (await args.state.completed());
   const outstanding = args.scopes.find(
     scope => !completed.has(backfillScopeKey(scope))
   );
@@ -111,7 +130,7 @@ export async function advanceBackfill(args: {
     // absence of an outstanding scope is exactly the condition
     // `backfillComplete` tests - asking twice would be a second implementation
     // of one question.
-    return { walked: null, complete: true };
+    return { walked: null, complete: true, completed };
   }
 
   await args.rebuild(outstanding);
@@ -127,5 +146,6 @@ export async function advanceBackfill(args: {
   return {
     walked: outstanding,
     complete: backfillComplete(args.scopes, after),
+    completed: after,
   };
 }

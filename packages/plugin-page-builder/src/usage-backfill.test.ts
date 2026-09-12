@@ -22,11 +22,21 @@ function scope(field: string): BackfillScope {
 function store(initial: string[] = []) {
   const done = new Set(initial);
   const recorded: string[] = [];
+  // Counted, because the production store answers `completed()` by paging the
+  // whole progress collection — so "did this read the store at all" is the
+  // property, not an implementation detail.
+  const counter = { reads: 0 };
   return {
     done,
     recorded,
+    get reads() {
+      return counter.reads;
+    },
     state: {
-      completed: async () => done,
+      completed: async () => {
+        counter.reads += 1;
+        return done;
+      },
       record: async (key: string) => {
         recorded.push(key);
         done.add(key);
@@ -102,9 +112,63 @@ describe("advancing a backfill", () => {
     });
 
     expect({ pass, rebuilds }).toEqual({
-      pass: { walked: null, complete: true },
+      pass: {
+        walked: null,
+        complete: true,
+        completed: new Set([backfillScopeKey(scope("a"))]),
+      },
       rebuilds: 0,
     });
+  });
+
+  it("takes the completed set a caller supplies instead of reading the store", async () => {
+    /*
+     * The store answers `completed()` by paging the whole progress collection,
+     * so a handler making one pass per scope paged it once per scope — quadratic
+     * in the number of scopes, and on a site of many small ones most of what the
+     * drain does.
+     */
+    const s = store([backfillScopeKey(scope("a"))]);
+    let rebuilds = 0;
+
+    const pass = await advanceBackfill({
+      scopes: [scope("a")],
+      state: s.state,
+      rebuild: async () => {
+        rebuilds += 1;
+      },
+      completed: new Set([backfillScopeKey(scope("a"))]),
+    });
+
+    expect({ walked: pass.walked, rebuilds, reads: s.reads }).toEqual({
+      walked: null,
+      rebuilds: 0,
+      reads: 0,
+    });
+  });
+
+  it("hands back the set INCLUDING what it just recorded, so the next pass sees it", async () => {
+    // Threading a stale set would make the next pass pick the same scope again
+    // and walk it twice — which is the cost this exists to avoid, paid twice.
+    const s = store();
+
+    const first = await advanceBackfill({
+      scopes: [scope("a"), scope("b")],
+      state: s.state,
+      rebuild: async () => undefined,
+      completed: new Set<string>(),
+    });
+
+    expect(first.completed.has(backfillScopeKey(scope("a")))).toBe(true);
+
+    const second = await advanceBackfill({
+      scopes: [scope("a"), scope("b")],
+      state: s.state,
+      rebuild: async () => undefined,
+      completed: first.completed,
+    });
+
+    expect(second.walked).toEqual(scope("b"));
   });
 
   it("does NOT record a scope whose rebuild rejected", async () => {
