@@ -412,4 +412,63 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     ).publicData?.errors;
     expect(issues?.map(i => i.path)).toEqual(["guarded"]);
   });
+  it("does not refuse over an unchanged TRANSLATED field the publisher cannot write", async () => {
+    process.env.DB_DIALECT = "sqlite";
+    const adapter = await createAdapter({
+      type: "sqlite",
+      url: `file:${dbPath}`,
+    } as Parameters<typeof createAdapter>[0]);
+    current = await createTestNextly({
+      adapter,
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: SLUG,
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: () => true },
+          fields: [
+            text({ name: "siteName", localized: true }),
+            // Translated AND guarded: its live value lives on the companion
+            // row, so a comparison that reads only the main row sees nothing
+            // there and calls an untouched translation an edit.
+            text({
+              name: "guarded",
+              localized: true,
+              access: { update: ({ req }) => req.user?.email === BOSS.email },
+            }),
+          ],
+        }),
+      ],
+    });
+    const singles = current.getService<"singleEntryService">(
+      "singleEntryService"
+    ) as unknown as SingleEntryService;
+
+    await singles.update(
+      SLUG,
+      { siteName: "Live", guarded: "kept", status: "published" },
+      { overrideAccess: true }
+    );
+    // A full form resubmits every field, so the held snapshot carries the
+    // translated `guarded` at the value it already has. Saved by someone who
+    // may write it, so the draft itself is legitimate.
+    await singles.update(
+      SLUG,
+      { siteName: "Edited", guarded: "kept" },
+      { routeAuthorized: true, user: BOSS }
+    );
+
+    const published = await singles.update(
+      SLUG,
+      { status: "published" },
+      { routeAuthorized: true, user: CLERK }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const live = await singles.get(SLUG, { overrideAccess: true });
+    expect((live.data as { siteName?: unknown }).siteName).toBe("Edited");
+    expect((live.data as { guarded?: unknown }).guarded).toBe("kept");
+  });
 });

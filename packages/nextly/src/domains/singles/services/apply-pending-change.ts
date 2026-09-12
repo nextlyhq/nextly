@@ -12,6 +12,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, type Column } from "drizzle-orm";
 
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
@@ -97,4 +98,47 @@ export async function writeCompanionValues(args: {
     args.values,
     args.status
   );
+}
+
+/**
+ * One language's stored companion values, keyed by FIELD name.
+ *
+ * The live main row is not the whole live document for a localized Single: a
+ * translatable field's value is on its language's companion row. Compared
+ * against the main row alone, every translation reads as absent, so an
+ * untouched one looks like an edit and a publish that changes nothing the
+ * caller is denied is refused.
+ *
+ * Read on the caller's transaction, which already holds the row it is about.
+ */
+export async function readCompanionValuesInTx(
+  tx: { getDrizzle: <T>() => T },
+  companion: {
+    table: unknown;
+    localizedFields: ReadonlyArray<{ name: string; column: string }>;
+  },
+  parentId: string,
+  locale: string
+): Promise<Record<string, unknown>> {
+  const table = companion.table as Record<string, Column>;
+  const drizzle = tx.getDrizzle<{
+    select: () => {
+      from: (t: unknown) => {
+        where: (c: unknown) => Promise<Record<string, unknown>[]>;
+      };
+    };
+  }>();
+  const rows = await drizzle
+    .select()
+    .from(companion.table)
+    .where(and(eq(table._parent, parentId), eq(table._locale, locale)));
+  const row = rows[0];
+  if (!row) return {};
+  const out: Record<string, unknown> = {};
+  for (const field of companion.localizedFields) {
+    if (Object.prototype.hasOwnProperty.call(row, field.column)) {
+      out[field.name] = row[field.column];
+    }
+  }
+  return out;
 }

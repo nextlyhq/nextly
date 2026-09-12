@@ -764,6 +764,26 @@ async function applyReadAccessRec(
 }
 
 /**
+ * The caller's grants, RESOLVED, wrapped as the resolver a field-access pass
+ * takes.
+ *
+ * `callerAccessGrants` builds a lazy resolver: nothing is looked up until the
+ * first pass asks, and a pass that first asks from inside a write transaction
+ * issues its queries on the pooled connection that transaction is holding. On
+ * a one-connection pool the query waits for a connection it can never get, and
+ * the write hangs rather than fails. A caller about to open a transaction
+ * awaits this instead, so the lookups are already done and the resolver it
+ * hands in only returns them.
+ */
+export async function resolvedCallerGrants(
+  user: Record<string, unknown> | undefined,
+  authenticatedScope?: AuthenticatedScope
+): Promise<() => Promise<CallerGrants>> {
+  const grants = await callerAccessGrants(user, authenticatedScope)();
+  return () => Promise.resolve(grants);
+}
+
+/**
  * The caller's grants resolver, to hand to every field-access pass over one
  * document or record so roles and permissions are read once.
  *

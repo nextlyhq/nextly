@@ -33,7 +33,7 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
-  callerAccessGrants,
+  resolvedCallerGrants,
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
@@ -69,6 +69,7 @@ import type {
 } from "../types";
 
 import {
+  readCompanionValuesInTx,
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
@@ -172,7 +173,7 @@ export class SinglePublishAllService extends BaseService {
       // Resolved here because the gate that uses them runs inside the write
       // transaction, and resolving grants queries the pooled connection that
       // transaction is holding.
-      const promoteGrants = callerAccessGrants(
+      const promoteGrants = await resolvedCallerGrants(
         options.user,
         options.authenticatedScope
       );
@@ -566,6 +567,7 @@ export class SinglePublishAllService extends BaseService {
    * say what happened.
    */
   private async assertPendingChangesMayBePromoted(
+    tx: TransactionContext,
     plan: PublishPlan,
     pending: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
     options: PublishAllSingleLocalesOptions,
@@ -602,8 +604,21 @@ export class SinglePublishAllService extends BaseService {
         ),
       // The stored row, in the shape a snapshot holds, so an untouched upload
       // or relationship is compared identifier with identifier rather than
-      // identifier with the document a read would have expanded it into.
-      liveStoredFor: () => Promise.resolve(existingDoc),
+      // identifier with the document a read would have expanded it into. And
+      // with this language's companion values over it, since a translation
+      // lives there and the main row reports every one of them as absent.
+      liveStoredFor: async locale =>
+        companion && locale
+          ? {
+              ...existingDoc,
+              ...(await readCompanionValuesInTx(
+                tx,
+                companion,
+                existingDoc.id,
+                locale
+              )),
+            }
+          : existingDoc,
       localizedFieldNames: new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       ),
@@ -645,6 +660,7 @@ export class SinglePublishAllService extends BaseService {
     // Judged one at a time, each draft can pass against its own shared values
     // while the document that actually lands holds another language's.
     await this.assertPendingChangesMayBePromoted(
+      tx,
       plan,
       pending,
       options,

@@ -120,26 +120,35 @@ export async function assertDraftsMayBePromoted(
 ): Promise<void> {
   if (drafts.length === 0) return;
 
-  // The shared half of what the write produces, in the order the write applies
-  // it, so the last value to land is the one judged.
-  let shared: Record<string, unknown> = {};
-  for (const draft of drafts) {
-    shared = { ...shared, ...ctx.toLogical(asRecord(draft.snapshot)) };
+  const logical = drafts.map(draft => ({
+    locale: draft.locale,
+    values: ctx.toLogical(asRecord(draft.snapshot)),
+  }));
+
+  // The shared half of what the write produces. Every language's snapshot is
+  // applied to the same main row in this order, so the shared value that
+  // survives is the last one written, and that is the value to judge. A
+  // translatable field is not shared: it goes to its own language's companion
+  // row, so it never takes part in this.
+  const shared: Record<string, unknown> = {};
+  for (const { values } of logical) {
+    for (const [key, value] of Object.entries(values)) {
+      if (!ctx.localizedFieldNames.has(key)) shared[key] = value;
+    }
   }
 
-  for (const draft of drafts) {
-    // This language's own values over the shared outcome, then the caller's
-    // payload over both: the document this language ends up with.
-    const promoted = {
-      ...shared,
-      ...ctx.toLogical(asRecord(draft.snapshot)),
-      ...(ctx.callerData ?? {}),
-    };
-    await assertNoDeniedChange(
-      ctx.toLogical(asRecord(draft.snapshot)),
-      draft.locale,
-      ctx
-    );
+  for (const { locale, values } of logical) {
+    // The final shared state with only THIS language's translations over it,
+    // then the caller's payload. Spreading the whole snapshot here instead
+    // would put back the shared values a later language overwrote, and refuse
+    // a publish whose committed document is perfectly valid.
+    const promoted: Record<string, unknown> = { ...shared };
+    for (const [key, value] of Object.entries(values)) {
+      if (ctx.localizedFieldNames.has(key)) promoted[key] = value;
+    }
+    Object.assign(promoted, ctx.callerData ?? {});
+
+    await assertNoDeniedChange(values, locale, ctx);
     await assertSchemaStillAccepts(promoted, ctx);
   }
 }
