@@ -27,19 +27,45 @@
 import type { SourceResolver } from "../../domains/widgets/resolved-sources";
 import type { WidgetSource } from "../../domains/widgets/sources";
 import { NextlyError } from "../../errors/nextly-error";
-import type { PluginDefinition } from "../plugin-context";
+import type { PluginContext, PluginDefinition } from "../plugin-context";
+
+/**
+ * Answers one contributed source's query, for one caller.
+ *
+ * 🔴 The third argument is the plugin's OWN context, and without it this
+ * contract answers nothing: a plugin's data services are reachable only
+ * through `PluginContext`, so a resolver holding `(query, caller)` alone can
+ * return constants and nothing else. Every other contributed FUNCTION on this
+ * surface is handed the context for the same reason -- `jobs.handler(ctx)`,
+ * `services[name](ctx)` -- and this one was the exception by oversight.
+ *
+ * It is the LAST argument rather than the first because the first two are the
+ * question and who is asking, which is what a resolver is about; the context is
+ * how it goes and looks. That also leaves a resolver needing no data free to
+ * ignore it.
+ *
+ * What it is NOT handed is a request, headers, or anything fetch-capable of its
+ * own. The context is the same one the plugin's `init` receives, bounded by
+ * `createPluginContext` — see `domains/widgets/resolved-sources` for why that
+ * boundary is structural.
+ */
+export type PluginSourceResolver = (
+  query: Parameters<SourceResolver>[0],
+  caller: Parameters<SourceResolver>[1],
+  ctx: PluginContext
+) => ReturnType<SourceResolver>;
 
 /**
  * One source a plugin contributes, and the function that answers it.
  *
- * The resolver is handed `(query, caller)` and nothing else. It reaches
- * whatever the plugin's own closure captured; there is no request, no headers
- * and no fetch-capable context — see `domains/widgets/resolved-sources` for why
- * that signature is a boundary rather than a convenience.
+ * The SOURCE half stays a plain object rather than anything computed, so
+ * `contributes` remains readable without executing the plugin -- which is what
+ * lets `generate:types` and the admin's own tooling work from config alone.
+ * Only the resolver is a function, and only it receives the context.
  */
 export interface PluginWidgetSource {
   source: WidgetSource;
-  resolve: SourceResolver;
+  resolve: PluginSourceResolver;
 }
 
 /** A contributed source resolved to what boot needs, plus its provenance. */

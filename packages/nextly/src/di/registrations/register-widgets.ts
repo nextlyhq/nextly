@@ -42,12 +42,10 @@ import { registerVersionsWidgetSource } from "../../domains/versions/versions-wi
 import { setContributedWidgets } from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
 import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
-import { registerResolvedSource } from "../../domains/widgets/resolved-sources";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
-import { collectWidgetSources } from "../../plugins/widgets/collect-widget-sources";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = []
@@ -82,21 +80,16 @@ export function resetWidgetRegistries(
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
 
-  // 🔴 LAST, and the order carries a rule. `registerSource` refuses a duplicate
-  // id, so whichever registration runs first owns that id and the second one
-  // fails the boot -- which is the outcome we want when a plugin names a
-  // built-in source, and the wrong one if core's registration is what fails.
-  // Registering core first turns "a plugin tried to shadow a built-in" into a
-  // refusal naming the plugin, rather than a boot that dies inside core's own
-  // publication for reasons the operator cannot act on.
+  // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
+  // ordering fact rather than a preference: this runs before any plugin
+  // context exists (`initializePlugins` builds them later in the same boot),
+  // and a contributed resolver is useless without its context -- a plugin's
+  // data services are reachable through nothing else.
   //
-  // The fold itself refuses the reserved namespaces before this point, so a
-  // plugin cannot reach a `system:` id at all; this ordering is what protects
-  // the ids core publishes INSIDE the plugin namespace, if it ever does.
-  for (const contributed of collectWidgetSources(plugins)) {
-    registerResolvedSource(
-      { ...contributed.source, kind: "plugin" },
-      contributed.resolve
-    );
-  }
+  // They register from `initializePlugins`, bound to their own plugin's
+  // context, exactly as contributed services already do. That keeps the
+  // ordering this function's own registrations rely on: core publishes its
+  // sources HERE, first, so a plugin naming a built-in id is refused by
+  // `registerSource` on the PLUGIN's registration -- naming the plugin an
+  // operator can act on, rather than dying inside core's own publication.
 }

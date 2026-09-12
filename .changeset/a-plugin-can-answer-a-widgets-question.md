@@ -49,3 +49,7 @@ slot that exceeds its budget now fails on its own and its siblings still answer.
 `@nextlyhq/plugin-sdk`, so a resolver can be written as a named function rather
 than only inline. They are `@experimental` on the same ladder as the rest of the
 widget contract.
+
+A contributed resolver is handed its plugin's own context, so it can read data
+to answer with. A plugin's services are reachable through nothing else, so the
+first shape of this contract could return constants and little more.
