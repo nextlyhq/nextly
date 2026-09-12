@@ -442,6 +442,49 @@ describe("a link and a visibility exposure", () => {
     });
   });
 
+  it("still offers a SELECT's options when its stored value is structured", () => {
+    // Unlike a text field, a select does not carry the old value into what it
+    // writes: choosing an option replaces it outright. So a junk value there is
+    // repairable by using the control, and hiding it would strand the property.
+    mount(instance({ overrides: { tone: { unexpected: true } } }), header());
+
+    expect(screen.getByRole("combobox", { name: "Tone" })).toBeDefined();
+  });
+
+  it("still offers the field for a CLEARED text row, so the author can put a value back", () => {
+    // A clear is a blank the field is meant to show, not a value the control
+    // cannot hold — read as unrepresentable, clearing a property would make it
+    // permanently uneditable.
+    mount(instance({ overrides: { cta: { $unset: true } } }), linked());
+
+    expect(
+      screen.getByRole("textbox", { name: "Call to action" })
+    ).toBeDefined();
+  });
+
+  it("shows a STRUCTURED value rather than offering to overwrite it with text", () => {
+    /*
+     * `OverrideValue` is unconstrained, so a host block may declare a link prop
+     * as an object. A text control renders one as an empty field — there is no
+     * string to show — and the first edit replaces the whole value with
+     * whatever was typed into that blank, losing the rest of it silently.
+     *
+     * Shown read-only instead, through the same note a type this panel cannot
+     * edit yet uses: the author sees what is there and nothing overwrites it.
+     */
+    const editor = mount(
+      instance({ overrides: { cta: { href: "/docs", rel: "nofollow" } } }),
+      linked()
+    );
+
+    expect(
+      screen.queryByRole("textbox", { name: "Call to action" })
+    ).toBeNull();
+    expect(screen.getByText(/nofollow/)).toBeDefined();
+    // Nothing to type into means nothing written: the value is intact.
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
   it("shows an inherited visibility row as shown, and hides it by writing false", () => {
     // Inherited is the component's own rule, which is shown unless the
     // definition gates the node itself; the resolver reads `false` as hidden

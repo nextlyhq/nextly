@@ -314,7 +314,14 @@ function ExposedControl({
       </p>
     );
   }
-  if (!row.supported) {
+  // A type this panel has no control for, OR a value its control could not
+  // represent. The second is not a shape problem to report: `OverrideValue` is
+  // unconstrained and a host block may declare a text or link prop as an
+  // object, which a text field renders as a blank — and the first edit then
+  // replaces the whole value with what was typed into that blank. Shown rather
+  // than offered for editing, so nothing is lost to a control that cannot hold
+  // it.
+  if (!row.supported || !representable(row)) {
     const shown = valueSummary(row.value);
     return (
       <p className="nx-inspector__note">
@@ -399,6 +406,27 @@ function dataOf(value: object): string {
     if (error instanceof TypeError) return "(structured value)";
     throw error;
   }
+}
+
+/**
+ * Whether this row's control can hold the value in force.
+ *
+ * Only the TEXT controls can fail this, and only on a structured value: a
+ * blank is what the field is meant to show, and a boolean or a number reads
+ * back as itself. A CLEARED row is a blank too and needs no case of its own —
+ * the resolver normalises a cleared value to `undefined` rather than handing
+ * the sentinel on, which is the contract `instanceExposure` states.
+ *
+ * A select and a visibility row always pass. Neither carries the old value into
+ * what it writes — choosing an option or ticking a box replaces it outright —
+ * so a value they cannot show is repairable by using the control, and hiding it
+ * would strand the property instead.
+ */
+function representable(row: ExposedRow): boolean {
+  if (row.type === "visibility" || row.type === "select") return true;
+  const { value } = row;
+  if (value === undefined || value === null) return true;
+  return typeof value !== "object";
 }
 
 /** A value as editable text, or empty when it is not representable. */
