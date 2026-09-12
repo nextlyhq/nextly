@@ -277,8 +277,38 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // same-document canvas, the class-usage index and SEO derivation all read one
 // without drawing anything. `componentIdsIn` is the other half of the seam —
 // what to FETCH, asked before anything can be resolved.
+/**
+ * Whether a component's references lead back to itself, and by which chain.
+ *
+ * Published because two surfaces ask it at different moments and must agree:
+ * an insert panel deciding what to OFFER while a component is open for
+ * editing, and a write deciding whether the document it is about to store
+ * closes a loop. The verdict carries `unknown` as its own answer rather than
+ * collapsing it, because the two spend that uncertainty differently — one
+ * withholds a tile, the other would refuse a save.
+ */
+export {
+  componentReach,
+  type ComponentPlacements,
+  type ComponentReach,
+} from "./component-graph";
+
 export {
   componentIdsIn,
+  // Every component a document can reach under ANY variant it offers, which is
+  // a different question from what its nodes carry. Published because the write
+  // guard has to judge a document a variant can re-point, and the usage index
+  // has to count what is actually stored.
+  componentReferencesIn,
+  // And the half that needs BOTH documents: what ONE placing node's overrides
+  // install on the definition it places. Published because the write guard and
+  // the insert panel both have to follow an edge neither document names alone.
+  componentReferencesFrom,
+  // Which NODES place something, rather than which components are placed. A
+  // caller following a placement-level override needs the node that carries it.
+  componentPlacementsIn,
+  // Both of the above from ONE walk, for the callers that need both.
+  componentReachIn,
   componentUsageIn,
   // The roots a document composes to, read without composing it. Published
   // because the palette judges every definition's placement by its roots and

@@ -47,7 +47,10 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
-  componentUsageIn,
+  componentReach,
+  componentReachIn,
+  componentReferencesFrom,
+  componentReferencesIn,
   isComponentDocument,
   newId,
   type BlockDocument,
@@ -442,7 +445,11 @@ function namesOf(
 ): readonly string[] | undefined {
   const nodes = pattern.document?.nodes;
   if (nodes === undefined) return [];
-  const usage = componentUsageIn(nodes, limits.maxNodes);
+  // The reachability question, not the stored-ids one, for the reason
+  // {@link namedBy} gives. A pattern declares no variants today, so the two
+  // answers coincide here — asked this way they cannot come apart if one ever
+  // does.
+  const usage = componentReferencesIn(pattern.document, limits.maxNodes);
   return usage.complete ? usage.ids : undefined;
 }
 
@@ -499,17 +506,41 @@ function reachesFrom(
   id: string,
   graph: ComponentGraph
 ): boolean {
-  if (seeds === undefined || seeds.includes(id)) return true;
-  const pending = [...seeds];
-  const followed = new Set<string>();
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    if (followed.has(next)) continue;
-    followed.add(next);
-    const named = namedBy(next, graph);
-    if (named === undefined || named.includes(id)) return true;
-    pending.push(...named);
-  }
-  return false;
+  // The ENGINE's walk, not a second one. The same question is asked at the
+  // write — whether a component's references lead back to it — and two
+  // traversals of one graph drift in their ordering, their handling of a
+  // definition nobody could read, and whatever the graph learns to mean next.
+  //
+  // Projected to a boolean here, which is what an OFFER needs: a chain that
+  // closes and a definition that could not be read both mean "do not offer
+  // this", because withholding one tile is the cheap direction. The write
+  // spends the same uncertainty differently, which is why the verdict keeps the
+  // two apart and each caller decides.
+  //
+  // The lookup is memoised for the DURATION of this question. Resolving a
+  // placement's overrides reads the definition being placed, and the walk then
+  // visits that same definition — so without this a definition is read twice per
+  // question, and one placed by many others once per placer. Held here rather
+  // than on the graph so it cannot outlive a question and answer a later one
+  // from a library that has since been re-read.
+  const held = new Map<string, BlockDocument | undefined>();
+  const once: ComponentLookup = {
+    has: candidate => graph.definitions.has(candidate),
+    get: candidate => {
+      if (!held.has(candidate))
+        held.set(candidate, graph.definitions.get(candidate));
+      return held.get(candidate);
+    },
+  };
+
+  return (
+    componentReach({
+      places: seeds,
+      self: id,
+      placedBy: candidate =>
+        namedBy(candidate, { ...graph, definitions: once }),
+    }).kind !== "none"
+  );
 }
 
 /**
@@ -534,8 +565,41 @@ function namedBy(
 ): readonly string[] | undefined {
   const definition = definitions.get(id);
   if (definition === undefined) return whole ? [] : undefined;
-  const usage = componentUsageIn(definition.nodes, limits.maxNodes);
-  return usage.complete ? usage.ids : undefined;
+  // What the definition can REACH, variants included, which is the same rule
+  // the write guard judges a save by. The stored ids alone would have the panel
+  // offer a component whose variant re-points a nested instance back at the one
+  // being edited — an insert the author is invited to make and the save then
+  // refuses.
+  // ONE walk for both: the ids the definition reaches, and the nodes it reaches
+  // through. The second is the edge that belongs to the PLACEMENT — a node here
+  // may carry overrides aimed at the exposures of the component IT places, which
+  // re-point one of that component's own nested instances. Neither document
+  // names it alone, so each placement is resolved against the definition it
+  // places, from the lookup already in memory. That is why the panel can ask
+  // synchronously where the write has to read.
+  const survey = componentReachIn(definition, limits.maxNodes);
+  if (!survey.complete) return undefined;
+
+  const ids = new Set<string>(survey.ids);
+  const resolved = new Map<string, BlockDocument | undefined>();
+  for (const placement of survey.placements) {
+    // One lookup per TARGET, not per placement: a definition that places the
+    // same component five times asks about it once.
+    if (!resolved.has(placement.target)) {
+      resolved.set(placement.target, definitions.get(placement.target));
+    }
+    const target = resolved.get(placement.target);
+    // A definition the lookup does not hold says nothing about what an override
+    // on it would install. SKIPPED rather than answered as unknown here: the
+    // target is already among the ids this returns, so the walk visits it and
+    // reports the uncertainty there. Answering unknown twice for one gap makes
+    // the panel withhold a tile for a definition it could read perfectly well.
+    if (target === undefined) continue;
+    for (const reached of componentReferencesFrom(target, placement.node)) {
+      ids.add(reached);
+    }
+  }
+  return [...ids];
 }
 
 /**

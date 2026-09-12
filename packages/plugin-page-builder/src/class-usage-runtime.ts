@@ -74,6 +74,21 @@ export interface ClassUsageDirectApi {
     depth?: number;
     disableErrors?: boolean;
     overrideAccess?: boolean;
+    /**
+     * The lifecycle states the read may answer from.
+     *
+     * A by-id read that names none is bounded back to public states, so a
+     * never-published row answers 404 — and a reader asking about every stored
+     * component has to be able to see one.
+     *
+     * The neighbouring `Nextly extends ClassUsageDirectApi` check does NOT
+     * establish that the real API takes this. Method parameters compare
+     * bivariantly, so an argument field invented here passes that assertion
+     * unchanged — measured, by adding one. What establishes it is a call on the
+     * real type: `library-route.ts` passes `status` to `requireNextly()
+     * .findByID` and type-checks.
+     */
+    status?: "published" | "draft" | "all";
   }): Promise<unknown>;
   create(args: {
     collection: string;
