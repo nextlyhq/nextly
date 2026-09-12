@@ -78,6 +78,61 @@ describe("which hrefs may become links", () => {
     ).toBe('Price \uFFFD each, [a](https://x.test "\uFFFD") &#65;');
   });
 
+  it("decodes an ESCAPED reference no code point can hold, too", () => {
+    // 🔴 The library drops a backslash before punctuation before it decodes
+    // references, and `#` and `;` are punctuation -- so these reach its
+    // decoder as `&#1114112;` and threw there, past a decode that matched
+    // only the unescaped spelling.
+    expect(representableMarkdown("&\\#1114112;")).toBe("\uFFFD");
+    expect(representableMarkdown("&#1114112\\;")).toBe("\uFFFD");
+    expect(representableMarkdown("\\&\\#1114112\\;")).toBe("\uFFFD");
+    expect(destinationOf("https://example.com/&#1114112\\;")).toBe(
+      "https://example.com/\uFFFD"
+    );
+    // A backslash that is itself escaped is one character of text, as the
+    // library reads it, and the reference after it is decoded on its own.
+    expect(representableMarkdown("\\\\&#1114112;")).toBe("\\\\\uFFFD");
+    // A reference the library CAN hold is left for it to decode.
+    expect(representableMarkdown("&#65\\;")).toBe("&#65\\;");
+  });
+
+  it("refuses a destination the browser's URL parser sends somewhere its written form does not say", () => {
+    // 🔴 For `http` and `https` the parser reads a backslash as a slash, so
+    // `/\evil.example` -- a path, as written, and so opened in this tab -- is
+    // the host `evil.example`; and it reads `https:evil.example` as a path on
+    // an https page and a host on an http one. Each was admitted as a path on
+    // this site.
+    for (const href of [
+      "/\\evil.example",
+      // The same destination as markdown writes it escaped.
+      "/\\\\evil.example",
+      "https:\\evil.example",
+      "https:evil.example",
+      "http:evil.example",
+    ]) {
+      expect(destinationOf(href), href).toBeUndefined();
+    }
+  });
+
+  it("admits every destination whose written form and parsed form agree", () => {
+    // The control: a rule refusing whatever a parser touches would satisfy
+    // the case above and refuse every link below.
+    for (const [href, leaves] of [
+      ["/admin/collections/notes", false],
+      ["./posts?status=draft", false],
+      ["#top", false],
+      ["/%5Cevil.example", false],
+      ["https://example.com/runbook", true],
+      ["//example.com/runbook", true],
+      ["mailto:ops@example.com", false],
+      ["tel:+15551234567", false],
+    ] as const) {
+      const destination = destinationOf(href);
+      expect(destination, href).toBe(href);
+      expect(externalHref(href), href).toBe(leaves);
+    }
+  });
+
   it("refuses a scheme that runs code or carries a payload", () => {
     for (const href of [
       "javascript:alert(1)",

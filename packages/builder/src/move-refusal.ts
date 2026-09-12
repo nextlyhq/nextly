@@ -7,13 +7,16 @@
  * in `ops.ts`, with a control showing the symbol resolves elsewhere in the
  * package. So a placement the rule forbids is not refused at apply time; it is
  * applied. The POINTER route is stopped because `drop-targets` asks
- * `blockAllowedAt` before a drop resolves; the keyboard route asks this, before
- * the move, for the same reason. Without it a keyboard author builds documents
- * a pointer author cannot.
+ * `placementVerdict` before a drop resolves; the keyboard route asks this,
+ * before the move, for the same reason. Without it a keyboard author builds
+ * documents a pointer author cannot.
  *
  * So this is the keyboard route's half of a decision the pointer route already
  * makes, asked of the same function, rather than a second implementation of it:
- * `blockAllowedAt` is the one answer and both surfaces ask it.
+ * `placementVerdict` is the one answer and both surfaces ask it — of the same
+ * types, too. A component instance is judged by the ROOTS of the definition it
+ * draws (`placementTypesOf`), as a drop is, because the instance node's own
+ * type is not a registered block and the nesting source restricts it nowhere.
  *
  * ## It does NOT move the question into `keyboard-move`
  *
@@ -30,11 +33,15 @@
  *
  * @module move-refusal
  */
-import type { BlockDocument, NestingSource } from "@nextlyhq/blocks-engine";
-import { findNode } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  ComponentLookup,
+  NestingSource,
+} from "@nextlyhq/blocks-engine";
+import { findNode, placementVerdict } from "@nextlyhq/blocks-engine";
 
 import { refusalWording, type RefusalWording } from "./drag-refusal";
-import { blockAllowedAt } from "./inserter";
+import { placementTypesOf } from "./inserter";
 import type { OpPosition } from "./ops";
 
 /**
@@ -47,13 +54,16 @@ import type { OpPosition } from "./ops";
  * @param movingId - the block being moved
  * @param to - the position it would move to
  * @param nesting - the rule source, the same one the pointer route asks
+ * @param definitions - the component definitions the canvas draws, so an
+ *   instance is judged by what it draws; without one, by its own type
  * @returns the refusal's headline and remedy, or `null` when it is permitted
  */
 export function nestingRefusalForMove(
   document: BlockDocument,
   movingId: string,
   to: OpPosition,
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): RefusalWording | null {
   const moving = findNode(document.nodes, movingId);
   if (moving === undefined) return null;
@@ -78,11 +88,17 @@ export function nestingRefusalForMove(
           slot: to.slot ?? "",
         } as const);
 
-  const verdict = blockAllowedAt(moving.type, target, nesting);
+  const verdict = placementVerdict(
+    placementTypesOf(moving, definitions),
+    target,
+    nesting
+  );
   // ALLOWED is null: the rule permits this placement. Whether it survives the
   // store's own limits is a later question with a different answer.
   if (verdict.allowed) return null;
 
+  // Worded by the node being moved, as the pointer route words a refused drop:
+  // the author picked up the instance, not the root inside it that refused.
   return refusalWording(verdict, moving.type, parent?.type);
 }
 

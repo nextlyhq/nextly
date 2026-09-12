@@ -13,7 +13,16 @@
  *
  * @module move-refusal.test
  */
-import type { BlockDocument, NestingSource } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  ComponentDocument,
+  ComponentLookup,
+  NestingSource,
+} from "@nextlyhq/blocks-engine";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  DOCUMENT_FORMAT_VERSION,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { refusalAnnouncement, nestingRefusalForMove } from "./move-refusal";
@@ -133,6 +142,93 @@ describe("permitting, rather than inventing a refusal", () => {
         { parentId: "gone", slot: "default", index: 0 },
         ONLY_IN_BOX
       )
+    ).toBeNull();
+  });
+});
+
+describe("a component instance is judged by the ROOTS of what it draws", () => {
+  /*
+   * An instance node's own type is not a registered block, so the nesting
+   * source answers "no restriction" for it. Judged by that type, the keyboard
+   * would move a component whose root belongs only inside a box up to the root
+   * — the placement the pointer route refuses, because a drop is judged by
+   * `placementTypesOf`. The keyboard asks the same question of the same
+   * lookup, so the two routes cannot disagree about where an instance may go.
+   */
+
+  /** A rule keyed by TYPE: text lives only inside a box, everything else is free. */
+  const TEXT_ONLY_IN_BOX: NestingSource = {
+    parentsOf: type => (type === "acme/text" ? ["acme/box"] : undefined),
+  };
+
+  /** A definition whose one root is a text block. */
+  const HEADER: ComponentDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [{ id: "d1", type: "acme/text", version: 1, props: {} }],
+  };
+
+  const DRAWS_HEADER: ComponentLookup = new Map([["header", HEADER]]);
+
+  /** A page holding a box and an instance of the header, both at the root. */
+  function pageOf(): BlockDocument {
+    return {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+        {
+          id: "inst",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    };
+  }
+
+  it("refuses an instance at the root when the root it draws may only sit inside a box", () => {
+    const wording = nestingRefusalForMove(
+      pageOf(),
+      "inst",
+      { index: 0 },
+      TEXT_ONLY_IN_BOX,
+      DRAWS_HEADER
+    );
+
+    expect(wording?.headline).toMatch(/has to sit inside a container/i);
+    expect(wording?.remedy).toContain("Box");
+  });
+
+  it("permits the same instance inside the box", () => {
+    // The control: the lookup refuses the ROOT, not the instance as such.
+    expect(
+      nestingRefusalForMove(
+        pageOf(),
+        "inst",
+        { parentId: "box", slot: "children", index: 0 },
+        TEXT_ONLY_IN_BOX,
+        DRAWS_HEADER
+      )
+    ).toBeNull();
+  });
+
+  it("judges an instance by its own type, which restricts nothing, when no lookup is given", () => {
+    /*
+     * A host without a definitions map — one whose library never loaded — has
+     * nothing to resolve against, and the instance is drawn as a placeholder
+     * wherever it sits. Refusing to move a placeholder would pin it to the
+     * spot it was left in, so the answer is the one `placementTypesOf` gives
+     * for an unresolvable instance: its own type.
+     */
+    expect(
+      nestingRefusalForMove(pageOf(), "inst", { index: 0 }, TEXT_ONLY_IN_BOX)
     ).toBeNull();
   });
 });

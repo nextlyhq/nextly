@@ -135,6 +135,12 @@ type FieldHookFn = FieldHookHandler;
 
 export interface FieldFunctions {
   validate?: ValidatableField["validate"];
+  /**
+   * A `defaultValue` declared as a function. Only the function form lives
+   * here: a constant default survives the stored definition and is read from
+   * it, while a function does not survive storage at all.
+   */
+  defaultValue?: (data: Record<string, unknown>) => unknown;
   access?: {
     create?: FieldAccessFn;
     read?: FieldAccessFn;
@@ -172,6 +178,10 @@ function extractFieldFunctions(
   const out: FieldFunctions = {};
   let hasAny = false;
 
+  if (typeof field.defaultValue === "function") {
+    out.defaultValue = field.defaultValue as FieldFunctions["defaultValue"];
+    hasAny = true;
+  }
   if (typeof field.validate === "function") {
     out.validate = field.validate as FieldFunctions["validate"];
     hasAny = true;
@@ -657,6 +667,21 @@ async function applyReadAccessRec(
 }
 
 /**
+ * The caller's grants resolver for a read, to hand to every field-access pass
+ * over one document so roles and permissions are read once. Memoised on first
+ * use, like the resolver each pass would otherwise build for itself.
+ */
+export function readAccessGrants(
+  user: Record<string, unknown> | undefined,
+  authenticatedScope?: AuthenticatedScope
+): () => Promise<CallerGrants> {
+  return grantsResolver(
+    typeof user?.id === "string" ? user.id : undefined,
+    authenticatedScope
+  );
+}
+
+/**
  * Enforce field-level read access on a serialized entry: fields whose
  * `access.read` denies are removed from the response, at every depth.
  *
@@ -676,6 +701,12 @@ export async function applyFieldReadAccess(
     /** The caller's own grants when they arrived on an API key; see {@link grantsResolver}. */
     authenticatedScope?: AuthenticatedScope;
     overrideAccess?: boolean;
+    /**
+     * A resolver shared with another pass over the same document, so the two
+     * passes read the caller's roles and permissions once and judge with one
+     * authority; see {@link readAccessGrants}.
+     */
+    grants?: () => Promise<CallerGrants>;
   },
   redactions?: ReadAccessRedactions
 ): Promise<void> {
@@ -701,10 +732,12 @@ export async function applyFieldReadAccess(
       // An unauthenticated read still runs the rules — this path, unlike the
       // write one, does not bail without a user — so the resolver is handed the
       // same absent id and answers with no grants rather than not being called.
-      grants: grantsResolver(
-        typeof opts.user?.id === "string" ? opts.user.id : undefined,
-        opts.authenticatedScope
-      ),
+      grants:
+        opts.grants ??
+        grantsResolver(
+          typeof opts.user?.id === "string" ? opts.user.id : undefined,
+          opts.authenticatedScope
+        ),
     },
     store,
     restoredByRow

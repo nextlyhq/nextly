@@ -28,7 +28,9 @@ import {
 import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import type { FieldConfig } from "../../collections/fields/types";
+import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { Logger } from "../../services/shared";
 
 const silentLogger: Logger = {
@@ -59,6 +61,35 @@ export interface SeedBuilderCollectionOptions {
  * Create the `dc_<slug>` table + `dynamic_collections` row for a UI collection.
  * Returns the slug + resolved physical table name.
  */
+/**
+ * Put the just-created table into the adapter's live table resolver, as every
+ * real create path does: `CollectionMetadataService.registerRuntimeSchema` for
+ * a Builder collection, the single dispatcher for a Single, and
+ * `field-group-table-provisioning` for a field group. They register straight
+ * after the DDL so the table is addressable in the process that made it rather
+ * than only after the next boot.
+ *
+ * Without this step the seeded table exists physically and is absent from the
+ * resolver, which no create path leaves behind: every model-bound adapter call
+ * against it (select, update, count, delete) refuses with "not found in schema
+ * registry", and only raw SQL reaches it. A fixture in that state measures a
+ * database the runtime cannot address.
+ */
+function registerRuntimeTable(
+  adapter: DrizzleAdapter,
+  tableName: string,
+  table: unknown
+): void {
+  const resolver = (
+    adapter as unknown as {
+      tableResolver?: {
+        registerDynamicSchema?: (name: string, table: unknown) => void;
+      };
+    }
+  ).tableResolver;
+  resolver?.registerDynamicSchema?.(tableName, table);
+}
+
 export async function seedBuilderCollection(
   adapter: DrizzleAdapter,
   opts: SeedBuilderCollectionOptions
@@ -105,6 +136,14 @@ export async function seedBuilderCollection(
   const registry = new DynamicCollectionRegistryService(adapter, silentLogger);
   await registry.registerCollection(metadata);
 
+  const { table } = generateRuntimeSchema(
+    tableName,
+    userFields,
+    adapter.getCapabilities().dialect,
+    { status: opts.status === true }
+  );
+  registerRuntimeTable(adapter, tableName, table);
+
   return { slug, tableName };
 }
 
@@ -148,6 +187,14 @@ export async function seedBuilderSingle(
     schemaHash: `seed_${slug}`,
   });
 
+  const { table } = generateRuntimeSchema(
+    tableName,
+    userFields,
+    adapter.getCapabilities().dialect,
+    { status: opts.status === true }
+  );
+  registerRuntimeTable(adapter, tableName, table);
+
   return { slug, tableName };
 }
 
@@ -183,6 +230,17 @@ export async function seedBuilderComponent(
     source: "ui",
     schemaHash: `seed_${slug}`,
   });
+
+  // The discriminator is the constant the DDL above just wrote, which is what
+  // a table this process created resolves it from; the catalog lookup is for
+  // tables an earlier process built under a since-renamed column.
+  registerRuntimeTable(
+    adapter,
+    tableName,
+    schemaService.generateRuntimeSchema(tableName, userFields, {
+      typeColumn: STORAGE_FORMAT.columns.type,
+    })
+  );
 
   return { slug, tableName };
 }

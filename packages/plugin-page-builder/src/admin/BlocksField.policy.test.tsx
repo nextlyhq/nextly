@@ -28,10 +28,48 @@ const seen: {
   inspector: Record<string, unknown> | undefined;
   canvas: Record<string, unknown> | undefined;
   breakpoints: Record<string, unknown> | undefined;
-} = { inspector: undefined, canvas: undefined, breakpoints: undefined };
+  classes: Record<string, unknown> | undefined;
+} = {
+  inspector: undefined,
+  canvas: undefined,
+  breakpoints: undefined,
+  classes: undefined,
+};
+
+/**
+ * The rail panel the shell mock asks the editor to draw, when one is asked
+ * for. The real shell draws one at a time and this mock draws none unless
+ * told, so a case about a panel's props names the panel.
+ */
+let shownPanel: "classes" | null = null;
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
+
+/**
+ * The document the editor holds, as the shell stub reports it.
+ *
+ * Empty for every case not about the page's content; a case that needs an
+ * instance on the page puts one here. Hoisted because the mock factory reads
+ * it.
+ */
+const EMPTY_PAGE = { formatVersion: 1, kind: "page", nodes: [] as unknown[] };
+let editorDocument: { formatVersion: number; kind: string; nodes: unknown[] } =
+  EMPTY_PAGE;
+
+/**
+ * What the component route answers with for the test in hand.
+ *
+ * `pending: false` with no data says the read ANSWERED with nothing — a site
+ * with no components — which is the state every case not about the gate was
+ * written against.
+ */
+let componentRead: {
+  data: unknown;
+  pending: boolean;
+  error: Error | null;
+  refetch: () => void;
+} = { data: undefined, pending: false, error: null, refetch: () => {} };
 
 /** What the stored-style read answers with for the test in hand. */
 let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
@@ -52,7 +90,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
    */
   const real = await importOriginal<Record<string, unknown>>();
   const record =
-    (key: "inspector" | "canvas") =>
+    (key: "inspector" | "canvas" | "classes") =>
     (props: Record<string, unknown>): React.JSX.Element => {
       seen[key] = props;
       return <div data-recorder={key} />;
@@ -73,10 +111,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       inspector,
       topBar,
       children,
+      renderPanel,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
+      renderPanel?: (panel: string) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
         {/*
@@ -86,12 +126,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
          */}
         {topBar}
         {inspector}
+        {shownPanel === null ? null : renderPanel?.(shownPanel)}
         {children}
       </div>
     ),
     BreakpointManager: record("breakpoints"),
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    ClassManagerPanel: record("classes"),
     BlockKeyboardActions: passthrough,
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
@@ -124,7 +166,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       draggingBlockName: null,
     }),
     useEditorState: () => ({
-      document: { formatVersion: 1, kind: "page", nodes: [] },
+      document: editorDocument,
       selectedId: null,
       selection: { ids: [], primary: null },
       apply: () => null,
@@ -149,6 +191,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    */
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
+  // No document around the field: the state every case here was written
+  // against, and the one that offers every component.
+  useDocumentIdentity: () => null,
+  // Nor a language the field could know: the component read asks for the
+  // app default.
+  useDocumentLocale: () => null,
   /*
    * The library read. Absent here rather than stubbed with patterns, because
    * these cases are about other surfaces and an offered pattern would change
@@ -156,12 +204,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * nothing, which is the site with an empty library — the state every one of
    * these cases was written against.
    */
-  usePluginRoute: () => ({
-    data: undefined,
-    pending: false,
-    error: null,
-    refetch: () => {},
-  }),
+  // Discriminated BY PATH, so the component read's state — the one gate this
+  // file drives — cannot reach a read of something else.
+  usePluginRoute: (args: { path: string }) =>
+    args.path === "/library/components"
+      ? componentRead
+      : { data: undefined, pending: false, error: null, refetch: () => {} },
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -205,6 +253,15 @@ beforeEach(() => {
   seen.breakpoints = undefined;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
+  componentRead = {
+    data: undefined,
+    pending: false,
+    error: null,
+    refetch: () => {},
+  };
+  editorDocument = EMPTY_PAGE;
+  shownPanel = null;
+  seen.classes = undefined;
 });
 
 afterEach(() => {
@@ -316,6 +373,83 @@ describe("when the stored style cannot be read at all", () => {
       document.querySelector('[data-canvas-state="loading"]')
     ).not.toBeNull();
     expect(document.querySelector('[data-canvas-state="failed"]')).toBeNull();
+  });
+});
+
+describe("what the canvas waits for, the component read", () => {
+  it("holds the canvas back while the definitions are still arriving", () => {
+    // Mounted without them, every instance on the page flashes as
+    // could-not-be-loaded and then re-lays-out when the read lands — the same
+    // finished-looking wrong picture the style gate refuses.
+    componentRead = {
+      data: undefined,
+      pending: true,
+      error: null,
+      refetch: () => {},
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeUndefined();
+    expect(
+      document.querySelector('[data-canvas-state="loading"]')
+    ).not.toBeNull();
+  });
+
+  it("still mounts the canvas when the components could not be read, and says so beside it", () => {
+    // The route refuses a role that may edit pages but not read components,
+    // and a least-privilege page editor must keep the canvas for every page,
+    // block-only pages included. So the failure does not gate; it is said
+    // above the canvas, with the one remedy reachable from here — and told
+    // apart from a failed STYLE read, which does gate and is fixed by a reload.
+    const refetch = vi.fn();
+    componentRead = {
+      data: undefined,
+      pending: false,
+      error: new Error("Forbidden"),
+      refetch,
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeDefined();
+    expect(document.querySelector('[data-canvas-state="failed"]')).toBeNull();
+    const note = document.querySelector(
+      '[data-canvas-state="components-unavailable"]'
+    );
+    expect(note?.textContent).toContain("components could not be loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what the canvas says of a component read that failed to refresh", () => {
+  it("draws the canvas from the cached definitions and says they may be out of date", () => {
+    // A read that answered once and then could not answer again keeps its
+    // last answer, so the canvas draws — from definitions an edit elsewhere
+    // may have changed. Said as that, with the retry, and not as the
+    // never-read sentence, which would claim instances draw as missing while
+    // they are drawn.
+    const refetch = vi.fn();
+    componentRead = {
+      data: { items: [], meta: { count: 0, truncated: false } },
+      pending: false,
+      error: new Error("Forbidden"),
+      refetch,
+    };
+
+    openEditor();
+
+    expect(seen.canvas).toBeDefined();
+    expect(
+      document.querySelector('[data-canvas-state="components-unavailable"]')
+    ).toBeNull();
+    const note = document.querySelector(
+      '[data-canvas-state="components-stale"]'
+    );
+    expect(note?.textContent).toContain("could not be reloaded");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -655,5 +789,184 @@ describe("what the inspector is told about provenance", () => {
 
     expect(seen.inspector).toBeDefined();
     expect(seen.inspector?.cascade).toBeDefined();
+  });
+
+  it("compiles the trace against the SAME definitions the canvas draws with", () => {
+    /*
+     * One map, two readers. A trace compiled without it leaves every instance
+     * unresolved, so the composed nodes on screen — and their declarations —
+     * are missing from the cascade the provenance dots read. Observed through
+     * the CASCADE rather than a call: a component with a coloured node, on a
+     * page holding one instance of it, yields a colour entry only when the
+     * definitions reached the compile.
+     */
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "core/text",
+          version: 1,
+          props: { text: "Composed" },
+          styles: { base: { base: { color: "crimson" } } },
+        },
+      ],
+    };
+    componentRead = {
+      data: {
+        items: [{ id: "header", title: "Header", document: definition }],
+        meta: { count: 1, truncated: false },
+      },
+      pending: false,
+      error: null,
+      refetch: () => {},
+    };
+    editorDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "i1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    };
+
+    openEditor();
+
+    const cascade = seen.inspector?.cascade as
+      | { entries: { property: string; value?: unknown }[] }
+      | undefined;
+    expect(cascade).toBeDefined();
+    expect(
+      (cascade?.entries ?? []).some(entry => entry.property === "color")
+    ).toBe(true);
+  });
+
+  it("compiles the trace under the SAME caps the canvas draws under", () => {
+    /*
+     * The trace takes the caps beside the definitions, and defaulted them to
+     * the engine's when the editor handed over only the map. Under a site cap
+     * the canvas leaves an instance unresolved for budget, the trace composed
+     * it anyway and reported declarations for nodes the canvas drew as a
+     * placeholder. Observed through the cascade: a two-node definition on a
+     * page whose cap has room for one yields NO colour entry once the caps
+     * reach the compile — and does yield one under the engine's defaults,
+     * which is the control the case would pass on vacuously without.
+     */
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "core/text",
+          version: 1,
+          props: { text: "Composed" },
+          styles: { base: { base: { color: "crimson" } } },
+        },
+        { id: "d2", type: "core/text", version: 1, props: { text: "More" } },
+      ],
+    };
+    componentRead = {
+      data: {
+        items: [{ id: "header", title: "Header", document: definition }],
+        meta: { count: 1, truncated: false },
+      },
+      pending: false,
+      error: null,
+      refetch: () => {},
+    };
+    editorDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "i1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    };
+    const hasColour = () =>
+      (
+        (
+          seen.inspector?.cascade as
+            | { entries: { property: string }[] }
+            | undefined
+        )?.entries ?? []
+      ).some(entry => entry.property === "color");
+
+    clientConfig = { limits: { maxNodes: 1 } };
+    openEditor();
+    expect(seen.inspector?.cascade).toBeDefined();
+    expect(hasColour()).toBe(false);
+    cleanup();
+
+    clientConfig = undefined;
+    openEditor();
+    expect(hasColour()).toBe(true);
+  });
+
+  it("tells the classes manager about a class a linked component applies on this page", () => {
+    /*
+     * The same map, a third reader. The manager's on-this-page filter is
+     * built from a walk of the document, and the stored document holds one
+     * instance node where the canvas draws a whole definition — so a class
+     * applied inside that definition is rendered on the page and absent from
+     * the filter unless the walk composes through the same map the canvas
+     * draws with.
+     */
+    const definition = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [
+        {
+          id: "d1",
+          type: "core/text",
+          version: 1,
+          props: { text: "Composed" },
+          classes: ["hero"],
+        },
+      ],
+    };
+    componentRead = {
+      data: {
+        items: [{ id: "header", title: "Header", document: definition }],
+        meta: { count: 1, truncated: false },
+      },
+      pending: false,
+      error: null,
+      refetch: () => {},
+    };
+    editorDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["own"],
+        },
+        {
+          id: "i1",
+          type: "nextly/component-instance",
+          version: 1,
+          props: { componentId: "header" },
+        },
+      ],
+    };
+    shownPanel = "classes";
+
+    openEditor();
+
+    expect(seen.classes?.documentClassIds).toEqual(["hero", "own"]);
+    expect(seen.classes?.documentScan).toBe("complete");
   });
 });

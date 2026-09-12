@@ -244,6 +244,26 @@ describe("Direct API - Collection Operations", () => {
         })
       );
     });
+
+    it("should forward the lifecycle scope to the service", async () => {
+      // The option is only worth having if it ARRIVES, for the reason `count`
+      // gives: dropped between the namespace and the service, an untrusted
+      // by-id read stays bounded to public states, and a row that was never
+      // published answers 404 to the caller that just listed it -- while the
+      // call site reads as though it asked for everything.
+      mocks.collectionsHandler.getEntry.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "OK",
+        data: { id: "1" },
+      });
+
+      await nextly.findByID({ collection: "posts", id: "1", status: "all" });
+
+      expect(mocks.collectionsHandler.getEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ entryId: "1", status: "all" })
+      );
+    });
   });
 
   describe("create()", () => {

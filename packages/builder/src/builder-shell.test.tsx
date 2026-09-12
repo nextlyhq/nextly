@@ -23,6 +23,7 @@ import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useNoticeQueue, useNoticeSink } from "./builder-notices";
 import { BuilderShell } from "./builder-shell";
 import { CommandPalette } from "./command-palette";
 import {
@@ -166,6 +167,46 @@ function renderShell(props: Partial<Parameters<typeof BuilderShell>[0]> = {}) {
   );
   return { onExit, ...result };
 }
+
+describe("whose notices the shell reports", () => {
+  it("renders and provides the HOST's queue when one is handed in, so a sentence raised above the shell lands in its region", () => {
+    // A host builds its editor above the shell, and that editor is where an
+    // edit is refused for room. The sink the shell provides cannot be reached
+    // from there, so the host owns the queue instead: what it raises and what
+    // a control inside the shell raises land in the same region.
+    function Host(): React.JSX.Element {
+      const notices = useNoticeQueue();
+      hostRaise = notices.raise;
+      return (
+        <BuilderShell
+          onExit={() => {}}
+          store={memoryStore()}
+          notices={notices}
+          inspector={<InsideRaiser />}
+        />
+      );
+    }
+    function InsideRaiser(): React.JSX.Element {
+      insideRaise = useNoticeSink();
+      return <span />;
+    }
+    let hostRaise: ((message: string) => void) | undefined;
+    let insideRaise: ((message: string) => void) | undefined;
+    stubContainerFits(true);
+    render(<Host />);
+
+    act(() => {
+      hostRaise?.("This page has no room left for that component.");
+    });
+    act(() => {
+      insideRaise?.("This class could not be saved.");
+    });
+
+    const region = screen.getByRole("status");
+    expect(region.textContent).toMatch(/no room left/);
+    expect(region.textContent).toMatch(/could not be saved/);
+  });
+});
 
 describe("the regions the shell exposes", () => {
   it("names every region for assistive technology", () => {
