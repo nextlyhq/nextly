@@ -35,6 +35,11 @@ rather than something a version bump does.
 Read-only by design for its first release. Writes, if they arrive, land as
 proposals a person reviews rather than as direct edits.
 
+## Related packages
+
+- [`@nextlyhq/plugin-sdk`](../plugin-sdk) — the SDK this plugin is built on
+- [`nextly`](../nextly) — the core whose schema and content this exposes
+
 ## Licence
 
 MIT
