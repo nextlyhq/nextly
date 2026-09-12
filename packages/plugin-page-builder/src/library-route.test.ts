@@ -722,6 +722,47 @@ describe("the component tier", () => {
     expect(library.meta.truncated).toBe(false);
   });
 
+  it("carries a component's KEYWORDS, which the palette searches", async () => {
+    // `LibraryComponent` derives from `SavedComponent`, and the catalogue
+    // builds a component tile's search terms from `keywords` exactly as it
+    // does a pattern's. Dropped here, a component whose useful terms are in
+    // neither its title nor its description could not be found by them.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b")]],
+      byId: {
+        a: {
+          id: "a",
+          title: "A",
+          keywords: "hero banner masthead",
+          content: draft("x"),
+        },
+        // The ordinary row: a non-required field is stored as SQL NULL and
+        // read back with the KEY PRESENT, which the palette's reader expects
+        // as `null` rather than as absent.
+        b: { id: "b", title: "B", keywords: null, content: draft("y") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items[0]).toMatchObject({
+      keywords: "hero banner masthead",
+    });
+    expect(library.items[1]).toMatchObject({ keywords: null });
+  });
+
+  it("carries no keywords key for a row that has none at all", async () => {
+    // The control: a collection with no keywords field must not grow one.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a")]],
+      byId: { a: { id: "a", title: "A", content: draft("x") } },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items[0]).not.toHaveProperty("keywords");
+  });
+
   it("keys a component by the id the LISTING named when the by-id row carries none", async () => {
     /*
      * The by-id row is a PRESENTATION of the same row — field-level access can
