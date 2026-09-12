@@ -3,6 +3,7 @@ import { sql, eq, and } from "drizzle-orm";
 
 import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
+import { NEW_ENTITY_PERMISSION_ROLE } from "../../../auth/new-entity-access-policy";
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
 import { ADOPTED_LIFECYCLE_ACTIONS } from "../../../plugins/permissions/collect-permissions";
 import { SYSTEM_RESOURCES, permissionSlug } from "../../../schemas/_zod/rbac";
@@ -920,7 +921,7 @@ export class PermissionSeedService extends BaseService {
       const superAdminRole = await this.db
         .select({ id: roles.id })
         .from(roles)
-        .where(eq(roles.slug, "super-admin"))
+        .where(eq(roles.slug, NEW_ENTITY_PERMISSION_ROLE))
         .limit(1)
         .then(
           (rows: unknown[]) => (rows[0] as { id: unknown } | undefined) ?? null
