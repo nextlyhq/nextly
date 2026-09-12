@@ -91,4 +91,17 @@ export function resetWidgetRegistries(
   // most of the codebase in order to offer a card.
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
+
+  // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
+  // ordering fact rather than a preference: this runs before any plugin
+  // context exists (`initializePlugins` builds them later in the same boot),
+  // and a contributed resolver is useless without its context -- a plugin's
+  // data services are reachable through nothing else.
+  //
+  // They register from `initializePlugins`, bound to their own plugin's
+  // context, exactly as contributed services already do. That keeps the
+  // ordering this function's own registrations rely on: core publishes its
+  // sources HERE, first, so a plugin naming a built-in id is refused by
+  // `registerSource` on the PLUGIN's registration -- naming the plugin an
+  // operator can act on, rather than dying inside core's own publication.
 }

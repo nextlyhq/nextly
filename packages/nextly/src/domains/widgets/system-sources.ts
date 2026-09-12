@@ -1,5 +1,5 @@
 /**
- * A source whose rows are not a collection's, and the function that answers it.
+ * CORE's own resolver-answered sources: the `system:` door.
  *
  * ## Why a resolver rather than a query compiler
  *
@@ -24,108 +24,85 @@
  * offer a card, and would make a domain unable to ship a source without editing
  * a file it does not own. The collection sources already work this way.
  *
+ * ## Why this is a door rather than a store
+ *
+ * The store, the resolver signature and the rule about which kinds may carry a
+ * resolver all live in `resolved-sources.ts`, because `plugin:` sources are
+ * answered exactly the same way and two stores would be two answers to "what
+ * answers this id". What survives here is the one thing that is genuinely
+ * system-specific: a caller reaching for THIS function is publishing core's own
+ * source, and a `plugin:` id arriving at it is a mistake worth refusing by name
+ * rather than quietly accepting through the generic door.
+ *
  * @module domains/widgets/system-sources
  */
 
 import { NextlyError } from "../../errors/nextly-error";
-import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
-import type { WidgetQuery } from "./query";
-import type { WidgetResult } from "./result";
-import { registerSource, type WidgetSource } from "./sources";
+import {
+  clearResolvers,
+  registerResolvedSource,
+  sourceResolver,
+  type SourceResolver,
+} from "./resolved-sources";
+import type { WidgetSource } from "./sources";
 
 /**
  * Answers one system source's query, for one caller.
  *
- * Returns the same `WidgetResult` a collection query does, so the archetypes
- * that draw a count or a list need no branch for where the rows came from.
+ * An alias rather than a second declaration: a plugin's resolver and core's are
+ * handed the same two values and return the same result, and spelling that
+ * twice is how the two would come to differ.
  */
-export type SystemSourceResolver = (
-  query: WidgetQuery,
-  caller: ReadCaller
-) => Promise<WidgetResult>;
+export type SystemSourceResolver = SourceResolver;
 
 /**
- * The resolvers, pinned where every other boot-time widget store is.
+ * A source this door may publish: one whose kind is literally `"system"`.
  *
- * On `globalThis` so they survive the module re-evaluation Next.js and
- * Turbopack perform, matching the source store beside them.
- */
-const globalForResolvers = globalThis as unknown as {
-  __nextly_systemResolvers?: Map<string, SystemSourceResolver>;
-};
-
-function resolvers(): Map<string, SystemSourceResolver> {
-  globalForResolvers.__nextly_systemResolvers ??= new Map();
-  return globalForResolvers.__nextly_systemResolvers;
-}
-
-/**
- * A source this registry may answer: one whose kind is literally `"system"`.
- *
- * Narrower than `WidgetSource` on purpose. The resolver store is keyed by id
- * alone, so a resolver accepted under any other kind would sit in the map
- * beside sources answered by an entirely different path.
+ * Narrower than `WidgetSource` on purpose, and narrower than the generic
+ * registrar accepts: the resolver store is keyed by id alone, so core
+ * publishing under a `plugin:` id would put its source where a plugin fold is
+ * entitled to replace it.
  */
 export type SystemWidgetSource = WidgetSource & { kind: "system" };
 
 /**
  * Publish a system source and the function that answers it, together.
  *
- * 🔴 One call, because the two halves are useless apart and dangerous apart in
- * one direction: a source registered without a resolver is discoverable, passes
- * validation, and fails only when a reader puts the card on their dashboard.
- * Registering them separately makes that state reachable through ordinary
- * refactoring; this signature makes it unrepresentable.
- *
  * 🔴 And only a SYSTEM source, checked at runtime rather than left to the type.
- * `registerSource` validates that a source's kind agrees with its namespace and
- * nothing more, so a well-formed `collection:` source satisfies it completely --
- * and a resolver stored under a collection id would be an answer to a question
- * the access-controlled Direct API is supposed to answer. The type states the
- * rule for a TypeScript caller; this states it for a plugin author compiling
- * separately, for JavaScript, and for a cast.
- *
- * Refused BEFORE `registerSource`, so a rejected registration writes neither
- * store. Checking afterwards would leave the source published and unanswerable,
- * which is the exact state this function's signature exists to prevent.
- *
- * The source then goes through `registerSource`, the same door a collection
- * source uses, so its shape is validated by the same rules and a duplicate id
- * is refused the same way.
+ * The type states the rule for a TypeScript caller; this states it for
+ * JavaScript and for a cast. Refused BEFORE the generic registrar, so a
+ * rejected registration writes neither store.
  */
 export function registerSystemSource(
   source: SystemWidgetSource,
   resolve: SystemSourceResolver
 ): void {
   if (source?.kind !== "system") {
-    // `invalidInput`, matching `sources.ts`: a source registered by core or by
-    // a plugin is developer input, not a reader's, so the message is safe to
-    // surface verbatim and says what to change.
     throw NextlyError.invalidInput({
       message:
         `Invalid widget source: ${String(source?.id)}: a resolver may only be ` +
         `registered for a "system:" source, not kind "${String(source?.kind)}"`,
     });
   }
-  registerSource(source);
-  resolvers().set(source.id, resolve);
+  registerResolvedSource(source, resolve);
 }
 
 /** The resolver for `sourceId`, or `undefined` when nothing answers it. */
 export function systemResolver(
   sourceId: string
 ): SystemSourceResolver | undefined {
-  return resolvers().get(sourceId);
+  return sourceResolver(sourceId);
 }
 
 /**
  * Forget every registered resolver.
  *
- * For tests, which register sources into a store that outlives a single file.
- * Paired with `clearSources`: clearing one and not the other leaves a resolver
- * addressable under an id no source claims, or a source nothing can answer.
+ * For tests, which register sources into a store that outlives a single file,
+ * and for the boot reset. Clears EVERY resolver rather than the system ones
+ * alone: they share a store, and a reset that took one kind would leave the
+ * other answering for a boot that is over.
  */
 export function clearSystemResolvers(): void {
-  resolvers().clear();
+  clearResolvers();
 }

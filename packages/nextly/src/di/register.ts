@@ -95,6 +95,7 @@ import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/w
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
+import { registerResolvedSource } from "../domains/widgets/resolved-sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -147,6 +148,7 @@ import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import { assertAdminWidgets } from "../plugins/validate-admin-widgets";
 import { validatePluginMenus } from "../plugins/validate-menus";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
+import { collectWidgetSources } from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
   CollectionSource,
@@ -2899,6 +2901,11 @@ async function initializePlugins(
     [];
   const contexts = new Map<string, PluginContext>();
 
+  // Folded once, across every plugin, so a duplicate source id or a reserved
+  // namespace is a boot failure naming BOTH owners. Done before any
+  // registration so a refusal writes no store at all.
+  const contributedSources = collectWidgetSources(plugins);
+
   // PASS 1 — build every enabled plugin's context, register its contributed
   // services (D64) and declared event names. Services register BEFORE any init
   // runs, so a plugin's `init` can resolve any other plugin's service lazily via
@@ -2932,6 +2939,30 @@ async function initializePlugins(
       plugin.contributes?.services ?? {}
     )) {
       registerPluginService(plugin.name, svcName, () => factory(pluginContext));
+    }
+
+    // Contributed widget SOURCES, bound the same way and for the same reason.
+    // They cannot register with the other widget stores in
+    // `resetWidgetRegistries`: that runs before any context is built, and a
+    // resolver without its context can answer nothing -- a plugin's data
+    // services are reachable through nothing else.
+    //
+    // Per plugin rather than in one sweep afterwards, so each resolver closes
+    // over ITS OWN context. One shared context would hand every plugin the
+    // first one's `ctx.self`, which is how a plugin would come to read another
+    // plugin's entities while believing they were its own.
+    //
+    // Validated across ALL plugins before the loop (`contributedSources`), so a
+    // duplicate id or a reserved namespace is refused naming both owners rather
+    // than discovered halfway through registration.
+    for (const contributed of contributedSources) {
+      if (contributed.owner !== plugin.name) continue;
+      // The source goes through AS DECLARED. The fold has already refused any
+      // kind but `plugin`, so rewriting it here would only be able to hide a
+      // contribution the fold would have caught.
+      registerResolvedSource(contributed.source, (query, caller) =>
+        contributed.resolve(query, caller, pluginContext)
+      );
     }
 
     // Register contributed email providers (C2/D65) — fail-fast on type collision.
