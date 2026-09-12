@@ -118,24 +118,24 @@ describe("resetWidgetRegistries", () => {
     expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
   });
 
-  it("drops the previous boot's deferred entities, for both kinds", () => {
-    // 🔴 A refusal is a statement about the reloads of ONE process, and this
-    // store outlives that process's services. Left standing across a
-    // `clearServices()` / `registerServices()` pair, a slug the last boot
-    // deferred withheld its source and every generated card for good: only a
-    // later reload replaces a kind's set, and this boot has no reason to run
-    // one. Both kinds asserted, because the store is keyed by kind and a reset
-    // that took one of them would leave the other answering for a boot that is
-    // over.
+  it("leaves the deferral store alone, because it has not synced anything yet", () => {
+    // 🔴 The reset runs BEFORE the boot syncs any metadata, so clearing here
+    // would publish "nothing is withheld" on the strength of work that has not
+    // happened -- and the boot's own sync can then fail and be CAUGHT, leaving
+    // the registry exactly as stale as the previous reload found it while the
+    // set says otherwise.
+    //
+    // Each kind replaces its own set from its own sync path instead, once that
+    // sync has succeeded (`publishBootDeferrals` in `di/register`), which
+    // clears a previous boot's refusal on the pass that earns the right to and
+    // retains it when the sync throws.
     setDeferredEntities("collection", ["posts"]);
     setDeferredEntities("single", ["settings"]);
-    expect([...deferredEntities("collection")]).toEqual(["posts"]);
-    expect([...deferredEntities("single")]).toEqual(["settings"]);
 
     resetWidgetRegistries();
 
-    expect([...deferredEntities("collection")]).toEqual([]);
-    expect([...deferredEntities("single")]).toEqual([]);
+    expect([...deferredEntities("collection")]).toEqual(["posts"]);
+    expect([...deferredEntities("single")]).toEqual(["settings"]);
   });
 
   it("drops the previous boot's widgets and leaves core's own", () => {

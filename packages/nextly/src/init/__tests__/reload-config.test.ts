@@ -989,7 +989,10 @@ describe("reloadNextlyConfig", () => {
 
     const resolver = buildResolver({
       singleSyncResult: {
-        created: ["settings", "theme"],
+        // `theme` was written; `settings` was refused, so it is absent from
+        // `created`. A slug in both lists means the row landed and something
+        // after it failed, which the pair below covers.
+        created: ["theme"],
         updated: [],
         unchanged: [],
         errors: [{ slug: "settings" }],
@@ -1007,6 +1010,48 @@ describe("reloadNextlyConfig", () => {
       "settings",
       "applied"
     );
+  });
+
+  it("DOES mark a single whose row landed and whose permission seeding then failed", async () => {
+    // 🔴 The distinction `errors` alone cannot make, and the direction that
+    // fails silently. Both registries push a slug onto `created`/`updated`
+    // BEFORE awaiting the permission seeding that follows the write, and the
+    // catch around that await appends to `errors` -- so a slug in BOTH lists
+    // means the row IS current and something after it failed.
+    //
+    // Read as a refusal, such a single is withheld from the widget sources and
+    // its migration is never marked applied, over metadata that is in fact
+    // current, and no later pass corrects it because every later pass reads
+    // the same report the same way.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "site_name", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(buildSnapshot([]));
+
+    const resolver = buildResolver({
+      singleSyncResult: {
+        created: ["settings"],
+        updated: [],
+        unchanged: [],
+        // The SAME slug, in both lists.
+        errors: [{ slug: "settings", error: "permission seeding failed" }],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateSingleMigrationStatusSpy).toHaveBeenCalledWith(
+      "settings",
+      "applied"
+    );
+    // Nor is its source withheld: the metadata the source is built from is the
+    // metadata that landed.
+    expect(setDeferredEntitiesSpy).toHaveBeenCalledWith("single", []);
   });
 
   it("does NOT mark a DEFERRED single 'applied' in a mixed batch", async () => {
@@ -1197,7 +1242,10 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({
       resolver: buildResolver({
         singleSyncResult: {
-          created: ["theme"],
+          // `errors` ALONE. A slug in `created` too would be a row that was
+          // written and then failed something after the write, which is not a
+          // refusal and must not be withheld -- see the pair below.
+          created: [],
           updated: [],
           unchanged: [],
           errors: [{ slug: "theme", error: "write failed" }],

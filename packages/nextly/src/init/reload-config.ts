@@ -106,6 +106,7 @@ import type { SingleHooks } from "../singles/config/types";
 
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
+import { rewrittenSlugs, unwrittenSlugs } from "./sync-outcome";
 
 // Service-resolver shape. Defaulted to the real getService at runtime;
 // tests inject a lighter-weight resolver to avoid pulling DI internals.
@@ -191,44 +192,6 @@ type ComponentDef = {
 };
 
 /**
- * The slugs a metadata sync REFUSED, read defensively from an untyped result.
- *
- * `syncCodeFirstCollections` resolves rather than rejecting on a per-collection
- * failure, so a caller that only catches sees a partial failure as a success.
- * Read through a guard for the same reason its sibling below is: the surface
- * this module holds is duck-typed, and a fake may resolve anything at all.
- */
-function syncFailedSlugs(result: unknown): string[] {
-  if (typeof result !== "object" || result === null) return [];
-  const errors = (result as { errors?: unknown }).errors;
-  if (!Array.isArray(errors)) return [];
-  return errors
-    .map(entry =>
-      typeof entry === "object" && entry !== null
-        ? (entry as { slug?: unknown }).slug
-        : undefined
-    )
-    .filter((slug): slug is string => typeof slug === "string");
-}
-
-/**
- * The slugs a metadata sync rewrote, read defensively from an untyped result.
- *
- * `SyncResult.updated` names the rows that went through `updateCollection`,
- * which is the one path that resets `migration_status` on a collection that
- * already existed. Read through a guard rather than a cast because the surface
- * this module holds is duck-typed: a partial resolver fake may resolve anything
- * at all, and a sync that reports nothing must leave the marking alone rather
- * than throw inside the metadata step.
- */
-function rewrittenSlugs(result: unknown): string[] {
-  if (typeof result !== "object" || result === null) return [];
-  const updated = (result as { updated?: unknown }).updated;
-  if (!Array.isArray(updated)) return [];
-  return updated.filter((slug): slug is string => typeof slug === "string");
-}
-
-/**
  * The slugs of one kind whose registry row may now say `applied`.
  *
  * 🔴 A successful apply leaves a row saying `pending` in TWO ways, and the
@@ -288,7 +251,7 @@ function migratedSlugs(
   // Read from the sync's OWN report rather than passed in beside it: the
   // result naming the rows it rewrote is the result naming the rows it could
   // not, so asking it twice cannot disagree with itself.
-  const refused = new Set(syncFailedSlugs(syncResult));
+  const refused = new Set(unwrittenSlugs(syncResult));
   const withheld = (slug: string): boolean =>
     isDeferred(slug) || refused.has(slug);
   const migrated = new Set<string>(
@@ -412,13 +375,12 @@ interface SingleRegistrySurface {
  * is read from there; those slugs keep their prior default snapshot.
  */
 function failedSingleSlugs(syncResult: unknown): Set<string> {
-  const errs = (syncResult as { errors?: Array<{ slug?: string }> } | undefined)
-    ?.errors;
-  const slugs = new Set<string>();
-  if (Array.isArray(errs)) {
-    for (const entry of errs) if (entry?.slug) slugs.add(entry.slug);
-  }
-  return slugs;
+  // Narrowed to the writes that did NOT land, for the reason `unwrittenSlugs`
+  // states: a slug the sync pushed onto `created` or `updated` before its
+  // permission seeding threw is in BOTH lists, and its row is current. Reading
+  // `errors` alone kept that single's PRIOR snapshot over metadata that had
+  // already advanced.
+  return new Set(unwrittenSlugs(syncResult));
 }
 
 /**
@@ -635,7 +597,7 @@ async function syncCodeFirstMetadataOnly(
       payload.length > 0
         ? await registry.syncCodeFirstCollections(payload)
         : undefined;
-    const failed = syncFailedSlugs(result);
+    const failed = unwrittenSlugs(result);
     if (failed.length > 0) {
       collections = false;
       logger?.warn(
@@ -2477,7 +2439,7 @@ async function applyReload(opts?: {
       // must not act on metadata the registry did not accept: the recording
       // policies, and the hook publication below. Both would then run against a
       // field tree that is not the one stored.
-      const failedCollections = syncFailedSlugs(collectionSync);
+      const failedCollections = unwrittenSlugs(collectionSync);
 
       // 🔴 Published HERE, on the path where the metadata sync actually ran,
       // and not before the branch above. Computing it earlier looked equivalent

@@ -106,3 +106,10 @@ and a single the sync refused no longer has its migration recorded as applied
 table on the next restart. A boot also starts with nothing withheld: the
 refusals one boot recorded are its own, and a slug held over from a previous
 boot kept its source and cards hidden for the life of the process.
+
+A collection or single whose registry row was written and whose permission
+seeding then failed keeps its widget source and has its migration marked
+applied. Both registries report such an entity in `errors` as well as in
+`created`, and reading the error alone withheld a source whose stored metadata
+was in fact current -- permanently, since every later pass read the same report
+the same way.

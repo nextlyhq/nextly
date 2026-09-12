@@ -67,22 +67,3 @@ export function setDeferredEntities(
 ): void {
   store().set(kind, new Set(slugs));
 }
-
-/**
- * Forget every kind's refusals, for a boot that is about to establish its own.
- *
- * 🔴 A refusal is a statement about ONE process's reloads, and this store
- * outlives the process's services: it is pinned to `globalThis`, so
- * `clearServices()` and a fresh `registerServices()` left the previous boot's
- * refusals standing. The new boot re-syncs every entity's metadata from the
- * config it was given, so nothing it registers is known to disagree with its
- * table -- and a slug held over from the last boot withheld a source and its
- * generated cards for good, since only a later reload replaces a kind's set.
- *
- * Called from `resetWidgetRegistries`, with the widget and source stores it
- * belongs beside: all three are the same boot's registration, and a reset that
- * took two of them left the third answering for a boot that is over.
- */
-export function clearDeferredEntities(): void {
-  store().clear();
-}
