@@ -9704,14 +9704,45 @@ export class CollectionMutationService extends BaseService {
       // Field-level afterChange hooks observe the saved values (before the
       // password strip so they can see the full stored row).
       if (options.runHooks) {
-        await runFieldHooks({
-          kind: "collection",
-          slug: params.collectionName,
-          phase: "afterChange",
-          data: updated as Record<string, unknown>,
-          operation: "update",
-          user: params.user,
-        });
+        // A field hook fires for every key PRESENT in the row it is given, so
+        // the untouched translations overlaid above — needed by the snapshot
+        // and the event, which describe the whole language — would run their
+        // `afterChange` handlers for values this write never changed. Those
+        // handlers send mail, re-index and call out, so firing them for an
+        // unchanged sibling is not a harmless extra pass.
+        //
+        // Taken off for the hook phase and put back after it, rather than
+        // handed a copy: a handler's return value is written back into the
+        // row, and a copy would drop the transformations belonging to the
+        // fields this write DID set. The same remove-then-restore the field
+        // registry performs around its own snapshots.
+        const untouched = localizedUpdate
+          ? Object.keys(localizedDocument).filter(
+              name => !(name in localizedUpdate.localizedFieldValues)
+            )
+          : [];
+        const held = untouched.map(
+          name => [name, (updated as Record<string, unknown>)[name]] as const
+        );
+        for (const [name] of held) {
+          delete (updated as Record<string, unknown>)[name];
+        }
+        try {
+          await runFieldHooks({
+            kind: "collection",
+            slug: params.collectionName,
+            phase: "afterChange",
+            data: updated as Record<string, unknown>,
+            operation: "update",
+            user: params.user,
+          });
+        } finally {
+          // Restored even when a handler throws, so the response and anything
+          // read from the row afterwards still carry the whole language.
+          for (const [name, value] of held) {
+            (updated as Record<string, unknown>)[name] = value;
+          }
+        }
       }
 
       await this.redactResponseFields(

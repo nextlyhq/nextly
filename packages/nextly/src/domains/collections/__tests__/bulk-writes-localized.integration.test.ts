@@ -471,6 +471,79 @@ describe("a bulk write on a localized collection", () => {
     expect(JSON.parse(after[0].body as string)).toEqual(edited);
   });
 
+  it("runs a translated field's hook only when the write touched that field", async () => {
+    // The whole language is overlaid onto the updated row, because the
+    // snapshot and the event describe a translation rather than one field of
+    // it. A field hook fires for every key PRESENT in the row it is handed,
+    // though, so carrying the untouched siblings would run their afterChange
+    // handlers for values this write never changed — and those send mail,
+    // re-index, and call out.
+    const fired: string[] = [];
+    const record =
+      (name: string) =>
+      ({ value }: { value: unknown }) => {
+        fired.push(name);
+        return value;
+      };
+    process.env.DB_DIALECT = "sqlite";
+    const adapter = await createAdapter({
+      type: "sqlite",
+      memory: true,
+    } as Parameters<typeof createAdapter>[0]);
+    current = await createTestNextly({
+      adapter,
+      collections: [
+        defineCollection({
+          slug: "hooked",
+          localized: true,
+          access: {
+            create: () => true,
+            read: () => true,
+            update: () => true,
+          },
+          fields: [
+            {
+              ...text({ name: "title" }),
+              hooks: { afterChange: [record("title")] },
+            },
+            {
+              ...text({ name: "metaTitle" }),
+              hooks: { afterChange: [record("metaTitle")] },
+            },
+          ] as unknown as Parameters<typeof defineCollection>[0]["fields"],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const handle = current;
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    await entries.createEntries(
+      { collectionName: "hooked", overrideAccess: true },
+      [{ title: "one", metaTitle: "meta" }]
+    );
+    const [row] = await handle.adapter.executeQuery<{ _parent: string }>(
+      'SELECT "_parent" FROM "dc_hooked_locales" LIMIT 1'
+    );
+    fired.length = 0;
+
+    // Only `title`. `metaTitle` is untouched and must stay that way.
+    await entries.updateEntries(
+      { collectionName: "hooked", overrideAccess: true },
+      [{ id: row._parent, data: { title: "two" } }]
+    );
+
+    expect(fired).toEqual(["title"]);
+
+    // And the untouched translation still comes back on the row, which is
+    // what makes the exclusion above a hook-phase concern rather than a loss.
+    const after = await handle.adapter.executeQuery<{ meta_title: unknown }>(
+      `SELECT "meta_title" FROM "dc_hooked_locales" WHERE "_parent" = '${row._parent}'`
+    );
+    expect(after[0].meta_title).toBe("meta");
+  });
+
   it("reports the prior translation as what changed, not the untranslated row", async () => {
     // The main table of a migrated localized collection holds no translatable
     // columns, so a `previous` built from it alone describes none of the values
