@@ -12,6 +12,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 export const nextlyRbacEpoch = sqliteTable("nextly_rbac_epoch", {
   id: text("id").primaryKey(),
   revision: integer("revision").notNull(),
+  generation: text("generation").notNull(),
   // Unix seconds, as every other timestamp in this dialect's tables.
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
 });

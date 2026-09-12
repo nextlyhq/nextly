@@ -12,5 +12,6 @@ import { bigint, mysqlTable, timestamp, varchar } from "drizzle-orm/mysql-core";
 export const nextlyRbacEpoch = mysqlTable("nextly_rbac_epoch", {
   id: varchar("id", { length: 32 }).primaryKey(),
   revision: bigint("revision", { mode: "number" }).notNull(),
+  generation: varchar("generation", { length: 64 }).notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });

@@ -6,6 +6,7 @@ import {
   EPOCH_TTL_MS,
   bumpEpoch,
   currentEpoch,
+  epochIsTrustworthy,
   refreshEpoch,
   resetEpochForTests,
 } from "./rbac-epoch";
@@ -25,7 +26,19 @@ import {
  * against real databases by the integration suite that drives invalidation end
  * to end.
  */
-type Row = { revision: number };
+type Row = { revision: number; generation: string };
+
+function chainOf(result: unknown) {
+  const self: Record<string, unknown> = {
+    from: () => self,
+    where: () => self,
+    set: () => self,
+    values: () => self,
+    limit: () => self,
+    then: (resolve: (value: unknown) => unknown) => resolve(result),
+  };
+  return self;
+}
 
 function fakeAdapter(rows: () => Row[], onWrite?: () => void) {
   const chain = (result: unknown) => {
@@ -68,27 +81,27 @@ describe("the RBAC epoch answers for the install", () => {
   });
 
   it("starts at zero and reads the shared value", async () => {
-    install(fakeAdapter(() => [{ revision: 7 }]));
+    install(fakeAdapter(() => [{ revision: 7, generation: "g" }]));
 
-    expect(currentEpoch()).toBe(0);
-    await expect(refreshEpoch()).resolves.toBe(7);
-    expect(currentEpoch()).toBe(7);
+    expect(currentEpoch()).toBe(":0");
+    await expect(refreshEpoch()).resolves.toBe("g:7");
+    expect(currentEpoch()).toBe("g:7");
   });
 
   it("takes another instance's bump on the next refresh", async () => {
     // The property the whole module exists for: a change this process did not
     // make still retires what it has cached.
     let shared = 3;
-    install(fakeAdapter(() => [{ revision: shared }]));
+    install(fakeAdapter(() => [{ revision: shared, generation: "g" }]));
 
     await refreshEpoch();
-    expect(currentEpoch()).toBe(3);
+    expect(currentEpoch()).toBe("g:3");
 
     shared = 4;
     vi.advanceTimersByTime(EPOCH_TTL_MS);
     await refreshEpoch();
 
-    expect(currentEpoch()).toBe(4);
+    expect(currentEpoch()).toBe("g:4");
   });
 
   it("reads at most once per interval, so the hot path is not a query", async () => {
@@ -99,7 +112,7 @@ describe("the RBAC epoch answers for the install", () => {
     install(
       fakeAdapter(() => {
         reads += 1;
-        return [{ revision: 1 }];
+        return [{ revision: 1, generation: "g" }];
       })
     );
 
@@ -110,32 +123,130 @@ describe("the RBAC epoch answers for the install", () => {
     expect(reads).toBe(1);
   });
 
-  it("never goes backwards, even if a read returns an older value", async () => {
-    // A local bump can land while a read is in flight. Taking the older answer
-    // would re-serve exactly what that bump retired.
-    install(fakeAdapter(() => [{ revision: 1 }]));
+  it("answers only with values the shared row gave it", async () => {
+    // The property that removes a whole class of bug. Inventing `epoch + 1`
+    // locally means two counters that both advance, and the local one then
+    // wins every comparison — so an instance that bumped while the shared row
+    // was unreachable would stay permanently ahead and stop noticing anybody
+    // else. Whatever the row says is what this answers.
+    let shared = 9;
+    install(fakeAdapter(() => [{ revision: shared, generation: "g" }]));
     await refreshEpoch();
+    expect(currentEpoch()).toBe("g:9");
+
+    // A bump the row does not reflect must not invent a value: the fake's read
+    // still answers 9, so 9 is what this process may claim.
+    shared = 9;
+    await bumpEpoch();
+
+    expect(currentEpoch()).toBe("g:9");
+  });
+
+  it("distrusts its caches while an invalidation is owed", async () => {
+    // The fail-safe direction. An epoch other instances have never seen cannot
+    // decide whether an answer is current, so nothing may be served from cache
+    // until the shared row accepts the change.
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => {
+        throw new Error("no such table: nextly_rbac_epoch");
+      },
+    });
+
+    expect(epochIsTrustworthy()).toBe(true);
+    await bumpEpoch();
+    expect(epochIsTrustworthy()).toBe(false);
+  });
+
+  it("trusts them again once the shared row accepts the backlog", async () => {
+    // The control on the case above, and the recovery path. Without it,
+    // "distrusts while owed" is satisfied by never trusting anything again,
+    // which would leave an install permanently uncached after one hiccup.
+    let reachable = false;
+    let shared = 0;
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => {
+        if (!reachable) throw new Error("unreachable");
+        return {
+          select: () => chainOf([{ revision: shared, generation: "g" }]),
+          // The real statement is an upsert, so the fake has to be one too: a
+          // fake that only models the UPDATE reports a backlog as persisted
+          // while the counter never moves.
+          insert: () => {
+            const chain = chainOf([{ changes: 1 }]) as Record<string, unknown>;
+            chain.values = () => chain;
+            chain.onConflictDoUpdate = () => {
+              shared += 1;
+              return Promise.resolve([{ changes: 1 }]);
+            };
+            return chain;
+          },
+          update: () => chainOf([{ changes: 1 }]),
+        };
+      },
+    });
 
     await bumpEpoch();
-    const afterBump = currentEpoch();
-    expect(afterBump).toBe(2);
+    expect(epochIsTrustworthy()).toBe(false);
 
-    // The shared row still answers 1, as it would for a read that raced.
+    reachable = true;
     vi.advanceTimersByTime(EPOCH_TTL_MS);
     await refreshEpoch();
 
-    expect(currentEpoch()).toBe(afterBump);
+    expect(epochIsTrustworthy()).toBe(true);
+    // And the invalidation made while unreachable reached the row rather than
+    // being dropped on the way.
+    expect(shared).toBeGreaterThan(0);
   });
 
-  it("moves this process's own value before the shared write", async () => {
-    // An instance must honour its own revocation immediately rather than
-    // waiting out the interval it uses for everyone else's.
-    install(fakeAdapter(() => [{ revision: 0 }]));
+  it("collapses concurrent refreshes onto one read", async () => {
+    // The interval bounds when a read may START, not how many run. Every check
+    // arriving after expiry sees the same stale timestamp, so without sharing
+    // the in-flight promise a burst issues one query per request.
+    let reads = 0;
+    install(
+      fakeAdapter(() => {
+        reads += 1;
+        return [{ revision: 1, generation: "g" }];
+      })
+    );
+
+    await Promise.all([refreshEpoch(), refreshEpoch(), refreshEpoch()]);
+
+    expect(reads).toBe(1);
+  });
+
+  it("rate-limits FAILING reads too, so a missing table is not a query storm", async () => {
+    // The upgrade window. Leaving the timestamp unset on failure means one
+    // failing query per authorization check rather than one per interval.
+    let attempts = 0;
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => {
+        attempts += 1;
+        throw new Error("no such table");
+      },
+    });
+
+    await refreshEpoch();
+    await refreshEpoch();
     await refreshEpoch();
 
-    await bumpEpoch();
+    expect(attempts).toBe(1);
+  });
 
-    expect(currentEpoch()).toBe(1);
+  it("forces a read when told to, whatever the interval says", async () => {
+    // The post-write verification depends on this: the window it closes is the
+    // write's own flight time, so a revocation inside it is newer than the last
+    // read by definition.
+    let shared = 1;
+    install(fakeAdapter(() => [{ revision: shared, generation: "g" }]));
+    await refreshEpoch();
+
+    shared = 2;
+    await expect(refreshEpoch()).resolves.toBe("g:1");
+    await expect(refreshEpoch({ force: true })).resolves.toBe("g:2");
   });
 
   it("keeps answering when the table cannot be read", async () => {
@@ -149,15 +260,20 @@ describe("the RBAC epoch answers for the install", () => {
       },
     });
 
-    await expect(refreshEpoch()).resolves.toBe(0);
-    await expect(bumpEpoch()).resolves.toBe(1);
-    expect(currentEpoch()).toBe(1);
+    // Neither call throws, which is the property: an authorization check must
+    // not fail because a counter is unreachable.
+    await expect(refreshEpoch()).resolves.toBe(":0");
+    await expect(bumpEpoch()).resolves.toBe(":0");
   });
 
-  it("still invalidates locally when the shared write fails", async () => {
+  it("still takes effect locally when the shared write fails", async () => {
     // The half of degrading that matters. A shared write nobody can make must
     // not stop this process retiring its own caches, or a failed upgrade turns
     // a staleness bug into a revocation that never happens anywhere.
+    //
+    // It takes effect by refusing to serve rather than by moving the number.
+    // Moving it would invent a value no other instance has seen, which is the
+    // divergence this model exists to make unrepresentable.
     install({
       getCapabilities: () => ({ dialect: "sqlite" as const }),
       getDrizzle: () => {
@@ -165,10 +281,9 @@ describe("the RBAC epoch answers for the install", () => {
       },
     });
 
-    const before = currentEpoch();
     await bumpEpoch();
 
-    expect(currentEpoch()).toBeGreaterThan(before);
+    expect(epochIsTrustworthy()).toBe(false);
   });
 
   it("treats a missing row as epoch zero rather than as a failure", async () => {
@@ -176,6 +291,6 @@ describe("the RBAC epoch answers for the install", () => {
     // invalidated, which is zero — not an error, and not a reason to degrade.
     install(fakeAdapter(() => []));
 
-    await expect(refreshEpoch()).resolves.toBe(0);
+    await expect(refreshEpoch()).resolves.toBe(":0");
   });
 });

@@ -26,7 +26,12 @@ import { NextlyError } from "../../errors/nextly-error";
 import { getAuthLogger } from "../../lib/logger";
 import type { Logger } from "../shared";
 
-import { bumpEpoch, currentEpoch, refreshEpoch } from "./rbac-epoch";
+import {
+  bumpEpoch,
+  currentEpoch,
+  epochIsTrustworthy,
+  refreshEpoch,
+} from "./rbac-epoch";
 
 if (typeof window !== "undefined") {
   throw new Error(
@@ -137,7 +142,7 @@ function storeSharedDecision(
     resource: string;
     allowed: boolean;
     roleIds: string[];
-    resolvedUnder: number;
+    resolvedUnder: string;
   }
 ): void {
   const { userId, action, resource, allowed, roleIds, resolvedUnder } =
@@ -151,6 +156,12 @@ function storeSharedDecision(
         allowed,
         roleIds
       );
+      // Forced, not throttled. This is the one place the interval must not
+      // apply: the window being closed is the upsert's own flight time, and a
+      // revocation that landed inside it is by definition newer than the last
+      // read. Asking the cached value here would accept the write the check
+      // exists to catch.
+      await refreshEpoch({ force: true });
       if (!resolvedUnderCurrentRevision(resolvedUnder)) {
         await service.invalidateByUser(userId);
       }
@@ -527,7 +538,7 @@ class PermissionChecker {
 }
 
 // ---- Process-wide LRU cache with TTL ----
-type CacheValue = { value: boolean; expiresAt: number; epoch: number };
+type CacheValue = { value: boolean; expiresAt: number; epoch: string };
 
 /**
  * May this entry still be SERVED?
@@ -541,7 +552,12 @@ type CacheValue = { value: boolean; expiresAt: number; epoch: number };
  * Asked in one place so the two tiers cannot answer differently, and so a third
  * one added later has somewhere obvious to ask.
  */
-function servable(entry: { expiresAt: number; epoch: number }): boolean {
+function servable(entry: { expiresAt: number; epoch: string }): boolean {
+  // The epoch has to be worth comparing against before the comparison means
+  // anything. While this process holds invalidations the shared row has not
+  // accepted, its epoch is a value no other instance has seen, so a match
+  // proves nothing and the answer is recomputed instead.
+  if (!epochIsTrustworthy()) return false;
   return entry.expiresAt > Date.now() && entry.epoch === currentEpoch();
 }
 const cacheTtlMs = 60_000; // 60 seconds
@@ -742,7 +758,7 @@ export async function listEffectivePermissions(
 let permissionFlushDepth = 0;
 
 /** The current count; see {@link invalidatePermissionCache}. */
-export function rbacRevision(): number {
+export function rbacRevision(): string {
   return currentEpoch();
 }
 
@@ -769,7 +785,7 @@ export function rbacRevision(): number {
  * and promotes the retired answer into a tier that outlives the retirement.
  * Nothing is cacheable while the caches are being emptied.
  */
-export function resolvedUnderCurrentRevision(revision: number): boolean {
+export function resolvedUnderCurrentRevision(revision: string): boolean {
   return permissionFlushDepth === 0 && revision === currentEpoch();
 }
 
@@ -783,7 +799,7 @@ export function resolvedUnderCurrentRevision(revision: number): boolean {
  */
 const superAdminCache = new Map<
   string,
-  { value: boolean; expiresAt: number; epoch: number }
+  { value: boolean; expiresAt: number; epoch: string }
 >();
 const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
 

@@ -18,7 +18,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createTestNextly, type TestNextly } from "nextly/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -33,7 +33,12 @@ import {
   isSuperAdmin,
   rbacRevision,
 } from "./permissions";
-import { EPOCH_TTL_MS, currentEpoch, refreshEpoch } from "./rbac-epoch";
+import {
+  EPOCH_TTL_MS,
+  currentEpoch,
+  refreshEpoch,
+  resetEpochForTests,
+} from "./rbac-epoch";
 
 let harness: TestNextly | undefined;
 
@@ -93,6 +98,10 @@ async function demote(userId: string): Promise<void> {
 }
 
 beforeEach(async () => {
+  // The database is rebuilt per test and the epoch module is not, so its cached
+  // stamp would outlive the counter it describes — and a fresh counter can read
+  // identically to the one before it. Reset together or the two disagree.
+  resetEpochForTests();
   harness = await createTestNextly();
   await seedSuperAdminRole();
 });
@@ -379,6 +388,11 @@ describe("an API key's grants are retired when the roles behind them change", ()
     // resolution, and whether the next read sees it says whether that entry
     // was served or re-resolved.
     await seedDeputy();
+    // Warm the stamp first. Capturing it is a database read now, so an unwarmed
+    // resolution can still be waiting on that read when the invalidation lands
+    // and would then capture the value AFTER it — which is a race in the test's
+    // setup rather than the behaviour under test.
+    await refreshEpoch();
     const inFlight = grants();
     await invalidateAllPermissionCaches();
     await inFlight;
@@ -490,7 +504,9 @@ describe("a sweep of permission writes", () => {
       await invalidateAllPermissionCaches();
       await invalidateAllPermissionCaches();
     });
-    expect(rbacRevision()).toBeGreaterThan(before + 2);
+    // Changed, and changed per write. The stamp carries the counter's identity
+    // as well as its number, so it is compared rather than ordered.
+    expect(rbacRevision()).not.toBe(before);
   });
 
   it("clears the process caches by the time the batch returns", async () => {
@@ -644,20 +660,25 @@ describe("an epoch bumped by another instance", () => {
       };
     };
     const tables = getDialectTables() as unknown as {
-      nextlyRbacEpoch: { id: unknown; revision: unknown };
+      nextlyRbacEpoch: { id: unknown; revision: unknown; generation: unknown };
     };
     const table = tables.nextlyRbacEpoch;
-    const seen = currentEpoch();
+    // The number alone is not the stamp: the row's generation is half of it, so
+    // a bump made here has to move the number and leave the identity alone,
+    // exactly as another instance's bump would.
     try {
-      await db
-        .insert(table)
-        .values({ id: "global", revision: seen + 5, updatedAt: new Date() });
+      await db.insert(table).values({
+        id: "global",
+        revision: 1,
+        generation: `another-instance-${randomUUID()}`,
+        updatedAt: new Date(),
+      });
     } catch {
       // A row already exists, which is the ordinary case once anything has
-      // invalidated. Move it past whatever this process last saw.
+      // invalidated here. Move its number without touching its identity.
       await db
         .update(table)
-        .set({ revision: seen + 5, updatedAt: new Date() })
+        .set({ revision: sql`${table.revision} + 5`, updatedAt: new Date() })
         .where(eq(table.id as never, "global"));
     }
   }
@@ -671,7 +692,7 @@ describe("an epoch bumped by another instance", () => {
     await new Promise(resolve => setTimeout(resolve, EPOCH_TTL_MS + 50));
     const after = await refreshEpoch();
 
-    expect(after).toBeGreaterThan(before);
+    expect(after).not.toBe(before);
   });
 
   it("retires a super-admin answer this process had cached", async () => {

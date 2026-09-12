@@ -281,7 +281,7 @@ const _apiKeyPermissionsCache = new Map<
      * old set, which the comment in `UserRoleService` said was handled
      * elsewhere and was not.
      */
-    revision: number;
+    revision: string;
   }
 >();
 const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;

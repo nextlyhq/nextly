@@ -36,6 +36,8 @@
  *
  * @module services/lib/rbac-epoch
  */
+import { randomUUID } from "node:crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, sql } from "drizzle-orm";
 
@@ -60,8 +62,31 @@ export const EPOCH_TTL_MS = 1000;
  * first `refreshEpoch()` of a process actually go to the database rather than
  * trusting an initial value nothing established.
  */
-let epoch = 0;
+let revision = 0;
+let generation = "";
 let readAt = 0;
+
+/**
+ * A refresh already on its way, shared by everyone who asks while it runs.
+ *
+ * Without this the interval bounds how often a read STARTS being allowed, not
+ * how many run: every check arriving after expiry sees the same stale `readAt`
+ * and issues its own query before any of them finishes, so a burst turns one
+ * read per second into one per request — the cost this design exists to avoid.
+ */
+let inFlight: Promise<string> | null = null;
+
+/**
+ * Local invalidations the shared row has not accepted yet.
+ *
+ * Only ever above zero while the shared store is unreachable. It is a COUNT
+ * rather than a second epoch on purpose: two counters that both advance
+ * diverge, and the local one then wins every comparison, so an instance that
+ * invalidated while degraded would stay permanently ahead and stop noticing
+ * anybody else's changes. Nothing here invents an epoch; the only values
+ * `epoch` ever takes are ones the shared row gave it.
+ */
+let pendingBumps = 0;
 
 /**
  * Whether the shared counter has been found unreadable.
@@ -84,6 +109,7 @@ let degraded = false;
  */
 interface EpochRow {
   revision: number;
+  generation: string;
 }
 interface EpochSelect extends Promise<EpochRow[]> {
   from(table: unknown): EpochSelect;
@@ -92,7 +118,15 @@ interface EpochSelect extends Promise<EpochRow[]> {
 }
 interface EpochInsert extends Promise<unknown> {
   values(row: Record<string, unknown>): EpochInsert;
-  onConflictDoNothing?: () => Promise<unknown>;
+  // Postgres and SQLite spell the upsert one way, MySQL the other. Both are
+  // optional so a builder offering neither is a branch rather than a crash.
+  onConflictDoUpdate?: (config: {
+    target: unknown;
+    set: Record<string, unknown>;
+  }) => Promise<unknown>;
+  onDuplicateKeyUpdate?: (config: {
+    set: Record<string, unknown>;
+  }) => Promise<unknown>;
 }
 interface EpochUpdate extends Promise<unknown> {
   set(patch: Record<string, unknown>): EpochUpdate;
@@ -137,8 +171,26 @@ function reportDegraded(error: unknown): void {
  * {@link refreshEpoch} first, so the value they file under reflects any change
  * another instance made.
  */
-export function currentEpoch(): number {
-  return epoch;
+export function currentEpoch(): string {
+  return `${generation}:${String(revision)}`;
+}
+
+/**
+ * May a cached answer be trusted at all right now?
+ *
+ * False while this process holds invalidations the shared row has not
+ * accepted. Its epoch is then a value other instances have never seen, so
+ * comparing anything against it says nothing about whether that answer is
+ * current — and the honest response to "I cannot tell" on an authorization
+ * decision is to recompute rather than to serve.
+ *
+ * The cost lands only on an installation whose core tables are not reconciled
+ * AND which has since changed a role: it stops serving from cache until
+ * `nextly db:sync` runs. That is a visible, self-correcting slowdown rather
+ * than an invisible stale grant, and it is the direction to fail in.
+ */
+export function epochIsTrustworthy(): boolean {
+  return pendingBumps === 0;
 }
 
 /**
@@ -148,29 +200,109 @@ export function currentEpoch(): number {
  * expression rather than reading it again afterwards and racing its own
  * refresh.
  */
-export async function refreshEpoch(): Promise<number> {
-  if (Date.now() - readAt < EPOCH_TTL_MS) return epoch;
+export async function refreshEpoch(options?: {
+  force?: boolean;
+}): Promise<string> {
+  const force = options?.force === true;
+  if (!force && Date.now() - readAt < EPOCH_TTL_MS) return currentEpoch();
+  // Joining a read already running is not the same as skipping one: a caller
+  // that must not miss a change still waits for a genuine observation, it
+  // simply does not start a second query to get it.
+  if (inFlight) return inFlight;
+
+  inFlight = readShared().finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function readShared(): Promise<string> {
   try {
     const table = epochTable();
     const rows = await executor()
-      .select({ revision: table.revision })
+      .select({ revision: table.revision, generation: table.generation })
       .from(table)
       .where(eq(table.id, RBAC_EPOCH_ROW_ID))
       .limit(1);
     // A missing row is not a failure: the table exists and nothing has
-    // invalidated yet, which is epoch zero and exactly what this process
-    // already holds.
-    const shared = rows.length > 0 ? Number(rows[0].revision) : 0;
-    // Never backwards. This process may have bumped locally while the read was
-    // in flight, and taking the older value would re-serve what that bump
-    // retired. The shared counter only rises, so the larger is the current one.
-    epoch = Math.max(epoch, shared);
+    // invalidated yet, which is epoch zero.
+    // Adopted whole, and never maxed against a local value. The row is the only
+    // authority: taking the larger of the two is what let a process that had
+    // invalidated while degraded stay permanently ahead of everyone else, and
+    // taking only the number is what let a REPLACED store read as the same one.
+    revision = rows.length > 0 ? Number(rows[0].revision) : 0;
+    generation = rows.length > 0 ? String(rows[0].generation) : "";
     readAt = Date.now();
     degraded = false;
+    // Reachable again, so anything this process invalidated while it was not
+    // has to reach the shared row before its caches can be trusted.
+    if (pendingBumps > 0) await persistPendingBumps();
   } catch (error) {
     reportDegraded(error);
+    // Rate-limit the FAILING path too. Left unset, a missing table means one
+    // failing query per authorization check rather than one per interval,
+    // which is the upgrade window turned into a load problem.
+    readAt = Date.now();
   }
-  return epoch;
+  return currentEpoch();
+}
+
+/**
+ * Push invalidations made while the shared row was unreachable into it.
+ *
+ * One statement, so two instances recovering at once cannot lose each other's
+ * count. Only on success is the local backlog cleared: a partial recovery must
+ * leave this process distrusting its caches rather than believing it has
+ * caught up.
+ */
+async function persistPendingBumps(): Promise<void> {
+  const owed = pendingBumps;
+  const table = epochTable();
+  const db = executor();
+
+  // ONE statement, so there is no row count to read and no create-or-update
+  // branch to get wrong. The previous shape asked the driver how many rows an
+  // UPDATE touched and inserted when the answer was zero, which is three
+  // different result shapes across three drivers and a silent no-op whenever
+  // one of them is misread — the counter then sticks at its first value and
+  // every later invalidation is lost, while every individual statement
+  // succeeds. An upsert cannot have that failure: the row is created if it is
+  // absent and incremented if it is present, decided by the database.
+  const insert = db.insert(table).values({
+    id: RBAC_EPOCH_ROW_ID,
+    revision: owed,
+    // Only ever written when the row is CREATED; the conflict branch below
+    // leaves it alone, so a live counter keeps its identity for life.
+    generation: randomUUID(),
+    updatedAt: new Date(),
+  });
+  const raise = {
+    target: table.id,
+    set: { revision: sql`${table.revision} + ${owed}`, updatedAt: new Date() },
+  };
+  if (typeof insert.onConflictDoUpdate === "function") {
+    await insert.onConflictDoUpdate(raise);
+  } else if (typeof insert.onDuplicateKeyUpdate === "function") {
+    // MySQL spells the same statement differently and takes no target.
+    await insert.onDuplicateKeyUpdate({ set: raise.set });
+  } else {
+    await insert;
+  }
+
+  pendingBumps -= owed;
+
+  // Read back rather than assume. The row may have moved for somebody else in
+  // the same moment, and the only values this process may answer with are ones
+  // the row gave it.
+  const rows = await db
+    .select({ revision: table.revision, generation: table.generation })
+    .from(table)
+    .where(eq(table.id, RBAC_EPOCH_ROW_ID))
+    .limit(1);
+  if (rows.length > 0) {
+    revision = Number(rows[0].revision);
+    generation = String(rows[0].generation);
+  }
 }
 
 /**
@@ -180,75 +312,27 @@ export async function refreshEpoch(): Promise<number> {
  * instances invalidating at the same moment produce two increments rather than
  * one lost update — which a read-modify-write from here would not.
  *
- * The in-memory value moves first and unconditionally. A shared write that
- * fails leaves this process correct and the others no worse than they were,
- * where waiting for the write would mean an instance not honouring its own
- * revocation.
+ * The value this process then answers with is READ BACK rather than assumed.
+ * Inventing `epoch + 1` locally is what made a degraded instance diverge, and
+ * it is also simply wrong whenever somebody else bumped in the same interval.
+ *
+ * A failed write leaves the count owed rather than applied, and
+ * {@link epochIsTrustworthy} then reports that nothing here may be served from
+ * cache until the shared row accepts it.
  */
-export async function bumpEpoch(): Promise<number> {
-  epoch += 1;
-  // Read again on the next check rather than after the TTL: this process just
-  // changed the value, so its cached copy is deliberately ahead of the last
-  // read and the window in which another instance's bump could be missed
-  // should not be extended by it.
-  readAt = 0;
-
+export async function bumpEpoch(): Promise<string> {
   try {
-    const table = epochTable();
-    const db = executor();
-    const updated = await db
-      .update(table)
-      .set({
-        revision: sql`${table.revision} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(table.id, RBAC_EPOCH_ROW_ID));
-    // The first invalidation on a fresh install has no row to increment. Insert
-    // it, and treat a collision as another instance having got there first —
-    // its insert counts as this bump, since either way the counter moved.
-    if (rowsTouched(updated) === 0) {
-      const insert = db
-        .insert(table)
-        .values({ id: RBAC_EPOCH_ROW_ID, revision: 1, updatedAt: new Date() });
-      // Not every dialect builder offers it; where it does not, a collision
-      // surfaces as the duplicate-key error the catch below reports, which is
-      // the correct outcome — another instance created the row.
-      if (typeof insert.onConflictDoNothing === "function") {
-        await insert.onConflictDoNothing();
-      } else {
-        await insert;
-      }
-    }
+    pendingBumps += 1;
+    await persistPendingBumps();
     degraded = false;
+    // The value moved, so the next check should see it rather than wait out an
+    // interval that began before the change.
+    readAt = Date.now();
   } catch (error) {
+    console.log("[probe] bump FAILED:", String(error));
     reportDegraded(error);
   }
-  return epoch;
-}
-
-/**
- * How many rows a write reported, across drivers that disagree about saying so.
- *
- * Postgres answers `{ rowCount }`, MySQL `{ affectedRows }` inside an array,
- * and better-sqlite3 `{ changes }`. A driver this does not recognise answers
- * `-1`, which the caller reads as "cannot tell" and does NOT treat as zero: a
- * spurious insert on a row that already exists is a conflict rather than a
- * silent second counter, but a spurious SKIP would leave a fresh install with
- * no row at all and no bump ever recorded.
- */
-function rowsTouched(result: unknown): number {
-  if (typeof result !== "object" || result === null) return -1;
-  const first = Array.isArray(result) ? result[0] : result;
-  if (typeof first !== "object" || first === null) return -1;
-  const shape = first as {
-    rowCount?: unknown;
-    affectedRows?: unknown;
-    changes?: unknown;
-  };
-  for (const value of [shape.rowCount, shape.affectedRows, shape.changes]) {
-    if (typeof value === "number") return value;
-  }
-  return -1;
+  return currentEpoch();
 }
 
 /**
@@ -260,7 +344,10 @@ function rowsTouched(result: unknown): number {
  * state is this module's own.
  */
 export function resetEpochForTests(): void {
-  epoch = 0;
+  revision = 0;
+  generation = "";
   readAt = 0;
   degraded = false;
+  pendingBumps = 0;
+  inFlight = null;
 }

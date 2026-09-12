@@ -251,6 +251,7 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE TABLE IF NOT EXISTS "nextly_rbac_epoch" (
       "id" TEXT PRIMARY KEY,
       "revision" INTEGER NOT NULL,
+      "generation" TEXT NOT NULL,
       "updated_at" INTEGER NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS "content_schema_events" (

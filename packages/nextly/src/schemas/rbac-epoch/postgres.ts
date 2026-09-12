@@ -46,5 +46,14 @@ export const nextlyRbacEpoch = pgTable("nextly_rbac_epoch", {
   // wrapped a 32-bit counter would start serving answers filed under a value
   // the counter is about to reach again.
   revision: bigint("revision", { mode: "number" }).notNull(),
+  // Identity of the counter itself, generated once with the row.
+  //
+  // A number alone cannot tell "the same counter, unchanged" from "a different
+  // counter that happens to read the same" — which is what a restored backup, a
+  // re-provisioned environment or a failover that lost writes produces. An
+  // instance holding entries filed at 7 would find a fresh counter also at 7
+  // and go on serving them. Comparing the pair makes a replaced store retire
+  // every cached answer, whatever its number says.
+  generation: text("generation").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 });
