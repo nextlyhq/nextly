@@ -755,6 +755,11 @@ function withDraftDocument(
     title: labelFor(record.title, id),
     ...optionalText(record.description, "description"),
     ...optionalText(record.category, "category"),
+    // Through the SAME reader a pattern row's keywords go through: a component
+    // tile's search terms are built from this field exactly as a pattern's
+    // are, so a component whose useful terms are in neither its title nor its
+    // description is findable by them.
+    ...storedKeywords(record.keywords),
     document:
       content === undefined || content === null
         ? null
@@ -1051,8 +1056,17 @@ export function componentLibraryRoute(
   return {
     method: "GET",
     path: COMPONENT_LIBRARY_ROUTE_PATH,
+    // The scope helper for the plugin's OWN collection, which follows the
+    // host's rename; the configured slug LITERALLY for a store the plugin was
+    // told about, because that is what the handler reads. Through the helper a
+    // configured slug that collides with a contributed name resolves to the
+    // renamed collection, so the gate and the read name two different
+    // collections — and a caller holding read on the one being read is
+    // refused while one holding read on the other is let in.
     requiredPermission: ({ collection }) =>
-      collection(store.collection ?? COMPONENTS_SLUG, "read"),
+      store.collection === undefined
+        ? collection(COMPONENTS_SLUG, "read")
+        : readPermissionFor(store.collection),
     handler: async (req: Request, ctx: PluginRouteContext) =>
       Response.json(
         await readComponentLibrary({
@@ -1062,6 +1076,20 @@ export function componentLibraryRoute(
         })
       ),
   };
+}
+
+/**
+ * The read permission for a collection this plugin does not own.
+ *
+ * Spelled rather than composed, because the scope a route resolver is handed
+ * offers only rename-aware helpers for the plugin's OWN names, and core's own
+ * docblock on that helper says a fixed foreign name "belongs in the string
+ * form of `requiredPermission`". The slug format is core's
+ * (`<action>-<resource>`) and is an identity existing grants are keyed on, so
+ * it does not move.
+ */
+function readPermissionFor(slug: string): string {
+  return `read-${slug}`;
 }
 
 /**
