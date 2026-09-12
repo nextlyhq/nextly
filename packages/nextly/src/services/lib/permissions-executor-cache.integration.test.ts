@@ -19,7 +19,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../database/index";
 
-import { hasPermission } from "./permissions";
+import { hasPermission, isSuperAdmin } from "./permissions";
+import { resetEpochForTests } from "./rbac-epoch";
 
 let harness: TestNextly | undefined;
 
@@ -104,5 +105,74 @@ describe("permission cache — transaction executor bypass (integration)", () =>
     //    cache: a later pooled check still sees the earlier stale grant, proving
     //    the executor path skips the cache write too.
     expect(await hasPermission(userId, "read", "posts")).toBe(true);
+  });
+});
+
+/**
+ * An executor-backed check must reach its answer WITHOUT the pooled connection.
+ *
+ * The caller passing an executor is inside its own open transaction. Where the
+ * pool holds a single connection that transaction is holding it, so any query
+ * this check issues on the pool waits for a connection that cannot be released
+ * until the check returns: the write deadlocks and both sides wait out the
+ * pool timeout. `domains/collections/__tests__/publish-enforcement-pool-reentry.integration.test.ts`
+ * reproduces the deadlock itself, but needs a real `pool.max = 1` Postgres and
+ * self-skips without one. What is portable, and what actually regresses, is the
+ * cause: a pooled checkout taken from inside the transaction at all.
+ */
+describe("an executor-backed check and the connection pool", () => {
+  /** Count checkouts of the pooled connection, leaving the adapter otherwise real. */
+  function countPooledCheckouts(): {
+    count: () => number;
+    restore: () => void;
+  } {
+    const adapter = harness!.adapter as unknown as Record<string, unknown>;
+    const own = Object.getOwnPropertyDescriptor(adapter, "getDrizzle");
+    const original = (
+      adapter.getDrizzle as (...args: unknown[]) => unknown
+    ).bind(harness!.adapter);
+    let checkouts = 0;
+    adapter.getDrizzle = (...args: unknown[]) => {
+      checkouts += 1;
+      return original(...args);
+    };
+    return {
+      count: () => checkouts,
+      restore: () => {
+        if (own) Object.defineProperty(adapter, "getDrizzle", own);
+        else delete adapter.getDrizzle;
+      },
+    };
+  }
+
+  it("takes no pooled connection, and a pooled check proves the count is live", async () => {
+    const userId = "pool-exec-user";
+    // Obtained BEFORE the count starts: this stands in for the executor a
+    // caller already holds from its own transaction.
+    const executor = harness!.adapter.getDrizzle();
+    // The epoch read is rate-limited to one a second, so an unreset module
+    // would skip it and the check would take no connection either way.
+    resetEpochForTests();
+
+    const pool = countPooledCheckouts();
+    try {
+      await hasPermission(userId, "read", "posts", executor);
+      await isSuperAdmin(userId, executor);
+      expect(pool.count(), "executor-backed checks").toBe(0);
+    } finally {
+      pool.restore();
+    }
+
+    // The control. Without it, "took no connection" is equally satisfied by a
+    // counter that never increments, and by a check that stopped reading the
+    // database at all.
+    resetEpochForTests();
+    const pooled = countPooledCheckouts();
+    try {
+      await hasPermission(userId, "read", "posts");
+      expect(pooled.count(), "pooled check").toBeGreaterThan(0);
+    } finally {
+      pooled.restore();
+    }
   });
 });

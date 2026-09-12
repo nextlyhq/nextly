@@ -67,12 +67,14 @@ let generation = "";
 let readAt = 0;
 
 /**
- * A refresh already on its way, shared by everyone who asks while it runs.
+ * A refresh already on its way, shared by every ORDINARY caller while it runs.
  *
  * Without this the interval bounds how often a read STARTS being allowed, not
  * how many run: every check arriving after expiry sees the same stale `readAt`
  * and issues its own query before any of them finishes, so a burst turns one
  * read per second into one per request — the cost this design exists to avoid.
+ *
+ * A forced caller does not join it; see {@link refreshEpoch}.
  */
 let inFlight: Promise<string> | null = null;
 
@@ -205,19 +207,43 @@ export async function refreshEpoch(options?: {
 }): Promise<string> {
   const force = options?.force === true;
   if (!force && Date.now() - readAt < EPOCH_TTL_MS) return currentEpoch();
-  // Joining a read already running is not the same as skipping one: a caller
-  // that must not miss a change still waits for a genuine observation, it
-  // simply does not start a second query to get it.
-  if (inFlight) return inFlight;
 
-  inFlight = readShared().finally(() => {
-    inFlight = null;
+  // Joining a read already running is honest for an ordinary caller: it asked
+  // for a value no older than the interval, and that read will supply one.
+  //
+  // It is not honest for a FORCED caller. The only reason to force is to
+  // observe something that has just happened, and a read already in flight may
+  // have queried before it — handing that back answers with an observation
+  // older than the write it exists to confirm, which is the whole of the
+  // post-write verification. So a forced caller waits out the reads ahead of it
+  // and then makes one of its own.
+  if (!force) {
+    if (inFlight) return inFlight;
+  } else {
+    // Sequential by design: each read ahead of this one has to finish before a
+    // new observation may start, or the observation is not a new one.
+    let ahead = inFlight;
+    while (ahead) {
+      await ahead;
+      ahead = inFlight;
+    }
+  }
+
+  const reading = readShared().finally(() => {
+    if (inFlight === reading) inFlight = null;
   });
-  return inFlight;
+  inFlight = reading;
+  return reading;
 }
 
 async function readShared(): Promise<string> {
   try {
+    // Owed invalidations go in BEFORE the value comes out, and that order is
+    // the point: a read taken first answers with a number that does not
+    // include them, and this process would then adopt it as authoritative and
+    // trust its caches again while the change it made is still nowhere.
+    await persistPendingBumps();
+
     const table = epochTable();
     const rows = await executor()
       .select({ revision: table.revision, generation: table.generation })
@@ -234,9 +260,6 @@ async function readShared(): Promise<string> {
     generation = rows.length > 0 ? String(rows[0].generation) : "";
     readAt = Date.now();
     degraded = false;
-    // Reachable again, so anything this process invalidated while it was not
-    // has to reach the shared row before its caches can be trusted.
-    if (pendingBumps > 0) await persistPendingBumps();
   } catch (error) {
     reportDegraded(error);
     // Rate-limit the FAILING path too. Left unset, a missing table means one
@@ -248,18 +271,36 @@ async function readShared(): Promise<string> {
 }
 
 /**
- * Push invalidations made while the shared row was unreachable into it.
+ * Push the invalidations this process owes into the shared row.
  *
- * One statement, so two instances recovering at once cannot lose each other's
- * count. Only on success is the local backlog cleared: a partial recovery must
- * leave this process distrusting its caches rather than believing it has
- * caught up.
+ * ## Exactly one drain runs at a time, and this depends on it
+ *
+ * The count is read, sent, and subtracted around an await. Two drains
+ * overlapping would each subtract a backlog the other had already sent, taking
+ * the count NEGATIVE: nothing could be served from cache again, and the next
+ * invalidation would publish an increment of zero, so the change that raised it
+ * would reach no other instance at all.
+ *
+ * What rules that out is not a lock here but the shape of the only path in.
+ * This is called from one place, the top of {@link readShared}; `readShared` is
+ * called from one place, {@link refreshEpoch}; and that call sits between a
+ * check of `inFlight` and its assignment with no await in between, so a second
+ * read cannot start while one is running. A second caller added anywhere else
+ * would need its own answer to this, and the subtraction is where it would go
+ * wrong.
+ *
+ * ## The count stays owed until the row has it
+ *
+ * Subtracted only after the statement resolves, so a write nobody accepted
+ * leaves this process distrusting its caches rather than believing it has
+ * caught up — and so does a write still in flight, which the row has not
+ * accepted yet either.
  */
 async function persistPendingBumps(): Promise<void> {
   const owed = pendingBumps;
-  const table = epochTable();
-  const db = executor();
+  if (owed === 0) return;
 
+  const table = epochTable();
   // ONE statement, so there is no row count to read and no create-or-update
   // branch to get wrong. The previous shape asked the driver how many rows an
   // UPDATE touched and inserted when the answer was zero, which is three
@@ -268,7 +309,7 @@ async function persistPendingBumps(): Promise<void> {
   // every later invalidation is lost, while every individual statement
   // succeeds. An upsert cannot have that failure: the row is created if it is
   // absent and incremented if it is present, decided by the database.
-  const insert = db.insert(table).values({
+  const insert = executor().insert(table).values({
     id: RBAC_EPOCH_ROW_ID,
     revision: owed,
     // Only ever written when the row is CREATED; the conflict branch below
@@ -278,7 +319,10 @@ async function persistPendingBumps(): Promise<void> {
   });
   const raise = {
     target: table.id,
-    set: { revision: sql`${table.revision} + ${owed}`, updatedAt: new Date() },
+    set: {
+      revision: sql`${table.revision} + ${owed}`,
+      updatedAt: new Date(),
+    },
   };
   if (typeof insert.onConflictDoUpdate === "function") {
     await insert.onConflictDoUpdate(raise);
@@ -290,19 +334,6 @@ async function persistPendingBumps(): Promise<void> {
   }
 
   pendingBumps -= owed;
-
-  // Read back rather than assume. The row may have moved for somebody else in
-  // the same moment, and the only values this process may answer with are ones
-  // the row gave it.
-  const rows = await db
-    .select({ revision: table.revision, generation: table.generation })
-    .from(table)
-    .where(eq(table.id, RBAC_EPOCH_ROW_ID))
-    .limit(1);
-  if (rows.length > 0) {
-    revision = Number(rows[0].revision);
-    generation = String(rows[0].generation);
-  }
 }
 
 /**
@@ -315,24 +346,19 @@ async function persistPendingBumps(): Promise<void> {
  * The value this process then answers with is READ BACK rather than assumed.
  * Inventing `epoch + 1` locally is what made a degraded instance diverge, and
  * it is also simply wrong whenever somebody else bumped in the same interval.
+ * Spelled as a FORCED refresh rather than as a second write path, because
+ * pushing the backlog and adopting what the row then says are already the two
+ * halves of one read: {@link refreshEpoch} drains before it queries, and
+ * forcing is what guarantees the query it makes is one this change is inside
+ * rather than an older one already in flight.
  *
  * A failed write leaves the count owed rather than applied, and
  * {@link epochIsTrustworthy} then reports that nothing here may be served from
  * cache until the shared row accepts it.
  */
 export async function bumpEpoch(): Promise<string> {
-  try {
-    pendingBumps += 1;
-    await persistPendingBumps();
-    degraded = false;
-    // The value moved, so the next check should see it rather than wait out an
-    // interval that began before the change.
-    readAt = Date.now();
-  } catch (error) {
-    console.log("[probe] bump FAILED:", String(error));
-    reportDegraded(error);
-  }
-  return currentEpoch();
+  pendingBumps += 1;
+  return refreshEpoch({ force: true });
 }
 
 /**

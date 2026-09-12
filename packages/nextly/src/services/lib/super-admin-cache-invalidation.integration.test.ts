@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../database/index";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
+import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
 import { PermissionService } from "../../domains/auth/services/permission-service";
 
 import {
@@ -497,16 +498,26 @@ describe("a sweep of permission writes", () => {
     // Deferring the table write must NOT defer the revision: a resolution
     // running alongside the batch has to be refused, and the counter is what
     // refuses it.
+    //
+    // Read after EACH write rather than once at the end. Comparing only the
+    // two ends is equally satisfied by three writes collapsing into a single
+    // announcement on the way out, which is exactly the deferral this exists to
+    // rule out.
     harness = harness ?? (await createTestNextly());
-    const before = rbacRevision();
+    const seen = [rbacRevision()];
     await inPermissionSweep(async () => {
       await invalidateAllPermissionCaches();
+      seen.push(rbacRevision());
       await invalidateAllPermissionCaches();
+      seen.push(rbacRevision());
       await invalidateAllPermissionCaches();
+      seen.push(rbacRevision());
     });
-    // Changed, and changed per write. The stamp carries the counter's identity
-    // as well as its number, so it is compared rather than ordered.
-    expect(rbacRevision()).not.toBe(before);
+
+    // Four distinct stamps: where it started, and one per write. The stamp
+    // carries the counter's identity as well as its number, so it is compared
+    // rather than ordered.
+    expect(new Set(seen).size).toBe(seen.length);
   });
 
   it("clears the process caches by the time the batch returns", async () => {
@@ -635,6 +646,79 @@ describe("a sweep of permission writes", () => {
     ).rejects.toThrow("half of the batch landed");
 
     expect(await isSuperAdmin(userId)).toBe(false);
+  });
+});
+
+/**
+ * The stored tier is emptied BEFORE the epoch that retires the rest is
+ * published.
+ *
+ * The epoch is the only signal another instance receives, and it is a one-way
+ * barrier: an answer filed before it moves is retired by the move, an answer
+ * filed after it is not. Announce first and every other instance gets a window
+ * in which it rejects its own in-memory answer, reads the stored row the
+ * tombstone has not reached yet, and files that retired decision under the NEW
+ * epoch, where nothing still to happen can reach it. Empty the stored rows
+ * first and both halves close: an instance that has not seen the move files
+ * under the old epoch and the move retires it, and one that has seen the move
+ * finds nothing to file.
+ *
+ * The interleaving is the subject, and both steps have finished by the time the
+ * call returns, so it cannot be seen from outside. The real retirement is left
+ * to run and only asked which epoch it ran under, which is the one fact that
+ * tells the two orders apart.
+ */
+describe("the order the two tiers are retired in", () => {
+  type Tombstone = (...args: never[]) => Promise<unknown>;
+
+  async function epochsAround(
+    method: "invalidateAll" | "invalidateByUser",
+    invalidate: () => Promise<void>
+  ): Promise<{ before: string; during: string; after: string }> {
+    const proto = PermissionCacheService.prototype as unknown as Record<
+      string,
+      Tombstone
+    >;
+    const original = proto[method];
+    const before = rbacRevision();
+    let during = "";
+    proto[method] = function (this: unknown, ...args: never[]) {
+      during = rbacRevision();
+      return original.apply(this, args);
+    };
+    try {
+      await invalidate();
+    } finally {
+      proto[method] = original;
+    }
+    return { before, during, after: rbacRevision() };
+  }
+
+  it("empties the stored rows before it announces the new epoch", async () => {
+    const { before, during, after } = await epochsAround("invalidateAll", () =>
+      invalidateAllPermissionCaches()
+    );
+
+    // The tombstone ran while the epoch was still the one every instance had.
+    expect(during).toBe(before);
+    // And the announcement did happen, so the assertion above is not passing
+    // because nothing moved at all.
+    expect(after).not.toBe(before);
+  });
+
+  it("does the same for an invalidation scoped to one user", async () => {
+    // A scoped tombstone is smaller, not faster: it is still an awaited write,
+    // so announcing ahead of it opens the same window.
+    const userId = `order-${randomUUID()}`;
+    await promote(userId, `${userId}@example.com`);
+
+    const { before, during, after } = await epochsAround(
+      "invalidateByUser",
+      () => invalidatePermissionCache({ userId })
+    );
+
+    expect(during).toBe(before);
+    expect(after).not.toBe(before);
   });
 });
 

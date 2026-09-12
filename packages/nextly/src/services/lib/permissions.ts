@@ -240,7 +240,15 @@ class PermissionChecker {
     // ANOTHER instance. Rate-limited to one read a second, which is what makes
     // this affordable on a path taken by every request, and what bounds how
     // long this process can be unaware of somebody else's revocation.
-    const resolvedUnder = await refreshEpoch();
+    //
+    // For a POOLED check only. The refresh is itself a pooled query, so issuing
+    // it from inside a caller's still-open transaction asks the pool for a
+    // second connection — and where the pool holds one connection, the caller's
+    // transaction is holding it, so the query never runs and the check never
+    // answers. It would also buy nothing: an executor-backed check is not
+    // cacheable at any tier, so every use of `resolvedUnder` below is already
+    // behind `!executor` and the value is never consulted.
+    const resolvedUnder = executor ? currentEpoch() : await refreshEpoch();
 
     // Skip EVERY cache tier when a transaction executor is supplied. Such a check
     // reads through the caller's still-open (uncommitted) transaction, so its
@@ -248,70 +256,20 @@ class PermissionChecker {
     // caches: if that transaction rolls back, a grant or denial that never
     // committed would otherwise be reused by later, non-transactional requests
     // for the cache TTL. An executor-backed check always computes fresh below.
+    //
+    // The stored tier is skipped for a second reason as well: its lookup is a
+    // pooled query, so making it from inside the caller's transaction is the
+    // same re-entry the epoch refresh above avoids.
     if (!executor) {
-      // Tier 1: In-memory instance cache (ultra-fast <1ms)
-      const cached = this.memo.get(key);
-      if (typeof cached === "boolean") return cached;
+      const remembered = this.servedFromMemory(key);
+      if (typeof remembered === "boolean") return remembered;
 
-      // Tier 1b: Process-wide LRU cache (<1ms)
-      const hit = cache.get(key);
-      if (hit) {
-        if (servable(hit)) {
-          this.memo.set(key, hit.value);
-          // refresh LRU by deleting+setting
-          cache.delete(key);
-          cache.set(key, hit);
-          return hit.value;
-        }
-        // expired -> clear reverse maps
-        cache.delete(key);
-        const rids = keyToRoleIds.get(key);
-        keyToRoleIds.delete(key);
-        if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(key);
-        userIdToKeys.get(userId)?.delete(key);
-      }
-    }
-
-    // Tier 2: Database cache (fast ~3-5ms). Skipped when a transaction executor
-    // is supplied: this lookup is itself a pooled query, so running it inside the
-    // caller's transaction would re-enter the pool (and by the rule above must
-    // not serve a cached decision to a transaction-scoped check anyway).
-    if (this.cacheService && !executor) {
-      try {
-        const dbCached = await this.cacheService.getCachedPermission(
-          userId,
-          action,
-          resource
-        );
-        // The lookup is itself awaited, so an invalidation can land while it
-        // is outstanding: the row it returns was read before the change and
-        // promoting it would put a retired decision back into tier 1 for that
-        // tier's whole life, having just been tombstoned in tier 2. Recompute
-        // instead, which is what a miss would have done anyway.
-        //
-        // NOT covered by a test, and said here rather than left to look like
-        // coverage: `setCachedPermission` does not take effect under
-        // `createTestNextly` — the table is created and a write followed by a
-        // read returns null — so no test can reach this branch. The predicate
-        // it uses is covered; this call site is not.
-        if (dbCached !== null && resolvedUnderCurrentRevision(resolvedUnder)) {
-          // Cache hit - promote to tier 1
-          this.memo.set(key, dbCached);
-          setCacheEntry(key, dbCached, userId, []);
-          return dbCached;
-        }
-      } catch (error) {
-        // Log but don't fail - fall through to fresh computation
-        getAuthLogger()?.log?.("warn", {
-          category: "auth",
-          op: "cache",
-          message: "DB cache lookup failed, falling back to fresh computation",
-          userId,
-          action,
-          resource,
-          error: String(error),
-        });
-      }
+      const stored = await this.servedFromSharedTier(
+        key,
+        { userId, action, resource },
+        resolvedUnder
+      );
+      if (typeof stored === "boolean") return stored;
     }
 
     // Tier 3: Fresh computation (~10ms)
@@ -391,6 +349,85 @@ class PermissionChecker {
         resource,
       });
       return false; // fail-closed
+    }
+  }
+
+  /**
+   * Tiers 1 and 1b: the per-checker memo and the process-wide LRU.
+   *
+   * `undefined` means no answer, which is not the same as `false`: a denial is
+   * cached on the same terms as a grant, so the two have to stay tellable
+   * apart all the way back to the caller.
+   */
+  private servedFromMemory(key: string): boolean | undefined {
+    const memoed = this.memo.get(key);
+    if (typeof memoed === "boolean") return memoed;
+
+    const hit = cache.get(key);
+    if (!hit) return undefined;
+
+    if (servable(hit)) {
+      this.memo.set(key, hit.value);
+      // refresh LRU by deleting+setting
+      cache.delete(key);
+      cache.set(key, hit);
+      return hit.value;
+    }
+
+    forgetKey(key);
+    return undefined;
+  }
+
+  /**
+   * Tier 2: the stored row, promoted into tier 1 when it may still be trusted.
+   *
+   * `undefined` means no usable answer, for either reason: nothing stored, or
+   * something stored that an invalidation has overtaken.
+   */
+  private async servedFromSharedTier(
+    key: string,
+    check: { userId: string; action: string; resource: string },
+    resolvedUnder: string
+  ): Promise<boolean | undefined> {
+    if (!this.cacheService) return undefined;
+    const { userId, action, resource } = check;
+
+    try {
+      const dbCached = await this.cacheService.getCachedPermission(
+        userId,
+        action,
+        resource
+      );
+      // The lookup is itself awaited, so an invalidation can land while it
+      // is outstanding: the row it returns was read before the change and
+      // promoting it would put a retired decision back into tier 1 for that
+      // tier's whole life, having just been tombstoned in tier 2. Recompute
+      // instead, which is what a miss would have done anyway.
+      //
+      // NOT covered by a test, and said here rather than left to look like
+      // coverage: `setCachedPermission` does not take effect under
+      // `createTestNextly` — the table is created and a write followed by a
+      // read returns null — so no test can reach this branch. The predicate
+      // it uses is covered; this call site is not.
+      if (dbCached === null || !resolvedUnderCurrentRevision(resolvedUnder)) {
+        return undefined;
+      }
+      // Cache hit - promote to tier 1
+      this.memo.set(key, dbCached);
+      setCacheEntry(key, dbCached, userId, []);
+      return dbCached;
+    } catch (error) {
+      // Log but don't fail - fall through to fresh computation
+      getAuthLogger()?.log?.("warn", {
+        category: "auth",
+        op: "cache",
+        message: "DB cache lookup failed, falling back to fresh computation",
+        userId,
+        action,
+        resource,
+        error: String(error),
+      });
+      return undefined;
     }
   }
 
@@ -569,6 +606,27 @@ const keyToRoleIds = new Map<string, Set<string>>();
 const roleIdToKeys = new Map<string, Set<string>>();
 const userIdToKeys = new Map<string, Set<string>>();
 
+/**
+ * Drop one key and every index that points at it.
+ *
+ * Four callers evict a key for four different reasons — the entry expired, the
+ * LRU is full, the user changed, the role changed — and every one of them has
+ * to unpick the same three reverse maps. Written out per caller, an index left
+ * behind holds a key nothing can reach: the next invalidation for that user or
+ * role iterates a name that is no longer in the cache and skips the entry it
+ * was raised to remove.
+ */
+function forgetKey(key: string): void {
+  cache.delete(key);
+  const roleIds = keyToRoleIds.get(key);
+  keyToRoleIds.delete(key);
+  if (roleIds) for (const rid of roleIds) roleIdToKeys.get(rid)?.delete(key);
+  const owner = key.split("|", 1)[0];
+  const owned = userIdToKeys.get(owner);
+  owned?.delete(key);
+  if (owned?.size === 0) userIdToKeys.delete(owner);
+}
+
 function setCacheEntry(
   key: string,
   value: boolean,
@@ -578,15 +636,7 @@ function setCacheEntry(
   // simple eviction of oldest
   if (cache.size >= cacheMaxEntries) {
     const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-      const rids = keyToRoleIds.get(oldest);
-      keyToRoleIds.delete(oldest);
-      if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(oldest);
-      const u = oldest.split("|", 1)[0];
-      userIdToKeys.get(u)?.delete(oldest);
-      if (userIdToKeys.get(u)?.size === 0) userIdToKeys.delete(u);
-    }
+    if (oldest) forgetKey(oldest);
   }
   cache.set(key, {
     value,
@@ -886,6 +936,12 @@ export async function invalidateAllPermissionCaches(): Promise<void> {
   const batch = permissionSweep.getStore();
   if (batch) {
     batch.dirty = true;
+    // Published without emptying the shared tier first, which
+    // `retireSharedThenPublish` otherwise forbids. It is sound only because the
+    // batch's own exit empties that tier and publishes AGAIN: anything another
+    // instance promoted from a still-live stored row while the batch ran is
+    // retired by that second publication. What it buys in return is that
+    // nothing in flight can file a result as current for the batch's length.
     await bumpEpoch();
     return;
   }
@@ -925,36 +981,71 @@ export async function writingPermissions<TTable, T>(
   }
 }
 
+/**
+ * Empty the SHARED tier, then publish the epoch that retires everything else.
+ *
+ * That order is the invariant, not an implementation detail. The epoch is the
+ * only signal another instance ever receives, and it is a one-way barrier: an
+ * answer filed before it moves is retired by the move, an answer filed after it
+ * is not.
+ *
+ * Publishing first therefore opens a window on every OTHER instance, and it is
+ * the worst-shaped window here. That instance rejects its own in-memory answer
+ * because the epoch moved, falls through to the stored row the tombstone has
+ * not reached yet, and promotes that retired decision back into memory under
+ * the NEW epoch — where nothing still to happen can reach it. Nothing local
+ * defends against this: the depth below is one process's own, and the instance
+ * doing the promoting is not the one invalidating.
+ *
+ * Emptying the stored rows first closes it from both sides. An instance that
+ * has not yet seen the move promotes under the OLD epoch, and the move retires
+ * that too; one that has seen the move finds nothing left to promote.
+ *
+ * The depth is held across both steps because THIS process has the same window
+ * between the tombstone starting and the epoch being published; see
+ * {@link resolvedUnderCurrentRevision}, which is where it is read.
+ */
+async function retireSharedThenPublish(
+  // Whatever the retirement answers is discarded: how many rows a tombstone
+  // touched is not a signal anything here acts on, and a driver that reports it
+  // differently must not become a branch.
+  retireShared: () => Promise<unknown>,
+  logContext: Record<string, unknown> = {}
+): Promise<void> {
+  permissionFlushDepth += 1;
+  try {
+    if (CACHE_ENABLED) {
+      try {
+        await retireShared();
+      } catch (error) {
+        getAuthLogger()?.log?.("error", {
+          category: "auth",
+          op: "cache",
+          message: "DB cache invalidation failed",
+          ...logContext,
+          error: String(error),
+        });
+        // Don't throw - cache invalidation failures should not break operations
+      }
+    }
+    await bumpEpoch();
+  } finally {
+    permissionFlushDepth -= 1;
+  }
+}
+
 async function flushPermissionCaches(): Promise<void> {
   cache.clear();
   keyToRoleIds.clear();
   roleIdToKeys.clear();
   userIdToKeys.clear();
   superAdminCache.clear();
-  await bumpEpoch();
 
-  if (CACHE_ENABLED) {
-    // Held across the shared write, so nothing computed while the stored rows
-    // are still readable can be filed as current. Advancing the revision again
-    // afterwards would not do it: the window belongs to checks that both start
-    // and finish inside it, and those see two numbers that never moved.
-    permissionFlushDepth += 1;
-    try {
-      await new PermissionCacheService(getAdapter(), getLogger(), {
-        cacheTtlSeconds: CACHE_TTL_SECONDS,
-      }).invalidateAll();
-    } catch (error) {
-      getAuthLogger()?.log?.("error", {
-        category: "auth",
-        op: "cache",
-        message: "DB cache invalidation failed",
-        error: String(error),
-      });
-      // Don't throw - cache invalidation failures should not break operations
-    } finally {
-      permissionFlushDepth -= 1;
-    }
-  }
+  await retireSharedThenPublish(() =>
+    new PermissionCacheService(getAdapter(), getLogger(), {
+      cacheTtlSeconds: CACHE_TTL_SECONDS,
+    }).invalidateAll()
+  );
 }
 
 export async function invalidatePermissionCache(
@@ -979,41 +1070,24 @@ export async function invalidatePermissionCache(
   if (userId) superAdminCache.delete(userId);
   if (roleId) superAdminCache.clear();
 
-  // Anything derived from these rows is stale from here, whoever holds it.
-  await bumpEpoch();
-
-  // Invalidate in-memory caches (Tier 1)
+  // Invalidate in-memory caches (Tier 1). Copied before iterating, because
+  // dropping a key edits the very index being walked.
   if (userId) {
-    const keys = userIdToKeys.get(userId);
-    if (keys) {
-      for (const k of keys) {
-        cache.delete(k);
-        const rids = keyToRoleIds.get(k);
-        keyToRoleIds.delete(k);
-        if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(k);
-      }
-      userIdToKeys.delete(userId);
-    }
+    for (const key of [...(userIdToKeys.get(userId) ?? [])]) forgetKey(key);
+    userIdToKeys.delete(userId);
   }
   if (roleId) {
-    const keys = roleIdToKeys.get(roleId);
-    if (keys) {
-      for (const k of keys) {
-        cache.delete(k);
-        const rids = keyToRoleIds.get(k);
-        keyToRoleIds.delete(k);
-        if (rids) for (const rid of rids) roleIdToKeys.get(rid)?.delete(k);
-        const uid = k.split("|", 1)[0];
-        userIdToKeys.get(uid)?.delete(k);
-        if (userIdToKeys.get(uid)?.size === 0) userIdToKeys.delete(uid);
-      }
-      roleIdToKeys.delete(roleId);
-    }
+    for (const key of [...(roleIdToKeys.get(roleId) ?? [])]) forgetKey(key);
+    roleIdToKeys.delete(roleId);
   }
 
-  // Invalidate database cache (Tier 2)
-  if (CACHE_ENABLED) {
-    try {
+  // Invalidate the database tier (Tier 2), and only then announce it. Same
+  // ordering as `flushPermissionCaches`, for the reason stated on
+  // `retireSharedThenPublish`: a scoped tombstone is still an awaited write, so
+  // announcing first still lets another instance promote the row it is about to
+  // remove into a place the removal cannot reach.
+  await retireSharedThenPublish(
+    async () => {
       const cacheService = new PermissionCacheService(
         getAdapter(),
         getLogger(),
@@ -1028,18 +1102,9 @@ export async function invalidatePermissionCache(
       if (roleId) {
         await cacheService.invalidateByRole(roleId);
       }
-    } catch (error) {
-      getAuthLogger()?.log?.("error", {
-        category: "auth",
-        op: "cache",
-        message: "DB cache invalidation failed",
-        userId,
-        roleId,
-        error: String(error),
-      });
-      // Don't throw - cache invalidation failures should not break operations
-    }
-  }
+    },
+    { userId, roleId }
+  );
 }
 
 /**
@@ -1079,8 +1144,11 @@ export async function isSuperAdmin(
   // who had just lost the role.
   //
   // Refreshed rather than read, for the reason `hasPermission` gives: a
-  // demotion performed on another instance has to reach this one.
-  const resolvedUnder = await refreshEpoch();
+  // demotion performed on another instance has to reach this one. And skipped
+  // for an executor-backed check, for the other reason `hasPermission` gives:
+  // the refresh is a pooled query, and the caller's transaction may be holding
+  // the only connection there is.
+  const resolvedUnder = executor ? currentEpoch() : await refreshEpoch();
 
   // Check in-memory cache (only for pooled, committed-view checks).
   if (!executor) {

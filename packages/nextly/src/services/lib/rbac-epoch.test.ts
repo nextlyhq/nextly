@@ -65,6 +65,55 @@ function fakeAdapter(rows: () => Row[], onWrite?: () => void) {
   };
 }
 
+/**
+ * A shared row that actually applies the increment the statement carries.
+ *
+ * `fakeAdapter` answers reads and reports writes as successful without moving
+ * anything, which cannot show a count applied twice or lost. The upsert's own
+ * `values({ revision })` carries the backlog being claimed, so the fake adds
+ * exactly what the statement asked the database to add.
+ */
+function countingAdapter(state: { revision: number; generation: string }) {
+  return {
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+    getDrizzle: () => ({
+      select: () =>
+        chainOf([{ revision: state.revision, generation: state.generation }]),
+      insert: () => {
+        let owed = 0;
+        const self: Record<string, unknown> = {
+          values: (row: { revision: number }) => {
+            owed = Number(row.revision);
+            return self;
+          },
+          onConflictDoUpdate: () => {
+            state.revision += owed;
+            return Promise.resolve([{ changes: 1 }]);
+          },
+          then: (resolve: (value: unknown) => unknown) =>
+            resolve([{ changes: 1 }]),
+        };
+        return self;
+      },
+      update: () => chainOf([{ changes: 1 }]),
+    }),
+  };
+}
+
+/** A select chain whose answer arrives when the given promise settles. */
+function pending(answer: Promise<Row[]>) {
+  const self: Record<string, unknown> = {
+    from: () => self,
+    where: () => self,
+    limit: () => self,
+    then: (
+      resolve: (value: Row[]) => unknown,
+      reject: (reason: unknown) => unknown
+    ) => answer.then(resolve, reject),
+  };
+  return self;
+}
+
 function install(adapter: unknown) {
   container.register("adapter", () => adapter);
 }
@@ -284,6 +333,69 @@ describe("the RBAC epoch answers for the install", () => {
     await bumpEpoch();
 
     expect(epochIsTrustworthy()).toBe(false);
+  });
+
+  it("lands both of two invalidations that race, rather than one", async () => {
+    // A second invalidation raised while the first is still writing has to
+    // reach the row on its own account. Folded into a write already in flight
+    // it is simply gone: no other instance is ever told about it, while this
+    // one goes on believing its backlog is persisted.
+    const shared = { revision: 0, generation: "g" };
+    install(countingAdapter(shared));
+
+    await Promise.all([bumpEpoch(), bumpEpoch()]);
+
+    // Two invalidations, two increments — not one, and not three.
+    expect(shared.revision).toBe(2);
+    // And nothing is left owed, which is what lets caching resume.
+    expect(epochIsTrustworthy()).toBe(true);
+  });
+
+  it("does not hand a forced caller a read that began before it", async () => {
+    // Forcing exists for the post-write verification, whose window is the
+    // write's own flight time. A read already running may have queried before
+    // that write, so joining it answers with an observation older than the
+    // thing being confirmed — the check then passes on evidence that predates
+    // what it is checking.
+    let shared = 1;
+    let reads = 0;
+    let releaseFirst: () => void = () => {};
+
+    function rows() {
+      // Snapshotted when the query is ISSUED, which is what makes a held read
+      // an old observation rather than a slow one.
+      const snapshot = [{ revision: shared, generation: "g" }];
+      reads += 1;
+      if (reads > 1) return Promise.resolve(snapshot);
+      return new Promise<Row[]>(resolve => {
+        releaseFirst = () => resolve(snapshot);
+      });
+    }
+
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => ({
+        select: () => pending(rows()),
+        insert: () => chainOf([{ changes: 1 }]),
+        update: () => chainOf([{ changes: 1 }]),
+      }),
+    });
+
+    const first = refreshEpoch();
+    // Let that read reach the database before anything moves under it. Asserted
+    // rather than assumed: if it has not started, the case below proves nothing.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(reads).toBe(1);
+
+    // The change a forced caller is verifying, made while the first read is out.
+    shared = 2;
+    const forced = refreshEpoch({ force: true });
+
+    releaseFirst();
+    await expect(first).resolves.toBe("g:1");
+    await expect(forced).resolves.toBe("g:2");
+    expect(reads).toBe(2);
   });
 
   it("treats a missing row as epoch zero rather than as a failure", async () => {
