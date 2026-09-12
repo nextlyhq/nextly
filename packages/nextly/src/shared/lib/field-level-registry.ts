@@ -68,7 +68,7 @@ type FieldAccessFn = (args: {
  * the single source for the string, so this carries what it returns rather
  * than re-deriving it.
  */
-interface CallerGrants {
+export interface CallerGrants {
   permissions: string[];
   roles: string[];
 }
