@@ -888,6 +888,12 @@ export class CollectionMutationService extends BaseService {
         manyToMany: Record<string, string[]>;
       };
       fields: FieldDefinition[];
+      /**
+       * The locale this snapshot's translatable values belong to, when the
+       * write put any there. Absent means the snapshot carries no per-locale
+       * parent state and the component rule below decides.
+       */
+      localeTag?: string;
     }
   ): Promise<void> {
     if (!args.versionsConfig?.enabled) {
@@ -905,15 +911,18 @@ export class CollectionMutationService extends BaseService {
         // event carries, and that payload is read shape.
         parts: await this.snapshotPartsFor(args.documentParts, args.fields, tx),
         createdBy: args.createdBy,
-        // The component subtrees were read at the default locale (these paths
-        // pass no write locale); tag the version with it so a localized
-        // component can be restored, exactly as the interactive create/update
-        // paths do. Null when the snapshot has no component state, since there is
-        // then one set of values and nothing to disambiguate.
+        // The locale this snapshot belongs to: the one the write put
+        // translatable parent values in, when it did. Otherwise the component
+        // rule — the subtrees were read at the default locale (these paths
+        // pass no write locale), so tag the version with it when there are
+        // any, exactly as the interactive create/update paths do. Null when
+        // the snapshot carries neither, since there is then one set of values
+        // and nothing to disambiguate.
         locale:
-          Object.keys(args.documentParts.components ?? {}).length > 0
+          args.localeTag ??
+          (Object.keys(args.documentParts.components ?? {}).length > 0
             ? this.componentSnapshotLocale(undefined)
-            : null,
+            : null),
         maxPerDoc: args.versionsConfig.maxPerDoc,
       });
     } catch (err) {
@@ -968,6 +977,8 @@ export class CollectionMutationService extends BaseService {
       manyToManyData: Record<string, string[]>;
       user?: UserContext;
       actor?: RequestActor;
+      /** The locale this create's translatable values were written in, if any. */
+      localeTag?: string;
     }
   ): Promise<{
     eventRecorded: boolean;
@@ -1025,6 +1036,10 @@ export class CollectionMutationService extends BaseService {
       versionsConfig,
       documentParts: createdParts,
       fields: args.fields,
+      // See `captureTxVersion`: a create that wrote translatable values put
+      // them in one language, and an untagged snapshot of them reads as
+      // shared.
+      localeTag: args.localeTag,
     });
     const eventFields = await this.webhookFieldTreeIfRecording(
       args.collectionName,
@@ -1371,11 +1386,22 @@ export class CollectionMutationService extends BaseService {
     // Resolved here, before the transaction opens. Everything downstream — including the read-back
     // that runs inside it — reads the answer rather than asking again.
     const mainTableName = companion.companionTableName.replace(/_locales$/, "");
-    const readiness = await resolveCompanionReadiness(this.adapter, {
-      companionTableName: companion.companionTableName,
-      mainTableName,
-      localizedColumns: companion.localizedFields.map(f => f.column),
-    });
+    // Inside a caller's transaction the verdict may only be REMEMBERED, never
+    // resolved: resolving issues a pooled query, which waits for the
+    // connection this transaction holds, and on PostgreSQL a query against a
+    // missing relation marks the whole transaction aborted — after which the
+    // real write dies naming an innocent statement. Every path that opens a
+    // write transaction resolves readiness before opening it (the batch
+    // services call `warmLocalizedReadiness`), so the answer is already known
+    // by the time this asks. Unknown is handled below as any other
+    // not-ready answer is, which is the same fallback as before.
+    const readiness = executor
+      ? cachedCompanionReadiness(this.adapter, companion.companionTableName)
+      : await resolveCompanionReadiness(this.adapter, {
+          companionTableName: companion.companionTableName,
+          mainTableName,
+          localizedColumns: companion.localizedFields.map(f => f.column),
+        });
     if (readiness !== "ready") {
       // The main table carries no language of its own, so anything written there
       // while the companion is missing is later read as the DEFAULT language —
@@ -8566,20 +8592,30 @@ export class CollectionMutationService extends BaseService {
       // it rolls back with the main row. A brand-new parent has no row to
       // conflict with, which is why this inserts where the update path upserts.
       if (localizedWrite) {
-        await this.insertCompanionRow(
-          tx,
-          localizedWrite,
-          (entry as { id: string }).id
-        );
+        // A failure here is a write-integrity failure: the parent row is
+        // already written. Reported as a soft per-item failure, a batch under
+        // `stopOnError: false` would carry on and commit a document whose
+        // translations never landed — the row would exist with no content in
+        // any language. Marked, the batch loop aborts and the transaction
+        // rolls back, exactly as a failed component save does.
+        try {
+          await this.insertCompanionRow(
+            tx,
+            localizedWrite,
+            (entry as { id: string }).id
+          );
+        } catch (error: unknown) {
+          throw markWriteIntegrityFailure(error);
+        }
         // Split out of the insert, so the returned row lacks them: merge them
-        // back for the hooks, the event and the response. Under the column's
-        // own name, which is how every other key on this path's row is spelled.
-        // `_status` is a companion column, not an entry field.
-        for (const [column, value] of Object.entries(
-          localizedWrite.companionData
+        // back for the hooks, the event and the response. Under the FIELD's
+        // name rather than the column's — a field whose column differs
+        // (`metaTitle` -> `meta_title`) would otherwise reach hooks and the
+        // durable snapshot under a key no field has.
+        for (const [field, value] of Object.entries(
+          localizedWrite.localizedFieldValues
         )) {
-          if (column === "_status") continue;
-          (entry as Record<string, unknown>)[column] = value;
+          (entry as Record<string, unknown>)[field] = value;
         }
       }
 
@@ -8603,6 +8639,9 @@ export class CollectionMutationService extends BaseService {
         manyToManyData,
         user: params.user,
         actor: params.actor,
+        // The language this create's translatable values went into, so the
+        // version snapshot is tagged with it rather than reading as shared.
+        localeTag: localizedWrite?.writeLocale,
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
@@ -9157,21 +9196,44 @@ export class CollectionMutationService extends BaseService {
         localizedUpdate &&
         Object.keys(localizedUpdate.companionData).length > 0
       ) {
-        await upsertCompanionRow(
-          companionWriteVia(tx, this.dialect),
-          localizedUpdate.companionTableName,
-          entryId,
-          localizedUpdate.writeLocale,
-          localizedUpdate.companionData
-        );
-        // Split out of the patch, so the returned row lacks them: merge them
-        // back under the column's own name, as the create path does.
-        for (const [column, value] of Object.entries(
-          localizedUpdate.companionData
-        )) {
-          if (column === "_status") continue;
-          (updated as Record<string, unknown>)[column] = value;
+        // Write-integrity, as in the create path: the main row is already
+        // written, and a soft per-item failure here would let the batch commit
+        // a row whose translation never landed.
+        try {
+          await upsertCompanionRow(
+            companionWriteVia(tx, this.dialect),
+            localizedUpdate.companionTableName,
+            entryId,
+            localizedUpdate.writeLocale,
+            localizedUpdate.companionData
+          );
+        } catch (error: unknown) {
+          throw markWriteIntegrityFailure(error);
         }
+      }
+
+      // The whole of this locale, not only what the patch named. A partial
+      // translatable update carries just the changed values, and the main row
+      // holds no translatable ones at all — so a snapshot built from those two
+      // would record a document missing every field this write did not touch,
+      // and a restore from it would drop them. Read the companion row for the
+      // write locale on the transaction (read-your-writes, so the upsert above
+      // is included) and overlay what this write set, the way the single-entry
+      // update composes the same document. Keyed by field name.
+      const localizedDocument = localizedUpdate
+        ? {
+            ...(await this.readCompanionLocalizedValues(
+              tx,
+              params.collectionName,
+              entryId,
+              localizedUpdate.writeLocale
+            )),
+            ...localizedUpdate.localizedFieldValues,
+          }
+        : {};
+      for (const [field, value] of Object.entries(localizedDocument)) {
+        if (field === "id") continue;
+        (updated as Record<string, unknown>)[field] = value;
       }
 
       // Compute the intent from the updated row and the pre-update row, before
@@ -9338,6 +9400,14 @@ export class CollectionMutationService extends BaseService {
           versionsConfig,
           documentParts: updatedParts,
           fields,
+          // The snapshot carries this locale's translatable values, so the
+          // version is tagged with it. Untagged, history reads the snapshot as
+          // shared and a restore drops every per-locale field — or refuses,
+          // on a collection where they all are.
+          localeTag:
+            Object.keys(localizedDocument).length > 0
+              ? localizedUpdate?.writeLocale
+              : undefined,
         });
       }
       const eventFields = await this.webhookFieldTreeIfRecording(

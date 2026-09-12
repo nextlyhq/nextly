@@ -52,7 +52,14 @@ async function boot(): Promise<TestNextly> {
           read: () => true,
           update: () => true,
         },
-        fields: [text({ name: "title" }), text({ name: "kind" })],
+        versions: true,
+        // `metaTitle` becomes `meta_title` in the companion: the column and the
+        // field name differ, which is where a reattachment by column shows.
+        fields: [
+          text({ name: "title" }),
+          text({ name: "kind" }),
+          text({ name: "metaTitle" }),
+        ],
       }),
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
@@ -134,6 +141,94 @@ describe("a bulk write on a localized collection", () => {
     expect(rows[0].kind).toBe("edited");
     expect(rows[0].title).toBe("first");
     expect(rows[0]._locale).toBe("en");
+  });
+
+  it("carries the whole locale, the field's own name and the write's locale into what it records", async () => {
+    const handle = await boot();
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    await entries.createEntries(
+      { collectionName: "pages", overrideAccess: true },
+      [{ title: "first", kind: "one", metaTitle: "meta" }]
+    );
+    const [created] = await companionRows(handle);
+
+    // A patch naming ONE translatable field. What is recorded must still be
+    // the whole document in this language, not the one field that moved.
+    await entries.updateEntries(
+      { collectionName: "pages", overrideAccess: true },
+      [{ id: created._parent, data: { kind: "edited" } }]
+    );
+
+    const events = await handle.adapter.select<{
+      type: string;
+      payload: unknown;
+    }>("nextly_events");
+    const documents = events
+      .filter(e => e.type === "entry.created" || e.type === "entry.updated")
+      .map(e => {
+        const envelope = (
+          typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload
+        ) as { resource?: { id?: string }; data?: Record<string, unknown> };
+        return { id: envelope.resource?.id, doc: envelope.data ?? {} };
+      })
+      .filter(d => d.id === created._parent);
+    expect(documents).toHaveLength(2);
+    for (const { doc } of documents) {
+      // Under the FIELD's name, not the column's.
+      expect(doc).toHaveProperty("metaTitle", "meta");
+      expect(doc).not.toHaveProperty("meta_title");
+    }
+    // The update's document carries the fields its patch never named.
+    const afterUpdate = documents[1].doc;
+    expect(afterUpdate.kind).toBe("edited");
+    expect(afterUpdate.title).toBe("first");
+
+    // Both versions are tagged with the language their values belong to;
+    // untagged, a restore reads them as shared and drops them.
+    const versions = await handle.adapter.select<{
+      locale: unknown;
+      entry_id?: string;
+      entryId?: string;
+    }>("nextly_versions");
+    const mine = versions.filter(
+      v => (v.entry_id ?? v.entryId) === created._parent
+    );
+    expect(mine.length).toBeGreaterThanOrEqual(2);
+    expect([...new Set(mine.map(v => v.locale))]).toEqual(["en"]);
+  });
+
+  it("rolls the batch back when the companion write fails, rather than committing a parent without it", async () => {
+    const handle = await boot();
+    const handler = handle.getService("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    // One write first, so readiness is remembered as it is in production;
+    // then the companion goes out from under it — schema drift, which is the
+    // shape this guard is for.
+    await entries.createEntries(
+      { collectionName: "pages", overrideAccess: true },
+      [{ title: "first", kind: "one" }]
+    );
+    await handle.adapter.executeQuery('DROP TABLE "dc_pages_locales"');
+    const before = await handle.adapter.executeQuery<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM "dc_pages"'
+    );
+
+    const result = await entries
+      .createEntries({ collectionName: "pages", overrideAccess: true }, [
+        { title: "second", kind: "two" },
+      ])
+      .catch(() => ({ successful: 0, failed: 1, errors: [{}] }));
+
+    expect(result.successful).toBe(0);
+    // The parent row did not survive: a document whose translations never
+    // landed must not be committed as though it had.
+    const after = await handle.adapter.executeQuery<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM "dc_pages"'
+    );
+    expect(after[0].n).toBe(before[0].n);
   });
 
   it("leaves a collection that is not localized writing to its own table", async () => {
