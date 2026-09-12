@@ -16,6 +16,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  deferredEntities,
+  setDeferredEntities,
+} from "../../domains/widgets/deferred-entities";
 
 import {
   clearWidgets,
@@ -112,6 +116,26 @@ describe("resetWidgetRegistries", () => {
     // The control: the source core DOES republish is still answerable, so this
     // cannot pass by clearing everything and registering nothing.
     expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
+  });
+
+  it("leaves the deferral store alone, because it has not synced anything yet", () => {
+    // 🔴 The reset runs BEFORE the boot syncs any metadata, so clearing here
+    // would publish "nothing is withheld" on the strength of work that has not
+    // happened -- and the boot's own sync can then fail and be CAUGHT, leaving
+    // the registry exactly as stale as the previous reload found it while the
+    // set says otherwise.
+    //
+    // Each kind replaces its own set from its own sync path instead, once that
+    // sync has succeeded (`publishBootDeferrals` in `di/register`), which
+    // clears a previous boot's refusal on the pass that earns the right to and
+    // retains it when the sync throws.
+    setDeferredEntities("collection", ["posts"]);
+    setDeferredEntities("single", ["settings"]);
+
+    resetWidgetRegistries();
+
+    expect([...deferredEntities("collection")]).toEqual(["posts"]);
+    expect([...deferredEntities("single")]).toEqual(["settings"]);
   });
 
   it("drops the previous boot's widgets and leaves core's own", () => {

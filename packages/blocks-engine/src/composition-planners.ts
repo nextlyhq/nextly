@@ -71,7 +71,9 @@ import { patternDigest } from "./pattern-digest";
 import { isPlainRecord } from "./plain-record";
 import {
   componentIdsIn,
+  placementTypesOf,
   resolveComponentInstances,
+  type ComponentLookup,
   type ComponentUnresolvedReason,
   type DefinitionsById,
 } from "./resolve-instances";
@@ -2001,13 +2003,19 @@ export type { PlacementTarget } from "./nesting";
 function placementRefusal(
   blocks: readonly BlockNode[],
   where: PlacementTarget,
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): PlanRefusal | undefined {
   // The rule itself lives with the rest of the nesting rule, where the palette
   // and the canvas reach it too. This function is the translation from its
   // verdict into the refusal a plan carries, and nothing more.
+  //
+  // Each block answers with what it DRAWS ({@link placementTypesOf}), which is
+  // its own type unless it is an instance and the caller supplied the lookup —
+  // so the rule judges the forest the canvas will render rather than the
+  // envelope the store holds.
   const verdict = placementVerdict(
-    blocks.map(block => block.type),
+    blocks.flatMap(block => placementTypesOf(block, definitions)),
     where,
     nesting
   );
@@ -2090,7 +2098,8 @@ export function planInsertPattern(
   document: BlockDocument,
   pattern: StoredPattern,
   target: InsertTarget,
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): PlanResult<never> {
   // The identity BEFORE anything is built on it. A record whose id is not a
   // non-empty string is one `isBlockOrigin` refuses, so the plan would succeed
@@ -2123,8 +2132,8 @@ export function planInsertPattern(
   );
 
   const refusal =
-    placementRefusal(marked, destination.place.where, nesting) ??
-    internalNestingRefusal(marked, nesting) ??
+    placementRefusal(marked, destination.place.where, nesting, definitions) ??
+    internalNestingRefusal(marked, nesting, definitions) ??
     // The `"document"` target REMOVES what is there, and a remove refuses both
     // a locked subtree and a malformed node for the same reasons an insert
     // does. Only that target deletes anything; a positional insert adds.
@@ -2216,11 +2225,12 @@ function storedPatternRefusal(pattern: BlockDocument): PlanRefusal | undefined {
  */
 export function patternRefusal(
   pattern: BlockDocument,
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): PlanRefusal | undefined {
   return (
     storedPatternRefusal(pattern) ??
-    internalNestingRefusal(pattern.nodes, nesting)
+    internalNestingRefusal(pattern.nodes, nesting, definitions)
   );
 }
 
@@ -2280,9 +2290,10 @@ export function saveAsPatternRefusal(
  */
 function internalNestingRefusal(
   roots: readonly BlockNode[],
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): PlanRefusal | undefined {
-  const verdict = internalNestingVerdict(roots, nesting);
+  const verdict = internalNestingVerdict(roots, nesting, definitions);
   if (verdict.allowed) return undefined;
   return {
     problem: verdict.reason,
@@ -2313,7 +2324,8 @@ function internalNestingRefusal(
  */
 export function internalNestingVerdict(
   roots: readonly BlockNode[],
-  nesting: NestingSource
+  nesting: NestingSource,
+  definitions?: ComponentLookup
 ): NestingVerdict {
   let refusal: NestingVerdict | undefined;
   walkNodes([...roots], node => {
@@ -2322,7 +2334,7 @@ export function internalNestingVerdict(
       // A stored forest reaches here unvalidated, so a slot may hold anything.
       if (!Array.isArray(children)) continue;
       const verdict = placementVerdict(
-        children.map(child => child.type),
+        children.flatMap(child => placementTypesOf(child, definitions)),
         { kind: "slot", parentType: node.type, slot },
         nesting
       );

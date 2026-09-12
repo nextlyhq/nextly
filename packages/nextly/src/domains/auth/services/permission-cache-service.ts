@@ -276,6 +276,32 @@ export class PermissionCacheService extends BaseService {
    * @param userId - User ID to invalidate
    * @returns Promise resolving to number of entries invalidated
    */
+  /**
+   * Tombstone every cached entry, for a change that reaches everyone.
+   *
+   * A PERMISSION row is not owned by a user or a role: editing what
+   * `manage-billing` means, or deleting it, changes what every role granting it
+   * confers. There is no id to scope by, so the two invalidations above cannot
+   * express it and a permission mutation reached neither of them.
+   *
+   * Tombstoned rather than deleted, like the two above, so a concurrent read
+   * sees an expired row rather than a missing one.
+   */
+  async invalidateAll(): Promise<number> {
+    try {
+      const { userPermissionCache } = this.tables;
+      const result = await this.db
+        .update(userPermissionCache)
+        .set({ expiresAt: new Date() });
+      return affectedRowCount(result, this.dialect);
+    } catch (error) {
+      this.logger.error("Failed to invalidate the whole permission cache", {
+        error: String(error),
+      });
+      return 0;
+    }
+  }
+
   async invalidateByUser(userId: string): Promise<number> {
     if (!userId) {
       return 0;

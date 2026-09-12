@@ -27,6 +27,7 @@ import {
   findNode,
   type BreakpointId,
   type BreakpointSet,
+  type ComponentLookup,
   type SiteTokenSet,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -50,20 +51,23 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import type { EditorState } from "./editor-state";
+import { IdentityFields } from "./identity-fields";
+import type { SavedComponent } from "./inserter";
 import {
   fieldLabel,
   inspectSelection,
-  lockOp,
   lockStateOf,
   propPatch,
-  renameOp,
   selectedNode,
-  type BlockIdentity,
+  type BlockInspection,
   type EditableProp,
   type LockState,
 } from "./inspector";
+import { inspectInstance, type InstanceInspection } from "./instance-inspector";
+import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
+import { useStoredDraft } from "./stored-draft";
 import {
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
@@ -194,6 +198,30 @@ export interface InspectorPanelProps {
    * serve this.
    */
   tokens?: SiteTokenSet;
+  /**
+   * The site's component library, as the host read it: the definitions the
+   * CANVAS resolves instances against, and the rows that name them.
+   *
+   * ONE prop rather than a lookup and a list beside each other, because they
+   * are one read: a selected instance's rows are read from the very document
+   * the page is drawn from, and its title from the row the same read returned.
+   * Handed two props from two reads, a host could title an instance from one
+   * library and resolve it against another.
+   *
+   * Supplied rather than fetched, as every input to this package is. Omitted,
+   * an instance is inspected as one whose definition could not be loaded —
+   * which is what the canvas draws for it under the same omission — and
+   * titled by its component id.
+   */
+  componentLibrary?: ComponentLibrary;
+}
+
+/** What the inspector needs of the host's component read. */
+export interface ComponentLibrary {
+  /** The definitions the canvas resolves instances against, keyed by id. */
+  readonly definitions: ComponentLookup;
+  /** The library's rows, the only holder of a definition's title and usage. */
+  readonly components: readonly SavedComponent[];
 }
 
 /**
@@ -276,6 +304,100 @@ function tabChangeHandler(
   };
 }
 
+/**
+ * What a host that supplies no library is judged under: nothing resolves, so an
+ * instance reads as one whose definition could not be loaded. A shared instance
+ * rather than a fresh one per render, because the inspection is recomputed
+ * every render and a fresh empty map is a new identity for nothing.
+ */
+const NO_LIBRARY: ComponentLibrary = { definitions: new Map(), components: [] };
+
+/** The selected instance, under the library the host supplied or the empty one. */
+function selectedInstance(
+  editor: EditorState,
+  library: ComponentLibrary = NO_LIBRARY
+): InstanceInspection | null {
+  return inspectInstance(
+    editor.document,
+    editor.selectedId,
+    library.definitions,
+    library.components
+  );
+}
+
+/**
+ * Which surface a selection gets: one drawn WITHOUT the tab strip, or the
+ * block whose tabs apply.
+ *
+ * A discriminated answer rather than "an element or null", so the caller that
+ * goes on to draw the tabs holds a BLOCK inspection by type rather than a
+ * maybe it has to re-check.
+ *
+ * Three selections get a surface of their own, and the order is the rule.
+ * Several blocks first: a selection of several instances is still several
+ * blocks, and the lock is still the one thing well defined across them. An
+ * instance next, before the empty case: the block inspection IS empty for an
+ * instance — its type is not in the registry — and answering "select a block"
+ * to an author who just clicked a component was the state that surface
+ * replaces. Nothing selected last: one note, and no tabs.
+ */
+function surfaceFor(
+  editor: EditorState,
+  instance: InstanceInspection | null,
+  inspection: BlockInspection | null
+):
+  | { readonly tabless: React.JSX.Element }
+  | { readonly block: BlockInspection } {
+  /*
+   * Several blocks selected: a different panel, not a thinner one.
+   *
+   * Showing the primary's name and props while six blocks are selected would
+   * describe one block and act on one block, on a screen where the canvas shows
+   * six outlined and the toolbar's delete removes all of them. The two surfaces
+   * would be answering different questions with the same words.
+   *
+   * Per-property batch editing — one field showing "Mixed" and writing to every
+   * block — is Plan 05's batch edit and is deliberately not here. What IS here
+   * is the one property that is well defined across any set today, because it
+   * is a flag rather than a value: the lock.
+   */
+  if (editor.selection.ids.length > 1) {
+    return {
+      tabless: (
+        <ManyBlocksPanel
+          editor={editor}
+          count={editor.selection.ids.length}
+          lock={lockStateOf(editor.document, editor.selection.ids)}
+        />
+      ),
+    };
+  }
+  if (instance !== null) {
+    return {
+      tabless: <InstanceInspectorPanel inspection={instance} editor={editor} />,
+    };
+  }
+  /*
+   * Nothing selected: one note, and no tabs.
+   *
+   * The entry's OWN fields are not drawn here. They already ship as a left
+   * panel the host renders, and reproducing them in this region would be the
+   * second surface-meaning-two-things the layout ruling removed, wearing a
+   * different shape. Tabs are withheld too: a Style tab over no selection would
+   * offer an author somewhere to click that can never show anything.
+   */
+  if (inspection === null) {
+    return {
+      tabless: (
+        <div className="nx-inspector" data-empty="no-selection">
+          <p className="nx-inspector__note">Select a block to edit it.</p>
+        </div>
+      ),
+    };
+  }
+  return { block: inspection };
+}
+
 export function InspectorPanel({
   editor,
   canvasRoot,
@@ -292,6 +414,7 @@ export function InspectorPanel({
   onJumpToBreakpoint,
   tokens,
   blocks,
+  componentLibrary,
 }: InspectorPanelProps): React.JSX.Element {
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
@@ -307,6 +430,14 @@ export function InspectorPanel({
     previewContainer,
   });
   const inspection = inspectSelection(editor.document, editor.selectedId);
+  /*
+   * Asked beside the block inspection rather than instead of it, and the two
+   * cannot both answer: a node is an instance or a registered block, never
+   * both, and `inspectSelection` already answers nothing for a type the
+   * registry does not hold. Asked here, before the early returns, because the
+   * hooks below have to run on every render whichever surface is drawn.
+   */
+  const instance = selectedInstance(editor, componentLibrary);
   /*
    * The NODE rather than the inspection, because the marker is about stored
    * styles and an inspection describes editable props. `selectedNode` answers
@@ -348,49 +479,13 @@ export function InspectorPanel({
     [editor]
   );
 
-  /*
-   * Several blocks selected: a different panel, not a thinner one.
-   *
-   * Showing the primary's name and props while six blocks are selected would
-   * describe one block and act on one block, on a screen where the canvas shows
-   * six outlined and the toolbar's delete removes all of them. The two surfaces
-   * would be answering different questions with the same words.
-   *
-   * Per-property batch editing — one field showing "Mixed" and writing to every
-   * block — is Plan 05's batch edit and is deliberately not here. What IS here
-   * is the one property that is well defined across any set today, because it
-   * is a flag rather than a value: the lock.
-   */
-  if (editor.selection.ids.length > 1) {
-    return (
-      <ManyBlocksPanel
-        editor={editor}
-        count={editor.selection.ids.length}
-        lock={lockStateOf(editor.document, editor.selection.ids)}
-      />
-    );
-  }
-
-  /*
-   * Nothing selected: one note, and no tabs.
-   *
-   * The entry's OWN fields are not drawn here. They already ship as a left
-   * panel the host renders, and reproducing them in this region would be the
-   * second surface-meaning-two-things the layout ruling removed, wearing a
-   * different shape. Tabs are withheld too: a Style tab over no selection would
-   * offer an author somewhere to click that can never show anything.
-   */
-  if (inspection === null) {
-    return (
-      <div className="nx-inspector" data-empty="no-selection">
-        <p className="nx-inspector__note">Select a block to edit it.</p>
-      </div>
-    );
-  }
+  const surface = surfaceFor(editor, instance, inspection);
+  if ("tabless" in surface) return surface.tabless;
+  const block = surface.block;
 
   return (
     <div className="nx-inspector">
-      <h2 className="nx-inspector__title">{inspection.label}</h2>
+      <h2 className="nx-inspector__title">{block.label}</h2>
 
       {/*
         What the block IS, above what it holds.
@@ -407,9 +502,9 @@ export function InspectorPanel({
       <IdentityFields
         // Keyed by node so the name input does not carry an uncommitted edit
         // across a selection change, exactly as the prop fields are.
-        key={`${inspection.nodeId}:identity`}
-        nodeId={inspection.nodeId}
-        identity={inspection.identity}
+        key={`${block.nodeId}:identity`}
+        nodeId={block.nodeId}
+        identity={block.identity}
         editor={editor}
       />
 
@@ -437,25 +532,7 @@ export function InspectorPanel({
         </TabsList>
 
         <TabsContent value="content">
-          {inspection.props.length === 0 ? (
-            <p className="nx-inspector__note">
-              This block has no editable properties.
-            </p>
-          ) : (
-            <div className="nx-inspector__fields">
-              {inspection.props.map(prop => (
-                <PropField
-                  // Keyed by node AND prop: a bare prop name would let React
-                  // reuse one block's field for the next block's same-named
-                  // prop, so the input would keep the previous block's
-                  // uncommitted text.
-                  key={`${inspection.nodeId}:${prop.name}`}
-                  prop={prop}
-                  onCommit={commit}
-                />
-              ))}
-            </div>
-          )}
+          <ContentFields inspection={block} onCommit={commit} />
         </TabsContent>
 
         <TabsContent value="style">
@@ -514,10 +591,10 @@ export function InspectorPanel({
             // next block the way an uncommitted name would. The panel holds
             // rows locally; without this an author would select another block
             // and find this one's unsaved row waiting there.
-            key={`${inspection.nodeId}:advanced`}
-            nodeId={inspection.nodeId}
-            cssId={inspection.html.cssId}
-            attributes={inspection.html.attributes}
+            key={`${block.nodeId}:advanced`}
+            nodeId={block.nodeId}
+            cssId={block.html.cssId}
+            attributes={block.html.attributes}
             editor={editor}
             active={tab === "advanced"}
             blocks={blocks}
@@ -528,69 +605,33 @@ export function InspectorPanel({
   );
 }
 
-/**
- * The block's own name and its lock.
- *
- * Applied through `editor.apply` like every other edit, so both are covered by
- * undo — a rename an author regrets is one press away, and a lock is not a
- * setting that sits outside the history everything else is in.
- */
-function IdentityFields({
-  nodeId,
-  identity,
-  editor,
+/** The Content tab: one field per declared prop, or the note that there are none. */
+function ContentFields({
+  inspection,
+  onCommit,
 }: {
-  nodeId: string;
-  identity: BlockIdentity;
-  editor: EditorState;
+  inspection: BlockInspection;
+  onCommit: (name: string, value: unknown) => void;
 }): React.JSX.Element {
-  const [draft, setDraft] = React.useState(identity.name);
-
-  // The stored name wins whenever it changes underneath the field — an undo, or
-  // a rename applied from somewhere else. Without this the input would go on
-  // showing a name the document no longer has.
-  React.useEffect(() => {
-    setDraft(identity.name);
-  }, [identity.name]);
-
-  const commitName = () => {
-    if (draft.trim() === identity.name) return;
-    editor.apply(renameOp(nodeId, draft));
-  };
-
+  if (inspection.props.length === 0) {
+    return (
+      <p className="nx-inspector__note">
+        This block has no editable properties.
+      </p>
+    );
+  }
   return (
-    <div className="nx-inspector__fields nx-inspector__identity">
-      <div className="nx-inspector__field">
-        <Label htmlFor="nx-block-name">Name</Label>
-        <Input
-          id="nx-block-name"
-          value={draft}
-          placeholder="Unnamed"
-          onChange={event => setDraft(event.target.value)}
-          // Committed on blur and on Enter, matching the text props below: an
-          // op per keystroke would make one undo remove one letter.
-          onBlur={commitName}
-          onKeyDown={event => {
-            if (event.key !== "Enter") return;
-            event.preventDefault();
-            commitName();
-          }}
+    <div className="nx-inspector__fields">
+      {inspection.props.map(prop => (
+        <PropField
+          // Keyed by node AND prop: a bare prop name would let React reuse one
+          // block's field for the next block's same-named prop, so the input
+          // would keep the previous block's uncommitted text.
+          key={`${inspection.nodeId}:${prop.name}`}
+          prop={prop}
+          onCommit={onCommit}
         />
-      </div>
-
-      <div className="nx-inspector__field nx-inspector__field--inline">
-        <Checkbox
-          id="nx-block-locked"
-          checked={identity.locked}
-          // Immediately, with no blur to wait for. There is nothing to coalesce
-          // in a checkbox, and waiting would leave the canvas disagreeing with a
-          // control the author has already changed.
-          onCheckedChange={checked =>
-            editor.apply(lockOp(nodeId, checked === true))
-          }
-        />
-        <Label htmlFor="nx-block-locked">Lock this block</Label>
-      </div>
+      ))}
     </div>
   );
 }
@@ -693,15 +734,7 @@ function TextishField({
   // unrepresentable value shows empty and, because `send` compares against
   // this, an untouched field writes nothing.
   const stored = storedText(prop.value);
-  const [draft, setDraft] = React.useState(stored);
-
-  // The stored value wins whenever it changes underneath the field — an undo,
-  // an edit from the canvas, a different block selected into the same slot.
-  // Without this the input would go on showing a value the document no longer
-  // has.
-  React.useEffect(() => {
-    setDraft(stored);
-  }, [stored]);
+  const [draft, setDraft] = useStoredDraft(stored);
 
   const send = () => {
     if (draft === stored) return;

@@ -219,6 +219,15 @@ const ROW_SEPARATOR_BYTES = 1;
 export interface CollectionPage {
   readonly data: readonly unknown[];
   readonly hasMore: boolean;
+  /**
+   * The greatest id this page named, which is where the next one starts.
+   *
+   * Absent when it named none — an empty page, or one whose rows all arrived
+   * without a readable id. Those rows are skipped anyway, so the walk keeps
+   * the position it had and steps past them by offset instead; that is the one
+   * case where an offset is still the only thing to go on.
+   */
+  readonly next?: string;
 }
 
 /** Who is asking, and which collections the host actually has. */
@@ -258,13 +267,12 @@ export interface ComponentReads {
    *
    * The plugin-facing listing forwards no lifecycle scope, and an untrusted
    * read that states none is bounded to public states — so a draft-only
-   * component would never be listed and never be placeable. Deterministically
-   * ordered by `id`, because these are independent offset queries: the service
-   * adds `ORDER BY` only when a sort is asked for, and an unordered offset read
-   * is free to return rows in a different order per page, so one row can arrive
-   * twice and another never at all.
+   * component would never be listed and never be placeable.
+   *
+   * Ordered by `id` and paged FROM one — see {@link ListPosition}. The service
+   * adds `ORDER BY` only when a sort is asked for, so the order is asked for.
    */
-  list(slug: string, page: number): Promise<CollectionPage>;
+  list(slug: string, at: ListPosition): Promise<CollectionPage>;
   /**
    * One component by id, with its working draft overlaid where this caller may
    * edit it, or nothing.
@@ -375,17 +383,17 @@ function directComponentReads(
     };
   };
   return {
-    list: async (slug, page) => {
+    list: async (slug, at) => {
       const result = await requireNextly().find({
         collection: slug,
         ...(await asUser()),
         ...inLocale,
         status: "all",
         sort: "id",
-        page,
+        ...queryAt(at),
         limit: COMPONENT_LIST_PAGE_SIZE,
       });
-      return { data: result.items, hasMore: result.meta.hasNext };
+      return page(result.items, result.meta.hasNext);
     },
     read: async (slug, id) => {
       try {
@@ -430,19 +438,18 @@ export async function readPatternLibrary(
   const asUser = { as: "user" as const, user: ctx.user ?? undefined };
   return envelope(
     await readTier(
-      async page => {
+      async at => {
+        const { page: pageNumber, ...filter } = queryAt(at);
         const result = await ctx.services.collections.listEntries(
           slug,
           {
             sort: { field: "id", direction: "asc" as const },
-            pagination: { limit: LIBRARY_PAGE_SIZE, page },
+            pagination: { limit: LIBRARY_PAGE_SIZE, page: pageNumber },
+            ...filter,
           },
           asUser
         );
-        return {
-          data: result.data,
-          hasMore: result.pagination?.hasMore === true,
-        };
+        return page(result.data, result.pagination?.hasMore === true);
       },
       row => readLibraryRow(row) ?? "skip",
       LIBRARY_PAGE_SIZE
@@ -478,6 +485,82 @@ export async function readComponentLibrary(
   );
 }
 
+/**
+ * Where one page of a listing starts.
+ *
+ * An id rather than a count, because these are independent queries against a
+ * collection other authors are editing: an offset moves when a row before it
+ * is inserted or deleted, so one row comes back twice and another never at
+ * all — and the one never returned is never completed, so `omitted` stays
+ * false and the response reports a whole library the canvas has no definition
+ * for. "The rows after this id" means the same thing however many rows before
+ * it moved.
+ *
+ * `page` is what is left of the offset, and it counts pages since `after` last
+ * MOVED — not since the walk began. It exists for the one page that names no
+ * id at all: every row on it arrived without a readable one, so it names no
+ * position, and stepping past it is the only way to reach what is behind it.
+ * A page that names an id resets it to 1, so the ordinary walk never uses it
+ * beyond the first page and never carries an offset a mutation can move.
+ */
+export interface ListPosition {
+  /** The greatest id already seen, absent before the first page. */
+  readonly after?: string;
+  /** Pages read since `after` last moved, 1-indexed. */
+  readonly page: number;
+}
+
+/**
+ * The filter that asks for the rows after one id, or nothing for the first
+ * page.
+ *
+ * Spelled once because both tiers page the same way through two different
+ * services, and the `id` sort they already ask for is what makes it a
+ * position: ordered by id, "after this id" and "after this row" are the same
+ * sentence, and it means the same thing however many rows before it were
+ * inserted or deleted while the walk was running.
+ *
+ * Not a framework filter. The exemption exists for reads that ADDRESS a field
+ * the caller may not read, and this one addresses the ids the caller was just
+ * handed — a caller who may not read `id` is a caller whose rows this walk
+ * skips anyway, and refusing the filter is the honest answer for them.
+ */
+function queryAt(at: ListPosition): {
+  where?: { id: { greater_than: string } };
+  page: number;
+} {
+  return {
+    ...(at.after === undefined
+      ? {}
+      : { where: { id: { greater_than: at.after } } }),
+    page: at.page,
+  };
+}
+
+/**
+ * One page as the walk consumes it: the rows, whether more exist, and the id
+ * the next page starts after.
+ *
+ * The cursor is the greatest id the page named, so it is a position in the
+ * collection's own order rather than a count of rows this read happened to
+ * receive.
+ */
+function page(rows: readonly unknown[], hasMore: boolean): CollectionPage {
+  // From the END, because the rows are ordered by id: the last one carrying a
+  // usable id is the greatest. Rows past it named no position and are skipped
+  // by the completion anyway, so reading them once more costs nothing and
+  // losing them costs a definition.
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    if (typeof row !== "object" || row === null) continue;
+    const id = (row as Record<string, unknown>).id;
+    if (typeof id === "string" && id !== "") {
+      return { data: rows, hasMore, next: id };
+    }
+  }
+  return { data: rows, hasMore };
+}
+
 /** One tier's read: what it kept, and whether it was cut. */
 interface TierRead<T> {
   readonly items: T[];
@@ -503,7 +586,7 @@ function envelope<T>(tier: TierRead<T>): LibraryListResponse<T> {
  * the last so the bound on reads is derived here from the size it bounds.
  */
 async function readTier<T extends LibraryPattern | LibraryComponent>(
-  pageAt: (page: number) => Promise<CollectionPage>,
+  pageAt: (at: ListPosition) => Promise<CollectionPage>,
   complete: (row: unknown) => Promise<Completed<T>> | Completed<T>,
   pageSize: number
 ): Promise<TierRead<T>> {
@@ -517,19 +600,28 @@ async function readTier<T extends LibraryPattern | LibraryComponent>(
   // Seeded with the framing, so the ceiling bounds the ANSWER rather than the
   // rows inside it.
   let bytes = RESPONSE_FRAMING_BYTES;
-  for (let page = 1; ; page += 1) {
-    const result = await pageAt(page);
-    const page_ = await collect(result.data, complete, items, bytes);
-    bytes = page_.bytes;
-    omitted ||= page_.omitted;
-    if (page_.full) {
+  let at: ListPosition = { page: 1 };
+  for (let read = 1; ; read += 1) {
+    const result = await pageAt(at);
+    const kept = await collect(result.data, complete, items, bytes);
+    bytes = kept.bytes;
+    omitted ||= kept.omitted;
+    if (kept.full) {
       truncated = true;
       break;
     }
-    const stop = whyStop({ hasMore: result.hasMore, page, lastPage });
-    if (stop === undefined) continue;
-    truncated = stop === "cut";
-    break;
+    const stop = whyStop({ hasMore: result.hasMore, read, lastPage });
+    if (stop !== undefined) {
+      truncated = stop === "cut";
+      break;
+    }
+    // A page that named an id moves the position and starts the offset over;
+    // one that named none leaves the position where it was and steps past
+    // itself.
+    at =
+      result.next === undefined
+        ? { ...at, page: at.page + 1 }
+        : { after: result.next, page: 1 };
   }
   return { items, truncated: truncated || omitted };
 }
@@ -582,13 +674,46 @@ function identityOf(
   const record = row as Record<string, unknown>;
   const { id, title } = record;
   if (typeof id !== "string" || id === "") return undefined;
-  return {
-    named: {
-      id,
-      title: typeof title === "string" && title !== "" ? title : id,
-    },
-    record,
-  };
+  return { named: { id, title: labelFor(title, id) }, record };
+}
+
+/**
+ * What a row is called: its title, or its id where it has no readable one.
+ *
+ * The id is the one name a row is sure to have. A collection with no title
+ * field, or one whose title field-level access redacts, still renders every
+ * instance on the public page — so a canvas that dropped the row would draw a
+ * placeholder where the page draws the component, and an author can find it
+ * by its id.
+ *
+ * One rule for both rows a component passes through. Spelled twice, the
+ * listing and the draft would eventually disagree about what an unnamed
+ * component is called.
+ */
+function labelFor(title: unknown, id: string): string {
+  return typeof title === "string" && title !== "" ? title : id;
+}
+
+/**
+ * Whether a by-id row is the row that was asked for.
+ *
+ * A row with NO `id` KEY is: field-level access drops it in presentation, which
+ * is why the id comes from the listing at all.
+ *
+ * A row that HAS the key answers with an identity, and the only identity that
+ * satisfies this is the one asked for. That covers a `beforeOperation` hook
+ * redirecting the read — the record answering for one component may be
+ * another's, and taking the listing's id would serve one component's draft
+ * under the other's name — and it covers a key present but unusable, a `null`,
+ * a number, an empty string. Those are not "no id"; they are an answer, and not
+ * this one. Read as absence their content would travel under a name they never
+ * claimed.
+ */
+function answersFor(record: Record<string, unknown>, id: string): boolean {
+  // `hasOwn` rather than a truthiness test, because "the key is not there" and
+  // "the key holds nothing usable" are the two cases being told apart.
+  if (!Object.hasOwn(record, "id")) return true;
+  return record.id === id;
 }
 
 /**
@@ -596,16 +721,28 @@ function identityOf(
  * caller should see it.
  *
  * The id is the LISTING's, never the by-id row's. That row is a presentation
- * of the same record — an `afterRead` hook may rewrite or drop its `id` —
- * while stored instances reference the id the collection holds, which is the
- * one the listing named. Keyed by the presentation, the client's definitions
- * answer to a name no instance uses and every instance of it draws as
- * missing. Everything else — the title, the category, the description and the
- * content — is the by-id row's, because that is the one carrying the draft.
+ * of the same record — field-level access may drop its `id` — while stored
+ * instances reference the id the collection holds, which is the one the
+ * listing named. Keyed by the presentation, the client's definitions answer to
+ * a name no instance uses and every instance of it draws as missing.
+ * Everything else — the title, the category, the description and the content —
+ * is the by-id row's, because that is the one carrying the draft.
+ *
+ * A row naming a DIFFERENT id is the other thing that can produce: a
+ * `beforeOperation` hook can redirect the read, so the record answering for
+ * one component may be another's. Taking the listing's id then serves one
+ * component's draft under the other's name, and nothing anywhere says so.
+ * Nothing is taken from it at all.
  *
  * `document: null` for a row the read found but which holds no content — a
- * legal row, and one the panel will skip — and `undefined` for no row at all,
- * which the caller reports as a cut library rather than a missing key.
+ * legal row, and one the panel will skip, because the field layer writes an
+ * unset non-required field as SQL `NULL` and reads it back with the key
+ * PRESENT. A row with no key at all is a different answer: field-level access
+ * or an `afterRead` hook removed the field, so this caller did not read the
+ * row whole, and a definition the client needs is missing rather than empty.
+ *
+ * `undefined` for every one of those, which the caller reports as a cut
+ * library rather than as a missing key.
  */
 function withDraftDocument(
   data: unknown,
@@ -614,15 +751,22 @@ function withDraftDocument(
 ): LibraryComponent | undefined {
   if (typeof data !== "object" || data === null) return undefined;
   const record = data as Record<string, unknown>;
-  const title = record.title;
+  if (!answersFor(record, id)) return undefined;
+  // `hasOwn`, not `in`: the field name is the site's to configure, and one
+  // naming something on `Object.prototype` would read a function as a
+  // document.
+  if (!Object.hasOwn(record, field)) return undefined;
   const content = record[field];
   return {
     id,
-    // Labelled by the id where the row has no readable title, as `identityOf`
-    // labels a listing row: the id is the one name it is sure to have.
-    title: typeof title === "string" && title !== "" ? title : id,
+    title: labelFor(record.title, id),
     ...optionalText(record.description, "description"),
     ...optionalText(record.category, "category"),
+    // Through the SAME reader a pattern row's keywords go through: a component
+    // tile's search terms are built from this field exactly as a pattern's
+    // are, so a component whose useful terms are in neither its title nor its
+    // description is findable by them.
+    ...storedKeywords(record.keywords),
     document:
       content === undefined || content === null
         ? null
@@ -795,7 +939,7 @@ function admitAll<T extends LibraryPattern | LibraryComponent>(
  */
 function whyStop(at: {
   hasMore: boolean;
-  page: number;
+  read: number;
   lastPage: number;
 }): "ended" | "cut" | undefined {
   // The SERVICE's own answer, not a length this recomputes. A page shorter than
@@ -803,8 +947,10 @@ function whyStop(at: {
   // rows, and stopping there loses every pattern behind them.
   if (!at.hasMore) return "ended";
   // A bound on the READS, which the per-row ceilings cannot supply: they count
-  // what was KEPT, and a page whose every row was dropped keeps none.
-  if (at.page >= at.lastPage) return "cut";
+  // what was KEPT, and a page whose every row was dropped keeps none. Counted
+  // over the whole walk rather than per position, because that is what it
+  // bounds — the requests this one response makes.
+  if (at.read >= at.lastPage) return "cut";
   return undefined;
 }
 
@@ -917,8 +1063,17 @@ export function componentLibraryRoute(
   return {
     method: "GET",
     path: COMPONENT_LIBRARY_ROUTE_PATH,
+    // The scope helper for the plugin's OWN collection, which follows the
+    // host's rename; the configured slug LITERALLY for a store the plugin was
+    // told about, because that is what the handler reads. Through the helper a
+    // configured slug that collides with a contributed name resolves to the
+    // renamed collection, so the gate and the read name two different
+    // collections — and a caller holding read on the one being read is
+    // refused while one holding read on the other is let in.
     requiredPermission: ({ collection }) =>
-      collection(store.collection ?? COMPONENTS_SLUG, "read"),
+      store.collection === undefined
+        ? collection(COMPONENTS_SLUG, "read")
+        : readPermissionFor(store.collection),
     handler: async (req: Request, ctx: PluginRouteContext) =>
       Response.json(
         await readComponentLibrary({
@@ -928,6 +1083,20 @@ export function componentLibraryRoute(
         })
       ),
   };
+}
+
+/**
+ * The read permission for a collection this plugin does not own.
+ *
+ * Spelled rather than composed, because the scope a route resolver is handed
+ * offers only rename-aware helpers for the plugin's OWN names, and core's own
+ * docblock on that helper says a fixed foreign name "belongs in the string
+ * form of `requiredPermission`". The slug format is core's
+ * (`<action>-<resource>`) and is an identity existing grants are keyed on, so
+ * it does not move.
+ */
+function readPermissionFor(slug: string): string {
+  return `read-${slug}`;
 }
 
 /**
