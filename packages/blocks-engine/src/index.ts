@@ -277,6 +277,22 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // same-document canvas, the class-usage index and SEO derivation all read one
 // without drawing anything. `componentIdsIn` is the other half of the seam —
 // what to FETCH, asked before anything can be resolved.
+/**
+ * Whether a component's references lead back to itself, and by which chain.
+ *
+ * Published because two surfaces ask it at different moments and must agree:
+ * an insert panel deciding what to OFFER while a component is open for
+ * editing, and a write deciding whether the document it is about to store
+ * closes a loop. The verdict carries `unknown` as its own answer rather than
+ * collapsing it, because the two spend that uncertainty differently — one
+ * withholds a tile, the other would refuse a save.
+ */
+export {
+  componentReach,
+  type ComponentPlacements,
+  type ComponentReach,
+} from "./component-graph";
+
 export {
   componentIdsIn,
   componentUsageIn,
