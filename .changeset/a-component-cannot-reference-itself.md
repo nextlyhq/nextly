@@ -56,11 +56,22 @@ resolve back to itself. Both the insert panel and the write judge a definition b
 what it can reach that way, so the editor does not offer a component whose insert
 the save would refuse.
 
-The write goes further and asks the RENDERER. Overrides flow down through
-nesting, so a placement can re-point a node two levels below it and the loop
-exists in the composed tree while no pair of definitions names the other twice.
-A save is therefore judged by composing it with the same function that draws the
-page, which is the only answer guaranteed to match what a reader would see.
+What decides a refusal is the RENDERER, not that scan. Overrides flow down
+through nesting, so a placement can re-point a node two levels below it: the
+scan is short by a level wherever that happens, and long by a stored edge
+wherever an override points one away from the loop. Both directions are real, so
+a save is judged by composing it with the same function that draws the page —
+the only answer guaranteed to match what a reader would see. The scan still runs
+first, because it is what can name the chain to break; it no longer has a vote.
+
+That is asked once per variant the component offers, and once for a placement
+naming none. Only one variant resolves at a time, so a loop that exists under
+one selection is real, and a scan that unions them all would refuse a component
+whose every selection is fine.
+
+A component that names ITSELF is refused from the submitted document alone,
+without reading the library at all — nothing in it can reopen an edge the
+document has already closed, and the reads it skips each run the site's hooks.
 
 It judges the lifecycle form the write actually changes. An ordinary editor save
 is stored as a working draft and leaves the published row alone, so it is checked

@@ -114,7 +114,12 @@ export function componentReach(args: {
   // names ITSELF, and withheld the one chain a person can act on.
   let unreadable: string | undefined;
 
-  for (let step = pending.shift(); step !== undefined; step = pending.shift()) {
+  // Walked with a head index rather than by shifting the queue. The insert panel
+  // asks this once per candidate across a library of thousands, and `shift()`
+  // moves every remaining entry on each step — quadratic work inside a walk that
+  // is itself already repeated per candidate.
+  for (let head = 0; head < pending.length; head += 1) {
+    const step = pending[head];
     const path = [...step.via, step.id];
     if (step.id === self) return { kind: "cycle", path };
     if (followed.has(step.id)) continue;

@@ -555,6 +555,54 @@ describe("saving a component that would reference itself", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("allows an override that re-points a stored edge AWAY from the loop", async () => {
+    /*
+     * Here the id walk is LONG, not short. `b` stores a placement of `cc` and
+     * `cc` places `a`, so a walk over stored ids reads a → b → … → a and refuses.
+     * The override re-points that very node at `d`, so `cc` is never resolved and
+     * no reader can see a loop — the resolver's oracle records that an overridden
+     * stored target is never referenced at all.
+     *
+     * Which is why the composition decides and the walk only names: refusing on
+     * the walk alone makes a supported shape unsavable.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: { b: exposesItsPlacement("cc") },
+      stored: { cc: ["a"], d: [] },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesWithOverrides("b", { swap: "d" }) },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("CONTROL: the same library WITHOUT the override is refused", async () => {
+    /*
+     * The one difference from the case above is the override, so that case is
+     * attributable to it rather than to a fixture with no loop in it. This also
+     * shows the walk is CAPABLE of finding this chain: it is the walk that
+     * supplies `a → b → … → a`, and the composition agrees here.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: { b: exposesItsPlacement("cc") },
+      stored: { cc: ["a"], d: [] },
+    });
+
+    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+      /a → b → … → a/
+    );
+  });
+
   it("refuses a loop only the COMPOSITION shows, two override levels down", async () => {
     /*
      * The case an id-keyed walk cannot reach, and the reason the resolver is the
@@ -806,6 +854,45 @@ describe("saving a component that would reference itself", () => {
     // And it costs no reads at all: nothing can reference an id the write is
     // about to mint, so there is no graph to walk.
     expect(asked).toEqual([]);
+  });
+
+  it("refuses a document that names ITSELF without reading the library", async () => {
+    /*
+     * A document carrying its own id closes the loop on its own, and no row in
+     * the library can open an edge it has already closed. The lookahead reads one
+     * row per distinct target and the graph walk reads everything behind them, so
+     * taking this from the document alone is the difference between no reads and
+     * up to the whole budget — each of which runs the site's hooks.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({ stored: { b: [], cc: [] } });
+
+    await expect(c.run(saving("a", ["b", "a", "cc"], nextly))).rejects.toThrow(
+      /a → a/
+    );
+    expect(asked).toEqual([]);
+  });
+
+  it("keeps the walk's refusal when the composition cannot be FINISHED", async () => {
+    /*
+     * `b → cc → a` is a loop the walk proves from stored ids. The composition
+     * reaches it one round later than it reaches `y`, which cannot be read — so
+     * it stops having established nothing, rather than reporting no loop.
+     *
+     * Reading that silence as "no loop" would make a library with one unreadable
+     * component the way to save a loop into it. The walk's proof stands.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { x: ["y"], b: ["cc"], cc: ["a"] },
+      unreadable: ["y"],
+    });
+
+    await expect(c.run(saving("a", ["x", "b"], nextly))).rejects.toThrow(
+      /a → b → … → a/
+    );
   });
 
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {

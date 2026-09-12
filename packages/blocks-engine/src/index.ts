@@ -310,6 +310,9 @@ export {
   // Both of the above from ONE walk, for the callers that need both.
   componentReachIn,
   componentUsageIn,
+  // The selections that union covers, separately. A caller that must agree with
+  // the rendered page composes each one; the union answers about none of them.
+  variantNamesIn,
   // The roots a document composes to, read without composing it. Published
   // because the palette judges every definition's placement by its roots and
   // composing three thousand of them to read their roots is the cost this

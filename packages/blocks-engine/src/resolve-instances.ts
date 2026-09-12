@@ -485,6 +485,31 @@ function withVariantReferences(
 }
 
 /**
+ * The variants a placement of this definition can select, each on its own.
+ *
+ * {@link componentReferencesIn} unions them, which is the right answer to "what
+ * could this document reach" and the wrong one to "what does a reader receive".
+ * Only one variant resolves at a time, so a caller that must not diverge from
+ * the rendered page — a write guard confirming a refusal, say — asks about each
+ * selection separately rather than about their union. Unioning alternatives
+ * invents chains that exist under none of them.
+ *
+ * A placement naming NO variant is a selection too, and the caller's to add:
+ * this answers only what the document offers.
+ *
+ * `null` where the variants cannot be enumerated within the envelope bound, for
+ * the reason {@link componentReferencesIn} reports the same case as unread — a
+ * prefix of the variants is a prefix of the answer, and a caller cannot tell a
+ * short list from a complete one.
+ */
+export function variantNamesIn(document: unknown): readonly string[] | null {
+  if (!isPlainRecord(document)) return [];
+  const variants = document.variants;
+  if (!isPlainRecord(variants)) return [];
+  return boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES);
+}
+
+/**
  * The component ids ONE variant's overrides put on this document's nodes.
  *
  * The overrides are applied and the result READ BACK, through the same four

@@ -14,6 +14,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type Variant,
 } from "./document";
 import {
   DEFAULT_LIMITS,
@@ -27,6 +28,7 @@ import {
   componentReferencesIn,
   componentUsageIn,
   composedRootTypes,
+  variantNamesIn,
   instanceExposure,
   readableDefinition,
   resolveComponentInstances,
@@ -2489,6 +2491,62 @@ describe("componentUsageIn", () => {
         ids: componentUsageIn(nodes, budget).ids,
       });
     }
+  });
+});
+
+/**
+ * The selections `componentReferencesIn` unions, listed separately.
+ *
+ * A caller confirming against the RENDER composes one selection at a time, so
+ * what matters here is that an unenumerable envelope is distinguishable from an
+ * empty one — `[]` and `null` mean opposite things to such a caller, and folding
+ * them together is what lets an unread document read as offering no variants.
+ */
+describe("variantNamesIn", () => {
+  it("names each variant a placement can select", () => {
+    const doc = component([node("t")], {
+      variants: {
+        wide: { label: "Wide", overrides: {} },
+        tall: { label: "Tall", overrides: {} },
+      },
+    });
+
+    expect(variantNamesIn(doc)).toEqual(["wide", "tall"]);
+  });
+
+  it("answers EMPTY for a document offering none, and for a non-document", () => {
+    // Empty rather than `null`: there is nothing to enumerate, which is a
+    // complete answer. A caller adds the no-variant placement itself.
+    expect(variantNamesIn(component([node("t")]))).toEqual([]);
+    expect(variantNamesIn({ variants: "not a record" })).toEqual([]);
+    expect(variantNamesIn(null)).toEqual([]);
+  });
+
+  it("answers NULL where the envelope admits fewer than the document holds", () => {
+    /*
+     * The distinction the empty case above cannot express. `componentReferencesIn`
+     * reports this same document as unread for the same reason — a prefix of the
+     * variants is a prefix of the answer — so a caller cannot treat a short list
+     * as the whole set.
+     */
+    const many: Record<string, Variant> = {};
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i += 1) {
+      many[`v${String(i)}`] = { label: "V", overrides: {} };
+    }
+
+    expect(
+      variantNamesIn(component([node("t")], { variants: many }))
+    ).toBeNull();
+
+    // CONTROL: exactly at the bound it enumerates, so the case above is about
+    // exceeding it rather than about a document with many variants.
+    const atBound: Record<string, Variant> = {};
+    for (let i = 0; i < MAX_ENVELOPE_ENTRIES; i += 1) {
+      atBound[`v${String(i)}`] = { label: "V", overrides: {} };
+    }
+    expect(
+      variantNamesIn(component([node("t")], { variants: atBound }))
+    ).toHaveLength(MAX_ENVELOPE_ENTRIES);
   });
 });
 

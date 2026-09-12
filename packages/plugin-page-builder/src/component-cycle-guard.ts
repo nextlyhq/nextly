@@ -75,6 +75,8 @@ import {
   componentReachIn,
   componentReferencesFrom,
   resolveComponentInstances,
+  variantNamesIn,
+  type ComponentReach,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
@@ -103,6 +105,16 @@ const MOST_COMPONENTS_READ = 100;
 
 /** The Direct API surface this needs, aliased rather than described again. */
 export type CycleGuardDirectApi = ClassUsageDirectApi;
+
+/**
+ * What composing the subject established, as three facts rather than two.
+ *
+ * `indeterminate` is the one a boolean loses: a composition that could not be
+ * finished — a definition the reader could not supply, a budget spent — has
+ * shown nothing, and reading it as `none` would let an unreadable library clear
+ * a loop the walk had already proven.
+ */
+type CompositionVerdict = "cycle" | "none" | "indeterminate";
 
 /** The plugin context this needs, named structurally. */
 export interface CycleGuardContext {
@@ -232,83 +244,175 @@ async function refuseIfReached(args: {
     // different documents, so a cache shared across the two would answer the
     // second walk with the first one's reading.
     const read = documentReader(options, nextly, draft);
-    const places = await reachableFrom(document, options, read);
-    const graph = await placementsReachedFrom(places, options, read);
-    const verdict = componentReach({
-      places,
-      self,
-      placedBy: id => graph.get(id),
-    });
-    if (verdict.kind === "unknown") {
+    const walked = await walkFrom(document, self, options, read);
+    if (walked.reach.kind === "unknown") {
       throw refusal(
         `This component cannot be saved: the components it uses could not all ` +
           `be read, so whether it would end up referencing itself could not be ` +
           `established.`
       );
     }
-    if (verdict.kind === "cycle") {
-      throw refusal(
-        `This component cannot be saved because it would reference itself: ` +
-          `${namedPath(verdict.path, places, self)}. Remove that placement and ` +
-          `save again.`
-      );
-    }
-    // The walk said none, and the walk is an APPROXIMATION. Ask the renderer.
-    if (await composesACycle(document, self, options, read)) {
-      throw refusal(
-        `This component cannot be saved because it would reference itself once ` +
-          `its placements are composed. Remove the placement that leads back ` +
-          `to it and save again.`
-      );
+
+    // The walk answers about IDS and never decides. It is an approximation in
+    // BOTH directions: short by one level wherever overrides flow down through
+    // nesting, and long by a stored edge wherever an override re-points one away
+    // from the loop. So the composition rules and the walk only supplies the
+    // chain to name — which is the one thing the composition cannot report.
+    const composed = await composesACycle(document, self, options, read);
+    if (composed === "cycle") throw cycleRefusal(walked, self);
+    // Composing could not be finished. The walk's own verdict stands, so a
+    // library this cannot read does not become a way to save a loop into it.
+    if (composed === "indeterminate" && walked.reach.kind === "cycle") {
+      throw cycleRefusal(walked, self);
     }
   }
 }
 
 /**
- * Whether composing this document actually produces a loop.
+ * The refusal for a loop, named as precisely as the two answers allow.
  *
- * The walk above answers a question about IDS, and reachability here is not a
- * property of ids. Overrides flow DOWN through nesting: a placement can re-point
- * a node two levels below it, so the loop exists in the composed tree while no
- * pair of documents names the other twice. An id-keyed graph is therefore an
- * approximation of composition, and it is short by one level for every level of
- * nesting it does not carry overrides through.
+ * The walk's chain where it found one, because a person can act on
+ * `Hero → Banner → Hero` and cannot act on "somewhere in here". Where only the
+ * composition found it there is no chain to give: `resolveComponentInstances`
+ * reports `{ instanceId, componentId, reason }` and not the path that reached
+ * it.
+ */
+function cycleRefusal(walked: WalkOutcome, self: string): Error {
+  if (walked.reach.kind === "cycle") {
+    return refusal(
+      `This component cannot be saved because it would reference itself: ` +
+        `${namedPath(walked.reach.path, walked.places, self)}. Remove that ` +
+        `placement and save again.`
+    );
+  }
+  return refusal(
+    `This component cannot be saved because it would reference itself once ` +
+      `its placements are composed. Remove the placement that leads back to ` +
+      `it and save again.`
+  );
+}
+
+/** The walk's verdict, with the ids used to decide which of them to name. */
+interface WalkOutcome {
+  readonly reach: ComponentReach;
+  readonly places: readonly string[] | undefined;
+}
+
+/**
+ * What the id walk makes of this document, for the chain it can name.
  *
- * So this asks `resolveComponentInstances` — the function the RENDERER uses. Its
+ * A document that names ITSELF is taken from the document alone, before any
+ * library read. The placement lookahead below reads one row per distinct target
+ * and the walk then reads the graph behind them — up to the whole budget — and
+ * none of those rows can change an edge the document already closes on itself.
+ * The composition confirming this costs no read either: the subject is the one
+ * document already in hand, so the loop closes in the first round.
+ */
+async function walkFrom(
+  document: unknown,
+  self: string,
+  options: CycleGuardOptions,
+  read: DocumentReader
+): Promise<WalkOutcome> {
+  const survey = componentReachIn(document, options.limits.maxNodes);
+  if (survey.complete && survey.ids.includes(self)) {
+    return { reach: { kind: "cycle", path: [self, self] }, places: survey.ids };
+  }
+
+  const places = await reachableFrom(document, options, read);
+  const graph = await placementsReachedFrom(places, options, read);
+  return {
+    reach: componentReach({ places, self, placedBy: id => graph.get(id) }),
+    places,
+  };
+}
+
+/**
+ * Whether a loop is what a READER would receive, which decides every refusal.
+ *
+ * The walk answers a question about IDS, and reachability is not a property of
+ * ids. It is wrong in both directions:
+ *
+ * - **Short.** Overrides flow DOWN through nesting: a placement can re-point a
+ *   node two levels below it, so the loop exists in the composed tree while no
+ *   pair of documents names the other twice.
+ * - **Long.** The same mechanism removes edges. Where a placement re-points a
+ *   nested reference away from the loop, the stored edge the walk follows is one
+ *   no reader ever resolves — and refusing on it refuses a supported shape.
+ *
+ * So this asks `resolveComponentInstances`, the function the RENDERER uses. Its
  * answer and the reader's experience cannot diverge, because they are the same
  * computation over the same inputs.
  *
- * The walk is kept and runs FIRST because it carries the chain: `resolve`
- * reports `{ instanceId, componentId, reason }` and not the path, so a refusal
- * derived from it alone could not tell an author which placement to remove.
+ * ONE COMPOSITION PER SELECTION, never their union. A definition's variants are
+ * alternatives in exactly the way its draft and published forms are, and
+ * `componentReferencesIn` unions them deliberately — its own words are "a
+ * SUPERSET of what any one reader receives". Confirming against the union would
+ * refuse a loop that exists under no selection; confirming against only the
+ * no-variant placement would clear one that exists under a variant, which is
+ * measured behaviour and not a hypothetical.
  *
- * Strictly ADDITIVE: only an explicit `cycle` refuses. A document this cannot
- * compose for any other reason — one the resolver reads as unreadable, a
- * definition it declines — falls back to the walk's verdict, which has already
- * said none. Refusing on anything else would make a document the resolver
- * cannot parse unsavable, and that is a far worse failure than the gap.
+ * Three answers rather than two. "Composed clean" and "could not finish
+ * composing" are different facts, and folding them together would make a
+ * library this cannot read into a way to save a loop into one.
  */
 async function composesACycle(
   document: unknown,
   self: string,
   options: CycleGuardOptions,
   read: DocumentReader
-): Promise<boolean> {
-  // The subject under its own id, so a chain leading back to it meets the
-  // document being SAVED rather than the copy the store still holds.
-  const held = new Map<string, unknown>([[self, document]]);
-  const missing = new Set<string>();
+): Promise<CompositionVerdict> {
+  const named = variantNamesIn(document);
+  // More variants than the envelope admits, so which ones a reader can select
+  // cannot be established. Not an answer either way.
+  if (named === null) return "indeterminate";
 
+  // The subject under its own id, so a chain leading back to it meets the
+  // document being SAVED rather than the copy the store still holds. Shared
+  // across the selections: a definition read for one is the same document under
+  // the next, and the resolver follows only what a selection references, so
+  // entries no selection reaches cost nothing but the read already paid for.
+  const library: HeldLibrary = {
+    held: new Map<string, unknown>([[self, document]]),
+    missing: new Set<string>(),
+  };
+
+  let indeterminate = false;
+  for (const variant of [undefined, ...named]) {
+    const one = await composesUnder(variant, self, options, read, library);
+    if (one === "cycle") return "cycle";
+    if (one === "indeterminate") indeterminate = true;
+  }
+  return indeterminate ? "indeterminate" : "none";
+}
+
+/** What the walk and the composition have read so far, shared across selections. */
+interface HeldLibrary {
+  readonly held: Map<string, unknown>;
+  readonly missing: Set<string>;
+}
+
+/** Composing the subject under ONE variant selection, reading what it asks for. */
+async function composesUnder(
+  variant: string | undefined,
+  self: string,
+  options: CycleGuardOptions,
+  read: DocumentReader,
+  library: HeldLibrary
+): Promise<CompositionVerdict> {
+  const { held, missing } = library;
   for (let round = 0; round <= MOST_COMPONENTS_READ; round += 1) {
     const composition = resolveComponentInstances(
-      hostPlacing(self) as never,
+      hostPlacing(self, variant) as never,
       {
         has: (id: string) => held.has(id),
         get: (id: string) => held.get(id),
       } as never,
       { limits: options.limits }
     );
-    if (composition.unresolved.some(one => one.reason === "cycle")) return true;
+    if (composition.unresolved.some(one => one.reason === "cycle")) {
+      return "cycle";
+    }
 
     // Whatever it wanted and this has not read yet. The resolver names them, so
     // the set to read is derived from what the COMPOSITION reached rather than
@@ -316,13 +420,13 @@ async function composesACycle(
     const wanted = composition.unresolved
       .map(one => one.componentId)
       .filter(id => id !== "" && !held.has(id) && !missing.has(id));
-    if (wanted.length === 0) return false;
+    // Nothing further to supply. Every placement this selection resolves was
+    // composed, and none of them closed on the subject.
+    if (wanted.length === 0) return "none";
 
     for (const id of wanted) {
       const answer = await read(id);
-      // Out of budget, or unreadable. Either way this cannot compose further —
-      // and the walk has already had its say, so nothing is claimed here.
-      if (answer.kind === "unreadable") return false;
+      if (answer.kind === "unreadable") return "indeterminate";
       if (answer.kind === "absent") {
         missing.add(id);
         continue;
@@ -330,11 +434,11 @@ async function composesACycle(
       held.set(id, answer.document);
     }
   }
-  return false;
+  return "indeterminate";
 }
 
 /** A page that places one component, so the resolver is asked about it. */
-function hostPlacing(self: string): unknown {
+function hostPlacing(self: string, variant?: string): unknown {
   return {
     formatVersion: DOCUMENT_FORMAT_VERSION,
     kind: "page",
@@ -343,7 +447,14 @@ function hostPlacing(self: string): unknown {
         id: "cycle-guard-subject",
         type: COMPONENT_INSTANCE_TYPE,
         version: 1,
-        props: { componentId: self },
+        // The selection spelled as ABSENT rather than as `undefined`, which a
+        // reader's own placement of no variant is: an explicit `variant` key
+        // holding `undefined` is a different record, and the resolver reads the
+        // props it is given rather than the ones this meant.
+        props:
+          variant === undefined
+            ? { componentId: self }
+            : { componentId: self, variant },
       },
     ],
   };
@@ -489,9 +600,12 @@ async function placementsReachedFrom(
 
   const pending = [...places];
   const seen = new Set<string>();
-  while (pending.length > 0) {
-    const id = pending.shift();
-    if (id === undefined || seen.has(id)) continue;
+  // A head index rather than `shift()`, which moves every remaining entry on
+  // each step. The same walk shape as `componentReach`, and quadratic for the
+  // same reason on a library that fans out.
+  for (let head = 0; head < pending.length; head += 1) {
+    const id = pending[head];
+    if (seen.has(id)) continue;
     // No bound of its own: the reader charges every distinct component against
     // the budget, and answers `unreadable` past it — which this walk already
     // reads as an unknown graph and refuses on. A second count here would be a
