@@ -79,6 +79,16 @@ export function usageBackfillStateCollection() {
       // reports itself complete. That is the one edit that can silently undo
       // the whole mechanism, which is why nothing outside may make it.
       //
+      // These do NOT stop a session super-admin. The RBAC gate is ordered
+      // "super-admin bypass -> code-defined access -> DB permissions", so for
+      // such a caller these callbacks are never evaluated. Closing that needs a
+      // write boundary external collection operations cannot cross, which is a
+      // core capability rather than an access rule a plugin can declare —
+      // recorded as `finding:backfill-progress-is-forgeable-by-a-super-admin`.
+      // What makes it worth naming rather than shrugging at is that it does not
+      // self-repair: a corrupted INDEX row is rewritten by the next sweep, and a
+      // forged PROGRESS row suppresses that sweep.
+      //
       // Functions returning a constant rather than bare `false`: access rules
       // are validated as callables and a boolean is rejected at config time
       // rather than read as "never". The plugin's own writes go through the
@@ -98,7 +108,7 @@ export function usageBackfillStateCollection() {
     webhooks: false,
     admin: {
       description:
-        "Which parts of the component usage index have been built. Maintained automatically; editing it cannot change what any page renders.",
+        "Which parts of the component usage index have been built. Maintained automatically. Editing it changes nothing about what a page renders — but a row added here marks a scope as already walked, so its documents stay out of the index and usage counts for them read as zero.",
     },
     // A row is a fact — this scope has been walked — rather than an event, and
     // WHEN it was walked answers nothing anyone asks: a scope is redone when it
