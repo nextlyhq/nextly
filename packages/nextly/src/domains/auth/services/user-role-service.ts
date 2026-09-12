@@ -115,7 +115,7 @@ export class UserRoleService extends BaseService {
         await insert;
       }
 
-      void invalidatePermissionCache({ userId });
+      await invalidatePermissionCache({ userId });
 
       // Invalidate API key permission caches for this user's read-only and
       // full-access keys — their effective permissions derive from the creator's
@@ -175,7 +175,7 @@ export class UserRoleService extends BaseService {
           )
         );
 
-      void invalidatePermissionCache({ userId });
+      await invalidatePermissionCache({ userId });
 
       // Invalidate API key permission caches for this user's read-only and
       // full-access keys — their effective permissions derive from the creator's

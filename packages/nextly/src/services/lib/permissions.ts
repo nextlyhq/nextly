@@ -26,6 +26,13 @@ import { NextlyError } from "../../errors/nextly-error";
 import { getAuthLogger } from "../../lib/logger";
 import type { Logger } from "../shared";
 
+import {
+  bumpEpoch,
+  currentEpoch,
+  epochIsTrustworthy,
+  refreshEpoch,
+} from "./rbac-epoch";
+
 if (typeof window !== "undefined") {
   throw new Error(
     "[nextly] Direct API permissions module loaded in a browser context. " +
@@ -135,7 +142,7 @@ function storeSharedDecision(
     resource: string;
     allowed: boolean;
     roleIds: string[];
-    resolvedUnder: number;
+    resolvedUnder: string;
   }
 ): void {
   const { userId, action, resource, allowed, roleIds, resolvedUnder } =
@@ -149,6 +156,12 @@ function storeSharedDecision(
         allowed,
         roleIds
       );
+      // Forced, not throttled. This is the one place the interval must not
+      // apply: the window being closed is the upsert's own flight time, and a
+      // revocation that landed inside it is by definition newer than the last
+      // read. Asking the cached value here would accept the write the check
+      // exists to catch.
+      await refreshEpoch({ force: true });
       if (!resolvedUnderCurrentRevision(resolvedUnder)) {
         await service.invalidateByUser(userId);
       }
@@ -220,9 +233,14 @@ class PermissionChecker {
     // Captured before the reads below; see `resolvedUnderCurrentRevision`. Both
     // tiers written at the end of this method are subject to the same race, and
     // the database tier is the worse of the two: it is shared across instances
-    // and its entries live for a day, so a stale decision written after a
+    // and its entries live longest, so a stale decision written after a
     // tombstone outlives everything else here.
-    const resolvedUnder = rbacRevisionCounter;
+    //
+    // Refreshed first, so what is captured accounts for a change made by
+    // ANOTHER instance. Rate-limited to one read a second, which is what makes
+    // this affordable on a path taken by every request, and what bounds how
+    // long this process can be unaware of somebody else's revocation.
+    const resolvedUnder = await refreshEpoch();
 
     // Skip EVERY cache tier when a transaction executor is supplied. Such a check
     // reads through the caller's still-open (uncommitted) transaction, so its
@@ -238,7 +256,7 @@ class PermissionChecker {
       // Tier 1b: Process-wide LRU cache (<1ms)
       const hit = cache.get(key);
       if (hit) {
-        if (hit.expiresAt > Date.now()) {
+        if (servable(hit)) {
           this.memo.set(key, hit.value);
           // refresh LRU by deleting+setting
           cache.delete(key);
@@ -520,7 +538,28 @@ class PermissionChecker {
 }
 
 // ---- Process-wide LRU cache with TTL ----
-type CacheValue = { value: boolean; expiresAt: number };
+type CacheValue = { value: boolean; expiresAt: number; epoch: string };
+
+/**
+ * May this entry still be SERVED?
+ *
+ * Gating the write alone is not enough, and that is the half this was missing.
+ * A write filed under the current epoch is correct at the moment it happens;
+ * what retires it is the epoch moving afterwards, which is exactly the case a
+ * change on ANOTHER instance produces — nothing local clears the entry, and
+ * without this it is served until it expires.
+ *
+ * Asked in one place so the two tiers cannot answer differently, and so a third
+ * one added later has somewhere obvious to ask.
+ */
+function servable(entry: { expiresAt: number; epoch: string }): boolean {
+  // The epoch has to be worth comparing against before the comparison means
+  // anything. While this process holds invalidations the shared row has not
+  // accepted, its epoch is a value no other instance has seen, so a match
+  // proves nothing and the answer is recomputed instead.
+  if (!epochIsTrustworthy()) return false;
+  return entry.expiresAt > Date.now() && entry.epoch === currentEpoch();
+}
 const cacheTtlMs = 60_000; // 60 seconds
 // Memory cache size: configurable via PERMISSION_CACHE_MEMORY_SIZE env var
 const cacheMaxEntries =
@@ -549,7 +588,11 @@ function setCacheEntry(
       if (userIdToKeys.get(u)?.size === 0) userIdToKeys.delete(u);
     }
   }
-  cache.set(key, { value, expiresAt: Date.now() + cacheTtlMs });
+  cache.set(key, {
+    value,
+    expiresAt: Date.now() + cacheTtlMs,
+    epoch: currentEpoch(),
+  });
   const roleSet = new Set(roleIds);
   keyToRoleIds.set(key, roleSet);
   for (const rid of roleSet) {
@@ -699,7 +742,10 @@ export async function listEffectivePermissions(
  * couple of indexed queries; a stale grant is the whole catalogue in the hands
  * of somebody who no longer holds the role that granted it.
  */
-let rbacRevisionCounter = 0;
+// Kept as a NAME rather than a variable. The count now lives in
+// `rbac-epoch`, where every instance can read it; leaving a second copy here
+// would be two answers to one question, and the local one would win every
+// comparison it took part in.
 
 /**
  * How many retirements are currently emptying the caches.
@@ -712,8 +758,8 @@ let rbacRevisionCounter = 0;
 let permissionFlushDepth = 0;
 
 /** The current count; see {@link invalidatePermissionCache}. */
-export function rbacRevision(): number {
-  return rbacRevisionCounter;
+export function rbacRevision(): string {
+  return currentEpoch();
 }
 
 /**
@@ -739,8 +785,8 @@ export function rbacRevision(): number {
  * and promotes the retired answer into a tier that outlives the retirement.
  * Nothing is cacheable while the caches are being emptied.
  */
-export function resolvedUnderCurrentRevision(revision: number): boolean {
-  return permissionFlushDepth === 0 && revision === rbacRevisionCounter;
+export function resolvedUnderCurrentRevision(revision: string): boolean {
+  return permissionFlushDepth === 0 && revision === currentEpoch();
 }
 
 /**
@@ -753,7 +799,7 @@ export function resolvedUnderCurrentRevision(revision: number): boolean {
  */
 const superAdminCache = new Map<
   string,
-  { value: boolean; expiresAt: number }
+  { value: boolean; expiresAt: number; epoch: string }
 >();
 const SUPER_ADMIN_CACHE_TTL_MS = 60_000; // 60 seconds
 
@@ -840,7 +886,7 @@ export async function invalidateAllPermissionCaches(): Promise<void> {
   const batch = permissionSweep.getStore();
   if (batch) {
     batch.dirty = true;
-    rbacRevisionCounter += 1;
+    await bumpEpoch();
     return;
   }
   await flushPermissionCaches();
@@ -885,7 +931,7 @@ async function flushPermissionCaches(): Promise<void> {
   roleIdToKeys.clear();
   userIdToKeys.clear();
   superAdminCache.clear();
-  rbacRevisionCounter += 1;
+  await bumpEpoch();
 
   if (CACHE_ENABLED) {
     // Held across the shared write, so nothing computed while the stored rows
@@ -934,7 +980,7 @@ export async function invalidatePermissionCache(
   if (roleId) superAdminCache.clear();
 
   // Anything derived from these rows is stale from here, whoever holds it.
-  rbacRevisionCounter += 1;
+  await bumpEpoch();
 
   // Invalidate in-memory caches (Tier 1)
   if (userId) {
@@ -1031,12 +1077,15 @@ export async function isSuperAdmin(
   // grants resolved from it would then be cached under the NEW revision,
   // putting the catalogue back for a full five minutes in the hands of somebody
   // who had just lost the role.
-  const resolvedUnder = rbacRevisionCounter;
+  //
+  // Refreshed rather than read, for the reason `hasPermission` gives: a
+  // demotion performed on another instance has to reach this one.
+  const resolvedUnder = await refreshEpoch();
 
   // Check in-memory cache (only for pooled, committed-view checks).
   if (!executor) {
     const cached = superAdminCache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (cached && servable(cached)) {
       return cached.value;
     }
   }
@@ -1056,6 +1105,7 @@ export async function isSuperAdmin(
         superAdminCache.set(userId, {
           value: false,
           expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+          epoch: currentEpoch(),
         });
       }
       return false;
@@ -1085,6 +1135,7 @@ export async function isSuperAdmin(
       superAdminCache.set(userId, {
         value: result,
         expiresAt: Date.now() + SUPER_ADMIN_CACHE_TTL_MS,
+        epoch: currentEpoch(),
       });
 
       // Evict oldest if cache grows too large

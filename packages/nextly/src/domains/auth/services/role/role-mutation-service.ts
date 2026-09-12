@@ -343,7 +343,7 @@ export class RoleMutationService extends BaseService {
         // Invalidate cache after successful transaction. `void` marks the
         // promise as intentionally unawaited - cache invalidation is
         // fire-and-forget and must not block the create response.
-        void invalidatePermissionCache({ roleId: id });
+        await invalidatePermissionCache({ roleId: id });
 
         return {
           id,
@@ -605,7 +605,7 @@ export class RoleMutationService extends BaseService {
           changes.permissionIds !== undefined ||
           changes.childRoleIds !== undefined
         ) {
-          void invalidatePermissionCache({ roleId });
+          await invalidatePermissionCache({ roleId });
         }
 
         return;
@@ -690,7 +690,7 @@ export class RoleMutationService extends BaseService {
       });
 
       // Invalidate cache after successful transaction (fire-and-forget).
-      void invalidatePermissionCache({ roleId });
+      await invalidatePermissionCache({ roleId });
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Raw DB errors map via
       // fromDatabaseError, which provides the spec-compliant generic public

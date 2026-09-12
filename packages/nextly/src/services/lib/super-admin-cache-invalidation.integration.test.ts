@@ -18,7 +18,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createTestNextly, type TestNextly } from "nextly/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -33,6 +33,12 @@ import {
   isSuperAdmin,
   rbacRevision,
 } from "./permissions";
+import {
+  EPOCH_TTL_MS,
+  currentEpoch,
+  refreshEpoch,
+  resetEpochForTests,
+} from "./rbac-epoch";
 
 let harness: TestNextly | undefined;
 
@@ -92,6 +98,10 @@ async function demote(userId: string): Promise<void> {
 }
 
 beforeEach(async () => {
+  // The database is rebuilt per test and the epoch module is not, so its cached
+  // stamp would outlive the counter it describes — and a fresh counter can read
+  // identically to the one before it. Reset together or the two disagree.
+  resetEpochForTests();
   harness = await createTestNextly();
   await seedSuperAdminRole();
 });
@@ -142,13 +152,22 @@ describe("the super-admin answer is invalidated with the permissions it is asked
     expect(await isSuperAdmin(userId)).toBe(false);
   });
 
-  it("leaves an unrelated user's answer alone on a userId invalidation", async () => {
-    // The discriminating control: an implementation that clears the whole map
-    // for every hint passes the two cases above and is a different behaviour.
-    const kept = "super-cache-kept";
-    const other = "super-cache-other";
-    await promote(kept, "super-cache-kept@example.com");
-    await promote(other, "super-cache-other@example.com");
+  it("retires every in-memory answer, not only the user it names", async () => {
+    // A deliberate loss of scoping, and the reason is structural rather than a
+    // shortcut: the counter other instances read carries a number and not a
+    // user id, so a change they see cannot be narrower than "something in RBAC
+    // moved". Keeping the scope locally while broadcasting a global signal
+    // would mean the instance that made the change was the only one applying it
+    // narrowly, which is the inconsistency this replaced.
+    //
+    // The cost is a role change emptying the in-memory tiers rather than one
+    // entry. It is bounded by how often roles change, which is rarely, and by
+    // what refilling costs, which is a couple of indexed queries. A stale
+    // answer costs the install a grant it revoked.
+    const kept = `scope-kept-${randomUUID()}`;
+    const other = `scope-other-${randomUUID()}`;
+    await promote(kept, `${kept}@example.com`);
+    await promote(other, `${other}@example.com`);
     expect(await isSuperAdmin(kept)).toBe(true);
     expect(await isSuperAdmin(other)).toBe(true);
 
@@ -156,8 +175,8 @@ describe("the super-admin answer is invalidated with the permissions it is asked
     await demote(other);
     await invalidatePermissionCache({ userId: other });
 
-    expect(await isSuperAdmin(kept), "still cached").toBe(true);
-    expect(await isSuperAdmin(other), "evicted").toBe(false);
+    expect(await isSuperAdmin(other), "the named user").toBe(false);
+    expect(await isSuperAdmin(kept), "and everyone else").toBe(false);
   });
 });
 
@@ -369,6 +388,11 @@ describe("an API key's grants are retired when the roles behind them change", ()
     // resolution, and whether the next read sees it says whether that entry
     // was served or re-resolved.
     await seedDeputy();
+    // Warm the stamp first. Capturing it is a database read now, so an unwarmed
+    // resolution can still be waiting on that read when the invalidation lands
+    // and would then capture the value AFTER it — which is a race in the test's
+    // setup rather than the behaviour under test.
+    await refreshEpoch();
     const inFlight = grants();
     await invalidateAllPermissionCaches();
     await inFlight;
@@ -480,7 +504,9 @@ describe("a sweep of permission writes", () => {
       await invalidateAllPermissionCaches();
       await invalidateAllPermissionCaches();
     });
-    expect(rbacRevision()).toBeGreaterThan(before + 2);
+    // Changed, and changed per write. The stamp carries the counter's identity
+    // as well as its number, so it is compared rather than ordered.
+    expect(rbacRevision()).not.toBe(before);
   });
 
   it("clears the process caches by the time the batch returns", async () => {
@@ -533,31 +559,66 @@ describe("a sweep of permission writes", () => {
     expect(duringBatch).toBe(false);
   });
 
-  it("still defers the batch's OWN writes, which is what the batch is for", async () => {
-    // The control. Without it the case above is satisfied by a sweep that
-    // defers nothing at all, which would pass it while removing the batching
-    // this exists to provide.
-    const userId = `inside-${randomUUID()}`;
-    await promote(userId, `${userId}@example.com`);
-    expect(await isSuperAdmin(userId)).toBe(true);
-    await demote(userId);
+  it("still defers the expensive table write, which is what the batch is for", async () => {
+    // The control, on the deferral that remains. The in-memory tiers no longer
+    // wait for the batch — the epoch moves the moment anything invalidates, so
+    // a demoted user stops reading as an admin immediately, inside a batch or
+    // out of it. What a batch still saves is the unfiltered rewrite of every
+    // stored row, which is the cost it was built for.
+    //
+    // Observed on a row put there directly, because `setCachedPermission` does
+    // not take effect under `createTestNextly`. A far-future expiry is what the
+    // flush overwrites, so its survival IS the deferral.
+    const db = harness!.adapter.getDrizzle() as unknown as {
+      insert: (t: unknown) => { values: (row: unknown) => Promise<unknown> };
+      select: (p: unknown) => {
+        from: (t: unknown) => { where: (c: unknown) => Promise<unknown[]> };
+      };
+    };
+    const tables = getDialectTables();
+    const rowId = `defer-${randomUUID()}`;
+    const owner = `defer-user-${randomUUID()}`;
+    await promote(owner, `${owner}@example.com`);
+    const farFuture = new Date(Date.now() + 3_600_000);
+    await db.insert(tables.userPermissionCache).values({
+      id: rowId,
+      userId: owner,
+      action: "read",
+      resource: "notes",
+      hasPermission: true,
+      roleIds: "[]",
+      expiresAt: farFuture,
+      createdAt: new Date(),
+    });
+
+    const stillFuture = async () => {
+      const rows = (await db
+        .select({ expiresAt: tables.userPermissionCache.expiresAt })
+        .from(tables.userPermissionCache)
+        .where(eq(tables.userPermissionCache.id, rowId))) as Array<{
+        expiresAt: Date | number;
+      }>;
+      const value = rows[0]?.expiresAt;
+      const ms = value instanceof Date ? value.getTime() : Number(value) * 1000;
+      return ms > Date.now() + 60_000;
+    };
 
     let releaseBatch: () => void = () => {};
     const batchRunning = new Promise<void>(resolve => {
       releaseBatch = resolve;
     });
     const batch = inPermissionSweep(async () => {
-      // This one IS the batch's own, so it waits for the batch to end.
       await invalidateAllPermissionCaches();
-      const answeredInside = await isSuperAdmin(userId);
+      const duringBatch = await stillFuture();
       await batchRunning;
-      return answeredInside;
+      return duringBatch;
     });
 
     releaseBatch();
-    // The batch's own write cleared nothing while the batch was open, so the
-    // demoted user still reads as a super admin from cache inside it.
-    expect(await batch).toBe(true);
+    // Untouched while the batch was open...
+    expect(await batch, "deferred during the batch").toBe(true);
+    // ...and rewritten on the way out, so deferred is not skipped.
+    expect(await stillFuture(), "flushed on exit").toBe(false);
   });
 
   it("flushes even when the batch throws, since a partial write still changed rows", async () => {
@@ -574,5 +635,98 @@ describe("a sweep of permission writes", () => {
     ).rejects.toThrow("half of the batch landed");
 
     expect(await isSuperAdmin(userId)).toBe(false);
+  });
+});
+
+/**
+ * The counter is shared, so a change made ELSEWHERE retires what is cached here.
+ *
+ * This is the property the module left memory for, and it cannot be observed
+ * from one process by ordinary means: everything a test calls bumps the local
+ * copy as a side effect. So the other instance is played by writing the shared
+ * row directly — which is exactly what a second process's bump looks like from
+ * this one — and the only thing that can then retire the cached answer is a
+ * refresh reading a value this process never set.
+ */
+describe("an epoch bumped by another instance", () => {
+  /** Advance the shared counter without touching this process's copy. */
+  async function bumpElsewhere(): Promise<void> {
+    const db = harness!.adapter.getDrizzle() as unknown as {
+      update: (table: unknown) => {
+        set: (patch: unknown) => { where: (cond: unknown) => Promise<unknown> };
+      };
+      insert: (table: unknown) => {
+        values: (row: unknown) => Promise<unknown>;
+      };
+    };
+    const tables = getDialectTables() as unknown as {
+      nextlyRbacEpoch: { id: unknown; revision: unknown; generation: unknown };
+    };
+    const table = tables.nextlyRbacEpoch;
+    // The number alone is not the stamp: the row's generation is half of it, so
+    // a bump made here has to move the number and leave the identity alone,
+    // exactly as another instance's bump would.
+    try {
+      await db.insert(table).values({
+        id: "global",
+        revision: 1,
+        generation: `another-instance-${randomUUID()}`,
+        updatedAt: new Date(),
+      });
+    } catch {
+      // A row already exists, which is the ordinary case once anything has
+      // invalidated here. Move its number without touching its identity.
+      await db
+        .update(table)
+        .set({ revision: sql`${table.revision} + 5`, updatedAt: new Date() })
+        .where(eq(table.id as never, "global"));
+    }
+  }
+
+  it("is visible here once the read interval has passed", async () => {
+    // The subject. Nothing in this process bumped anything, so a local counter
+    // would answer with what it last set and never move.
+    const before = currentEpoch();
+    await bumpElsewhere();
+
+    await new Promise(resolve => setTimeout(resolve, EPOCH_TTL_MS + 50));
+    const after = await refreshEpoch();
+
+    expect(after).not.toBe(before);
+  });
+
+  it("retires a super-admin answer this process had cached", async () => {
+    // What the counter is FOR, end to end: the demotion happens by a raw row
+    // delete, so nothing in this process clears the cache, and the answer flips
+    // only because the shared counter moved.
+    const userId = `elsewhere-${randomUUID()}`;
+    await seedSuperAdminRole().catch(() => {});
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+
+    await demote(userId);
+    // Still cached: nothing has told this process anything changed.
+    expect(await isSuperAdmin(userId)).toBe(true);
+
+    await bumpElsewhere();
+    await new Promise(resolve => setTimeout(resolve, EPOCH_TTL_MS + 50));
+
+    expect(await isSuperAdmin(userId)).toBe(false);
+  });
+
+  it("keeps serving inside the interval, which is what makes the read cheap", async () => {
+    // The control on both cases above. Without it, "the answer changed" is
+    // equally satisfied by reading the shared row on every single check — the
+    // per-request query this design exists to avoid — and the interval would be
+    // free to regress to zero unnoticed.
+    const userId = `within-${randomUUID()}`;
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+
+    await demote(userId);
+    await bumpElsewhere();
+
+    // No wait. The shared row has moved and this process has not looked.
+    expect(await isSuperAdmin(userId)).toBe(true);
   });
 });

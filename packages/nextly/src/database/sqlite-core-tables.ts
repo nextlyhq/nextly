@@ -238,6 +238,22 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "user_permission_cache" ("expires_at")`,
     `CREATE INDEX IF NOT EXISTS "upc_user_action_resource_idx"
       ON "user_permission_cache" ("user_id", "action", "resource")`,
+    // The counter every instance reads to decide whether a cached
+    // authorization answer is still current. One row, keyed `global`: the
+    // primary key is what makes a second counter unrepresentable, so nothing
+    // has to keep "there is exactly one" true.
+    //
+    // Reached by an existing installation because this whole bootstrap is
+    // re-run as a reconciliation, and `IF NOT EXISTS` adds only what is absent.
+    // That is why the epoch is a TABLE rather than a column on the rows above:
+    // SQLite skips a `CREATE TABLE` wholesale once the table exists, so a new
+    // column there would never arrive.
+    `CREATE TABLE IF NOT EXISTS "nextly_rbac_epoch" (
+      "id" TEXT PRIMARY KEY,
+      "revision" INTEGER NOT NULL,
+      "generation" TEXT NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS "content_schema_events" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "op" TEXT NOT NULL,
