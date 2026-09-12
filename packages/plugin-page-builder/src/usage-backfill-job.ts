@@ -54,7 +54,14 @@ export interface UsageBackfillDeps {
    */
   scopes: () => Promise<readonly BackfillScope[]>;
   /** Where completed scopes are recorded. */
-  state: () => BackfillStateStore;
+  /**
+   * The progress store, built when a pass needs it.
+   *
+   * A PROMISE because building it resolves the Direct API, and the plugin entry
+   * that supplies that must import `nextly/runtime` at call time rather than at
+   * module scope — the entry is isomorphic and reachable from a browser bundle.
+   */
+  state: () => Promise<BackfillStateStore>;
   /** Repairs one scope, walking every document in it. */
   rebuild: (scope: BackfillScope) => Promise<void>;
   /**
@@ -90,7 +97,7 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
     sweep: true,
     handler: async (_input, context) => {
       const scopes = await deps.scopes();
-      const state = deps.state();
+      const state = await deps.state();
       const deadline = context.deadline.getTime();
 
       for (;;) {

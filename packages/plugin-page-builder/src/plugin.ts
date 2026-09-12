@@ -10,7 +10,6 @@ import {
   resolvedCollectionView,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
-import { requireNextly } from "nextly/runtime";
 
 // Imported rather than read at runtime so it can never drift from the published
 // package: a hardcoded literal had fallen eight releases behind, and
@@ -557,11 +556,21 @@ function installContext(
   opts: PageBuilderOptions
 ): BackfillHost {
   return {
-    // Resolved per pass. `requireNextly` refuses until services are registered
-    // and boot migrations have settled, which is exactly the guard a job wants:
-    // a pass that ran too early fails and is re-queued rather than reading a
-    // database whose schema is unverified.
-    nextly: () => requireNextly(),
+    /*
+     * Imported at CALL time, not at module scope, for the reason the preview
+     * reader above gives: this entry is isomorphic and reachable from a browser
+     * bundle, and `nextly/runtime` aggregates the request lifecycle — its graph
+     * reaches `fs`, `crypto`, `module`, `async_hooks` and more, none of which a
+     * browser can resolve or run. A static import puts all of it in the module
+     * graph of every consumer that imports so much as `isBlocksField` from the
+     * package root.
+     *
+     * Resolved per pass either way. `requireNextly` refuses until services are
+     * registered and boot migrations have settled, which is exactly the guard a
+     * job wants: a pass that ran too early fails and is re-queued rather than
+     * reading a database whose schema is unverified.
+     */
+    nextly: async () => (await import("nextly/runtime")).requireNextly(),
     // The LIVE registry, not the configured list. `class-usage-hook` opens by
     // saying the set of collections is not known when a plugin is wired — which
     // is why the write path registers on the wildcard — because the Schema
