@@ -7,6 +7,7 @@
 // so they must emit nothing here (empty array) — emitting DDL for them
 // would double-apply.
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import type { IndexSpec, Operation, TableSpec } from "../diff/types";
 
 import { quoteIdent } from "./identifiers";
@@ -185,9 +186,13 @@ export function emitPostgresDdl(op: Operation): string[] {
       // constraint is not one of the additive statements this emitter owns,
       // and `FAST_PATH_OP_TYPES` does not list it, so an apply carrying one
       // routes elsewhere rather than arriving here.
-      throw new Error(
-        `emitPostgresDdl: ${op.type} is not a fast-path operation`
-      );
+      throw NextlyError.internal({
+        logContext: {
+          reason: "op-not-fast-path-emittable",
+          op: op.type,
+          dialect: "postgresql",
+        },
+      });
 
     default: {
       const exhaustive: never = op;
