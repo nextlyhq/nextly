@@ -22,6 +22,57 @@ const graph = (places: Record<string, readonly string[]>) => {
 };
 
 describe("componentReach", () => {
+  it("prefers a cycle it can prove over an unreadable branch beside it", () => {
+    // The order the placements are listed in must not decide the answer: both
+    // spellings name a document that places ITSELF, which is a fact, next to a
+    // definition nobody could read, which is not.
+    expect(
+      componentReach({
+        places: ["unreadable", "a"],
+        self: "a",
+        placedBy: graph({}),
+      })
+    ).toEqual({ kind: "cycle", path: ["a", "a"] });
+    expect(
+      componentReach({
+        places: ["a", "unreadable"],
+        self: "a",
+        placedBy: graph({}),
+      })
+    ).toEqual({ kind: "cycle", path: ["a", "a"] });
+  });
+
+  it("finds a cycle that only a branch BEYOND the unreadable one closes", () => {
+    // The loop runs a→c→a while a→b cannot be read. Answering at the point of
+    // discovery reported uncertainty about a graph whose loop is fully readable.
+    expect(
+      componentReach({
+        places: ["b", "c"],
+        self: "a",
+        placedBy: graph({ c: ["a"] }),
+      })
+    ).toEqual({ kind: "cycle", path: ["a", "c", "a"] });
+  });
+
+  it("still reports the unreadable branch when no other branch closes a loop", () => {
+    expect(
+      componentReach({
+        places: ["b", "c"],
+        self: "a",
+        placedBy: graph({ c: [] }),
+      })
+    ).toEqual({ kind: "unknown", at: "b" });
+  });
+
+  it("names the FIRST unreadable branch, not the last", () => {
+    expect(
+      componentReach({
+        places: ["b", "d"],
+        self: "a",
+        placedBy: graph({}),
+      })
+    ).toEqual({ kind: "unknown", at: "b" });
+  });
   it("answers none when nothing leads back", () => {
     expect(
       componentReach({

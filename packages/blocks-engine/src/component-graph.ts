@@ -72,11 +72,17 @@ export type ComponentReach =
  * reading `self` through `placedBy`: at save time the stored copy is the old
  * one, and asking it would answer about the document being replaced.
  *
- * The walk follows each placement through `placedBy` until it meets `self`,
- * runs out, or meets a definition it cannot read. Every component is followed
- * ONCE per question, which is what makes a graph that already contains loops
- * among OTHER components finite here: a loop between B and C ends where it
- * began rather than running forever while the caller waits on a write.
+ * The walk follows each placement through `placedBy` until it meets `self` or
+ * runs out. Every component is followed ONCE per question, which is what makes
+ * a graph that already contains loops among OTHER components finite here: a
+ * loop between B and C ends where it began rather than running forever while
+ * the caller waits on a write.
+ *
+ * A definition it cannot read does NOT end the walk. The remaining branches are
+ * searched first and the uncertainty is reported only if none of them proves a
+ * loop, so a `cycle` this can establish always beats an `unknown` it cannot —
+ * the two are not interchangeable to a caller, and which one came back would
+ * otherwise depend on the order a document happens to list its placements in.
  *
  * A direct self-placement is a cycle like any other and needs no special case:
  * `self` appearing in `places` is met on the first step.
@@ -99,6 +105,14 @@ export function componentReach(args: {
     via: [self],
   }));
   const followed = new Set<string>();
+  // The first definition that could not be read, HELD rather than answered
+  // with. An unreadable branch rules nothing out, so it cannot be treated as
+  // placing nothing — but it is not an answer either while another branch may
+  // still prove a loop. Answering at the point of discovery made the verdict
+  // depend on the order the placements happen to be listed in:
+  // `places: ["unreadable", self]` reported uncertainty about a document that
+  // names ITSELF, and withheld the one chain a person can act on.
+  let unreadable: string | undefined;
 
   for (let step = pending.shift(); step !== undefined; step = pending.shift()) {
     const path = [...step.via, step.id];
@@ -107,9 +121,15 @@ export function componentReach(args: {
     followed.add(step.id);
 
     const named = placedBy(step.id);
-    if (named === undefined) return { kind: "unknown", at: step.id };
+    if (named === undefined) {
+      unreadable ??= step.id;
+      continue;
+    }
     for (const id of named) pending.push({ id, via: path });
   }
 
+  // Exhausted without meeting the subject. `none` only where every definition
+  // on the way was read, which is what makes the two answers different facts.
+  if (unreadable !== undefined) return { kind: "unknown", at: unreadable };
   return { kind: "none" };
 }
