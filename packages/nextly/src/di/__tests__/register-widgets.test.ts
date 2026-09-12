@@ -114,6 +114,75 @@ describe("resetWidgetRegistries", () => {
     expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
   });
 
+  it("registers a plugin's contributed source, answerable through the shared store", () => {
+    const resolve = () => Promise.resolve({ op: "count" as const, total: 3 });
+
+    resetWidgetRegistries([
+      {
+        name: "@acme/stripe",
+        contributes: {
+          widgetSources: [
+            {
+              source: {
+                id: "plugin:stripe/revenue",
+                label: "Revenue",
+                kind: "plugin",
+                supports: ["count"],
+                fields: [{ name: "total", type: "number" }],
+              },
+              resolve,
+            },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(getSource("plugin:stripe/revenue")).toBeDefined();
+    // Both halves, because a source discoverable with nothing to answer it is
+    // the state `registerResolvedSource` takes two arguments to prevent.
+    expect(systemResolver("plugin:stripe/revenue")).toBe(resolve);
+  });
+
+  it("registers core's own sources BEFORE a plugin's, so a shadow fails naming the plugin", () => {
+    // 🔴 `registerSource` refuses a duplicate id, so whichever registration
+    // runs first owns it. The ordering is what decides WHICH registration
+    // fails -- and a boot dying inside core's own publication tells the
+    // operator nothing they can act on. The fold refuses the reserved
+    // namespaces before this point; this covers an id inside the plugin
+    // namespace that core itself publishes.
+    //
+    // No precondition on the store being empty: `resetWidgetRegistries` clears
+    // it as its first act, so what a previous case left behind says nothing
+    // about this one -- and asserting emptiness here read the LAST test's
+    // leftovers rather than this test's starting point.
+    expect(() =>
+      resetWidgetRegistries([
+        {
+          name: "@acme/shadow",
+          contributes: {
+            widgetSources: [
+              {
+                source: {
+                  id: RELEASES_SOURCE_ID,
+                  label: "Not releases",
+                  kind: "plugin",
+                  supports: ["count"],
+                  fields: [{ name: "total", type: "number" }],
+                },
+                resolve: () =>
+                  Promise.resolve({ op: "count" as const, total: 0 }),
+              },
+            ],
+          },
+        } as never,
+      ])
+    ).toThrow();
+
+    // Core's own source survived the attempt: the refusal happened on the
+    // plugin's registration, not on core's.
+    expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
+  });
+
   it("drops the previous boot's widgets and leaves core's own", () => {
     // The property is that nothing SURVIVES a boot, not that the store ends
     // empty -- core registers its dashboard cards in this same function, so

@@ -42,10 +42,12 @@ import { registerVersionsWidgetSource } from "../../domains/versions/versions-wi
 import { setContributedWidgets } from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
 import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
+import { registerResolvedSource } from "../../domains/widgets/resolved-sources";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
+import { collectWidgetSources } from "../../plugins/widgets/collect-widget-sources";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = []
@@ -79,4 +81,22 @@ export function resetWidgetRegistries(
   // most of the codebase in order to offer a card.
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
+
+  // 🔴 LAST, and the order carries a rule. `registerSource` refuses a duplicate
+  // id, so whichever registration runs first owns that id and the second one
+  // fails the boot -- which is the outcome we want when a plugin names a
+  // built-in source, and the wrong one if core's registration is what fails.
+  // Registering core first turns "a plugin tried to shadow a built-in" into a
+  // refusal naming the plugin, rather than a boot that dies inside core's own
+  // publication for reasons the operator cannot act on.
+  //
+  // The fold itself refuses the reserved namespaces before this point, so a
+  // plugin cannot reach a `system:` id at all; this ordering is what protects
+  // the ids core publishes INSIDE the plugin namespace, if it ever does.
+  for (const contributed of collectWidgetSources(plugins)) {
+    registerResolvedSource(
+      { ...contributed.source, kind: "plugin" },
+      contributed.resolve
+    );
+  }
 }

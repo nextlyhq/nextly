@@ -938,3 +938,101 @@ describe("a body that is not JSON at all", () => {
     expect(executeWidgetQuery).not.toHaveBeenCalled();
   });
 });
+
+describe("a slot that never settles", () => {
+  /**
+   * A source answered by a resolver, registered the way boot registers one.
+   *
+   * The kind matters to the assertion rather than to the timer: a
+   * resolver-answered source is the one that can make a network call, and a
+   * dead outbound connection does not reject -- it hangs. That is the shape
+   * the bound exists for.
+   */
+  function registerHangingSource(id: string): void {
+    registerSystemSource(
+      {
+        id,
+        label: "Slow",
+        kind: "system",
+        supports: ["count"],
+        fields: [{ name: "total", type: "number" }],
+      },
+      () => new Promise<never>(() => {})
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fails the hung slot alone, and the rest of the batch still answers", async () => {
+    // 🔴 The defect: the batch aggregates with `Promise.all`, so it is only as
+    // fast as its slowest slot. One query that never settles held every other
+    // card behind it and the reader saw NOTHING -- not seven cards and one
+    // error, which is what the per-slot shape exists to produce.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    executeWidgetQuery.mockImplementation((query: { source: string }) =>
+      query.source === "system:slow"
+        ? new Promise(() => {})
+        : Promise.resolve({ op: "count", total: 7 })
+    );
+
+    const pending = postWidgetQuery(
+      makeReq({
+        queries: [
+          { source: "system:slow", op: "count" },
+          { source: "collection:posts", op: "count" },
+        ],
+      })
+    );
+
+    // Past the bound. `Async` because the race settles on a microtask that a
+    // synchronous timer advance would never let run.
+    await vi.advanceTimersByTimeAsync(31_000);
+    const slots = await slotsOf(await pending);
+
+    expect(slots[0].ok).toBe(false);
+    expect(slots[0].error).toMatch(/took too long/i);
+    // The control, and the whole point: the sibling was not held behind it.
+    expect(slots[1].ok).toBe(true);
+  });
+
+  it("names the source in the log, where an operator can act on it", async () => {
+    // The caller is told their card timed out; only the log says WHICH source
+    // is hanging, which is the half an operator needs.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    executeWidgetQuery.mockImplementation(() => new Promise(() => {}));
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    await pending;
+
+    expect(
+      logged.some(
+        entry =>
+          JSON.stringify(entry).includes("widget-slot-timeout") &&
+          JSON.stringify(entry).includes("system:slow")
+      )
+    ).toBe(true);
+  });
+
+  it("does not fail a slot that answers within the bound", async () => {
+    // The must-differ half. Without it a bound of zero -- or one that fired
+    // unconditionally -- satisfies both cases above.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    executeWidgetQuery.mockResolvedValue({ op: "count", total: 4 });
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+    await vi.advanceTimersByTimeAsync(29_000);
+    const slots = await slotsOf(await pending);
+
+    expect(slots[0].ok).toBe(true);
+  });
+});

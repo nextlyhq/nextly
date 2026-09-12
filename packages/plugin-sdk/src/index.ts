@@ -534,6 +534,12 @@ export type {
  * Held `@experimental` alongside `PluginAdminWidget`, which is the same feature
  * seen from the contributions side: the widget contract graduates per D55 once a
  * first-party plugin ships one. See STABILITY.md.
+ *
+ * `WidgetSourceResolver`, `PluginWidgetSource` and `ReadCaller` are the data
+ * SOURCE contract, which `contributes.widgetSources` names. Inference covers a
+ * resolver written inline inside `definePlugin`; these are what let an author
+ * declare one as a named function instead, which is how a plugin publishing
+ * more than one source ends up written.
  */
 export {
   WIDGET_SIZES,
@@ -567,4 +573,7 @@ export {
   type WidgetSourceKind,
   type WidgetOp,
   type TimeseriesInterval,
+  type WidgetSourceResolver,
+  type PluginWidgetSource,
+  type ReadCaller,
 } from "nextly";

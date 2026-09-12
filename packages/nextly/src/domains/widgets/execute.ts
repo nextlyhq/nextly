@@ -386,7 +386,12 @@ export async function executeWidgetQuery(
   // `ReleasesService.find` asks its own `authorize` before it reads -- so a
   // filter applied here would be a second implementation of a rule this module
   // cannot see, agreeing on the day it is written and drifting afterwards.
-  if (executable.kind === "system") {
+  if (executable.kind === "system" || executable.kind === "plugin") {
+    // One arm for both, because the contract is one. A plugin's resolver is
+    // handed exactly what core's is and is trusted exactly as far: it reaches
+    // what its own closure captured, and nothing a caller wrote can be a URL
+    // or a table name by the time it arrives -- every name in `query` was
+    // checked against the source's own declared fields first.
     return executable.resolve(query, caller);
   }
 

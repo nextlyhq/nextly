@@ -104,3 +104,24 @@ export {
   TIMESERIES_INTERVALS,
   type TimeseriesInterval,
 } from "../collections/query/timeseries-interval";
+
+/**
+ * The contract a plugin's widget source is written against.
+ *
+ * Published because `contributes.widgetSources` names it, and every contract a
+ * published shape names travels with it. Inference covers the common case --
+ * an author writing the resolver inline inside `definePlugin` gets `query` and
+ * `caller` typed from the contextual type, and needs none of these names. What
+ * inference cannot do is let them declare the resolver as a standalone
+ * function, or hand it to a helper, which is exactly how a plugin with more
+ * than one source ends up written.
+ *
+ * `ReadCaller` travels with the resolver for the same reason: it is the second
+ * of the two arguments, so without it the parameter has no name to annotate.
+ */
+export type { SourceResolver as WidgetSourceResolver } from "./resolved-sources";
+export type { ReadCaller } from "../../services/dashboard/readable-resources";
+export type {
+  PluginWidgetSource,
+  CollectedWidgetSource,
+} from "../../plugins/widgets/collect-widget-sources";

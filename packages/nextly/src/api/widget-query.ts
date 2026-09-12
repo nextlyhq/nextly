@@ -350,6 +350,66 @@ async function warmReadDecisions(
 }
 
 /** Authorizes, validates and runs one already-prepared query. */
+/**
+ * How long one slot may take before the batch stops waiting for it.
+ *
+ * 🔴 The batch aggregates with `Promise.all`, so it is only as fast as its
+ * SLOWEST slot: one query that never settles holds every other card on the
+ * dashboard behind it, and the reader sees nothing at all rather than the
+ * seven cards that answered. That is the failure this bound exists for, and it
+ * is not hypothetical for a source answered by a resolver -- a resolver may
+ * make a network call, and a dead outbound connection does not reject, it
+ * hangs for whatever the socket's own timeout is.
+ *
+ * Thirty seconds, following Grafana's `[dataproxy] timeout` default for the
+ * same kind of call. Generous on purpose: the bound is here to stop a hang
+ * becoming an outage, not to police a slow-but-working query, and cutting off
+ * a large but legitimate aggregate would be a worse card than a slow one.
+ */
+const SLOT_TIMEOUT_MS = 30_000;
+
+/**
+ * Runs `work`, giving up on it after {@link SLOT_TIMEOUT_MS}.
+ *
+ * 🔴 A race ABANDONS rather than cancels, and it cannot do otherwise: a
+ * promise has no cancellation, so the work goes on running after this returns.
+ * Two consequences are handled here rather than left to surprise someone.
+ *
+ * The abandoned promise may reject later, with nobody awaiting it -- an
+ * unhandled rejection, which crashes the process under Node's default policy.
+ * So a no-op handler is attached to the ORIGINAL promise, which marks it
+ * handled without changing what the race sees.
+ *
+ * And the timer must not hold the event loop open: a slot that answered in a
+ * millisecond would otherwise keep the process alive for the remaining thirty
+ * seconds, which in a test run means a suite that will not exit.
+ */
+async function withinSlotBudget<T>(
+  work: Promise<T>,
+  onTimeout: () => never
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = Symbol("widget-slot-timeout");
+  try {
+    // Attached to `work` itself, not to the race's result: the race settles on
+    // whichever arm wins, so on a timeout nothing would ever observe `work`.
+    void work.catch(() => undefined);
+
+    const deadline = new Promise<typeof timedOut>(resolve => {
+      timer = setTimeout(() => resolve(timedOut), SLOT_TIMEOUT_MS);
+      timer.unref?.();
+    });
+
+    const outcome = await Promise.race([work, deadline]);
+    // `onTimeout` returns `never`, so the compiler narrows `outcome` to `T`
+    // past this line without an assertion.
+    if (outcome === timedOut) onTimeout();
+    return outcome;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function runPrepared(
   entry: Extract<PreparedQuery, { ok: true }>,
   caller: ReadCaller,
@@ -362,7 +422,26 @@ async function runPrepared(
       entry.parsed,
       entry.executable.source
     );
-    const result = await executeWidgetQuery(query, caller);
+    const result = await withinSlotBudget(
+      executeWidgetQuery(query, caller),
+      () => {
+        // A `NextlyError`, so `failedSlot` puts THIS sentence on the wire
+        // rather than the generic one: a card that timed out is worth telling
+        // its reader about, and the source id is already known to them --
+        // they placed the card. The slug travels in `logContext` for the
+        // operator, who needs to know WHICH source is hanging.
+        throw new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "This widget took too long to answer",
+          logMessage: `widget source "${query.source}" exceeded ${SLOT_TIMEOUT_MS}ms`,
+          logContext: {
+            reason: "widget-slot-timeout",
+            source: query.source,
+            timeoutMs: SLOT_TIMEOUT_MS,
+          },
+        });
+      }
+    );
     return { ok: true, result };
   } catch (error) {
     return failedSlot(error);

@@ -524,6 +524,9 @@ export {
 // inferred but never annotated: `WidgetDefinition.defaultHeight` is a
 // `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
 // `WidgetSourceKind` and `WidgetOp`.
+// The last three are the data SOURCE contract that `contributes.widgetSources`
+// names: inference covers a resolver written inline, and these are what let an
+// author declare one as a named function instead.
 export {
   WIDGET_SIZES,
   WIDGET_CHROME,
@@ -568,6 +571,9 @@ export {
   type TimeseriesInterval,
   type WidgetLifecycle,
   type WidgetCondition,
+  type WidgetSourceResolver,
+  type PluginWidgetSource,
+  type ReadCaller,
 } from "./domains/widgets";
 
 // Value exports for the email provider contract. A plugin calls

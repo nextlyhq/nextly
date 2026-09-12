@@ -18,6 +18,7 @@ import type {
 import type { PluginAuthContributions } from "./auth-contributions";
 import type { PluginContext } from "./plugin-context";
 import type { PluginRoute } from "./routes/route-types";
+import type { PluginWidgetSource } from "./widgets/collect-widget-sources";
 
 /**
  * @public A plugin-declared custom permission. CRUD permissions are
@@ -560,6 +561,28 @@ export interface PluginContributions {
    * app mounts the Nextly handler (`/admin/api` in a scaffolded project).
    */
   routes?: PluginRoute[];
+  /**
+   * @experimental Dashboard-widget DATA SOURCES: a queryable source this plugin
+   * publishes, paired with the server-side function that answers it.
+   *
+   * Server-side, and therefore not under `admin`: a source is answered in the
+   * Nextly process against the caller's identity, while `admin.widgets` is
+   * about what the dashboard DRAWS. A plugin can contribute either without the
+   * other — a card over `collection:orders` needs no source, and a source is
+   * useful to any card that names it.
+   *
+   * Each entry declares the source's queryable fields and supported ops up
+   * front, so a query is validated against them before the resolver is ever
+   * called. The resolver receives `(query, caller)` and nothing else; see
+   * `domains/widgets/resolved-sources` for why that signature is the boundary
+   * that keeps a caller-supplied string from ever becoming a URL or a table
+   * name.
+   *
+   * The host cannot prove a resolver consults `caller` — it hands the caller
+   * over and the plugin decides. That is the trust boundary this plugin's
+   * `init()`, hooks and services already cross, not a new one.
+   */
+  widgetSources?: PluginWidgetSource[];
   /**
    * @public Admin UI contributions: menu, pages +
    * settings, per-collection view overrides. `widgets` is
