@@ -13,7 +13,7 @@ const { listRoleSlugsForUser } = vi.hoisted(() => ({
 
 vi.mock("../../services/lib/permissions", () => ({ listRoleSlugsForUser }));
 
-import { isCreatableCollectionSlug } from "../../collections/config/collection-slug-rules";
+import { isCreatableCollectionSlug } from "../../domains/collections/creatable-slug";
 import {
   NEW_COLLECTION_PROBE_SLUG,
   NEW_ENTITY_PERMISSION_ROLE,
@@ -65,7 +65,7 @@ describe("the roles a new collection's read grant reaches", () => {
     // the presets are blind to WHICH creatable collection they are shown. A
     // preset that started discriminating by slug would fail here instead of
     // silently making the single probe the wrong question.
-    const slugs = ["reports", "invoices", "team-updates", "b2"];
+    const slugs = ["reports", "invoices", "team_updates", "b2"];
     for (const slug of slugs) {
       expect(isCreatableCollectionSlug(slug)).toBe(true);
     }
@@ -118,11 +118,24 @@ describe("an API key", () => {
     ).toBe(false);
   });
 
-  it("is refused when its read grant names a reserved route name", async () => {
-    // `admin` is reserved without being a system resource, so this case fails
-    // against a fix that tested only `isSystemResource` -- the reserved set is
-    // wider than the system one, and a collection cannot take either name.
-    expect(await wouldReadOwnNewCollection(key(["read-admin"]))).toBe(false);
+  it("is ADMITTED on a name only the code-first validator reserves", async () => {
+    // 🔴 `admin` is reserved for a code-first config, which is mounted on a
+    // route -- but nothing on the runtime create path consults that list, and a
+    // Schema-Builder create accepts the name. Judging the grant by the
+    // code-first rules withheld the step from a key that can finish it, which
+    // is the same defect as offering one that cannot, in the other direction.
+    expect(await wouldReadOwnNewCollection(key(["read-admin"]))).toBe(true);
+  });
+
+  it("is refused when its read grant cannot be a slug at all", async () => {
+    // A second reason to refuse, and not the system-resource one: a runtime
+    // slug takes underscores and no hyphens, so no create path would accept
+    // `team-updates` however unreserved the name is. Without this case a
+    // predicate that only tested `isReservedResourceSlug` passes everything
+    // else here.
+    expect(await wouldReadOwnNewCollection(key(["read-team-updates"]))).toBe(
+      false
+    );
   });
 
   it("is refused when it holds no read grant at all", async () => {
