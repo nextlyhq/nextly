@@ -674,13 +674,39 @@ function identityOf(
   const record = row as Record<string, unknown>;
   const { id, title } = record;
   if (typeof id !== "string" || id === "") return undefined;
-  return {
-    named: {
-      id,
-      title: typeof title === "string" && title !== "" ? title : id,
-    },
-    record,
-  };
+  return { named: { id, title: labelFor(title, id) }, record };
+}
+
+/**
+ * What a row is called: its title, or its id where it has no readable one.
+ *
+ * The id is the one name a row is sure to have. A collection with no title
+ * field, or one whose title field-level access redacts, still renders every
+ * instance on the public page — so a canvas that dropped the row would draw a
+ * placeholder where the page draws the component, and an author can find it
+ * by its id.
+ *
+ * One rule for both rows a component passes through. Spelled twice, the
+ * listing and the draft would eventually disagree about what an unnamed
+ * component is called.
+ */
+function labelFor(title: unknown, id: string): string {
+  return typeof title === "string" && title !== "" ? title : id;
+}
+
+/**
+ * Whether a by-id row is the row that was asked for.
+ *
+ * A row carrying NO id is: field-level access drops it in presentation, which
+ * is why the id comes from the listing at all. A row carrying a DIFFERENT one
+ * is not — a `beforeOperation` hook can redirect the read, so the record
+ * answering for one component may be another's, and taking the listing's id
+ * would serve one component's draft under the other's name with nothing
+ * anywhere saying so.
+ */
+function answersFor(record: Record<string, unknown>, id: string): boolean {
+  const own = record.id;
+  return typeof own !== "string" || own === "" || own === id;
 }
 
 /**
@@ -718,9 +744,7 @@ function withDraftDocument(
 ): LibraryComponent | undefined {
   if (typeof data !== "object" || data === null) return undefined;
   const record = data as Record<string, unknown>;
-  const own = record.id;
-  if (typeof own === "string" && own !== "" && own !== id) return undefined;
-  const title = record.title;
+  if (!answersFor(record, id)) return undefined;
   // `hasOwn`, not `in`: the field name is the site's to configure, and one
   // naming something on `Object.prototype` would read a function as a
   // document.
@@ -728,9 +752,7 @@ function withDraftDocument(
   const content = record[field];
   return {
     id,
-    // Labelled by the id where the row has no readable title, as `identityOf`
-    // labels a listing row: the id is the one name it is sure to have.
-    title: typeof title === "string" && title !== "" ? title : id,
+    title: labelFor(record.title, id),
     ...optionalText(record.description, "description"),
     ...optionalText(record.category, "category"),
     document:
