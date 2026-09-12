@@ -22,6 +22,10 @@ import type {
 } from "../diff/types";
 
 import { columnDefinition, createTableBody } from "./create-table-body";
+import {
+  changeForeignKeyActionSql,
+  unsupportedOperation,
+} from "./foreign-key-action";
 import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "postgresql");
@@ -31,6 +35,17 @@ function columnDef(c: ColumnSpec): string {
 }
 
 export function generatePgSQL(op: Operation): string {
+  // The three dialect dispatchers are switches over the SAME `Operation`
+  // union, so their arms line up one for one and their tails are identical
+  // text. That parallelism is the safety property, not an accident: each
+  // narrows the union to `never` in its own default arm, so adding a member
+  // to `Operation` is a COMPILE error in every dialect that has not handled
+  // it — which is how `change_foreign_key_action` located all seven of its
+  // consumers instead of leaving one to fail at run time on whichever dialect
+  // a user happened to be on. Sharing them means a handler table keyed by op
+  // type, and a table is not exhaustiveness-checked per dialect: a missing
+  // entry becomes an undefined lookup while writing DDL.
+  // fallow-ignore-next-line code-duplication
   switch (op.type) {
     case "add_table":
       return generateAddTable(op);
@@ -54,13 +69,12 @@ export function generatePgSQL(op: Operation): string {
       return generateAddIndex(op);
     case "drop_index":
       return generateDropIndex(op);
-    default: {
-      const exhaustive: never = op;
-      void exhaustive;
-      throw new Error(
-        `generatePgSQL: unsupported op ${(op as { type: string }).type}`
-      );
-    }
+    case "change_foreign_key_action":
+      // `DROP CONSTRAINT` here; the drop is near-instant (no scan) and the
+      // add re-checks the existing rows.
+      return changeForeignKeyActionSql(op, q, "DROP CONSTRAINT");
+    default:
+      return unsupportedOperation("generatePgSQL", op);
   }
 }
 

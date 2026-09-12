@@ -102,6 +102,22 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
         fromDefault: op.toDefault,
         toDefault: op.fromDefault,
       };
+    case "change_foreign_key_action":
+      // Both sides travel on the op precisely so the inverse is a swap: the
+      // constraint keeps its name, column and target, and only the actions
+      // move back.
+      return {
+        type: "change_foreign_key_action",
+        tableName: op.tableName,
+        constraintName: op.constraintName,
+        columnName: op.columnName,
+        referencesTable: op.referencesTable,
+        referencesColumn: op.referencesColumn,
+        fromOnDelete: op.toOnDelete,
+        fromOnUpdate: op.toOnUpdate,
+        toOnDelete: op.fromOnDelete,
+        toOnUpdate: op.fromOnUpdate,
+      };
     case "add_index":
       return { type: "drop_index", tableName: op.tableName, index: op.index };
     case "drop_index":

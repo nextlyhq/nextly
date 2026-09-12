@@ -180,6 +180,15 @@ export function emitPostgresDdl(op: Operation): string[] {
       ];
     }
 
+    case "change_foreign_key_action":
+      // Deliberately outside the fast path: dropping and redeclaring a live
+      // constraint is not one of the additive statements this emitter owns,
+      // and `FAST_PATH_OP_TYPES` does not list it, so an apply carrying one
+      // routes elsewhere rather than arriving here.
+      throw new Error(
+        `emitPostgresDdl: ${op.type} is not a fast-path operation`
+      );
+
     default: {
       const exhaustive: never = op;
       throw new Error(

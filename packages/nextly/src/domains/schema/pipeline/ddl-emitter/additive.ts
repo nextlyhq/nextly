@@ -219,8 +219,12 @@ export function emitAdditiveDdl(
     case "change_column_type":
     case "change_column_nullable":
     case "change_column_default":
+    case "change_foreign_key_action":
       // Not emittable on SQLite (table rebuild) / MySQL (full MODIFY
       // definition) — canEmitWithoutDrizzleKit routes these to drizzle-kit.
+      // A referential-action change is not additive either: it drops a live
+      // constraint before redeclaring it, so it never belongs in the pass that
+      // only adds things.
       throw NextlyError.internal({
         logContext: {
           reason: "op-not-additive-emittable",

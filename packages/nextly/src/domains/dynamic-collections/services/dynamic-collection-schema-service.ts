@@ -1327,6 +1327,26 @@ ${allColumnDefs.join(",\n")}
     }
 
     // Find modified fields
+    // What a relationship does when the row it points at is deleted, or its
+    // key updated. Its own pass, ahead of the column work and outside the
+    // column loop, for two reasons that both bit: an action is a property of
+    // the CONSTRAINT, so an edit to one changes no column and the loop below
+    // — which runs only for a field whose column moved — never sees it; and
+    // that loop is skipped wholesale on SQLite, which is the one dialect that
+    // has to REFUSE this edit rather than ignore it.
+    for (const field of newFields) {
+      const previous = oldFieldMap.get(field.name);
+      if (!previous) continue;
+      statements.push(
+        ...this.referentialActionStatements(
+          tableName,
+          toSnakeCase(field.name),
+          previous,
+          field
+        )
+      );
+    }
+
     // Note: SQLite doesn't support ALTER COLUMN - modifications require table rebuild
     // For simplicity, we skip column modifications for SQLite
     if (this.dialect !== "sqlite") {
@@ -1514,6 +1534,95 @@ ${allColumnDefs.join(",\n")}
       before.nullable !== after.nullable ||
       before.kind !== after.kind
     );
+  }
+
+  /**
+   * What it takes to move a relationship's referential actions to the ones the
+   * field now declares — nothing, when they already agree.
+   *
+   * Kept out of {@link isFieldModified} on purpose. That answers whether the
+   * COLUMN changed, and its `true` drives a type rewrite; an action lives on
+   * the constraint, not on the column, so folding it in would rewrite storage
+   * for an edit that never touched any. `unique` and `index` were separated
+   * from it for the same reason.
+   *
+   * Compared on the RESOLVED actions rather than the declared ones, because an
+   * undeclared `onDelete` is derived from `required` — so making a field
+   * required moves its delete behaviour from `set null` to `restrict` without
+   * either definition mentioning `onDelete` at all.
+   *
+   * @throws NextlyError (validation, `FOREIGN_KEY_ACTION_UNSUPPORTED`) on
+   *   SQLite, which cannot alter a constraint.
+   */
+  private referentialActionStatements(
+    tableName: string,
+    columnName: string,
+    oldField: FieldDefinition,
+    newField: FieldDefinition
+  ): string[] {
+    if (newField.type !== "relationship") return [];
+    const target = newField.options?.target;
+    if (!target || usesJunctionTable(newField)) return [];
+
+    const actionsOf = (f: FieldDefinition) => ({
+      onDelete: this.mapOnDeleteAction(this.relationOnDelete(f)),
+      onUpdate: this.mapOnUpdateAction(f.options?.onUpdate || "no action"),
+    });
+    const from = actionsOf(oldField);
+    const to = actionsOf(newField);
+    if (from.onDelete === to.onDelete && from.onUpdate === to.onUpdate) {
+      return [];
+    }
+
+    if (this.dialect === "sqlite") {
+      // Refused by name, as a foreign-key drop and a unique constraint this
+      // dialect cannot enforce already are. The only way to change an action
+      // here is to rebuild the table, and doing that silently underneath a
+      // save would take every index, trigger and view on it — and can fire
+      // another table's cascade while the rebuild is in flight.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${newField.name}`,
+            code: "FOREIGN_KEY_ACTION_UNSUPPORTED",
+            message:
+              `"${newField.name}" cannot change what happens to it when the ` +
+              `"${target}" it points at is deleted or its id changes: SQLite ` +
+              `can only alter a link like this by rebuilding ${tableName}. ` +
+              `Make the change on PostgreSQL or MySQL, or recreate the ` +
+              `collection.`,
+          },
+        ],
+        logContext: {
+          tableName,
+          field: newField.name,
+          column: columnName,
+          from,
+          to,
+        },
+      });
+    }
+
+    // Rendered by the shared template, so this path and `migrate:create` emit
+    // the same statements — including the two-statement form both remaining
+    // dialects need to redeclare a constraint under its own name.
+    return [
+      `${generateSQL(
+        {
+          type: "change_foreign_key_action",
+          tableName,
+          constraintName: `fk_${tableName}_${columnName}`,
+          columnName,
+          referencesTable: `dc_${target}`,
+          referencesColumn: "id",
+          fromOnDelete: from.onDelete,
+          fromOnUpdate: from.onUpdate,
+          toOnDelete: to.onDelete,
+          toOnUpdate: to.onUpdate,
+        },
+        this.dialect
+      )};`,
+    ];
   }
 
   /**
@@ -2092,6 +2201,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
       ...carries.flatMap(({ from, to }) =>
         this.renameJunctionStatements(from, to)
       ),
+      ...this.junctionActionChanges(tableName, oldFields, newFields),
       ...this.junctionCreates(
         tableName,
         before,
@@ -2099,6 +2209,94 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
         new Set(moved.map(m => m.to.table))
       ),
     ];
+  }
+
+  /**
+   * The junctions that stayed exactly where they were and changed only what
+   * they do when a row they point at is deleted or its key updated.
+   *
+   * The carry path above redeclares a junction's constraints on the way to a
+   * new name, so a table whose name moved is already covered. This is the
+   * case it cannot see: `junctionCarries` returns nothing when the table name
+   * is unchanged, so before this an `onDelete` edit on a many-to-many emitted
+   * no DDL at all — the registry recorded `restrict` while the database went
+   * on cascading.
+   *
+   * The table is deliberately NOT rebuilt for this. Dropping and recreating a
+   * junction to change an action would destroy every link row it holds, for a
+   * change that never needed to touch one.
+   *
+   * @throws NextlyError (validation, `FOREIGN_KEY_ACTION_UNSUPPORTED`) on
+   *   SQLite, which cannot alter a constraint.
+   */
+  private junctionActionChanges(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): string[] {
+    const newByName = new Map(newFields.map(f => [f.name, f]));
+    const out: string[] = [];
+    for (const field of oldFields.filter(usesJunctionTable)) {
+      const next = newByName.get(field.name);
+      if (!next || !this.sameRelationTarget(field, next)) continue;
+      const from = this.junctionShape(tableName, field);
+      const to = this.junctionShape(tableName, next);
+      if (from.table !== to.table) continue;
+      if (from.onDelete === to.onDelete && from.onUpdate === to.onUpdate) {
+        continue;
+      }
+
+      if (this.dialect === "sqlite") {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `fields.${next.name}`,
+              code: "FOREIGN_KEY_ACTION_UNSUPPORTED",
+              message:
+                `"${next.name}" cannot change what happens to its links when ` +
+                `a row on either side is deleted or its id changes: SQLite ` +
+                `can only alter a link like this by rebuilding ` +
+                `"${to.table}", which would destroy the links it holds. ` +
+                `Make the change on PostgreSQL or MySQL.`,
+            },
+          ],
+          logContext: {
+            tableName,
+            field: next.name,
+            junctionTable: to.table,
+            from: { onDelete: from.onDelete, onUpdate: from.onUpdate },
+            to: { onDelete: to.onDelete, onUpdate: to.onUpdate },
+          },
+        });
+      }
+
+      // Both ends. A junction's row is only meaningful while both the source
+      // and the target it names exist, so an edit to what happens on delete
+      // applies to each of them.
+      for (const [constraint, column, references] of [
+        [to.fkSource, to.sourceColumn, to.sourceTable],
+        [to.fkTarget, to.targetColumn, to.targetTable],
+      ] as const) {
+        out.push(
+          `${generateSQL(
+            {
+              type: "change_foreign_key_action",
+              tableName: to.table,
+              constraintName: constraint,
+              columnName: column,
+              referencesTable: references,
+              referencesColumn: "id",
+              fromOnDelete: from.onDelete,
+              fromOnUpdate: from.onUpdate,
+              toOnDelete: to.onDelete,
+              toOnUpdate: to.onUpdate,
+            },
+            this.dialect
+          )};`
+        );
+      }
+    }
+    return out;
   }
 
   /**

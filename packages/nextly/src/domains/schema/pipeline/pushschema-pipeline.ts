@@ -358,6 +358,7 @@ export function computeJournalSummaryFromOperations(
       case "change_column_type":
       case "change_column_nullable":
       case "change_column_default":
+      case "change_foreign_key_action":
         changed++;
         break;
       default: {
@@ -427,6 +428,7 @@ export function operationTargetTable(op: Operation): string | null {
     case "change_column_type":
     case "change_column_nullable":
     case "change_column_default":
+    case "change_foreign_key_action":
     case "add_index":
     case "drop_index":
       return op.tableName;
@@ -861,6 +863,7 @@ export class PushSchemaPipeline {
           case "change_column_type":
           case "change_column_nullable":
           case "change_column_default":
+          case "change_foreign_key_action":
           case "add_index":
           case "drop_index":
             affectedTableNames.add(op.tableName);

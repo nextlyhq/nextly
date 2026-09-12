@@ -421,6 +421,12 @@ function describeOp(op: Operation): string {
       return `add_index ${op.index.name} on ${op.tableName}`;
     case "drop_index":
       return `drop_index ${op.index.name} on ${op.tableName}`;
+    case "change_foreign_key_action":
+      return (
+        `change_foreign_key_action ${op.tableName}.${op.columnName} ` +
+        `(ON DELETE ${op.fromOnDelete} -> ${op.toOnDelete}, ` +
+        `ON UPDATE ${op.fromOnUpdate} -> ${op.toOnUpdate})`
+      );
   }
 }
 
