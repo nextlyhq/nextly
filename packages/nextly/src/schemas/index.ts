@@ -56,6 +56,7 @@ import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
+import { rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
 import { schemaEventsTables } from "./schema-events";
 import { siteSettingsMysql } from "./site-settings/mysql";
@@ -175,6 +176,12 @@ export function getCoreSchema(
     // outside it is never created on a real installation, however completely
     // its own module declares it.
     ...Object.values(documentLockTables(dialect)),
+    // `nextly_rbac_epoch` — the one counter every instance reads to decide
+    // whether a cached authorization answer is still current. Declared here for
+    // the same reason as the lock above: a table outside this set is never
+    // created on a real installation, however completely its own module
+    // declares it.
+    ...Object.values(rbacEpochTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
     // `nextly_schema_events` (the migration ledger) is a first-class managed
     // table. It is still bootstrapped out-of-band via `getSchemaEventsDdl` so
@@ -295,6 +302,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   // snapshot, so the drift check proposes adding it again on every run.
   "nextly_field_group_lock",
   "nextly_document_lock",
+  "nextly_rbac_epoch",
   "nextly_widget_layout",
   "dynamic_collections",
   "dynamic_singles",

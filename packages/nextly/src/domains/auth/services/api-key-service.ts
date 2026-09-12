@@ -69,8 +69,8 @@ import { BaseService } from "../../../services/base-service";
 import {
   isSuperAdmin,
   listRoleSlugsForUserOrRefuse,
-  rbacRevision,
 } from "../../../services/lib/permissions";
+import { refreshEpoch } from "../../../services/lib/rbac-epoch";
 import type { Logger } from "../../../services/shared";
 
 /** The three token types that determine how permissions are resolved at request time. */
@@ -755,7 +755,12 @@ export class ApiKeyService extends BaseService {
     // under the new one, so the next request reuses grants the change was
     // meant to retire, for the whole TTL. Captured here, that entry is already
     // behind when it is written and the next read re-resolves.
-    const resolvedUnder = rbacRevision();
+    //
+    // Refreshed rather than read, which is what makes the comparison below
+    // answer for the INSTALL rather than for this process. These grants are a
+    // copy of the catalogue held for five minutes, and a role revoked on
+    // another instance has to retire them here too.
+    const resolvedUnder = await refreshEpoch();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
     if (
