@@ -34,4 +34,6 @@ BEHAVIOUR CHANGE, and it is visible. A draft written under an older, looser sche
 
 A pending change that edits a field the PUBLISHER may not write is refused too, rather than being quietly dropped from the write. A successful publish consumes the pending change, so dropping the value would have published everything else, deleted the draft, and destroyed the author's edit with it. Refusing keeps the draft intact for someone who can write that field. Only a field whose promoted value actually differs from the live row counts: a draft snapshot is a full copy of the document, so a denied field appears in every one of them.
 
-Both gates run over the snapshot being promoted and never over the live document, so a schema change cannot block someone from fixing and republishing unrelated content.
+Both gates run over the snapshot being promoted and never over the live document, so a schema change cannot block someone from fixing and republishing unrelated content. They run over that snapshot in its logical shape, so a Single that merely HAS a group, repeater or JSON field is not refused for holding one.
+
+Both publish paths are covered by one gate: the ordinary publish and `publishAllLocales`, which promotes every language's pending change in its own loop and had no such check at all.

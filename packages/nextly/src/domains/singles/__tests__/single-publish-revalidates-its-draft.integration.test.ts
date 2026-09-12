@@ -18,7 +18,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defineSingle, text } from "../../../config";
+import { defineSingle, group, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import {
   createTestNextly,
@@ -70,6 +70,11 @@ async function boot(strict: boolean): Promise<SingleEntryService> {
         access: { read: () => true, update: () => true },
         fields: [
           text({ name: "siteName" }),
+          // A JSON-backed field, so every case here also proves the gate reads
+          // a snapshot in its logical shape. A snapshot stores this as the
+          // string that was written; judged as-is, the validator calls it an
+          // invalid type and an ordinary publish is refused.
+          group({ name: "seo", fields: [text({ name: "metaTitle" })] }),
           text({
             name: "guarded",
             access: { update: ({ req }) => req.user?.email === BOSS.email },
@@ -241,5 +246,85 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     // And nothing was published: the live row still holds what it held.
     const live = await singles.get(SLUG, { overrideAccess: true });
     expect((live.data as { checked?: unknown }).checked ?? null).toBeNull();
+  });
+  it("publishes a draft that holds a group value", async () => {
+    const singles = await boot(false);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "Live",
+        seo: { metaTitle: "Title" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "Edited" },
+      { overrideAccess: true }
+    );
+
+    const published = await singles.update(
+      SLUG,
+      { status: "published" },
+      { overrideAccess: true }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const live = await singles.get(SLUG, { overrideAccess: true });
+    expect((live.data as { siteName?: unknown }).siteName).toBe("Edited");
+    // The group survived the round trip as an object, not as its stored text.
+    expect((live.data as { seo?: unknown }).seo).toEqual({
+      metaTitle: "Title",
+    });
+  });
+  it("gates publishAllLocales too, not only the ordinary publish", async () => {
+    let singles = await boot(false);
+    await singles.update(
+      SLUG,
+      { siteName: "Live", status: "published" },
+      { overrideAccess: true }
+    );
+    // Legal under the schema as it stands.
+    await singles.update(
+      SLUG,
+      { checked: "anything" },
+      { overrideAccess: true }
+    );
+
+    // The schema tightens while the change is held.
+    singles = await reboot(true);
+    // The other publish path: it promotes every language's pending change in
+    // its own loop, and had no gate of its own at all. `overrideAccess` waives
+    // the field rules, so what this proves is that the SCHEMA gate runs here.
+    // This path reports a refusal by throwing, where `update` returns a
+    // result; both carry the same validation issues.
+    let issues: Array<{ path: string; message: string }> | undefined;
+    await expect(
+      singles.publishAllLocales(SLUG, { overrideAccess: true }).catch(error => {
+        issues = (
+          error as {
+            publicData?: {
+              errors?: Array<{ path: string; message: string }>;
+            };
+          }
+        ).publicData?.errors;
+        throw error;
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(issues?.map(i => i.path)).toContain("checked");
+    expect(issues?.map(i => i.message).join(" ")).toContain("must be ok");
+
+    // And it did not consume the pending change on its way out.
+    const drafts = await current!.adapter.select("nextly_versions", {
+      where: {
+        and: [
+          { column: "scopeSlug", op: "=", value: SLUG },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    });
+    expect(drafts).toHaveLength(1);
   });
 });
