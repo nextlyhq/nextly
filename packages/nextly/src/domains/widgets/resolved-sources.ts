@@ -53,8 +53,9 @@
  * That a resolver consults `caller`. It cannot: the host hands over the caller
  * and the resolver decides what to do with it. Pairing the source and the
  * resolver in one call makes "registered but unanswerable" unrepresentable, and
- * the signature forecloses SSRF — neither proves a third party authorized
- * anything. WordPress has required a `permission_callback` on every REST route
+ * validating the query keeps a malformed question out — neither proves a third
+ * party authorized anything, and neither is the SSRF bound the section above
+ * declines to claim. WordPress has required a `permission_callback` on every REST route
  * since 5.5 and plugins still ship `__return_true` for it (CVE-2026-4019,
  * CVE-2026-4020); Payload's Local API disables access control by default. A
  * required field is not an enforced check.
@@ -75,6 +76,38 @@ import type { WidgetResult } from "./result";
 import { registerSource, type WidgetSource } from "./sources";
 
 /**
+ * What the host passes a resolver BESIDE the question it is answering.
+ *
+ * An options object rather than further positional parameters, and the shape is
+ * the decision rather than a detail. A resolver already takes its query, its
+ * caller and -- for a plugin -- its context, and `PluginSourceResolver` derives
+ * its own parameters from this type; adding each new concern as another
+ * argument makes the two resolver kinds disagree about which position means
+ * what. Everything the host may hand over in future arrives in here instead,
+ * where adding a field breaks nobody.
+ *
+ * Optional as a whole, so a resolver that ignores it -- most will -- is written
+ * exactly as before.
+ */
+export interface ResolverOptions {
+  /**
+   * Aborted when the host has stopped waiting for this answer.
+   *
+   * 🔴 Cooperative, and it cannot be anything else. A promise has no
+   * cancellation, so the per-slot budget in `api/widget-query` can only stop
+   * WAITING for a resolver -- the work goes on running, holding its connection
+   * and its memory, and further requests start more of it. This signal is how a
+   * resolver is told that its answer is no longer wanted, and a resolver that
+   * reaches the network should pass it to whatever it calls: `fetch` takes one
+   * directly, and most database clients accept one or expose a cancel.
+   *
+   * A resolver that ignores it is not broken, merely uninterruptible -- which is
+   * the state every resolver was in before this existed.
+   */
+  signal?: AbortSignal;
+}
+
+/**
  * Answers one source's query, for one caller.
  *
  * Returns the same `WidgetResult` a collection query does, so the archetypes
@@ -82,7 +115,8 @@ import { registerSource, type WidgetSource } from "./sources";
  */
 export type SourceResolver = (
   query: WidgetQuery,
-  caller: ReadCaller
+  caller: ReadCaller,
+  opts?: ResolverOptions
 ) => Promise<WidgetResult>;
 
 /**
@@ -133,6 +167,14 @@ function resolvers(): Map<string, SourceResolver> {
  * The source then goes through `registerSource`, the same door a collection
  * source uses, so its shape is validated by the same rules and a duplicate id
  * is refused the same way.
+ *
+ * 🔴 The resolver is keyed from the snapshot `registerSource` RETURNS, never by
+ * reading `source.id` a second time. `source` belongs to the plugin, and `id`
+ * may be an accessor or a Proxy trap rather than a stored string -- so a second
+ * read can answer differently and file the resolver under a key no source
+ * claims. The published source would then fail every query as unanswerable,
+ * which is the exact state one call exists to make unreachable: two reads of a
+ * caller-owned property are two values, however atomic the signature looks.
  */
 export function registerResolvedSource(
   source: ResolvedWidgetSource,
@@ -149,8 +191,8 @@ export function registerResolvedSource(
         `"${String(source?.kind)}"`,
     });
   }
-  registerSource(source);
-  resolvers().set(source.id, resolve);
+  const registered = registerSource(source);
+  resolvers().set(registered.id, resolve);
 }
 
 /** The resolver for `sourceId`, or `undefined` when nothing answers it. */

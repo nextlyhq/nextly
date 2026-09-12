@@ -37,10 +37,6 @@ import {
   isReservedSystemColumn,
 } from "../../lib/system-columns";
 import {
-  NEWLY_RESERVED_SLUG_NOTES,
-  SYSTEM_RESOURCES,
-} from "../../schemas/_zod/rbac";
-import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
@@ -55,9 +51,8 @@ import {
 } from "../../shared/base-validator";
 // RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
 // moved to shared/sql-reserved.ts to break a circular dependency with
-// base-validator. Imported here for local use in RESERVED_SLUGS_SET below
-// and re-exported so existing consumers that import them from this file's
-// path continue to work unchanged.
+// base-validator, and are re-exported here so existing consumers that import
+// them from this file's path continue to work unchanged.
 import {
   RESERVED_SLUGS,
   SQL_RESERVED_KEYWORDS,
@@ -65,6 +60,7 @@ import {
 // C7/D16 — accept plugin-registered custom field types (must be registered
 // before the config is validated; see field-type-registry).
 
+import { COLLECTION_SLUG_RULES } from "./collection-slug-rules";
 import type { CollectionConfig } from "./define-collection";
 
 export { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS };
@@ -172,17 +168,9 @@ export interface ValidationResult {
 // they now live in shared/sql-reserved.ts and are re-exported above so the
 // public API surface for this file is unchanged.
 
-// System-resource names are added on top of the base reserved slugs. A
-// collection named after a system resource would seed the same permission rows
-// that resource's routes check (a `settings` collection reaches the user-fields
-// and component admin surfaces, a `media` collection the media routes), so it is
-// rejected here — at config validation, before any migration or table is built.
-// The names are NOT in the shared base list, because that list also feeds the
-// component validator and a component does not seed a permission under its slug.
-const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
-  ...RESERVED_SLUGS,
-  ...SYSTEM_RESOURCES,
-]);
+// The slug rules themselves live in ./collection-slug-rules, because the
+// onboarding checklist asks the same question about a slug that does not exist
+// yet and must not carry a second copy of the answer.
 
 // System columns injected onto a collection table, under both the snake_case
 // name and the camelCase alias that snake-cases to the same column. A code-first
@@ -694,12 +682,7 @@ export function validateCollectionConfig(
   const errors: ValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
-  validateSlugShared(config.slug, errsBase, {
-    entityLabel: "Collection",
-    reservedSlugsSet: RESERVED_SLUGS_SET,
-    reservedSlugNotes: NEWLY_RESERVED_SLUG_NOTES,
-    sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
-  });
+  validateSlugShared(config.slug, errsBase, COLLECTION_SLUG_RULES);
 
   validateFields(
     config.fields,

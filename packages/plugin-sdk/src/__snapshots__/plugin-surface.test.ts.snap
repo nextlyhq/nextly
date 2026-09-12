@@ -306,6 +306,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "RegisteredEmailProvider (type)",
   "RequestContext (type)",
   "ResolvedDraftSplitCollection (type)",
+  "ResolverOptions (type)",
   "RouteMethod (type)",
   "ScheduledTask (type)",
   "Secret (value)",

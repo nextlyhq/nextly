@@ -67,8 +67,9 @@ export interface ConditionProbe {
    * Two halves: may they DEFINE one (the grant
    * `auth/collection-definition-policy` names, which the schema route and the
    * dispatcher both enforce), and would they be able to READ the result. The
-   * second is what makes the step finishable -- a new collection's permissions
-   * are seeded to `super_admin` alone.
+   * second is what makes the step finishable, and it is not implied by the
+   * first -- `auth/new-entity-access-policy` names the roles and grants that
+   * reach a new collection.
    */
   mayCreateCollection(): Promise<boolean>;
 }
@@ -88,10 +89,9 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   const mayCreateCollection = (): Promise<boolean> => {
     // 🔴 May create AND would be able to READ what they created. Both halves,
     // because the step completes when this reader can read a collection, and
-    // `seedPermissionsForCollection` assigns a new collection's CRUD
-    // permissions to `super_admin` alone. A caller holding the definition
-    // grant and nothing else creates the collection, gains no `read-<slug>`
-    // for it, and finds the step still outstanding -- permanently, which is
+    // creating one does not grant its creator anything: a caller holding the
+    // definition grant and nothing else creates the collection, gains no
+    // `read-<slug>` for it, and finds the step still outstanding -- which is
     // the defect this predicate exists to prevent, moved one action later.
     //
     // The readability half is DERIVED from the seeding policy rather than
@@ -139,7 +139,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       // resolving that list twice is the duplication this module removes.
       // 🔴 NOT composed with `mayCreateCollection`. Being able to create a
       // collection is not being able to write a row in it: seeding a new
-      // collection's CRUD permissions assigns them to `super_admin` alone
+      // collection's CRUD permissions assigns them to the super-admin role
       // (`seedPermissionsForCollection`), so a caller holding the definition
       // grant and nothing else does not acquire `create-<new-slug>` -- and may
       // not even be able to READ the collection they just made. Offering the

@@ -574,6 +574,7 @@ export {
   callerReadOptions,
   type WidgetSourceResolver,
   type PluginSourceResolver,
+  type ResolverOptions,
   type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";

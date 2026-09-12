@@ -304,6 +304,28 @@ describe("onboarding steps against a real instance", () => {
     expect((await stepsFor(stampedToRead)).collection).toBe(false);
   });
 
+  it("withholds it from a KEY whose read grant names nothing it could create", async () => {
+    // 🔴 The read decision admits a key on an EXACT `read-<slug>` match, so a
+    // grant only makes this step finishable if a collection can be created
+    // under that same name. `settings` is a system resource and a collection
+    // may not take its name, so this key would create something it still could
+    // not read -- and any `read-` prefix test offers it the step anyway.
+    await createTestNextly({ collections: [] }).then(t => {
+      current = t;
+      return refreshCollectionSources();
+    });
+
+    const stampedToReadSettings: ReadCaller = {
+      user: { id: "key-3", roles: [] },
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions: ["manage-settings", "read-settings"],
+      },
+    };
+
+    expect((await stepsFor(stampedToReadSettings)).collection).toBeUndefined();
+  });
+
   it("DOES offer it to a super admin, who would read what they create", async () => {
     // The must-differ half, and without it "offered to nobody" satisfies the
     // case above. The instance's FIRST user is its super admin, so this is the

@@ -39,10 +39,15 @@ import type { PluginContext, PluginDefinition } from "../plugin-context";
  * surface is handed the context for the same reason -- `jobs.handler(ctx)`,
  * `services[name](ctx)` -- and this one was the exception by oversight.
  *
- * It is the LAST argument rather than the first because the first two are the
- * question and who is asking, which is what a resolver is about; the context is
- * how it goes and looks. That also leaves a resolver needing no data free to
- * ignore it.
+ * It comes AFTER the question and who is asking rather than before them,
+ * because those two are what a resolver is about; the context is how it goes
+ * and looks. That also leaves a resolver needing no data free to ignore it.
+ *
+ * `opts` follows the context and carries what the HOST offers -- the
+ * cancellation signal today -- so the two resolver kinds stay in step: core's
+ * options sit in the same bag, and a concern added later becomes a field there
+ * rather than a fourth position that means one thing to a plugin and another to
+ * core. See `ResolverOptions` in `domains/widgets/resolved-sources`.
  *
  * What it is NOT handed is a request, headers, or anything fetch-capable of its
  * own. The context is the same one the plugin's `init` receives, bounded by
@@ -52,7 +57,8 @@ import type { PluginContext, PluginDefinition } from "../plugin-context";
 export type PluginSourceResolver = (
   query: Parameters<SourceResolver>[0],
   caller: Parameters<SourceResolver>[1],
-  ctx: PluginContext
+  ctx: PluginContext,
+  opts?: Parameters<SourceResolver>[2]
 ) => ReturnType<SourceResolver>;
 
 /**
