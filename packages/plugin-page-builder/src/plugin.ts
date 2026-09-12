@@ -43,6 +43,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { registerComponentCycleGuard } from "./component-cycle-guard";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
@@ -498,6 +499,27 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         componentsCollection:
           ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
         layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+      });
+
+      // Refuse a component write that closes a reference cycle. Registered
+      // beside the delete guard because both refuse a write over the component
+      // graph, and separately because they ask different questions of it: that
+      // one is about what still USES a component, this one about what the
+      // component itself would end up using.
+      registerComponentCycleGuard({
+        ctx,
+        // The collection components actually live in, resolved the way the
+        // readiness notice resolves it: a configured store is named literally,
+        // and the plugin's own collection follows the host's rename.
+        componentsCollection:
+          componentStoreOf(opts).collection ??
+          ctx.self.collections[COMPONENTS_SLUG] ??
+          COMPONENTS_SLUG,
+        documentField: componentStoreOf(opts).field,
+        // The SAME bounds the renderer draws under. Read under different ones,
+        // the walk would follow references inside a document the page never
+        // renders, or stop short of ones it does.
+        limits: opts.limits ?? DEFAULT_LIMITS,
       });
 
       registerClassUsageMaintenance({
