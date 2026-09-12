@@ -15,8 +15,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../config";
-import { definePlugin } from "../plugin-context";
+import { definePlugin, type PluginContext } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
+import type { AuthUserId } from "../../types/auth";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -24,11 +25,17 @@ afterEach(async () => {
   current = undefined;
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Services = any;
+/**
+ * The real context type, not a loose one: the point of an end-to-end suite over
+ * this surface is that the PUBLISHED signature carries the method. Typed `any`,
+ * every call here would compile whether or not `PluginCollectionService`
+ * declares `updateMany`, and the suite would stay green while the surface it
+ * exists to pin disappeared.
+ */
+type Services = PluginContext["services"];
 
 async function boot(): Promise<{ services: Services; handle: TestNextly }> {
-  let services: Services;
+  let services: Services | undefined;
   const probe = definePlugin({
     name: "@test/update-many",
     version: "1.0.0",
@@ -46,7 +53,8 @@ async function boot(): Promise<{ services: Services; handle: TestNextly }> {
     ],
     plugins: [probe],
   });
-  return { services: services!, handle: current };
+  if (!services) throw new Error("the plugin's init never ran");
+  return { services, handle: current };
 }
 
 async function seed(handle: TestNextly, titles: string[]): Promise<string[]> {
@@ -135,7 +143,10 @@ describe("ctx.services.collections.updateMany", () => {
     const result = await services.collections.updateMany(
       "widgets",
       [{ id: a, data: { kind: "published" } }],
-      { as: "user", user: { id: "nobody", email: "nobody@x.test", roles: [] } }
+      {
+        as: "user",
+        user: { id: "nobody" as AuthUserId, email: "nobody@x.test" },
+      }
     );
 
     // Not elevated: the collection gate judges an unprivileged caller, so the

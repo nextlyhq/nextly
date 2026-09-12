@@ -2,7 +2,7 @@
   "coverage": {
     "pages": 51,
     "samples": 347,
-    "compiled": 210
+    "compiled": 211
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -187,7 +187,7 @@
     },
     "docs/plugins/services.mdx": {
       "samples": 7,
-      "compiled": 0
+      "compiled": 1
     },
     "docs/plugins/testing.mdx": {
       "samples": 1,
@@ -220,7 +220,8 @@
     "docs/plugins/distribution.mdx": 1,
     "docs/plugins/lifecycle.mdx": 2,
     "docs/database/mysql.mdx": 3,
-    "docs/guides/isr-caching.mdx": 1
+    "docs/guides/isr-caching.mdx": 1,
+    "docs/plugins/services.mdx": 4
   },
   "findings": {
     "docs/getting-started/quick-start.mdx": {
@@ -279,6 +280,12 @@
     "docs/guides/isr-caching.mdx": {
       "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/plugins/services.mdx": {
+      "#5 error TS2304: Cannot find name 'ctx'.": 2,
+      "#5 error TS2304: Cannot find name 'slug'.": 2,
+      "context #4 error TS2304: Cannot find name 'ctx'.": 1,
+      "context #4 error TS2304: Cannot find name 'slug'.": 1
     },
     "docs/api-reference/direct-api.mdx": {
       "suppressed #36 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
