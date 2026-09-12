@@ -40,6 +40,7 @@ import {
   listEffectivePermissions,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
+import { addressableFields } from "../addressable-fields";
 
 import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
@@ -220,14 +221,46 @@ function extractFieldFunctions(
   return hasAny ? out : undefined;
 }
 
+/**
+ * An unnamed GROUP is layout: its children are stored at the level the group
+ * sits in, which is the level this map is keyed by. An unnamed REPEATER is not:
+ * its children are stored PER ROW, so flattening them here would file a row's
+ * field under the parent's name and hand its rules the wrong object.
+ *
+ * The same distinction `collection-sources` draws, and it has to be made DURING
+ * the walk: the walk emits the children themselves, so by the time a predicate
+ * could read the result, a field reached through an unnamed repeater is
+ * indistinguishable from one reached through an unnamed group.
+ */
+function storedAtThisLevel(container: { type?: unknown }): boolean {
+  return container.type === "group";
+}
+
+/**
+ * The function-bearing fields at one level, keyed by name.
+ *
+ * Flattened through the shared `addressableFields` walk rather than a loop over
+ * the array, because an unnamed presentational container stores its children at
+ * the level it sits in. A loop over named entries drops every rule declared
+ * inside one: not just a `defaultValue`, but the `access` rule deciding whether
+ * a caller may read or write that field, and the hooks that shape it. The data
+ * side already flattens these containers, so the two now agree.
+ *
+ * `defineCollection` refuses a field with no name, so the documented code-first
+ * path cannot build this shape. A plugin contributing raw config can:
+ * `assertPluginFieldDeclarations` checks each field's TYPE and not its name, so
+ * an unnamed `group` reaches the live config and this map. Silently dropping
+ * the access rules inside it is the failure worth spending a walk to avoid.
+ */
 function collectFieldFunctions(
   fields: unknown[]
 ): Record<string, FieldFunctions> | undefined {
   const map: Record<string, FieldFunctions> = {};
   let hasAny = false;
-  for (const raw of fields) {
-    if (raw === null || typeof raw !== "object") continue;
-    const field = raw as Record<string, unknown>;
+  for (const raw of addressableFields(fields, {
+    descendInto: storedAtThisLevel,
+  })) {
+    const field = raw as unknown as Record<string, unknown>;
     if (typeof field.name !== "string" || !field.name) continue;
     const fns = extractFieldFunctions(field);
     if (fns) {
@@ -253,6 +286,27 @@ export function registerFieldFunctions(
   } else {
     store().delete(key(kind, slug));
   }
+}
+
+/**
+ * The whole registry as it stands, and the means to put it back.
+ *
+ * A config reload re-reads the live config and re-registers from it, which has
+ * to happen before the reload knows it will land: the same optimistic terms the
+ * field-type registry and the config's hooks are applied on. A reload that is
+ * then abandoned must leave the retained config's functions in force, or an
+ * access rule, hook or default from a config that never took effect would be
+ * the one deciding writes.
+ */
+export function snapshotFieldFunctions(): Store {
+  return new Map(store());
+}
+
+/** Put a {@link snapshotFieldFunctions} result back, discarding what is there. */
+export function restoreFieldFunctions(snapshot: Store): void {
+  const current = store();
+  current.clear();
+  for (const [k, v] of snapshot) current.set(k, v);
 }
 
 export function getFieldFunctions(
@@ -432,6 +486,13 @@ export async function applyFieldWriteAccess(opts: {
   authenticatedScope?: AuthenticatedScope;
   overrideAccess?: boolean;
   id?: string;
+  /**
+   * A resolver shared with another pass over the same write, so the caller's
+   * roles and permissions are read once and both passes judge with one
+   * authority. Build it with {@link writeAccessGrants}. Omitted, this pass
+   * builds its own, which is right for a write judged only once.
+   */
+  grants?: () => Promise<CallerGrants>;
 }): Promise<void> {
   // Bypass for a caller that has SAID it is trusted, and only that. The read
   // side gates on the same single condition, and the two must agree: a rule
@@ -458,10 +519,12 @@ export async function applyFieldWriteAccess(opts: {
     // answers `{ permissions: [], roles: [] }` — so a rule written as
     // `({ permissions }) => permissions.includes(...)` refuses it, which is
     // the correct answer rather than an accident of the shape.
-    grants: grantsResolver(
-      typeof opts.user?.id === "string" ? opts.user.id : undefined,
-      opts.authenticatedScope
-    ),
+    grants:
+      opts.grants ??
+      grantsResolver(
+        typeof opts.user?.id === "string" ? opts.user.id : undefined,
+        opts.authenticatedScope
+      ),
   });
 }
 
@@ -672,6 +735,21 @@ async function applyReadAccessRec(
  * use, like the resolver each pass would otherwise build for itself.
  */
 export function readAccessGrants(
+  user: Record<string, unknown> | undefined,
+  authenticatedScope?: AuthenticatedScope
+): () => Promise<CallerGrants> {
+  return grantsResolver(
+    typeof user?.id === "string" ? user.id : undefined,
+    authenticatedScope
+  );
+}
+
+/**
+ * The caller's grants resolver for a write, to hand to every field-access pass
+ * over one record so roles and permissions are read once. The counterpart to
+ * {@link readAccessGrants}, for the write path's two passes.
+ */
+export function writeAccessGrants(
   user: Record<string, unknown> | undefined,
   authenticatedScope?: AuthenticatedScope
 ): () => Promise<CallerGrants> {

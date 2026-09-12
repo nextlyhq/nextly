@@ -1025,9 +1025,12 @@ Static value or `(data) => value` function. The function form receives the docum
 Both forms are applied on the server, so a default holds for every write
 path that applies defaults, not only for the admin form. On an ordinary
 collection create through the REST or Direct API, an omitted field takes its
-default before any hook runs, at every depth: a group's children, each
-supplied repeater row's children, and the children of each new field-group
-instance. A function default is read from the live config, since a
+default before any hook runs, at every depth: a group's children and each
+supplied repeater row's children. A new field-group instance also fills its own
+children's defaults, but LATER: a field group's rows are written in their own
+pass after the entry's hooks have run, so the parent's hooks see such a child as
+absent and cannot read or derive from the value that will be stored. A function
+default is read from the live config, since a
 collection's stored definition cannot hold a function, and it receives the
 data built so far at its own level: the document for a top-level field, the
 group or the row for a nested one. Rows are never invented; `minRows` is a

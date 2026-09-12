@@ -424,6 +424,38 @@ function hasFieldName<T extends { name?: string }>(
 }
 
 /**
+ * Whether a filled container is missing a child its own declaration requires.
+ *
+ * Only asked of a container the default fill created, so "missing" means no
+ * default reached it and no caller supplied it. A required child inside a
+ * nested container counts as well: an incomplete group two levels down is
+ * still a document the write path would refuse.
+ */
+function missesARequiredChild(
+  fields: readonly ValidatableField[] | undefined,
+  filled: unknown
+): boolean {
+  if (!fields) return false;
+  if (Array.isArray(filled)) {
+    return filled.some(row => missesARequiredChild(fields, row));
+  }
+  if (!isPlainRecord(filled)) return false;
+  for (const child of fields) {
+    if (!child.name) {
+      // A layout container holds no value; its children are on this object.
+      if (missesARequiredChild(child.fields, filled)) return true;
+      continue;
+    }
+    const value = filled[child.name];
+    if (child.required && (value === undefined || value === null)) return true;
+    if (value !== undefined && missesARequiredChild(child.fields, value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * A record the nested walk can read children off: an array is a repeater's
  * rows and is walked as rows, and a primitive holds no children at all.
  */
@@ -1581,6 +1613,22 @@ export class SingleQueryService extends BaseService {
       applyFieldDefaults(logicalDefaults, [source]);
       const after = logicalDefaults[field.name];
       if (after === before) return;
+      // A group the fill INVENTED has to be complete to be stored. This insert
+      // is direct and runs no validation pass, so a group created for the sake
+      // of one defaulted child, while a required sibling has no default and no
+      // value, would persist a document that the next create or update refuses.
+      // Left absent instead, which is where it stood before anything was
+      // filled, rather than stored knowing it is invalid.
+      if (
+        before === undefined &&
+        missesARequiredChild(
+          (source as { fields?: readonly ValidatableField[] }).fields,
+          after
+        )
+      ) {
+        delete logicalDefaults[field.name];
+        return;
+      }
       await assertNestedDefaultsValid(
         (source as { fields?: readonly ValidatableField[] }).fields,
         after,

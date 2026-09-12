@@ -83,6 +83,7 @@ import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
+  writeAccessGrants,
   attachFieldValidators,
   getFieldFunctions,
   runFieldHooks,
@@ -2903,6 +2904,37 @@ export class CollectionMutationService extends BaseService {
       // of write access matches generation, so a field the caller may not
       // create is not reintroduced.
       const seededBody: Record<string, unknown> = { ...body };
+      // One resolver for both write-access passes over this record, so the
+      // caller's roles and permissions are read once and both judge with one
+      // authority.
+      const writeGrants = writeAccessGrants(
+        params.user,
+        params.authenticatedScope
+      );
+      // Field write access runs HERE as well as below, the two passes the read
+      // path runs around its hooks and for the same reason.
+      //
+      // A function default receives the data built so far. Judged only after
+      // the defaults, a field this caller may not create would still be sitting
+      // in the record while those functions ran, so a default could read the
+      // forbidden value and carry it into a field the caller IS allowed to
+      // write. The denied field was stripped and its value persisted anyway,
+      // one column across. Stripping first means the functions see what this
+      // caller was actually allowed to send.
+      //
+      // The second pass below is not redundant: the hooks in between may put a
+      // denied key back, and that pass judges the key by its own rule on the
+      // value the hook wrote.
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: seededBody,
+        operation: "create",
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        overrideAccess: params.overrideAccess,
+        grants: writeGrants,
+      });
       // The stored fields carry constant defaults; a function default exists
       // only in the live config, which the registry captured at boot.
       applyFieldDefaults(
@@ -2995,7 +3027,9 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "create",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
+        grants: writeGrants,
       });
 
       // Field-level beforeValidate hooks transform values ahead of the

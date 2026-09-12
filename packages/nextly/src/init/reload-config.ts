@@ -1549,6 +1549,43 @@ async function applyReload(opts?: {
       singles: newConfig?.singles,
       fieldGroups: newConfig?.fieldGroups,
     });
+
+    // The field-level registry holds the function-bearing half of the live
+    // config: a field's `access` rules, its hooks, its `validate`, and a
+    // `defaultValue` written as a function. None of it survives being stored,
+    // so it is captured from the config object at boot and read from here on
+    // every write and every read.
+    //
+    // A reload never goes back through `registerServices`, so that capture was
+    // never refreshed. An edit to any of it kept running the version from
+    // process start until the dev server was restarted, which is wrong in the
+    // direction that matters most for an access rule: a rule TIGHTENED in the
+    // config was not the one being enforced.
+    //
+    // Applied on the same optimistic terms as the field types above, and put
+    // back by the same undo, so a reload that is abandoned leaves the retained
+    // config's functions in force.
+    const {
+      registerFieldFunctions,
+      snapshotFieldFunctions,
+      restoreFieldFunctions,
+    } = await import("../shared/lib/field-level-registry");
+    const previousFieldFunctions = snapshotFieldFunctions();
+    reloadUndo.push(() => restoreFieldFunctions(previousFieldFunctions));
+    for (const collection of newConfig?.collections ?? []) {
+      const slug = (collection as { slug?: string }).slug;
+      const fields = (collection as { fields?: unknown[] }).fields;
+      if (slug && Array.isArray(fields)) {
+        registerFieldFunctions("collection", slug, fields);
+      }
+    }
+    for (const single of newConfig?.singles ?? []) {
+      const slug = (single as { slug?: string }).slug;
+      const fields = (single as { fields?: unknown[] }).fields;
+      if (slug && Array.isArray(fields)) {
+        registerFieldFunctions("single", slug, fields);
+      }
+    }
   } catch (err) {
     // The registry was rebuilt from the config that just failed; put the
     // working set back so the retained config keeps the behavior it was
