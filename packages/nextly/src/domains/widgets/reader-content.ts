@@ -27,7 +27,11 @@
  * @module domains/widgets/reader-content
  */
 
-import { readAccessCaller } from "../../auth/entity-read-access";
+import {
+  authorizationGroups,
+  callerHoldsPermission,
+  readAccessCaller,
+} from "../../auth/entity-read-access";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
@@ -90,6 +94,45 @@ export async function readableSingleSlugs(
   return (
     (await readableSlugAllowlist(readAccessCaller(caller), "single")) ?? []
   );
+}
+
+/**
+ * Whether this reader could create an entry in ANY collection they can read.
+ *
+ * Answers the grants ALONE: `false` means this reader holds `create-<slug>` on
+ * none of the collections named. An empty `readable` is therefore `false` too,
+ * and that is not the same statement as "cannot write a first entry" -- with
+ * nothing in reach there was no grant to find. The caller composes that case
+ * (see `ConditionProbe.mayCreateEntry`, which asks whether they could make a
+ * collection instead); answering it here would make this function two questions
+ * wearing one name.
+ *
+ * Decided through {@link callerHoldsPermission}, the same door `requirePermission`
+ * uses, so the answer agrees with what the create itself would say. Deriving it
+ * from the stored grant rows instead would disagree in both directions, exactly
+ * as {@link readableEntities} documents for reads.
+ *
+ * Short-circuits on the first grant, and walks in {@link authorizationGroups}
+ * order otherwise: one decision, then bounded groups, so a cold per-user cache
+ * is populated once rather than missed by every member of the first fan-out.
+ */
+export async function readerMayCreateEntry(
+  caller: ReadCaller,
+  readable: readonly string[]
+): Promise<boolean> {
+  const access = readAccessCaller(caller);
+  for (const group of authorizationGroups(readable)) {
+    // `allSettled`, as the read decision beside it: a lookup that threw has
+    // told us nothing, and nothing must not read as a grant. The slug counts
+    // as refused and the rest of the set still answers.
+    const settled = await Promise.allSettled(
+      group.map(slug => callerHoldsPermission(`create-${slug}`, access))
+    );
+    if (settled.some(result => result.status === "fulfilled" && result.value)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
