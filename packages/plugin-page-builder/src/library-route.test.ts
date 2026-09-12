@@ -77,16 +77,17 @@ function contextOver(
  * service, rather than a walk that quietly changed.
  */
 function pageOf(data: unknown[], hasMore: boolean): CollectionPage {
-  const last = data[data.length - 1];
-  const id =
-    typeof last === "object" && last !== null
-      ? (last as { id?: unknown }).id
-      : undefined;
-  return {
-    data,
-    hasMore,
-    ...(typeof id === "string" && id !== "" ? { next: id } : {}),
-  };
+  // Scanned BACKWARD, as production does. Inspecting only the final row makes
+  // the stub fall back to the offset where production would carry a cursor, so
+  // a page ending in an unreadable row exercises a different path here than the
+  // one that runs — and the pagination cases would pass about the wrong walk.
+  for (let i = data.length - 1; i >= 0; i -= 1) {
+    const row = data[i];
+    if (typeof row !== "object" || row === null) continue;
+    const id = (row as { id?: unknown }).id;
+    if (typeof id === "string" && id !== "") return { data, hasMore, next: id };
+  }
+  return { data, hasMore };
 }
 
 /**
@@ -267,6 +268,34 @@ describe("how much of the library travels", () => {
     expect(patternReads(listEntries)).toBe(2);
     expect(library.items).toHaveLength(LIBRARY_PAGE_SIZE + 1);
     expect(library.meta.truncated).toBe(false);
+  });
+
+  it("takes its cursor from the greatest readable id on a page, not the last row", async () => {
+    /*
+     * Exercised HERE rather than on the component tier, because this is where
+     * the route's own `page()` runs: the component tier's listing is injected
+     * and a stub supplies the cursor, so a test there asserts the stub.
+     *
+     * A page can end in a row this reader cannot name — `readLibraryRow` skips
+     * those anyway. Taking the cursor from the final row would find none, and
+     * the walk would fall back to stepping by offset across a collection other
+     * authors are editing, which is the instability the cursor removes.
+     */
+    const { ctx, listEntries } = contextOver([
+      [row("a"), { title: "no id at all" }],
+      [row("b")],
+    ]);
+
+    const library = await readPatternLibrary(ctx);
+
+    // The second read asks for the rows AFTER the readable one, with the
+    // offset reset — not for page two of an offset walk.
+    const second = listEntries.mock.calls[1]?.[1] as
+      | { where?: unknown; pagination?: { page?: number } }
+      | undefined;
+    expect(second?.where).toEqual({ id: { greater_than: "a" } });
+    expect(second?.pagination?.page).toBe(1);
+    expect(library.items.map(p => p.id)).toEqual(["a", "b"]);
   });
 
   it("pages on what the SERVICE says, not on how many rows it could read", async () => {
@@ -789,6 +818,29 @@ describe("the component tier", () => {
     expect(library.meta.truncated).toBe(false);
   });
 
+  it("omits a component whose by-id row carries an id that is not a usable one", async () => {
+    /*
+     * A row with NO `id` key is the redaction case, and it is keyed by the
+     * listing. A row that HAS the key carrying `null`, a number or an empty
+     * string is a different thing: it answered with an identity, and that
+     * identity is not the one asked for. Read as "carries no id" its content
+     * would be served under the listing's name.
+     */
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b"), componentRow("c")]],
+      byId: {
+        a: { id: null, title: "A", content: draft("x") },
+        b: { id: 7, title: "B", content: draft("y") },
+        c: { id: "", title: "C", content: draft("z") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items).toEqual([]);
+    expect(library.meta.truncated).toBe(true);
+  });
+
   it("omits a component whose by-id row names a DIFFERENT id, and says the tier was cut", async () => {
     /*
      * The complement of the rule above, and the reason it is not "trust the
@@ -862,6 +914,45 @@ describe("the component tier", () => {
 
     expect(library.items.map(c => c.id)).toEqual(["b"]);
     expect(library.meta.truncated).toBe(true);
+  });
+
+  it("pages from the greatest readable id, not the last row", async () => {
+    /*
+     * A page can end in a row whose id this caller cannot read — those rows are
+     * skipped by the completion anyway. Taking the cursor from the final row
+     * would find none, and the walk would fall back to stepping by offset
+     * across a collection other authors are editing, which is the instability
+     * the cursor exists to remove. Reading them once more costs nothing;
+     * losing the position costs a definition.
+     */
+    const list = vi.fn((_slug: string, at: ListPosition) => {
+      if (at.after === undefined) {
+        return Promise.resolve(
+          pageOf([componentRow("a"), { title: "no id at all" }], true)
+        );
+      }
+      return Promise.resolve(pageOf([componentRow("b")], false));
+    });
+    const ctx: ComponentLibraryContext = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      components: {
+        list,
+        read: (_slug: string, id: string) =>
+          Promise.resolve({ id, title: `Component ${id}`, content: draft(id) }),
+      },
+      store: DEFAULT_COMPONENT_STORE,
+    };
+
+    const library = await readComponentLibrary(ctx);
+
+    // The second page was asked for AFTER the readable row, with the offset
+    // reset — not as page two of an offset walk.
+    expect(list.mock.calls.map(call => call[1])).toEqual([
+      { page: 1 },
+      { after: "a", page: 1 },
+    ]);
+    expect(library.items.map(c => c.id)).toEqual(["a", "b"]);
   });
 
   it("loses no component when a row is removed from the listing between pages", async () => {

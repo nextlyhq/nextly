@@ -697,16 +697,23 @@ function labelFor(title: unknown, id: string): string {
 /**
  * Whether a by-id row is the row that was asked for.
  *
- * A row carrying NO id is: field-level access drops it in presentation, which
- * is why the id comes from the listing at all. A row carrying a DIFFERENT one
- * is not — a `beforeOperation` hook can redirect the read, so the record
- * answering for one component may be another's, and taking the listing's id
- * would serve one component's draft under the other's name with nothing
- * anywhere saying so.
+ * A row with NO `id` KEY is: field-level access drops it in presentation, which
+ * is why the id comes from the listing at all.
+ *
+ * A row that HAS the key answers with an identity, and the only identity that
+ * satisfies this is the one asked for. That covers a `beforeOperation` hook
+ * redirecting the read — the record answering for one component may be
+ * another's, and taking the listing's id would serve one component's draft
+ * under the other's name — and it covers a key present but unusable, a `null`,
+ * a number, an empty string. Those are not "no id"; they are an answer, and not
+ * this one. Read as absence their content would travel under a name they never
+ * claimed.
  */
 function answersFor(record: Record<string, unknown>, id: string): boolean {
-  const own = record.id;
-  return typeof own !== "string" || own === "" || own === id;
+  // `hasOwn` rather than a truthiness test, because "the key is not there" and
+  // "the key holds nothing usable" are the two cases being told apart.
+  if (!Object.hasOwn(record, "id")) return true;
+  return record.id === id;
 }
 
 /**
