@@ -71,12 +71,13 @@ export interface NewEntityAccessCaller {
  * `assignNewPermissionsToSuperAdmin` runs AS the collection is created and
  * assigns its permissions to {@link NEW_ENTITY_PERMISSION_ROLE} alone.
  *
- * `seedRolePresets` runs at every boot and re-resolves each preset's predicate
- * against the permission list as it then stands, so a preset whose rule covers
- * the new collection picks its permissions up on the next start. `admin` is
- * such a preset -- its rule is "everything except escalation", and a content
- * collection is not an escalation resource -- so an admin who is not a super
- * admin does reach the collection they created, one restart later.
+ * `seedPermissionsAndRolePresets` runs at every boot -- on BOTH boot paths, which
+ * is what makes this route real rather than conditional -- and re-resolves each
+ * preset's predicate against the permission list as it then stands, so a preset
+ * whose rule covers the new collection picks its permissions up on the next
+ * start. `admin` is such a preset -- its rule is "everything except escalation",
+ * and a content collection is not an escalation resource -- so an admin who is
+ * not a super admin does reach the collection they created, one restart later.
  *
  * That delay is why the checklist offers the step rather than hiding it: the
  * step is finishable for them, and a step withheld from someone who can take it

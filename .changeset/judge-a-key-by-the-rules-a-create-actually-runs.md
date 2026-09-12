@@ -41,3 +41,11 @@ step no create path would let it complete.
 The rule a create enforces on every path is now declared once, in
 `domains/collections/creatable-slug`, and the schema endpoint's own slug
 validation reads it from there rather than restating it.
+
+An app that cold boots only through `createDynamicHandlers` now seeds its preset
+roles as well as its permissions. That path re-seeded permissions on the first
+request but never re-resolved the presets, so an administrator who was not a
+super admin never received a new collection's grants there, however many times
+the app restarted. The two are now one boot operation that both paths call,
+which is the same fix this module already carries for plugin-declared
+permissions.
