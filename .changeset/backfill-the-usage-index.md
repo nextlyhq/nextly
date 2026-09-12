@@ -14,6 +14,7 @@
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
 "@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
 "@nextlyhq/plugin-page-builder": patch
 "@nextlyhq/plugin-seo": patch
 "@nextlyhq/plugin-sdk": patch
@@ -43,8 +44,16 @@ that make it owed are not things any handler sees.
 Each pass walks one (collection, field, locale, variant) — the smallest unit a
 rebuild can finish, so the largest one certain to make progress — stops at the
 runner's deadline, and defers the rest to a durable queue. A scope is recorded
-only after its walk resolves AND reports nothing unrepaired or undetermined, so
+only after its walk resolves AND brings every row it touched into agreement, so
 a partial rebuild is retried rather than marked done and never revisited.
+
+A document too large to read whole is the one exception, and it is recorded
+rather than retried. Exceeding a bound is deterministic — the same document
+exceeds it on every pass — so refusing would leave the scope outstanding for
+ever and make every drain rescan the collection. Such a document leaves an
+`unreadable` marker instead, written before the scope is recorded, and that
+marker keeps health from calling any count exact until a later save or a change
+of traversal limits makes the document readable again.
 
 It pages by KEYSET rather than by offset. Deleting a document the walk has
 already passed shifts everything behind it back, so an offset walk skips the row
