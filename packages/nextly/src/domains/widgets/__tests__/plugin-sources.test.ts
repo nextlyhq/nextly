@@ -95,7 +95,29 @@ describe("a plugin's widget source", () => {
     });
     await executeWidgetQuery(query, caller);
 
-    expect(resolve).toHaveBeenCalledWith(query, caller);
+    expect(resolve).toHaveBeenCalledWith(query, caller, undefined);
+  });
+
+  it("hands the resolver the host's options, so a signal reaches it", async () => {
+    // 🔴 The chain the endpoint's per-slot budget depends on. It creates the
+    // signal and aborts it when the budget expires, but that only cancels
+    // anything if the signal travels the whole way to the plugin's function --
+    // and every link between them is a separate forward that could drop it.
+    const resolve = vi
+      .fn()
+      .mockResolvedValue({ op: "count" as const, total: 3 });
+    registerResolvedSource(revenueSource, resolve);
+
+    const controller = new AbortController();
+    const query = validateWidgetQuery({
+      source: revenueSource.id,
+      op: "count",
+    });
+    await executeWidgetQuery(query, caller, { signal: controller.signal });
+
+    expect(resolve).toHaveBeenCalledWith(query, caller, {
+      signal: controller.signal,
+    });
   });
 
   it("refuses a query naming a field the source never declared", async () => {

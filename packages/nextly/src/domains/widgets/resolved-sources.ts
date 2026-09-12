@@ -76,6 +76,38 @@ import type { WidgetResult } from "./result";
 import { registerSource, type WidgetSource } from "./sources";
 
 /**
+ * What the host passes a resolver BESIDE the question it is answering.
+ *
+ * An options object rather than further positional parameters, and the shape is
+ * the decision rather than a detail. A resolver already takes its query, its
+ * caller and -- for a plugin -- its context, and `PluginSourceResolver` derives
+ * its own parameters from this type; adding each new concern as another
+ * argument makes the two resolver kinds disagree about which position means
+ * what. Everything the host may hand over in future arrives in here instead,
+ * where adding a field breaks nobody.
+ *
+ * Optional as a whole, so a resolver that ignores it -- most will -- is written
+ * exactly as before.
+ */
+export interface ResolverOptions {
+  /**
+   * Aborted when the host has stopped waiting for this answer.
+   *
+   * 🔴 Cooperative, and it cannot be anything else. A promise has no
+   * cancellation, so the per-slot budget in `api/widget-query` can only stop
+   * WAITING for a resolver -- the work goes on running, holding its connection
+   * and its memory, and further requests start more of it. This signal is how a
+   * resolver is told that its answer is no longer wanted, and a resolver that
+   * reaches the network should pass it to whatever it calls: `fetch` takes one
+   * directly, and most database clients accept one or expose a cancel.
+   *
+   * A resolver that ignores it is not broken, merely uninterruptible -- which is
+   * the state every resolver was in before this existed.
+   */
+  signal?: AbortSignal;
+}
+
+/**
  * Answers one source's query, for one caller.
  *
  * Returns the same `WidgetResult` a collection query does, so the archetypes
@@ -83,7 +115,8 @@ import { registerSource, type WidgetSource } from "./sources";
  */
 export type SourceResolver = (
   query: WidgetQuery,
-  caller: ReadCaller
+  caller: ReadCaller,
+  opts?: ResolverOptions
 ) => Promise<WidgetResult>;
 
 /**

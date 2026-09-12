@@ -30,6 +30,7 @@ import {
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
+import type { ResolverOptions } from "../resolved-sources";
 import { getSource } from "../sources";
 
 const NOTES = "notes";
@@ -40,7 +41,11 @@ const admin: ReadCaller = { user: { id: "admin-1", roles: ["admin"] } };
 
 let current: TestNextly | undefined;
 /** What the resolver was handed, captured so the assertions can read it. */
-let handed: { ctx?: PluginContext; caller?: ReadCaller } = {};
+let handed: {
+  ctx?: PluginContext;
+  caller?: ReadCaller;
+  opts?: ResolverOptions;
+} = {};
 
 afterEach(async () => {
   await current?.destroy();
@@ -73,9 +78,10 @@ function acmePlugin(): unknown {
           resolve: async (
             _query: unknown,
             caller: ReadCaller,
-            ctx: PluginContext
+            ctx: PluginContext,
+            opts?: ResolverOptions
           ) => {
-            handed = { ctx, caller };
+            handed = { ctx, caller, opts };
             const services = ctx.services as unknown as {
               collections: {
                 count: (
@@ -153,8 +159,8 @@ describe("a plugin's widget source, booted", () => {
     );
 
     // 🔴 The number is the evidence. It could not have been produced without a
-    // context that reaches the collection service, so this fails outright on
-    // the two-argument resolver the contract shipped with.
+    // context that reaches the collection service, so this fails outright for a
+    // resolver that never received a usable one.
     expect(result).toEqual({ op: "count", total: 2 });
   });
 
@@ -173,6 +179,26 @@ describe("a plugin's widget source, booted", () => {
     // entities while believing they were its own.
     expect((handed.ctx as unknown as { self?: unknown }).self).toBeDefined();
     expect(handed.ctx?.services).toBeDefined();
+  });
+
+  it("carries the host's cancellation signal all the way to the plugin", async () => {
+    // 🔴 The boot binds each contributed resolver to ITS OWN plugin's context,
+    // and that binding is a hand-written forward -- it has to pass the host's
+    // options through as well. Dropped there, the endpoint would still create a
+    // signal and still abort it on timeout, and no plugin would ever see one:
+    // every unit below this level would keep passing while cancellation did
+    // nothing in the only place it was built for.
+    const t = await boot([acmePlugin()]);
+    await write(t, "only");
+
+    const controller = new AbortController();
+    await executeWidgetQuery(
+      validateWidgetQuery({ source: SOURCE_ID, op: "count" }),
+      admin,
+      { signal: controller.signal }
+    );
+
+    expect(handed.opts?.signal).toBe(controller.signal);
   });
 
   it("publishes nothing for a DISABLED plugin", async () => {

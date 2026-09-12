@@ -187,7 +187,8 @@ describe("POST /api/dashboard/query", () => {
       expect.anything(),
       expect.objectContaining({
         user: expect.objectContaining({ id: "user-1" }),
-      })
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
   });
 
@@ -452,7 +453,8 @@ describe("POST /api/dashboard/query", () => {
       expect(slot.ok).toBe(true);
       expect(executeWidgetQuery).toHaveBeenCalledWith(
         expect.objectContaining({ source: "system:releases" }),
-        expect.anything()
+        expect.anything(),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
     });
 
@@ -577,7 +579,8 @@ describe("POST /api/dashboard/query", () => {
       expect(slot.ok).toBe(true);
       expect(executeWidgetQuery).toHaveBeenCalledWith(
         expect.objectContaining({ source: "single:settings" }),
-        expect.anything()
+        expect.anything(),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
     });
 
@@ -1034,6 +1037,66 @@ describe("a slot that never settles", () => {
     const slots = await slotsOf(await pending);
 
     expect(slots[0].ok).toBe(true);
+  });
+
+  it("aborts the signal it handed the resolver when the budget expires", async () => {
+    // 🔴 Giving up on the race does not stop the work: a promise has no
+    // cancellation, so a hung resolver kept its connection and its memory while
+    // the next request started up to thirty more. The signal is how it is told,
+    // and a resolver that passes it to `fetch` or a database client stops
+    // rather than merely stops being awaited.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    let handed: AbortSignal | undefined;
+    executeWidgetQuery.mockImplementation(
+      (
+        _query: unknown,
+        _caller: unknown,
+        opts?: { signal?: AbortSignal }
+      ): Promise<never> => {
+        handed = opts?.signal;
+        return new Promise<never>(() => {});
+      }
+    );
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+
+    // The must-differ half, and it has to be asserted INSIDE the budget: a
+    // signal aborted unconditionally would satisfy the check below on its own.
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(handed).toBeInstanceOf(AbortSignal);
+    expect(handed?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+
+    expect(handed?.aborted).toBe(true);
+  });
+
+  it("leaves the signal alone for a slot that answers in time", async () => {
+    // The abandoned work is what gets cancelled, never the work that finished.
+    // A resolver that returned inside the budget must not see its signal abort
+    // afterwards -- it may still be holding it open for its own cleanup.
+    vi.useFakeTimers();
+    registerHangingSource("system:slow");
+    let handed: AbortSignal | undefined;
+    executeWidgetQuery.mockImplementation(
+      (_query: unknown, _caller: unknown, opts?: { signal?: AbortSignal }) => {
+        handed = opts?.signal;
+        return Promise.resolve({ op: "count", total: 4 });
+      }
+    );
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [{ source: "system:slow", op: "count" }] })
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    const slots = await slotsOf(await pending);
+
+    expect(slots[0].ok).toBe(true);
+    expect(handed?.aborted).toBe(false);
   });
 });
 

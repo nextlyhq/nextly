@@ -117,17 +117,20 @@ export {
  * than one source ends up written.
  *
  * 🔴 TWO resolver types, and a plugin author wants the second.
- * `WidgetSourceResolver` is the two-argument shape core's own system sources
- * use. `PluginSourceResolver` is what `contributes.widgetSources` takes: the
- * same two plus the plugin's own `PluginContext`, which is how a resolver
- * reaches any data. Typing a contributed resolver as the former rejects the
- * `ctx` parameter it needs, so both are published and the names say which is
- * which.
+ * `WidgetSourceResolver` is the shape core's own system sources use: the query,
+ * the caller, and the host's `ResolverOptions`. `PluginSourceResolver` is what
+ * `contributes.widgetSources` takes: the same, with the plugin's own
+ * `PluginContext` between them, which is how a resolver reaches any data.
+ * Typing a contributed resolver as the former rejects the `ctx` parameter it
+ * needs, so both are published and the names say which is which.
  *
- * `ReadCaller` travels with them for the same reason: it is one of the
- * arguments, so without it the parameter has no name to annotate.
+ * `ReadCaller` and `ResolverOptions` travel with them for the same reason: they
+ * are the other arguments, so without them a parameter has no name to annotate.
  */
-export type { SourceResolver as WidgetSourceResolver } from "./resolved-sources";
+export type {
+  SourceResolver as WidgetSourceResolver,
+  ResolverOptions,
+} from "./resolved-sources";
 export type { PluginSourceResolver } from "../../plugins/widgets/collect-widget-sources";
 export type { ReadCaller } from "../../services/dashboard/readable-resources";
 export { callerReadOptions } from "./caller-read-options";

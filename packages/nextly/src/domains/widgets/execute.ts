@@ -27,6 +27,7 @@ import type { WhereFilter } from "../collections/query/query-operators";
 
 import { resolveExecutableSource } from "./executable-source";
 import type { WidgetQuery } from "./query";
+import type { ResolverOptions } from "./resolved-sources";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
   failUnavailableSourceOrOp,
@@ -377,7 +378,8 @@ function projectedTo(
 
 export async function executeWidgetQuery(
   query: WidgetQuery,
-  caller: ReadCaller
+  caller: ReadCaller,
+  opts?: ResolverOptions
 ): Promise<WidgetResult> {
   const executable = resolveExecutableSource(query.source);
 
@@ -396,7 +398,7 @@ export async function executeWidgetQuery(
     // widget chooses them. A resolver that uses one as a destination is
     // exploitable, which is why `resolved-sources` states that as the
     // contract's rule rather than implying the host removed the possibility.
-    return executable.resolve(query, caller);
+    return executable.resolve(query, caller, opts);
   }
 
   const source = executable.source;

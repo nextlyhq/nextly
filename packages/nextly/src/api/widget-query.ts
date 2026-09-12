@@ -369,27 +369,43 @@ async function warmReadDecisions(
 const SLOT_TIMEOUT_MS = 30_000;
 
 /**
- * Runs `work`, giving up on it after {@link SLOT_TIMEOUT_MS}.
+ * Starts `work` with a cancellation signal and gives up on it after
+ * {@link SLOT_TIMEOUT_MS}.
  *
  * 🔴 A race ABANDONS rather than cancels, and it cannot do otherwise: a
- * promise has no cancellation, so the work goes on running after this returns.
- * Two consequences are handled here rather than left to surprise someone.
+ * promise has no cancellation, so giving up on the race does not stop the work.
+ * Abandoned work keeps its connection, its memory and its database handle, and
+ * the endpoint's cap is on the queries ONE request may ask for -- so a resolver
+ * that hangs stays running while the next request starts up to thirty more.
  *
- * The abandoned promise may reject later, with nobody awaiting it -- an
- * unhandled rejection, which crashes the process under Node's default policy.
- * So a no-op handler is attached to the ORIGINAL promise, which marks it
- * handled without changing what the race sees.
+ * The signal is how that is bounded. It is handed to `work` when it starts and
+ * aborted the moment the budget expires, so a resolver that passes it on --
+ * `fetch` takes one directly -- stops rather than merely stops being awaited.
+ * Cooperative, necessarily: a resolver that ignores it is uninterruptible, as
+ * every resolver was before, and this bounds what the host can offer rather
+ * than what it can guarantee.
  *
- * And the timer must not hold the event loop open: a slot that answered in a
- * millisecond would otherwise keep the process alive for the remaining thirty
- * seconds, which in a test run means a suite that will not exit.
+ * `start` is a FUNCTION rather than a promise so the signal exists before the
+ * work does. Handed an already-running promise, there is nothing to give a
+ * signal to.
+ *
+ * Two further consequences are handled here rather than left to surprise
+ * someone. The abandoned promise may reject later with nobody awaiting it -- an
+ * unhandled rejection, which crashes the process under Node's default policy --
+ * so a no-op handler is attached to the ORIGINAL promise, which marks it
+ * handled without changing what the race sees. And the timer must not hold the
+ * event loop open: a slot that answered in a millisecond would otherwise keep
+ * the process alive for the remaining thirty seconds, which in a test run means
+ * a suite that will not exit.
  */
 async function withinSlotBudget<T>(
-  work: Promise<T>,
+  start: (signal: AbortSignal) => Promise<T>,
   onTimeout: () => never
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = Symbol("widget-slot-timeout");
+  const controller = new AbortController();
+  const work = start(controller.signal);
   try {
     // Attached to `work` itself, not to the race's result: the race settles on
     // whichever arm wins, so on a timeout nothing would ever observe `work`.
@@ -403,7 +419,12 @@ async function withinSlotBudget<T>(
     const outcome = await Promise.race([work, deadline]);
     // `onTimeout` returns `never`, so the compiler narrows `outcome` to `T`
     // past this line without an assertion.
-    if (outcome === timedOut) onTimeout();
+    if (outcome === timedOut) {
+      // Before the throw, because `onTimeout` never returns -- and the point of
+      // the signal is that the abandoned work is told, not merely dropped.
+      controller.abort();
+      onTimeout();
+    }
     return outcome;
   } finally {
     if (timer) clearTimeout(timer);
@@ -461,7 +482,7 @@ async function runPrepared(
       entry.executable.source
     );
     const result = await withinSlotBudget(
-      executeWidgetQuery(query, caller),
+      signal => executeWidgetQuery(query, caller, { signal }),
       () => {
         // A `NextlyError`, so `failedSlot` puts THIS sentence on the wire
         // rather than the generic one: a card that timed out is worth telling

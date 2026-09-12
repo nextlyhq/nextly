@@ -53,3 +53,17 @@ published rather than by reading the plugin's object a second time. A JavaScript
 `id` may be an accessor or a proxy, and a second read that answered differently
 filed the resolver under an id no source claimed, leaving the published source
 failing every query as unanswerable.
+
+A widget source's resolver now receives the host's `ResolverOptions` — a
+cancellation signal today — beside the question it is answering. The dashboard's
+per-slot budget already stopped waiting for a resolver that hung, but a promise
+has no cancellation, so the work went on running and further requests started
+more of it. The signal is aborted when that budget expires, so a resolver that
+passes it to whatever it calls (`fetch` takes one directly) stops rather than
+merely stops being awaited.
+
+The parameter is optional and arrives in an options object, so every resolver
+written before it keeps working unchanged, and anything the host offers later
+becomes a field there rather than another positional argument. `ResolverOptions`
+is published through `nextly` and `@nextlyhq/plugin-sdk` alongside the resolver
+types.
