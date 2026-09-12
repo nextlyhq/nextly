@@ -199,7 +199,8 @@ function walkDeclarations(
   let unaddressable = false;
   const found: BlocksFieldDescriptor[] = [];
   const seen = new Set<string>();
-  // Groups already expanded, by IDENTITY. This is what makes the walk finite,
+  // Groups already expanded, by identity AND by whether reaching them that way
+  // makes what is inside addressable. This is what makes the walk finite,
   // and it is the ONLY thing that does: a group listing itself would otherwise
   // be re-entered forever. Expanding each group once bounds the visits at the
   // number of declarations the configuration actually contains.
@@ -211,7 +212,10 @@ function walkDeclarations(
   // is the state that licences deleting a class a page still renders. Nothing
   // validates a field count, so a long list is legal configuration rather than
   // a signal that the config is wrong.
-  const expanded = new WeakSet<object>();
+  const expanded = {
+    reachable: new WeakSet<object>(),
+    hidden: new WeakSet<object>(),
+  };
 
   // Depth-first over a stack of CURSORS rather than recursion or a queue of
   // fields. Recursion would let author-supplied nesting exhaust the call stack.
@@ -245,8 +249,9 @@ function walkDeclarations(
       continue;
     }
     if (step.kind === "descend") {
-      // Each container expanded ONCE, by identity — the only thing making a walk
-      // over author-supplied nesting finite, since a group may list itself.
+      // Each container expanded once per addressability — the only thing making
+      // a walk over author-supplied nesting finite, since a group may list
+      // itself.
       descend(stack, field as object, step, expanded);
       continue;
     }
@@ -279,10 +284,26 @@ function descend(
   stack: { fields: readonly unknown[]; index: number; addressable: boolean }[],
   container: object,
   step: { fields: readonly unknown[]; addressable: boolean },
-  expanded: WeakSet<object>
+  expanded: { reachable: WeakSet<object>; hidden: WeakSet<object> }
 ): void {
-  if (expanded.has(container)) return;
-  expanded.add(container);
+  // Keyed by the container AND by what reaching it this way means. One
+  // declaration object can appear twice in a configuration — a shared nameless
+  // group at the top level and again beneath a named one — and the two
+  // occurrences store their data under DIFFERENT keys, so the blocks field
+  // inside is addressable through one path and not through the other.
+  //
+  // Keyed by identity alone, the first visit claimed the object and the second
+  // was skipped: the field was enumerated as a scope for the reachable path and
+  // never reported as unreachable for the hidden one, so the survey said nothing
+  // was out of reach while half of that field's content was.
+  //
+  // Two sets rather than a set of pairs, because `addressable` is a boolean and
+  // a WeakSet is what lets a declaration object be garbage collected. Each
+  // container is still expanded at most once PER MODE, so a group that lists
+  // itself terminates — at most twice round instead of once.
+  const seen = step.addressable ? expanded.reachable : expanded.hidden;
+  if (seen.has(container)) return;
+  seen.add(container);
   stack.push({ fields: step.fields, index: 0, addressable: step.addressable });
 }
 

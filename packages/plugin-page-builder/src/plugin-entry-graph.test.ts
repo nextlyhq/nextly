@@ -19,8 +19,9 @@
  * older than this guard and are not `plugin.ts`'s to fix: `library-route.ts`
  * imports `nextly/runtime` at module scope, and `@nextlyhq/plugin-sdk` — a
  * static import here since long before — re-exports from `nextly`, whose own
- * root graph reaches twelve Node built-ins. Both are recorded as
- * `finding:page-builder-root-is-not-isomorphic`.
+ * root graph reaches twelve Node built-ins. Whether that root is meant to be
+ * isomorphic at all is an SDK-level question, since the SDK's re-export is the
+ * blocker and no change to this package can remove it.
  *
  * So this pins ONE edge: the one a change to this file can add back by hand,
  * against a comment three lines above it that says not to. A guard that refused

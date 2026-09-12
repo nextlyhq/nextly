@@ -452,6 +452,49 @@ describe("noticing a blocks field this index cannot address", () => {
     expect(survey.unaddressable).toBe(false);
   });
 
+  it("reports a SHARED group reached both ways, not only the first way", async () => {
+    /*
+     * One declaration object, two occurrences. A nameless group is declared once
+     * and referenced at the top level AND beneath a named group — which a host
+     * gets for free by hoisting the group into a constant and using it twice.
+     *
+     * The two occurrences store their data under DIFFERENT keys, so the blocks
+     * field inside is addressable through the top-level path and not through the
+     * nested one. Keyed by identity alone, the first visit claimed the object and
+     * the second was skipped: the field was enumerated as a scope and never
+     * reported as unreachable, so the survey said nothing was out of reach while
+     * half of that field's content was — and health could call the index exact.
+     */
+    const shared = {
+      type: "group",
+      fields: [{ type: "blocks", name: "content" }],
+    };
+    const survey = blocksFieldSurvey({
+      fields: [shared, { type: "group", name: "hero", fields: [shared] }],
+    });
+
+    // Both halves: still enumerated for the reachable path, and no longer silent
+    // about the hidden one.
+    expect(survey.addressable).toEqual([{ name: "content", localized: false }]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("still terminates when a shared group contains ITSELF", async () => {
+    // Two sets means two rounds, not unbounded ones. Without a bound per mode a
+    // self-listing group reached both ways would never finish.
+    const cyclic: { type: string; fields: unknown[] } = {
+      type: "group",
+      fields: [],
+    };
+    cyclic.fields.push(cyclic, { type: "blocks", name: "content" });
+    const survey = blocksFieldSurvey({
+      fields: [cyclic, { type: "group", name: "hero", fields: [cyclic] }],
+    });
+
+    expect(survey.addressable).toEqual([{ name: "content", localized: false }]);
+    expect(survey.unaddressable).toBe(true);
+  });
+
   it("CONTROL: a presentational group's blocks field is addressable, not unreachable", () => {
     // Without this, reporting every group as unaddressable would satisfy the
     // cases above and withhold completeness from every site that uses a layout

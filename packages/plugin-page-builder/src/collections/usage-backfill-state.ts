@@ -83,11 +83,11 @@ export function usageBackfillStateCollection() {
       // "super-admin bypass -> code-defined access -> DB permissions", so for
       // such a caller these callbacks are never evaluated. Closing that needs a
       // write boundary external collection operations cannot cross, which is a
-      // core capability rather than an access rule a plugin can declare —
-      // recorded as `finding:backfill-progress-is-forgeable-by-a-super-admin`.
-      // What makes it worth naming rather than shrugging at is that it does not
-      // self-repair: a corrupted INDEX row is rewritten by the next sweep, and a
-      // forged PROGRESS row suppresses that sweep.
+      // core capability rather than an access rule a plugin can declare.
+      //
+      // What makes it worth naming rather than shrugging at a trusted role is
+      // that it does not self-repair: a corrupted INDEX row is rewritten by the
+      // next sweep, and a forged PROGRESS row suppresses that sweep.
       //
       // Functions returning a constant rather than bare `false`: access rules
       // are validated as callables and a boolean is rejected at config time
