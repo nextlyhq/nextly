@@ -6,6 +6,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import {
+  collectDocSamples,
   compareToBaseline,
   compile,
   contextOnlyWorthRecording,
@@ -1690,5 +1691,41 @@ describe("how a block used a name", () => {
     // The control for the two above: `mentioned` is load-bearing, so an absent
     // name cannot read as a value use.
     expect(usedOnlyAsValue("const a = 1;", "Media", "ts")).toBe(false);
+  });
+});
+
+describe("the population includes package and template READMEs", () => {
+  const samples = collectDocSamples();
+
+  it("collects samples at all, so the checks below are not vacuous", () => {
+    // The control. An absence assertion over a list that came back empty
+    // passes perfectly, and this one reads the filesystem.
+    expect(samples).not.toBeNull();
+    expect(samples.length).toBeGreaterThan(100);
+  });
+
+  it("reads a README, which nothing compiled before", () => {
+    // A README is the first code a reader copies: `check-docs-compile` reads
+    // `docs/` and so did this gate, so package install and usage examples were
+    // the only ones no gate had an opinion about. Named rather than counted,
+    // because a count agrees with itself while the walk quietly stops
+    // descending.
+    const files = new Set(samples.map(s => s.file));
+    expect(files).toContain("packages/nextly/README.md");
+    expect(files).toContain("packages/plugin-sdk/README.md");
+  });
+
+  it("reads a TEMPLATE README too, which is a separate root", () => {
+    // `templates/` is walked by its own loop, so a package README arriving
+    // says nothing about whether templates do.
+    const files = [...new Set(samples.map(s => s.file))];
+    expect(files.some(f => f.startsWith("templates/"))).toBe(true);
+  });
+
+  it("still reads the docs pages, which the READMEs must not displace", () => {
+    // The other direction. A collector rewritten to return only READMEs
+    // satisfies both cases above and silently drops 51 pages of coverage.
+    const files = [...new Set(samples.map(s => s.file))];
+    expect(files.some(f => f.startsWith("docs/"))).toBe(true);
   });
 });

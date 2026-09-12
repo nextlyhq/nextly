@@ -195,6 +195,9 @@ export const pricingTable = defineBlock({
     plan: { type: "text" },
   },
   defaultProps: { plan: "Pro" },
+  // Required. What the block looks like in the inserter, before an author has
+  // set anything.
+  example: { props: { plan: "Pro" } },
   supports: { typography: true, color: true, spacing: true },
   render: ({ props, className }) => (
     <div className={className}>{String(props.plan)}</div>
