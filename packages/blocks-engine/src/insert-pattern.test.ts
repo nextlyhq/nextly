@@ -1012,6 +1012,30 @@ describe("a composed root is judged by what it draws", () => {
     ]);
   });
 
+  it("does not raise when the LOOKUP itself throws", () => {
+    /*
+     * The boundary added inside the roots query does not cover this: the
+     * lookup is read before it is entered, so a `get` that raises escapes
+     * exactly the caller the boundary exists for — the palette, whose one
+     * unreadable definition would take the whole panel down.
+     *
+     * A lookup is a caller-supplied object, not a map this module builds.
+     */
+    const hostile: ComponentLookup = {
+      has: () => true,
+      get: () => {
+        throw new Error("this lookup cannot answer");
+      },
+    } as unknown as ComponentLookup;
+
+    expect(() => placementTypesOf(instance("i", "col"), hostile)).not.toThrow();
+    // Judged by its own type, which is the answer for every instance this
+    // cannot resolve.
+    expect(placementTypesOf(instance("i", "col"), hostile)).toEqual([
+      COMPONENT_INSTANCE_TYPE,
+    ]);
+  });
+
   it("judges an instance by its own type when no lookup is supplied", () => {
     // The published signature is reached by callers holding no library, and
     // their answer is stated here so that adding the lookup cannot quietly
