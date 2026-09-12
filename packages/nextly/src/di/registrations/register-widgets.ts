@@ -59,6 +59,18 @@ export function resetWidgetRegistries(
   // and ready to answer again the moment anything republished that id through
   // the generic `registerSource` door.
   clearSystemResolvers();
+  // 🔴 The deferral store is NOT cleared here, and that is deliberate. It
+  // records which entities a reload found to disagree with their tables, and
+  // this function runs BEFORE the boot has synced any metadata -- so clearing
+  // here publishes "nothing is withheld" on the strength of work that has not
+  // happened yet. The boot's own sync can then fail and be caught, leaving the
+  // registry exactly as stale as the previous reload found it while the set
+  // says otherwise.
+  //
+  // Each kind replaces its own set from its own sync path instead, once that
+  // sync has actually succeeded -- which clears a previous boot's refusal on
+  // the pass that earns the right to, and retains it when the sync fails. See
+  // `publishBootDeferrals` in `di/register`.
 
   // The OTHER channel a widget arrives by. A contribution never passes through
   // `registerWidget`, so without this the server's canonical set holds core's

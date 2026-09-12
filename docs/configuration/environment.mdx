@@ -295,7 +295,7 @@ Nextly's RBAC layer ships a hybrid (in-memory LRU + database) permission cache. 
 | Variable | Required | Default | Description | Read by |
 |---|---|---|---|---|
 | `PERMISSION_CACHE_ENABLED` | No | `true` | Set to `false` or `0` to disable the hybrid permission cache. | `packages/nextly/src/services/lib/permissions.ts` |
-| `PERMISSION_CACHE_TTL_SECONDS` | No | `86400` | Time-to-live for database cache entries (seconds). | `packages/nextly/src/services/lib/permissions.ts` |
+| `PERMISSION_CACHE_TTL_SECONDS` | No | `300` | Time-to-live for database cache entries (seconds). This tier is shared between instances and the signal that retires it is held in memory, so until that signal is stored beside the rows this value is also the longest a revoked grant can survive on an instance that did not handle the change. | `packages/nextly/src/services/lib/permissions.ts` |
 | `PERMISSION_CACHE_MEMORY_SIZE` | No | `10000` | In-memory LRU cache size (number of entries). | `packages/nextly/src/services/lib/permissions.ts` |
 
 The database permission cache benefits from periodic cleanup. A typical daily cron:
