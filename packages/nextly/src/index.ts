@@ -672,7 +672,13 @@ export type {
 // `ctx.services.collections.createMany`. Rich-query options (`QueryOptions`
 // with where/sort/depth/select) + `PaginatedResult` are exported with the other
 // shared service types above.
-export type { BatchOperationResult } from "./domains/collections/services/collection-types";
+export type {
+  BatchOperationResult,
+  // The input half of the batch update, beside the result half: a plugin
+  // typing an array it builds before calling `updateMany` has to be able to
+  // name the contract rather than restate its shape.
+  BulkUpdateEntry,
+} from "./domains/collections/services/collection-types";
 
 // Whether a collection stores a working draft beside its published row.
 //

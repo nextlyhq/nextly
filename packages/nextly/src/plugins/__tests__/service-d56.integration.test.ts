@@ -2,14 +2,13 @@
  * D56 end-to-end — the new `ctx.services.collections` surface (the
  * ServiceOpts-wrapped facade) against a live in-memory SQLite boot.
  *
- * Harness scope (mirrors the P3-D35/P4 posture): the in-memory `createTestNextly`
- * boot wires the high-level `nextly.create` path but NOT the lower entry-service
- * hook seam that the facade's doc-read (`listEntries`) and bulk-create
- * (`createMany`) paths call — both surface `hookRegistry.executeBeforeOperation
- * is not a function` / an INTERNAL_ERROR there. That is a pre-existing harness
- * limitation, not a P7a regression (a plain `listEntries` fails identically).
- * So those two are covered by the focused facade/wrapper UNIT tests
- * (`collection-service-d56.test.ts`, `service-opts-wrapper.test.ts`).
+ * The harness limitation this file was written around is gone: the in-memory
+ * `createTestNextly` boot reaches the entry-service hook seam, so `createMany`
+ * and the bulk update run end to end through the wrapper. Measured in
+ * `service-update-many.integration.test.ts`, which seeds with `createMany` and
+ * patches the result with `updateMany`. The focused facade and wrapper unit
+ * tests (`collection-service-d56.test.ts`, `service-opts-wrapper.test.ts`)
+ * still cover the translation itself.
  *
  * What this file proves end-to-end through the wrapper:
  *  - `count` with a `where` filter actually reaches the query layer (the filter
