@@ -141,7 +141,13 @@ export class SingleEntryService extends BaseService {
       singleRegistryService,
       fieldGroupDataService,
       rbacAccessControlService,
-      localization
+      localization,
+      // Publishing every language promotes every language's pending change,
+      // and judging one before it is promoted means reading: the stored
+      // snapshot in its logical shape, and the live document of the language
+      // it belongs to. The read service is the one that answers both, and
+      // this path is built here where it already exists.
+      this.queryService
     );
   }
 
