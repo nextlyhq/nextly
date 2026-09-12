@@ -27,6 +27,7 @@ import {
   attachFieldValidators,
   clearFieldFunctions,
   getFieldFunctions,
+  readAccessGrants,
   type ReadAccessRedactions,
   registerFieldFunctions,
   runFieldHooks,
@@ -119,6 +120,41 @@ describe("field access can ask what the caller is granted", () => {
     });
     // Three rules, one lookup. Field access runs on every authenticated write,
     // so a per-rule lookup would multiply the cost by the field count.
+    expect(listEffectivePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads grants once across two read passes handed one resolver", async () => {
+    // A read that redacts before its hooks and again after runs two passes
+    // over one document. Each pass builds its own resolver unless handed one,
+    // and two lookups can answer with two authorities if grants change in
+    // between; one resolver is one lookup and one answer.
+    listEffectivePermissions.mockResolvedValue(["pages:read"]);
+    registerFieldFunctions("collection", "pages", [
+      {
+        name: "secret",
+        access: {
+          read: ({ permissions }: { permissions: string[] }) =>
+            permissions.includes("pages:read"),
+        },
+      },
+    ]);
+    const grants = readAccessGrants({ id: "u1" });
+    const entry: Record<string, unknown> = { secret: "s" };
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug: "pages",
+      entry,
+      user: { id: "u1" },
+      grants,
+    });
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug: "pages",
+      entry,
+      user: { id: "u1" },
+      grants,
+    });
+    expect(entry).toEqual({ secret: "s" });
     expect(listEffectivePermissions).toHaveBeenCalledTimes(1);
   });
 

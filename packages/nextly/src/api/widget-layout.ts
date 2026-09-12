@@ -307,6 +307,9 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
         widgets.map(w => w.id),
         audience.heldActionGates
       ),
+      // The audience the workspace payload is built for, so the admin can tell
+      // the payload it holds apart from the one this reader would be sent now.
+      audience: audience.token,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
