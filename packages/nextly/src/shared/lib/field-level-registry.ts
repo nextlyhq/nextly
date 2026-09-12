@@ -751,10 +751,13 @@ async function runFieldHooksRec(
     kind: EntityKind;
     operation: "create" | "read" | "update" | "delete";
     user?: Record<string, unknown>;
-  }
+  },
+  /** Top level only; a nested row's names are its own. See {@link runFieldHooks}. */
+  only?: ReadonlySet<string>
 ): Promise<void> {
   for (const [name, entry] of Object.entries(fns)) {
     if (!(name in data)) continue;
+    if (only && !only.has(name)) continue;
     if (entry.fields) {
       for (const row of nestedRows(data[name])) {
         await runFieldHooksRec(row, entry.fields, phase, ctx);
@@ -847,13 +850,35 @@ export async function runFieldHooks(opts: {
   data: Record<string, unknown>;
   operation: "create" | "read" | "update" | "delete";
   user?: Record<string, unknown>;
+  /**
+   * Restrict WHICH fields' handlers run, without restricting what they SEE.
+   *
+   * Presence in `data` normally decides both, and for most callers that is the
+   * same question. It stops being the same question when the row carries more
+   * than the write touched: a localized update assembles the whole translation
+   * for its snapshot, and firing `afterChange` for a sibling nobody edited
+   * sends mail for an unchanged value. Withholding those keys from `data`
+   * instead would answer that at the cost of the other half — a handler that
+   * does run could no longer read its siblings, which is what a search-index
+   * or derived-value hook is for.
+   *
+   * Names at the TOP level only. A nested row's fields are its own, and the
+   * parent's gate has already decided whether its subtree runs at all.
+   */
+  only?: ReadonlySet<string>;
 }): Promise<void> {
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
-  await runFieldHooksRec(opts.data, fns, opts.phase, {
-    slug: opts.slug,
-    kind: opts.kind,
-    operation: opts.operation,
-    user: opts.user,
-  });
+  await runFieldHooksRec(
+    opts.data,
+    fns,
+    opts.phase,
+    {
+      slug: opts.slug,
+      kind: opts.kind,
+      operation: opts.operation,
+      user: opts.user,
+    },
+    opts.only
+  );
 }
