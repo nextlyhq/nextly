@@ -48,7 +48,7 @@ import {
   registryNestingSource,
   previewContainerFor,
   componentReach,
-  componentUsageIn,
+  componentReferencesIn,
   isComponentDocument,
   newId,
   type BlockDocument,
@@ -443,7 +443,11 @@ function namesOf(
 ): readonly string[] | undefined {
   const nodes = pattern.document?.nodes;
   if (nodes === undefined) return [];
-  const usage = componentUsageIn(nodes, limits.maxNodes);
+  // The reachability question, not the stored-ids one, for the reason
+  // {@link namedBy} gives. A pattern declares no variants today, so the two
+  // answers coincide here — asked this way they cannot come apart if one ever
+  // does.
+  const usage = componentReferencesIn(pattern.document, limits.maxNodes);
   return usage.complete ? usage.ids : undefined;
 }
 
@@ -541,7 +545,12 @@ function namedBy(
 ): readonly string[] | undefined {
   const definition = definitions.get(id);
   if (definition === undefined) return whole ? [] : undefined;
-  const usage = componentUsageIn(definition.nodes, limits.maxNodes);
+  // What the definition can REACH, variants included, which is the same rule
+  // the write guard judges a save by. The stored ids alone would have the panel
+  // offer a component whose variant re-points a nested instance back at the one
+  // being edited — an insert the author is invited to make and the save then
+  // refuses.
+  const usage = componentReferencesIn(definition, limits.maxNodes);
   return usage.complete ? usage.ids : undefined;
 }
 
