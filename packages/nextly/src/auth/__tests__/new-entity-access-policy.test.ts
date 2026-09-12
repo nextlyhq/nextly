@@ -128,14 +128,29 @@ describe("an API key", () => {
   });
 
   it("is refused when its read grant cannot be a slug at all", async () => {
-    // A second reason to refuse, and not the system-resource one: a runtime
-    // slug takes underscores and no hyphens, so no create path would accept
-    // `team-updates` however unreserved the name is. Without this case a
-    // predicate that only tested `isReservedResourceSlug` passes everything
-    // else here.
+    // A second reason to refuse, and not the system-resource one: a Builder
+    // slug takes underscores and no hyphens, so the create the reader is sent
+    // to would not accept `team-updates` however unreserved the name is.
     expect(await wouldReadOwnNewCollection(key(["read-team-updates"]))).toBe(
       false
     );
+  });
+
+  it("is refused when its read grant names a SQL keyword", async () => {
+    // 🔴 A third reason, reachable only through the validator the linked create
+    // actually runs. `select` is not a system resource and is a legal slug
+    // shape, so both a system-resource test and a shape test admit it -- and
+    // `collectionNameSchema` refuses it. The step would send this key to a form
+    // that will not take the one name its grant can read.
+    expect(await wouldReadOwnNewCollection(key(["read-select"]))).toBe(false);
+  });
+
+  it("is refused on a name only the Schema Builder's own list reserves", async () => {
+    // `accounts` is in `RESERVED_COLLECTION_NAMES` without being a system
+    // resource, so this fails against any predicate that stops at
+    // `isReservedResourceSlug` -- including the one this file asserted before
+    // the create path was measured rather than reasoned about.
+    expect(await wouldReadOwnNewCollection(key(["read-accounts"]))).toBe(false);
   });
 
   it("is refused when it holds no read grant at all", async () => {

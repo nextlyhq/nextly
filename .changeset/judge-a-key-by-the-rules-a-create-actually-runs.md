@@ -30,17 +30,19 @@
 The onboarding checklist now judges an API key's read grant by the rules a
 collection create actually runs, rather than by the code-first config validator.
 
-The two disagree in both directions. A code-first config reserves names like
-`admin` and `dashboard` because such a collection is mounted on a route, and
-nothing on the runtime create path consults that list — so a key stamped
-`read-admin` can create `admin` and read it, and was being refused the step it
-could finish. In the other direction a code-first slug may contain hyphens while
-a runtime slug may not, so a key stamped `read-team-updates` was being offered a
-step no create path would let it complete.
+The checklist links its step to the Schema Builder, whose create posts to
+`POST /collections` and validates the name with `collectionNameSchema`. That
+schema's verdict is therefore whether the step can be finished, and the
+code-first validator disagreed with it in both directions: it reserves `admin`
+and `dashboard`, which the Builder creates happily, and it allows hyphens, which
+the Builder does not. So a key stamped `read-admin` was refused a step it could
+finish, and one stamped `read-team-updates` was offered a step it could not.
 
-The rule a create enforces on every path is now declared once, in
-`domains/collections/creatable-slug`, and the schema endpoint's own slug
-validation reads it from there rather than restating it.
+The predicate now asks `collectionNameSchema` itself rather than restating any
+rule, so a reserved name or a length limit added there reaches the checklist with
+nobody editing a second file. That also brings in two refusals no restatement
+had: SQL keywords such as `select`, and the Builder's own reserved names such as
+`accounts`.
 
 An app that cold boots only through `createDynamicHandlers` now seeds its preset
 roles as well as its permissions. That path re-seeded permissions on the first
