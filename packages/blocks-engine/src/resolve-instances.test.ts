@@ -2522,6 +2522,81 @@ describe("instanceExposure", () => {
     expect(state?.cleared).toBe(false);
   });
 
+  it("reports a visibility exposure's INHERITED gate, so a panel does not call a gated node shown", () => {
+    /*
+     * The resolver is the oracle. A definition node carrying entry-field
+     * conditions is not served — `survivesGating` with no plan says so, and
+     * the composed forest keeps the gate for the renderer's hidden-node pass
+     * to act on. Read as "no override, so nothing in force", an inspector drew
+     * the row checked and said the node was shown on this page while the
+     * canvas withheld it.
+     */
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const showGated = {
+      id: "showGated",
+      label: "Banner",
+      nodeId: "d1",
+      propPath: "hidden",
+      type: "visibility",
+    } as const;
+    const showPlain = { ...showGated, id: "showPlain", nodeId: "d2" } as const;
+    const definition = component(
+      [node("d1", { visibility: gate as BlockNode["visibility"] }), node("d2")],
+      { exposed: [showGated, showPlain] }
+    );
+
+    const [gated, plain] = instanceExposure(
+      definition,
+      instance("i1", "hero")
+    ).properties;
+
+    expect(gated?.value).toBe(false);
+    // Where it came from, so a surface can tell an inherited gate from an
+    // author's own hiding without a vocabulary of its own.
+    expect(gated?.source).toBe("definition");
+    expect(gated?.cleared).toBe(false);
+    // The control: a node with no gate has nothing in force, and is served.
+    expect(plain?.value).toBeUndefined();
+
+    // And the oracle itself: one root keeps its gate, the other does not.
+    const resolved = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: definition })
+    );
+    expect(
+      resolved.document.nodes.map(root => root.visibility !== undefined)
+    ).toEqual([true, false]);
+  });
+
+  it("lets the instance's own override win over the inherited gate, either way", () => {
+    const gate = { conditions: [[{ field: "tier", op: "eq", value: "pro" }]] };
+    const showGated = {
+      id: "showGated",
+      label: "Banner",
+      nodeId: "d1",
+      propPath: "hidden",
+      type: "visibility",
+    } as const;
+    const definition = component(
+      [node("d1", { visibility: gate as BlockNode["visibility"] })],
+      { exposed: [showGated] }
+    );
+
+    const on = instanceExposure(
+      definition,
+      instance("i1", "hero", { overrides: { showGated: true } })
+    ).properties[0];
+    expect(on?.value).toBe(true);
+    expect(on?.source).toBe("instance");
+
+    const off = instanceExposure(
+      definition,
+      instance("i1", "hero", { overrides: { showGated: false } })
+    ).properties[0];
+    expect(off?.value).toBe(false);
+    expect(off?.source).toBe("instance");
+  });
+
   it("attributes a variant's value to the VARIANT, not to the author", () => {
     const node = instance("i1", "hero", { variant: "loud" });
     const [state] = instanceExposure(hero, node).properties;

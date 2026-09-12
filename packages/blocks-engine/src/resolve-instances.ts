@@ -2034,7 +2034,8 @@ function isPathPrefix(shorter: string, longer: string): boolean {
  *
  * The value is read from the final props for a prop exposure, so it reflects
  * every write that reached it. For a `visibility` exposure there is no prop to
- * read — the winning write's decision IS the value.
+ * read — the winning write's decision IS the value, and where there is no
+ * write, the definition's own gate is ({@link inheritedVisibility}).
  */
 function exposedState(
   property: ExposedProperty,
@@ -2095,10 +2096,40 @@ function valueAt(
   props: ReadonlyMap<string, Record<string, unknown>>,
   nodes: ReadonlyMap<string, BlockNode>
 ): OverrideValue {
-  if (property.type === "visibility") return winner?.override.value;
+  if (property.type === "visibility") {
+    return winner === undefined
+      ? inheritedVisibility(nodes.get(property.nodeId))
+      : winner.override.value;
+  }
   const record =
     props.get(property.nodeId) ?? nodes.get(property.nodeId)?.props;
   return readPath(record, property.propPath);
+}
+
+/**
+ * What a `visibility` exposure reads when the instance has written nothing.
+ *
+ * The DEFINITION's own answer, which is `survivesGating` with no plan: a node
+ * carrying entry-field conditions is not served, and one carrying none is.
+ * Read from the target node rather than left blank, because blank is what a
+ * consumer reads as "nothing decides this" — and something does. An inspector
+ * drawing the row from a blank said "shown on this page" for a node the
+ * resolver keeps gated and the renderer's hidden-node pass withholds, which
+ * is the disagreement between the panel and the canvas that reading these
+ * rows from the resolver exists to prevent.
+ *
+ * `false` rather than a third value, because it is the decision in force and
+ * the row already says where it came from: `source` is `definition`, and
+ * `ownOverride` is false, so a surface can tell an inherited gate from an
+ * author's own hiding without a vocabulary of its own.
+ *
+ * An ungated node stays `undefined` — nothing is in force there, which is
+ * what a row with no override on a node with no gate means, and the surfaces
+ * already draw it as served.
+ */
+function inheritedVisibility(node: BlockNode | undefined): OverrideValue {
+  if (node === undefined) return undefined;
+  return isConditionGated(node) ? false : undefined;
 }
 
 /**
