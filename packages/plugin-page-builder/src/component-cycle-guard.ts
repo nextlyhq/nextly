@@ -34,6 +34,25 @@
  *
  * ## What this does NOT close, stated rather than implied
  *
+ * A write that runs NO USER HOOKS. `skipHooks: true` is a documented import
+ * option, and the transaction writers set `runHooks: !skipHooks` over the whole
+ * collection-level and field-level phase — so the high-performance import path
+ * can store a component referencing itself without this handler being called at
+ * all, and ordinary document validation does not look across rows. Nothing a
+ * plugin can register closes that: the invariant needs a write boundary that is
+ * not skippable, which is a core capability rather than a hook. Recorded as
+ * `finding:cycle-guard-is-skippable-by-import` with what it would take.
+ *
+ * A reference a NESTED instance's own overrides install. A variant this document
+ * declares is covered (see {@link componentReferencesIn}), because the exposure
+ * it writes through is declared in the same document. An instance node placing B
+ * can also carry `props.overrides` aimed at B's exposures, and reading those
+ * needs B's definition to map an exposure id to a node and a prop path — so the
+ * edge belongs to the PLACEMENT rather than to either document, and the walk
+ * here keys a component's placements by id alone. Closing it means reading every
+ * reachable definition before computing any edge, which is a different walk;
+ * filed as `finding:cycle-guard-misses-placement-level-overrides`.
+ *
  * Two saves closing a loop between them AT THE SAME MOMENT. This walk runs
  * before its own write commits and takes no lock the other write contends for,
  * and a plugin hook has no transaction to enlist in — the same window
@@ -62,7 +81,7 @@
  */
 import {
   componentReach,
-  componentUsageIn,
+  componentReferencesIn,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
@@ -129,22 +148,23 @@ async function refuseACycle(
   context: unknown
 ): Promise<void> {
   const self = subjectOf(context);
-  // Nothing addressable. Left alone rather than refused: a create whose id the
-  // store has not minted yet is not a row anything can reference, so no chain
-  // can lead back to it.
+  // Nothing addressable. Left alone rather than refused: a CREATE has no stored
+  // row, and the id it will be stored under is minted by the write itself — so
+  // it is not a row anything can already reference and no chain can lead back
+  // to it. See {@link subjectOf} for why a supplied id is not that id.
   if (self === null) return;
 
-  const places = placesOf(context, options);
-  // Not a document this can read. Whether the value is a legal one is the
-  // field's own validation to answer, and refusing here would report a shape
-  // problem as a reference problem.
-  if (places === "not-a-document") return;
+  const submitted = placesOf(context, options);
+  // Carries no document AND promotes nothing, so it cannot move an edge. A bulk
+  // rename or a metadata edit is this. Whether a malformed value is a legal one
+  // is the field's own validation to answer, and refusing here would report a
+  // shape problem as a reference problem.
+  const promotes = namesAStatus(context);
+  if (submitted === "not-a-document" && !promotes) return;
 
-  // AFTER the two checks above, so a write that cannot change the reference
-  // graph is not refused for being in a transaction. A bulk rename, a metadata
-  // edit or a status change carries no document, and a bulk create with no id
-  // has nothing to close a loop onto — none of them needs a graph read, so none
-  // of them is refused.
+  // AFTER the checks above, so a write that cannot change the reference graph is
+  // not refused for being in a transaction. None of them needs a graph read, so
+  // none of them is refused.
   //
   // For a write that DOES need one, the transaction is a refusal rather than a
   // skip: the Direct API takes no executor, so a read here checks out a second
@@ -166,13 +186,40 @@ async function refuseACycle(
   // authorisation one.
   if (nextly === null) return;
 
-  // Each lifecycle form on its OWN, never as one graph. A component's published
-  // and draft documents are alternatives: only one of them is what a reader
-  // receives at any moment. Unioning their edges invents chains that exist in
-  // neither — published B naming C while DRAFT C names A yields A → B → C → A
-  // out of two references that are never live together — and refuses a save
-  // that closes nothing.
-  for (const draft of [false, true]) {
+  // A status-only publish carries no document of its own and is NOT graph-
+  // neutral: core promotes the whole pending working draft into the live row
+  // (`draft-published-split.integration.test.ts`, "promotes the whole working
+  // draft to the live row when the publish omits its fields"). What goes live is
+  // that draft, so that is the document to judge — a cycle written into a draft
+  // before this guard existed, or through a write that skipped it, would
+  // otherwise reach the live library on a publish this never inspected.
+  const places =
+    submitted === "not-a-document"
+      ? await pendingPlaces(self, options, nextly)
+      : submitted;
+  // No pending document to promote after all. Nothing changes and nothing is
+  // judged, rather than a refusal for a row this could not find.
+  if (places === "nothing-to-judge") return;
+
+  await refuseIfReached({
+    options,
+    nextly,
+    self,
+    places,
+    forms: formsChangedBy(promotes),
+  });
+}
+
+/** Walk each named form, and refuse on the first that does not come back clean. */
+async function refuseIfReached(args: {
+  options: CycleGuardOptions;
+  nextly: CycleGuardDirectApi;
+  self: string;
+  places: readonly string[] | undefined;
+  forms: readonly boolean[];
+}): Promise<void> {
+  const { options, nextly, self, places, forms } = args;
+  for (const draft of forms) {
     const graph = await placementsReachedFrom(places, options, nextly, draft);
     const verdict = componentReach({
       places,
@@ -192,6 +239,74 @@ async function refuseACycle(
         `${verdict.path.join(" → ")}. Remove that placement and save again.`
     );
   }
+}
+
+/**
+ * Which lifecycle forms this write actually changes, as `draft` flags.
+ *
+ * Each form on its OWN, never as one graph. A component's published and draft
+ * documents are alternatives: only one of them is what a reader receives at any
+ * moment. Unioning their edges invents chains that exist in neither — published
+ * B naming C while DRAFT C names A yields A → B → C → A out of two references
+ * that are never live together — and refuses a save that closes nothing.
+ *
+ * And only the forms this write REACHES, which is the second half of the same
+ * rule. Core decides that from whether the payload names a status, and the two
+ * cases are disjoint on it (`collection-mutation-service.ts` calls the predicate
+ * `namesNoStatus`):
+ *
+ * - **No status named.** The incoming document is stored as a working draft and
+ *   THE LIVE ROW IS LEFT UNTOUCHED. Judging the incoming placements against the
+ *   live graph as well refuses a save that closes nothing: live B naming A while
+ *   B's own draft is empty makes A → live B → A out of an edge the preview
+ *   never has and a document the live row never receives.
+ * - **A status named.** Core writes the live row and promotes any pending draft
+ *   into it, consuming the draft — so both forms end up holding that document
+ *   and both are judged.
+ *
+ * Where the split is NOT in force for this collection a status-less write goes
+ * straight to the live row, and this would then judge the wrong form. It does
+ * not, and no second predicate is needed for it: with no working drafts to
+ * overlay, a `draft: true` read answers with the live row for every component,
+ * so the preview graph IS the live graph and judging one judges both.
+ */
+function formsChangedBy(promotes: boolean): readonly boolean[] {
+  return promotes ? [false, true] : [true];
+}
+
+/**
+ * What the component's PENDING form places, for a write that promotes it.
+ *
+ * Read through the same overlay a preview does — core's own words for it are
+ * "the overlay returns the draft (or the live row when none exists)" — so a
+ * publish with no pending draft judges the live document it is re-publishing.
+ * That costs one read and answers `none` for any library without a loop, which
+ * is the cheap direction; the alternative is not noticing a promoted cycle.
+ */
+async function pendingPlaces(
+  self: string,
+  options: CycleGuardOptions,
+  nextly: CycleGuardDirectApi
+): Promise<readonly string[] | undefined | "nothing-to-judge"> {
+  const pending = await readComponent(self, options, nextly, true);
+  return pending === "absent" ? "nothing-to-judge" : pending;
+}
+
+/**
+ * Whether this write names a status, and so reaches the live row.
+ *
+ * The VALUE rather than the key, which is what core reads: `intendedStatus` is
+ * `finalData.status` and the transition is skipped where that is `undefined`, so
+ * a payload carrying the key with no value is status-less to core and must be
+ * status-less here.
+ *
+ * Read at this moment, which is the same limit the module header already records
+ * for the document: a later `beforeChange` handler can add or remove `status`
+ * after this has judged, and no plugin can be last.
+ */
+function namesAStatus(context: unknown): boolean {
+  const data = fieldOf(context, "data");
+  return data !== undefined && data.status !== undefined;
 }
 
 /**
@@ -305,17 +420,17 @@ function isRowFor(row: unknown, id: string): boolean {
   return record.id === id;
 }
 
-/** The ids a stored row's document places, under the site's cap. */
+/** The ids a stored row's document can reach, under the site's cap. */
 function usageIn(
   row: unknown,
   options: CycleGuardOptions
 ): readonly string[] | undefined {
   if (typeof row !== "object" || row === null) return undefined;
   const document = (row as Record<string, unknown>)[options.documentField];
-  if (typeof document !== "object" || document === null) return [];
-  const nodes = (document as { nodes?: unknown }).nodes;
-  if (!Array.isArray(nodes)) return [];
-  const usage = componentUsageIn(nodes, options.limits.maxNodes);
+  // A row whose document is missing or malformed places nothing, and the
+  // renderer draws it as such. That is not a loop, so it is `[]` rather than the
+  // unknown a caller would refuse on.
+  const usage = componentReferencesIn(document, options.limits.maxNodes);
   return usage.complete ? usage.ids : undefined;
 }
 
@@ -341,26 +456,33 @@ function placesOf(
   }
   const nodes = (document as { nodes?: unknown }).nodes;
   if (!Array.isArray(nodes)) return "not-a-document";
-  const usage = componentUsageIn(nodes, options.limits.maxNodes);
+  const usage = componentReferencesIn(document, options.limits.maxNodes);
   return usage.complete ? usage.ids : undefined;
 }
 
 /**
- * The id this write will be stored under, or `null` when the write does not
- * name one.
+ * The id this write will be stored under, or `null` when there is no such id
+ * yet.
  *
- * An UPDATE carries the stored row as `originalData`, which is where the id
- * comes from: the incoming data is a patch and need not repeat it. A CREATE has
- * no stored row, and an id only where the caller supplied one — a create whose
- * id the store mints later is not a row anything can already reference, so
- * there is no chain for it to close.
+ * The STORED row only. An update carries it as `originalData`, and the incoming
+ * data is a patch that need not repeat it.
+ *
+ * `data.id` is deliberately NOT a fallback, and that is not an omission. A
+ * client-supplied id is never the identity a row is stored under: every write
+ * path spreads `stripImmutableSystemFields(finalData, "collection")` over a
+ * freshly generated `id`, and `id` is declared `writableByClient: false`, so the
+ * value is discarded on create and on update alike. Judging a create against it
+ * refuses a real chain that happens to run through whatever the caller typed,
+ * while the row being written gets an id nothing references — a refusal whose
+ * reported path names a component the author never placed.
+ *
+ * So a CREATE is left alone entirely. Nothing can already reference an id the
+ * write is about to mint, so no chain can lead back to it and there is no cycle
+ * a create can close.
  */
 function subjectOf(context: unknown): string | null {
   const original = fieldOf(context, "originalData");
-  const fromStored = original === undefined ? null : idIn(original);
-  if (fromStored !== null) return fromStored;
-  const data = fieldOf(context, "data");
-  return data === undefined ? null : idIn(data);
+  return original === undefined ? null : idIn(original);
 }
 
 /** A usable id on a record, or null. */

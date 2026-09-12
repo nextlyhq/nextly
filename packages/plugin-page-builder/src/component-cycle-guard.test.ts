@@ -77,6 +77,30 @@ function api(rows: {
     depth: unknown;
     override: unknown;
   }[] = [];
+  /** The failures the real store raises rather than answering with. */
+  const refuseWhereTheStoreWould = (id: string): void => {
+    if (rows.unreadable?.includes(id) === true) {
+      throw new Error("this row could not be read");
+    }
+    // What the real Direct API does for a row that is not there: it THROWS
+    // NOT_FOUND unless errors are disabled, rather than answering null.
+    if (rows.deleted?.includes(id) === true) {
+      throw NextlyError.notFound({ message: `no component ${id}` });
+    }
+  };
+
+  /**
+   * The ids one form of one component places.
+   *
+   * The real overlay "returns the draft (or the live row when none exists)" —
+   * core's own words for it — so a draft read FALLS BACK to the live row rather
+   * than answering with nothing. Modelling the two forms as independent stores
+   * let a test assert a state the API cannot produce: a component with a live
+   * document whose preview read finds none.
+   */
+  const documentFor = (id: string, draft: boolean): string[] | undefined =>
+    draft ? (rows.draft?.[id] ?? rows.stored?.[id]) : rows.stored?.[id];
+
   const nextly = {
     find: async () => ({ items: [], meta: { hasNext: false } }),
     findByID: async (a: {
@@ -91,16 +115,8 @@ function api(rows: {
         depth: a.depth,
         override: a.overrideAccess,
       });
-      if (rows.unreadable?.includes(a.id) === true) {
-        throw new Error("this row could not be read");
-      }
-      // What the real Direct API does for a row that is not there: it THROWS
-      // NOT_FOUND unless errors are disabled, rather than answering null.
-      if (rows.deleted?.includes(a.id) === true) {
-        throw NextlyError.notFound({ message: `no component ${a.id}` });
-      }
-      const from = a.draft === true ? rows.draft : rows.stored;
-      const ids = from?.[a.id];
+      refuseWhereTheStoreWould(a.id);
+      const ids = documentFor(a.id, a.draft === true);
       if (ids === undefined) return null;
       // A hook may answer with a row that is not the one asked for.
       const answeredAs = rows.redirect?.[a.id] ?? a.id;
@@ -121,13 +137,49 @@ const register = (ctx: CycleGuardContext) =>
     limits: DEFAULT_LIMITS,
   });
 
-/** An UPDATE of `id`, whose incoming document places `ids`. */
+/**
+ * An UPDATE of `id`, whose incoming document places `ids`.
+ *
+ * Names NO status, which is the ordinary editor save: core stores it as a
+ * working draft and leaves the live row alone, so it changes the preview graph
+ * only.
+ */
 const saving = (id: string, ids: string[], nextly: unknown) => ({
   collection: COMPONENTS,
   operation: "update",
   originalData: { id },
   data: { [FIELD]: places(...ids) },
   req: { nextly },
+});
+
+/** The same write with a status, which reaches the live row as well. */
+const publishing = (id: string, ids: string[], nextly: unknown) => ({
+  ...saving(id, ids, nextly),
+  data: { status: "published", [FIELD]: places(...ids) },
+});
+
+/** A status-ONLY publish, which carries no document and promotes the draft. */
+const publishingPending = (id: string, nextly: unknown) => ({
+  collection: COMPONENTS,
+  operation: "update",
+  originalData: { id },
+  data: { status: "published" },
+  req: { nextly },
+});
+
+/**
+ * A document placing `stored` whose VARIANT re-points that node at `swapped`.
+ *
+ * The exposure targets the instance node's own `componentId`, which is a
+ * supported thing to expose — so the id that resolves when the variant is picked
+ * is `swapped`, and `stored` is never read.
+ */
+const placesViaVariant = (stored: string, swapped: string) => ({
+  ...places(stored),
+  exposed: [
+    { id: "swap", nodeId: "n0", propPath: "componentId", type: "select" },
+  ],
+  variants: { loop: { label: "Loop", overrides: { swap: swapped } } },
 });
 
 describe("saving a component that would reference itself", () => {
@@ -196,7 +248,21 @@ describe("saving a component that would reference itself", () => {
 
     expect(asked.every(a => a.override === true)).toBe(true);
     expect(asked.every(a => a.depth === 0)).toBe(true);
-    // Both forms of the one component it had to look at.
+    // The PREVIEW form only. This save names no status, so core stores it as a
+    // working draft and the live row keeps the document it has — reading the
+    // live graph as well would judge a form this write does not change.
+    expect(asked.map(a => a.draft)).toEqual([true]);
+  });
+
+  it("reads BOTH forms when the write names a status, because both change", async () => {
+    // The counterpart: a publish writes the live row and consumes the pending
+    // draft, so the document lands in both forms and both are judged.
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({ stored: { b: [] } });
+
+    await c.run(publishing("a", ["b"], nextly));
+
     expect(asked.map(a => a.draft).sort()).toEqual([false, true]);
   });
 
@@ -258,7 +324,8 @@ describe("saving a component that would reference itself", () => {
 
   it("still refuses a chain that closes WITHIN one form", async () => {
     // The control for the case above: separating the forms must not stop it
-    // seeing a loop that is entirely inside one of them.
+    // seeing a loop that is entirely inside one of them. Published here, so the
+    // write reaches the live form the loop is in.
     const c = context();
     register(c.ctx);
     const { nextly } = api({
@@ -266,9 +333,71 @@ describe("saving a component that would reference itself", () => {
       draft: { b: [], cc: [] },
     });
 
-    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+    await expect(c.run(publishing("a", ["b"], nextly))).rejects.toThrow(
       /a → b → cc → a/
     );
+  });
+
+  it("allows a draft edit whose loop exists only in the LIVE form", async () => {
+    /*
+     * The write core will make is a working draft; the live row keeps the
+     * document it has. So live `b` naming `a` closes nothing: the public graph
+     * is unchanged, and the preview graph has `b`'s own empty draft in it. The
+     * incoming placements applied to the live graph invent a → live b → a and
+     * refuse an edit an author is entitled to make.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: ["a"] }, draft: { b: [] } });
+
+    await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
+  });
+
+  it("refuses that same edit once it is PUBLISHED, which is when it goes live", async () => {
+    // The other half, and what makes the case above a lifecycle rule rather
+    // than a hole: the very same document is refused by the write that puts it
+    // in front of readers.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: ["a"] }, draft: { b: [] } });
+
+    await expect(c.run(publishing("a", ["b"], nextly))).rejects.toThrow(
+      /a → b → a/
+    );
+  });
+
+  it("judges the document a status-only publish PROMOTES", async () => {
+    /*
+     * A publish carrying only `{ status }` is not graph-neutral: core promotes
+     * the whole pending working draft into the live row. Read as "no document,
+     * nothing to check", a cycle written into a draft before this guard existed
+     * — or by a write that skipped it — reaches the live library unexamined.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { a: [], b: ["a"] },
+      draft: { a: ["b"] },
+    });
+
+    await expect(c.run(publishingPending("a", nextly))).rejects.toThrow(
+      /a → b → a/
+    );
+  });
+
+  it("allows a status-only publish whose pending draft closes nothing", async () => {
+    // The control. Without it a guard that refused every publish would satisfy
+    // the case above.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { a: [], b: [] },
+      draft: { a: ["b"] },
+    });
+
+    await expect(
+      c.run(publishingPending("a", nextly))
+    ).resolves.toBeUndefined();
   });
 
   it("refuses when a by-id read answers with a row claiming another identity", async () => {
@@ -359,12 +488,18 @@ describe("saving a component that would reference itself", () => {
     expect(asked).toEqual([]);
   });
 
-  it("judges a create by the id the caller supplied", async () => {
-    // A caller may supply the id, and a component already referencing that id
-    // makes the create the write that closes the loop.
+  it("leaves a create alone, even when the caller supplied an id", async () => {
+    /*
+     * The supplied id is NOT the identity the row gets: every write path spreads
+     * `stripImmutableSystemFields` over a freshly generated `id`, and `id` is
+     * declared `writableByClient: false`. So a component referencing the
+     * supplied value closes no loop through the row being created — it gets a
+     * different id, which nothing references — and refusing here reports a chain
+     * through a component the author never placed.
+     */
     const c = context();
     register(c.ctx);
-    const { nextly } = api({ stored: { b: ["mine"] } });
+    const { nextly, asked } = api({ stored: { b: ["mine"] } });
 
     await expect(
       c.run({
@@ -373,7 +508,50 @@ describe("saving a component that would reference itself", () => {
         data: { id: "mine", [FIELD]: places("b") },
         req: { nextly },
       })
-    ).rejects.toThrow(/mine → b → mine/);
+    ).resolves.toBeUndefined();
+    // And it costs no reads at all: nothing can reference an id the write is
+    // about to mint, so there is no graph to walk.
+    expect(asked).toEqual([]);
+  });
+
+  it("refuses a document whose VARIANT re-points a node at the component itself", async () => {
+    /*
+     * The raw ids in the document name `b`, and the guard reading only those
+     * approves the save. The resolver applies the variant's override BEFORE
+     * expanding the nested instance, so what resolves is `a` and the loop is
+     * real for every reader who selects that variant.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [] } });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesViaVariant("b", "a") },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/a → a/);
+  });
+
+  it("allows a variant that re-points a node at something harmless", async () => {
+    // The control: it is the variant's TARGET that decides, not the presence of
+    // a variant. Otherwise any component offering one would be unsavable.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [], other: [] } });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesViaVariant("b", "other") },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("leaves a write carrying no document alone", async () => {
@@ -442,8 +620,9 @@ describe("saving a component that would reference itself", () => {
 
     await c.run(saving("a", ["b", "cc"], nextly));
 
+    // The preview form, which is the one a status-less save changes.
     const ids = asked
-      .filter(a => !a.draft)
+      .filter(a => a.draft)
       .map(a => a.id)
       .sort();
     expect(ids).toEqual(["b", "cc", "shared"]);
