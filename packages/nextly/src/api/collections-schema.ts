@@ -24,6 +24,10 @@ import {
   COLLECTION_DEFINITION_RESOURCE,
 } from "../auth/collection-definition-policy";
 import { getService } from "../di";
+import {
+  CREATABLE_SLUG_MAX_LENGTH,
+  CREATABLE_SLUG_PATTERN,
+} from "../domains/collections/creatable-slug";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
@@ -63,12 +67,19 @@ async function getCollectionRegistry(): Promise<CollectionRegistryService> {
 }
 
 const createCollectionSchema = z.object({
+  // The shape comes from `domains/collections/creatable-slug`, which the
+  // dashboard's onboarding checklist also reads to decide whether a caller's
+  // read grant names a collection they could create. Restated here, the
+  // checklist would offer a step this endpoint refuses, or hide one it accepts.
   slug: z
     .string()
     .min(1, "Slug is required")
-    .max(255, "Slug must be 255 characters or less")
+    .max(
+      CREATABLE_SLUG_MAX_LENGTH,
+      `Slug must be ${CREATABLE_SLUG_MAX_LENGTH} characters or less`
+    )
     .regex(
-      /^[a-z][a-z0-9_]*$/,
+      CREATABLE_SLUG_PATTERN,
       "Slug must start with a letter and contain only lowercase letters, numbers, and underscores"
     ),
   labels: z.object({

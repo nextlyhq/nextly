@@ -42,7 +42,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { generateSqliteCoreTableStatements } from "../database/sqlite-core-tables";
 import { createTestNextly, type TestNextly } from "../plugins/test-nextly";
 
-import { seedAllPermissions } from "./seed-permissions";
+import {
+  seedAllPermissions,
+  seedPermissionsAndRolePresets,
+} from "./seed-permissions";
 
 /**
  * The actions collection seeding produces, named once.
@@ -104,6 +107,22 @@ async function permissionSlugsFor(
   return rows.map(row => String(row.slug)).sort();
 }
 
+/** The permission slugs a preset ROLE ended up holding for one resource. */
+async function roleGrantsFor(
+  handle: TestNextly,
+  roleSlug: string,
+  resource: string
+): Promise<string[]> {
+  const rows = (await handle.adapter.executeQuery(
+    `SELECT p.slug AS slug
+       FROM role_permissions rp
+       JOIN roles r ON r.id = rp.role_id
+       JOIN permissions p ON p.id = rp.permission_id
+      WHERE r.slug = '${roleSlug}' AND p.resource = '${resource}'`
+  )) as unknown as Array<{ slug: string }>;
+  return rows.map(row => String(row.slug)).sort();
+}
+
 describe("permission seeding across the two boot paths", () => {
   it("leaves a code-first collection seeded once the request path has initialised", async () => {
     const handle = await bootRegisterServicesOnly();
@@ -138,6 +157,35 @@ describe("permission seeding across the two boot paths", () => {
     await seedAllPermissions();
     expect(await permissionSlugsFor(handle, "reports")).toEqual(
       slugsFor("reports")
+    );
+  });
+
+  it("brings the preset roles along with the permissions, in one operation", async () => {
+    // 🔴 Preset seeding used to be performed by the instrumentation boot's
+    // post-init tasks and by nothing else, so an app that cold booted only
+    // through `createDynamicHandlers` got its permissions and not the roles
+    // meant to cover them -- an administrator never received a new collection's
+    // grants however many times it restarted. The dashboard's onboarding
+    // checklist reads the preset predicates to decide whether creating a
+    // collection is finishable, so on that path it offered a step that was not.
+    //
+    // What this asserts is the OPERATION: seeding permissions and re-resolving
+    // the presets is one call, and an `admin` ends up holding a content
+    // collection's grants. It does NOT drive a real `createDynamicHandlers`
+    // cold boot, so it is not proof that the request path calls it -- that is
+    // a one-line fact in `auth-handler`, not something this fixture reaches.
+    // Stated rather than implied, the way this file's other cases are.
+    const handle = await bootRegisterServicesOnly();
+
+    // The must-differ half: permissions alone leave the preset role empty, so
+    // an assertion that only ran the sweep would pass against the defect.
+    await seedAllPermissions();
+    expect(await roleGrantsFor(handle, "admin", "articles")).toEqual([]);
+
+    await seedPermissionsAndRolePresets();
+
+    expect(await roleGrantsFor(handle, "admin", "articles")).toEqual(
+      slugsFor("articles")
     );
   });
 });

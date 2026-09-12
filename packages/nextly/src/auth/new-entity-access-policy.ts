@@ -22,7 +22,7 @@
  * @module auth/new-entity-access-policy
  */
 
-import { isCreatableCollectionSlug } from "../collections/config/collection-slug-rules";
+import { isCreatableCollectionSlug } from "../domains/collections/creatable-slug";
 import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import { listRoleSlugsForUser } from "../services/lib/permissions";
 
@@ -71,12 +71,13 @@ export interface NewEntityAccessCaller {
  * `assignNewPermissionsToSuperAdmin` runs AS the collection is created and
  * assigns its permissions to {@link NEW_ENTITY_PERMISSION_ROLE} alone.
  *
- * `seedRolePresets` runs at every boot and re-resolves each preset's predicate
- * against the permission list as it then stands, so a preset whose rule covers
- * the new collection picks its permissions up on the next start. `admin` is
- * such a preset -- its rule is "everything except escalation", and a content
- * collection is not an escalation resource -- so an admin who is not a super
- * admin does reach the collection they created, one restart later.
+ * `seedPermissionsAndRolePresets` runs at every boot -- on BOTH boot paths, which
+ * is what makes this route real rather than conditional -- and re-resolves each
+ * preset's predicate against the permission list as it then stands, so a preset
+ * whose rule covers the new collection picks its permissions up on the next
+ * start. `admin` is such a preset -- its rule is "everything except escalation",
+ * and a content collection is not an escalation resource -- so an admin who is
+ * not a super admin does reach the collection they created, one restart later.
  *
  * That delay is why the checklist offers the step rather than hiding it: the
  * step is finishable for them, and a step withheld from someone who can take it
@@ -97,8 +98,14 @@ export function rolesThatWouldReadNewCollection(
  * `canReadEntity` admits an API key on an EXACT `read-<slug>` match, so a grant
  * only makes the step finishable if the caller can go on to create a collection
  * under that exact name. A key stamped `read-settings` cannot: `settings` is a
- * system resource and a collection may not take its name, so that key would
- * create something it still could not read.
+ * system resource, refused on every create path, so that key would create
+ * something it still could not read.
+ *
+ * The rules are the RUNTIME ones, not the code-first validator's. A code-first
+ * config reserves names a Schema-Builder create accepts -- `admin` among them --
+ * and judging a grant by that list would withhold the step from a key that can
+ * finish it, which is the defect this predicate exists to prevent rather than a
+ * cautious version of preventing it.
  *
  * Whether the name is already TAKEN is not asked, and does not need to be. The
  * step is only offered while it is incomplete, and it is complete as soon as
