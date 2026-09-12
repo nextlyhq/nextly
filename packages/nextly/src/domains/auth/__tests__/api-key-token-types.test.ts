@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import {
   isSuperAdmin,
+  listRoleSlugsForUser,
   listRoleSlugsForUserOrRefuse,
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
@@ -34,6 +35,11 @@ vi.mock("../../../services/lib/permissions", async importOriginal => ({
     typeof import("../../../services/lib/permissions")
   >()),
   isSuperAdmin: vi.fn(),
+  // Both, so a case can assert WHICH resolver the service asks. Mocking only
+  // the one it currently calls proves that a rejection propagates and nothing
+  // about whether the swallowing sibling was the one consulted — which is the
+  // whole property here, since that sibling answers `[]` instead of refusing.
+  listRoleSlugsForUser: vi.fn(),
   listRoleSlugsForUserOrRefuse: vi.fn(),
 }));
 
@@ -769,6 +775,24 @@ describe("ApiKeyService – Token Type Permission Resolution", () => {
         await expect(
           service.resolveApiKeyRoles("read-only", null, userId)
         ).rejects.toThrow("roles unreadable");
+      });
+
+      it("asks the refusing resolver and not the one that swallows", async () => {
+        // The discriminating control. The case above mocks whichever resolver
+        // the service calls, so it passes on EITHER wiring: the swallowing one
+        // rejects too, once a test tells it to. Only naming the door
+        // separates a key whose unreadable roles refuse from one whose
+        // unreadable roles read as none.
+        vi.mocked(listRoleSlugsForUser).mockClear();
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockClear();
+        vi.mocked(listRoleSlugsForUserOrRefuse).mockResolvedValueOnce([]);
+
+        await service.resolveApiKeyRoles("read-only", null, userId);
+
+        expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith(
+          userId
+        );
+        expect(vi.mocked(listRoleSlugsForUser)).not.toHaveBeenCalled();
       });
 
       it("still answers when the lookup works, which is what makes that a refusal", async () => {
