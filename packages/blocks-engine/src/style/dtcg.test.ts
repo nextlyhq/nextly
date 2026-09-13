@@ -1560,7 +1560,49 @@ describe("what the reader reports it did not keep", () => {
     expect(said(extensions)).toContain('"foo.$extensions" is not an object');
   });
 
+  it("calls a group's $root a token only when it has a token's shape", () => {
+    // `$root` names a group's own token, and a token is an object carrying
+    // `$value`. Anything else under that key is malformed input, and naming it
+    // as a skipped token would describe something the file does not hold.
+    for (const stated of [42, "x", null, [], {}, { $type: "number" }]) {
+      const document = {
+        g: { $root: stated, t: { $type: "number", $value: 1 } },
+      };
+      expect(said(document)).toContain(
+        '"g.$root" is a design-token field this site does not read'
+      );
+      expect(said(document)).not.toContain("group's own token");
+    }
+    const tokenShaped = { g: { $root: { $value: 1 }, t: { $value: 2 } } };
+    expect(said(tokenShaped)).toContain('"g.$root" is a group\'s own token');
+  });
+
   describe("a type the reader could not use", () => {
+    it("is still named when the token's value is refused as unsafe", () => {
+      // Refused after the kind is chosen, by the writability guard. The type
+      // was ignored whatever the value held, so it is named; the lines that
+      // only describe an IMPORTED token — an unusable dark value — are not.
+      const document = {
+        g: {
+          $type: "dimension",
+          t: {
+            $type: 42,
+            $value: 1,
+            $extensions: {
+              "com.nextlyhq.nextly": {
+                css: { light: "url(evil)", dark: 42 },
+                kind: "number",
+              },
+            },
+          },
+        },
+      };
+      expect(names(document)).toEqual([]);
+      expect(said(document)).toContain('"g.t.$type" is not a usable type');
+      expect(said(document)).not.toContain("group's type");
+      expect(said(document)).not.toContain("css.dark");
+    });
+
     const stored = {
       "com.nextlyhq.nextly": { css: { light: "5" }, kind: "number" },
     };

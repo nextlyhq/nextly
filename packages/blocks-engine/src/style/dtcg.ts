@@ -924,6 +924,17 @@ function statedType(node: DtcgNode): string | undefined {
   return typeof node.$type === "string" ? node.$type : undefined;
 }
 
+/**
+ * Whether a node is a token: an object carrying `$value`.
+ *
+ * The walk reads a child as a token by this, and the report calls a group's
+ * `$root` a skipped token by this, so the two cannot disagree about what a
+ * token is — a `$root` holding a number is malformed input, not a token.
+ */
+function isTokenNode(value: unknown): value is DtcgNode {
+  return isPlainObject(value) && "$value" in value;
+}
+
 /** A token's own `$description` as the reader takes it: text, or nothing. */
 function statedDescription(node: DtcgNode): string | undefined {
   return typeof node.$description === "string" ? node.$description : undefined;
@@ -963,7 +974,7 @@ function read(
       continue;
     }
 
-    if ("$value" in child) {
+    if (isTokenNode(child)) {
       const token = readToken(child, here, groupType, issues);
       if (token !== undefined) tokens.push(token);
       continue;
@@ -1080,7 +1091,7 @@ function unreadReservedField(
   at: string,
   on: "group" | "token"
 ): string {
-  if (on === "group" && key === "$root") {
+  if (on === "group" && key === "$root" && isTokenNode(value)) {
     return `"${at}" is a group's own token, which this site cannot read yet, so it was skipped.`;
   }
   if (on === "group" && key === "$extends") {
@@ -1269,15 +1280,23 @@ function readToken(
   const assemble = (
     kind: TokenKind,
     values: { light: string; dark?: string },
+    groupType: string | undefined,
     decided: readonly (string | undefined)[]
   ): SiteToken | undefined => {
     // The guard lives here rather than at each call, so the shorter extension
     // path cannot be the one that skips it: its CSS is arbitrary JSON from a
     // file exactly as `$value` is, and is trusted no further.
-    if (!isWritableValue(values, name, issues)) return undefined;
+    const before = issues.length;
+    if (!isWritableValue(values, name, issues)) {
+      // The type was ignored whatever the value held, so a refused token still
+      // names it, ahead of the refusal and crediting no group: nothing landed.
+      const ignored = typeUnread(node, name);
+      if (ignored !== undefined) issues.splice(before, 0, issue(ignored));
+      return undefined;
+    }
     // A loss belonging to the path taken is said only once that path has made
     // a token, so a token refused afterwards never reports how it was read.
-    for (const line of decided)
+    for (const line of [typeUnread(node, name, groupType), ...decided])
       if (line !== undefined) issues.push(issue(line));
     return {
       ...(id !== undefined ? { id } : {}),
@@ -1306,10 +1325,7 @@ function readToken(
       // is the only place that knows both what the file stated and what was
       // taken instead, so anywhere else would be guessing at that decision.
       reportOverridden(node.$value, css.light, kind, name, issues);
-      return assemble(kind, values, [
-        typeUnread(node, name),
-        darkUnread(dark, name),
-      ]);
+      return assemble(kind, values, undefined, [darkUnread(dark, name)]);
     }
   }
 
@@ -1338,14 +1354,7 @@ function readToken(
     return undefined;
   }
 
-  return assemble(kind, { light }, [
-    typeUnread(
-      node,
-      name,
-      statedType(node) === undefined ? inherited : undefined
-    ),
-    storedValuesUnread(own, name),
-  ]);
+  return assemble(kind, { light }, inherited, [storedValuesUnread(own, name)]);
 }
 
 /**
