@@ -1,11 +1,9 @@
 /**
  * What `callerMayPerform` answers for a READ of an entity, for every kind of
- * caller, as it behaves today.
+ * caller.
  *
- * It is one of several functions that each decide "may this caller read this
- * entity", and the only one no test named directly: its read decision was
- * reached only through `PluginRouteCaller.can()`. These cases pin each cell so
- * that folding it into a shared read decision cannot change an answer unseen.
+ * Each case pins one cell of that decision — a kind of caller against a state
+ * of the entity's rule — so a change to any single answer fails a named test.
  *
  * The RBAC service is a stub that says yes to everything a session asks. A
  * scoped API key is judged on its own grant and the entity's code rule, never

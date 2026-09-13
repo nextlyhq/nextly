@@ -1,13 +1,13 @@
 /**
- * What populating a relationship answers about its TARGET, for the callers the
- * existing relationship-access suite does not name, as it behaves today.
+ * What populating a relationship answers about its TARGET, for each kind of
+ * caller.
  *
  * Expansion decides read access to the target by itself rather than through
  * the collection read gate, and it decides differently in two documented ways:
  * it never asks whether the caller holds `read-<target>`, and a target with no
  * read rule admits. These cases pin those answers cell by cell, beside the
- * direct read of the same target where the two doors disagree, so that folding
- * expansion into a shared read decision cannot change either answer unseen.
+ * direct read of the same target where the two disagree, so a change to either
+ * answer fails a named test.
  *
  * Not pinned here: expansion with no RBAC service registered. Every instance
  * `createTestNextly` builds registers one.
