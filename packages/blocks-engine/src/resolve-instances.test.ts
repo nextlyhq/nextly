@@ -2544,6 +2544,67 @@ describe("variantReferencesIn", () => {
     expect(out.byVariant.size).toBe(0);
   });
 
+  it("reports a forest too large to index as UNREAD", () => {
+    // A published entry point takes its own bound. That its internal callers
+    // happen to survey the forest first is a property of today's call graph, not
+    // a guarantee this function offers a caller holding an imported document.
+    const big = component(
+      [
+        instance("n1", "c"),
+        ...Array.from({ length: 11 }, (_, i) => node(`t${String(i)}`)),
+      ],
+      {
+        exposed: [
+          {
+            id: "swap",
+            label: "Which",
+            nodeId: "n1",
+            propPath: "componentId",
+            type: "select",
+          },
+        ],
+        variants: { toA: { label: "A", overrides: { swap: "a" } } },
+      }
+    );
+
+    expect(variantReferencesIn(big, 4).complete).toBe(false);
+
+    // CONTROL: under a bound that fits, the same document reads completely AND
+    // reports the variant — so the case above is the bound, not the fixture.
+    const fits = variantReferencesIn(big, 5000);
+    expect(fits.complete).toBe(true);
+    expect([...fits.byVariant]).toEqual([["toA", ["a"]]]);
+  });
+
+  it("names a variant that reaches the graph WITHOUT installing a new id", () => {
+    /*
+     * The distinction `byVariant` alone cannot make. This variant writes an
+     * `overrides` record onto the placement, which flows DOWN into the placed
+     * definition — so what it installs at this level is the node's own unchanged
+     * id, while the composed tree below it is different.
+     */
+    const doc = component([instance("n1", "c")], {
+      exposed: [
+        {
+          id: "pass",
+          label: "Pass",
+          nodeId: "n1",
+          propPath: "overrides",
+          type: "select",
+        },
+      ],
+      variants: {
+        deep: { label: "Deep", overrides: { pass: { inner: "a" } } },
+      },
+    });
+    const out = variantReferencesIn(doc);
+
+    expect(out.affecting.has("deep")).toBe(true);
+    // And it installs only the id the node already stored, which is why a caller
+    // choosing on installed ids would have dropped it.
+    expect(out.byVariant.get("deep")).toEqual(["c"]);
+  });
+
   it("is EMPTY for a document offering no variants or no exposures", () => {
     expect(variantReferencesIn(doc({})).byVariant.size).toBe(0);
     expect(

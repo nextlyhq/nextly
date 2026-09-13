@@ -73,7 +73,6 @@ import {
   DOCUMENT_FORMAT_VERSION,
   componentReach,
   componentReachIn,
-  componentIdsIn,
   componentReferencesFrom,
   resolveComponentInstances,
   variantNamesIn,
@@ -202,7 +201,7 @@ async function refuseACycle(
 
   // Decided from the document in hand, so it is decided BEFORE the declines
   // below. Those exist for the graph READS, and this question needs none.
-  refuseASelfReference(submitted, self, options);
+  await refuseASelfReference(submitted, self, options);
 
   const nextly = directApiOf(context);
   // No Direct API to ask with. A guard that refused every write it could not
@@ -237,13 +236,28 @@ async function refuseACycle(
  * The chain is the subject twice over, so there is nothing to redact: both ids
  * are the one the author is saving.
  */
-function refuseASelfReference(
+async function refuseASelfReference(
   submitted: { readonly document: unknown } | "absent",
   self: string,
   options: CycleGuardOptions
-): void {
+): Promise<void> {
   if (submitted === "absent") return;
+  // The ID survey only says where to LOOK. It reads a stored id off every node,
+  // and the renderer does not expand a condition-gated instance at all — so a
+  // component holding a gated self-placeholder composes with no loop in it, and
+  // refusing on the survey alone makes that component unsavable.
   if (!namesItself(submitted.document, self, options)) return;
+
+  // So the composition decides here too, and still costs no read: the subject is
+  // the one document in hand, so a loop it closes on itself is found in the
+  // first round and nothing is ever asked of the library. A reader that refuses
+  // everything is therefore not a limitation — it is the assertion that this
+  // answer needed nothing.
+  const composed = await composesACycle(submitted.document, self, options, () =>
+    Promise.resolve({ kind: "unreadable" as const })
+  );
+  if (composed !== "cycle") return;
+
   throw refusal(
     `This component cannot be saved because it would reference itself: ` +
       `${self} → ${self}. Remove that placement and save again.`
@@ -543,33 +557,21 @@ function selectionsWorthComposing(
   if (named === null) return null;
   if (named.length === 0) return [undefined];
 
-  const installing = variantReferencesIn(document);
+  const installing = variantReferencesIn(document, options.limits.maxNodes);
   if (!installing.complete) return null;
 
-  // What the DEFAULT selection already reaches, from the ids the nodes CARRY.
-  // Not `componentReachIn`, which unions the variants in — measuring against
-  // that would find every variant already accounted for and compose none.
-  // `componentIdsIn` reads a FOREST, not a document — the same narrowing this
-  // module already does to reach a submitted document's nodes.
-  const nodes = (document as { nodes?: unknown }).nodes;
-  const already = new Set(
-    Array.isArray(nodes) ? componentIdsIn(nodes, options.limits.maxNodes) : []
-  );
-
-  // A variant is worth composing only where it installs an id the default does
-  // not already reach. `installedOn` reports the componentId of every node an
-  // override WROTE to, so a variant merely setting a caption on an instance node
-  // reports that node's unchanged id — and those are most of the variants a real
-  // component declares. Comparing against the default is what tells an override
-  // that moves a reference from one that only passes beside it.
+  // Every variant that can CHANGE what the document composes to, which is not
+  // the same as every variant that installs a new id. A variant may write an
+  // `overrides` record onto a placement and re-point a node two levels below it
+  // while every componentId this document holds stays exactly as stored — so
+  // choosing on installed ids drops precisely the variants whose effect no
+  // one-level scan can see.
   //
-  // Sound for this question because reachability is a SET: a variant whose ids
-  // the default already reaches composes over the same reachable set, so it can
-  // close no loop the default does not. One that hides a node reaches fewer, and
-  // removing references closes nothing either.
-  const worth = [...installing.byVariant]
-    .filter(([, ids]) => ids.some(id => !already.has(id)))
-    .map(([variant]) => variant);
+  // What is skipped is what provably cannot reach the graph: a variant writing
+  // only captions, colours or visibility. One that hides a node reaches FEWER
+  // components than the default selection, and removing references closes no
+  // loop the default did not already have.
+  const worth = [...installing.affecting];
   if (worth.length > MOST_SELECTIONS_COMPOSED) return null;
 
   // The default selection first, so an ordinary save reaches its answer before

@@ -476,11 +476,41 @@ function withVariantReferences(
   return { ids, complete: true };
 }
 
-/** What each variant installs, and whether the variants could all be read. */
+/**
+ * The props of a component instance that decide what it composes to.
+ *
+ * An exposure's `propPath` is a dot path into a node's props, so a write whose
+ * path begins with one of these can change the composed graph: `componentId`
+ * names the placed component outright, `variant` selects presets that can name
+ * one, and `overrides` flows DOWN into the placed definition and can re-point a
+ * node levels below. A write to any other path — a caption, a colour — reaches
+ * the rendered output and never the graph.
+ *
+ * Listed here rather than inferred, because they are this package's own contract
+ * (`ComponentInstanceProps`) rather than someone else's spelling.
+ */
+const GRAPH_REACHING_PROPS: readonly string[] = [
+  "componentId",
+  "variant",
+  "overrides",
+];
+
+/** What each variant installs, whether it can change composition, and whether it could be read. */
 export interface VariantReferences {
   /** Variant name to the component ids its overrides install, in declared order. */
   readonly byVariant: ReadonlyMap<string, readonly string[]>;
-  /** `false` where the variants could not be enumerated within the envelope bound. */
+  /**
+   * The variants whose overrides can change what the document composes to.
+   *
+   * A SUPERSET of `byVariant`'s keys, and the difference is the point. A variant
+   * may re-point a node two levels down by writing an `overrides` record without
+   * touching any `componentId` this document holds — so the ids it installs are
+   * unchanged while the composed tree is not. A caller choosing which selections
+   * to compose has to use this; choosing on installed ids alone drops exactly the
+   * variants whose effect no one-level scan can see.
+   */
+  readonly affecting: ReadonlySet<string>;
+  /** `false` where the variants or the forest could not be read within the bounds. */
   readonly complete: boolean;
 }
 
@@ -500,30 +530,66 @@ export interface VariantReferences {
  * link does not reach the graph at all, and one that HIDES a node only removes
  * references the default selection was already judged on.
  */
-export function variantReferencesIn(document: unknown): VariantReferences {
-  const empty = new Map<string, readonly string[]>();
+export function variantReferencesIn(
+  document: unknown,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): VariantReferences {
+  const nothing = {
+    byVariant: new Map<string, readonly string[]>(),
+    affecting: new Set<string>(),
+  };
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
-    return { byVariant: empty, complete: true };
+    return { ...nothing, complete: true };
   }
   const variants = document.variants;
-  if (!isPlainRecord(variants)) return { byVariant: empty, complete: true };
+  if (!isPlainRecord(variants)) return { ...nothing, complete: true };
   const names = boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES);
   // More variants than the envelope admits. Reported as unread rather than
   // scanned to the bound: a prefix of the variants is a prefix of the answer.
-  if (names === null) return { byVariant: empty, complete: false };
+  if (names === null) return { ...nothing, complete: false };
   // No exposure means no override can reach a node, whatever the variants say.
   const declared = usableExposures(document.exposed);
   if (names.length === 0 || declared.length === 0) {
-    return { byVariant: empty, complete: true };
+    return { ...nothing, complete: true };
   }
 
-  const nodes = nodeIndex(document.nodes as readonly BlockNode[]);
+  // BOUNDED, because this is a public entry point: a caller may hand it an
+  // imported document larger than any limit admits, and the internal callers
+  // that happen to survey the forest first are a property of today's call graph
+  // rather than a guarantee this function offers.
+  const cap = boundedLimit(maxNodes, "maxNodes", "variantReferencesIn");
+  const indexed = boundedNodeIndex(document.nodes as readonly BlockNode[], cap);
+  if (!indexed.complete) return { ...nothing, complete: false };
+
+  const reaching = new Set(
+    declared
+      .filter(property =>
+        GRAPH_REACHING_PROPS.includes(property.propPath.split(".")[0] ?? "")
+      )
+      .map(property => property.id)
+  );
+
   const byVariant = new Map<string, readonly string[]>();
+  const affecting = new Set<string>();
   for (const name of names) {
-    const installed = installedBy(document, name, declared, nodes);
+    const installed = installedBy(document, name, declared, indexed.index);
     if (installed.length > 0) byVariant.set(name, installed);
+    if (writesAnyOf(variants[name], reaching)) affecting.add(name);
   }
-  return { byVariant, complete: true };
+  return { byVariant, affecting, complete: true };
+}
+
+/** Whether a variant's overrides name any of the exposures given. */
+function writesAnyOf(variant: unknown, reaching: ReadonlySet<string>): boolean {
+  if (reaching.size === 0) return false;
+  if (!isPlainRecord(variant)) return false;
+  const overrides = variant.overrides;
+  if (!isPlainRecord(overrides)) return false;
+  const keys = boundedOwnKeys(overrides, MAX_ENVELOPE_ENTRIES);
+  // Unreadable overrides are treated as reaching the graph: this decides whether
+  // a selection is worth COMPOSING, and the safe answer is to compose it.
+  if (keys === null) return true;
+  return keys.some(key => reaching.has(key));
 }
 
 /**

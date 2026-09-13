@@ -1278,6 +1278,134 @@ describe("saving a component that would reference itself", () => {
     ).rejects.toThrow(/could not all be read/);
   });
 
+  it("allows a self-placement the renderer never expands", async () => {
+    /*
+     * A condition-gated instance is left unexpanded by `resolveComponentInstances`,
+     * so a component holding a gated placeholder of ITSELF composes with no loop
+     * in it and no reader ever sees one.
+     *
+     * The id survey cannot tell that: it reads the stored id off every node. So
+     * the survey says where to LOOK and the composition still decides — which it
+     * can do here without a single read, because the subject is the one document
+     * already in hand.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({ stored: {} });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "a" },
+                visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+              },
+            ],
+          },
+        },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    // And it establishes that without asking the library anything.
+    expect(asked).toEqual([]);
+  });
+
+  it("CONTROL: the same placement UNGATED is refused", async () => {
+    // One difference — the visibility envelope — and the opposite outcome, so the
+    // case above is about the gate rather than about a fixture that never closed
+    // a loop at all.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: {} });
+
+    await expect(c.run(saving("a", ["a"], nextly))).rejects.toThrow(/a → a/);
+  });
+
+  it("composes a variant that re-points a node through NESTED overrides", async () => {
+    /*
+     * The variant writes an `overrides` record onto its own placement of `bb`,
+     * and that record re-points `cc`'s nested instance at the component being
+     * saved — two levels below the node the variant touched. Every componentId
+     * this document stores is unchanged, so a scan of what the variant INSTALLS
+     * reports nothing new and would skip the selection entirely.
+     *
+     * Which is why the skip is decided by what a variant can REACH rather than by
+     * the ids it installs.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: {
+        bb: {
+          ...places("cc"),
+          exposed: [
+            {
+              id: "pass",
+              label: "Pass",
+              nodeId: "n0",
+              propPath: "overrides",
+              type: "select",
+            },
+          ],
+        },
+        cc: {
+          ...places("dd"),
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        },
+      },
+      stored: { dd: [] },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...places("bb"),
+            // The subject exposes its OWN placement's overrides record, so the
+            // variant writes the record `bb` then reads through its own `pass`.
+            exposed: [
+              {
+                id: "outer",
+                label: "Outer",
+                nodeId: "n0",
+                propPath: "overrides",
+                type: "select",
+              },
+            ],
+            variants: {
+              loop: {
+                label: "Loop",
+                overrides: { outer: { pass: { swap: "a" } } },
+              },
+            },
+          },
+        },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/would reference itself/);
+  });
+
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {
     /*
      * The raw ids in the document name `b`, and the guard reading only those
