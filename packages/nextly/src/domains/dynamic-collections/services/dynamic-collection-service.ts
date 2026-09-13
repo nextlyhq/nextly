@@ -30,7 +30,7 @@ import {
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
 import {
-  readColumnsContainingNull,
+  readColumnNullState,
   readForeignKeyColumns,
   readIndexNames,
   tableHasRows,
@@ -238,6 +238,7 @@ export class DynamicCollectionService extends BaseService {
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
     columnsContainingNull: ReadonlySet<string>;
+    columnsAbsentFromTable: ReadonlySet<string>;
   }> {
     // A collection whose creation migration has not been deployed yet has a registry record and
     // no table. Reading from it throws, which would block every follow-up edit to a collection
@@ -251,8 +252,11 @@ export class DynamicCollectionService extends BaseService {
     if (!(await this.adapter.tableExists(tableName))) {
       return {
         tableHasRows: false,
-        // No table, no rows, so no column holds a null.
+        // No table, no rows: nothing holds a null, and nothing can be
+        // tightened against a table the deployment has not built yet either —
+        // which the create artefact handles, not this diff.
         columnsContainingNull: new Set<string>(),
+        columnsAbsentFromTable: new Set<string>(),
         ...this.schemaService.plannedAttachments(tableName, pendingFields),
       };
     }
@@ -268,12 +272,7 @@ export class DynamicCollectionService extends BaseService {
       tableHasRows(db, this.adapter.dialect, tableName),
       readForeignKeyColumns(db, this.adapter.dialect, tableName),
       readIndexNames(db, this.adapter.dialect, tableName),
-      readColumnsContainingNull(
-        db,
-        this.adapter.dialect,
-        tableName,
-        nullableColumns
-      ),
+      readColumnNullState(db, this.adapter.dialect, tableName, nullableColumns),
     ]);
 
     // What the table carries, and only that.
@@ -293,7 +292,8 @@ export class DynamicCollectionService extends BaseService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
-      columnsContainingNull: holdingNull,
+      columnsContainingNull: holdingNull.holdingNull,
+      columnsAbsentFromTable: holdingNull.absent,
     };
   }
 

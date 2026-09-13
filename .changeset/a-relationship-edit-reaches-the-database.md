@@ -138,6 +138,14 @@ Two things about the check above, both found before it shipped:
   silently removed the relationship's configured default for future inserts.
   Both callers now render that statement through one function.
 
+A column the live table does not have YET is its own answer, not a clean one.
+Its `ADD` is queued, so it holds no nulls today — and reading that as "no
+nulls" let a save make the field required, after which the deployment creates
+the column holding NULL in every existing row and fails on the next statement.
+Absence is reported separately now and refused only where the table already
+has entries, with its own message: deploy the change that adds the field
+first, fill the entries in, then make it required.
+
 Which columns exist is read from the database rather than predicted from the
 field definitions. Predicting it was wrong twice — a localized collection
 keeps its translatable columns in a companion table, and a deployment holding

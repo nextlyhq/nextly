@@ -262,10 +262,24 @@ export class DynamicCollectionSchemaService {
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[],
     rename: { from: FieldDefinition; to: FieldDefinition } | null,
-    options?: { columnsContainingNull?: ReadonlySet<string> }
+    options?: {
+      columnsContainingNull?: ReadonlySet<string>;
+      columnsAbsentFromTable?: ReadonlySet<string>;
+      tableHasRows?: boolean;
+    }
   ): void {
     const holdingNull = options?.columnsContainingNull;
-    if (holdingNull === undefined || holdingNull.size === 0) return;
+    // A column the live table does not have YET is the third state, and it is
+    // not the safe one. Its `ADD` is queued; applying it over a table that
+    // already has rows creates it holding NULL in every one of them, so a
+    // tightening in the same deployment adds the column in one migration and
+    // fails on the next. Over an EMPTY table there is nothing to violate, so
+    // `tableHasRows` is what separates the two.
+    const pendingOverRows =
+      options?.tableHasRows === true
+        ? options.columnsAbsentFromTable
+        : undefined;
+    if (holdingNull === undefined && pendingOverRows === undefined) return;
     const oldByName = new Map(oldFields.map(f => [f.name, f]));
     for (const field of newFields) {
       if (field.required !== true) continue;
@@ -284,19 +298,36 @@ export class DynamicCollectionSchemaService {
       // this save: the nulls were counted against that column, and the rename
       // has not happened yet when they were.
       const column = toSnakeCase(previous.name);
-      if (!holdingNull.has(column)) continue;
+      const holdsNull = holdingNull?.has(column) === true;
+      const notYetApplied = pendingOverRows?.has(column) === true;
+      if (!holdsNull && !notYetApplied) continue;
+      // Two causes, two remedies: fill the empty entries in, or deploy the
+      // migration that adds the column before the one that tightens it. One
+      // message for both would name the wrong fix half the time.
       throw NextlyError.validation({
         errors: [
           {
             path: `fields.${field.name}`,
-            code: "REQUIRED_COLUMN_HAS_NULLS",
-            message:
-              `"${field.name}" cannot be made required while entries still ` +
-              `leave it empty. Give every entry a value for it first, or ` +
-              `leave the field optional.`,
+            code: holdsNull
+              ? "REQUIRED_COLUMN_HAS_NULLS"
+              : "REQUIRED_COLUMN_NOT_YET_APPLIED",
+            message: holdsNull
+              ? `"${field.name}" cannot be made required while entries still ` +
+                `leave it empty. Give every entry a value for it first, or ` +
+                `leave the field optional.`
+              : `"${field.name}" cannot be made required in the same ` +
+                `deployment that adds it, because this collection already has ` +
+                `entries and they would all start out empty. Deploy the ` +
+                `change that adds the field first, give the existing entries ` +
+                `a value, then make it required.`,
           },
         ],
-        logContext: { field: field.name, column, previous: previous.name },
+        logContext: {
+          field: field.name,
+          column,
+          previous: previous.name,
+          reason: holdsNull ? "holds-null" : "column-not-yet-applied",
+        },
       });
     }
   }

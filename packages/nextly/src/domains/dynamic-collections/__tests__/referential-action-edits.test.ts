@@ -882,3 +882,74 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
     });
   }
 );
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "making a field required in the same deployment that adds it, on %s",
+  dialect => {
+    const optional = manyToOne({ onDelete: "cascade" });
+    const required = {
+      ...manyToOne({ onDelete: "cascade" }),
+      required: true,
+    } as FieldDefinition;
+    const alter = (options: Record<string, unknown>) =>
+      service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [optional],
+        [required],
+        options as never
+      );
+
+    it("refuses when the column is not applied yet and the table has entries", () => {
+      // The third state. The column is absent because its ADD is queued, so it
+      // holds no nulls TODAY — and reading that as "clean" lets the save
+      // tighten it. On deployment the first migration creates it holding NULL
+      // in every existing row and the second fails on NOT NULL, after MySQL has
+      // auto-committed the first.
+      try {
+        alter({
+          columnsContainingNull: new Set<string>(),
+          columnsAbsentFromTable: new Set(["author"]),
+          tableHasRows: true,
+        });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
+    });
+
+    it("allows it when the table has no entries to be left empty", () => {
+      // The control that keeps the refusal narrow: over an empty table the
+      // column is created and tightened with nothing to violate, which is the
+      // ordinary case of adding a required field to a new collection.
+      expect(() =>
+        alter({
+          columnsContainingNull: new Set<string>(),
+          columnsAbsentFromTable: new Set(["author"]),
+          tableHasRows: false,
+        })
+      ).not.toThrow();
+    });
+
+    it("names the cause, because the two remedies differ", () => {
+      // Holding nulls is fixed by filling them in; not-yet-applied is fixed by
+      // deploying one migration before the other. One code for both would send
+      // the reader to the wrong fix half the time.
+      try {
+        alter({
+          columnsContainingNull: new Set(["author"]),
+          columnsAbsentFromTable: new Set<string>(),
+          tableHasRows: true,
+        });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(JSON.stringify(error)).toContain("REQUIRED_COLUMN_HAS_NULLS");
+        expect(JSON.stringify(error)).not.toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
+    });
+  }
+);
