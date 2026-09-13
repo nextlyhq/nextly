@@ -63,6 +63,18 @@ async function getCollectionRegistry(): Promise<CollectionRegistryService> {
 }
 
 const createCollectionSchema = z.object({
+  // 🔴 This endpoint's own slug rules, NOT `collectionNameSchema`. The Schema
+  // Builder posts to `POST /collections`, which validates with that schema --
+  // 50 characters, a curated reserved list, a SQL-keyword refusal. This is a
+  // different door: a manifest-shaped create for callers driving the schema
+  // API directly, and it has always accepted names that one rejects.
+  //
+  // Kept apart deliberately rather than by omission. Converging them narrows
+  // what this endpoint accepts, which is a breaking change for anything already
+  // posting a 60-character slug, and it belongs in its own change with its own
+  // migration story. Anything deciding whether a name is creatable through the
+  // ADMIN surface must read `domains/collections/creatable-slug`, which asks the
+  // Builder's validator, rather than borrowing these limits.
   slug: z
     .string()
     .min(1, "Slug is required")
