@@ -290,6 +290,37 @@ Specific examples:
 | 2 | `MIGRATION_TAMPERED`. Abort before running any. |
 | 3 | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
 
+## Builder entities and production
+
+Everything above describes how **columns** reach production. Entities created in the
+[Visual Schema Builder](/docs/schema-builder) carry a second thing: a row in a registry table —
+`dynamic_collections`, `dynamic_singles` or `dynamic_components` — holding the label, description,
+admin display settings and the Status, Internationalization, Versions, Revalidate and Webhooks
+switches. The runtime reads its Drizzle table from that row, so the row matters as much as the
+columns do.
+
+The two do not travel the same way today:
+
+| Entity | Columns reach production via | Registry row reaches production via |
+|---|---|---|
+| Collection | a `.sql` migration the Builder writes | the same file, **only when that save also changed a column** |
+| Single | its DDL, applied to the connected database | nothing — no file is written for any operation |
+| Field Group | its DDL, applied to the connected database | nothing — no file is written for any operation |
+
+Two consequences worth planning around:
+
+- **A metadata-only edit does not leave your machine.** Renaming a label or flipping the Versions
+  or Webhooks switch changes no column, so no migration file is written and `nextly migrate:create`
+  reports `No changes detected`. Production keeps the previous setting.
+- **A registry row can be stale, absent or orphaned while the table itself is correct.** The
+  `migration_status` column on each registry row records how far a change got, and a row describing
+  a table that no longer matches it is the case `nextly migrate` cannot see: the migration ledger
+  tracks `.sql` files, not registry rows.
+
+Until metadata travels with migrations, treat a Builder change that flips a switch as a change you
+must make in each environment, and prefer declaring those settings in `nextly.config.ts` where you
+need them versioned and reviewed.
+
 ## What `nextly migrate:check` does (CI-friendly, no DB)
 
 Runs five integrity checks; first failure exits non-zero with a specific code:

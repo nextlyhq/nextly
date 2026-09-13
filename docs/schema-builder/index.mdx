@@ -3,13 +3,13 @@ title: Visual Schema Builder
 description: Design Collections, Singles, and Field Groups visually with drag-and-drop instead of writing code.
 ---
 
-The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces, plus the matching TypeScript types and Drizzle migration files. You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
+The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces, plus the matching TypeScript types. Only the Collections Builder writes a file to disk: a Drizzle migration. Singles and Field Groups persist to the database alone — see [Persistence](#persistence). You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
 
 The Schema Builder has three variants that share the same canvas, palette, and field editor:
 
 | Variant | Route | Output |
 |---|---|---|
-| Collections Builder | `/admin/builder/collections` | Persists the schema row, generates a TypeScript schema file under `db.schemasDir` (default `./src/db/schemas/collections/`), and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). |
+| Collections Builder | `/admin/builder/collections` | Persists the schema row and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). No TypeScript schema file is written: the runtime builds its Drizzle table from the `dynamic_collections` row instead. |
 | Singles Builder | `/admin/builder/singles` | Persists the schema in the `dynamic_singles` database table. No files written to disk. |
 | Field Groups Builder | `/admin/builder/field-groups` | Persists the field group definition in the database. No files written to disk. |
 
@@ -78,17 +78,21 @@ A Component field embeds a reusable field group definition (created via the Fiel
 9. Reorder the fields by dragging the grip handles.
 10. Click **Save**. For Collections, the toolbar previews the schema diff before applying it; for Singles and Components the change applies immediately.
 
-After save, the new collection appears in the admin sidebar under Collections. The generated TypeScript schema and Drizzle migration are written to your `db.schemasDir` and `db.migrationsDir` and should be committed alongside your code.
+After save, the new collection appears in the admin sidebar under Collections. The Drizzle migration is written to your `db.migrationsDir` and should be committed alongside your code.
 
 ## Persistence
 
 | Entity | Where it is stored | What gets generated |
 |---|---|---|
-| Collection | `dynamic_collections` table + files on disk | TypeScript schema file (`<slug>.ts` under `db.schemasDir`) and a Drizzle migration in `db.migrationsDir`. The schema file's path is exported from a generated `index.ts` so the runtime can import it. |
+| Collection | `dynamic_collections` table + a migration file on disk | A Drizzle migration in `db.migrationsDir`. No TypeScript schema file: the runtime builds the Drizzle table from the `dynamic_collections` row, so a generated file would only drift from it. |
 | Single | `dynamic_singles` table | Runtime-only: the schema is regenerated from the database row on each request. No files are written. |
 | Component | Database row | Runtime-only: stored alongside dynamic singles. No files are written. |
 
-When you edit and re-save a collection, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar). The generator avoids re-running migrations that have already been applied — see [`packages/nextly/src/services/collection-file-manager.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/services/collection-file-manager.ts) for the implementation.
+When you edit and re-save a collection in a way that changes its **data table**, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar).
+
+An edit that changes only metadata — a label, a description, or the Status, Internationalization, Versions, Revalidate or Webhooks switches — changes no column, so no migration file is written. That edit applies to the database the running process is connected to and does not travel to another environment on its own. Plan for it: see [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production).
+
+Applied migrations are not re-run: `nextly migrate` records every file it applies in the `nextly_migrations` table and skips what is already there. That ledger belongs to the migration runner, not to the Builder's file writer.
 
 ## Permissions and visibility
 
