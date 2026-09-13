@@ -107,4 +107,8 @@ export interface AllLocalesLifecycleParams {
   authenticatedScope?: AuthenticatedScope;
   /** Who performed the transition, recorded on the events and the trail. */
   actor?: RequestActor;
+  /** The request this operation's hooks are told about. */
+  request?: Request;
+  /** Values shared between this operation's hooks. */
+  context?: Record<string, unknown>;
 }

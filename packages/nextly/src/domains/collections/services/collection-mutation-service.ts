@@ -5023,16 +5023,16 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Publish ALL languages of an entry at once (i18n M7, spec §10).
+   * Publish every language of an entry at once.
    *
-   * Unchanged in behaviour and in signature: the route, the dispatcher and the
-   * admin hooks that call this keep working. What moved is where the work is
-   * stated — see {@link LifecycleDirection}.
+   * An ordinary update under the wildcard locale, so hooks, field rules,
+   * validation, the publish permission, every language's pending change, the
+   * version and the events all come from the one write path.
    */
   async publishAllLocales(
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
-    return this.setLifecycleAllLocales(PUBLISH_ALL_LOCALES, params);
+    return this.moveEveryLanguage(PUBLISH_ALL_LOCALES, params);
   }
 
   /**
@@ -5103,7 +5103,104 @@ export class CollectionMutationService extends BaseService {
         data: null,
       };
     }
-    return this.setLifecycleAllLocales(WITHDRAW_ALL_LOCALES, params);
+    return this.moveEveryLanguage(WITHDRAW_ALL_LOCALES, params);
+  }
+
+  /**
+   * Move every language of a document through the one write path.
+   *
+   * A status patch under the wildcard locale is an ordinary update: hooks,
+   * field rules, validation, the lifecycle permission, every language's pending
+   * change, the version and the events all come from `updateEntry`.
+   */
+  private async moveEveryLanguage(
+    direction: LifecycleDirection,
+    params: AllLocalesLifecycleParams
+  ): Promise<CollectionServiceResult> {
+    let nothingToDo: CollectionServiceResult | null;
+    try {
+      nothingToDo = await this.lifecycleNothingToDo(direction, params);
+    } catch (error) {
+      return {
+        success: false,
+        statusCode: 500,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to change the status of every language",
+        data: null,
+        // A typed error keeps its own status and code.
+        ...errorEnvelopeFields(error),
+      };
+    }
+    if (nothingToDo) return nothingToDo;
+    const result = await this.updateEntry(
+      {
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        user: params.user,
+        actor: params.actor,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        request: params.request,
+        context: params.context,
+        locale: EVERY_LOCALE,
+      },
+      { status: direction.nextStatus }
+    );
+    if (!result.success) return result;
+    return {
+      ...result,
+      message: direction.successMessage,
+      data: { id: params.entryId, status: direction.nextStatus },
+    };
+  }
+
+  /**
+   * The answer for a collection with no draft/published lifecycle: the entry
+   * exists, the caller may update it, and there is nothing to move. `null` when
+   * the collection has a lifecycle, so the move goes ahead.
+   */
+  private async lifecycleNothingToDo(
+    direction: LifecycleDirection,
+    params: AllLocalesLifecycleParams
+  ): Promise<CollectionServiceResult | null> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    if ((collection as { status?: boolean }).status === true) return null;
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const [existing] = await this.db
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1);
+    if (!existing) {
+      return {
+        success: false,
+        statusCode: 404,
+        message: "Entry not found",
+        data: null,
+      };
+    }
+    const denied = await this.accessService.checkCollectionAccess({
+      collectionName: params.collectionName,
+      operation: "update",
+      user: params.overrideAccess ? undefined : params.user,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
+      authenticatedScope: params.authenticatedScope,
+    });
+    if (denied) return denied;
+    return {
+      success: true,
+      statusCode: 200,
+      message: direction.nothingToDoMessage,
+      data: { id: params.entryId },
+    };
   }
 
   /**
@@ -6081,6 +6178,10 @@ export class CollectionMutationService extends BaseService {
       from: string | null;
       data: Record<string, unknown>;
     }[] = [];
+    // Whether the write locale's companion recorded the same transition as the
+    // main row, set where the durable status events are routed and read after
+    // the commit so the in-process events follow the same rule.
+    let mainTransitionEncodedByCompanion = false;
     try {
       // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
@@ -6836,6 +6937,7 @@ export class CollectionMutationService extends BaseService {
       await withVersionConflictRetry(() =>
         this.adapter.transaction(async tx => {
           recorded = false;
+          mainTransitionEncodedByCompanion = false;
           // Reset the payloads the promote fold rebinds, so a retried attempt
           // re-decides the split from the caller's input; and clear the pending
           // draft document, so a stale one from a promoted attempt cannot suppress
@@ -7956,6 +8058,7 @@ export class CollectionMutationService extends BaseService {
                 companionStatusWritten &&
                 localizedPreviousStatus === mainFrom &&
                 companionNext === mainTo;
+              mainTransitionEncodedByCompanion = companionEncodesMainTransition;
               // The main-row event must describe the main `status` column's
               // transition, but `updatedDocument`/`previousDocument` carry the
               // write-locale companion status overlaid — and for a default-locale
@@ -8145,6 +8248,14 @@ export class CollectionMutationService extends BaseService {
             slug: readStringField(updated as Record<string, unknown>, "slug"),
             previousSlug,
             locale: localizedUpdate?.writeLocale,
+            // Moving every language makes every language's address current.
+            localizedSlugs: sweepAllLocales
+              ? await this.readCompanionSlugsAllLocales(
+                  this.db,
+                  params.collectionName,
+                  params.entryId
+                )
+              : undefined,
           }
         );
       }
@@ -8207,7 +8318,14 @@ export class CollectionMutationService extends BaseService {
           | undefined) ??
         null;
       const nextStatus = (updated as { status?: unknown }).status;
-      if (typeof nextStatus === "string" && nextStatus !== previousStatus) {
+      // Not reported untagged when the write locale's companion records this
+      // same transition: the locale-tagged event below reports it, as the
+      // durable events do, so a subscriber hears one publish rather than two.
+      if (
+        typeof nextStatus === "string" &&
+        nextStatus !== previousStatus &&
+        !mainTransitionEncodedByCompanion
+      ) {
         this.transitionStatus({
           collection: params.collectionName,
           id: (updated as { id?: unknown }).id,

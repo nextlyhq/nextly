@@ -14,6 +14,7 @@ import {
   fieldGroup,
   text,
 } from "../../../config";
+import { registerHook, unregisterHook } from "../../../hooks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -357,6 +358,65 @@ describe.each(getConfiguredTestDialects())(
         expect(await pendingLocales(t, id)).toEqual([]);
       }
     );
+
+    it("runs the update hooks once for the whole document when every language is published", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      await holdEdit(t, id, "de", { title: "DE v2" });
+      const seen: string[] = [];
+      const before = (ctx: { req?: { http?: { method?: string } } }) => {
+        seen.push(`before:${ctx.req?.http?.method ?? "none"}`);
+        return undefined;
+      };
+      const after = () => {
+        seen.push("after");
+        return undefined;
+      };
+      // Registered after boot: creating the instance resets the hook registry.
+      registerHook("beforeUpdate", SLUG, before as never);
+      registerHook("afterUpdate", SLUG, after as never);
+      try {
+        const res = await handlerOf(t).publishAllLocales({
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+          request: new Request("http://localhost/api/collections", {
+            method: "POST",
+          }),
+        });
+
+        expect(res.success, JSON.stringify(res)).toBe(true);
+        expect(seen).toEqual(["before:POST", "after"]);
+        expect((await live(t, id, "de")).title).toBe("DE v2");
+        expect(await pendingLocales(t, id)).toEqual([]);
+      } finally {
+        unregisterHook("beforeUpdate", SLUG, before as never);
+        unregisterHook("afterUpdate", SLUG, after as never);
+      }
+    });
+
+    it("applies every language's pending change before taking the document down", async () => {
+      // A pending change sits over a published row. Withdrawn, the row is a
+      // draft and nothing accumulates onto it any more, so each language's
+      // pending change becomes the content, as a single-language unpublish does.
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      await holdEdit(t, id, "en", { title: "EN v2" });
+      await holdEdit(t, id, "de", { title: "DE v2" });
+
+      const res = await handlerOf(t).unpublishAllLocales({
+        collectionName: SLUG,
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      const en = await live(t, id, "en");
+      const de = await live(t, id, "de");
+      expect([en.status, de.status]).toEqual(["draft", "draft"]);
+      expect([en.title, de.title]).toEqual(["EN v2", "DE v2"]);
+      expect(await pendingLocales(t, id)).toEqual([]);
+    });
 
     it("refuses the whole write, and keeps every pending change, when one edits a field the publisher may not", async () => {
       const t = await boot(dialect);
