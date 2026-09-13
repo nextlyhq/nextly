@@ -30,16 +30,35 @@
  *
  * Within that, it reads exactly what the COMPILER reads: the first
  * `MAX_CLASSES_PER_NODE` entries of each node's list, over at most `MAX_NODES`
- * nodes. Those numbers are imported rather than restated, because the question
- * is which classes the page renders — a reader that stopped anywhere else would
- * answer about a document other than the one being served, naming a class the
- * page never applies or omitting one it does.
+ * nodes. Those numbers are imported rather than restated, because a reader that
+ * stopped anywhere else would select different nodes from the ones the compiler
+ * writes rules for — omitting a class the stylesheet applies, which is the
+ * absence a safe-delete check cannot afford.
  *
  * The bounds are on WORK, never on the answer. Nothing reachable is dropped, so
- * an id missing from the result means the document does not render it. That is
- * what lets a caller treat this as authoritative for its own question; a bound
- * that silently truncated the result would make every absence ambiguous, and
- * absence is what a safe-delete check reads.
+ * an id missing from the result means the document does not reference it. That
+ * is what lets a caller treat this as authoritative for its own question; a
+ * bound that silently truncated the result would make every absence ambiguous,
+ * and absence is what a safe-delete check reads.
+ *
+ * ## Authored reference, not rendered reference
+ *
+ * The question this answers is which classes the document references AS
+ * AUTHORED — not which classes a served page renders. The two differ, because
+ * the renderer drops nodes before it draws: `pruneHiddenNodes` in
+ * `@nextlyhq/blocks-react`'s visibility module removes every condition-gated
+ * subtree, and further passes over the same `pruneNodes` walk drop blocks that
+ * draw nothing and subtrees replaced by a placeholder. None of those run here,
+ * and neither does the engine's `hiddenSubtreeNodes`, which names the same
+ * gated subtrees. `selectNodes` deliberately leaves gating to its reader, and
+ * this reader does not ask. A class that appears only on a pruned node still
+ * counts, because the author put it there.
+ *
+ * That over-count is the direction to fail in. It warns about a delete that was
+ * safe. Pruning would under-count instead, and an absent class may be deleted
+ * while a live document still carries it on a gated node — rendered again as
+ * soon as the gate stops withholding that node, with its rules gone. Only one
+ * of those is recoverable.
  *
  * @module class-usage
  */
@@ -120,13 +139,17 @@ export interface ClassUsage {
  * is what lets a caller compare a stored list against a fresh one without
  * re-sorting or set arithmetic.
  *
- * With `definitions`, the classes the document RENDERS through them: every
+ * With `definitions`, the classes the document references through them: every
  * component instance is inlined the way the renderer inlines it, under the
  * same `limits`, before the walk. That is the editor's question — which
- * classes are on this page as drawn — and it differs from the record's. The
+ * classes are on this page as composed — and it differs from the record's. The
  * record asks what THIS document references, and a class inside a component's
  * definition is that component's own record; without `definitions` an
  * instance stays the one stored node it is, which applies nothing.
+ *
+ * Neither form runs the renderer's visibility prune, so either may name a class
+ * on a node the served page omits. The module docblock says why that over-count
+ * is the safe direction.
  */
 export function classUsageOf(
   stored: unknown,
@@ -137,9 +160,9 @@ export function classUsageOf(
   if (!composable(document)) return { ids: [], complete: true };
 
   // WHICH nodes are read is the engine's, shared with the style compiler rather
-  // than reproduced here. The question is which classes this page RENDERS, so a
-  // reader that stopped anywhere else would answer about a different document
-  // than the one being served.
+  // than reproduced here. The selection is the compiler's, so a reader that
+  // stopped anywhere else would miss nodes the stylesheet has rules for. It is
+  // not the served page's: no visibility prune runs, gated nodes included.
   //
   // Sharing the walk rather than the numbers is the part that matters. Both
   // sides once stopped at `MAX_NODES` by different routes — depth-first here,

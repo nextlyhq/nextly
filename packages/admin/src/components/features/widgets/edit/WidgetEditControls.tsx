@@ -95,6 +95,16 @@ export interface WidgetEditControlsProps {
     column: number;
     columnCount: number;
     hidden: boolean;
+    /**
+     * Whether this card offers its reader a standing dismiss control.
+     *
+     * Read for the WORDING rather than for an affordance: the toolbar's hide
+     * button does the same thing either way. A card a reader can send away is
+     * one the install may also withdraw on its own, so promising that hiding
+     * keeps "its position and settings" describes a permanence it does not
+     * have.
+     */
+    dismissible: boolean;
   };
   /**
    * Which moves are available.
@@ -173,7 +183,8 @@ function ColumnMoveControls({
 }
 
 export function WidgetEditControls({ card, can, on }: WidgetEditControlsProps) {
-  const { title, position, count, column, columnCount, hidden } = card;
+  const { title, position, count, column, columnCount, hidden, dismissible } =
+    card;
   /*
    * Both halves of the hide control resolved BEFORE the JSX, rather than as two
    * ternaries inside it. The pair says one thing — which direction this control
@@ -183,7 +194,14 @@ export function WidgetEditControls({ card, can, on }: WidgetEditControlsProps) {
    */
   const hiddenLabel = hidden
     ? `Show ${title} again, in the position it was hidden from`
-    : `Hide ${title}, keeping its position and settings`;
+    : dismissible
+      ? // A dismissible card is transient by declaration, so naming the
+        // position and the settings it keeps describes the wrong thing: it has
+        // no settings worth preserving and it will go on its own when the
+        // install says the work it describes is done. What a reader wants to
+        // know is that this is the same gesture as the card's own X.
+        `Dismiss ${title}, keeping it available to bring back from here`
+      : `Hide ${title}, keeping its position and settings`;
   const HiddenIcon = hidden ? Icons.Eye : Icons.EyeOff;
 
   return (

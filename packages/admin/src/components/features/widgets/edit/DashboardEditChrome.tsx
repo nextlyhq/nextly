@@ -47,6 +47,7 @@ export function DashboardEditChrome({
           isEditing={editor.isEditing}
           hasUnsavedChanges={editor.hasUnsavedChanges}
           isSaving={editor.isSaving}
+          isWriting={editor.isWriting}
           canReset={canReset}
           columnCount={columnCount}
           columnChoices={COLUMN_COUNTS}

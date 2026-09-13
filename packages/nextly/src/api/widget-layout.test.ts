@@ -67,7 +67,12 @@ const reqAuth = vi.mocked(requireAuthentication);
 /** A stand-in for the row, so a test can state what is stored and read it back. */
 let stored: { layout: string; version: number } | undefined;
 let saved:
-  | { placements: WidgetPlacement[]; expected: number; columnCount?: number }
+  | {
+      placements: WidgetPlacement[];
+      expected: number;
+      columnCount?: number;
+      arranged?: boolean;
+    }
   | undefined;
 let saveThrows: Error | undefined;
 let deleted: { kind: string; scope: string } | undefined;
@@ -99,13 +104,16 @@ const fakeService = {
     _scope: string,
     placements: WidgetPlacement[],
     expected: number,
-    columnCount?: number
+    columnCount?: number,
+    arranged?: boolean
   ) => {
     if (saveThrows) throw saveThrows;
     // The count is recorded because the response ECHOES one: a writer that
     // answered with the right number while storing another would satisfy every
-    // assertion made on the body alone.
-    saved = { placements, expected, columnCount };
+    // assertion made on the body alone. Whether the write ARRANGES is recorded
+    // for a different reason -- nothing in the response says it, so the only
+    // place a wrong answer is visible is what reaches the service.
+    saved = { placements, expected, columnCount, arranged };
     return expected + 1;
   },
 };
@@ -492,6 +500,208 @@ describe("a widget registered after the reader last saved", () => {
 
     expect(body.available).toEqual([]);
     expect(body.placements).toHaveLength(2);
+  });
+});
+
+/** A row a dismissal wrote: never arranged, so it still follows the defaults. */
+function unarrangedRow(placements: WidgetPlacement[], version = 1) {
+  return {
+    version,
+    layout: serializeLayout(placements, DEFAULT_COLUMN_COUNT, false),
+  };
+}
+
+describe("a row nobody arranged still follows the defaults", () => {
+  it("places a widget declared after a dismissal wrote the row", async () => {
+    // 🔴 The freeze this exists to close. A dismissal writes a row without the
+    // reader arranging anything, and the read used to treat any row as a
+    // snapshot -- so one click on a card's dismiss control left every widget
+    // declared afterwards merely OFFERED rather than placed. The arranged
+    // case, where a later widget is correctly withheld, is the describe block
+    // above: its rows are written as arrangements and it still passes.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/new" }));
+    stored = unarrangedRow([
+      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: true },
+    ]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId).sort()).toEqual([
+      "core/a",
+      "core/new",
+    ]);
+    // Placed, so not offered as well: two answers to "is this on the
+    // dashboard" in one response would disagree about the same card.
+    expect(body.available).toEqual([]);
+  });
+
+  it("keeps a dismissed card dismissed when a new widget arrives", async () => {
+    // Following the defaults must not undo what the reader DID do. The new
+    // card arrives visible; the one they sent away stays sent away.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/new" }));
+    stored = unarrangedRow([
+      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: true },
+    ]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.find(p => p.widgetId === "core/a")?.hidden).toBe(
+      true
+    );
+    expect(body.placements?.find(p => p.widgetId === "core/new")?.hidden).toBe(
+      false
+    );
+  });
+
+  it("follows a change to the declared order", async () => {
+    // Positions come from the live registry, not from the order the row was
+    // written in. A snapshot taken from an earlier registry would otherwise
+    // keep a card where a plugin has since stopped putting it -- and merging a
+    // new widget into that snapshot could land it on a number an existing
+    // placement already holds.
+    registerWidget(widget({ id: "core/a", defaultOrder: 20 }));
+    registerWidget(widget({ id: "core/b", defaultOrder: 10 }));
+    stored = unarrangedRow([
+      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: false },
+      { id: "core/b", widgetId: "core/b", column: 1, order: 10, hidden: false },
+    ]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    const orderOf = (id: string) =>
+      body.placements?.find(p => p.widgetId === id)?.order ?? -1;
+
+    expect(orderOf("core/b")).toBeLessThan(orderOf("core/a"));
+    expect(orderOf("core/b")).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("the kind of write a PUT is", () => {
+  const onePlacement = (hidden: boolean, id = "core/a") => [
+    { id, widgetId: "core/a", column: 0, order: 0, hidden },
+  ];
+
+  it("records a dismissal on a reader with no row as unarranged", async () => {
+    registerWidget(widget({ id: "core/a" }));
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement(true),
+        version: 0,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+
+    expect(saved?.arranged).toBe(false);
+  });
+
+  it("keeps an arranged row arranged when a dismissal writes to it", async () => {
+    // 🔴 MONOTONIC, and the case that matters most. A dismissal states `false`
+    // because IT is not an arrangement; taken at its word against a row the
+    // reader already arranged, it would demote their layout to the live
+    // defaults and discard every move they ever made.
+    registerWidget(widget({ id: "core/a" }));
+    stored = {
+      version: 3,
+      layout: serializeLayout(onePlacement(false, "p1")),
+    };
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement(true, "p1"),
+        version: 3,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+
+    expect(saved?.arranged).toBe(true);
+  });
+
+  it("arranges a row a dismissal wrote, once the editor saves it", async () => {
+    // The only way OUT of following the defaults, and it has to be reachable:
+    // a reader who dismissed a card and then arranged their dashboard has taken
+    // charge, whatever the row said before.
+    registerWidget(widget({ id: "core/a" }));
+    stored = unarrangedRow(onePlacement(true));
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement(false),
+        version: 1,
+        scope: scopeFor(),
+        arranged: true,
+      })
+    );
+
+    expect(saved?.arranged).toBe(true);
+  });
+
+  it("treats a write that says nothing as an arrangement", async () => {
+    // Every client written before a card could be dismissed from the dashboard
+    // only ever wrote from the editor, so its silence keeps what it does today.
+    registerWidget(widget({ id: "core/a" }));
+
+    await putWidgetLayout(
+      putReq({ placements: onePlacement(false), version: 0, scope: scopeFor() })
+    );
+
+    expect(saved?.arranged).toBe(true);
+  });
+
+  it("refuses a kind that is not a boolean, before writing anything", async () => {
+    // Read for truthiness, "false" would freeze a reader out of every later
+    // widget on the strength of a string saying the opposite.
+    registerWidget(widget({ id: "core/a" }));
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: onePlacement(false),
+        version: 0,
+        scope: scopeFor(),
+        arranged: "false",
+      })
+    );
+
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+
+  it("carries a dismissal of a card the reader can no longer see", async () => {
+    // Dismissals are applied to the WHOLE materialization before it is split
+    // by visibility, so a card this reader dismissed and then lost access to
+    // is carried through their next write still dismissed -- and comes back
+    // dismissed the day access returns, rather than reappearing.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(
+      widget({ id: "core/gated", requiredPermission: "read-secrets" })
+    );
+    stored = unarrangedRow([
+      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: false },
+      {
+        id: "core/gated",
+        widgetId: "core/gated",
+        column: 1,
+        order: 10,
+        hidden: true,
+      },
+    ]);
+    callerHoldsPermission.mockResolvedValue(false);
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement(true, "core/a"),
+        version: 1,
+        scope: scopeFor(["core/a"]),
+        arranged: false,
+      })
+    );
+
+    expect(
+      saved?.placements.find(p => p.widgetId === "core/gated")?.hidden
+    ).toBe(true);
   });
 });
 

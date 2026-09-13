@@ -91,6 +91,30 @@ describe("the canonical widget set", () => {
     ).toHaveProperty("defaultHeight", "tall");
   });
 
+  it("keeps a CONTRIBUTED dismissible the registration did not state", () => {
+    // 🔴 The same field-by-field rebuild one field along, and the admin's own
+    // `mergeCollision` already falls back to the contribution here. Dropped on
+    // this side, the browser draws a card its reader can send away while the
+    // server's canonical copy of the same declaration says nothing about it --
+    // and the two implementations of one merge have come apart, which is the
+    // divergence this whole path exists to prevent.
+    registerWidget(registered({ id: "dup/one" }));
+    expect(
+      canonicalWidgets([{ id: "dup/one", dismissible: true }])[0]
+    ).toHaveProperty("dismissible", true);
+  });
+
+  it("lets a REGISTRATION state dismissible over a contribution's", () => {
+    // The control: the fallback must not become a merge that always prefers the
+    // contribution. A registration IS the override channel, so where it states
+    // the field its answer stands -- and without this, a merge hard-coded to
+    // the contribution's value would satisfy the case above.
+    registerWidget(registered({ id: "dup/one", dismissible: false }));
+    expect(
+      canonicalWidgets([{ id: "dup/one", dismissible: true }])[0]
+    ).toHaveProperty("dismissible", false);
+  });
+
   it("keeps a CONTRIBUTED lifecycle the registration did not state", () => {
     // 🔴 The collision path dropped it. A registration that says nothing about
     // the lifecycle contributes no such fields, and the merge then returned the

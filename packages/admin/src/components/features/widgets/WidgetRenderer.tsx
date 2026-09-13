@@ -23,6 +23,7 @@
  */
 
 import type { WidgetComponentProps } from "nextly/widget-result";
+import type { ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
@@ -46,6 +47,19 @@ import { WidgetCard } from "./WidgetCard";
 
 export interface WidgetRendererProps {
   definition: DashboardWidget;
+  /**
+   * A control the HOST puts in this card's header, where one is drawn.
+   *
+   * 🔴 Passed through the card rather than floated over the cell, because
+   * `WidgetCard` already places the declared icon in that same corner and
+   * reserves no space for anything else — so a control positioned absolutely
+   * there covers the icon on any card that declares one, and whatever an
+   * unframed plugin component drew in its own corner.
+   *
+   * Ignored by the `chrome: "none"` branch, which draws no header at all; the
+   * cell positions it for those.
+   */
+  headerAction?: ReactNode;
   /**
    * This widget's slot from the batch. `undefined` means the batch has not
    * answered yet — which is why a data widget with no slot is BUSY rather than
@@ -100,6 +114,7 @@ export function WidgetRenderer({
   slot,
   slotFor,
   placement,
+  headerAction,
   updatedAt = null,
   isFetching = false,
 }: WidgetRendererProps) {
@@ -107,6 +122,7 @@ export function WidgetRenderer({
     title: definition.title,
     icon: resolveIconName(definition.icon),
     link: definition.link,
+    headerAction,
   };
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);

@@ -126,6 +126,25 @@ export interface StoredLayout {
    * and whatever wrote the duplicate goes on writing them unobserved.
    */
   duplicatePlacementIds?: readonly string[];
+  /**
+   * Present, and `true`, only on a row no reader ever ARRANGED.
+   *
+   * 🔴 A row existing and a reader having taken charge of their dashboard are
+   * different facts, and this is what separates them. Until a card could be
+   * dismissed from the dashboard itself, the only way to create a row was to
+   * arrange one and save, so the read path treated "a row exists" as "stop
+   * placing new widgets" -- and a dismissal, which writes a row without
+   * arranging anything, silently froze that reader out of every widget declared
+   * afterwards.
+   *
+   * Stored as the RARE-CASE NEGATIVE, the convention `duplicatePlacementIds`
+   * already follows: absent is the sound, ordinary state. Every row written
+   * before this field existed was written by an edit-mode save, so absent reads
+   * as arranged and today's behaviour is kept for all of them with no migration.
+   *
+   * Read it through {@link layoutIsArranged}, never directly.
+   */
+  unarranged?: true;
 }
 
 /**
@@ -474,6 +493,10 @@ export function readStoredLayout(raw: string): StoredLayout {
           schemaVersion: LAYOUT_SCHEMA_VERSION,
           columnCount: readColumnCount(decoded.columnCount),
           placements: readPlacements(decoded.placements),
+          // `=== true` rather than truthiness: anything else this core did
+          // not write is the ordinary arranged row, which keeps a reader's
+          // arrangement rather than replacing it with the live defaults.
+          ...(decoded.unarranged === true ? { unarranged: true as const } : {}),
         };
   const { rekeyed } = resolvePlacementIds(layout.placements);
   return rekeyed.length === 0
@@ -534,16 +557,82 @@ export function byPosition(a: WidgetPlacement, b: WidgetPlacement): number {
   return a.order - b.order || a.column - b.column;
 }
 
-/** The payload written into the `layout` column. */
+/**
+ * The payload written into the `layout` column.
+ *
+ * `arranged` defaults to TRUE, because every write before a card could be
+ * dismissed from the dashboard was an edit-mode save -- so a caller that says
+ * nothing is making the ordinary kind of write.
+ */
 export function serializeLayout(
   placements: readonly WidgetPlacement[],
-  columnCount: ColumnCount = DEFAULT_COLUMN_COUNT
+  columnCount: ColumnCount = DEFAULT_COLUMN_COUNT,
+  arranged = true
 ): string {
   return JSON.stringify({
     schemaVersion: LAYOUT_SCHEMA_VERSION,
     columnCount,
     placements,
+    ...(arranged ? {} : { unarranged: true }),
   });
+}
+
+/**
+ * Whether a reader has taken charge of this arrangement.
+ *
+ * The ONE reading of {@link StoredLayout.unarranged}. An arranged row is a
+ * snapshot the read path honours as written; an unarranged one still follows
+ * the live registry, so a widget declared after it was written reaches the
+ * reader the way it reaches somebody with no row at all.
+ *
+ * 🔴 The invariant that keeps this safe: ANY write that can remove a placement
+ * from the array must be an arranged one. An unarranged row is then only ever
+ * the default plus hidden flags, so following the live registry cannot bring
+ * back a card the reader deliberately removed -- they could not have removed
+ * one without arranging. Today the only removing write is the editor's save.
+ * A control added later that drops a placement outside edit mode must state
+ * `arranged`, or it reopens exactly the freeze this field exists to close, one
+ * level down.
+ */
+export function layoutIsArranged(stored: StoredLayout): boolean {
+  return stored.unarranged !== true;
+}
+
+/**
+ * The default arrangement with a reader's dismissals applied.
+ *
+ * For a row that still follows the live registry: positions, sizes and the
+ * set of cards all come from `defaults`, and the stored row contributes only
+ * which widgets its reader sent away.
+ *
+ * 🔴 Re-derived from the defaults rather than merging new widgets into the
+ * stored snapshot. A snapshot taken from an earlier registry holds `order`
+ * values from that registry's indices, so a widget declared in the middle of
+ * the order would be merged in at a number an existing placement already holds
+ * -- the tie that reorders a reader's dashboard on its own. Deriving from one
+ * materialization gives every card one position, and a plugin changing its
+ * `defaultOrder` reaches this reader as it reaches anyone following the
+ * defaults.
+ *
+ * Keyed by WIDGET, across the whole stored row and whatever its visibility, so
+ * a dismissal of a card the reader has since lost access to is still honoured
+ * the day access returns. `undefined` is a reader with no row, who has
+ * dismissed nothing.
+ */
+export function dismissalsApplied(
+  defaults: readonly WidgetPlacement[],
+  stored: StoredLayout | undefined
+): WidgetPlacement[] {
+  const dismissed = new Set(
+    (stored?.placements ?? [])
+      .filter(placement => placement.hidden)
+      .map(placement => placement.widgetId)
+  );
+  return defaults.map(placement =>
+    dismissed.has(placement.widgetId)
+      ? { ...placement, hidden: true }
+      : placement
+  );
 }
 
 /**

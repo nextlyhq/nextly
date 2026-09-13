@@ -189,10 +189,14 @@ export class WidgetLayoutService extends BaseService {
     scopeId: string,
     placements: readonly WidgetPlacement[],
     expectedVersion: number,
-    columnCount: ColumnCount = DEFAULT_COLUMN_COUNT
+    columnCount: ColumnCount = DEFAULT_COLUMN_COUNT,
+    // Whether this write is a reader taking charge of the arrangement. The
+    // caller resolves it -- including keeping an arranged row arranged -- and
+    // this only records the answer; see `layoutIsArranged`.
+    arranged = true
   ): Promise<number> {
     const id = layoutRowId(kind, scopeId);
-    const layout = serializeLayout(placements, columnCount);
+    const layout = serializeLayout(placements, columnCount, arranged);
     const now = new Date();
 
     if (expectedVersion === NO_STORED_LAYOUT_VERSION) {

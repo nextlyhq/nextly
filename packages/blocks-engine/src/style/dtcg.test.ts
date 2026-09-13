@@ -1351,6 +1351,81 @@ describe("a var() substitution CSS will actually make", () => {
     expect(readFamilyList(escaped).kind).toBe("dynamic");
   });
 
+  it("reads text carrying no var() call as ordinary families", () => {
+    // The negative control for every escape case below: without a `var(` the
+    // substitution check never runs, so a result here says nothing about it.
+    expect(readFamilyList("not a var call").kind).toBe("families");
+  });
+
+  describe("a custom-property name spelled with a hex escape", () => {
+    const backslash = String.fromCharCode(92);
+    const plainName = readFamilyList("var(--brand)").parts[0]?.part.name;
+
+    it("is the same property as its plain spelling", () => {
+      /*
+       * `\62 ` is ONE escape meaning `b`: the space ends the escape and belongs
+       * to it, so `--\62 rand` is `--brand`. Reading only the backslash and the
+       * first digit left that space looking like the end of the name.
+       */
+      const reading = readFamilyList(`var(--${backslash}62 rand)`);
+      expect(plainName).toBe("var(--brand)");
+      expect(reading.parts[0]?.part.name).toBe(plainName);
+      expect(reading.kind).toBe("dynamic");
+    });
+
+    it("accepts every digit count CSS allows, with or without a terminator", () => {
+      // Up to six hex digits. With no whitespace after them, the escape simply
+      // ends where the digits do.
+      const sixDigits = readFamilyList(`var(--${backslash}000062 rand)`);
+      expect(sixDigits.parts[0]?.part.name).toBe(plainName);
+      expect(sixDigits.kind).toBe("dynamic");
+      expect(readFamilyList(`var(--${backslash}62)`).kind).toBe("dynamic");
+      expect(readFamilyList(`var(--x${backslash}62)`).kind).toBe("dynamic");
+    });
+
+    it("consumes a tab, and a CRLF pair, as the single terminator", () => {
+      /*
+       * CSS reads CRLF as one newline before tokenising, so the whole pair ends
+       * the escape. Consuming only the CR leaves the LF inside the name, where
+       * it both changes the decoded name and ends the identifier early — which
+       * is what a pattern admitting one optional whitespace character does.
+       */
+      const tab = readFamilyList(`var(--${backslash}62\trand)`);
+      expect(tab.parts[0]?.part.name).toBe(plainName);
+      expect(tab.kind).toBe("dynamic");
+      const crlf = readFamilyList(`var(--${backslash}62\r\nrand)`);
+      expect(crlf.parts[0]?.part.name).toBe(plainName);
+      expect(crlf.kind).toBe("dynamic");
+    });
+
+    it("consumes only CSS whitespace as the terminator", () => {
+      // A no-break space is an identifier character to CSS, not whitespace, so
+      // it stays in the name rather than being swallowed by the escape.
+      const nbsp = readFamilyList(`var(--${backslash}62\u00a0rand)`);
+      expect(nbsp.parts[0]?.part.name).toBe("var(--b\u00a0rand)");
+      expect(nbsp.kind).toBe("dynamic");
+    });
+
+    it("still reaches the fallback after an escaped name", () => {
+      expect(readFamilyList(`var(--${backslash}62 rand, serif)`).kind).toBe(
+        "dynamic"
+      );
+    });
+
+    it("still refuses a second word after an escaped name", () => {
+      // Consuming the escape whole must not consume what follows the name.
+      expect(readFamilyList(`var(--${backslash}62 rand extra)`).kind).toBe(
+        "invalid"
+      );
+    });
+
+    it("does not treat a backslash before a newline as an escape", () => {
+      // CSS reads `\` + newline as no escape at all, so the name ends there and
+      // the argument is malformed.
+      expect(readFamilyList(`var(--a${backslash}\nb)`).kind).toBe("invalid");
+    });
+  });
+
   it("refuses a call whose FUNCTION NAME is written with an escape", () => {
     /*
      * `v\61 r(foo)` decodes to `var(foo)`, which a browser tokenises as a

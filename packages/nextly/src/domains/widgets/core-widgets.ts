@@ -132,6 +132,11 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
      */
     lifecycle: "conditional",
     visibleWhen: "onboarding:incomplete",
+    // 🔴 Both, and they answer different questions. The condition takes the card
+    // away when the INSTALL says the work is done; this takes it away when the
+    // READER says they do not want it. Without the second, somebody who has no
+    // intention of finishing the checklist has to finish it to be rid of it.
+    dismissible: true,
   },
   {
     id: "core/collections",

@@ -2775,6 +2775,30 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const canvasPreviewContainer = canvasRender.styleContext.previewContainer;
 
   /*
+   * What the classes manager compiles each class's summary with, so the summary
+   * describes the stylesheet the page gets.
+   *
+   * The canvas's context supplies the breakpoints: without them only the base
+   * context is emitted, and styles a class holds under a site-defined tier go
+   * uncounted. It does NOT carry the host policy — the canvas receives that as
+   * `hostPolicy`, and the page compile turns the patterns into a predicate — so
+   * the inspector's predicate, built from the same patterns, is added here.
+   * Without it the summary lists a declaration the page drops for its URL.
+   * Added only where the site stated patterns, which leaves a site with none
+   * compiling exactly as the canvas does.
+   */
+  const classSummaryContext = useMemo(
+    () =>
+      stylePolicy.mayFetchUrl === undefined
+        ? canvasRender.styleContext
+        : {
+            ...canvasRender.styleContext,
+            mayFetchUrl: stylePolicy.mayFetchUrl,
+          },
+    [canvasRender.styleContext, stylePolicy]
+  );
+
+  /*
    * Which tier an edit lands in, and which tiers the box is applying.
    *
    * Both derived from the MEASURED width and from the one breakpoint set above,
@@ -3364,6 +3388,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 */
                 documentScan={documentClasses.complete ? "complete" : "partial"}
                 library={classes.library}
+                styleContext={classSummaryContext}
                 onRename={classes.rename}
                 currentRenameAttempt={classes.currentRenameAttempt}
                 /*

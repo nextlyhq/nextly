@@ -317,6 +317,23 @@ export interface WidgetDefinition {
    */
   visibleWhen?: WidgetCondition | readonly WidgetCondition[];
   /**
+   * Whether a reader may send this card away themselves.
+   *
+   * 🔴 Dismissal is HIDING, not deleting, and deliberately so: the placement
+   * stays in the reader's layout marked hidden, which is what lets them put it
+   * back from the same panel every other hidden card is restored from. A
+   * separate "dismissed" store would be a second way to make a card disappear,
+   * and the reader would have two places to look for it.
+   *
+   * Independent of {@link WidgetDefinition.lifecycle}. A CONDITIONAL card stops
+   * being offered when its condition lapses, which is the install's decision; a
+   * DISMISSIBLE one can be sent away while the condition still holds, which is
+   * the reader's. An onboarding checklist wants both -- it goes when the work is
+   * done, and a reader who does not want it now should not have to finish the
+   * work to be rid of it.
+   */
+  dismissible?: boolean;
+  /**
    * Whether the host frames this widget. Defaults to `"card"`.
    *
    * Only a `custom` widget may decline the frame, because only a `custom`
@@ -526,6 +543,20 @@ export function widgetValueProblem(
   // skew this boundary exists for.
   if (widget.chrome !== undefined && typeof widget.chrome !== "string") {
     return "chrome, when given, must be a string";
+  }
+
+  // A BOOLEAN in every version -- unlike `chrome`, there is no vocabulary here
+  // that a newer core could extend, so anything else is a mistake rather than
+  // version skew. It decides whether the admin draws a control that HIDES a
+  // card, and the admin copies a registration's fields verbatim, so a truthy
+  // non-boolean such as `dismissible: "false"` would draw the control on a card
+  // whose author declared the opposite. Refusing the declaration is the only
+  // place that mistake is visible to the person who made it.
+  if (
+    widget.dismissible !== undefined &&
+    typeof widget.dismissible !== "boolean"
+  ) {
+    return "dismissible, when given, must be a boolean";
   }
 
   const geometry = geometryShapeProblem(widget);

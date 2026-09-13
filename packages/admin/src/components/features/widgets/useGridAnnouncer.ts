@@ -41,6 +41,23 @@ export interface GridAnnouncer {
     position: number,
     count: number
   ) => void;
+  /**
+   * Say that a card was put away, or brought back.
+   *
+   * Hiding changes nothing a screen reader can otherwise perceive: the card
+   * simply stops being rendered, and the control that did it keeps its own
+   * label. Without this the only feedback is the card's silent disappearance,
+   * which is indistinguishable from the page having failed.
+   */
+  announceHidden: (title: string, hidden: boolean) => void;
+  /**
+   * Say that a card was taken off the dashboard.
+   *
+   * Its own sentence rather than the hiding one, because the two differ in
+   * what they cost: hiding keeps the placement and removing drops it, and a
+   * reader deciding whether to undo needs to hear which one happened.
+   */
+  announceRemoved: (title: string) => void;
 }
 
 /**
@@ -66,6 +83,21 @@ function settledAnnouncement(
     : `${loaded} of ${total} ${noun} updated.`;
 }
 
+/**
+ * The next announcement, alternated so an identical sentence is spoken again.
+ *
+ * The zero-width space, for the reason `announceMove` carries one: a live
+ * region does not re-announce text that did not change. Two placements of one
+ * widget carry the same title, so putting both away produces the same sentence
+ * twice and the second would be silent.
+ *
+ * At module scope because it is pure: inside the hook it would be a dependency
+ * of every callback below, and a new identity each render.
+ */
+function alternate(current: string, next: string): string {
+  return `${next}${current.endsWith("\u200b") ? "" : "\u200b"}`;
+}
+
 export function useGridAnnouncer(
   settling: boolean,
   counted: number,
@@ -85,15 +117,11 @@ export function useGridAnnouncer(
 
   const announceMove = useCallback(
     (title: string, position: number, count: number) => {
-      // The zero-width space alternates the string, because a live region does
-      // not re-announce text that did not change -- and moving a card up twice
-      // produces the same sentence both times. Same device as the builder's
-      // `keyboard-actions`, which is where this grid's convention comes from.
-      setAnnouncement(
-        current =>
-          `${title} moved to position ${position} of ${count}.${
-            current.endsWith("​") ? "" : "​"
-          }`
+      setAnnouncement(current =>
+        alternate(
+          current,
+          `${title} moved to position ${position} of ${count}.`
+        )
       );
     },
     []
@@ -107,15 +135,45 @@ export function useGridAnnouncer(
       position: number,
       count: number
     ) => {
-      setAnnouncement(
-        current =>
-          `${title} moved to column ${column} of ${columnCount}, position ${position} of ${count}.${
-            current.endsWith("\u200b") ? "" : "\u200b"
-          }`
+      setAnnouncement(current =>
+        alternate(
+          current,
+          `${title} moved to column ${column} of ${columnCount}, position ${position} of ${count}.`
+        )
       );
     },
     []
   );
 
-  return { announcement, announceMove, announceColumn };
+  const announceHidden = useCallback(
+    (title: string, hidden: boolean) =>
+      setAnnouncement(current =>
+        alternate(
+          current,
+          hidden
+            ? // Names where it went rather than only that it went. A hidden
+              // card is still in the arrangement, and a reader who cannot see
+              // the dimmed cell has no other way to learn it is recoverable.
+              `${title} hidden. Edit the dashboard to bring it back.`
+            : `${title} shown again.`
+        )
+      ),
+    []
+  );
+
+  const announceRemoved = useCallback(
+    (title: string) =>
+      setAnnouncement(current =>
+        alternate(current, `${title} removed from the dashboard.`)
+      ),
+    []
+  );
+
+  return {
+    announcement,
+    announceMove,
+    announceColumn,
+    announceHidden,
+    announceRemoved,
+  };
 }
