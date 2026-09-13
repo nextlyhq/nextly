@@ -20,9 +20,10 @@
  * ## What a field publishes is decided in core, not here
  *
  * `declaredShape` is the one projection every surface that describes a field
- * uses. This file deliberately holds no list of member names: it held one for
- * three review rounds and lost a declaration key in each, because a list of
- * names cannot notice a name missing from it. Core classifies every key the
+ * uses. This file deliberately holds no list of member names: such a
+ * list cannot notice a name missing from it. A field type that gains a
+ * declaration key goes on being described without it, and the answer stays well
+ * formed while omitting the one part a client needed. Core classifies every key the
  * manifest schema declares as published or withheld and a test holds that
  * classification total, so a key added there fails the build rather than going
  * quietly absent from this answer.

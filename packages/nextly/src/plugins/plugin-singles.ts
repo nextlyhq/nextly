@@ -64,8 +64,8 @@ import type {
  * The shared projection's shape, aliased rather than restated. This surface
  * publishes what a field DECLARES, and which keys those are is decided in one
  * place for every consumer that has to describe a field: a copy here would be
- * a second answer to that question, and the first three keys it lost were lost
- * exactly that way.
+ * a second answer to that question, and two answers diverge the moment
+ * either is extended without the other.
  *
  * It is deliberately OPEN. The registry reads a JSON column, so what a stored
  * declaration carries depends on its type and on which writer produced it, and

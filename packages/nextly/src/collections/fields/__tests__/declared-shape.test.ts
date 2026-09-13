@@ -1,13 +1,11 @@
 /**
  * The projection publishes the declaration, and the classification is total.
  *
- * The first case here is the one that matters. Three declaration keys went
- * missing from a field projection in three consecutive reviews, each found by a
- * person reading the code rather than by anything failing, and a fourth was
- * never reported at all. A list of member names in a projection cannot notice
- * that a name is absent from it, so the guard cannot be another list: it has to
- * read the schema every stored declaration is validated against and insist that
- * each key there was CLASSIFIED, as published or as withheld.
+ * The first case here is the one that matters. A projection spelled as a list
+ * of member names cannot notice that a name is absent from it, so the guard
+ * cannot be another list: it has to read the schema every stored declaration is
+ * validated against and insist that each key there was CLASSIFIED, as published
+ * or as withheld.
  *
  * That turns "somebody forgot to forward the new key" into a red test on the
  * commit that adds the key, which is the only place the question can be
@@ -85,7 +83,7 @@ describe("every key the manifest declares is classified", () => {
 
 describe("what the projection publishes", () => {
   it("carries a select's choices in BOTH spellings", () => {
-    // The defect no review reported. A code-first select declares `options`; a
+    // The spelling split, which no code-first fixture exposes. A code-first select declares `options`; a
     // Builder-authored one declares `fieldOptions`, and a projection copying
     // only the first returns a Builder select with no choices at all while
     // looking correct against every code-first fixture.

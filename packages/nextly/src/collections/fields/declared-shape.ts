@@ -3,14 +3,19 @@
  *
  * Several surfaces have to describe a field to something outside core: the
  * Singles facade a plugin reads, and any tool that answers "what shape is this
- * entity". Each of them was projecting the declaration itself, member by member,
- * and a projection written that way is a list somebody has to remember to
- * extend. Three separate declaration keys went missing that way in a row, each
- * found by review rather than by anything going red: the options of a select,
- * the target and cardinality of a relationship, and the slugs a field group
- * points at. A fourth was never reported at all, because the Builder spells a
- * select's choices `fieldOptions` while code-first spells them `options`, and
- * only the second was being copied.
+ * entity". Projecting the declaration member by member at each of
+ * them makes the published key set a list somebody has to remember to extend,
+ * and such a list cannot notice a name missing from it.
+ *
+ * The keys that go missing are the type-specific ones, because each belongs to a
+ * minority of field types and no fixture built from the others exercises it: a
+ * select's choices, a relationship's target and cardinality, the slugs a field
+ * group points at.
+ *
+ * A spelling split hides inside the same shape. A select declares its choices as
+ * `options` from code and as `fieldOptions` from the Schema Builder, so a
+ * projection carrying one of the two is correct for every code-first fixture and
+ * returns no choices at all for a Builder-authored field.
  *
  * So the projection lives here, once, and the set of keys it carries is DATA
  * rather than control flow. {@link declaredShape} copies the keys named in
@@ -30,7 +35,8 @@
  * classification is TOTAL over the manifest field schema, so a key added there
  * belongs to exactly one of {@link SCHEMA_FIELD_KEYS} or
  * {@link WITHHELD_FIELD_KEYS} and a key in neither fails the build. The
- * question a reviewer kept having to ask is asked by a test instead.
+ * question is settled by a test on the commit that adds the key, rather
+ * than by whoever happens to be reading the diff.
  *
  * @module collections/fields/declared-shape
  */
