@@ -17,7 +17,7 @@
  * Workflows and the local actions they use are read with a YAML parser, so a folded, quoted,
  * flow-style or continued `run:` is the same string here that it is to GitHub. Steps are taken in
  * the order they run: a composite action's steps in place of the step that uses it, a JavaScript
- * action's `pre` as the job starts and its `post` as it ends.
+ * action's `pre` as the job starts, and its `main` and `post` where the step using it is.
  *
  * A job leaves the dependency-free state at its first step that installs the repository's
  * dependencies and does nothing else, unconditionally, in the repository root. Everything before
@@ -40,9 +40,9 @@
  *
  * Outside it: the code a remote action brings with it, which is that action's to load.
  *
- * Imports are read with TypeScript's parser rather than a pattern, because a pattern reads an
- * import quoted in a comment or a string as a real one, and a guard that fails on a correct file
- * teaches people to delete it.
+ * Imports are read by `@nextlyhq/module-specifiers`, the repository's one reader for what a source
+ * file loads, so this sees every form the layering guards see, and it follows a relative specifier
+ * with the resolver that reader says finds it.
  *
  * @module no-install-jobs
  */
@@ -50,8 +50,8 @@
 import { isBuiltin } from "node:module";
 import { posix } from "node:path";
 
+import { UNRESOLVABLE_SPECIFIER, moduleSpecifierRefs } from "@nextlyhq/module-specifiers";
 import { load } from "js-yaml";
-import ts from "typescript";
 
 import { shellCommands } from "./shell-commands.mjs";
 
@@ -89,8 +89,18 @@ const INSTALL = /^(?:install|ci|i)$/;
 /** Install options whose value is the next word. */
 const INSTALL_VALUES = new Set(["--filter", "-F"]);
 
-/** Install options that put what they install somewhere other than the repository root. */
-const INSTALL_ELSEWHERE = /^(?:--dir|-C|--prefix|--cwd|-g|--global|--location)(?:=|$)/;
+/**
+ * Install options that still leave every dependency of the installed packages in place.
+ *
+ * A list of what is known to install rather than of what is known not to: `--lockfile-only`,
+ * `--package-lock-only`, `--dry-run`, `--prod` and another project's directory each leave
+ * dependencies absent, and so may whatever option appears next. An option not listed here keeps
+ * the job in the state this check reads.
+ */
+const INSTALL_OPTIONS = new Set([
+  "--frozen-lockfile", "--prefer-frozen-lockfile", "--prefer-offline", "--ignore-scripts",
+  "--strict-peer-dependencies", "--no-audit", "--no-fund",
+]);
 
 const NODE_OPTIONS_REASON =
   "sets NODE_OPTIONS, which changes what every node command loads, and this reader does not follow it";
@@ -106,7 +116,7 @@ export function jobSequences(text, repo) {
   const workflow = load(text) ?? {};
   const sequences = new Map();
   for (const [id, job] of Object.entries(workflow.jobs ?? {})) {
-    const sequence = { before: [], steps: [], after: [] };
+    const sequence = { before: [], steps: [] };
     const defaults =
       job.defaults?.run?.["working-directory"] ?? workflow.defaults?.run?.["working-directory"];
     const scope = {
@@ -120,7 +130,7 @@ export function jobSequences(text, repo) {
       sequence,
     };
     readSteps(job.steps ?? [], scope);
-    sequences.set(id, [...sequence.before, ...sequence.steps, ...sequence.after]);
+    sequences.set(id, [...sequence.before, ...sequence.steps]);
   }
   return sequences;
 }
@@ -138,7 +148,8 @@ function readStep(step, scope) {
     // A condition on the step using an action binds every step inside it, an install included.
     const conditional =
       scope.conditional || step.if !== undefined || Boolean(step["continue-on-error"]);
-    readLocalAction(step.uses, { ...scope, conditional });
+    // The step's own environment reaches every step inside the action, NODE_OPTIONS included.
+    readLocalAction(step.uses, { ...scope, conditional, env: [...scope.env, step.env] });
   }
 }
 
@@ -157,7 +168,7 @@ function readRunStep(step, scope) {
     steps.push(refusal(scope.where, cwd.refusal));
   } else if ([...scope.env, step.env].some(env => env != null && Object.hasOwn(env, "NODE_OPTIONS"))) {
     steps.push(refusal(scope.where, NODE_OPTIONS_REASON));
-  } else if (/\bnode\b/.test(shell ?? "")) {
+  } else if (shellRunsNode(shell)) {
     steps.push(refusal(scope.where, "runs its script as inline Node code; move it into a file"));
   } else {
     const script = withKnownPaths(step.run, scope);
@@ -169,8 +180,9 @@ function readRunStep(step, scope) {
  * Whether a step installs the repository's dependencies, unconditionally, and does nothing else.
  *
  * Narrow on purpose. A condition, a tolerated failure, another directory, a package named on the
- * command line and a second command each describe a step after which the dependencies may still be
- * absent, so each keeps the job in the state this check reads rather than releasing it.
+ * command line, an option not known to leave a full install and a second command each describe a
+ * step after which the dependencies may still be absent, so each keeps the job in the state this
+ * check reads rather than releasing it.
  */
 function isInstall(step, cwd) {
   if (step.if !== undefined || step["continue-on-error"]) return false;
@@ -184,9 +196,8 @@ function installsHere(words) {
   const [tool = "", subcommand = "", ...options] = words.map(word => word.text);
   if (!INSTALLER.test(tool) || !INSTALL.test(subcommand)) return false;
   for (let i = 0; i < options.length; i += 1) {
-    if (INSTALL_ELSEWHERE.test(options[i])) return false;
     if (INSTALL_VALUES.has(options[i])) i += 1;
-    else if (!options[i].startsWith("-")) return false;
+    else if (!INSTALL_OPTIONS.has(options[i])) return false;
   }
   return true;
 }
@@ -243,7 +254,8 @@ function withKnownPaths(script, scope) {
  *
  * A composite action's steps are read as though the job had written them, so an install inside one
  * ends the dependency-free state and a script started inside one is checked. A JavaScript action's
- * `pre` runs as the job starts and its `post` as the job ends, so they are placed there.
+ * `pre` runs as the job starts, so it is placed there. Its `post` runs as the job ends, but only for
+ * an action whose step ran and even when a later install failed, so it is read where that step is.
  */
 function readLocalAction(uses, scope) {
   const dir = posix.normalize(uses).replace(/\/$/, "");
@@ -278,16 +290,15 @@ function readManifest(dir, repo) {
 }
 
 function readJavaScriptAction(dir, runs, scope) {
-  const { before, steps, after } = scope.sequence;
-  for (const [key, events] of [["pre", before], ["main", steps], ["post", after]]) {
+  const { before, steps } = scope.sequence;
+  const preloads = scope.env.some(env => env != null && Object.hasOwn(env, "NODE_OPTIONS"));
+  for (const [key, events] of [["pre", before], ["main", steps], ["post", steps]]) {
     if (typeof runs[key] !== "string") continue;
     const where = `${scope.where} (${key})`;
     const entry = repositoryPath(runs[key], dir, "script");
-    events.push(
-      "refusal" in entry
-        ? refusal(where, entry.refusal)
-        : { kind: "start", where, entry: entry.path, preloads: [] }
-    );
+    if ("refusal" in entry) events.push(refusal(where, entry.refusal));
+    else if (preloads) events.push(refusal(where, NODE_OPTIONS_REASON));
+    else events.push({ kind: "start", where, entry: entry.path, preloads: [] });
   }
 }
 
@@ -308,6 +319,12 @@ const NODE_NAMED = /(?:^|[^\w$.-])(?:node|nodejs)(?![\w.-])/;
 
 /** Windows' spelling of Node's name inside other text, which the boundary above excludes. */
 const NODE_EXE_NAMED = /(?:^|[^\w$.-])(?:node|nodejs)\.exe(?![\w.-])/i;
+
+/** Whether a step's shell is Node itself, spelled any way a command could spell it. */
+function shellRunsNode(shell) {
+  const [program = ""] = String(shell ?? "").trim().split(/\s+/);
+  return NODE_PROGRAM.test(program);
+}
 
 const DIRECTORY_CHANGES = new Set(["cd", "pushd", "popd"]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "source", "."]);
@@ -512,7 +529,7 @@ function scriptAt(word, preloads) {
   return { entry: word.text, preloads };
 }
 
-/** `bash file`, `bash -c '…'`, `bash <<EOF`, `source file`: the script it runs is read in turn. */
+/** `bash file`, `bash -c '…'`, `bash < file`, `bash <<EOF`, `source file`: its script is read in turn. */
 function readShellCommand(command, words, state) {
   const shell = words[0].text;
   const inline = words.findIndex(word => word.literal && /^-[A-Za-z]*c[A-Za-z]*$/.test(word.text));
@@ -527,6 +544,8 @@ function readShellCommand(command, words, state) {
     followFile(file, "shell", state);
     return;
   }
+  // No script file: the shell runs what arrives on its input, a file or a here-document.
+  for (const input of command.inputs) followFile(input, "shell", state);
   for (const body of command.heredocs) {
     readScript({ where: `${state.where} › ${shell} <<`, script: body, cwd: state.cwd }, state);
   }
@@ -632,77 +651,6 @@ function residual(command, state) {
   );
 }
 
-/** Record a node's module specifier, if it names one, as followable or not. */
-function collectSpecifier(node, source, requires, found) {
-  const declares = ts.isImportDeclaration(node) || ts.isExportDeclaration(node);
-  if (declares && node.moduleSpecifier !== undefined) {
-    if (ts.isStringLiteral(node.moduleSpecifier)) found.imports.push(node.moduleSpecifier.text);
-    return;
-  }
-  const list = loaderCall(node, requires);
-  if (list === null) return;
-  const [argument] = node.arguments;
-  if (argument !== undefined && ts.isStringLiteralLike(argument)) found[list].push(argument.text);
-  else found.unresolvable.push(node.getText(source));
-}
-
-/** Which list a call asking Node's loader for a module belongs to, or null for any other node. */
-function loaderCall(node, requires) {
-  if (!ts.isCallExpression(node)) return null;
-  const callee = node.expression;
-  if (callee.kind === ts.SyntaxKind.ImportKeyword) return "imports";
-  if (ts.isIdentifier(callee)) return requires.has(callee.text) ? "requires" : null;
-  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "resolve") return null;
-  const target = callee.expression;
-  if (ts.isIdentifier(target) && requires.has(target.text)) return "requires";
-  const importMeta = ts.isMetaProperty(target) && target.keywordToken === ts.SyntaxKind.ImportKeyword;
-  return importMeta ? "imports" : null;
-}
-
-/** The names a file calls `require` by: `require` itself, and each binding of `createRequire(…)`. */
-function requireNames(source) {
-  const names = new Set(["require"]);
-  const visit = node => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && isCreateRequire(node.initializer)) {
-      names.add(node.name.text);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return names;
-}
-
-function isCreateRequire(node) {
-  if (node === undefined || !ts.isCallExpression(node)) return false;
-  const callee = node.expression;
-  if (ts.isIdentifier(callee)) return callee.text === "createRequire";
-  return ts.isPropertyAccessExpression(callee) && callee.name.text === "createRequire";
-}
-
-/**
- * Every module specifier a file names: what it imports, what it requires, and the loader calls
- * whose argument a static walk cannot follow.
- *
- * `require` counts under any name `createRequire` binds it to, which is how a module script reaches
- * CommonJS, and `require.resolve` and `import.meta.resolve` count as well, since resolving a package
- * that is not installed fails as loading it does.
- *
- * @param {string} fileName
- * @param {string} text
- * @returns {{imports: string[], requires: string[], unresolvable: string[]}}
- */
-export function moduleSpecifiers(fileName, text) {
-  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const requires = requireNames(source);
-  const found = { imports: [], requires: [], unresolvable: [] };
-  const visit = node => {
-    collectSpecifier(node, source, requires, found);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return found;
-}
-
 /** A file's contents, or null after recording that it could not be read. */
 function readOrReport(file, read, offenders) {
   try {
@@ -730,10 +678,11 @@ const REQUIRE_FORMS = ["", ".js", ".json", "/index.js", "/index.json"];
 /**
  * What an entry's static module graph reaches that Node alone cannot load.
  *
- * Relative specifiers are followed through `read` — an import at exactly the path it names, a
- * require through the forms `require` tries — and a bare one must be a builtin. Whatever the walk
- * cannot settle is reported rather than passed over: a file that cannot be read, or a loader call
- * with no literal argument, because an unexamined import and a clean one look identical otherwise.
+ * Relative specifiers are followed through `read` — one the ES module resolver finds at exactly the
+ * path it names, one CommonJS finds through the forms `require` tries — and a bare one must be a
+ * builtin. Whatever the walk cannot settle is reported rather than passed over: a file that cannot
+ * be read, or a module named only at run time, because an unexamined import and a clean one look
+ * identical otherwise.
  *
  * @param {string} entry repository-relative path of the file a job starts
  * @param {(path: string) => string} read a file's contents, throwing when it does not exist
@@ -755,10 +704,14 @@ export function nonBuiltinImports(entry, read) {
     files.add(file);
     const text = readOrReport(file, read, offenders);
     if (text === null || file.endsWith(".json")) return;
-    const { imports, requires, unresolvable } = moduleSpecifiers(file, text);
-    for (const call of unresolvable) offenders.push(`${file}: ${call} names no literal module`);
-    for (const specifier of imports) follow(file, specifier, [""]);
-    for (const specifier of requires) follow(file, specifier, REQUIRE_FORMS);
+    for (const ref of moduleSpecifierRefs(text, file)) {
+      if (ref.typeOnly) continue;
+      if (ref.specifier === UNRESOLVABLE_SPECIFIER) {
+        offenders.push(`${file}: loads a module named at run time, which a static walk cannot follow`);
+      } else {
+        follow(file, ref.specifier, ref.resolution === "cjs" ? REQUIRE_FORMS : [""]);
+      }
+    }
   };
   walk(entry);
   return { files: [...files], offenders };

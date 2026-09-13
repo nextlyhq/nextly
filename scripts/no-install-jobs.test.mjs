@@ -17,7 +17,6 @@ import { describe, expect, it } from "vitest";
 import {
   dependencyFreeStarts,
   jobSequences,
-  moduleSpecifiers,
   nonBuiltinImports,
   startOffenders,
 } from "./no-install-jobs.mjs";
@@ -67,6 +66,10 @@ describe("the install that ends the dependency-free state", () => {
     ["a package named on the command line", ["- run: npm install /tmp/tarballs/app.tgz"]],
     ["a global install", ["- run: npm install --global"]],
     ["a directory option", ["- run: pnpm install --dir=tools"]],
+    ["an option that only writes the lockfile", ["- run: pnpm install --lockfile-only"]],
+    ["npm's lockfile-only option", ["- run: npm install --package-lock-only"]],
+    ["an option that skips development dependencies", ["- run: pnpm install --prod"]],
+    ["a dry run", ["- run: npm ci --dry-run"]],
   ])("does not end it at an install with %s", (_what, install) => {
     const found = read(jobWith(...install, "- run: node scripts/after.mjs"));
 
@@ -387,53 +390,6 @@ describe("the shell around a node command", () => {
   });
 });
 
-describe("moduleSpecifiers", () => {
-  it("does NOT read an import quoted in a comment or a string", () => {
-    const found = moduleSpecifiers(
-      "f.mjs",
-      '// import { compile } from "@mdx-js/mdx";\nconst s = \'import x from "js-yaml"\';\nimport { readFileSync } from "node:fs";\n'
-    );
-
-    expect(found).toEqual({ imports: ["node:fs"], requires: [], unresolvable: [] });
-  });
-
-  it("reads re-exports, side-effect imports and a literal dynamic import", () => {
-    const { imports } = moduleSpecifiers(
-      "f.mjs",
-      'export { a } from "./a.mjs";\nexport * from "pkg-a";\nimport "pkg-b";\nawait import("pkg-c");\n'
-    );
-
-    expect(imports).toEqual(["./a.mjs", "pkg-a", "pkg-b", "pkg-c"]);
-  });
-
-  it("reads require, require.resolve, a createRequire binding and import.meta.resolve", () => {
-    const found = moduleSpecifiers(
-      "f.mjs",
-      [
-        'import { createRequire } from "node:module";',
-        "const load = createRequire(import.meta.url);",
-        'load("pkg-a");',
-        'require("pkg-b");',
-        'require.resolve("pkg-c");',
-        'import.meta.resolve("pkg-d");',
-        'settings.require("not-a-module");',
-      ].join("\n")
-    );
-
-    expect(found).toEqual({
-      imports: ["node:module", "pkg-d"],
-      requires: ["pkg-a", "pkg-b", "pkg-c"],
-      unresolvable: [],
-    });
-  });
-
-  it("reports a require or import() it cannot follow instead of dropping it", () => {
-    const found = moduleSpecifiers("f.mjs", 'const name = "js-yaml";\nrequire(name);\nawait import(name);\n');
-
-    expect(found).toEqual({ imports: [], requires: [], unresolvable: ["require(name)", "import(name)"] });
-  });
-});
-
 describe("nonBuiltinImports", () => {
   const readFile = readerOf({
     "scripts/entry.mjs": 'import { x } from "./middle.mjs";\nimport { join } from "node:path";\n',
@@ -444,6 +400,12 @@ describe("nonBuiltinImports", () => {
     "scripts/entry.cjs": 'const lib = require("./lib");\nconst data = require("./data.json");\n',
     "scripts/lib.js": 'module.exports = require("js-yaml");\n',
     "scripts/data.json": '{ "name": "data" }\n',
+    "scripts/module-require.cjs": 'const yaml = module.require("js-yaml");\n',
+    "scripts/created.mjs":
+      'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nload("js-yaml");\n',
+    "scripts/dynamic.mjs": 'const name = "js-yaml";\nawait import(name);\n',
+    "scripts/esm-extensionless.mjs": 'import lib from "./lib";\n',
+    "scripts/typed.mjs": '/** @typedef {import("js-yaml").Schema} Schema */\nexport const x = 1;\n',
   });
 
   it("finds an npm import two files down, through a re-export", () => {
@@ -464,6 +426,29 @@ describe("nonBuiltinImports", () => {
 
     expect(offenders).toEqual(["scripts/lib.js imports js-yaml"]);
     expect(reached.sort()).toEqual(["scripts/data.json", "scripts/entry.cjs", "scripts/lib.js"]);
+  });
+
+  it.each([
+    ["module.require in a CommonJS entry", "scripts/module-require.cjs"],
+    ["a require function createRequire returned", "scripts/created.mjs"],
+  ])("finds an npm package loaded through %s", (_how, entry) => {
+    expect(nonBuiltinImports(entry, readFile).offenders).toEqual([`${entry} imports js-yaml`]);
+  });
+
+  it("reports a module named only at run time instead of passing over it", () => {
+    expect(nonBuiltinImports("scripts/dynamic.mjs", readFile).offenders).toEqual([
+      "scripts/dynamic.mjs: loads a module named at run time, which a static walk cannot follow",
+    ]);
+  });
+
+  it("does not count a type-only import, which is erased before Node runs anything", () => {
+    expect(nonBuiltinImports("scripts/typed.mjs", readFile).offenders).toEqual([]);
+  });
+
+  it("follows an ES module import only at the path it names, as Node does", () => {
+    expect(nonBuiltinImports("scripts/esm-extensionless.mjs", readFile).offenders).toEqual([
+      "scripts/lib: cannot be read",
+    ]);
   });
 
   it("reports a relative import it cannot read", () => {
@@ -563,6 +548,88 @@ describe("the other ways a node command is spelled or configured", () => {
 
     expect(found.refusals.map(refusal => refusal.reason)).toEqual([
       expect.stringContaining("names Node"),
+    ]);
+  });
+});
+
+describe("the shell a step runs under, and what a step using an action passes it", () => {
+  it.each(["nodejs {0}", "Node {0}", "/usr/local/bin/node {0}", "node.exe {0}"])(
+    "refuses a script whose shell is `%s`, which runs it as Node code",
+    shell => {
+      const found = read(jobWith(`- shell: ${shell}`, '  run: import "js-yaml";'));
+
+      expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+        expect.stringContaining("inline Node code"),
+      ]);
+    }
+  );
+
+  it("refuses NODE_OPTIONS passed to a composite action by the step using it", () => {
+    const files = {
+      ".github/actions/a/action.yml": compositeWith("- run: node scripts/a.mjs", "  shell: bash"),
+    };
+    const found = read(
+      jobWith("- uses: ./.github/actions/a", "  env:", "    NODE_OPTIONS: --require=missing"),
+      files
+    );
+
+    expect(found.starts).toEqual([]);
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("NODE_OPTIONS"),
+    ]);
+  });
+
+  it("refuses NODE_OPTIONS passed to a JavaScript action by the step using it", () => {
+    const files = {
+      ".github/actions/js/action.yml": ["runs:", "  using: node24", "  main: dist/main.mjs"].join("\n"),
+    };
+    const found = read(
+      jobWith("- uses: ./.github/actions/js", "  env:", "    NODE_OPTIONS: --import=tsx"),
+      files
+    );
+
+    expect(found.starts).toEqual([]);
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("NODE_OPTIONS"),
+    ]);
+  });
+
+  it("reads a JavaScript action's post when the step using it comes before the install", () => {
+    const files = {
+      ".github/actions/js/action.yml": [
+        "runs:",
+        "  using: node24",
+        "  main: dist/main.mjs",
+        "  post: dist/post.mjs",
+      ].join("\n"),
+    };
+    const found = read(
+      jobWith("- uses: ./.github/actions/js", "- run: pnpm install --frozen-lockfile"),
+      files
+    );
+
+    expect(entriesOf(found)).toEqual([
+      ".github/actions/js/dist/main.mjs",
+      ".github/actions/js/dist/post.mjs",
+    ]);
+  });
+
+  it("follows a shell script a step feeds to bash on its input", () => {
+    const files = { ".github/scripts/run.sh": "node scripts/c.mjs\n" };
+
+    expect(read(jobWith("- run: bash < .github/scripts/run.sh"), files)).toEqual({
+      starts: [
+        { where: "check › step 1 › .github/scripts/run.sh", entry: "scripts/c.mjs", preloads: [] },
+      ],
+      refusals: [],
+    });
+  });
+
+  it("refuses a script fed to bash from a path the shell expands", () => {
+    const found = read(jobWith('- run: bash < "$SCRIPT"'));
+
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("not in the text"),
     ]);
   });
 });

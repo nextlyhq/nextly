@@ -55,6 +55,14 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  *   `require` identifier, or `module.require` — the documented CommonJS method,
  *   which resolves exactly as the free function does. `loader.require("x")` is a
  *   method on some other object and is not a module resolve.
+ * - A function `createRequire` returned: `const load = createRequire(import.meta.url)`
+ *   and then `load("pkg")`, which is how an ES module reaches CommonJS and loads
+ *   exactly as `require` does. Counted only when `createRequire` comes from
+ *   `module` or `node:module`, since a helper of that name from anywhere else
+ *   returns whatever that helper returns.
+ * - `require.resolve("pkg")`, the same on a created require, and
+ *   `import.meta.resolve("pkg")`. They find a module without loading it, and fail
+ *   exactly as loading it would when the package is not there.
  * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
  *   is neither of the above.
  * - `typeof import("pkg")` in type position, which the parser gives as an
@@ -181,27 +189,253 @@ function readsModuleRequire(callee: ts.Expression, shadowed: boolean): boolean {
   return ts.isStringLiteralLike(key) && key.text === "require";
 }
 
+/** The specifiers `createRequire` is imported from. */
+const NODE_MODULE_SPECIFIERS: ReadonlySet<string> = new Set([
+  "module",
+  "node:module",
+]);
+
+/** The property a call reads, `a.b` or `a["b"]`, or null for any other callee. */
+function accessedName(callee: ts.Expression): string | null {
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+  if (
+    ts.isElementAccessExpression(callee) &&
+    ts.isStringLiteralLike(callee.argumentExpression)
+  ) {
+    return callee.argumentExpression.text;
+  }
+  return null;
+}
+
+/** The object an access reads its property from, seen through wrappers. */
+function accessReceiver(callee: ts.Expression): ts.Expression | null {
+  return ts.isPropertyAccessExpression(callee) ||
+    ts.isElementAccessExpression(callee)
+    ? unwrapReceiver(callee.expression)
+    : null;
+}
+
+/** `require("module")` or `require("node:module")`, seen through wrappers. */
+function requiresNodeModule(expression: ts.Expression): boolean {
+  const call = unwrapReceiver(expression);
+  if (!ts.isCallExpression(call) || !ts.isIdentifier(call.expression)) {
+    return false;
+  }
+  const [target] = call.arguments;
+  return (
+    call.expression.text === "require" &&
+    target !== undefined &&
+    ts.isStringLiteralLike(target) &&
+    NODE_MODULE_SPECIFIERS.has(target.text)
+  );
+}
+
+/** The local names bound to Node's `createRequire`, and to the `module` builtin carrying it. */
+interface CreateRequireBindings {
+  readonly factories: Set<string>;
+  readonly namespaces: Set<string>;
+}
+
+/** Record `local` as a `createRequire` when the name it binds is `createRequire`. */
+function recordFactory(
+  bindings: CreateRequireBindings,
+  bound: ts.Node,
+  local: ts.Node
+): void {
+  const named = ts.isIdentifier(bound) || ts.isStringLiteral(bound);
+  if (named && bound.text === "createRequire" && ts.isIdentifier(local)) {
+    bindings.factories.add(local.text);
+  }
+}
+
+/** The bindings an `import ... from "node:module"` declaration makes. */
+function recordImportedBindings(
+  node: ts.ImportDeclaration,
+  bindings: CreateRequireBindings
+): void {
+  const clause = node.importClause;
+  if (clause?.name) bindings.namespaces.add(clause.name.text);
+  const named = clause?.namedBindings;
+  if (named === undefined) return;
+  if (ts.isNamespaceImport(named)) {
+    bindings.namespaces.add(named.name.text);
+    return;
+  }
+  for (const element of named.elements) {
+    recordFactory(bindings, element.propertyName ?? element.name, element.name);
+  }
+}
+
+/** The bindings `const ... = require("node:module")` makes. */
+function recordRequiredBindings(
+  node: ts.VariableDeclaration,
+  bindings: CreateRequireBindings
+): void {
+  if (ts.isIdentifier(node.name)) {
+    bindings.namespaces.add(node.name.text);
+    return;
+  }
+  if (!ts.isObjectBindingPattern(node.name)) return;
+  for (const element of node.name.elements) {
+    recordFactory(bindings, element.propertyName ?? element.name, element.name);
+  }
+}
+
+/**
+ * Where a file binds Node's `createRequire`, or the `module` builtin that carries it.
+ *
+ * Only a binding from `module` or `node:module` counts. A helper of the same name
+ * imported from anywhere else returns whatever that helper returns, and reading its
+ * calls as module loads would report a dependency nobody has.
+ */
+function createRequireBindings(source: ts.SourceFile): CreateRequireBindings {
+  const bindings: CreateRequireBindings = {
+    factories: new Set(),
+    namespaces: new Set(),
+  };
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteralLike(node.moduleSpecifier) &&
+      NODE_MODULE_SPECIFIERS.has(node.moduleSpecifier.text)
+    ) {
+      recordImportedBindings(node, bindings);
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      requiresNodeModule(node.initializer)
+    ) {
+      recordRequiredBindings(node, bindings);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return bindings;
+}
+
+/** Whether an expression calls Node's `createRequire`, however the file bound it. */
+function callsCreateRequire(
+  expression: ts.Expression,
+  bindings: CreateRequireBindings
+): boolean {
+  const call = unwrapReceiver(expression);
+  if (!ts.isCallExpression(call)) return false;
+  const callee = unwrapReceiver(call.expression);
+  if (ts.isIdentifier(callee)) return bindings.factories.has(callee.text);
+  const receiver = accessReceiver(callee);
+  return (
+    accessedName(callee) === "createRequire" &&
+    receiver !== null &&
+    ts.isIdentifier(receiver) &&
+    bindings.namespaces.has(receiver.text)
+  );
+}
+
+/**
+ * The names in a file holding a require function Node's `createRequire` returned.
+ *
+ * File-granular, like {@link declaresOwnModule}: once a declaration binds a created
+ * require to a name, that name reads as a require everywhere in the file. Resolving
+ * each use to its own declaration needs a checker, which this reader works without.
+ */
+function createdRequireNames(source: ts.SourceFile): ReadonlySet<string> {
+  const bindings = createRequireBindings(source);
+  const names = new Set<string>();
+  if (bindings.factories.size === 0 && bindings.namespaces.size === 0) {
+    return names;
+  }
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      callsCreateRequire(node.initializer, bindings)
+    ) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return names;
+}
+
+/**
+ * Which resolver a call hands its argument to, or null when the call resolves no module.
+ *
+ * `import()` and `import.meta.resolve()` take the ES module resolver. `require()`,
+ * `module.require()`, a created require, and `.resolve()` on `require` or on a created
+ * require take CommonJS's. A `.resolve` on any other object is that object's own method.
+ */
+function callResolution(
+  callee: ts.Expression,
+  shadowsModule: boolean,
+  requires: ReadonlySet<string>
+): ModuleResolution | null {
+  if (callee.kind === ts.SyntaxKind.ImportKeyword) return "esm";
+  if (ts.isIdentifier(callee)) {
+    return callee.text === "require" || requires.has(callee.text)
+      ? "cjs"
+      : null;
+  }
+  if (readsModuleRequire(callee, shadowsModule)) return "cjs";
+  const receiver = accessReceiver(callee);
+  if (accessedName(callee) !== "resolve" || receiver === null) return null;
+  if (ts.isMetaProperty(receiver)) {
+    return receiver.keywordToken === ts.SyntaxKind.ImportKeyword ? "esm" : null;
+  }
+  const requireFunction =
+    ts.isIdentifier(receiver) &&
+    (receiver.text === "require" || requires.has(receiver.text));
+  return requireFunction ? "cjs" : null;
+}
+
 export function importedSpecifiers(text: string, fileName: string): string[] {
   return moduleSpecifierRefs(text, fileName).map(ref => ref.specifier);
 }
 
-/** One module a source file names, and whether it survives to runtime. */
-export interface ModuleSpecifierRef {
-  /** The specifier as written, or {@link UNRESOLVABLE_SPECIFIER}. */
-  readonly specifier: string;
-  /**
-   * Whether this reference is erased before anything runs.
-   *
-   * True for `import type`, `export type`, `typeof import()`, a JSDoc
-   * `@import` and a triple-slash type reference. False for everything that
-   * survives into the emitted module: a plain import, a bare side-effect
-   * import, `import(...)`, `require(...)` and `import x = require(...)`.
-   *
-   * 🔴 A mixed clause such as `import { a, type B } from "pkg"` is NOT type-only.
-   * The module is still loaded for `a`, and reading the inline `type` keyword as
-   * governing the whole clause would erase a real runtime edge.
-   */
-  readonly typeOnly: boolean;
+/** Which of Node's resolvers finds a module. */
+export type ModuleResolution = "esm" | "cjs";
+
+/** One module a source file names, whether it survives to runtime, and what finds it if so. */
+export type ModuleSpecifierRef =
+  | {
+      /** The specifier as written, or {@link UNRESOLVABLE_SPECIFIER}. */
+      readonly specifier: string;
+      /**
+       * Erased before anything runs: `import type`, `export type`,
+       * `typeof import()`, a JSDoc `@import` and a triple-slash type reference.
+       */
+      readonly typeOnly: true;
+    }
+  | {
+      /** The specifier as written, or {@link UNRESOLVABLE_SPECIFIER}. */
+      readonly specifier: string;
+      /**
+       * Survives into the emitted module: a plain import, a bare side-effect
+       * import, `import(...)`, `require(...)`, `import x = require(...)`, a
+       * created require, and the resolve calls.
+       *
+       * 🔴 A mixed clause such as `import { a, type B } from "pkg"` is NOT type-only.
+       * The module is still loaded for `a`, and reading the inline `type` keyword as
+       * governing the whole clause would erase a real runtime edge.
+       */
+      readonly typeOnly: false;
+      /**
+       * Which resolver finds it. `"esm"` takes the path as written; `"cjs"` also
+       * tries the extensions and index files CommonJS adds. A caller following a
+       * relative specifier needs this to find the file Node would load.
+       */
+      readonly resolution: ModuleResolution;
+    };
+
+/** The reference an import or export declaration makes, which the ES module resolver finds. */
+function declarationRef(
+  specifier: string,
+  typeOnly: boolean
+): ModuleSpecifierRef {
+  return typeOnly
+    ? { specifier, typeOnly: true }
+    : { specifier, typeOnly: false, resolution: "esm" };
 }
 
 /**
@@ -230,6 +464,7 @@ export function moduleSpecifierRefs(
   );
   const found: ModuleSpecifierRef[] = [];
   const shadowsModule = declaresOwnModule(source);
+  const requires = createdRequireNames(source);
   const seen = new Set<ts.Node>();
 
   const visit = (node: ts.Node): void => {
@@ -248,12 +483,14 @@ export function moduleSpecifierRefs(
       node.moduleSpecifier &&
       ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
-      found.push({
-        specifier: node.moduleSpecifier.text,
-        typeOnly: ts.isImportDeclaration(node)
-          ? Boolean(node.importClause?.isTypeOnly)
-          : node.isTypeOnly,
-      });
+      found.push(
+        declarationRef(
+          node.moduleSpecifier.text,
+          ts.isImportDeclaration(node)
+            ? Boolean(node.importClause?.isTypeOnly)
+            : node.isTypeOnly
+        )
+      );
     } else if (ts.isJSDocImportTag(node)) {
       const target = node.moduleSpecifier;
       found.push({
@@ -282,14 +519,15 @@ export function moduleSpecifierRefs(
           ? target.text
           : UNRESOLVABLE_SPECIFIER,
         typeOnly: false,
+        resolution: "cjs",
       });
     } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const resolvesAModule =
-        callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require") ||
-        readsModuleRequire(callee, shadowsModule);
-      if (resolvesAModule) {
+      const resolution = callResolution(
+        node.expression,
+        shadowsModule,
+        requires
+      );
+      if (resolution !== null) {
         const target = node.arguments[0];
         found.push({
           specifier:
@@ -297,6 +535,7 @@ export function moduleSpecifierRefs(
               ? target.text
               : UNRESOLVABLE_SPECIFIER,
           typeOnly: false,
+          resolution,
         });
       }
     }

@@ -105,7 +105,25 @@ describe("shellCommands", () => {
 
   it("keeps a here-string as its command's input", () => {
     expect(shellCommands('bash <<< "node x.mjs"')).toEqual([
-      { words: [{ text: "bash", literal: true }], heredocs: ["node x.mjs"] },
+      { words: [{ text: "bash", literal: true }], heredocs: ["node x.mjs"], inputs: [] },
+    ]);
+  });
+
+  it("keeps the file a command reads through <, and only through <", () => {
+    const [shell] = shellCommands("bash < scripts/run.sh > out.txt 2< ignored.txt");
+    const [node] = shellCommands('node a.mjs < "$INPUT"');
+
+    expect(shell.words.map(word => word.text)).toEqual(["bash"]);
+    expect(shell.inputs).toEqual([
+      { text: "scripts/run.sh", literal: true },
+      { text: "ignored.txt", literal: true },
+    ]);
+    expect(node.inputs).toEqual([{ text: "$INPUT", literal: false }]);
+  });
+
+  it("reports a command that only reads its input, with no words of its own", () => {
+    expect(shellCommands("< scripts/run.sh")).toEqual([
+      { words: [], heredocs: [], inputs: [{ text: "scripts/run.sh", literal: true }] },
     ]);
   });
 

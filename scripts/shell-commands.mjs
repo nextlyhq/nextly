@@ -29,6 +29,7 @@
  * @typedef {object} ShellCommand
  * @property {ShellWord[]} words the command's words, without its redirections
  * @property {string[]} heredocs the here-documents and here-strings it reads
+ * @property {ShellWord[]} inputs the files it reads standard input from, `<` redirections
  */
 
 /** A control operator, which ends a command. `&` before `>` starts a redirection instead. */
@@ -37,8 +38,12 @@ const CONTROL = /^(?:&&|\|\||;;|\|&|[;|]|&(?!>))/;
 /** A redirection operator. */
 const REDIRECTION = /^(?:<<<|<<-|<<|&>>|&>|>>|>&|<&|<>|>\||<|>)/;
 
-/** What the word after each redirection operator is. Every other operator is followed by a file. */
-const REDIRECTED = { "<<": "heredoc", "<<-": "heredoc-tabs", "<<<": "herestring" };
+/**
+ * What the word after each redirection operator is. `<` names the file a command reads as its
+ * input, which a shell given no script file runs; every other operator is followed by a file
+ * written to or duplicated, which runs nothing.
+ */
+const REDIRECTED = { "<": "input", "<<": "heredoc", "<<-": "heredoc-tabs", "<<<": "herestring" };
 
 /** A parameter reference after `$`: a name, or one of the special parameters. */
 const PARAMETER = /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9?#@*$!-])/;
@@ -69,7 +74,7 @@ function scan(ctx, inSubstitution) {
 }
 
 function newCommand() {
-  return { words: [], heredocs: [] };
+  return { words: [], heredocs: [], inputs: [] };
 }
 
 /** Consume what ends a word or a command, returning false when the next character is neither. */
@@ -240,6 +245,7 @@ function endWord(frame) {
   const expect = frame.expect;
   frame.expect = null;
   if (expect === null) frame.command.words.push(word);
+  else if (expect === "input") frame.command.inputs.push(word);
   else if (expect === "herestring") frame.command.heredocs.push(word.text);
   else if (expect !== "file") {
     const tabs = expect === "heredoc-tabs";
@@ -252,7 +258,8 @@ function endCommand(ctx, frame) {
   frame.expect = null;
   const { command } = frame;
   const readsHeredoc = frame.pending.some(entry => entry.command === command);
-  if (command.words.length > 0 || command.heredocs.length > 0 || readsHeredoc) ctx.out.push(command);
+  const reads = command.heredocs.length > 0 || command.inputs.length > 0 || readsHeredoc;
+  if (command.words.length > 0 || reads) ctx.out.push(command);
   frame.command = newCommand();
 }
 

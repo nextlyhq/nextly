@@ -71,3 +71,19 @@ the green it always did. The corpus that catches that belongs beside the reader.
 Note this is a different control from "the input set is non-empty". A guard can
 read every file it was given and still be unable to fail on any input. Only a
 known offender it must REJECT catches that.
+
+## Which resolver finds a module
+
+A reference that survives to runtime also says which of Node's resolvers finds
+it. `"esm"` covers an import declaration, a re-export, `import()` and
+`import.meta.resolve()`, which take the path as written. `"cjs"` covers
+`require()`, `module.require()`, `import x = require()`, a function
+`createRequire` returned and `.resolve()` on either kind of require, which also
+try the extensions and index files CommonJS adds. A caller following a relative
+specifier to its file needs the difference: `./lib` is `lib.js` to a require and
+nothing at all to an import.
+
+A created require is recognised only when `createRequire` itself comes from
+`module` or `node:module`. A helper of that name from anywhere else returns
+whatever that helper returns, and reading its calls as module loads would report
+a dependency nobody has.
