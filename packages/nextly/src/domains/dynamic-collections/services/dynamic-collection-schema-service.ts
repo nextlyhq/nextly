@@ -292,16 +292,25 @@ export class DynamicCollectionSchemaService {
       // has not happened yet when they were.
       const column = toSnakeCase(previous.name);
       const holdsNull = holdingNull?.has(column) === true;
-      // A queued ADD that carries a DEFAULT populates every existing row, so
-      // the tightening that follows it is valid and must not be refused. The
-      // ADD path emits one only when the field is required or declares a
-      // default — and this field is the OPTIONAL side of the transition, so
-      // only a declared, non-NULL default reaches the rows.
-      const queuedAddBackfills =
-        previous.default !== undefined &&
-        this.requiredColumnBackfill(previous) !== null;
-      const notYetApplied =
-        pendingOverRows?.has(column) === true && !queuedAddBackfills;
+      // Refused whatever the definition says about a default, and that is
+      // deliberate rather than unexamined.
+      //
+      // A queued ADD that emits a DEFAULT does backfill every existing row, so
+      // some of these refusals reject a save that would have worked. The
+      // definition cannot tell you which: `previous.default` is the CURRENT
+      // registry state, not what the queued ADD wrote. A field added with no
+      // default and given one by a later save carries that default here while
+      // the queued `ADD COLUMN` has none — a default-only edit emits no DDL at
+      // all, because `isFieldModified` does not compare defaults. Answering it
+      // properly means replaying the queued artefacts, which this generator
+      // deliberately does not do (see `readTableFacts`).
+      //
+      // So this fails CLOSED. A precondition that misses PERMITS the thing it
+      // exists to stop — here a `SET NOT NULL` that fails mid-deployment with
+      // earlier MySQL DDL already committed — while a false positive only asks
+      // the author to deploy in two steps, which is the same remedy the
+      // message already gives and which works either way.
+      const notYetApplied = pendingOverRows?.has(column) === true;
       if (!holdsNull && !notYetApplied) continue;
       // Two causes, two remedies: fill the empty entries in, or deploy the
       // migration that adds the column before the one that tightens it. One
@@ -319,9 +328,9 @@ export class DynamicCollectionSchemaService {
                 `leave the field optional.`
               : `"${field.name}" cannot be made required in the same ` +
                 `deployment that adds it, because this collection already has ` +
-                `entries and they would all start out empty. Deploy the ` +
-                `change that adds the field first, give the existing entries ` +
-                `a value, then make it required.`,
+                `entries. Deploy the change that adds the field first — if it ` +
+                `carries a default, that fills the existing entries in on its ` +
+                `own; otherwise give them a value — then make it required.`,
           },
         ],
         logContext: {

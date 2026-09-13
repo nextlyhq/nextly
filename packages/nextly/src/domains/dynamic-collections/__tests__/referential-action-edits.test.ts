@@ -920,17 +920,24 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       }
     });
 
-    it("allows it when the queued ADD carries a default to backfill with", () => {
-      // The refusal is about rows that would be left EMPTY. A queued ADD for a
-      // field that declares a default populates every existing row as it
-      // applies, so the tightening after it is valid — refusing there would
-      // block a save that works.
+    it("refuses even when the CURRENT definition carries a default", () => {
+      // The definition cannot answer this. `default` is the registry's state
+      // now, not what the queued ADD wrote: a field added with no default and
+      // given one by a later save carries it here while the queued
+      // `ADD COLUMN` has none, because a default-only edit emits no DDL at all
+      // (isFieldModified does not compare defaults — measured).
+      //
+      // So this refuses either way. Some of those refusals reject a save that
+      // would have worked; a precondition that misses instead PERMITS a
+      // migration that fails halfway with MySQL DDL already committed, and the
+      // remedy the message gives — deploy the adding change first — works for
+      // both histories.
       const withDefault = {
         name: "headline",
         type: "text",
         default: "untitled",
       } as unknown as FieldDefinition;
-      expect(() =>
+      try {
         service(dialect).generateAlterTableMigration(
           "dc_posts",
           [withDefault],
@@ -940,14 +947,17 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
             columnsAbsentFromTable: new Set(["headline"]),
             tableHasRows: true,
           }
-        )
-      ).not.toThrow();
+        );
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
     });
 
     it("still refuses when the queued ADD has no default to give", () => {
-      // The control for the case above: without a declared default the ADD
-      // emits no DEFAULT clause, so every existing row starts out NULL and the
-      // tightening that follows fails.
       const noDefault = {
         name: "headline",
         type: "text",
