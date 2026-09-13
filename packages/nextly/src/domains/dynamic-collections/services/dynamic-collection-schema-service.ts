@@ -261,6 +261,7 @@ export class DynamicCollectionSchemaService {
   private refuseTighteningOverNulls(
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[],
+    rename: { from: FieldDefinition; to: FieldDefinition } | null,
     options?: { columnsContainingNull?: ReadonlySet<string> }
   ): void {
     const holdingNull = options?.columnsContainingNull;
@@ -269,9 +270,20 @@ export class DynamicCollectionSchemaService {
     for (const field of newFields) {
       if (field.required !== true) continue;
       if (!fieldProducesColumn(field)) continue;
-      const previous = oldByName.get(field.name);
+      // The save's OWN rename pair, not a lookup by the new name. A field
+      // renamed and made required in one save is the same field, and matching
+      // by name finds no previous definition for it — so the transition read
+      // as "newly added", skipped this refusal, and the rename-aware column
+      // pass below then emitted the tightening anyway.
+      const previous =
+        rename !== null && field.name === rename.to.name
+          ? rename.from
+          : oldByName.get(field.name);
       if (!previous || previous.required === true) continue;
-      const column = toSnakeCase(field.name);
+      // Keyed on the column as the LIVE table has it, which is the name before
+      // this save: the nulls were counted against that column, and the rename
+      // has not happened yet when they were.
+      const column = toSnakeCase(previous.name);
       if (!holdingNull.has(column)) continue;
       throw NextlyError.validation({
         errors: [
@@ -284,7 +296,7 @@ export class DynamicCollectionSchemaService {
               `leave the field optional.`,
           },
         ],
-        logContext: { field: field.name, column },
+        logContext: { field: field.name, column, previous: previous.name },
       });
     }
   }
@@ -1032,7 +1044,13 @@ ${allColumnDefs.join(",\n")}
     // auto-committed, including the foreign-key replacement a relationship's
     // tightening is ordered behind, which leaves the table carrying no key at
     // all while the registry records the save as made.
-    this.refuseTighteningOverNulls(oldFields, newFields, options);
+    // Detected here rather than at its use below, because the precondition
+    // needs the same pair: a renamed field is the same field, and two answers
+    // to that question is what this whole pass keeps being bitten by. One call,
+    // so an ambiguous-rename refusal is also raised once.
+    const rename = this.detectFieldRename(oldFields, newFields);
+
+    this.refuseTighteningOverNulls(oldFields, newFields, rename, options);
 
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
 
@@ -1098,7 +1116,6 @@ ${allColumnDefs.join(",\n")}
     // doesn't appear in oldFieldMap. Acceptable trade-off vs the
     // alternative (data destruction). Track as a follow-up; admin UI
     // ideally splits combined edits into two saves.
-    const rename = this.detectFieldRename(oldFields, newFields);
     let renamedFromName = rename?.from.name ?? null;
     let renamedToName = rename?.to.name ?? null;
     if (rename) {

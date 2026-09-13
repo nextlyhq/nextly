@@ -186,50 +186,100 @@ describe("readForeignKeyColumns", () => {
 });
 
 describe("readColumnsContainingNull", () => {
-  it("probes exactly the columns it was given, and nothing else", () => {
-    // The probe list is the caller's decision; inventing one here would reach
-    // for a column the table may not have.
-    const seen: string[] = [];
-    const execute = vi.fn(async (query: unknown) => {
-      seen.push(JSON.stringify(query));
-      return { rows: [] };
-    });
-    return readColumnsContainingNull({ execute }, "postgresql", "dc_posts", [
-      "author",
-      "editor",
-    ]).then(found => {
-      expect(execute).toHaveBeenCalledTimes(2);
-      expect(found.size).toBe(0);
-      expect(seen.join(" ")).toContain("author");
-      expect(seen.join(" ")).toContain("editor");
-    });
-  });
-
-  it("reports only the columns that answered with a row", () => {
+  /**
+   * A fake that answers the CATALOG query first and then each probe.
+   *
+   * The catalog read is not incidental: it is what makes this reader unable to
+   * ask about a column the table does not have, so a fake that skipped it
+   * would be testing a different function.
+   */
+  const server = (liveColumns: string[], nullColumns: string[] = []) => {
+    const probed: number[] = [];
     let call = 0;
     const execute = vi.fn(async () => {
       call += 1;
-      return { rows: call === 1 ? [{ "?column?": 1 }] : [] };
+      if (call === 1) {
+        return {
+          rows: liveColumns.map(name => ({
+            table_name: "dc_posts",
+            column_name: name,
+            udt_name: "text",
+          })),
+        };
+      }
+      probed.push(call);
+      // Probes answer in the order the reader issues them.
+      const index = call - 2;
+      const asked = liveColumns.filter(c => nullColumns.includes(c));
+      return { rows: asked[index] !== undefined ? [{ one: 1 }] : [] };
     });
-    return readColumnsContainingNull({ execute }, "postgresql", "dc_posts", [
-      "author",
-      "editor",
-    ]).then(found => {
-      expect([...found]).toEqual(["author"]);
-    });
+    return { execute, probes: () => execute.mock.calls.length - 1, probed };
+  };
+
+  it("probes the columns it was given, once each", async () => {
+    const { execute, probes } = server(["author", "editor"]);
+    const found = await readColumnsContainingNull(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author", "editor"]
+    );
+    expect(probes()).toBe(2);
+    expect(found.size).toBe(0);
   });
 
-  it("asks nothing when there is nothing to ask about", () => {
-    // The control: an empty list is a real answer and must not cost a query.
+  it("never probes a column the live table does not have", async () => {
+    // The whole point. A caller cannot know from the field definitions which
+    // columns exist — a localized collection keeps some in a companion, and a
+    // deployment holding an unapplied migration has a field whose column is
+    // not there yet. Probing one errors and takes the save down with it.
+    const { execute, probes } = server(["author"]);
+    const found = await readColumnsContainingNull(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author", "ghost", "alsoGone"]
+    );
+    expect(probes()).toBe(1);
+    expect(found.size).toBe(0);
+  });
+
+  it("reports only the columns that answered with a row", async () => {
+    const { execute } = server(["author", "editor"], ["author"]);
+    const found = await readColumnsContainingNull(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author", "editor"]
+    );
+    expect([...found]).toEqual(["author"]);
+  });
+
+  it("asks nothing at all when there is nothing to ask about", async () => {
+    // Not even the catalog: an empty list is a real answer and must not cost a
+    // query.
     const execute = vi.fn(async () => ({ rows: [] }));
-    return readColumnsContainingNull(
+    const found = await readColumnsContainingNull(
       { execute },
       "postgresql",
       "dc_posts",
       []
-    ).then(found => {
-      expect(execute).not.toHaveBeenCalled();
-      expect(found.size).toBe(0);
-    });
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(found.size).toBe(0);
+  });
+
+  it("reports nothing when the table itself is absent", async () => {
+    // The catalog returns no row for it, which is not the same as a table with
+    // no nulls — but for this question both mean "refuse nothing".
+    const execute = vi.fn(async () => ({ rows: [] }));
+    const found = await readColumnsContainingNull(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author"]
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(found.size).toBe(0);
   });
 });

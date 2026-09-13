@@ -823,3 +823,63 @@ describe("relaxing a column for SET NULL keeps what the column carries", () => {
     expect(sql).toContain("MODIFY COLUMN `author` varchar(36) NULL;");
   });
 });
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "renaming a field and making it required, over rows that left it empty, on %s",
+  dialect => {
+    // `onDelete` declared on both sides so the resolved action does not move
+    // with requiredness — otherwise SQLite refuses for its own reason and the
+    // refusal under test cannot be told apart from that one.
+    const before = manyToOne({ onDelete: "cascade" });
+    const afterRenamed = {
+      ...manyToOne({ onDelete: "cascade" }),
+      name: "writer",
+      required: true,
+    } as FieldDefinition;
+
+    it("refuses, keyed on the column the live table still has", () => {
+      // The nulls were counted BEFORE this save, so they are recorded under
+      // `author`. Looking the old definition up by the new name finds nothing,
+      // reads the transition as a newly added field, and skips the refusal —
+      // and the rename-aware column pass then emits the tightening anyway,
+      // which fails at the server after earlier chunks have committed.
+      try {
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [before],
+          [afterRenamed],
+          { columnsContainingNull: new Set(["author"]) } as never
+        );
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain("REQUIRED_COLUMN_HAS_NULLS");
+      }
+    });
+
+    it("does not refuse on the name the column is about to take", () => {
+      // The control for the key: `writer` is what the column becomes, and no
+      // row can be holding a null under a column that does not exist yet.
+      // Keying on it would refuse a save that is perfectly fine.
+      expect(() =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [before],
+          [afterRenamed],
+          { columnsContainingNull: new Set(["writer"]) } as never
+        )
+      ).not.toThrow();
+    });
+
+    it("still allows the rename when nothing is empty", () => {
+      expect(() =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [before],
+          [afterRenamed],
+          { columnsContainingNull: new Set<string>() } as never
+        )
+      ).not.toThrow();
+    });
+  }
+);

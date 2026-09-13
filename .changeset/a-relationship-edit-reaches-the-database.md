@@ -137,3 +137,18 @@ Two things about the check above, both found before it shipped:
   restates the entire column definition on `MODIFY`, so a narrower rendering
   silently removed the relationship's configured default for future inserts.
   Both callers now render that statement through one function.
+
+Which columns exist is read from the database rather than predicted from the
+field definitions. Predicting it was wrong twice — a localized collection
+keeps its translatable columns in a companion table, and a deployment holding
+an unapplied migration has a field whose column is not there yet — and each
+repair only covered the reason someone had just met. The reader now narrows to
+the columns the catalog reports before it probes anything, so it cannot be
+asked about a column that is not there whatever the caller believed. The
+caller's list is a query-reduction narrowing and says so.
+
+The requiredness precondition uses the save's own rename pair, like every
+other pass in a save. A field renamed and made required in one go read as
+newly added, skipped the refusal, and had the tightening emitted anyway; the
+nulls are recorded against the column the live table still has, so that is the
+name the check reads.
