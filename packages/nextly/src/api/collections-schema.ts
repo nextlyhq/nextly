@@ -69,12 +69,12 @@ const createCollectionSchema = z.object({
   // different door: a manifest-shaped create for callers driving the schema
   // API directly, and it has always accepted names that one rejects.
   //
-  // Kept apart deliberately rather than by omission. Converging them narrows
-  // what this endpoint accepts, which is a breaking change for anything already
-  // posting a 60-character slug, and it belongs in its own change with its own
-  // migration story. Anything deciding whether a name is creatable through the
-  // ADMIN surface must read `domains/collections/creatable-slug`, which asks the
-  // Builder's validator, rather than borrowing these limits.
+  // Kept apart deliberately rather than by omission: 255 is the limit every
+  // caller of this endpoint has been accepted under, and the Builder's 50 would
+  // reject a slug it has always taken. Anything deciding whether a name is
+  // creatable through the ADMIN surface reads
+  // `domains/collections/creatable-slug`, which asks the Builder's validator,
+  // rather than borrowing these limits.
   slug: z
     .string()
     .min(1, "Slug is required")
