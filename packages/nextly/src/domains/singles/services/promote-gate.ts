@@ -30,7 +30,10 @@
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
-import { resolvePromotedDocument } from "../../../shared/lib/denied-change";
+import {
+  declaredFieldNames,
+  resolvePromotedDocument,
+} from "../../../shared/lib/denied-change";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldWriteAccess,
@@ -222,6 +225,9 @@ async function resolveForLocale(
         grants: ctx.grants,
         id: ctx.entryId,
       }),
+    // What this Single declares, so a field named like one of the store's own
+    // columns is judged as the content it is rather than skipped as metadata.
+    authoredFieldNames: declaredFieldNames(ctx.fields),
     slug: ctx.slug,
     locale,
   });
