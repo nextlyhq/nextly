@@ -70,6 +70,15 @@ export interface McpPluginOptions {
    * Where the endpoint answers, within the host application's Nextly handler
    * mount. Defaults to `/mcp`, so an app serving Nextly from `/admin/api`
    * publishes `https://<host>/admin/api/mcp`.
+   *
+   * A path core itself serves will NOT reach this endpoint. Core answers first
+   * and consults root-mounted plugin routes only where it serves nothing, which
+   * is deliberate: it is what stops a plugin taking over `/collections` by
+   * declaring it, and it is why core keeps no list of reserved prefixes for a
+   * plugin to check against. The consequence to know is that the shadowing is
+   * per METHOD, so a path core serves for `GET` and not for `DELETE` would send
+   * half this endpoint's traffic somewhere else. Pick a path core does not
+   * serve; `/mcp` is the default because it is one.
    */
   path?: string;
 }
@@ -80,8 +89,42 @@ export interface McpPluginOptions {
  * Takes its options now so that enabling the surface later is a value change
  * rather than a signature change for everyone who has already installed it.
  */
+/**
+ * Refuse a path that cannot address one endpoint, at the moment it is written.
+ *
+ * Shape only, and the limit is worth stating rather than leaving to look like
+ * more: this cannot tell whether core serves the path, because core keeps no
+ * list to ask — its own answer coming first IS the mechanism, so a list here
+ * would be a second one, drifting behind every route core adds. What it does
+ * catch is the class it can decide, at config time rather than as a 404 an
+ * operator has to explain.
+ */
+function endpointPathOrRefuse(path: string): string {
+  const problem = !path.startsWith("/")
+    ? "must start with `/`"
+    : path.includes(":")
+      ? "must name one address, not a `:param` pattern"
+      : path.length > 1 && path.endsWith("/")
+        ? "must not end with `/`"
+        : path === "/"
+          ? "must name a path under the Nextly handler mount, not the mount itself"
+          : null;
+
+  if (problem === null) return path;
+
+  // A plain error on purpose. `NextlyError`'s public messages are canonical by
+  // design, because they shape an HTTP response — and this never reaches one:
+  // it fires while the developer's own config is being evaluated, where the
+  // message IS the fix. A canonical "Validation failed." there would be a 404
+  // with extra steps.
+  throw new Error(
+    `@nextlyhq/plugin-mcp: \`path\` ${problem}. Received ${JSON.stringify(path)}.`
+  );
+}
+
 export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
-  const { enabled = false, path = DEFAULT_ENDPOINT_PATH } = options;
+  const { enabled = false } = options;
+  const path = endpointPathOrRefuse(options.path ?? DEFAULT_ENDPOINT_PATH);
 
   return definePlugin({
     // Carried on the definition, not merely resolved. Core reads an OMITTED

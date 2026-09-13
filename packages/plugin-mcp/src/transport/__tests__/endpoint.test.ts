@@ -131,6 +131,43 @@ describe("the endpoint refuses a request addressed somewhere else", () => {
     expect(response.status).toBe(200);
   });
 
+  it("serves a browser on the site the operator published", async () => {
+    // The case every refusal above needs beside it. Without it, "refuses the
+    // wrong Origin" is equally satisfied by refusing EVERY Origin — which is
+    // what an allowlist in the wrong shape produces, and which would lock out
+    // every browser client on the configured site while looking like a working
+    // guard. The refusals here all send no Origin or a foreign one, so none of
+    // them can tell the two apart.
+    const response = await routeFor("POST").handler(
+      initialize({
+        host: "cms.example.com",
+        origin: "https://cms.example.com",
+      }),
+      NO_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("serves one when the operator configured a full origin, not a hostname", async () => {
+    // The check compares HOSTNAMES and is port-agnostic, so an allowlist entry
+    // carrying a scheme matches nothing. An operator pastes what is in their
+    // address bar, so the entry is reduced to its hostname before it gets
+    // there; handing the full origin straight through is what would refuse the
+    // configured site.
+    const response = await routeFor("POST", {
+      allowedHosts: ["https://cms.example.com"],
+    }).handler(
+      initialize({
+        host: "cms.example.com",
+        origin: "https://cms.example.com",
+      }),
+      NO_CONTEXT
+    );
+
+    expect(response.status).toBe(200);
+  });
+
   it("serves a client that sends no Origin at all, which is every real one", async () => {
     // An MCP client is not a browser and sends no Origin. Refusing on absence
     // would be a guard that refuses every genuine caller and no attacker.
@@ -251,6 +288,32 @@ describe("what the plugin contributes, and when", () => {
     // other plugin route gets. Setting it would open the endpoint to anyone who
     // can reach the URL, and nothing else here would notice.
     expect(endpointRoutes().every(r => r.public === undefined)).toBe(true);
+  });
+
+  it("refuses a path that cannot address one endpoint", () => {
+    // Caught where it is written, rather than as a 404 an operator has to
+    // explain. Each of these produces a route that either never matches or
+    // matches more than the one address this endpoint has.
+    for (const bad of ["mcp", "/mcp/", "/agents/:id", "/"]) {
+      expect(() => mcpPlugin({ enabled: true, path: bad }), bad).toThrow();
+    }
+  });
+
+  it("accepts the shapes that DO address one endpoint", () => {
+    // The control. Refusing everything satisfies the case above perfectly, and
+    // would make the option unusable while looking like validation.
+    for (const good of ["/mcp", "/agents/mcp", "/a/b/c"]) {
+      expect(
+        () => mcpPlugin({ enabled: true, path: good }),
+        good
+      ).not.toThrow();
+    }
+  });
+
+  it("says which option is wrong and what it received", () => {
+    // A refusal an operator cannot act on is a 404 with extra steps.
+    expect(() => mcpPlugin({ enabled: true, path: "mcp" })).toThrow(/path/);
+    expect(() => mcpPlugin({ enabled: true, path: "mcp" })).toThrow(/"mcp"/);
   });
 
   it("answers where an operator asks it to", () => {

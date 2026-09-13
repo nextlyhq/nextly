@@ -78,6 +78,24 @@ const ENDPOINT_METHODS: readonly RouteMethod[] = ["POST", "GET", "DELETE"];
  * other plugin route: a session, or `Authorization: Bearer` with an API key.
  * The endpoint exposes nothing yet, so no permission is named beyond that.
  * Tools reaching content authorize their own reads as they arrive.
+ *
+ * ## What that costs, stated rather than left to be found
+ *
+ * Core authenticates BEFORE the handler runs, so a caller with no credential
+ * never reaches the address guard below and is answered `401`. The transport
+ * specification names `403` for a disallowed `Origin`, so an unauthenticated
+ * probe gets the wrong status and the guard has no part in refusing it.
+ *
+ * It is still refused, and by the stronger of the two checks: an unauthenticated
+ * caller cannot reach the protocol however its request is addressed. The guard
+ * covers the case that authentication cannot — a request carrying a real
+ * credential from a page that had no business sending it, which is the browser
+ * half of the attack. `__tests__/endpoint-dispatch.integration.test.ts` pins the
+ * `401` through the real dispatcher, so the gap is a recorded fact.
+ *
+ * Making the route `public` would put the guard first and answer `403`. It would
+ * also mean authenticating here instead, which is the one thing this endpoint
+ * exists not to do.
  */
 export function mcpEndpointRoutes(options: EndpointOptions): PluginRoute[] {
   let handler: McpHttpHandler | undefined;
