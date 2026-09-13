@@ -50,8 +50,10 @@ The endpoint is authenticated like every other Nextly route: a signed-in
 session, or an API key.
 
 ```sh
+export NEXTLY_API_KEY=...   # never paste the key into the command itself
+
 curl https://cms.example.com/admin/api/mcp \
-  -H 'Authorization: Bearer nx_live_...' \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
