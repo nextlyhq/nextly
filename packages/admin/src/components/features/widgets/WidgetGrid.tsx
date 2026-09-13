@@ -22,7 +22,7 @@
 
 import { DndContext, closestCorners } from "@dnd-kit/core";
 import { applyWidgetSettings } from "nextly/config";
-import { useCallback, useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 import {
   useBranding,
@@ -30,12 +30,18 @@ import {
 } from "@admin/context/providers/BrandingProvider";
 import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
 import { AddWidgetPicker } from "./edit/AddWidgetPicker";
 import { ArrangedColumns } from "./edit/ArrangedColumns";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
-import { useDashboardArrangement } from "./edit/useDashboardArrangement";
+import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
+import {
+  useDashboardArrangement,
+  type ArrangedWidget,
+} from "./edit/useDashboardArrangement";
+import { useDismissPlacement } from "./edit/useDismissPlacement";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -118,6 +124,55 @@ function NothingToDraw({
  * landmark and the live region stay where a reader left them.
  */
 
+/**
+ * The cards the batch asks for, with each reader's own settings applied.
+ *
+ * Applied HERE rather than inside the batch, because the stored config belongs
+ * to the placement and the batch has no reason to read a layout. The ROW is
+ * carried through rather than the widget alone, so the answer comes back keyed
+ * to the placement that asked: the same widget placed twice with different
+ * settings asks two different questions, and keying those by widget filed both
+ * under one entry.
+ *
+ * `applyWidgetSettings` returns the query it was given when nothing applies, so
+ * a card with no settings keeps its identity through this map and the batch's
+ * memoisation does not see a new object every render.
+ */
+function askedWith(rows: ArrangedWidget[]): ArrangedWidget[] {
+  return rows.map(row =>
+    row.widget.query
+      ? {
+          ...row,
+          widget: {
+            ...row.widget,
+            query: applyWidgetSettings(
+              row.widget.query,
+              row.widget.settings,
+              row.config
+            ),
+          },
+        }
+      : row
+  );
+}
+
+/**
+ * The widgets the picker offers, each under the name a reader will recognise.
+ *
+ * The declaration's own title where the admin can resolve it. The id is a poor
+ * label and it is TRUE, which an invented one would not be — a widget whose
+ * client bundle is absent still has to be addable by name.
+ */
+function offerable(
+  available: readonly string[],
+  byId: ReadonlyMap<string, DashboardWidget>
+): Array<{ widgetId: string; title: string }> {
+  return available.map(widgetId => ({
+    widgetId,
+    title: byId.get(widgetId)?.title ?? widgetId,
+  }));
+}
+
 export function WidgetGrid() {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -136,26 +191,10 @@ export function WidgetGrid() {
     [branding, hasPermission]
   );
 
-  // 🔴 A stable indirection, because these three hooks form a cycle: the
-  // announcer needs the batch's outcome, the batch needs the widgets the
-  // arrangement resolved, and the arrangement needs somewhere to announce a
-  // move. The ref is the one link that can be filled in after the fact — the
-  // wrapper's identity never changes, so nothing downstream re-renders on it,
-  // and by the time a reader can move a card the announcer is long since
-  // assigned.
-  const announcer = useRef<
-    (t: string, col: number, cols: number, p: number, c: number) => void
-  >(() => {});
-  const announceColumn = useCallback(
-    (
-      title: string,
-      column: number,
-      columnCount: number,
-      position: number,
-      count: number
-    ) => announcer.current(title, column, columnCount, position, count),
-    []
-  );
+  // The arrangement needs somewhere to announce a gesture before the announcer
+  // exists; the relay is that somewhere. Its own hook because the cycle it
+  // resolves takes a paragraph to explain and has nothing to do with drawing.
+  const { announce, attach } = useAnnouncerRelay();
 
   const layout = useDashboardLayout();
   const {
@@ -169,46 +208,24 @@ export function WidgetGrid() {
     sensors,
     announcements,
     handleDragEnd,
-  } = useDashboardArrangement(declared, layout, announceColumn);
+    toggleHidden,
+    remove,
+  } = useDashboardArrangement(declared, layout, announce);
+
+  // The STANDING dismiss, which is a different write from the toolbar's hide:
+  // outside edit mode there is no draft to mutate, so it commits on its own
+  // against the read's own guards. Given the announcer directly rather than
+  // through the arrangement, because it is the one gesture whose outcome is not
+  // known until the server answers -- and `undefined` until an arrangement has
+  // been read, which is what withholds the control itself.
+  const dismiss = useDismissPlacement(layout, editor, announce.hidden);
 
   const byId = useMemo(
     () => new Map(declared.map(widget => [widget.id, widget])),
     [declared]
   );
 
-  /*
-   * The cards the batch asks for, with each reader's own settings applied.
-   *
-   * Applied HERE rather than inside the batch, because the stored config
-   * belongs to the placement and the batch has no reason to read a layout. The
-   * ROW is carried through rather than the widget alone, so the answer comes
-   * back keyed to the placement that asked: the same widget placed twice with
-   * different settings asks two different questions, and keying those by widget
-   * filed both under one entry.
-   *
-   * `applyWidgetSettings` returns the query it was given when nothing applies,
-   * so a card with no settings keeps its identity through this map and the
-   * batch's memoisation does not see a new object every render.
-   */
-  const cards = useMemo(
-    () =>
-      visible.map(row =>
-        row.widget.query
-          ? {
-              ...row,
-              widget: {
-                ...row.widget,
-                query: applyWidgetSettings(
-                  row.widget.query,
-                  row.widget.settings,
-                  row.config
-                ),
-              },
-            }
-          : row
-      ),
-    [visible]
-  );
+  const cards = useMemo(() => askedWith(visible), [visible]);
 
   const {
     slots,
@@ -221,9 +238,9 @@ export function WidgetGrid() {
     settling,
   } = useWidgetBatch(cards);
 
-  const { announcement, announceColumn: announceSettledColumn } =
-    useGridAnnouncer(settling, counted, failed);
-  announcer.current = announceSettledColumn;
+  const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
+  const { announcement } = gridAnnouncer;
+  attach(gridAnnouncer);
 
   // Nothing DECLARED. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
@@ -292,22 +309,16 @@ export function WidgetGrid() {
           announcement={announcement}
           onMove={moveWithinColumn}
           onMoveColumn={moveColumn}
-          onToggleHidden={editor.toggleHidden}
-          onRemove={editor.remove}
+          onToggleHidden={toggleHidden}
+          onDismiss={dismiss}
+          onRemove={remove}
           onSaveSettings={editor.setConfig}
         />
       </DndContext>
 
       {editor.isEditing ? (
         <AddWidgetPicker
-          options={editor.available.map(widgetId => ({
-            widgetId,
-            // The declaration's own title where the admin can resolve it. The
-            // id is a poor label and it is TRUE, which an invented one would
-            // not be — a widget whose client bundle is absent still has to be
-            // addable by name.
-            title: byId.get(widgetId)?.title ?? widgetId,
-          }))}
+          options={offerable(editor.available, byId)}
           onAdd={editor.add}
           atCapacity={editor.atCapacity}
         />

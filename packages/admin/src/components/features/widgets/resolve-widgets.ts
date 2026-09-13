@@ -107,6 +107,8 @@ export interface ReadableWidgetDeclaration {
   link?: { label: string; href: string };
   defaultOrder?: number;
   chrome?: WidgetChrome;
+  /** Whether the reader may send this card away; see `DashboardWidget`. */
+  dismissible?: boolean;
 }
 
 /**
@@ -235,6 +237,7 @@ function resolveOne(
     link: meta.link,
     defaultOrder: meta.defaultOrder,
     chrome: meta.chrome,
+    dismissible: meta.dismissible,
   };
 }
 
@@ -282,6 +285,7 @@ function resolveRegistered(
     link: meta.link,
     defaultOrder: meta.defaultOrder,
     chrome: meta.chrome,
+    dismissible: meta.dismissible,
   };
 }
 
@@ -390,6 +394,13 @@ function mergeCollision(
       contribution.defaultOrder
     ),
     chrome: preferRegistered(registration.chrome, contribution.chrome),
+    // Named here like every other field, because this list IS the contract: a
+    // field the merge does not name is dropped, and a merged card would lose
+    // the dismiss control its contribution declared.
+    dismissible: preferRegistered(
+      registration.dismissible,
+      contribution.dismissible
+    ),
   };
 }
 

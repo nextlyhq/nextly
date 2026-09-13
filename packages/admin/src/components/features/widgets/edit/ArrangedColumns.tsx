@@ -37,6 +37,11 @@ export interface ArrangedColumnsProps {
   onMove: (placementId: string, neighbourId: string, side: DropSide) => void;
   onMoveColumn: (placementId: string, targetColumn: number) => void;
   onToggleHidden: (placementId: string) => void;
+  /**
+   * Put one card away from the card itself, or nothing where no arrangement
+   * has been read yet and there is no placement to hide.
+   */
+  onDismiss?: (placementId: string, title: string) => void;
   onRemove: (placementId: string) => void;
   /** Records what a reader chose for one card's settings. */
   onSaveSettings: (
@@ -92,6 +97,7 @@ export function ArrangedColumns({
   onMove,
   onMoveColumn,
   onToggleHidden,
+  onDismiss,
   onRemove,
   onSaveSettings,
 }: ArrangedColumnsProps) {
@@ -179,6 +185,7 @@ export function ArrangedColumns({
                 },
                 moveColumn: onMoveColumn,
                 toggleHidden: onToggleHidden,
+                dismiss: onDismiss,
                 remove: onRemove,
                 saveSettings: config => onSaveSettings(row.placementId, config),
               }}

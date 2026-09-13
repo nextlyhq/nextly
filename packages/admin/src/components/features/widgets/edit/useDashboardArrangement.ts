@@ -33,6 +33,10 @@ import {
   type DropTarget,
 } from "../layout-editor";
 
+import {
+  useAnnouncedPresence,
+  type ArrangementAnnouncer,
+} from "./useArrangementAnnouncer";
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
 
 /** One card to draw: which placement put it there, and whether it is put away. */
@@ -128,18 +132,25 @@ export interface DashboardArrangement {
    * identical and no drop is read twice.
    */
   announcements: Announcements;
+  /**
+   * Put one card away, or bring it back, saying so.
+   *
+   * Wraps the editor's own mutation rather than being offered beside it: the
+   * arrangement is what holds the card's title, and an unannounced hide is a
+   * card that silently stops being rendered — indistinguishable, without sight,
+   * from the page having failed.
+   */
+  toggleHidden: (placementId: string) => void;
+  /** Take one card off the dashboard, saying so. */
+  remove: (placementId: string) => void;
 }
+
+export type { ArrangementAnnouncer };
 
 export function useDashboardArrangement(
   declared: DashboardWidget[],
   layout: UseDashboardLayoutResult,
-  announceColumn: (
-    title: string,
-    column: number,
-    columnCount: number,
-    position: number,
-    count: number
-  ) => void
+  announce: ArrangementAnnouncer
 ): DashboardArrangement {
   // The DECLARATIONS, by id. The arrangement says which cards and in what
   // order; this says what each one actually is. Two questions, two sources:
@@ -327,7 +338,7 @@ export function useDashboardArrangement(
       );
       if (column === -1) return;
       const position = buckets[column].findIndex(p => p.id === placementId) + 1;
-      announceColumn(
+      announce.column(
         title,
         column + 1,
         columnCount,
@@ -335,7 +346,7 @@ export function useDashboardArrangement(
         buckets[column].length
       );
     },
-    [editor.placements, columnCount, announceColumn, renderedIds]
+    [editor.placements, columnCount, announce, renderedIds]
   );
 
   const handleDragEnd = useCallback(
@@ -423,6 +434,15 @@ export function useDashboardArrangement(
     [visible, editor, announceLanding]
   );
 
+  // The two gestures that change whether a card is on the dashboard, each
+  // saying so. Their own hook because announcing is a subject rather than a
+  // step, and because this one had grown past what a reader can hold.
+  const { toggleHidden, remove } = useAnnouncedPresence(
+    visible,
+    editor,
+    announce
+  );
+
   return {
     visible,
     editor,
@@ -434,5 +454,7 @@ export function useDashboardArrangement(
     sensors,
     announcements,
     handleDragEnd,
+    toggleHidden,
+    remove,
   };
 }

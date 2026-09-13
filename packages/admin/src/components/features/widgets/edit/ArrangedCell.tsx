@@ -23,6 +23,7 @@ import { moveAffordance, columnAffordance } from "../layout-editor";
 import { widgetSpanClass } from "../sizes";
 import { WidgetRenderer } from "../WidgetRenderer";
 
+import { DismissWidgetButton } from "./DismissWidgetButton";
 import { SortableWidgetCell } from "./SortableWidgetCell";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import { WidgetEditControls } from "./WidgetEditControls";
@@ -70,6 +71,24 @@ export interface ArrangedCellProps {
     move: (delta: number) => void;
     moveColumn: (placementId: string, targetColumn: number) => void;
     toggleHidden: (placementId: string) => void;
+    /**
+     * Send this card away from the card itself, outside edit mode.
+     *
+     * Separate from {@link toggleHidden} because the two reach different
+     * writers: that one edits the draft, which exists only while editing, so a
+     * standing control wired to it would do nothing at all. Takes the title
+     * because the handler announces the outcome after the write, when this row
+     * may be gone.
+     *
+     * 🔴 ABSENT rather than present-and-inert before an arrangement has been
+     * read, the rule {@link ArrangedCellProps.on.saveSettings}'s neighbour
+     * `openSettings` already follows. The grid draws the DECLARATIONS while
+     * the layout request is in flight, and those rows carry no stored
+     * placement to hide -- so a control drawn then answered a click by doing
+     * nothing at all, which is the silent no-op this whole path exists to
+     * avoid.
+     */
+    dismiss?: (placementId: string, title: string) => void;
     remove: (placementId: string) => void;
     /** Records what a reader chose for THIS card. */
     saveSettings: (config: Record<string, unknown>) => void;
@@ -118,6 +137,10 @@ export function ArrangedCell({
   const moveLeft = () => on.moveColumn(row.placementId, column - 1);
   const moveRight = () => on.moveColumn(row.placementId, column + 1);
   const toggleHidden = () => on.toggleHidden(row.placementId);
+  const onDismiss = on.dismiss;
+  const dismiss = onDismiss
+    ? () => onDismiss(row.placementId, widget.title)
+    : undefined;
   const remove = () => on.remove(row.placementId);
   const openSettings = () => setSettingsOpen(true);
   const { canMoveUp, canMoveDown } = moveAffordance(index, count);
@@ -153,6 +176,14 @@ export function ArrangedCell({
         // either side, which is the empty-slot bug rather than the hiding those
         // components have always performed.
         "empty:hidden",
+        // The same collapse, for a cell whose only child is the dismiss
+        // control. That control is drawn from the DECLARATION rather than from
+        // anything the body produced, so it is present even when the widget
+        // renders nothing -- and an element child stops `:empty` matching, so
+        // without this a card that drew nothing would hold a blank row with a
+        // stray button in it. Reads as what it is: a cell carrying only its own
+        // chrome is still empty.
+        "has-[>[data-widget-chrome]:only-child]:hidden",
         // An unframed widget is a SECTION, and sections on this page have
         // always been 48px apart -- the `space-y-12` the dashboard used before
         // these became widgets. The grid's own `gap-6` is a card rhythm and
@@ -182,6 +213,10 @@ export function ArrangedCell({
             column: column + 1,
             columnCount,
             hidden: row.hidden,
+            // Boolean rather than the declaration's optional field: the label
+            // branches on it, and `undefined` reaching a prop that reads as a
+            // yes/no question is a third state nothing here means.
+            dismissible: widget.dismissible === true,
           }}
           can={{
             up: canMoveUp,
@@ -199,6 +234,14 @@ export function ArrangedCell({
             ...(hasSettings ? { openSettings } : {}),
           }}
         />
+      ) : null}
+      {/* Drawn only where the widget DECLARED that its reader may send it away,
+          and only outside edit mode -- the toolbar above already offers hide
+          and show, and two controls doing one thing in one cell is a reader
+          choosing between synonyms. The corner is free by construction: the
+          drag handle takes the left and renders only while editing. */}
+      {!isEditing && widget.dismissible && dismiss ? (
+        <DismissWidgetButton title={widget.title} onDismiss={dismiss} />
       ) : null}
       {/* Mounted whenever the widget offers settings, not only while editing.
           A closed `Sheet` renders nothing, so this costs a card nothing — and

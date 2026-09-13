@@ -125,6 +125,15 @@ export interface DashboardWidget {
    * a second heading around the first.
    */
   chrome?: WidgetChrome;
+  /**
+   * Whether this reader may send the card away from the card itself.
+   *
+   * Carried through because the CONTROL is drawn per card, outside edit mode,
+   * and the cell has no other way to know a card offers one. Hiding is what it
+   * performs -- the placement stays in the arrangement marked hidden -- so a
+   * dismissed card is recoverable from the same controls as any other.
+   */
+  dismissible?: boolean;
 }
 
 /**

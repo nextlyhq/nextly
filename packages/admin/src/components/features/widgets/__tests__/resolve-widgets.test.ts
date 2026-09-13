@@ -367,6 +367,40 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
     expect(widget.chrome).toBe("none");
   });
 
+  it("carries dismissible through the collision merge", () => {
+    // The same field-by-field rebuild `defaultOrder` and `chrome` guard above,
+    // one field along. Dropped here, a merged card loses the only control its
+    // reader has for sending it away outside edit mode -- and nothing about the
+    // card looks wrong, because every other field survived.
+    const contribution = {
+      id: "shared",
+      title: "Shared",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "@acme/p/admin#X",
+      dismissible: true,
+    } as unknown as RegisteredWidgetMeta;
+
+    const registration = {
+      id: "shared",
+      title: "Shared",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "@acme/p/admin#X",
+    } as unknown as RegisteredWidgetMeta;
+
+    const [widget] = resolveDashboardWidgets(
+      contributing([contribution]),
+      [registration],
+      allow
+    );
+
+    // The registration states nothing, so the contribution's answer stands --
+    // the rule `settings` follows in the case below, rather than the registry
+    // winning unconditionally.
+    expect(widget.dismissible).toBe(true);
+  });
+
   it("keeps settings the contribution declared and the registration does not", () => {
     /*
      * 🔴 The registration is authoritative only where it STATES a value. A
@@ -510,6 +544,66 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       allow
     );
     expect(ids(widgets)).toEqual(["shared", "first"]);
+  });
+});
+
+describe("who may send a card away travels with the declaration", () => {
+  it("carries dismissible from a contribution", () => {
+    const [widget] = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "acme/tour",
+          title: "Tour",
+          archetype: "custom",
+          component: "@acme/p/admin#Tour",
+          dismissible: true,
+        },
+      ]),
+      [],
+      allow
+    );
+
+    expect(widget.dismissible).toBe(true);
+  });
+
+  it("carries dismissible from a registration", () => {
+    const [widget] = resolveDashboardWidgets(
+      undefined,
+      [
+        {
+          id: "core/onboarding",
+          title: "Set up your project",
+          archetype: "custom",
+          defaultSize: "full",
+          component: "core#Onboarding",
+          dismissible: true,
+        } as unknown as RegisteredWidgetMeta,
+      ],
+      allow
+    );
+
+    expect(widget.dismissible).toBe(true);
+  });
+
+  it("leaves a card that declared nothing without the field", () => {
+    // The control is drawn on the strength of this field, so a resolver that
+    // defaulted it to `true` would put a dismiss button on every card -- and
+    // asserting only the two cases above cannot tell that apart, since both
+    // expect `true`.
+    const [widget] = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "acme/plain",
+          title: "Plain",
+          archetype: "custom",
+          component: "@acme/p/admin#Plain",
+        },
+      ]),
+      [],
+      allow
+    );
+
+    expect(widget.dismissible).toBeUndefined();
   });
 });
 
