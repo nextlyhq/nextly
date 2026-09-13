@@ -338,22 +338,32 @@ than something production generates.
   leave the `localized` registry value behind, because the upsert is filtered by the same
   touched-table set the companion file does not populate. Check the registry row after toggling
   localization on an existing entity.
+- **A deletion leaves the registry row behind.** Deleting an entity in the Builder writes a
+  migration that drops its table, so the table goes. Its registry row does not: `migrate:create`
+  builds registry upserts only for entities still in the manifest, and nothing on the
+  `nextly migrate` path removes a row. The other environment keeps a row describing a table that no
+  longer exists. There is no supported way to remove it through `nextly migrate` today, and
+  `nextly prune` does not apply — it only removes `plugin:` provenance and always retains Builder
+  entities.
 
 ### What `migrate` repairs
 
-After applying files, `reconcileMigrationMetadata` calls `registerFromMigrations`, then checks
-pending entities against their physical tables. It is narrower than it sounds, so expect exactly
-this and no more:
+After applying files, `reconcileMigrationMetadata` does two things. It registers entities that an
+applied migration's snapshot describes but the registry lacks, and it promotes a pending row to
+`applied` once no unapplied migration still names that entity and its table exists. Which of those
+reach a Builder entity is narrower than it sounds:
 
 | Case | Repaired by `nextly migrate`? |
 |---|---|
-| A missing **collection** or **single** registry row, where an applied migration's snapshot describes it | Yes — the row is inserted |
-| A row whose `migration_status` is stale for a table that does exist | Yes — the status is advanced or reported |
-| A missing **field group** row | No — `registerFromMigrations` covers collections and singles only |
-| An existing row with stale labels, descriptions or fields | No — the sweep updates status, it does not refresh content |
-| A metadata-only edit that produced no file | No — there is no artifact for the reconciler to read |
+| A pending row, once every migration naming the entity has run and its table exists | Yes — promoted to `applied` |
+| A missing **collection** or **single** row from a `migrate:create` deployment | **No** — a `migrate:create` snapshot records tables, not entities, so registration finds nothing to insert. Only an entity-level snapshot, such as a scaffolded template's, restores a row |
+| A missing **field group** row | No — registration covers collections and singles only |
+| An existing row with stale labels, descriptions or fields | No — the pass promotes status; it does not refresh content |
+| A metadata-only edit that produced no file | No — there is no artifact to read |
+| The row of a **deleted** entity | No — nothing on this path removes a row |
 
-For the first two, run `nextly migrate` rather than recreating the entity by hand.
+So run `nextly migrate` to settle a pending status, but do not rely on it to recreate a registry row
+that a Builder deployment is missing.
 
 ### Moving an entity into code
 
