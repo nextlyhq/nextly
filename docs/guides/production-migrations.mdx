@@ -294,11 +294,13 @@ Specific examples:
 
 Everything above describes how **columns** reach production. Entities created in the
 [Visual Schema Builder](/docs/schema-builder) carry a second thing: a row in a registry table —
-`dynamic_collections`, `dynamic_singles` or `dynamic_components` — holding the label, description
-and admin display settings. Collections and Singles additionally carry the Versions, Revalidate and
-Webhooks switches; Field Groups have none of those, and `dynamic_components` has no columns for
-them. The runtime reads its Drizzle table from that row, so the row matters as much as the columns
-do.
+`dynamic_collections`, `dynamic_singles`, or for Field Groups `dynamic_components` — holding the
+label, description and admin display settings. A database that has run
+`nextly migrate:field-groups --apply --backup-confirmed` holds the Field Group registry as
+`dynamic_field_groups` instead, and the runtime reads whichever of the two the database has.
+Collections and Singles additionally carry the Versions, Revalidate and Webhooks switches; Field
+Groups have none of those, and the Field Group registry has no columns for them under either name.
+The runtime reads its Drizzle table from that row, so the row matters as much as the columns do.
 
 ### Commit `ui-schema.json`
 
@@ -333,13 +335,19 @@ than something production generates.
   only for DDL and filters metadata upserts to the tables that file touches. With no DDL anywhere in
   the run it writes nothing at all (`No changes detected`, exit code 2). The value stays in the
   manifest until some later migration changes that entity's table and carries the row with it.
+  A **cleared** description is the exception, because it never travels: the manifest records an
+  empty description as absent, and the upsert leaves a column the manifest does not carry as it
+  was, so the other database keeps the old text through every later migration.
 - Status and Internationalization are **not** metadata: both change columns. Note that an
   Internationalization toggle whose column moves are emitted as a companion migration can still
   leave the `localized` registry value behind, because the upsert is filtered by the same
   touched-table set the companion file does not populate. Check the registry row after toggling
   localization on an existing entity.
-- **A deletion leaves the registry row behind.** Deleting an entity in the Builder writes a
-  migration that drops its table, so the table goes. Its registry row does not: `migrate:create`
+- **A deletion leaves the registry row behind.** Deleting a Collection in the Builder writes a
+  migration that drops its table. Deleting a Single or a Field Group writes none: the Builder drops
+  the development table and removes the manifest entry, and the next `migrate:create` finds that
+  table in the previous snapshot but not in the manifest and writes the `DROP TABLE`. Either way the
+  table goes. Its registry row does not: `migrate:create`
   builds registry upserts only for entities still in the manifest, and nothing on the
   `nextly migrate` path removes a row. The other environment keeps a row describing a table that no
   longer exists. There is no supported way to remove it through `nextly migrate` today, and
@@ -372,9 +380,11 @@ entity rather than a way to version one switch: `defineCollection` and `defineSi
 **complete** definition, fields included.
 
 Remove the entity from the manifest (`db.uiSchemaFile`) as part of the move. `migrate:create` tolerates the
-collision — it warns and lets the code-first definition win — but `nextly migrate:check` runs
-`validateCrossFile` and fails on `NEXTLY_SCHEMA_SLUG_COLLISION`, so a conversion that leaves the
-manifest entry in place generates a migration locally and is then rejected by CI.
+collision — it warns and lets the code-first definition win. What CI then catches depends on the
+kind: `nextly migrate:check` runs `validateCrossFile`, which compares manifest entries against
+code-first **Collection** slugs only. A Collection whose manifest entry stays behind fails there on
+`NEXTLY_SCHEMA_SLUG_COLLISION`, so it generates a migration locally and is then rejected by CI. A
+Single or Field Group left behind passes `migrate:check`, so nothing reminds you to remove it.
 
 ## What `nextly migrate:check` does (CI-friendly, no DB)
 
