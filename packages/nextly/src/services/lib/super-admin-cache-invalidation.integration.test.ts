@@ -725,6 +725,40 @@ describe("the order the two tiers are retired in", () => {
     expect(after).not.toBe(before);
   });
 
+  it("raises when the stored tier refuses, rather than reporting nothing done", async () => {
+    // The half the cases below cannot reach. They replace `invalidateAll` with
+    // a rejection to exercise the caller, which proves nothing about whether
+    // the real one rejects — and it used to catch its own database error and
+    // answer `0`, which is also what a successful tombstone over an empty table
+    // answers. The caller could not tell those apart, so it published either
+    // way. This asks the real method, over an adapter whose write fails.
+    const real = harness!.adapter;
+    const unwritable = Object.create(real) as typeof real;
+    (unwritable as { getDrizzle: unknown }).getDrizzle = () => ({
+      update: () => ({
+        set: () => Promise.reject(new Error("the stored tier is unreachable")),
+      }),
+    });
+
+    const service = new PermissionCacheService(unwritable, console, {
+      cacheTtlSeconds: 300,
+    });
+
+    await expect(service.invalidateAll()).rejects.toThrow(
+      "the stored tier is unreachable"
+    );
+  });
+
+  it("answers a count when the write succeeds, so raising is not its only mode", async () => {
+    // The control. Without it, "rejects on failure" is equally satisfied by a
+    // method that rejects on every call.
+    const service = new PermissionCacheService(harness!.adapter, console, {
+      cacheTtlSeconds: 300,
+    });
+
+    await expect(service.invalidateAll()).resolves.toBeTypeOf("number");
+  });
+
   it("announces nothing when the stored rows could not be retired", async () => {
     // The epoch means "everything filed before this is gone". A tombstone that
     // failed leaves those rows live, so the sentence is false — and announcing
