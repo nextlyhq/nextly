@@ -268,13 +268,7 @@ async function refuseIfReached(args: {
     // second walk with the first one's reading.
     const read = documentReader(options, nextly, draft);
     const walked = await walkFrom(document, self, options, read);
-    if (walked.reach.kind === "unknown") {
-      throw refusal(
-        `This component cannot be saved: the components it uses could not all ` +
-          `be read, so whether it would end up referencing itself could not be ` +
-          `established.`
-      );
-    }
+    if (walked.reach.kind === "unknown") throw unreadableRefusal();
 
     // The walk answers about IDS and never decides. It is an approximation in
     // BOTH directions: short by one level wherever overrides flow down through
@@ -283,12 +277,50 @@ async function refuseIfReached(args: {
     // chain to name — which is the one thing the composition cannot report.
     const composed = await composesACycle(document, self, options, read);
     if (composed === "cycle") throw cycleRefusal(walked, self);
-    // Composing could not be finished. The walk's own verdict stands, so a
-    // library this cannot read does not become a way to save a loop into it.
-    if (composed === "indeterminate" && walked.reach.kind === "cycle") {
-      throw cycleRefusal(walked, self);
-    }
+
+    // Composing could not be FINISHED, which is not a report that there is no
+    // loop — and the walk's `none` cannot stand in for one, because the walk is
+    // exactly the approximation that misses a loop only composition shows. A
+    // nested override can send the resolver to a definition the walk never
+    // needed, so the two do not even read the same rows.
+    //
+    // Refused whatever the walk said, and that costs nothing it did not already
+    // cost: this state is a failed read or a spent budget, and the walk refuses
+    // on both of those itself. A definition the RENDERER declines is not this
+    // case — that resolves to a placeholder a reader sees, so it composes as
+    // `none` and stays savable.
+    if (composed === "indeterminate") throw indeterminateRefusal(walked, self);
   }
+}
+
+/** The refusal for a graph this could not establish, worded once. */
+function unreadableRefusal(): Error {
+  return refusal(UNESTABLISHED);
+}
+
+const UNESTABLISHED =
+  `This component cannot be saved: the components it uses could not all be ` +
+  `read, so whether it would end up referencing itself could not be ` +
+  `established.`;
+
+/**
+ * The refusal for a composition that could not be finished.
+ *
+ * Says only what is known, and the two halves are different claims. The
+ * composition established nothing, so it cannot be reported as a loop. But where
+ * the WALK found a chain over stored ids, that chain is the one thing an author
+ * can act on — and withholding it to keep the message short leaves them re-saving
+ * and getting the same refusal with nowhere to start.
+ *
+ * Offered as a lead rather than as the verdict, deliberately: a walk's chain can
+ * be a stored edge an override re-points, which is why it does not decide.
+ */
+function indeterminateRefusal(walked: WalkOutcome, self: string): Error {
+  if (walked.reach.kind !== "cycle") return refusal(UNESTABLISHED);
+  return refusal(
+    `${UNESTABLISHED} Its stored placements do lead back to it — ` +
+      `${namedPath(walked.reach.path, walked.places, self)} — so start there.`
+  );
 }
 
 /**
