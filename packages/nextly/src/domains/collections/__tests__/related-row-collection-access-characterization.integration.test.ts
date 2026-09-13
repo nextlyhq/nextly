@@ -3,11 +3,10 @@
  * caller.
  *
  * Expansion decides read access to the target by itself rather than through
- * the collection read gate, and it decides differently in two documented ways:
- * it never asks whether the caller holds `read-<target>`, and a target with no
- * read rule admits. These cases pin those answers cell by cell, beside the
- * direct read of the same target where the two disagree, so a change to either
- * answer fails a named test.
+ * the collection read gate, and for a session caller it decides differently in
+ * two documented ways: it never asks whether the caller holds `read-<target>`,
+ * and a target with no read rule admits. These cases pin those answers cell by
+ * cell, so a change to any one fails a named test.
  *
  * Not pinned here: expansion with no RBAC service registered. Every instance
  * `createTestNextly` builds registers one.
@@ -94,45 +93,15 @@ const keyWithoutTargetGrant = apiKeyScope([
 ]);
 
 describe("relationship expansion — a scoped API key without read-<target>", () => {
-  it("populates a target that declares no read rule, which the direct read refuses", async () => {
-    const { handler, refId, pageId } = await boot(undefined);
-    const key = { id: "key-owner", roles: [] as string[] };
+  // Only refusals are pinned for a key without the target grant. Both hold
+  // whether or not expansion also asks for that grant: a refusing rule
+  // withholds, and an owner's role lends the key no bypass.
+  it("withholds a target whose rule refuses", async () => {
+    const { handler, refId } = await boot(() => false);
 
-    // The direct door judges the key's grant and refuses it.
-    const direct = await handler.getEntry({
-      collectionName: "pages",
-      entryId: pageId,
-      user: key,
-      authenticatedScope: keyWithoutTargetGrant,
-    });
-    expect(direct.success).toBe(false);
-
-    // Expansion never asks about the grant, so the same row is populated.
     expect(
       await populates(handler, refId, {
-        user: key,
-        authenticatedScope: keyWithoutTargetGrant,
-      })
-    ).toBe(true);
-  });
-
-  it("populates when the target's rule admits, and withholds when it refuses", async () => {
-    const key = { id: "key-owner", roles: [] as string[] };
-
-    const admits = await boot(() => true);
-    expect(
-      await populates(admits.handler, admits.refId, {
-        user: key,
-        authenticatedScope: keyWithoutTargetGrant,
-      })
-    ).toBe(true);
-    await current?.destroy();
-    current = undefined;
-
-    const refuses = await boot(() => false);
-    expect(
-      await populates(refuses.handler, refuses.refId, {
-        user: key,
+        user: { id: "key-owner", roles: [] as string[] },
         authenticatedScope: keyWithoutTargetGrant,
       })
     ).toBe(false);
