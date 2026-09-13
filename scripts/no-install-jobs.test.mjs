@@ -473,6 +473,100 @@ describe("nonBuiltinImports", () => {
   });
 });
 
+describe("what a job's defaults and a wrapping step change", () => {
+  it.each([
+    ["the job's", ["jobs:", "  check:", "    defaults:", "      run:", "        shell: node {0}", "    steps:", '      - run: import "js-yaml";']],
+    ["the workflow's", ["defaults:", "  run:", "    shell: node {0}", "jobs:", "  check:", "    steps:", '      - run: import "js-yaml";']],
+  ])("refuses a script %s default shell runs as Node code", (_whose, lines) => {
+    const found = read(lines.join("\n"));
+
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("inline Node code"),
+    ]);
+  });
+
+  it("keeps a composite action step's own shell, which a job's default does not reach", () => {
+    const files = {
+      ".github/actions/a/action.yml": compositeWith("- run: node scripts/a.mjs", "  shell: bash"),
+    };
+    const workflow = ["jobs:", "  check:", "    defaults:", "      run:", "        shell: node {0}", "    steps:", "      - uses: ./.github/actions/a"];
+
+    expect(entriesOf(read(workflow.join("\n"), files))).toEqual(["scripts/a.mjs"]);
+  });
+
+  it.each([
+    ["a condition", "  if: false"],
+    ["a tolerated failure", "  continue-on-error: true"],
+  ])("does not end it at an install inside an action whose step has %s", (_what, guard) => {
+    const files = {
+      ".github/actions/setup/action.yml": compositeWith(
+        "- run: pnpm install --frozen-lockfile",
+        "  shell: bash"
+      ),
+    };
+    const found = read(
+      jobWith("- uses: ./.github/actions/setup", guard, "- run: node scripts/after.mjs"),
+      files
+    );
+
+    expect(entriesOf(found)).toEqual(["scripts/after.mjs"]);
+  });
+
+  it("does not end it at an install in a job's default directory", () => {
+    const workflow = [
+      "jobs:",
+      "  check:",
+      "    defaults:",
+      "      run:",
+      "        working-directory: tools",
+      "    steps:",
+      "      - run: npm ci",
+      "      - working-directory: .",
+      "        run: node scripts/after.mjs",
+    ];
+
+    expect(entriesOf(read(workflow.join("\n")))).toEqual(["scripts/after.mjs"]);
+  });
+});
+
+describe("the other ways a node command is spelled or configured", () => {
+  it.each([
+    "node --env-file=.env scripts/a.mjs",
+    "node --env-file .env scripts/a.mjs",
+    "node --env-file-if-exists=.env scripts/a.mjs",
+  ])("refuses `%s`, whose file can set NODE_OPTIONS", command => {
+    const found = read(jobWith(`- run: ${command}`));
+
+    expect(found.starts).toEqual([]);
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("NODE_OPTIONS"),
+    ]);
+  });
+
+  it("starts Windows' node.exe, by name or by path, on a Windows runner", () => {
+    const workflow = [
+      "jobs:",
+      "  check:",
+      "    runs-on: windows-latest",
+      "    steps:",
+      "      - run: node.exe scripts/check.mjs",
+      "      - run: '\"C:\\Program Files\\nodejs\\node.exe\" scripts/other.mjs'",
+    ];
+    const found = read(workflow.join("\n"));
+
+    expect(found.refusals).toEqual([]);
+    expect(entriesOf(found)).toEqual(["scripts/check.mjs", "scripts/other.mjs"]);
+  });
+
+  it("refuses node.exe named where it cannot tell whether it runs", () => {
+    const found = read(jobWith("- run: xargs node.exe < list.txt"));
+
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("names Node"),
+    ]);
+  });
+});
+
 describe("the real workflows", () => {
   const workflowDir = path.join(ROOT, ".github", "workflows");
   const workflows = readdirSync(workflowDir).filter(name => /\.ya?ml$/.test(name)).sort();

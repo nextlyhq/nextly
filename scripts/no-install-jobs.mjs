@@ -109,7 +109,16 @@ export function jobSequences(text, repo) {
     const sequence = { before: [], steps: [], after: [] };
     const defaults =
       job.defaults?.run?.["working-directory"] ?? workflow.defaults?.run?.["working-directory"];
-    const scope = { where: id, defaults, env: [workflow.env, job.env], actions: [], repo, sequence };
+    const scope = {
+      where: id,
+      defaults,
+      defaultShell: job.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
+      env: [workflow.env, job.env],
+      actions: [],
+      conditional: false,
+      repo,
+      sequence,
+    };
     readSteps(job.steps ?? [], scope);
     sequences.set(id, [...sequence.before, ...sequence.steps, ...sequence.after]);
   }
@@ -126,7 +135,10 @@ function readSteps(steps, scope) {
 function readStep(step, scope) {
   if (typeof step.run === "string") readRunStep(step, scope);
   else if (typeof step.uses === "string" && step.uses.startsWith("./")) {
-    readLocalAction(step.uses, scope);
+    // A condition on the step using an action binds every step inside it, an install included.
+    const conditional =
+      scope.conditional || step.if !== undefined || Boolean(step["continue-on-error"]);
+    readLocalAction(step.uses, { ...scope, conditional });
   }
 }
 
@@ -137,11 +149,15 @@ function refusal(where, reason) {
 function readRunStep(step, scope) {
   const { steps } = scope.sequence;
   const cwd = workingDirectory(step, scope);
-  if (isInstall(step)) steps.push({ kind: "install", where: scope.where });
-  else if ("refusal" in cwd) steps.push(refusal(scope.where, cwd.refusal));
-  else if ([...scope.env, step.env].some(env => env != null && Object.hasOwn(env, "NODE_OPTIONS"))) {
+  // A composite action's run step names its own shell; a job's default reaches only the job's.
+  const shell = step.shell ?? (scope.actions.length > 0 ? undefined : scope.defaultShell);
+  if (!scope.conditional && isInstall(step, cwd)) {
+    steps.push({ kind: "install", where: scope.where });
+  } else if ("refusal" in cwd) {
+    steps.push(refusal(scope.where, cwd.refusal));
+  } else if ([...scope.env, step.env].some(env => env != null && Object.hasOwn(env, "NODE_OPTIONS"))) {
     steps.push(refusal(scope.where, NODE_OPTIONS_REASON));
-  } else if (/\bnode\b/.test(step.shell ?? "")) {
+  } else if (/\bnode\b/.test(shell ?? "")) {
     steps.push(refusal(scope.where, "runs its script as inline Node code; move it into a file"));
   } else {
     const script = withKnownPaths(step.run, scope);
@@ -156,9 +172,9 @@ function readRunStep(step, scope) {
  * command line and a second command each describe a step after which the dependencies may still be
  * absent, so each keeps the job in the state this check reads rather than releasing it.
  */
-function isInstall(step) {
+function isInstall(step, cwd) {
   if (step.if !== undefined || step["continue-on-error"]) return false;
-  if (step["working-directory"] !== undefined) return false;
+  if (cwd.path !== ".") return false;
   const commands = shellCommands(step.run);
   return commands.length === 1 && installsHere(commands[0].words);
 }
@@ -284,11 +300,14 @@ const PREFIXES = new Set([
 /** An assignment word, `NAME=value`, whatever its value. */
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/** Node's program name, alone or at the end of a path. */
-const NODE_PROGRAM = /^(?:.*\/)?(?:node|nodejs)$/;
+/** Node's program name, alone or at the end of a path, with or without Windows' `.exe`. */
+const NODE_PROGRAM = /^(?:.*[\\/])?(?:node|nodejs)(?:\.exe)?$/i;
 
 /** Node's name as a word inside some other text. */
 const NODE_NAMED = /(?:^|[^\w$.-])(?:node|nodejs)(?![\w.-])/;
+
+/** Windows' spelling of Node's name inside other text, which the boundary above excludes. */
+const NODE_EXE_NAMED = /(?:^|[^\w$.-])(?:node|nodejs)\.exe(?![\w.-])/i;
 
 const DIRECTORY_CHANGES = new Set(["cd", "pushd", "popd"]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "source", "."]);
@@ -313,6 +332,9 @@ const NODE_RUNS_OTHER_CODE = new Set([
 /** Options after which Node prints something and exits without running anything. */
 const NODE_EXITS = new Set(["-v", "--version", "-h", "--help", "--v8-options"]);
 
+/** Options that load environment variables from a file, where NODE_OPTIONS can be set. */
+const NODE_READS_ENV_FILE = new Set(["--env-file", "--env-file-if-exists"]);
+
 /** Options whose value is a module Node loads before the script. */
 const NODE_PRELOADS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader"]);
 
@@ -324,7 +346,7 @@ const NODE_PRELOADS = new Set(["-r", "--require", "--import", "--loader", "--exp
  * with `=` is accepted whatever its name.
  */
 const NODE_TAKES_VALUE = new Set([
-  "-C", "--conditions", "--disable-warning", "--env-file", "--env-file-if-exists", "--input-type",
+  "-C", "--conditions", "--disable-warning", "--input-type",
   "--redirect-warnings", "--diagnostic-dir", "--title", "--watch-path", "--report-dir",
   "--report-directory", "--report-filename", "--cpu-prof-dir", "--heap-prof-dir",
   "--unhandled-rejections", "--dns-result-order", "--localstorage-file", "--openssl-config",
@@ -455,6 +477,11 @@ function readOption(words, i) {
   const name = equals === -1 ? text : text.slice(0, equals);
   const attached = equals === -1 ? undefined : text.slice(equals + 1);
   if (NODE_EXITS.has(name)) return { exits: true };
+  if (NODE_READS_ENV_FILE.has(name)) {
+    return {
+      refusal: `passes Node ${name}, whose file can set NODE_OPTIONS, which this reader does not follow`,
+    };
+  }
   if (NODE_RUNS_OTHER_CODE.has(name)) {
     return { refusal: `passes Node ${name}, so what runs is not a script file this reader can walk` };
   }
@@ -526,7 +553,7 @@ function readProgram(path, kind, state) {
   else if (actual === "shell") {
     const following = [...state.following, path];
     readScript({ where: `${state.where} › ${path}`, script: text, cwd: state.cwd }, { ...state, following });
-  } else if (NODE_NAMED.test(text)) {
+  } else if (NODE_NAMED.test(text) || NODE_EXE_NAMED.test(text)) {
     refuse(state, `runs ${path}, which names Node in a language this reader does not read`);
   }
 }
@@ -594,9 +621,9 @@ function readPackageManager(command, words, state) {
 /** Node named where this reader cannot tell whether it runs: an argument, a string, a here-document. */
 function residual(command, state) {
   const texts = [...command.words.map(word => word.text), ...command.heredocs];
-  const named = texts.find(text => NODE_NAMED.test(text));
+  const named = texts.find(text => NODE_NAMED.test(text) || NODE_EXE_NAMED.test(text));
   if (named === undefined) return;
-  const at = named.search(NODE_NAMED);
+  const at = Math.max(named.search(NODE_NAMED), named.search(NODE_EXE_NAMED));
   const excerpt = named.slice(Math.max(0, at - 30), at + 50).replace(/\s+/g, " ").trim();
   refuse(
     state,
