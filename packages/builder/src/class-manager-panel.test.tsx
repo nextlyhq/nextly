@@ -48,20 +48,56 @@ const LIBRARY: NamedClass[] = [
   cls("id-badge", "badge", 1),
 ];
 
+/**
+ * A rename identity for cases that never race.
+ *
+ * Constant on purpose, and named so it cannot be mistaken for the real thing: a
+ * constant makes EVERY answer look current, which is fine where only one rename
+ * is ever in flight and silently removes the supersession where two are. A test
+ * about two answers arriving out of order builds a counting identity instead.
+ */
+const onlyOneRenameInFlight = (): number => 1;
+
+/**
+ * A host's rename identity, modelled the way the real one behaves.
+ *
+ * The attempt is taken INSIDE `onRename`, because that is the ordering the prop
+ * documents and the panel depends on: it reads the number straight after the
+ * call. A stub that answered a constant would make every answer look current and
+ * quietly remove the supersession these tests are about.
+ */
+function renameIdentity() {
+  const attempts = new Map<string, number>();
+  return {
+    take: (classId: string): number => {
+      const next = (attempts.get(classId) ?? 0) + 1;
+      attempts.set(classId, next);
+      return next;
+    },
+    current: (classId: string): number => attempts.get(classId) ?? 0,
+  };
+}
+
 function draw(overrides: Partial<ClassManagerPanelProps> = {}): {
   onRename: ReturnType<typeof vi.fn>;
   onDelete: ReturnType<typeof vi.fn>;
 } {
-  const onRename = vi.fn();
+  const identity = renameIdentity();
+  const given = overrides.onRename;
+  const onRename = vi.fn((classId: string, slug: string) => {
+    identity.take(classId);
+    return given?.(classId, slug);
+  });
   const onDelete = vi.fn();
   render(
     <ClassManagerPanel
       library={LIBRARY}
       usage={{ "id-hero": 3 }}
       documentClassIds={["id-card"]}
-      onRename={onRename}
+      currentRenameAttempt={identity.current}
       onDelete={onDelete}
       {...overrides}
+      onRename={onRename}
     />
   );
   return { onRename, onDelete };
@@ -78,6 +114,7 @@ describe("a library that has not been read yet", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -458,6 +495,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -481,6 +519,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -505,6 +544,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -538,6 +578,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -573,6 +614,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -609,6 +651,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -634,6 +677,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -657,6 +701,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -678,6 +723,7 @@ describe("a rename the host refuses", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -703,6 +749,7 @@ describe("a host that answers a rename with nothing", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -734,10 +781,18 @@ describe("two renames on one row, answered out of order", () => {
     const first = new Promise<{ ok: false; reason: string }>(resolve => {
       settleFirst = resolve;
     });
-    const onRename = vi
+    const answers = vi
       .fn()
       .mockReturnValueOnce(first)
       .mockResolvedValueOnce({ ok: true as const });
+    // A COUNTING identity, taken inside `onRename` exactly as the host takes it.
+    // A constant here would make the superseded answer look current and the test
+    // would pass on the defect it exists to catch.
+    const identity = renameIdentity();
+    const onRename = vi.fn((classId: string, slug: string) => {
+      identity.take(classId);
+      return answers(classId, slug);
+    });
 
     render(
       <ClassManagerPanel
@@ -745,6 +800,7 @@ describe("two renames on one row, answered out of order", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={identity.current}
         onDelete={vi.fn()}
       />
     );
@@ -763,6 +819,18 @@ describe("two renames on one row, answered out of order", () => {
   });
 });
 
+/*
+ * A rename identity that outlives the panel is covered in
+ * `builder-notices.test.tsx` ("does not raise a refusal the author has already
+ * renamed past") rather than here.
+ *
+ * It cannot be asserted from this file: once the field is unmounted its own
+ * `setRefused` reaches nothing, so a stale refusal and a suppressed one look
+ * identical in this DOM. The refusal goes to the notice sink instead, and that
+ * test renders one. A version written here passed with the defect reinstated,
+ * which is why it is not here.
+ */
+
 describe("a rename handler that fails before it returns", () => {
   it("reports a SYNCHRONOUS throw like any other refusal", async () => {
     // A permission or storage check that throws is a legitimate handler. The
@@ -777,6 +845,7 @@ describe("a rename handler that fails before it returns", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -801,6 +870,7 @@ describe("a filter whose backing data disappears", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -818,6 +888,7 @@ describe("a filter whose backing data disappears", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -827,6 +898,7 @@ describe("a filter whose backing data disappears", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -847,6 +919,7 @@ describe("deleting while the index was never read", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -894,6 +967,7 @@ describe("a library far larger than a screen", () => {
           usage={{}}
           documentClassIds={[]}
           onRename={vi.fn()}
+          currentRenameAttempt={onlyOneRenameInFlight}
           onDelete={vi.fn()}
         />
       );
@@ -1030,6 +1104,7 @@ describe("reaching a class past the row cap", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
         pageSize={4}
       />
@@ -1042,6 +1117,7 @@ describe("reaching a class past the row cap", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
         pageSize={2}
       />
@@ -1082,6 +1158,7 @@ describe("a revert typed while the first rename is still in flight", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1101,6 +1178,7 @@ describe("a revert typed while the first rename is still in flight", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
         pendingSlugs={{ "id-hero": "promo" }}
       />
@@ -1131,6 +1209,7 @@ describe("a revert typed while the first rename is still in flight", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1159,6 +1238,7 @@ describe("a host whose rename handler returns something else entirely", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1199,6 +1279,7 @@ describe("a host whose rename handler returns something else entirely", () => {
         usage={{}}
         documentClassIds={[]}
         onRename={onRename}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1293,6 +1374,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
       />
     );
     expect(screen.queryByText(/clear them out/i)).toBeNull();
@@ -1305,6 +1387,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1322,6 +1405,7 @@ describe("the panel explains itself", () => {
         documentClassIds={[]}
         suppliedClassIds={["id-own"]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1347,6 +1431,7 @@ describe("the panel explains itself", () => {
         documentClassIds={[]}
         suppliedClassIds={["id-hero"]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1362,6 +1447,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1385,6 +1471,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
       />
     );
     // The control: the list really is empty, so this is about the verdict
@@ -1400,6 +1487,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
       />
     );
     expect(screen.getByText("No classes yet.")).toBeTruthy();
@@ -1422,6 +1510,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1437,6 +1526,7 @@ describe("the panel explains itself", () => {
         documentClassIds={[]}
         suppliedClassIds={["id-hero"]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1458,6 +1548,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1481,6 +1572,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1497,6 +1589,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
         onDelete={vi.fn()}
       />
     );
@@ -1536,6 +1629,7 @@ describe("the panel explains itself", () => {
           },
         }}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
       />
     );
     const drawn = document.querySelector(".nx-classman__properties");
@@ -1562,6 +1656,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
       />
     );
     expect(document.querySelector(".nx-classman__declares")).toBeNull();
@@ -1593,6 +1688,7 @@ describe("the panel explains itself", () => {
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
+        currentRenameAttempt={onlyOneRenameInFlight}
       />
     );
     const drawn = document.querySelector(".nx-classman__properties");

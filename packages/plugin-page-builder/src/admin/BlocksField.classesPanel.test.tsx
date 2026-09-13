@@ -570,6 +570,84 @@ describe("the classes manager reaching an author", () => {
     expect(last).not.toContain("panel");
   });
 
+  it("keeps the pending name when an EARLIER rename settles under a later one", async () => {
+    /*
+     * Two renames of one class can be in flight together, and the first to
+     * settle used to release the pending name for BOTH — its cleanup ran
+     * unconditionally. The panel then compares the author's next edit against
+     * the rendered slug rather than the name the class is heading for, so
+     * typing the original back reads as a no-op and is never written, while the
+     * second rename goes on to persist a different name.
+     *
+     * The window has to be built deliberately: the first must SETTLE while the
+     * second is still open, which is two releases rather than one. A single
+     * release lets both finish, and then no pending name is owed to anyone and
+     * the no-op is correct.
+     */
+    let releaseFirst: (() => void) | undefined;
+    let releaseSecond: (() => void) | undefined;
+    holdSaves = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+    storedRead = {
+      data: {
+        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+
+    // First rename: the class is now heading for `panel`.
+    fireEvent.change(screen.getByLabelText("Name of card"), {
+      target: { value: "panel" },
+    });
+    fireEvent.blur(screen.getByLabelText("Name of card"));
+    await vi.waitFor(() => expect(saved.length).toBe(1));
+
+    // Second rename, committed while the first is still open. The field still
+    // renders `card`, so this is judged against the PENDING `panel`.
+    fireEvent.change(screen.getByLabelText("Name of card"), {
+      target: { value: "hero" },
+    });
+    fireEvent.blur(screen.getByLabelText("Name of card"));
+
+    // The second save will block here instead. The first is already awaiting the
+    // promise it captured, so swapping this does not free it.
+    holdSaves = new Promise<void>(resolve => {
+      releaseSecond = resolve;
+    });
+    await act(async () => {
+      releaseFirst?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The revert, with the SECOND still open. Against the pending `hero` this is
+    // a real change; against the rendered `card` it reads as a no-op and is
+    // dropped, which is the defect.
+    fireEvent.change(screen.getByLabelText("Name of card"), {
+      target: { value: "car" },
+    });
+    fireEvent.change(screen.getByLabelText("Name of card"), {
+      target: { value: "card" },
+    });
+    fireEvent.blur(screen.getByLabelText("Name of card"));
+
+    await act(async () => {
+      releaseSecond?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Written, rather than swallowed as a no-op.
+    await vi.waitFor(() => expect(saved.length).toBeGreaterThanOrEqual(3));
+    const last = JSON.stringify(saved[saved.length - 1]);
+    expect(last).toContain('"card"');
+  });
+
   it("says a failed read failed, rather than loading forever", () => {
     // A read that FAILED will not finish. A panel still saying "loading"
     // describes a state the site is not in, and the author waits for something
