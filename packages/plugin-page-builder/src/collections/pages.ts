@@ -113,6 +113,11 @@ export function pagesCollection(options: PagesCollectionOptions = {}) {
       blocks({ name: "content", label: "Page Builder" }),
     ],
     status: true,
+    // A save keeps a working draft and publishing is its own act, as it is for
+    // the components and Layouts a page is built from. Without the split, saving
+    // a published page puts the edit live at once while a header it embeds waits
+    // for a publish, so "publish" would mean two different things on one screen.
+    versions: { drafts: true },
     admin: {
       useAsTitle: "title",
       // Present only when the host supplied a path. A code-first collection
