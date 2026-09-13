@@ -78,7 +78,7 @@ import {
   rehydrateSystemTimestamps,
   SYSTEM_TIMESTAMP_KEYS,
 } from "../../../shared/lib/case-conversion";
-import { assertNoDeniedChange } from "../../../shared/lib/denied-change";
+import { resolvePromotedDocument } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
@@ -6784,33 +6784,10 @@ export class CollectionMutationService extends BaseService {
                 manyToManyFields,
                 splitComponentSchemas
               );
-              // Judged on a deep COPY. The rules delete a denied value in
-              // place, so the original is what the removals are measured
-              // against; a shallow copy would share every group, repeater row
-              // and component with it and the deletion would land on both.
-              const permittedPromoteData = detachData(mergedPromoteData);
-              await applyFieldWriteAccess({
-                kind: "collection",
-                slug: params.collectionName,
-                data: permittedPromoteData,
-                operation: "update",
-                user: params.user,
-                authenticatedScope: params.authenticatedScope,
-                overrideAccess: params.overrideAccess,
-                grants: promoteGrants,
-                id: params.entryId,
-              });
-              // Refused, not stripped. Stripping is right on an ordinary write,
-              // where the value is the caller's own input; here it belongs to
-              // whoever saved the pending change, and the delete below CONSUMES
-              // that change on success, so a strip would publish the rest,
-              // remove the draft, and destroy the author's edit while reporting
-              // success. Compared against the row as it stands, so only a
-              // denied value this write would CHANGE refuses it.
               // The caller's own contribution, assembled by the SAME function
               // with no draft behind it, so it lands in the same shape as the
               // document it is compared against. A denied value of theirs is
-              // stripped as it is on any other write; only the pending
+              // dropped back to live as on any other write; only the pending
               // change's own values are worth refusing over.
               const callerContribution = this.assemblePromotedDocument(
                 {},
@@ -6821,21 +6798,44 @@ export class CollectionMutationService extends BaseService {
                 manyToManyFields,
                 splitComponentSchemas
               );
-              assertNoDeniedChange({
+              // One call decides the refusal AND returns what to write, so the
+              // document that was judged is the document that lands. A denied
+              // field comes back at its LIVE value rather than removed: taking
+              // the rules' own output would serialize a partial group over the
+              // whole JSON column and clear a protected value nobody touched.
+              const promotedDocument = await resolvePromotedDocument({
                 before: mergedPromoteData,
-                permitted: permittedPromoteData,
                 live: previousDocument ?? {},
                 callerSupplied: callerContribution,
+                applyRules: document =>
+                  applyFieldWriteAccess({
+                    kind: "collection",
+                    slug: params.collectionName,
+                    data: document,
+                    operation: "update",
+                    user: params.user,
+                    authenticatedScope: params.authenticatedScope,
+                    overrideAccess: params.overrideAccess,
+                    grants: promoteGrants,
+                    id: params.entryId,
+                  }),
+                // What the schema declares, so a field named like one of the
+                // store's own columns is still judged as the content it is.
+                authoredFieldNames: new Set(
+                  addressableFields(fields, { descendInto: () => true })
+                    .map(entry => entry.name)
+                    .filter((name): name is string => typeof name === "string")
+                ),
                 slug: params.collectionName,
                 locale: draftLocaleKey ?? params.locale ?? null,
               });
               const draftParts = this.shapeWriteParts(
-                permittedPromoteData,
+                promotedDocument,
                 fields,
                 manyToManyFields,
                 collection
               );
-              finalData = permittedPromoteData;
+              finalData = promotedDocument;
               componentFieldData = draftParts.componentFieldData;
               manyToManyData = draftParts.manyToManyData;
               // Rebuild the companion payload from the promoted document, and

@@ -222,6 +222,58 @@ export class DynamicCollectionSchemaService {
    * creation. The two mappings still disagree elsewhere — see the note on
    * `mapFieldTypeToSQL`.
    */
+  /**
+   * The type for a column this migration is about to CREATE.
+   *
+   * Read from the canonical descriptor — the same answer the runtime Drizzle table selects through
+   * and the schema diff compares against — so a column is born as the type the rest of the system
+   * already believes it has. `mapFieldTypeToSQL` stays as the fallback for a field the descriptor
+   * declines to describe.
+   *
+   * Scoped to columns that do not exist yet, and that scope is the whole safety argument. Asking
+   * the descriptor about an EXISTING column would restate it under a mapping it was not built with,
+   * which on MySQL is a narrowing `MODIFY` that truncates stored values for an edit that touched
+   * nothing but a flag. The paths that alter a live column therefore do not call this, and say so
+   * where they render their own type.
+   *
+   * This generalises `canonicalSlugType`, which reached for the descriptor for exactly one column
+   * because MySQL cannot index an unbounded `TEXT`. The same disagreement was present for every
+   * other column; only `slug` failed loudly enough to get fixed.
+   */
+  private newColumnType(field: FieldDefinition): string {
+    const legacy = this.mapFieldTypeToSQL(
+      field.type,
+      field.length,
+      field.options,
+      field.validation,
+      field
+    );
+    const described = getColumnDescriptor(field, this.dialect, "collection");
+    if (described === undefined || described === null) return legacy;
+
+    // 🔴 The descriptor disagrees in two different ways, and only one of them is this change's to
+    // take. A SPELLING or PRECISION disagreement — `int4` for `integer`, `float8` for
+    // `decimal(10,2)`, `varchar(120)` for unbounded `text` — leaves the column holding the same
+    // shape of value, so adopting it is safe on its own.
+    //
+    // A STORAGE-CLASS disagreement does not. The descriptor stores a `hasMany` field and a
+    // repeater or group as a JSON array where this generator emits a scalar, and the column type
+    // is not the only thing that has to move with it: the index loop decides whether a column can
+    // be indexed from the legacy rendering, the relationship block attaches a scalar foreign key,
+    // the CHECK builder emits `>= min` against the column, and `requiredColumnBackfill` derives a
+    // scalar default from the declared type. Changing the type alone would leave four consumers
+    // describing a column that no longer exists — a `CREATE INDEX` on a JSON column that MySQL
+    // rejects after the table DDL has committed, a foreign key from an array to a scalar id, a
+    // JSONB-versus-integer comparison PostgreSQL cannot resolve, and `json NOT NULL DEFAULT 0`.
+    //
+    // So the storage class is held and the disagreement stays recorded in the conformance matrix.
+    // Converging it is a change that has to move those consumers in the same commit.
+    if (described.kind === "json" && legacy !== described.dialectType) {
+      return legacy;
+    }
+    return described.dialectType;
+  }
+
   private canonicalSlugType(field: FieldDefinition): string | null {
     if (toSnakeCase(field.name) !== "slug") return null;
     // Asked as the builder this service IS. The descriptor bounds a slug column for every builder,
@@ -428,15 +480,17 @@ export class DynamicCollectionSchemaService {
     // emitting both makes a freshly created table disagree with its own snapshot, and
     // every write maintains two identical unique indexes until a reconcile drops one.
     if (toSnakeCase(field.name) === "slug") return null;
-    const rendered =
-      this.canonicalSlugType(field) ??
-      this.mapFieldTypeToSQL(
-        field.type,
-        field.length,
-        field.options,
-        field.validation,
-        field
-      );
+    // Judged on the type the create path EMITS, because that is what the index will stand on.
+    // Asking the legacy renderer instead reports an unbounded MySQL `text` for a field the
+    // descriptor bounds, so the named index is suppressed while the inline `UNIQUE` is skipped too
+    // — the column being keyable is exactly what skips it — and the table is created enforcing no
+    // uniqueness at all.
+    //
+    // The note on `uniquenessCanBeAnIndex` says bounding a MySQL text column belongs in the shared
+    // descriptor rather than here, and that is still true: this READS the descriptor's answer
+    // rather than bounding anything itself, so the created column and this prediction cannot
+    // disagree.
+    const rendered = this.newColumnType(field);
     if (!this.uniquenessCanBeAnIndex(rendered)) return null;
     return uniqueIndexNameForColumn(tableName, toSnakeCase(field.name));
   }
@@ -703,9 +757,7 @@ export class DynamicCollectionSchemaService {
           return null;
         }
 
-        const type =
-          this.canonicalSlugType(f) ??
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f);
+        const type = this.newColumnType(f);
         const nullable = f.required ? "NOT NULL" : "";
 
         // A one-to-one keeps its inline `UNIQUE`, and ONLY a one-to-one.
@@ -899,10 +951,13 @@ ${allColumnDefs.join(",\n")}
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
         const col = toSnakeCase(f.name);
+        // The same question as the unique index above, and it has to reach the same answer: this
+        // shapes an index over a column this statement is creating, so it judges the type being
+        // created rather than the one the legacy renderer would have chosen.
         const indexSql = this.createIndexSql(
           tableName,
           col,
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f)
+          this.newColumnType(f)
         );
         if (indexSql) indexStatements.push(indexSql);
       }
@@ -1034,6 +1089,19 @@ ${allColumnDefs.join(",\n")}
        * drop exactly as it behaved before anything was measured.
        */
       foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
+      /**
+       * The type each column currently has, as the catalog reports it, read by
+       * `queryLiveColumnTypes`.
+       *
+       * Only MySQL's `MODIFY` consults it, and only to restate a column it is not otherwise
+       * changing. MySQL restates the whole definition on every `MODIFY`, so a requiredness toggle
+       * has to name a type; naming a RENDERED one asks which renderer built this column, and after
+       * the create path moved to the descriptor there is no static answer — a column built by an
+       * older version carries the legacy type and a new one carries the descriptor's. The catalog
+       * knows, so it is asked rather than predicted. Undefined means the caller did not look, and
+       * the legacy rendering is used, which is the behaviour this had before the question arose.
+       */
+      liveColumnTypes?: ReadonlyMap<string, string>;
       /**
        * The columns that currently hold at least one NULL, read from the live table by
        * `readColumnNullState`.
@@ -1266,13 +1334,7 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
-        const type = this.mapFieldTypeToSQL(
-          field.type,
-          field.length,
-          undefined,
-          undefined,
-          field
-        );
+        const type = this.newColumnType(field);
         const nullable = field.required ? "NOT NULL" : "";
         const addColName = toSnakeCase(field.name);
 
@@ -1407,8 +1469,8 @@ ${allColumnDefs.join(",\n")}
             this.mapFieldTypeToSQL(
               field.type,
               field.length,
-              undefined,
-              undefined,
+              field.options,
+              field.validation,
               field
             )
           );
@@ -1678,21 +1740,32 @@ ${allColumnDefs.join(",\n")}
               // wrong rewrites a column nobody asked to change.
               //
               // Changing the storage means asking for the descriptor's answer. Changing only the
-              // nullability means preserving what the column already is — and what it already is,
-              // for a table this service built, is what THIS generator renders. Restating the
-              // descriptor's answer instead would move a `select` created as unbounded `text` to
-              // `varchar(255)` and truncate stored values, for an edit that touched nothing but a
-              // required flag. MySQL leaves no third option: the type has to be restated or the
-              // column definition is lost.
+              // nullability means preserving what the column already IS, and MySQL leaves no third
+              // option: the type has to be restated or the column definition is lost.
+              //
+              // 🔴 "What it already is" cannot be rendered. It used to be safe to render it — a
+              // table this service built carried what this generator emitted — but the create path
+              // now reads the canonical descriptor, so a column built by an older version carries
+              // the legacy type while a new one carries the descriptor's, and no single renderer
+              // is right for both. Rendering the legacy answer narrows a float created as `double`
+              // to `decimal(10,2)`; rendering the descriptor's narrows a `select` created as
+              // unbounded `text` to `varchar(255)`. Both truncate, for an edit that touched nothing
+              // but a required flag.
+              //
+              // So the column's own type is read from the catalog and restated verbatim. A caller
+              // that did not look falls back to the legacy rendering, which is what this did before
+              // the two renderers could disagree about an existing column.
+              const liveType = options?.liveColumnTypes?.get(alterCol);
               const restated = columnChanged
                 ? type
-                : this.mapFieldTypeToSQL(
+                : (liveType ??
+                  this.mapFieldTypeToSQL(
                     field.type,
                     field.length,
                     field.options,
                     field.validation,
                     field
-                  );
+                  ));
               statements.push(
                 this.modifyColumnSql(tableName, alterCol, field, restated)
               );

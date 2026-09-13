@@ -91,9 +91,54 @@ describe("a number field's storage", () => {
       type: "number",
     } as unknown as FieldDefinition;
 
-    expect(createdColumn("postgresql", field)).toContain("integer");
+    // `int4` is PostgreSQL's own name for a 4-byte integer and the spelling the descriptor uses,
+    // which is what a new column is now rendered from. The same type as `integer`, which is what
+    // this generator used to spell it; the pairing with `numeric` below is what carries the claim.
+    expect(createdColumn("postgresql", field)).toContain("int4");
     expect(createdColumn("postgresql", field)).not.toContain("numeric");
   });
+
+  // The two paths, compared to EACH OTHER rather than to a literal.
+  //
+  // Every assertion above names an expected type, so all of them could pass while create and add
+  // disagreed — each would simply be checked against its own expectation. The defect this guards
+  // was exactly that shape: a float field reached `decimal`/`double`/`real` when its table was
+  // created and a whole-number column when it was added to a table that already existed, so the
+  // fraction was discarded for one arrival order and kept for the other. Asking whether the two
+  // agree is the only question a per-path literal cannot answer.
+  it.each([["postgresql"], ["mysql"], ["sqlite"]] as const)(
+    "gives a float the same column whether it is created or added — %s",
+    dialect => {
+      const field = {
+        name: "score",
+        type: "number",
+        options: { format: "float" },
+      } as unknown as FieldDefinition;
+
+      const created = createdColumn(dialect, field);
+      const added = addedColumn(dialect, field);
+
+      // Both non-empty first: an unrendered column would make the comparison below vacuously true.
+      expect(created).not.toBe("");
+      expect(added).not.toBe("");
+
+      // Anchored on the column NAME rather than on either statement's prefix: the create path
+      // yields a bare column clause and the add path a whole `ALTER TABLE ... ADD COLUMN`
+      // statement, and a helper that assumed one shape silently compared a statement against a
+      // type and failed on correct code.
+      const typeOf = (line: string) => {
+        const match = line
+          .toLowerCase()
+          .match(/[`"]score[`"]\s+(.+?)[,;]?\s*$/);
+        expect(match).not.toBeNull();
+        return (match?.[1] ?? "").trim();
+      };
+
+      expect(typeOf(added)).toBe(typeOf(created));
+      // And a whole-number column is specifically not the answer either side reaches.
+      expect(typeOf(created)).not.toMatch(/^int(eger|4)?$/);
+    }
+  );
 
   // `precision` and `scale` are what let the column hold the values the field promises, so a default
   // that silently ignored them would pass every assertion above that names no dimensions.
@@ -197,6 +242,56 @@ describe("changing a number's storage on an existing table", () => {
 
   const whole = (name: string): FieldDefinition =>
     ({ name, type: "number" }) as unknown as FieldDefinition;
+
+  // MySQL restates the whole column definition on every `MODIFY`, including one issued only to
+  // change nullability. Which type it restates cannot be RENDERED: a column built before the create
+  // path read the canonical descriptor carries the legacy type, one built after carries the
+  // descriptor's, and either renderer is a narrowing for the other's columns. So the live type is
+  // read and restated verbatim.
+  it("restates the column's live type on a requiredness-only change — mysql", () => {
+    const before = {
+      name: "rating",
+      type: "number",
+      options: { format: "float" },
+      required: false,
+    } as unknown as FieldDefinition;
+    const after = { ...before, required: true } as FieldDefinition;
+
+    const sql = new DynamicCollectionSchemaService(
+      undefined,
+      "mysql"
+    ).generateAlterTableMigration(TABLE, [before], [after], {
+      tableHasRows: false,
+      // What a column created by the current create path actually is.
+      liveColumnTypes: new Map([["rating", "double"]]),
+    });
+
+    expect(sql).toMatch(/MODIFY COLUMN `rating` double NOT NULL/i);
+    // The narrowing this exists to prevent: the legacy renderer's answer for the same field.
+    expect(sql).not.toMatch(/decimal\(10,\s*2\)/i);
+  });
+
+  it("falls back to the rendered type when the caller supplied none — mysql", () => {
+    // Not an endorsement of the fallback, a statement of it: a caller that does not read the live
+    // table keeps exactly the behaviour this had before the two renderers could disagree.
+    const before = {
+      name: "rating",
+      type: "number",
+      options: { format: "float" },
+      required: false,
+    } as unknown as FieldDefinition;
+    const after = { ...before, required: true } as FieldDefinition;
+
+    const sql = new DynamicCollectionSchemaService(
+      undefined,
+      "mysql"
+    ).generateAlterTableMigration(TABLE, [before], [after], {
+      tableHasRows: false,
+    });
+
+    expect(sql).toMatch(/MODIFY COLUMN `rating`/i);
+    expect(sql).toMatch(/decimal\(10,\s*2\)/i);
+  });
 
   const float = (name: string): FieldDefinition =>
     ({
@@ -350,8 +445,10 @@ describe("an ALTER changes only what actually changed", () => {
       "postgresql"
     ).generateMigrationSQL(TABLE, [plugin], {});
 
-    // Reaching the number branch at all is the precondition: an unresolved type would be `text`.
-    expect(sql.toLowerCase()).toContain("integer");
+    // Reaching the number branch at all is the precondition: an unresolved type would be `text`,
+    // which `int4` still distinguishes from — the assertion keeps its discriminating power under
+    // the descriptor's spelling.
+    expect(sql.toLowerCase()).toContain("int4");
     expect(sql.toLowerCase()).not.toContain("numeric(12, 4)");
   });
 
