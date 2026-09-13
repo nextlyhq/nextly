@@ -266,6 +266,23 @@ describe("renaming in place", () => {
     expect(onRename).not.toHaveBeenCalled();
   });
 
+  it("treats a name typed away and back as no rename, whatever the class id", () => {
+    /*
+     * A class id is stored data, and a pending-name record indexed by it can
+     * answer an inherited property instead of an entry. For `__proto__` that
+     * answer is an object, so a name typed away and back was compared against
+     * it rather than against the class's own name, and sent as a rename.
+     */
+    const { onRename } = draw({
+      library: [cls("__proto__", "odd", 0)],
+      pendingSlugs: {},
+    });
+    fireEvent.change(nameField("odd"), { target: { value: "od" } });
+    fireEvent.change(nameField("odd"), { target: { value: "odd" } });
+    fireEvent.keyDown(nameField("odd"), { key: "Enter" });
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
   it("treats a name typed away and back as no rename at all", () => {
     /*
      * Two things at once, and both matter. Its own slug is not a COLLISION, so

@@ -704,6 +704,24 @@ function usablePageSize(pageSize: number | undefined): number {
     : DEFAULT_PAGE_SIZE;
 }
 
+/**
+ * The name a class is heading for, read as the record's OWN entry.
+ *
+ * A class id is stored data, so this record can be asked about any string. An
+ * index answers an inherited property for some of them, `__proto__` among them,
+ * and the row would then compare an edit against that object rather than a
+ * name, sending a name typed away and back as a rename.
+ */
+function pendingSlugFor(
+  pendingSlugs: Readonly<Record<string, string>> | undefined,
+  classId: string
+): string | undefined {
+  if (pendingSlugs === undefined || !Object.hasOwn(pendingSlugs, classId)) {
+    return undefined;
+  }
+  return pendingSlugs[classId];
+}
+
 function ClassList({
   rows,
   searching,
@@ -793,7 +811,7 @@ function ClassList({
           <li key={row.id} className="nx-classman__row">
             <ClassRowView
               row={row}
-              pendingSlug={pendingSlugs?.[row.id]}
+              pendingSlug={pendingSlugFor(pendingSlugs, row.id)}
               library={library}
               styles={stylesById.get(row.id)}
               styleContext={styleContext}

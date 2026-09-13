@@ -648,6 +648,47 @@ describe("the classes manager reaching an author", () => {
     expect(last).toContain('"card"');
   });
 
+  it("lets a class whose id is __proto__ retry a rename its save refused", async () => {
+    /*
+     * The rename identity is keyed by class id, and a class id is stored data.
+     * On a plain record `__proto__` read back an inherited object and wrote
+     * through the prototype setter, so the refused attempt never released its
+     * pending name, and the retry, judged against that name, was dropped as no
+     * change at all.
+     */
+    storedRead = {
+      data: {
+        classes: [{ id: "__proto__", slug: "card", orderIndex: 0, styles: {} }],
+      },
+      isPending: false,
+      error: null,
+    };
+    saveResult = new Error("The site style is locked.");
+    openEditor();
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Name of card"), {
+        target: { value: "panel" },
+      });
+      fireEvent.blur(screen.getByLabelText("Name of card"));
+    });
+    expect(await screen.findByText("The site style is locked.")).toBeTruthy();
+    const refused = saved.length;
+    expect(refused).toBeGreaterThan(0);
+
+    saveResult = { success: true };
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Name of card"), {
+        target: { value: "panel" },
+      });
+      fireEvent.blur(screen.getByLabelText("Name of card"));
+    });
+
+    // Written again, rather than swallowed as a no-op against a stuck name.
+    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(refused));
+    expect(JSON.stringify(saved[saved.length - 1])).toContain('"panel"');
+  });
+
   it("says a failed read failed, rather than loading forever", () => {
     // A read that FAILED will not finish. A panel still saying "loading"
     // describes a state the site is not in, and the author waits for something

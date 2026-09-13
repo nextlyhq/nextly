@@ -1172,11 +1172,15 @@ function useClassSurface(
    * A ref rather than state because both readers need the value SYNCHRONOUSLY —
    * the panel reads it in the same event that started the attempt, and a state
    * update is not visible until the render after.
+   *
+   * A `Map` rather than a record, because a class id is stored data: every string
+   * a class can carry has to be a key here, and on a plain object some strings,
+   * `__proto__` among them, name an inherited accessor instead of an entry.
    */
-  const renameAttempts = useRef<Record<string, number>>({});
+  const renameAttempts = useRef(new Map<string, number>());
   const beginRename = useCallback((classId: string, slug: string): number => {
-    const mine = (renameAttempts.current[classId] ?? 0) + 1;
-    renameAttempts.current[classId] = mine;
+    const mine = (renameAttempts.current.get(classId) ?? 0) + 1;
+    renameAttempts.current.set(classId, mine);
     setPendingSlugs(current =>
       current[classId] === slug ? current : { ...current, [classId]: slug }
     );
@@ -1191,16 +1195,19 @@ function useClassSurface(
      * reads as a no-op while the queued rename goes on to persist a different
      * name.
      */
-    if (renameAttempts.current[classId] !== mine) return;
+    if (renameAttempts.current.get(classId) !== mine) return;
     setPendingSlugs(current => {
-      if (!(classId in current)) return current;
+      // The record's OWN entry, for the reason the counters are a `Map`: `in`
+      // also answers for inherited names, and removing one that is not there
+      // would rebuild the record for nothing.
+      if (!Object.hasOwn(current, classId)) return current;
       const { [classId]: _gone, ...rest } = current;
       return rest;
     });
   }, []);
   /** The live attempt for a class, for a caller deciding whether it is current. */
   const currentRenameAttempt = useCallback(
-    (classId: string): number => renameAttempts.current[classId] ?? 0,
+    (classId: string): number => renameAttempts.current.get(classId) ?? 0,
     []
   );
   return {
