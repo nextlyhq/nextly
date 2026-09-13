@@ -1,9 +1,11 @@
 ---
+"@nextlyhq/eslint-plugin": patch
 "nextly": patch
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
 "@nextlyhq/blocks-engine": patch
 "@nextlyhq/blocks-react": patch
+"@nextlyhq/plugin-mcp": patch
 "@nextlyhq/ui": patch
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-postgres": patch
