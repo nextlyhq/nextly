@@ -221,16 +221,21 @@ describe("the endpoint speaks the protocol", () => {
     expect(text).toContain(`"version":"${manifest.version}"`);
   });
 
-  it("exposes no capabilities, because it carries no tools yet", async () => {
-    // What this stage is: an address that speaks the protocol and offers
-    // nothing through it. A client connecting to an install that has published
-    // nothing should be told exactly that.
+  it("advertises the tool capability, and nothing beyond tools", async () => {
+    // This replaces an assertion that the server carried NO capabilities, which
+    // was true while it exposed nothing and is not the claim worth making now
+    // that it does. What still matters is the boundary: this server reads, so
+    // it announces tools and neither resources nor prompts, and a capability
+    // appearing here is a decision rather than a side effect.
     const response = await routeFor("POST").handler(
       initialize({ host: "cms.example.com" }),
       SOME_CALLER
     );
 
-    expect(await response.text()).toContain('"capabilities":{}');
+    const text = await response.text();
+    expect(text).toContain('"capabilities":{"tools"');
+    expect(text).not.toContain('"resources"');
+    expect(text).not.toContain('"prompts"');
   });
 
   it("answers the removed session methods the way the revision says to", async () => {

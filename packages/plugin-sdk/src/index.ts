@@ -365,6 +365,18 @@ export { narrowScope } from "nextly";
 // single address.
 export { routePathIsLiteral } from "nextly";
 
+// Which collections and singles the caller may read, decided by the same rule a
+// row read applies. A plugin describing an install to an agent needs the coarse
+// set, and deriving it from permission slugs is the second implementation that
+// disclosed a refused collection's contents on one surface while hiding a
+// code-authorized one on another.
+export { readableContent } from "nextly";
+export type {
+  ReadableContent,
+  ReadableContentCaller,
+  ReadableContentEntity,
+} from "nextly";
+
 /**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.

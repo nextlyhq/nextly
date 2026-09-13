@@ -21,6 +21,8 @@ import type {
   RouteMethod,
 } from "@nextlyhq/plugin-sdk";
 
+import { registerInitialContext } from "../tools/initial-context";
+
 import { callerNow, whileServing } from "./caller";
 import { refuseUnlessAddressedHere } from "./guard";
 
@@ -68,8 +70,13 @@ const SERVER_NAME = "nextly";
  * re-export it.
  */
 export function buildServer(options: EndpointOptions): McpServer {
-  callerNow();
-  return new McpServer({ name: SERVER_NAME, version: options.version });
+  const ctx = callerNow();
+  const server = new McpServer({ name: SERVER_NAME, version: options.version });
+  // Registered per request, with THIS caller closed over. A tool reading the
+  // ambient scope instead would run when the callback fires rather than when
+  // the server was built, and the two are not the same request.
+  registerInitialContext(server, ctx);
+  return server;
 }
 
 /**

@@ -669,6 +669,16 @@ export type {
 // is every such plugin restating the rule, and a restatement that is stricter
 // than the matcher refuses paths that would have routed.
 export { routePathIsLiteral } from "./plugins/routes/route-pattern";
+// What a caller may read, for a surface that DESCRIBES an install rather than
+// reading one document. Published because the alternative is each such surface
+// composing the registry, the caller conversion and the per-entity decision
+// itself, and that composition is where the dashboard's own version went wrong.
+export { readableContent } from "./auth/readable-content";
+export type {
+  ReadableContent,
+  ReadableContentCaller,
+  ReadableContentEntity,
+} from "./auth/readable-content";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
