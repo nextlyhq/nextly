@@ -29,6 +29,7 @@ import type { Logger } from "../shared";
 import {
   bumpEpoch,
   currentEpoch,
+  duringRetirement,
   refreshEpoch,
   stampIsCurrent,
 } from "./rbac-epoch";
@@ -796,16 +797,6 @@ export async function listEffectivePermissions(
 // would be two answers to one question, and the local one would win every
 // comparison it took part in.
 
-/**
- * How many retirements are currently emptying the caches.
- *
- * Held while the shared tier is being tombstoned, which is an awaited database
- * write and therefore a window during which the local numbers are quiet but the
- * stored rows are not yet gone. See {@link resolvedUnderCurrentRevision}, which
- * is where it is read.
- */
-let permissionFlushDepth = 0;
-
 /** The current count; see {@link invalidatePermissionCache}. */
 export function rbacRevision(): string {
   return currentEpoch();
@@ -835,12 +826,12 @@ export function rbacRevision(): string {
  * Nothing is cacheable while the caches are being emptied.
  */
 export function resolvedUnderCurrentRevision(revision: string): boolean {
-  // Same derivation as `servable`, and it was missing here. Comparing the
-  // stamp alone accepts a result resolved under an epoch this process invented
-  // while the shared row was unreachable — and the forced refresh that was
-  // meant to close that window fails on exactly the installs where the row is
-  // unreachable, so the comparison is against the same unmoved value.
-  return permissionFlushDepth === 0 && stampIsCurrent(revision);
+  // Nothing of its own left. Whether a retirement is running was the one thing
+  // this asked that `stampIsCurrent` did not, and asking it here meant the
+  // caches that do not route through this predicate never asked it at all —
+  // including a key's copied grants, in another module, which no list of maps
+  // to empty was ever going to reach. It is one question, so it has one answer.
+  return stampIsCurrent(revision);
 }
 
 /**
@@ -922,15 +913,17 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
   if (enclosing) return run();
 
   const batch = { dirty: false };
-  try {
-    return await permissionSweep.run(batch, run);
-  } finally {
-    if (batch.dirty) {
-      // Released before the flush, which raises it again for its own window.
-      permissionFlushDepth -= 1;
-      await flushPermissionCaches();
+  // Open for the batch's whole length, not from its first write. A batch exists
+  // to write permission rows, and the alternative is a window between the run
+  // starting and its first write in which answers derived from rows the batch
+  // is about to change are still being filed as current.
+  return duringRetirement(async () => {
+    try {
+      return await permissionSweep.run(batch, run);
+    } finally {
+      if (batch.dirty) await flushPermissionCaches();
     }
-  }
+  });
 }
 
 /**
@@ -959,14 +952,7 @@ export async function invalidateAllPermissionCaches(): Promise<void> {
   // caches now, however long the batch still has to run.
   const batch = permissionSweep.getStore();
   if (batch) {
-    if (!batch.dirty) {
-      batch.dirty = true;
-      // Held from the batch's first write to its exit. Nothing may be filed as
-      // current while a batch is open: its stored rows are deliberately still
-      // live, so a resolution that finished inside the batch would be caching
-      // an answer the batch has already invalidated.
-      permissionFlushDepth += 1;
-    }
+    batch.dirty = true;
     // Retired here, announced at the exit. The tiers this process holds cost
     // nothing to empty, so an answer it is already holding does not outlive the
     // row it came from; what the batch defers is the unfiltered rewrite of
@@ -1062,8 +1048,7 @@ async function retireSharedThenPublish(
   retireShared: () => Promise<unknown>,
   logContext: Record<string, unknown> = {}
 ): Promise<void> {
-  permissionFlushDepth += 1;
-  try {
+  return duringRetirement(async () => {
     if (CACHE_ENABLED) {
       try {
         await retireShared();
@@ -1081,9 +1066,7 @@ async function retireSharedThenPublish(
       }
     }
     await bumpEpoch();
-  } finally {
-    permissionFlushDepth -= 1;
-  }
+  });
 }
 
 async function flushPermissionCaches(): Promise<void> {

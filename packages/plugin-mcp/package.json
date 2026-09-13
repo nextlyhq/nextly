@@ -1,7 +1,7 @@
 {
   "name": "@nextlyhq/plugin-mcp",
   "version": "0.0.2-alpha.65",
-  "description": "Experimental placeholder: the package for exposing a Nextly install to AI agents over the Model Context Protocol. Serves no endpoint yet",
+  "description": "Experimental: serves a Model Context Protocol endpoint for AI agents, off by default and authenticated like every other Nextly route. Exposes no tools yet",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,6 +25,7 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

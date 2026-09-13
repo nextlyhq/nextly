@@ -817,13 +817,27 @@ export class SingleMetadataService {
       isLocalized || wasLocalized
     );
 
-    // Whether a required column can be added without a value for the rows already there, and
-    // which columns a foreign key or an index references, are facts about the live table. The
-    // generator refuses an edit these rule out, which is why they are read before the apply.
+    // Whether a required column can be added without a value for the rows already there, which
+    // columns a foreign key or an index references, and which columns already hold a NULL or are
+    // not on the table yet, are facts about the live table. The generator refuses an edit these
+    // rule out, which is why they are read before the apply.
+    //
+    // The null state is read from the SAME reader the collection path uses. Omitting it does not
+    // weaken the refusal, it removes it: `refuseTighteningOverNulls` returns at its first guard
+    // when neither set is supplied, so a single that tightened a field over rows holding NULL, or
+    // over a column an undeployed migration has not added yet, reached the database as
+    // nullability SQL that PostgreSQL and MySQL then reject.
     const db = adapter.getDrizzle();
     const liveDialect = adapter.getCapabilities().dialect;
-    const [tableHasAnyRows, foreignKeysByColumn, indexNames] =
-      await this.readLiveTableFacts(db, liveDialect, tableName);
+    const liveFacts = await this.readLiveTableFacts(
+      db,
+      liveDialect,
+      tableName,
+      // The list this pass will actually diff, as it was before the save: a localized single
+      // keeps its translatable columns in a companion table, and they are not this pass's to ask
+      // about.
+      alterInput.oldFields
+    );
 
     // Detected from the FULL field lists: a renamed LOCALIZED field-group
     // field sits in neither side of alterInput (the localized filter removes
@@ -843,9 +857,11 @@ export class SingleMetadataService {
         {
           wasStatus,
           hasStatus,
-          tableHasRows: tableHasAnyRows,
-          foreignKeysByColumn,
-          indexNames,
+          tableHasRows: liveFacts.tableHasRows,
+          foreignKeysByColumn: liveFacts.foreignKeysByColumn,
+          indexNames: liveFacts.indexNames,
+          columnsContainingNull: liveFacts.columnsContainingNull,
+          columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           ...groupMigration,
         }
       ),
@@ -993,15 +1009,45 @@ export class SingleMetadataService {
   private async readLiveTableFacts(
     db: unknown,
     dialect: "postgresql" | "mysql" | "sqlite",
-    tableName: string
-  ): Promise<[boolean, Map<string, string[]>, Set<string>]> {
-    const { readForeignKeyColumns, readIndexNames, tableHasRows } =
-      await import("../../schema/pipeline/live-table-facts");
-    return Promise.all([
+    tableName: string,
+    previousAlterFields: FieldDefinition[]
+  ): Promise<{
+    tableHasRows: boolean;
+    foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
+    indexNames: ReadonlySet<string>;
+    columnsContainingNull: ReadonlySet<string>;
+    columnsAbsentFromTable: ReadonlySet<string>;
+  }> {
+    const {
+      readColumnNullState,
+      readForeignKeyColumns,
+      readIndexNames,
+      tableHasRows,
+    } = await import("../../schema/pipeline/live-table-facts");
+    const { columnsThatMayHoldNull } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+
+    // Asked of the PREVIOUS definitions, because the refusal is keyed on the
+    // column as the live table has it and a rename has not happened yet: the
+    // nulls were counted under the old name. A deliberate over-estimate —
+    // `readColumnNullState` narrows it to what the catalog reports before it
+    // probes anything, so a column this list names and the table lacks comes
+    // back as absent rather than as an error.
+    const mayHoldNull = columnsThatMayHoldNull(previousAlterFields);
+    const [hasRows, foreignKeys, indexes, nullState] = await Promise.all([
       tableHasRows(db, dialect, tableName),
       readForeignKeyColumns(db, dialect, tableName),
       readIndexNames(db, dialect, tableName),
+      readColumnNullState(db, dialect, tableName, mayHoldNull),
     ]);
+    return {
+      tableHasRows: hasRows,
+      foreignKeysByColumn: foreignKeys,
+      indexNames: indexes,
+      columnsContainingNull: nullState.holdingNull,
+      columnsAbsentFromTable: nullState.absent,
+    };
   }
 
   /**

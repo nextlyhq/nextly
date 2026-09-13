@@ -137,3 +137,50 @@ Two things about the check above, both found before it shipped:
   restates the entire column definition on `MODIFY`, so a narrower rendering
   silently removed the relationship's configured default for future inserts.
   Both callers now render that statement through one function.
+
+A column the live table does not have YET is its own answer, not a clean one.
+Its `ADD` is queued, so it holds no nulls today — and reading that as "no
+nulls" let a save make the field required, after which the deployment creates
+the column holding NULL in every existing row and fails on the next statement.
+Absence is reported separately now and refused only where the table already
+has entries, with its own message: deploy the change that adds the field
+first, fill the entries in, then make it required.
+
+Which columns exist is read from the database rather than predicted from the
+field definitions. Predicting it was wrong twice — a localized collection
+keeps its translatable columns in a companion table, and a deployment holding
+an unapplied migration has a field whose column is not there yet — and each
+repair only covered the reason someone had just met. The reader now narrows to
+the columns the catalog reports before it probes anything, so it cannot be
+asked about a column that is not there whatever the caller believed. The
+caller's list is a query-reduction narrowing and says so.
+
+The requiredness precondition uses the save's own rename pair, like every
+other pass in a save. A field renamed and made required in one go read as
+newly added, skipped the refusal, and had the tightening emitted anyway; the
+nulls are recorded against the column the live table still has, so that is the
+name the check reads.
+
+The live column read is resolved to the catalog's own spelling of the table.
+MySQL under `lower_case_table_names=1` answers a query for a mixed-case table
+by reporting the name it folded, so the map came back keyed as `dc_posts` for a
+table asked about as `Dc_Posts` and an exact lookup missed the very table it had
+just described. That miss reported no nulls and no absent columns, which is
+indistinguishable from a clean table, so the refusal above withdrew itself on
+exactly the server whose DDL auto-commits. The folding rule is given rather than
+queried, for the reason the apply pipeline already records: the only name being
+matched is the one this read just asked the server to describe, so a
+case-insensitive match cannot select a different object. PostgreSQL is left
+case-sensitive, where the two spellings are two different tables.
+
+Singles ask the same question of their own table. The precondition is keyed
+entirely on facts the caller supplies, so a caller that reads none does not get
+a weaker check — it gets no check: the refusal returns at its first guard. The
+singles path read whether the table had rows and which columns carried keys and
+indexes, and never read the null state, so a single that tightened a field over
+an entry leaving it empty, or over a column an undeployed migration has not
+added yet, still had the nullability statement written for PostgreSQL and MySQL
+to reject. It reads both now, through the same reader the collection path uses,
+narrowed to the columns this pass will actually diff — a localized single keeps
+its translatable columns in a companion table and they are not this pass's to
+ask about.

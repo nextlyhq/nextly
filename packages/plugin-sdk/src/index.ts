@@ -358,6 +358,13 @@ export type {
 // leave the field gate holding a grant the route had given up.
 export { narrowScope } from "nextly";
 
+// The route matcher's own grammar. A plugin that takes a path from an operator
+// has to refuse a pattern while the config is being written, and deciding that
+// locally means a second grammar: one stricter than the matcher refuses paths
+// that would have routed, and one looser mounts a pattern while reporting a
+// single address.
+export { routePathIsLiteral } from "nextly";
+
 /**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.

@@ -27,11 +27,10 @@
  * @module domains/singles/services/promote-gate
  */
 
-import { isDeepStrictEqual } from "node:util";
-
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import { assertNoDeniedChange } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
@@ -162,7 +161,7 @@ export async function assertDraftsMayBePromoted(
     }
     Object.assign(promoted, ctx.callerData ?? {});
 
-    await assertNoDeniedChange(promoted, live, locale, ctx);
+    await refuseADeniedChange(promoted, live, locale, ctx);
     await assertSchemaStillAccepts(promoted, ctx);
   }
 }
@@ -174,20 +173,12 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Refuse a promotion that would change a field this publisher may not write.
+ * Apply the field rules to what the write would persist, and refuse a denied
+ * change.
  *
- * Refused rather than stripped, which is the opposite of what a denied field
- * gets on an ordinary write. There, the value is the caller's own input and
- * dropping it costs them nothing they did not already have. Here the value
- * belongs to whoever saved the draft, and a successful publish CONSUMES the
- * pending change: stripping would publish everything else, delete the draft,
- * and take that author's edit with it, reporting success. Refusing keeps the
- * draft for someone who can write the field.
- *
- * Judged in STORED shape, on both sides, and on what would CHANGE rather than
- * on what the document holds: the promoted document holds every field, so a
- * denied one appears in all of them, and only a value that differs from what
- * is live is a change being made.
+ * The rules are applied here; whether a removal is a CHANGE, and the refusal
+ * itself, are {@link assertNoDeniedChange}'s, shared with the collection
+ * publish path so both answer one question one way.
  *
  * Judged on the PROMOTED document rather than on the snapshot that contributed
  * it, because a field rule reads its siblings. A draft whose protected field
@@ -197,7 +188,7 @@ function asRecord(value: unknown): Record<string, unknown> {
  * one language's snapshot changes and a later language's overwrites never
  * reaches the row, so judging the snapshot refuses an edit the write discards.
  */
-async function assertNoDeniedChange(
+async function refuseADeniedChange(
   promoted: Record<string, unknown>,
   live: Record<string, unknown>,
   locale: string | null,
@@ -205,9 +196,9 @@ async function assertNoDeniedChange(
 ): Promise<void> {
   // A deep copy, because the rules delete a denied value in place and a
   // shallow one shares every nested group, repeater row and component with the
-  // original: the deletion would land on both, and the comparison below would
-  // then see a container still present and report nothing denied while the
-  // write persisted the forbidden nested edit.
+  // original: the deletion would land on both, and the comparison would then
+  // see a container still present and report nothing denied while the write
+  // persisted the forbidden nested edit.
   const permitted = detachData(promoted);
   await applyFieldWriteAccess({
     kind: "single",
@@ -221,82 +212,19 @@ async function assertNoDeniedChange(
     id: ctx.entryId,
   });
 
-  const denied = deniedPaths(promoted, permitted, "");
-  if (denied.length === 0) return;
-
-  // Both sides through the same conversion, so a JSON-backed value is an
-  // object on both and an upload or a relationship is the identifier it is
-  // stored as on both. Compared across representations, an untouched field
-  // reads as an edit and a publish nobody objected to is refused.
-  const deniedChanges = denied.filter(
-    path => !isDeepStrictEqual(valueAt(promoted, path), valueAt(live, path))
-  );
-  if (deniedChanges.length === 0) return;
-
-  throw NextlyError.validation({
-    errors: deniedChanges.map(path => ({
-      path,
-      code: "FORBIDDEN",
-      message:
-        "The pending change edits this field and you do not have permission to write it, so it cannot be published. The change is kept.",
-    })),
-    logContext: {
-      cause: "promote-denied-field",
-      slug: ctx.slug,
-      locale,
-      fields: deniedChanges,
-    },
+  assertNoDeniedChange({
+    before: promoted,
+    permitted,
+    live,
+    // The caller's own payload, so a denied value of theirs is stripped as it
+    // is on any other write rather than refusing the publish. Only the pending
+    // change's values are worth refusing over, since those belong to whoever
+    // saved them and a successful publish deletes the draft. The collection
+    // path draws the same line, which is the point of one judge.
+    callerSupplied: ctx.callerData,
+    slug: ctx.slug,
+    locale,
   });
-}
-
-/**
- * Every path the rules removed, at any depth.
- *
- * A field rule can sit on a child of a group or of a repeater row, and the
- * removal there leaves the container in place: comparing only the top level
- * reports nothing denied and lets the forbidden nested edit through.
- */
-function deniedPaths(
-  before: unknown,
-  after: unknown,
-  prefix: string
-): string[] {
-  if (Array.isArray(before)) {
-    if (!Array.isArray(after)) return [prefix];
-    return before.flatMap((row, index) =>
-      deniedPaths(row, after[index], `${prefix}[${index}]`)
-    );
-  }
-  if (!isRecord(before)) return [];
-  if (!isRecord(after)) return [prefix];
-  const out: string[] = [];
-  for (const key of Object.keys(before)) {
-    const path = prefix ? `${prefix}.${key}` : key;
-    if (!Object.prototype.hasOwnProperty.call(after, key)) {
-      out.push(path);
-      continue;
-    }
-    out.push(...deniedPaths(before[key], after[key], path));
-  }
-  return out;
-}
-
-/** Read a dotted/bracketed path the way {@link deniedPaths} writes one. */
-function valueAt(root: unknown, path: string): unknown {
-  let current: unknown = root;
-  for (const step of path.split(/\.|\[(\d+)\]/).filter(Boolean)) {
-    if (Array.isArray(current) && /^\d+$/.test(step)) {
-      current = current[Number(step)];
-      continue;
-    }
-    if (!isRecord(current)) return undefined;
-    current = current[step];
-  }
-  return current;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

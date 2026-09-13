@@ -78,12 +78,15 @@ import {
   rehydrateSystemTimestamps,
   SYSTEM_TIMESTAMP_KEYS,
 } from "../../../shared/lib/case-conversion";
+import { assertNoDeniedChange } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
+  hasFieldAccessRule,
+  resolvedCallerGrants,
   callerAccessGrants,
   attachFieldValidators,
   getFieldFunctions,
@@ -5851,6 +5854,7 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "update",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
         id: params.entryId,
       });
@@ -6183,6 +6187,32 @@ export class CollectionMutationService extends BaseService {
       const isRestoreWrite =
         params.sourceVersionNo !== undefined && params.sourceVersionNo !== null;
       const promotePossible = splitEnabled && !namesNoStatus && !isRestoreWrite;
+      // The caller's grants, resolved HERE, before the write transaction opens.
+      //
+      // The promotion gate runs under the row lock, on the draft that
+      // transaction holds, because a check that runs before the write can
+      // always disagree with the write. A grants resolver first asked from in
+      // there issues its queries on the pooled connection the transaction is
+      // holding, and on a small pool waits for a connection it can never get:
+      // the publish hangs rather than fails. Awaited, not merely constructed,
+      // since the resolver is lazy and building it early is not resolving it.
+      //
+      // Only where a promotion could happen AND a rule could ask. A trusted
+      // write returns from `applyFieldWriteAccess` on `overrideAccess` before
+      // it looks at grants, and so does a collection with no `access.update`
+      // rule on any field at any depth: grants are consulted for that rule
+      // alone, so a collection whose registered functions are validators,
+      // defaults, hooks or READ rules never reaches a lookup. Without this
+      // every publish, unpublish and republish on a draft-enabled collection
+      // paid for the roles and permissions queries to answer a question
+      // nothing would ask. Both tests are map reads.
+      const promoteRulesCouldRun =
+        promotePossible &&
+        params.overrideAccess !== true &&
+        hasFieldAccessRule("collection", params.collectionName, "update");
+      const promoteGrants = promoteRulesCouldRun
+        ? await resolvedCallerGrants(params.user, params.authenticatedScope)
+        : undefined;
       const isPluginForRestore =
         (
           (collection as Record<string, unknown>).admin as
@@ -6252,15 +6282,13 @@ export class CollectionMutationService extends BaseService {
             manyToManyFields,
             splitComponentSchemas
           );
-          await applyFieldWriteAccess({
-            kind: "collection",
-            slug: params.collectionName,
-            data: merged,
-            operation: "update",
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            id: params.entryId,
-          });
+          // Validated as ASSEMBLED, with nothing removed. A field this
+          // publisher may not write is not a schema violation, and the gate
+          // that judges permission now refuses the promotion outright rather
+          // than dropping the value, under the row lock where it can compare
+          // against what is live. Filtering here would validate a document
+          // that is never written either way, and report a denied required
+          // field as missing rather than as forbidden.
           const localeCtx = await this.localizedRequiredContext(
             params.collectionName,
             params.locale
@@ -6756,22 +6784,58 @@ export class CollectionMutationService extends BaseService {
                 manyToManyFields,
                 splitComponentSchemas
               );
+              // Judged on a deep COPY. The rules delete a denied value in
+              // place, so the original is what the removals are measured
+              // against; a shallow copy would share every group, repeater row
+              // and component with it and the deletion would land on both.
+              const permittedPromoteData = detachData(mergedPromoteData);
               await applyFieldWriteAccess({
                 kind: "collection",
                 slug: params.collectionName,
-                data: mergedPromoteData,
+                data: permittedPromoteData,
                 operation: "update",
                 user: params.user,
+                authenticatedScope: params.authenticatedScope,
                 overrideAccess: params.overrideAccess,
+                grants: promoteGrants,
                 id: params.entryId,
               });
+              // Refused, not stripped. Stripping is right on an ordinary write,
+              // where the value is the caller's own input; here it belongs to
+              // whoever saved the pending change, and the delete below CONSUMES
+              // that change on success, so a strip would publish the rest,
+              // remove the draft, and destroy the author's edit while reporting
+              // success. Compared against the row as it stands, so only a
+              // denied value this write would CHANGE refuses it.
+              // The caller's own contribution, assembled by the SAME function
+              // with no draft behind it, so it lands in the same shape as the
+              // document it is compared against. A denied value of theirs is
+              // stripped as it is on any other write; only the pending
+              // change's own values are worth refusing over.
+              const callerContribution = this.assemblePromotedDocument(
+                {},
+                finalData,
+                componentFieldData,
+                manyToManyData,
+                fields,
+                manyToManyFields,
+                splitComponentSchemas
+              );
+              assertNoDeniedChange({
+                before: mergedPromoteData,
+                permitted: permittedPromoteData,
+                live: previousDocument ?? {},
+                callerSupplied: callerContribution,
+                slug: params.collectionName,
+                locale: draftLocaleKey ?? params.locale ?? null,
+              });
               const draftParts = this.shapeWriteParts(
-                mergedPromoteData,
+                permittedPromoteData,
                 fields,
                 manyToManyFields,
                 collection
               );
-              finalData = mergedPromoteData;
+              finalData = permittedPromoteData;
               componentFieldData = draftParts.componentFieldData;
               manyToManyData = draftParts.manyToManyData;
               // Rebuild the companion payload from the promoted document, and
@@ -8546,6 +8610,7 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "create",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
       });
 
@@ -9070,6 +9135,7 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "update",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
         id: entryId,
       });

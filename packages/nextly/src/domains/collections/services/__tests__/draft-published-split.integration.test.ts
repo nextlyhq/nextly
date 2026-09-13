@@ -1117,7 +1117,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(seo?.metaDesc).toBe("draft-desc");
   });
 
-  it("does not promote a draft field the publisher's field-level access denies", async () => {
+  it("refuses to publish a draft field the publisher may not write, and keeps the draft", async () => {
     handle = await createTestNextly({
       collections: [
         defineCollection({
@@ -1170,19 +1170,37 @@ describe("draft/published split — promote on publish (integration)", () => {
       },
       { status: "published" }
     );
-    expect(res.success).toBe(true);
+    // Refused, not stripped. A successful publish CONSUMES the pending change,
+    // so promoting the rest and dropping `secret` would delete the draft and
+    // take the author's edit with it while reporting success.
+    expect(res.success).toBe(false);
+    const issues = (
+      res as { publicData?: { errors?: Array<{ path: string; code: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["secret"]);
+    expect(issues?.[0]?.code).toBe("FORBIDDEN");
 
     const [live] = await handle.adapter.select<{
       title: string;
       secret: string;
     }>(TABLE);
-    // The allowed field is promoted...
-    expect(live.title).toBe("draft-title");
-    // ...but the field the publisher may not write keeps its live value.
+    // Nothing was published: a publish applies the whole pending change or none
+    // of it, so the allowed field did not go live on its own either.
+    expect(live.title).toBe("live");
     expect(live.secret).toBe("live-secret");
+    // And the edit is still there, for someone who can write the field.
+    const pending = await handle.adapter.select<{
+      entryId?: unknown;
+      versionNo?: unknown;
+    }>("nextly_versions", {});
+    expect(
+      JSON.stringify(
+        pending.filter(r => String(r.entryId) === id && r.versionNo === null)
+      )
+    ).toContain("draft-secret");
   });
 
-  it("does not promote a denied field nested in a group", async () => {
+  it("refuses a denied field nested in a group, naming it at its own depth", async () => {
     handle = await createTestNextly({
       collections: [
         defineCollection({
@@ -1244,19 +1262,23 @@ describe("draft/published split — promote on publish (integration)", () => {
       },
       { status: "published" }
     );
-    expect(res.success).toBe(true);
+    expect(res.success).toBe(false);
+    const issues = (
+      res as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    // Named at its own depth: the removal leaves the container in place, so a
+    // report at the top level would say nothing useful about what to hand over.
+    expect(issues?.map(i => i.path)).toEqual(["meta.secret"]);
 
     const [live] = await handle.adapter.select<{ meta: unknown }>(TABLE);
     const meta = (
       typeof live.meta === "string" ? JSON.parse(live.meta) : live.meta
     ) as { note?: string; secret?: string };
-    // The allowed nested field is promoted...
-    expect(meta.note).toBe("draft-note");
-    // ...but the denied nested field's pending value is NOT published.
-    expect(meta.secret).not.toBe("draft-secret");
+    expect(meta.note).toBe("live-note");
+    expect(meta.secret).toBe("live-secret");
   });
 
-  it("re-evaluates a draft field's access against a sibling changed by the publish patch", async () => {
+  it("judges a draft field's access against a sibling the publish patch changes", async () => {
     handle = await createTestNextly({
       collections: [
         defineCollection({
@@ -1317,14 +1339,108 @@ describe("draft/published split — promote on publish (integration)", () => {
       },
       { status: "published", approved: "no" }
     );
-    expect(res.success).toBe(true);
+    // The rule is answered against the document the write produces, where the
+    // caller's own `approved: "no"` has already won, so the draft's `secret` is
+    // denied and the promotion is refused rather than quietly dropped.
+    expect(res.success).toBe(false);
+    const issues = (
+      res as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["secret"]);
 
     const [live] = await handle.adapter.select<{
       approved: string;
       secret: string;
     }>(TABLE);
     expect(live.approved).toBe("no");
-    expect(live.secret).not.toBe("draft-secret");
+    expect(live.secret).toBe("live-secret");
+  });
+
+  it("refuses when a denied component still carries the draft's own sibling", async () => {
+    // The caller patches ONE field of a component the merged document denies.
+    // The rules delete the component whole, so the removal is reported at the
+    // component, but its other field is the pending change's: exempting the
+    // whole subtree because the caller supplied part of it would drop that
+    // sibling and delete the draft on a successful publish.
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "promo",
+          fields: [text({ name: "label" }), text({ name: "tagline" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+          },
+          fields: [
+            text({ name: "approved" }),
+            fieldGroup({
+              name: "promo",
+              component: "promo",
+              access: {
+                update: (args: { data?: { approved?: unknown } }) =>
+                  args.data?.approved !== "no",
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      {
+        approved: "yes",
+        promo: { label: "live", tagline: "live-tagline" },
+        status: "published",
+      }
+    );
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // The pending change edits the TAGLINE, which the caller never mentions.
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { approved: "no", promo: { label: "draft", tagline: "draft-tagline" } }
+    );
+
+    const res = await entries.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        user: { id: "editor" },
+        overrideAccess: false,
+      },
+      { status: "published", promo: { label: "caller" } }
+    );
+
+    expect(res.success).toBe(false);
+    const issues = (
+      res as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    // The caller owns `label`, so that one is theirs to lose. `tagline` is the
+    // pending change's and is what refuses the publish.
+    expect(issues?.map(i => i.path)).toEqual(["promo.tagline"]);
+
+    const pending = await handle.adapter.select<{
+      entryId?: unknown;
+      versionNo?: unknown;
+    }>("nextly_versions", {});
+    expect(
+      JSON.stringify(
+        pending.filter(r => String(r.entryId) === id && r.versionNo === null)
+      )
+    ).toContain("draft-tagline");
   });
 
   it("does not promote a caller's component value a field-access rule denies", async () => {

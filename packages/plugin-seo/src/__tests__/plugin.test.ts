@@ -119,3 +119,34 @@ describe("seoPlugin", () => {
     ]);
   });
 });
+
+describe("the dashboard card the plugin contributes", () => {
+  it("is contributed alongside the source it draws", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    const widgets = plugin.contributes?.admin?.widgets ?? [];
+
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0]?.archetype).toBe("stats");
+  });
+
+  it("is withheld when no collection carries the fields", () => {
+    // 🔴 A plugin registered with no collections extends nothing, so the source
+    // has nothing to scan and every cell answers zero. A card there would report
+    // a clean site for a plugin that is doing nothing at all -- which is worse
+    // than no card, because it is an answer rather than an absence.
+    const plugin = seoPlugin({ collections: [], sitemap: false });
+
+    expect(plugin.contributes?.admin?.widgets ?? []).toHaveLength(0);
+  });
+
+  it("declares a core floor that cannot fall behind what it needs", () => {
+    // 🔴 A hand-written floor goes stale silently in the direction that ACCEPTS:
+    // an older core satisfying the wider range registers no source for
+    // `contributes.widgetSources`, and the card queries one that does not exist.
+    // Every package here releases at one version, so the version this plugin
+    // ships at names the core built beside it.
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+
+    expect(plugin.nextly).toBe(`>=${plugin.version}`);
+  });
+});

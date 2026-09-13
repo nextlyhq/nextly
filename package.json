@@ -64,7 +64,7 @@
     "lane:test:playground": "pnpm --filter playground exec vitest run",
     "lane:test:integration:postgres": "turbo run test:integration --filter=@nextlyhq/adapter-postgres --filter=nextly --filter=@nextlyhq/plugin-page-builder",
     "lane:test:integration:mysql": "turbo run test:integration --filter=@nextlyhq/adapter-mysql --filter=nextly --filter=@nextlyhq/plugin-page-builder",
-    "lane:test:integration:sqlite": "turbo run test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder",
+    "lane:test:integration:sqlite": "turbo run test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-mcp",
     "_comment_cleaning": "=== Cleaning ===",
     "clean": "turbo run clean",
     "clean:cache": "turbo daemon clean && rm -rf .turbo node_modules/.cache",

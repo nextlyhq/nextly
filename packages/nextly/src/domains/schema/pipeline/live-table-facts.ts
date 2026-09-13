@@ -20,7 +20,15 @@
 // MySQL, a PRAGMA for SQLite.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
+
+import {
+  identifierCaseRules,
+  indexCatalog,
+  resolveCatalogName,
+} from "../utils/resolve-catalog-name";
+
+import { queryLiveColumnTypes } from "./live-column-types";
 
 interface PgForeignKeyRow {
   column_name: string;
@@ -63,13 +71,20 @@ function mysqlRows<T>(result: unknown): T[] {
  * backfill needed, may an unregistered table be dropped — and `SELECT 1 ... LIMIT 1` costs the
  * same on a table of ten rows and a table of ten million, where `COUNT(*)` scans.
  */
-export async function tableHasRows(
+/**
+ * Whether a probe returned at least one row.
+ *
+ * Each dialect hands its rows back differently — node-postgres wraps them in a
+ * QueryResult, mysql2 may or may not nest them in a tuple, better-sqlite3
+ * returns a plain array — and every caller that asks "is there such a row?"
+ * had to spell all three. Two did, identically. Asked here once so a fourth
+ * caller cannot get one of the three shapes subtly wrong.
+ */
+async function probeReturnsRow(
   db: unknown,
   dialect: SupportedDialect,
-  tableName: string
+  probe: SQL
 ): Promise<boolean> {
-  const probe = sql`SELECT 1 FROM ${sql.identifier(tableName)} LIMIT 1`;
-
   if (dialect === "postgresql") {
     // node-postgres returns the QueryResult object, not a flat row array.
     const result = (await (db as PgMysqlExecute).execute(probe)) as {
@@ -77,14 +92,24 @@ export async function tableHasRows(
     };
     return result.rows.length > 0;
   }
-
   if (dialect === "mysql") {
     return (
       mysqlRows<unknown>(await (db as PgMysqlExecute).execute(probe)).length > 0
     );
   }
-
   return (await (db as SqliteAll).all(probe)).length > 0;
+}
+
+export async function tableHasRows(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<boolean> {
+  return probeReturnsRow(
+    db,
+    dialect,
+    sql`SELECT 1 FROM ${sql.identifier(tableName)} LIMIT 1`
+  );
 }
 
 /**
@@ -98,43 +123,94 @@ export async function tableHasRows(
  * instead, so the caller has to deal with the referrers first either way.
  */
 /**
- * Which of the named columns currently hold at least one NULL.
+ * What the live table says about these columns: which hold a NULL today, and
+ * which are not there at all.
  *
- * Asked per column rather than for the whole table: the caller knows which
- * columns a save is about to make required, and that is a short list, while
- * probing every column would read the table once per column for no reason.
+ * THREE states, not two, and collapsing the third into "clean" is a defect.
+ * A column the catalog does not report is not a column with no nulls — it is a
+ * column whose `ADD` has not been applied yet, and applying it over a table
+ * that already has rows creates it holding NULL in every one of them. Reporting
+ * that as "no nulls" lets a save tighten it, and the deployment then adds the
+ * column in one migration and fails on `SET NOT NULL` in the next, after MySQL
+ * has auto-committed the first. So absence is returned as its own answer and
+ * the caller decides, with `tableHasRows`, what it means.
  *
- * The answer is a PRECONDITION, not a diagnostic. A column being made NOT NULL
- * while a row still holds a null fails at the server — after the statements
- * before it have been applied and, on MySQL, auto-committed — so the edit has
- * to be refused before any of them is written rather than discovered partway.
+ * Asked per column rather than for the whole table: the caller knows the short
+ * list a save is about to make required, and probing every column would read
+ * the table once per column for nothing.
+ *
+ * A PRECONDITION, not a diagnostic. The tightening fails at the server after
+ * the statements before it have run, so the edit is refused before any of them
+ * is written rather than discovered partway.
  */
-export async function readColumnsContainingNull(
+export async function readColumnNullState(
   db: unknown,
   dialect: SupportedDialect,
   tableName: string,
   columns: readonly string[]
-): Promise<Set<string>> {
-  const holding = new Set<string>();
+): Promise<{ holdingNull: Set<string>; absent: Set<string> }> {
+  const holdingNull = new Set<string>();
+  const absent = new Set<string>();
+  if (columns.length === 0) return { holdingNull, absent };
+
+  // Narrowed to the columns the table ACTUALLY has, read from the catalog,
+  // before a single probe is issued. A caller cannot know this from the field
+  // definitions and twice did not: a localized collection keeps its
+  // translatable columns in a companion, and a deployment holding an unapplied
+  // migration has a field whose column does not exist yet. Both produced a
+  // probe for a missing column, which errors and takes the whole save with it.
+  //
+  // A boundary rather than another prediction — a filter over definitions has
+  // to enumerate every reason a column might be absent, and the next reason is
+  // the one nobody listed. The catalog answers the question directly, so the
+  // caller's list is free to be a rough over-estimate.
+  const catalog = await queryLiveColumnTypes(db, dialect, [tableName]);
+  // Keyed by the spelling the CATALOG returned, which is not always the one
+  // asked for: MySQL under `lower_case_table_names=1` answers a query for
+  // `Dc_Posts` with `dc_posts`, so an exact `.get` misses the very table it
+  // just described. That miss is not a harmless one — it lands on the branch
+  // below that reports neither nulls nor absences, which is indistinguishable
+  // from a clean table and silently withdraws the refusal this function exists
+  // to supply.
+  //
+  // Resolved the way `pushschema-pipeline` resolves the same question, and the
+  // folding setting is GIVEN rather than queried, which is sound here for a
+  // narrower reason than a blanket listing would allow: the catalog read is
+  // filtered on this one name, so every key it can return is a row the SERVER
+  // itself matched against the name asked for. Folding among those cannot reach
+  // a table the server did not already offer as the answer, while an exact
+  // match discards the answer it did offer. Reading the live
+  // `lower_case_table_names` instead would cost a round trip on every save and
+  // a failure mode when the server declines to report it.
+  //
+  // Only the TABLE lookup is resolved this way. A column the catalog spells
+  // differently falls into `absent`, which refuses — the safe direction for a
+  // precondition — so folding it too would trade a false positive for a false
+  // negative with no defect reported against it.
+  const catalogName = resolveCatalogName(
+    indexCatalog(
+      [...catalog.keys()],
+      (dialect === "mysql"
+        ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+        : identifierCaseRules({ dialect })
+      ).tables
+    ),
+    tableName
+  );
+  const live = catalogName === undefined ? undefined : catalog.get(catalogName);
+  // No such table: nothing exists to hold a null and nothing can be tightened
+  // against it either, so neither set gains a member.
+  if (live === undefined) return { holdingNull, absent };
+
   for (const column of columns) {
+    if (!live.has(column)) {
+      absent.add(column);
+      continue;
+    }
     const probe = sql`SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${sql.identifier(column)} IS NULL LIMIT 1`;
-    if (dialect === "postgresql") {
-      const result = (await (db as PgMysqlExecute).execute(probe)) as {
-        rows: unknown[];
-      };
-      if (result.rows.length > 0) holding.add(column);
-      continue;
-    }
-    if (dialect === "mysql") {
-      const rows = mysqlRows<unknown>(
-        await (db as PgMysqlExecute).execute(probe)
-      );
-      if (rows.length > 0) holding.add(column);
-      continue;
-    }
-    if ((await (db as SqliteAll).all(probe)).length > 0) holding.add(column);
+    if (await probeReturnsRow(db, dialect, probe)) holdingNull.add(column);
   }
-  return holding;
+  return { holdingNull, absent };
 }
 
 export async function readReferencingTables(

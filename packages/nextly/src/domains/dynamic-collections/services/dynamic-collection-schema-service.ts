@@ -259,32 +259,86 @@ export class DynamicCollectionSchemaService {
    * @throws NextlyError (validation, `REQUIRED_COLUMN_HAS_NULLS`)
    */
   private refuseTighteningOverNulls(
-    oldFields: FieldDefinition[],
     newFields: FieldDefinition[],
-    options?: { columnsContainingNull?: ReadonlySet<string> }
+    previousDefinitionOf: (
+      field: FieldDefinition
+    ) => FieldDefinition | undefined,
+    options?: {
+      columnsContainingNull?: ReadonlySet<string>;
+      columnsAbsentFromTable?: ReadonlySet<string>;
+      tableHasRows?: boolean;
+    }
   ): void {
     const holdingNull = options?.columnsContainingNull;
-    if (holdingNull === undefined || holdingNull.size === 0) return;
-    const oldByName = new Map(oldFields.map(f => [f.name, f]));
+    // A column the live table does not have YET is the third state, and it is
+    // not the safe one. Its `ADD` is queued; applying it over a table that
+    // already has rows creates it holding NULL in every one of them, so a
+    // tightening in the same deployment adds the column in one migration and
+    // fails on the next. Over an EMPTY table there is nothing to violate, so
+    // `tableHasRows` is what separates the two.
+    const pendingOverRows =
+      options?.tableHasRows === true
+        ? options.columnsAbsentFromTable
+        : undefined;
+    if (holdingNull === undefined && pendingOverRows === undefined) return;
     for (const field of newFields) {
       if (field.required !== true) continue;
       if (!fieldProducesColumn(field)) continue;
-      const previous = oldByName.get(field.name);
+      // The save's own pairing, asked of the one resolver every pass uses.
+      const previous = previousDefinitionOf(field);
       if (!previous || previous.required === true) continue;
-      const column = toSnakeCase(field.name);
-      if (!holdingNull.has(column)) continue;
+      // Keyed on the column as the LIVE table has it, which is the name before
+      // this save: the nulls were counted against that column, and the rename
+      // has not happened yet when they were.
+      const column = toSnakeCase(previous.name);
+      const holdsNull = holdingNull?.has(column) === true;
+      // Refused whatever the definition says about a default, and that is
+      // deliberate rather than unexamined.
+      //
+      // A queued ADD that emits a DEFAULT does backfill every existing row, so
+      // some of these refusals reject a save that would have worked. The
+      // definition cannot tell you which: `previous.default` is the CURRENT
+      // registry state, not what the queued ADD wrote. A field added with no
+      // default and given one by a later save carries that default here while
+      // the queued `ADD COLUMN` has none — a default-only edit emits no DDL at
+      // all, because `isFieldModified` does not compare defaults. Answering it
+      // properly means replaying the queued artefacts, which this generator
+      // deliberately does not do (see `readTableFacts`).
+      //
+      // So this fails CLOSED. A precondition that misses PERMITS the thing it
+      // exists to stop — here a `SET NOT NULL` that fails mid-deployment with
+      // earlier MySQL DDL already committed — while a false positive only asks
+      // the author to deploy in two steps, which is the same remedy the
+      // message already gives and which works either way.
+      const notYetApplied = pendingOverRows?.has(column) === true;
+      if (!holdsNull && !notYetApplied) continue;
+      // Two causes, two remedies: fill the empty entries in, or deploy the
+      // migration that adds the column before the one that tightens it. One
+      // message for both would name the wrong fix half the time.
       throw NextlyError.validation({
         errors: [
           {
             path: `fields.${field.name}`,
-            code: "REQUIRED_COLUMN_HAS_NULLS",
-            message:
-              `"${field.name}" cannot be made required while entries still ` +
-              `leave it empty. Give every entry a value for it first, or ` +
-              `leave the field optional.`,
+            code: holdsNull
+              ? "REQUIRED_COLUMN_HAS_NULLS"
+              : "REQUIRED_COLUMN_NOT_YET_APPLIED",
+            message: holdsNull
+              ? `"${field.name}" cannot be made required while entries still ` +
+                `leave it empty. Give every entry a value for it first, or ` +
+                `leave the field optional.`
+              : `"${field.name}" cannot be made required in the same ` +
+                `deployment that adds it, because this collection already has ` +
+                `entries. Deploy the change that adds the field first — if it ` +
+                `carries a default, that fills the existing entries in on its ` +
+                `own; otherwise give them a value — then make it required.`,
           },
         ],
-        logContext: { field: field.name, column },
+        logContext: {
+          field: field.name,
+          column,
+          previous: previous.name,
+          reason: holdsNull ? "holds-null" : "column-not-yet-applied",
+        },
       });
     }
   }
@@ -982,7 +1036,7 @@ ${allColumnDefs.join(",\n")}
       foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
       /**
        * The columns that currently hold at least one NULL, read from the live table by
-       * `readColumnsContainingNull`.
+       * `readColumnNullState`.
        *
        * Consulted before a column is made NOT NULL. Whether a column can take that is a fact
        * about the ROWS, which no field definition records: the save says "required" and the data
@@ -990,6 +1044,19 @@ ${allColumnDefs.join(",\n")}
        * the tightening exactly as it behaved before anything was measured.
        */
       columnsContainingNull?: ReadonlySet<string>;
+      /**
+       * The columns this save names that the live table does NOT have, read from the catalog by
+       * `readColumnNullState`.
+       *
+       * Its own answer rather than a clean one. Such a column holds no nulls today because its
+       * `ADD` has not been applied; applying it over a table that already has rows creates it
+       * holding NULL in every one of them, so a tightening in the same deployment fails. Consulted
+       * with `tableHasRows`, and refused whatever the definition says about a default: `default`
+       * is the CURRENT registry state, not what the queued `ADD` wrote, so it cannot prove the
+       * rows get backfilled. The precondition fails closed on that. Undefined means the caller did
+       * not look.
+       */
+      columnsAbsentFromTable?: ReadonlySet<string>;
       /**
        * The index names the table carries, read from the live table by `readIndexNames`.
        *
@@ -1032,7 +1099,11 @@ ${allColumnDefs.join(",\n")}
     // auto-committed, including the foreign-key replacement a relationship's
     // tightening is ordered behind, which leaves the table carrying no key at
     // all while the registry records the save as made.
-    this.refuseTighteningOverNulls(oldFields, newFields, options);
+    // Detected here rather than at its use below, because the precondition
+    // needs the same pair: a renamed field is the same field, and two answers
+    // to that question is what this whole pass keeps being bitten by. One call,
+    // so an ambiguous-rename refusal is also raised once.
+    const rename = this.detectFieldRename(oldFields, newFields);
 
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
 
@@ -1098,9 +1169,36 @@ ${allColumnDefs.join(",\n")}
     // doesn't appear in oldFieldMap. Acceptable trade-off vs the
     // alternative (data destruction). Track as a follow-up; admin UI
     // ideally splits combined edits into two saves.
-    const rename = this.detectFieldRename(oldFields, newFields);
     let renamedFromName = rename?.from.name ?? null;
     let renamedToName = rename?.to.name ?? null;
+
+    // What this save says a field WAS, by identity rather than by spelling,
+    // asked in ONE place by everything that needs it.
+    //
+    // A renamed field is the same field under a new name, so an exact-name
+    // lookup finds nothing for it and any pass keyed on one silently treats
+    // the rename as carrying no other edit. That has now been the cause three
+    // times — the action pass, the column pass, and the tightening
+    // precondition — each resolving it separately and disagreeing with its
+    // neighbour. A second implementation is what lets them diverge again.
+    //
+    // The names are read at CALL time, so a field-group association rename
+    // reassigning them below is seen by the passes that run after it. The
+    // precondition runs before that and is unaffected either way: a field
+    // group produces no parent column, so it is never a column tightening.
+    const previousDefinitionOf = (
+      field: FieldDefinition
+    ): FieldDefinition | undefined =>
+      renamedToName !== null &&
+      renamedFromName !== null &&
+      field.name === renamedToName
+        ? oldFieldMap.get(renamedFromName)
+        : oldFieldMap.get(field.name);
+
+    // Refuses before this method returns any SQL, which is what makes it a
+    // precondition: the caller applies nothing it has not been handed.
+    this.refuseTighteningOverNulls(newFields, previousDefinitionOf, options);
+
     if (rename) {
       const fromCol = toSnakeCase(rename.from.name);
       const toCol = toSnakeCase(rename.to.name);
@@ -1448,24 +1546,6 @@ ${allColumnDefs.join(",\n")}
         }
       }
     }
-
-    // What this save says a field WAS, by identity rather than by spelling.
-    //
-    // A renamed field is the same field under a new name, so an exact-name
-    // lookup finds nothing for it and every pass keyed on one silently treats
-    // the rename as having no other edit in it. Both passes below ask this,
-    // because they were answering it separately and disagreeing: the action
-    // pass carried a renamed field's edit while the column pass skipped the
-    // same field, so a link renamed and turned optional in one save had its
-    // key moved to `SET NULL` and its column left `NOT NULL`.
-    const previousDefinitionOf = (
-      field: FieldDefinition
-    ): FieldDefinition | undefined =>
-      renamedToName !== null &&
-      renamedFromName !== null &&
-      field.name === renamedToName
-        ? oldFieldMap.get(renamedFromName)
-        : oldFieldMap.get(field.name);
 
     // Find modified fields
     // What a relationship does when the row it points at is deleted, or its

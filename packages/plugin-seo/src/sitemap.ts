@@ -29,47 +29,18 @@
 // importing it never loads `next`, so the package's zero-`next` guarantee holds.
 import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 
+import type { CollectionReads } from "./collection-reads";
+
 /**
- * The minimal `listEntries` the sitemap builder calls — a structural slice of
- * the managed collection service (`ctx.services.collections`). Declared
- * explicitly (rather than `Pick<PluginCollectionService, ...>`) so a test can
- * satisfy it with a plain stub, while the real, richer service stays assignable
- * to it. Reads published rows as system; only the fields the sitemap consumes
- * (`data` + `pagination.hasMore`) are named here.
+ * What the sitemap builder reads, as system.
+ *
+ * The shape is shared with the SEO issues source through
+ * `CollectionReads` -- both ask the same two questions of the same service, and
+ * two declarations of one contract agree on the day they are written and drift
+ * afterwards. Only the identity differs: the sitemap is a public document, so
+ * it reads published rows as `system`.
  */
-export interface SitemapServices {
-  collections: {
-    /**
-     * Collection metadata — read only to check the built-in draft/published
-     * lifecycle flag (`status: true`). Typed as `unknown` and narrowed at the
-     * call site (the core `Collection` type does not surface `status`). The
-     * context arg is unused by the read; pass `{}`.
-     */
-    getCollection(
-      slug: string,
-      context: Record<string, never>
-    ): Promise<unknown>;
-    listEntries(
-      slug: string,
-      query: {
-        where?: Record<string, unknown>;
-        depth?: number;
-        // Field projection passed to the managed service. It trims the returned
-        // rows to what the default mapper reads; note the current service
-        // applies it to the response, not the SQL, so it does not yet avoid
-        // reading the columns at the DB layer (a core enhancement).
-        select?: Record<string, boolean>;
-        // A stable, unique sort so consecutive pages don't overlap or skip
-        // rows: the managed service adds `ORDER BY` only when `sort` is passed.
-        sort?: { field: string; direction: "asc" | "desc" };
-        // Paged by 1-indexed `page`: the managed service reads a page from
-        // `page`, not `offset`, so pagination MUST advance `page` to progress.
-        pagination?: { limit?: number; page?: number };
-      },
-      opts: { as: "system" }
-    ): Promise<{ data: unknown[]; pagination: { hasMore: boolean } }>;
-  };
-}
+export type SitemapServices = CollectionReads<{ as: "system" }>;
 
 /** One resolved sitemap URL. */
 export interface SitemapUrl {

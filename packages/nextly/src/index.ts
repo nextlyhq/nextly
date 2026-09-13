@@ -664,6 +664,11 @@ export type {
   PluginRoutePermissionResolver,
   PluginRoutePermissionScope,
 } from "./plugins/routes/route-permission";
+// The matcher's own grammar, for a plugin that has to judge a path BEFORE a
+// request arrives. Exported rather than left internal because the alternative
+// is every such plugin restating the rule, and a restatement that is stricter
+// than the matcher refuses paths that would have routed.
+export { routePathIsLiteral } from "./plugins/routes/route-pattern";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).

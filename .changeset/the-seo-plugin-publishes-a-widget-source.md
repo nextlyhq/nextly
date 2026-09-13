@@ -1,0 +1,69 @@
+---
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"create-nextly-app": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
+"nextly": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/ui": patch
+---
+
+`@nextlyhq/plugin-seo` now publishes a dashboard data source, `plugin:seo/issues`,
+counting the SEO gaps in the collections it was configured to extend — documents
+missing a meta title, canonical URL, meta description or social image, and
+documents hidden from search engines by `noindex`.
+
+It is the first plugin to use `contributes.widgetSources`, and it is built
+entirely from `@nextlyhq/plugin-sdk`: nothing it imports is unavailable to a
+third-party plugin, which is what makes it a reference rather than a
+demonstration.
+
+Every read is scoped to the caller through `callerReadOptions`, so the number
+describes what that reader can see; a collection they cannot read contributes
+zero rather than failing the card. The scan is bounded, and past the bound the
+answer reports a floor rather than a figure that is quietly too small — the
+fields live in a JSON column that a database-side `count` cannot filter on, so
+the rows are read and inspected. It also honours the resolver cancellation
+signal, stopping between pages once the dashboard has given up waiting.
+
+The checks follow the fields a project actually configured: `seoPlugin({ fields })`
+replaces the default group, so a project storing a `focusKeyword` and nothing else
+is not told every document is missing four things it never asked to store.
+
+A card can also ask for one kind of issue by name — `where: { issue: { equals:
+"Missing meta title" } }` — which gives a per-issue number without needing a
+chart. An operator the source cannot honour is refused rather than answered with
+the unfiltered total.
+
+A collection the reader may not see contributes zero; anything else that fails —
+a database outage, a failing hook — reaches the card as an error rather than
+being folded into a count that is quietly too small.
+
+It also draws the card. `@nextlyhq/plugin-seo` contributes an "SEO issues" stats
+widget to the dashboard — one labelled number per issue, so a reader sees that
+eleven pages have no title rather than that the site has twenty-three problems.
+The card is declarative: it names an archetype and a query per cell, the host
+draws it, and none of the plugin's code enters the admin bundle.
+
+Its cells are computed from the same checks the source counts by, so a project
+that replaced the default fields gets numbers only for what it installed, and one
+whose override leaves nothing to check gets no card rather than an empty frame.

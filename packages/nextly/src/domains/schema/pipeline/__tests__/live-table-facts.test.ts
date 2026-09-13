@@ -11,7 +11,7 @@ import {
   readForeignKeyColumns,
   readIndexNames,
   tableHasRows,
-  readColumnsContainingNull,
+  readColumnNullState,
 } from "../live-table-facts";
 
 /** One row of `PRAGMA foreign_key_list("dc_posts")`, verbatim from SQLite 3.51. */
@@ -185,51 +185,209 @@ describe("readForeignKeyColumns", () => {
   );
 });
 
-describe("readColumnsContainingNull", () => {
-  it("probes exactly the columns it was given, and nothing else", () => {
-    // The probe list is the caller's decision; inventing one here would reach
-    // for a column the table may not have.
-    const seen: string[] = [];
+describe("readColumnNullState", () => {
+  /**
+   * A fake that answers the CATALOG query first and then each probe, and
+   * RECORDS which identifier every probe named.
+   *
+   * Recording the identifier is the point. Counting probes cannot tell a run
+   * that asked about the live column from one that asked about a column the
+   * table does not have — both issue one query — so a count alone certifies
+   * the guarantee this suite exists to hold without ever testing it.
+   */
+  const server = (liveColumns: string[], nullColumns: string[] = []) => {
+    const probedFor: string[] = [];
+    let call = 0;
     const execute = vi.fn(async (query: unknown) => {
-      seen.push(JSON.stringify(query));
-      return { rows: [] };
+      call += 1;
+      if (call === 1) {
+        return {
+          rows: liveColumns.map(name => ({
+            table_name: "dc_posts",
+            column_name: name,
+            udt_name: "text",
+          })),
+        };
+      }
+      const text = JSON.stringify(query);
+      const named = liveColumns
+        .concat(nullColumns)
+        .find(name => text.includes(name));
+      probedFor.push(named ?? `<unrecognised: ${text.slice(0, 60)}>`);
+      return {
+        rows:
+          named !== undefined && nullColumns.includes(named)
+            ? [{ one: 1 }]
+            : [],
+      };
     });
-    return readColumnsContainingNull({ execute }, "postgresql", "dc_posts", [
-      "author",
-      "editor",
-    ]).then(found => {
-      expect(execute).toHaveBeenCalledTimes(2);
-      expect(found.size).toBe(0);
-      expect(seen.join(" ")).toContain("author");
-      expect(seen.join(" ")).toContain("editor");
-    });
-  });
+    return { execute, probedFor };
+  };
 
-  it("reports only the columns that answered with a row", () => {
+  /**
+   * MySQL, in the driver's `[rows, fields]` tuple, answering for a table whose
+   * name the server folded. `lower_case_table_names=1` matches a query for
+   * `Dc_Posts` and reports the row as `dc_posts`.
+   */
+  const foldedMysqlServer = (
+    catalogTable: string,
+    liveColumns: string[],
+    nullColumns: string[] = []
+  ) => {
     let call = 0;
     const execute = vi.fn(async () => {
       call += 1;
-      return { rows: call === 1 ? [{ "?column?": 1 }] : [] };
+      if (call === 1) {
+        return [
+          liveColumns.map(name => ({
+            TABLE_NAME: catalogTable,
+            COLUMN_NAME: name,
+            COLUMN_TYPE: "varchar(255)",
+          })),
+          [],
+        ];
+      }
+      return [nullColumns.length > 0 ? [{ one: 1 }] : [], []];
     });
-    return readColumnsContainingNull({ execute }, "postgresql", "dc_posts", [
-      "author",
-      "editor",
-    ]).then(found => {
-      expect([...found]).toEqual(["author"]);
-    });
+    return { execute };
+  };
+
+  it("finds the table when MySQL reports the name it folded, not the one asked for", async () => {
+    // The lookup key is whatever the catalog returned. An exact match misses the
+    // very table just described, and the miss is silent: it reports no nulls and
+    // nothing absent, which reads exactly like a clean table and withdraws the
+    // refusal. `holdingNull` is the discriminator — an exact-only lookup returns
+    // before any probe is issued, so it comes back empty.
+    const { execute } = foldedMysqlServer("dc_posts", ["author"], ["author"]);
+
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "mysql",
+      "Dc_Posts",
+      ["author"]
+    );
+
+    expect([...holdingNull]).toEqual(["author"]);
+    expect([...absent]).toEqual([]);
   });
 
-  it("asks nothing when there is nothing to ask about", () => {
-    // The control: an empty list is a real answer and must not cost a query.
+  it("still reports a genuinely missing column under a folded table name", async () => {
+    // The other half: resolving the TABLE must not make every column present.
+    const { execute } = foldedMysqlServer("dc_posts", ["author"]);
+
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "mysql",
+      "Dc_Posts",
+      ["headline"]
+    );
+
+    expect([...absent]).toEqual(["headline"]);
+    expect([...holdingNull]).toEqual([]);
+  });
+
+  it("does not fold on PostgreSQL, where the two spellings are two tables", async () => {
+    // The control against over-correcting. Postgres stores exactly what it was
+    // given, so `Dc_Posts` and `dc_posts` are different objects and matching
+    // them would report one table's columns as another's.
+    const execute = vi.fn(async () => ({
+      rows: [
+        { table_name: "dc_posts", column_name: "author", udt_name: "text" },
+      ],
+    }));
+
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "postgresql",
+      "Dc_Posts",
+      ["author"]
+    );
+
+    expect([...holdingNull]).toEqual([]);
+    expect([...absent]).toEqual([]);
+    // One call: the catalog read. No probe was issued against a table that, on
+    // this server, is not the one asked for.
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes each live column it was given, by name", async () => {
+    const { execute, probedFor } = server(["author", "editor"]);
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author", "editor"]
+    );
+    expect(probedFor).toEqual(["author", "editor"]);
+    expect(holdingNull.size).toBe(0);
+    expect(absent.size).toBe(0);
+  });
+
+  it("never probes a column the live table does not have, and names it absent", async () => {
+    // Asserted on the IDENTIFIER, not the count: an implementation that probed
+    // `ghost` once instead of `author` once issues exactly as many queries.
+    const { execute, probedFor } = server(["author"]);
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author", "ghost", "alsoGone"]
+    );
+    expect(probedFor).toEqual(["author"]);
+    expect(holdingNull.size).toBe(0);
+    expect([...absent].sort()).toEqual(["alsoGone", "ghost"]);
+  });
+
+  it("reports only the columns that answered with a row", async () => {
+    const { execute } = server(["author", "editor"], ["author"]);
+    const { holdingNull } = await readColumnNullState(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author", "editor"]
+    );
+    expect([...holdingNull]).toEqual(["author"]);
+  });
+
+  it("separates absent from clean, because they are not the same answer", async () => {
+    // The distinction this return shape exists for. `ghost` has no nulls
+    // BECAUSE it has no rows to hold them yet — its ADD is unapplied — and a
+    // caller told "no nulls" would let a save tighten it.
+    const { execute } = server(["author"]);
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["ghost"]
+    );
+    expect(holdingNull.has("ghost")).toBe(false);
+    expect(absent.has("ghost")).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks nothing at all when there is nothing to ask about", async () => {
     const execute = vi.fn(async () => ({ rows: [] }));
-    return readColumnsContainingNull(
+    const { holdingNull, absent } = await readColumnNullState(
       { execute },
       "postgresql",
       "dc_posts",
       []
-    ).then(found => {
-      expect(execute).not.toHaveBeenCalled();
-      expect(found.size).toBe(0);
-    });
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(holdingNull.size + absent.size).toBe(0);
+  });
+
+  it("reports neither when the table itself is absent", async () => {
+    // No table is not the same as a table missing a column: the create
+    // artefact builds it, and this diff has nothing to refuse.
+    const execute = vi.fn(async () => ({ rows: [] }));
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      ["author"]
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(holdingNull.size + absent.size).toBe(0);
   });
 });

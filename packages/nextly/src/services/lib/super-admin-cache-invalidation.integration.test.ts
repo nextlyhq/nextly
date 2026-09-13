@@ -344,6 +344,28 @@ describe("an API key's grants are retired when the roles behind them change", ()
     ).toEqual(["read-notes"]);
   });
 
+  it("loses it inside a batch, which announces nothing until it exits", async () => {
+    // A batch defers the shared announcement on purpose, and the local
+    // retirement empties the maps this module owns. A key's copied grants are
+    // neither: they live in another module, so no list of maps to clear was
+    // ever going to reach them, and a key went on holding revoked grants for
+    // the batch's whole length — which for a seeder is not bounded by anything
+    // this module controls.
+    //
+    // What reaches them is the predicate all three tiers already ask. A batch
+    // holds a retirement open, and nothing is current while one is running.
+    await seedDeputy();
+    expect(await grants()).toContain(ONLY_IN_THE_CATALOGUE);
+    await revokeInheritance();
+
+    const insideBatch = await inPermissionSweep(async () => {
+      await invalidateAllPermissionCaches();
+      return grants();
+    });
+
+    expect(insideBatch).not.toContain(ONLY_IN_THE_CATALOGUE);
+  });
+
   it("loses it when a PERMISSION row changes, which names neither", async () => {
     // A permission belongs to no user and no role, so neither hint above can
     // express it, and `PermissionService`'s own update and delete called

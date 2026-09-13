@@ -9,6 +9,8 @@ import type { PluginRoute, PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import { mcpPlugin } from "../../plugin";
+import { whileServing } from "../caller";
+import { buildServer } from "../endpoint";
 
 const require = createRequire(import.meta.url);
 const manifest = require("../../../package.json") as { version: string };
@@ -39,8 +41,14 @@ function routeFor(method: string, options?: Parameters<typeof mcpPlugin>[0]) {
   return route;
 }
 
-/** The route handler takes a context it does not read at this stage. */
-const NO_CONTEXT = {} as PluginRouteContext;
+/**
+ * A stand-in caller, which is all these cases need.
+ *
+ * The handler carries the context into the protocol layer rather than reading
+ * it, so what matters here is that one is PRESENT. What a real one holds is
+ * exercised by the integration suite, against a context core actually built.
+ */
+const SOME_CALLER = {} as PluginRouteContext;
 
 function initializeBody(): string {
   return JSON.stringify({
@@ -84,7 +92,7 @@ describe("the endpoint refuses a request addressed somewhere else", () => {
     // with itself. The name it arrived under is the part that does not agree.
     const response = await routeFor("POST").handler(
       initialize({ host: "evil.example.com" }),
-      NO_CONTEXT
+      SOME_CALLER
     );
 
     expect(response.status).toBe(403);
@@ -100,7 +108,7 @@ describe("the endpoint refuses a request addressed somewhere else", () => {
         host: "cms.example.com",
         origin: "https://evil.example.com",
       }),
-      NO_CONTEXT
+      SOME_CALLER
     );
 
     expect(response.status).toBe(403);
@@ -113,7 +121,7 @@ describe("the endpoint refuses a request addressed somewhere else", () => {
     // would admit exactly the context that cannot be identified.
     const response = await routeFor("POST").handler(
       initialize({ host: "cms.example.com", origin: "null" }),
-      NO_CONTEXT
+      SOME_CALLER
     );
 
     expect(response.status).toBe(403);
@@ -125,7 +133,44 @@ describe("the endpoint refuses a request addressed somewhere else", () => {
     // mis-parsed allowlist produces.
     const response = await routeFor("POST").handler(
       initialize({ host: "cms.example.com" }),
-      NO_CONTEXT
+      SOME_CALLER
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("serves a browser on the site the operator published", async () => {
+    // The case every refusal above needs beside it. Without it, "refuses the
+    // wrong Origin" is equally satisfied by refusing EVERY Origin — which is
+    // what an allowlist in the wrong shape produces, and which would lock out
+    // every browser client on the configured site while looking like a working
+    // guard. The refusals here all send no Origin or a foreign one, so none of
+    // them can tell the two apart.
+    const response = await routeFor("POST").handler(
+      initialize({
+        host: "cms.example.com",
+        origin: "https://cms.example.com",
+      }),
+      SOME_CALLER
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("serves one when the operator configured a full origin, not a hostname", async () => {
+    // The check compares HOSTNAMES and is port-agnostic, so an allowlist entry
+    // carrying a scheme matches nothing. An operator pastes what is in their
+    // address bar, so the entry is reduced to its hostname before it gets
+    // there; handing the full origin straight through is what would refuse the
+    // configured site.
+    const response = await routeFor("POST", {
+      allowedHosts: ["https://cms.example.com"],
+    }).handler(
+      initialize({
+        host: "cms.example.com",
+        origin: "https://cms.example.com",
+      }),
+      SOME_CALLER
     );
 
     expect(response.status).toBe(200);
@@ -136,7 +181,7 @@ describe("the endpoint refuses a request addressed somewhere else", () => {
     // would be a guard that refuses every genuine caller and no attacker.
     const response = await routeFor("POST").handler(
       initialize({ host: "cms.example.com" }),
-      NO_CONTEXT
+      SOME_CALLER
     );
 
     expect(response.status).toBe(200);
@@ -166,7 +211,7 @@ describe("the endpoint speaks the protocol", () => {
   it("answers initialize as this install", async () => {
     const response = await routeFor("POST").handler(
       initialize({ host: "cms.example.com" }),
-      NO_CONTEXT
+      SOME_CALLER
     );
 
     const text = await response.text();
@@ -182,7 +227,7 @@ describe("the endpoint speaks the protocol", () => {
     // nothing should be told exactly that.
     const response = await routeFor("POST").handler(
       initialize({ host: "cms.example.com" }),
-      NO_CONTEXT
+      SOME_CALLER
     );
 
     expect(await response.text()).toContain('"capabilities":{}');
@@ -195,7 +240,7 @@ describe("the endpoint speaks the protocol", () => {
     for (const method of ["GET", "DELETE"]) {
       const response = await routeFor(method).handler(
         new Request(ENDPOINT, { method, headers: { host: "cms.example.com" } }),
-        NO_CONTEXT
+        SOME_CALLER
       );
 
       expect(response.status, method).toBe(405);
@@ -210,7 +255,7 @@ describe("the endpoint speaks the protocol", () => {
         method: "GET",
         headers: { host: "evil.example.com" },
       }),
-      NO_CONTEXT
+      SOME_CALLER
     );
 
     expect(response.status).toBe(403);
@@ -221,7 +266,7 @@ describe("the endpoint speaks the protocol", () => {
     // so an untouched body is proof it never saw this one — where a status code
     // is equally produced by a guard consulted afterwards and preferred.
     const refused = initialize({ host: "evil.example.com" });
-    await routeFor("POST").handler(refused, NO_CONTEXT);
+    await routeFor("POST").handler(refused, SOME_CALLER);
 
     expect(refused.bodyUsed).toBe(false);
 
@@ -229,7 +274,7 @@ describe("the endpoint speaks the protocol", () => {
     // protocol that reads nothing at all, and the assertion above would hold
     // against a handler wired to nothing.
     const served = initialize({ host: "cms.example.com" });
-    await routeFor("POST").handler(served, NO_CONTEXT);
+    await routeFor("POST").handler(served, SOME_CALLER);
 
     expect(served.bodyUsed).toBe(true);
   });
@@ -253,11 +298,65 @@ describe("what the plugin contributes, and when", () => {
     expect(endpointRoutes().every(r => r.public === undefined)).toBe(true);
   });
 
+  it("refuses a path that cannot address one endpoint", () => {
+    // Caught where it is written, rather than as a 404 an operator has to
+    // explain. Each of these produces a route that either never matches or
+    // matches more than the one address this endpoint has.
+    for (const bad of ["mcp", "/mcp/", "/agents/:id", "/"]) {
+      expect(() => mcpPlugin({ enabled: true, path: bad }), bad).toThrow();
+    }
+  });
+
+  it("accepts the shapes that DO address one endpoint", () => {
+    // The control. Refusing everything satisfies the case above perfectly, and
+    // would make the option unusable while looking like validation.
+    for (const good of ["/mcp", "/agents/mcp", "/a/b/c"]) {
+      expect(
+        () => mcpPlugin({ enabled: true, path: good }),
+        good
+      ).not.toThrow();
+    }
+  });
+
+  it("says which option is wrong and what it received", () => {
+    // A refusal an operator cannot act on is a 404 with extra steps.
+    expect(() => mcpPlugin({ enabled: true, path: "mcp" })).toThrow(/path/);
+    expect(() => mcpPlugin({ enabled: true, path: "mcp" })).toThrow(/"mcp"/);
+  });
+
   it("answers where an operator asks it to", () => {
     expect(endpointRoutes({ path: "/agents/mcp" }).map(r => r.path)).toEqual([
       "/agents/mcp",
       "/agents/mcp",
       "/agents/mcp",
     ]);
+  });
+});
+
+describe("a protocol server is only ever built for a caller", () => {
+  const OPTIONS = {
+    allowedHosts: ["cms.example.com"],
+    path: "/mcp",
+    version: "0.0.0-test",
+  };
+
+  it("refuses to build one when no caller is in scope", () => {
+    // The fail-closed direction, asserted where it can actually be reached.
+    // Serving a request always opens the window, so this branch is unreachable
+    // through the endpoint today and a guard nobody has watched refuse is a
+    // guard nobody has seen work. The first tool to read the caller inherits
+    // this rather than establishing it.
+    expect(() => buildServer(OPTIONS)).toThrow(/no caller is in scope/);
+  });
+
+  it("builds one inside a request, so the refusal is not blanket", async () => {
+    // The discriminating control. Without it, "refuses outside a request" is
+    // equally satisfied by a factory that refuses always, which would take the
+    // endpoint down entirely while this file stayed green.
+    const built = await whileServing(SOME_CALLER, async () =>
+      buildServer(OPTIONS)
+    );
+
+    expect(built).toBeInstanceOf(McpServer);
   });
 });

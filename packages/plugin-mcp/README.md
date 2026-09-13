@@ -62,6 +62,11 @@ curl https://cms.example.com/admin/api/mcp \
 A key is judged on the grants stamped on the key itself, not on what the person
 who minted it can reach, so an agent is bounded by the key you give it.
 
+Authentication runs before the address check below, so a request with no
+credential is answered `401` whatever address it used. That is a refusal either
+way, and it is the reason a client that is simply missing its key sees `401`
+rather than a protocol error.
+
 ## Which hostnames it answers on
 
 A request addressed to a name you have not published is refused with `403`. That

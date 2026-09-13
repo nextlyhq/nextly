@@ -635,7 +635,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         "dc_posts",
         [optional],
         [required],
-        options as never
+        options
       );
 
     it("refuses before a single statement is written", () => {
@@ -681,7 +681,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           "dc_posts",
           [required],
           [{ ...required, index: true } as FieldDefinition],
-          { columnsContainingNull: new Set(["author"]) } as never
+          { columnsContainingNull: new Set(["author"]) }
         )
       ).not.toThrow();
     });
@@ -822,3 +822,196 @@ describe("relaxing a column for SET NULL keeps what the column carries", () => {
     expect(sql).toContain("MODIFY COLUMN `author` varchar(36) NULL;");
   });
 });
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "renaming a field and making it required, over rows that left it empty, on %s",
+  dialect => {
+    // `onDelete` declared on both sides so the resolved action does not move
+    // with requiredness — otherwise SQLite refuses for its own reason and the
+    // refusal under test cannot be told apart from that one.
+    const before = manyToOne({ onDelete: "cascade" });
+    const afterRenamed = {
+      ...manyToOne({ onDelete: "cascade" }),
+      name: "writer",
+      required: true,
+    } as FieldDefinition;
+
+    it("refuses, keyed on the column the live table still has", () => {
+      // The nulls were counted BEFORE this save, so they are recorded under
+      // `author`. Looking the old definition up by the new name finds nothing,
+      // reads the transition as a newly added field, and skips the refusal —
+      // and the rename-aware column pass then emits the tightening anyway,
+      // which fails at the server after earlier chunks have committed.
+      try {
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [before],
+          [afterRenamed],
+          { columnsContainingNull: new Set(["author"]) }
+        );
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain("REQUIRED_COLUMN_HAS_NULLS");
+      }
+    });
+
+    it("does not refuse on the name the column is about to take", () => {
+      // The control for the key: `writer` is what the column becomes, and no
+      // row can be holding a null under a column that does not exist yet.
+      // Keying on it would refuse a save that is perfectly fine.
+      expect(() =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [before],
+          [afterRenamed],
+          { columnsContainingNull: new Set(["writer"]) }
+        )
+      ).not.toThrow();
+    });
+
+    it("still allows the rename when nothing is empty", () => {
+      expect(() =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [before],
+          [afterRenamed],
+          { columnsContainingNull: new Set<string>() }
+        )
+      ).not.toThrow();
+    });
+  }
+);
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "making a field required in the same deployment that adds it, on %s",
+  dialect => {
+    const optional = manyToOne({ onDelete: "cascade" });
+    const required = {
+      ...manyToOne({ onDelete: "cascade" }),
+      required: true,
+    } as FieldDefinition;
+    const alter = (options: Record<string, unknown>) =>
+      service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [optional],
+        [required],
+        options
+      );
+
+    it("refuses when the column is not applied yet and the table has entries", () => {
+      // The third state. The column is absent because its ADD is queued, so it
+      // holds no nulls TODAY — and reading that as "clean" lets the save
+      // tighten it. On deployment the first migration creates it holding NULL
+      // in every existing row and the second fails on NOT NULL, after MySQL has
+      // auto-committed the first.
+      try {
+        alter({
+          columnsContainingNull: new Set<string>(),
+          columnsAbsentFromTable: new Set(["author"]),
+          tableHasRows: true,
+        });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
+    });
+
+    it("refuses even when the CURRENT definition carries a default", () => {
+      // The definition cannot answer this. `default` is the registry's state
+      // now, not what the queued ADD wrote: a field added with no default and
+      // given one by a later save carries it here while the queued
+      // `ADD COLUMN` has none, because a default-only edit emits no DDL at all
+      // (isFieldModified does not compare defaults — measured).
+      //
+      // So this refuses either way. Some of those refusals reject a save that
+      // would have worked; a precondition that misses instead PERMITS a
+      // migration that fails halfway with MySQL DDL already committed, and the
+      // remedy the message gives — deploy the adding change first — works for
+      // both histories.
+      const withDefault = {
+        name: "headline",
+        type: "text",
+        default: "untitled",
+      } as unknown as FieldDefinition;
+      try {
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [withDefault],
+          [{ ...withDefault, required: true } as FieldDefinition],
+          {
+            columnsContainingNull: new Set<string>(),
+            columnsAbsentFromTable: new Set(["headline"]),
+            tableHasRows: true,
+          }
+        );
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
+    });
+
+    it("still refuses when the queued ADD has no default to give", () => {
+      const noDefault = {
+        name: "headline",
+        type: "text",
+      } as unknown as FieldDefinition;
+      try {
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [noDefault],
+          [{ ...noDefault, required: true } as FieldDefinition],
+          {
+            columnsContainingNull: new Set<string>(),
+            columnsAbsentFromTable: new Set(["headline"]),
+            tableHasRows: true,
+          }
+        );
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
+    });
+
+    it("allows it when the table has no entries to be left empty", () => {
+      // The control that keeps the refusal narrow: over an empty table the
+      // column is created and tightened with nothing to violate, which is the
+      // ordinary case of adding a required field to a new collection.
+      expect(() =>
+        alter({
+          columnsContainingNull: new Set<string>(),
+          columnsAbsentFromTable: new Set(["author"]),
+          tableHasRows: false,
+        })
+      ).not.toThrow();
+    });
+
+    it("names the cause, because the two remedies differ", () => {
+      // Holding nulls is fixed by filling them in; not-yet-applied is fixed by
+      // deploying one migration before the other. One code for both would send
+      // the reader to the wrong fix half the time.
+      try {
+        alter({
+          columnsContainingNull: new Set(["author"]),
+          columnsAbsentFromTable: new Set<string>(),
+          tableHasRows: true,
+        });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(JSON.stringify(error)).toContain("REQUIRED_COLUMN_HAS_NULLS");
+        expect(JSON.stringify(error)).not.toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
+    });
+  }
+);

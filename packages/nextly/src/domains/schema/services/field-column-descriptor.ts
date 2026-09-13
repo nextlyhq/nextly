@@ -112,27 +112,29 @@ export type ColumnKind =
   | "skip"; // the field keeps its values in another table — no column emitted
 
 /**
- * The columns of this table that a row could currently have left empty.
+ * The columns a row of this table could plausibly have left empty.
  *
- * Two exclusions, and each was a defect without it. A field the definitions
- * call REQUIRED sits behind a `NOT NULL` column and cannot hold a null, so
- * asking costs a query and returns nothing. And a field whose column lives in
- * a localized collection's COMPANION table is not on this table at all —
- * probing for it asks the main table for a column it does not have, and the
- * error takes the whole save down before any migration is generated.
+ * A NARROWING, not a guarantee, and the distinction is the point. It removes
+ * what cannot be worth asking about — a field the definitions call required
+ * sits behind a `NOT NULL` column, and a field that occupies no column of its
+ * own has nothing to ask — so the caller issues fewer probes. It does NOT
+ * promise that the columns it names exist: whether a column is on the table is
+ * a fact about the table, and `readColumnNullState` reads it from the
+ * catalog before probing anything.
  *
- * Answered here because this module owns which physical column a field
- * occupies; a caller recomputing it is the second implementation that drifts.
+ * That split is deliberate. Predicting existence from field definitions was
+ * wrong twice — a localized collection keeps translatable columns in a
+ * companion, and a deployment holding an unapplied migration has a field whose
+ * column is not there yet — and each fix only added the reason someone had
+ * just met. The list of reasons is open; the catalog is not.
  */
 export function columnsThatMayHoldNull(
-  fields: readonly { name: string; required?: boolean; type?: string }[],
-  companionOwned: ReadonlySet<string> = new Set()
+  fields: readonly { name: string; required?: boolean; type?: string }[]
 ): string[] {
   return fields
     .filter(
       field =>
         field.required !== true &&
-        !companionOwned.has(field.name) &&
         fieldProducesColumn(field as Parameters<typeof fieldProducesColumn>[0])
     )
     .map(field => toSnakeCase(field.name));
