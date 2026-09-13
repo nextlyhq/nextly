@@ -17,7 +17,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionAccessControl } from "@nextly/domains/auth/services/access-control-types";
 
-import type { GrantedPermission } from "../authenticated-scope";
+import {
+  apiKeyScope,
+  callerMayPerform,
+  type GrantedPermission,
+} from "../authenticated-scope";
 
 const state = vi.hoisted(() => ({
   rules: new Map<string, CollectionAccessControl>(),
@@ -164,38 +168,55 @@ describe("requirePermission and a scoped API key's entity access rule", () => {
     ).toBe(403);
   });
 
-  it("answers exactly as the collection gate does, for every rule state", async () => {
+  it("answers exactly as the service gates do, for every rule state", async () => {
     // The property this file exists for: one question, one answer, whichever
-    // of the two gates a route happens to use.
+    // door asks it. `callerMayPerform` is the decision the service gates use
+    // for a scoped key, so both route gates must agree with it as well as
+    // with each other.
+    //
+    // The last state returns a truthy value that is not `true`. A rule is typed
+    // to return a boolean, but a JavaScript rule can return anything, and the
+    // service decision admits only `true` — so a route gate that admitted any
+    // truthy value would answer this row differently.
+    const truthyNotTrue = (() =>
+      "yes") as unknown as CollectionAccessControl["read"];
     const ruleStates: Array<CollectionAccessControl | undefined> = [
       undefined,
       { read: true },
       { read: false },
       { read: () => true },
       { read: () => false },
+      { read: truthyNotTrue },
     ];
     holdGrant("read", "forms");
+    const scope = apiKeyScope(state.grants);
     const seen = new Set<number>();
 
     for (const rule of ruleStates) {
       state.rules.clear();
       if (rule) state.rules.set("forms", rule);
 
+      const viaService = (await callerMayPerform(scope, "read", "forms", {
+        id: "owner-1",
+      }))
+        ? 200
+        : 403;
       const viaPermission = statusOf(
         await requirePermission(keyRequest(), "read", "forms")
       );
       const viaCollection = statusOf(
         await requireCollectionAccess(keyRequest(), "read", "forms")
       );
-      seen.add(viaCollection);
-      expect({ rule, status: viaPermission }).toEqual({
+      seen.add(viaService);
+      expect({
         rule,
-        status: viaCollection,
-      });
+        permission: viaPermission,
+        collection: viaCollection,
+      }).toEqual({ rule, permission: viaService, collection: viaService });
     }
 
-    // Agreement only means something if the states told the gates apart. Two
-    // gates failing the same way for an unrelated reason agree on every row.
+    // Agreement only means something if the states told the gates apart. Gates
+    // failing the same way for an unrelated reason agree on every row.
     expect([...seen].sort()).toEqual([200, 403]);
   });
 });
