@@ -119,7 +119,7 @@ export type ColumnKind =
  * sits behind a `NOT NULL` column, and a field that occupies no column of its
  * own has nothing to ask — so the caller issues fewer probes. It does NOT
  * promise that the columns it names exist: whether a column is on the table is
- * a fact about the table, and `readColumnsContainingNull` reads it from the
+ * a fact about the table, and `readColumnNullState` reads it from the
  * catalog before probing anything.
  *
  * That split is deliberate. Predicting existence from field definitions was

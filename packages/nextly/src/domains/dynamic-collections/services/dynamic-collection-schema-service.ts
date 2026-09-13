@@ -1036,7 +1036,7 @@ ${allColumnDefs.join(",\n")}
       foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
       /**
        * The columns that currently hold at least one NULL, read from the live table by
-       * `readColumnsContainingNull`.
+       * `readColumnNullState`.
        *
        * Consulted before a column is made NOT NULL. Whether a column can take that is a fact
        * about the ROWS, which no field definition records: the save says "required" and the data
@@ -1051,8 +1051,10 @@ ${allColumnDefs.join(",\n")}
        * Its own answer rather than a clean one. Such a column holds no nulls today because its
        * `ADD` has not been applied; applying it over a table that already has rows creates it
        * holding NULL in every one of them, so a tightening in the same deployment fails. Consulted
-       * with `tableHasRows`, and only where the queued `ADD` carries no default to backfill with.
-       * Undefined means the caller did not look.
+       * with `tableHasRows`, and refused whatever the definition says about a default: `default`
+       * is the CURRENT registry state, not what the queued `ADD` wrote, so it cannot prove the
+       * rows get backfilled. The precondition fails closed on that. Undefined means the caller did
+       * not look.
        */
       columnsAbsentFromTable?: ReadonlySet<string>;
       /**

@@ -262,7 +262,7 @@ export class DynamicCollectionService extends BaseService {
     }
 
     const db = this.adapter.getDrizzle();
-    // A deliberate over-estimate: `readColumnsContainingNull` narrows this to
+    // A deliberate over-estimate: `readColumnNullState` narrows this to
     // the columns the table ACTUALLY has, from the catalog, before it probes
     // anything — so this only has to drop the ones that could not hold a null
     // anyway. Which of them a save then TIGHTENS is the generator's question;

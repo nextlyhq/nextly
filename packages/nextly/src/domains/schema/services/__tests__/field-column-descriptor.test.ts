@@ -501,13 +501,12 @@ describe("columnsThatMayHoldNull", () => {
   });
 
   it("does not claim the columns it names exist", () => {
-    // This is a narrowing, not a guarantee. A localized collection keeps its
+    // A narrowing, not a guarantee. A localized collection keeps its
     // translatable columns in a companion and an unapplied migration leaves a
     // field with no column yet, so a name here can still be absent from the
-    // table — which is why `readColumnsContainingNull` reads the catalog
-    // before probing. That guarantee is tested there, under "never probes a
-    // column the live table does not have"; predicting it from definitions was
-    // wrong twice and is deliberately not attempted here.
+    // table. Whether it exists is read from the catalog by
+    // `readColumnNullState`, not predicted from definitions — which was wrong
+    // twice before it moved.
     expect(columnsThatMayHoldNull([plain("body")])).toEqual(["body"]);
   });
 
