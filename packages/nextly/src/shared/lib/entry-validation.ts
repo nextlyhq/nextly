@@ -119,7 +119,16 @@ function numberRule(field: ValidatableField, key: string): number | undefined {
   return typeof v === "number" ? v : undefined;
 }
 
-function isRequired(field: ValidatableField): boolean {
+/**
+ * Whether a field declares itself required, in either spelling.
+ *
+ * Exported because anything deciding whether a value is missing has to agree
+ * with the validator that will reject it. `required: true` on the field and
+ * `validation: { required: true }` beside its other rules are both supported,
+ * and a caller testing only the first calls a field optional that the next
+ * write refuses.
+ */
+export function isRequired(field: ValidatableField): boolean {
   return Boolean(field.required) || Boolean(rule(field, "required"));
 }
 

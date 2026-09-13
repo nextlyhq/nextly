@@ -189,7 +189,7 @@ function fillGroup(
   /** The parent's view; a child reads the view's matching container. */
   view?: Record<string, unknown>
 ): void {
-  const childView = isPlainObject(view?.[name]) ? view[name] : undefined;
+  const childView = viewOf(view, view?.[name]);
   const existing = Object.prototype.hasOwnProperty.call(data, name)
     ? data[name]
     : undefined;
@@ -236,17 +236,37 @@ function fillRepeaterRows(
   const rows = value.map((row, index) => {
     if (!isPlainObject(row)) return row;
     const filled = { ...row };
-    const rowView = viewRows?.[index];
     applyFieldDefaults(
       filled,
       fields,
       functions,
-      isPlainObject(rowView) ? rowView : undefined
+      viewOf(view, viewRows?.[index])
     );
     changed = true;
     return filled;
   });
   if (changed) data[name] = rows;
+}
+
+/**
+ * A container's counterpart in the view, which has to stay a view.
+ *
+ * An EMPTY record, not `undefined`, when the view holds no such container.
+ * Undefined is how this module says "no view was given", and the recursion
+ * answering that way reads the caller's own container instead: a nested
+ * function default then sees the denied sibling the view exists to hide, and
+ * carries it into a child the caller may write. The rules remove a whole
+ * container when they deny it, which is the only way one goes missing from a
+ * view, so empty is the accurate answer rather than a fallback.
+ */
+function viewOf(
+  view: Record<string, unknown> | undefined,
+  container: unknown
+): Record<string, unknown> | undefined {
+  if (!view) return undefined;
+  // A fresh object per call. A shared one would be written into by the
+  // caller-side synchronisation a level down.
+  return isPlainObject(container) ? container : {};
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

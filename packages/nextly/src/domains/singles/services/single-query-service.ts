@@ -68,6 +68,7 @@ import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
   isEmptyRequiredValue,
+  isRequired,
   type ValidatableField,
 } from "../../../shared/lib/entry-validation";
 import {
@@ -450,10 +451,12 @@ function missesARequiredChild(
       continue;
     }
     const value = filled[child.name];
-    // The same question the write validator will ask of this document later.
-    // A nullish check calls a whitespace string or an empty array present, so
-    // the group would be stored and the next write would reject it.
-    if (child.required && isEmptyRequiredValue(value)) return true;
+    // Both halves of the question the write validator will ask of this
+    // document later, taken from the validator itself. Reading `required` off
+    // the field misses the `validation: { required: true }` spelling, and a
+    // nullish value check calls a whitespace string or an empty array present:
+    // either way the group is stored and the next write rejects it.
+    if (isRequired(child) && isEmptyRequiredValue(value)) return true;
     if (value !== undefined && missesARequiredChild(child.fields, value)) {
       return true;
     }

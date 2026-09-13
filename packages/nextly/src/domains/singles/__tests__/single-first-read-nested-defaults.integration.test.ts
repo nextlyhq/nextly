@@ -197,6 +197,36 @@ describe("a Single's first read fills nested defaults (integration)", () => {
     expect(doc?.contact ?? null).toBeNull();
   });
 
+  it("reads requiredness in the spelling the write validator reads", async () => {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "nested_rule",
+          fields: [
+            group({
+              name: "contact",
+              fields: [
+                text({ name: "label", defaultValue: "Support" }),
+                // The other supported spelling. `validateEntryData` reads
+                // `required` off the field OR out of `validation`, so a check
+                // here that reads only the field calls this child optional and
+                // stores a group the next write rejects.
+                text({ name: "email", validation: { required: true } }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const doc = (await current.nextly.findSingle({
+      slug: "nested_rule",
+      overrideAccess: true,
+    })) as { contact?: unknown } | null;
+
+    expect(doc?.contact ?? null).toBeNull();
+  });
+
   it("still fills a group whose required children are all satisfied", async () => {
     current = await createTestNextly({
       singles: [

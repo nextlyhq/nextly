@@ -14,7 +14,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../config";
+import { defineCollection, repeater, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
 
@@ -130,6 +130,56 @@ describe("a function default cannot read a field the caller may not write", () =
     // the other way round, the document would describe a `secret` it does not
     // hold, and the rule guarding it would be defeated one column across.
     expect(row.copy).toBe("saw:undefined");
+  });
+
+  it("keeps the view redacted inside a container the rules removed", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "rowed",
+          fields: [
+            text({ name: "title" }),
+            // Flips the repeater's rule, but only once defaults have run, so
+            // the pass before them removes the whole repeater from the view.
+            text({ name: "kind", defaultValue: "public" }),
+            repeater({
+              name: "items",
+              access: {
+                create: ({ data }) =>
+                  (data as { kind?: string } | undefined)?.kind === "public",
+              },
+              fields: [
+                text({ name: "secret", access: { create: () => false } }),
+                text({
+                  name: "echo",
+                  defaultValue: d => `saw:${String(d.secret)}`,
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler = current.getService<"collectionsHandler">(
+      "collectionsHandler"
+    ) as unknown as CollectionsHandler;
+
+    const created = await handler.createEntry(
+      { collectionName: "rowed", routeAuthorized: true, user: CALLER },
+      { title: "t", items: [{ secret: "forbidden-value" }] }
+    );
+
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const rows = (created.data as { items?: Array<Record<string, unknown>> })
+      .items;
+    expect(rows).toHaveLength(1);
+    // The repeater itself is allowed, because `kind` defaulted to `public`.
+    // Its denied child is stripped, and the row's own default did not read it:
+    // with the repeater missing from the view there is no row view to read,
+    // and falling back to the caller's raw row would hand the default exactly
+    // the value the view exists to hide.
+    expect(rows?.[0].secret ?? null).toBeNull();
+    expect(rows?.[0].echo).toBe("saw:undefined");
   });
 
   it("keeps a value whose permission a DEFAULT establishes", async () => {
