@@ -189,6 +189,31 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
  * conditional card became permanent here — offered forever, which is the
  * behaviour the lifecycle exists to remove.
  */
+/**
+ * The contribution's lifecycle pair, where the registration states none.
+ *
+ * As a PAIR and only as a pair, for the reason given above: `visibleWhen`
+ * means nothing without `lifecycle: "conditional"`, so taking one half from
+ * each channel could describe a card neither of them declared.
+ *
+ * Its own function because the merge is a list of fields, and the two nested
+ * branches this takes were what pushed that list past what a reader can hold.
+ */
+function lifecycleFallback(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): Pick<CanonicalWidget, "lifecycle" | "visibleWhen"> {
+  if (registration.lifecycle !== undefined) return {};
+  return {
+    ...(contribution.lifecycle === undefined
+      ? {}
+      : { lifecycle: contribution.lifecycle }),
+    ...(contribution.visibleWhen === undefined
+      ? {}
+      : { visibleWhen: contribution.visibleWhen }),
+  };
+}
+
 function mergeCanonical(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
@@ -196,24 +221,21 @@ function mergeCanonical(
   const defaultOrder = registration.defaultOrder ?? contribution.defaultOrder;
   const defaultHeight =
     registration.defaultHeight ?? contribution.defaultHeight;
-  const contributedLifecycle =
-    registration.lifecycle === undefined
-      ? {
-          ...(contribution.lifecycle === undefined
-            ? {}
-            : { lifecycle: contribution.lifecycle }),
-          ...(contribution.visibleWhen === undefined
-            ? {}
-            : { visibleWhen: contribution.visibleWhen }),
-        }
-      : {};
+  // 🔴 The same fallback the admin's `mergeCollision` applies. Left out, a
+  // contributed `dismissible` colliding with a registration that states
+  // nothing is dropped HERE and kept THERE -- the browser draws a card its
+  // reader can send away while the server's canonical copy of the same
+  // declaration says nothing about it, which is exactly the two-implementations
+  // divergence this function exists to prevent.
+  const dismissible = registration.dismissible ?? contribution.dismissible;
   return {
     // The registration wholesale first: id, `requiredPermission` and
     // `defaultSize` are its to state, including by stating nothing.
     ...registration,
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
-    ...contributedLifecycle,
+    ...(dismissible === undefined ? {} : { dismissible }),
+    ...lifecycleFallback(contribution, registration),
     // Both copies' action gates, because both copies ship: the payload carries
     // each channel's declaration and withholds the actions in each, so every
     // gate either names has to be resolved.

@@ -14,7 +14,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { AdminBranding } from "@admin/types/branding";
-import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
+import type {
+  DashboardLayoutResponse,
+  WidgetPlacement,
+} from "@admin/types/dashboard/widgets";
 
 import { WidgetGrid } from "../../WidgetGrid";
 
@@ -135,7 +138,27 @@ beforeEach(() => {
   mockBranding = branding();
   layoutResponse = layout();
   api.get.mockImplementation(() => Promise.resolve(layoutResponse));
-  api.put.mockResolvedValue({ message: "ok", item: {} });
+  /*
+   * 🔴 The stand-in APPLIES the write, so the next read answers with it.
+   *
+   * A `put` that merely resolves leaves every later GET returning the original
+   * arrangement, so a card is never actually removed and any assertion about a
+   * dismissal having taken effect passes over a dashboard that did not change.
+   * Announcement and focus were asserted against exactly that: both fired on
+   * the write alone, and the card the reader was told had gone was still on
+   * screen.
+   */
+  api.put.mockImplementation((_path: string, body: unknown) => {
+    const sent = body as { placements: WidgetPlacement[]; columnCount: number };
+    layoutResponse = {
+      ...(layoutResponse as DashboardLayoutResponse),
+      placements: sent.placements,
+      columnCount: sent.columnCount,
+      version: (layoutResponse?.version ?? 0) + 1,
+      source: "own",
+    };
+    return Promise.resolve({ message: "ok", item: {} });
+  });
 });
 
 describe("the control a card carries itself", () => {
@@ -275,6 +298,10 @@ describe("what a dismiss writes", () => {
       // when a row states none -- so a write that reached for the default
       // would narrow or widen the reader's dashboard as a side effect.
       columnCount: 2,
+      // 🔴 NOT an arrangement. Sending a card away is not taking charge of the
+      // dashboard, and a write that claimed to be one would stop every widget
+      // declared afterwards from reaching this reader.
+      arranged: false,
     });
   });
 
@@ -301,6 +328,22 @@ describe("what a dismiss writes", () => {
     ]);
   });
 
+  it("says the editor's save IS an arrangement", async () => {
+    // The other half of the statement above, and the one that keeps a dismissed
+    // row safe to follow the defaults: the editor is the only route that can
+    // REMOVE a card, so every write that can drop one must say it arranges.
+    // Without this, a save that stopped stating it would pass the case above.
+    renderGrid();
+    const user = await beginEditing();
+    await user.click(screen.getAllByTestId("widget-toggle-hidden")[0]);
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect((api.put.mock.calls[0][1] as { arranged?: unknown }).arranged).toBe(
+      true
+    );
+  });
+
   it("joins the draft instead of committing, while the reader is editing", async () => {
     renderGrid();
     await screen.findByTestId("widget-dismiss");
@@ -316,16 +359,40 @@ describe("what a dismiss writes", () => {
 });
 
 describe("what a reader is told", () => {
-  it("announces a dismiss once the write has landed", async () => {
+  it("announces a dismiss once the card has actually gone", async () => {
     const user = userEvent.setup();
     renderGrid();
     await user.click(await screen.findByTestId("widget-dismiss"));
 
+    // 🔴 The CARD first. A write the server accepted is not the same as an
+    // arrangement the reader is looking at -- the re-read that fills the cache
+    // can fail on its own, and `invalidateQueries` swallows that -- so
+    // asserting the sentence alone passes while the card sits there.
     await waitFor(() =>
-      expect(screen.getByTestId("widget-grid-live")).toHaveTextContent(
-        "Set up your project hidden. Edit the dashboard to bring it back."
+      expect(screen.queryByTestId("widget-cell-core/onboarding")).toBeNull()
+    );
+    expect(screen.getByTestId("widget-grid-live")).toHaveTextContent(
+      "Set up your project hidden. Edit the dashboard to bring it back."
+    );
+  });
+
+  it("says nothing when the write landed but the re-read did not", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await screen.findByTestId("dashboard-edit-begin");
+    // The PUT is accepted and every later GET fails, which is the shape that
+    // leaves a dismissed card on screen: the cache keeps the answer it has, so
+    // the reader is looking at the card they just sent away.
+    api.put.mockResolvedValue({ message: "ok", item: {} });
+    api.get.mockRejectedValue(new Error("layout unavailable"));
+    await user.click(screen.getByTestId("widget-dismiss"));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Set up your project was updated, but the dashboard could not be refreshed. Reload the page to see it."
       )
     );
+    expect(screen.getByTestId("widget-grid-live")).toHaveTextContent("");
   });
 
   it("says nothing, and reports the failure, when the write is refused", async () => {
@@ -459,6 +526,50 @@ describe("a dismissal reports itself, and nothing else does", () => {
         screen.getByLabelText("Dashboard widgets")
       )
     );
+  });
+});
+
+describe("one layout write at a time", () => {
+  it("locks the editor's own controls while a dismissal is in flight", async () => {
+    const user = userEvent.setup();
+    api.put.mockImplementation(() => new Promise(() => {}));
+    renderGrid();
+    await user.click(await screen.findByTestId("widget-dismiss"));
+
+    // 🔴 Every control here starts a whole-layout write against ONE cached
+    // version. A reader who dismisses and immediately edits and saves puts two
+    // in flight against the same guard, so one of their OWN actions comes back
+    // as a conflict somebody else caused -- and a reset racing a dismissal can
+    // land in either order, reversing what they asked for.
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-edit-begin")).toBeDisabled()
+    );
+  });
+
+  it("keeps them locked until the dashboard has been read again", async () => {
+    // 🔴 The write finishing is not the end of it. The re-read that follows is
+    // what puts the new version in the cache, and a draft opened before it
+    // lands is seeded with the version the write just replaced -- so the lock
+    // has to outlast the re-read, not merely the PUT. It does because the
+    // mutation's own `onSuccess` RETURNS the invalidation and TanStack awaits
+    // it before reporting success; one that fired it and returned nothing
+    // would release the lock early.
+    const user = userEvent.setup();
+    renderGrid();
+    await screen.findByTestId("dashboard-edit-begin");
+    const readsBefore = api.get.mock.calls.length;
+    // The write lands at once; the re-read it triggers never does.
+    api.get.mockImplementation(() => new Promise(() => {}));
+    await user.click(screen.getByTestId("widget-dismiss"));
+
+    // Past the PUT for certain: the re-read starts only once the write has
+    // succeeded, so asserting the lock without this could be satisfied by the
+    // write's own pending phase.
+    await waitFor(() =>
+      expect(api.get.mock.calls.length).toBeGreaterThan(readsBefore)
+    );
+    expect(api.put).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("dashboard-edit-begin")).toBeDisabled();
   });
 });
 

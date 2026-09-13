@@ -27,10 +27,12 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A reader can send a first-run card away from the card itself, and hiding or removing any card now says so out loud.
+A reader can send a first-run card away from the card itself, and dismissing one no longer stops later widgets from reaching them.
 
-A widget declaring `dismissible` draws a control on the card, outside edit mode: the cards that address somebody who has just arrived should not require discovering the dashboard editor first. Dismissing hides the placement rather than deleting it, so the arrangement keeps it and the reader restores it from the same controls as any other card -- no schema change in any dialect.
+A widget declaring `dismissible` draws a control on the card, outside edit mode: a card that addresses somebody who has just arrived should not require discovering the dashboard editor first. Framed cards carry it in their header; unframed cards float it in the free corner. It is offered only from the width at which editing -- the one route to bringing a card back -- is available, and `dismissible` must be a boolean on both declaration channels.
 
-The control commits on its own rather than through the editor's draft, because the draft exists only while editing and a standing control wired to it would do nothing at all. It carries the read's own `version` and `scope`, so a dismiss raced against another tab is refused rather than silently overwriting it, and it renumbers nothing -- hiding moves no card.
+Dismissing hides the placement rather than deleting it. The write has its own channel, so its failures never reach the editor's chrome, it locks every other layout write while it is in flight, it confirms against the refreshed dashboard before announcing, and focus moves into the widgets region when the card holding it goes.
 
-`toggleHidden` and `remove` now announce through the grid's existing live region. Both changed the dashboard in silence before: a card stopped being rendered, and a reader who could not see that had nothing to distinguish it from the page having failed.
+A layout row now records whether its reader ARRANGED it. A row written only by dismissals still follows the live registry -- a widget declared later is placed, and positions track the declared order -- with the reader's dismissals applied. The editor's save takes charge of the arrangement, and a row once arranged stays arranged whatever a later write says. Every row written before this reads as arranged, so existing dashboards are unchanged; the flag lives in the stored JSON, so nothing migrates on any dialect.
+
+`toggleHidden` and `remove` now announce through the grid's live region, where both used to change the dashboard in silence.

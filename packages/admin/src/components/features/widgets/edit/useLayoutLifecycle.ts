@@ -73,6 +73,11 @@ export function useLayoutLifecycle(
         version: draft.version,
         scope: draft.scope,
         columnCount: draft.columnCount,
+        // The editor is the one route that can reorder, resize or REMOVE a
+        // card, so its save is always the reader taking charge. It is also
+        // what keeps a dismissed row safe to follow the defaults: no write
+        // that can drop a placement may leave the row unarranged.
+        arranged: true,
       },
       // Only on success. A conflict must LEAVE the draft in place, because
       // dropping it here would discard the reader's work at the exact moment

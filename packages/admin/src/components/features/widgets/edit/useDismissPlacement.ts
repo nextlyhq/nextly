@@ -85,6 +85,11 @@ function hiddenFlipped(
     version: stored.version,
     scope: stored.scope,
     columnCount: stored.columnCount ?? DEFAULT_COLUMN_COUNT,
+    // 🔴 NOT an arrangement. Sending a card away is not taking charge of the
+    // dashboard, and a write that said it was would stop every widget declared
+    // afterwards from reaching this reader. The server keeps a row that was
+    // already arranged arranged, so this cannot undo a reader's own layout.
+    arranged: false,
   };
 }
 
@@ -141,12 +146,32 @@ export function useDismissPlacement(
       layout.dismiss.reset();
       layout.dismiss.mutate(hiddenFlipped(stored, placementId), {
         onSuccess: () => {
-          // Announced on SUCCESS, not on click. The card stays on screen until
-          // the write lands, so speaking first would describe an arrangement
-          // the server may still refuse.
+          // 🔴 The written arrangement is not what the reader is looking at.
+          // The write's own success says the SERVER accepted it; the grid draws
+          // the cache, and the re-read that fills it can fail on its own --
+          // `invalidateQueries` swallows that and resolves anyway. So the
+          // outcome is checked against what the client now holds, rather than
+          // inferred from the call having returned.
+          //
+          // Read synchronously, and that is safe rather than hopeful: the
+          // mutation's own `onSuccess` returns the invalidation, TanStack awaits
+          // it before reporting success, and a callback passed to `mutate` runs
+          // only on that report. The re-read has already settled -- landed or
+          // failed -- by the time this runs.
+          const settled = layout
+            .cached()
+            ?.placements.find(row => row.id === placementId);
+          if (settled?.hidden !== becomesHidden) {
+            toast.error(
+              `${title} was updated, but the dashboard could not be refreshed. Reload the page to see it.`
+            );
+            return;
+          }
+          // Spoken only once the card has actually gone. Announced on the
+          // write alone, this described an arrangement still on screen.
           announceHidden(title, becomesHidden);
-          // 🔴 And focus is moved, because the element that had it is about to
-          // be unmounted with its card. Left alone, the browser drops focus to
+          // 🔴 And focus is moved, because the element that had it has been
+          // unmounted with its card. Left alone, the browser drops focus to
           // `body` and the reader's next Tab restarts at the top of the page --
           // a whole-page relocation reported as one card being hidden.
           onDismissed();

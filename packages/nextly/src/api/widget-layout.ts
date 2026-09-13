@@ -44,6 +44,8 @@ import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
   defaultPlacements,
+  dismissalsApplied,
+  layoutIsArranged,
   resolvePlacementIds,
   layoutSizeProblem,
   mergePreservingHidden,
@@ -119,11 +121,21 @@ type LayoutSource = "own" | "default";
  * `available`, never placed -- so it must not take a default position, and must
  * not spend one of the placements a caller may submit.
  */
-function defaultRow(visibleIds: ReadonlySet<string>): {
+function defaultRow(
+  visibleIds: ReadonlySet<string>,
+  unarranged?: StoredLayout
+): {
   visible: WidgetPlacement[];
   invisible: WidgetPlacement[];
 } {
-  return partitionPlacements(defaultPlacements(declaredWidgets()), visibleIds);
+  // A row nobody arranged contributes its dismissals and nothing else, applied
+  // to the WHOLE materialization before it is split -- so a card this caller
+  // cannot see keeps the dismissal it was given, and returns dismissed the day
+  // they can.
+  return partitionPlacements(
+    dismissalsApplied(defaultPlacements(declaredWidgets()), unarranged),
+    visibleIds
+  );
 }
 
 /**
@@ -146,13 +158,16 @@ function defaultRow(visibleIds: ReadonlySet<string>): {
  * go" rather than two that agree today.
  */
 function carriedPlacements(
-  storedPlacements: readonly WidgetPlacement[] | undefined,
+  stored: StoredLayout | undefined,
   visibleIds: ReadonlySet<string>
 ): WidgetPlacement[] {
-  if (storedPlacements) {
-    return partitionPlacements(storedPlacements, visibleIds).invisible;
+  if (stored && layoutIsArranged(stored)) {
+    return partitionPlacements(stored.placements, visibleIds).invisible;
   }
-  return defaultRow(visibleIds).invisible;
+  // No row, or a row that still follows the defaults: the carried half is the
+  // DEFAULT's, because that is what the reader was shown -- see
+  // `visibleArrangement`, which answers the same way.
+  return defaultRow(visibleIds, stored).invisible;
 }
 
 /**
@@ -176,11 +191,18 @@ function visibleArrangement(
   stored: StoredLayout | undefined,
   widgets: readonly CanonicalWidget[]
 ): WidgetPlacement[] {
-  if (!stored) return visibleDefaults(widgets);
-  return partitionPlacements(
-    stored.placements,
-    new Set(widgets.map(widget => widget.id))
-  ).visible;
+  // 🔴 A row EXISTING is not enough to honour it as a snapshot. A row a
+  // dismissal wrote has never been arranged, and honouring it would freeze
+  // that reader out of every widget declared afterwards -- so only an arranged
+  // row is read as written, and the rest follow the live registry with their
+  // dismissals applied.
+  if (stored && layoutIsArranged(stored)) {
+    return partitionPlacements(
+      stored.placements,
+      new Set(widgets.map(widget => widget.id))
+    ).visible;
+  }
+  return visibleDefaults(widgets, stored);
 }
 
 /**
@@ -200,11 +222,12 @@ function visibleArrangement(
  * materializations that agree only while nothing is hidden.
  */
 function visibleDefaults(
-  widgets: readonly CanonicalWidget[]
+  widgets: readonly CanonicalWidget[],
+  unarranged?: StoredLayout
 ): WidgetPlacement[] {
   const visibleIds = new Set(widgets.map(widget => widget.id));
   return (
-    defaultRow(visibleIds)
+    defaultRow(visibleIds, unarranged)
       .visible // 🔴 The submission cap applies HERE, to what this caller can actually
       // send, rather than to the materialization above. `layoutSizeProblem`
       // refuses a submission over `MAX_PLACEMENTS`, so an install declaring
@@ -361,6 +384,35 @@ function readVersion(body: Record<string, unknown>): number {
 }
 
 /**
+ * Reads whether this write is a reader taking charge of the arrangement.
+ *
+ * OPTIONAL, and absent reads as `true`, unlike `scope`. Every client written
+ * before a card could be dismissed from the dashboard only ever wrote from the
+ * editor, so treating its silence as an arrangement keeps what it does today --
+ * and the one write that is not an arrangement is new enough to say so.
+ *
+ * Refused when present and not a boolean, rather than read for truthiness:
+ * `"false"` read that way would freeze a reader out of every later widget on
+ * the strength of a string that says the opposite.
+ */
+function readArranged(body: Record<string, unknown>): boolean {
+  const { arranged } = body;
+  if (arranged === undefined) return true;
+  if (typeof arranged !== "boolean") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "arranged",
+          code: "INVALID_VALUE",
+          message: '"arranged", when given, must be a boolean.',
+        },
+      ],
+    });
+  }
+  return arranged;
+}
+
+/**
  * Reads the visibility token a PUT must echo.
  *
  * Required, not optional. An optional token would be absent for every client
@@ -462,6 +514,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const sentColumnCount = (body as Record<string, unknown>).columnCount;
   const expectedVersion = readVersion(body as Record<string, unknown>);
   const submittedScope = readScope(body as Record<string, unknown>);
+  const writeArranges = readArranged(body as Record<string, unknown>);
 
   // The caller's own quota, asked HERE — before the service, the role-slug
   // resolution, the permission decisions and the stored row. It is a
@@ -545,7 +598,15 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   }
 
   const stored = await service.getLayout(SCOPE_KIND, caller.userId);
-  const carried = carriedPlacements(stored.layout?.placements, visibleIds);
+  const carried = carriedPlacements(stored.layout, visibleIds);
+  // 🔴 MONOTONIC. A row a reader has arranged stays arranged whatever a later
+  // write says: a dismissal states `false` because IT is not an arrangement,
+  // and taking that at its word would demote a reader's own layout to the
+  // live defaults and discard every move they ever made. Only a row that was
+  // never arranged -- or no row -- takes the write's own statement.
+  const arranged =
+    writeArranges ||
+    (stored.layout !== undefined && layoutIsArranged(stored.layout));
 
   // 🔴 An OMITTED count inherits the stored one; only a row that does not exist
   // yet falls back to the default. Every client written before columns sends no
@@ -594,7 +655,8 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     caller.userId,
     toStore,
     expectedVersion,
-    submittedColumnCount
+    submittedColumnCount,
+    arranged
   );
 
   // `respondMutation`, not `respondData`: this is a write, and every write in
