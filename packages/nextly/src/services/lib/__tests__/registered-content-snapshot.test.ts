@@ -25,15 +25,23 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
-import { registeredContentSnapshot } from "../registered-content-slugs";
+import {
+  registeredContentKindOf,
+  registeredContentSnapshot,
+} from "../registered-content-slugs";
 
-const collections = { getAllSlugs: vi.fn() };
-const singles = { getAllSlugs: vi.fn() };
+const collections = { getAllSlugs: vi.fn(), getCollectionBySlug: vi.fn() };
+const singles = { getAllSlugs: vi.fn(), getSingleBySlug: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();
   collections.getAllSlugs.mockResolvedValue(["posts"]);
   singles.getAllSlugs.mockResolvedValue(["site-settings"]);
+  // Absence is the default, so each case below opts INTO the state it is
+  // about. A default of `present` would let a case pass while exercising
+  // the wrong branch.
+  collections.getCollectionBySlug.mockResolvedValue(null);
+  singles.getSingleBySlug.mockResolvedValue(null);
   containerHas.mockReturnValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") return collections;
@@ -89,5 +97,93 @@ describe("enumerating the content registries", () => {
     const snapshot = await registeredContentSnapshot();
 
     expect(snapshot.degraded).toBe(true);
+  });
+});
+
+/**
+ * The same distinction the file above is about, asked one slug at a time.
+ *
+ * 🔴 The point lookup has a caller the enumeration does not: a DISCLOSURE
+ * decision, which reads absence as permission because a name that is not
+ * registered content is safe to publish. That inverts the safe direction. An
+ * access decision refuses on both "absent" and "could not tell", so a boolean
+ * serves it fine; a disclosure decision must withhold on the second and may
+ * publish on the first, and a boolean silently picks the wrong one.
+ *
+ * These cases exist so the three-valued answer cannot quietly collapse back
+ * into two.
+ */
+describe("asking the registries about ONE slug", () => {
+  it("names the registry that holds it", async () => {
+    collections.getCollectionBySlug.mockResolvedValue({ slug: "posts" });
+
+    expect(await registeredContentKindOf("posts")).toEqual({
+      kind: "collection",
+      known: true,
+    });
+  });
+
+  it("finds a single when no collection claims the slug", async () => {
+    singles.getSingleBySlug.mockResolvedValue({ slug: "site-settings" });
+
+    expect(await registeredContentKindOf("site-settings")).toEqual({
+      kind: "single",
+      known: true,
+    });
+  });
+
+  it("prefers the collection when both registries answer", async () => {
+    // The same precedence the snapshot gets by writing collections last. The
+    // registries do not permit the overlap; pinning it keeps the two readings
+    // from disagreeing if they ever do.
+    collections.getCollectionBySlug.mockResolvedValue({ slug: "both" });
+    singles.getSingleBySlug.mockResolvedValue({ slug: "both" });
+
+    expect((await registeredContentKindOf("both")).kind).toBe("collection");
+  });
+
+  it("reports a slug neither registry holds as KNOWN to be absent", async () => {
+    // Both lookups answered, and both said no. That is an observation, and a
+    // caller may act on it.
+    expect(await registeredContentKindOf("ghost")).toEqual({ known: true });
+  });
+
+  it("reports a FAILED lookup as unknown, never as absent", async () => {
+    // The case the third value exists for. A registry that threw has not said
+    // the slug is missing, and a caller that reads it as missing publishes the
+    // name of an entity it was refused, exactly while the install is degraded.
+    collections.getCollectionBySlug.mockRejectedValue(
+      new Error("pool timeout")
+    );
+
+    const answer = await registeredContentKindOf("posts");
+
+    expect(answer.known).toBe(false);
+    expect(answer.kind).toBeUndefined();
+  });
+
+  it("reports a service that FAILS TO CONSTRUCT as unknown too", async () => {
+    // `Container.get` invokes the factory, so a lazy singleton whose
+    // construction throws propagates exactly as an unregistered name does while
+    // `has` is true. The snapshot above draws the same distinction for the same
+    // reason; drawing it there and not here would leave the point lookup
+    // reporting a broken dependency as an empty install.
+    containerGet.mockImplementation((name: string) => {
+      if (name === "singleRegistryService") return singles;
+      throw new Error("factory blew up during initialization");
+    });
+
+    expect((await registeredContentKindOf("posts")).known).toBe(false);
+  });
+
+  it("still reports absence when a registry is simply NOT REGISTERED", async () => {
+    // The control for the two cases above. An install with no singles has no
+    // singles, and treating that as unknown would make every disclosure
+    // decision withhold forever on an ordinary install.
+    containerHas.mockImplementation(
+      (name: string) => name === "collectionRegistryService"
+    );
+
+    expect(await registeredContentKindOf("ghost")).toEqual({ known: true });
   });
 });
