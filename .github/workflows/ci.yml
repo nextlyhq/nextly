@@ -233,11 +233,28 @@ jobs:
             exit 0
           fi
 
+          # Counted before the list is trimmed, so the summary can say how much it
+          # is not showing. A bare "first files" told a reader neither how many
+          # there were nor that anything had been left out.
+          NOT_INERT_COUNT=$(printf '%s\n' "$NOT_INERT" | wc -l | tr -d ' ')
           {
             echo
-            echo "Running in full. First files requiring it:"
+            echo "Running in full. $NOT_INERT_COUNT file(s) require it:"
             echo
-            printf '%s\n' "$NOT_INERT" | head -20 | sed 's/^/- `/;s/$/`/'
+            # `sed` reading the WHOLE stream rather than `head` stopping early.
+            # A reader that stops closes the pipe, `printf` then fails with EPIPE,
+            # and `pipefail` makes that failure the step's exit status — so this
+            # summary line failed the job that every other job depends on, as soon
+            # as the file list outgrew the pipe buffer. It is a race on the buffer
+            # rather than a fixed threshold, which is why it went unseen until a
+            # pull request touching a thousand files hit it.
+            printf '%s\n' "$NOT_INERT" | sed -n '1,20{s/^/- `/;s/$/`/;p;}'
+            # An `if`, not `[ ... ] && echo`: a false test as the last command in
+            # this group would be the group's exit status, which is the same shape
+            # of failure as the one above.
+            if [ "$NOT_INERT_COUNT" -gt 20 ]; then
+              echo "- …and $((NOT_INERT_COUNT - 20)) more"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           echo "inert=false" >> "$GITHUB_OUTPUT"
 
