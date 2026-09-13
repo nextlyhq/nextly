@@ -46,8 +46,11 @@ async function bootWithEndpoint() {
   return createDynamicHandlers();
 }
 
-function initialize(headers: Record<string, string>): Request {
-  return new Request("http://localhost/api/mcp", {
+function initialize(
+  headers: Record<string, string>,
+  url = "http://localhost/api/mcp"
+): Request {
+  return new Request(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -116,6 +119,41 @@ describe("the endpoint as the dispatcher serves it", () => {
     );
 
     expect(res.status).toBe(400);
+  });
+
+  it("routes a colon inside a segment as the one literal address it is", async () => {
+    // What keeps the config-time path check from being a second grammar. It
+    // accepts `/mcp:v1` because a capture is a segment that BEGINS with `:`,
+    // and that is a claim about the MATCHER, not about this package. Asserted
+    // through the dispatcher so a change to core's grammar shows up here rather
+    // than as a plugin mounting a pattern while reporting one address.
+    current = await createTestNextly({
+      plugins: [
+        mcpPlugin({
+          enabled: true,
+          allowedHosts: ["cms.example.com"],
+          path: "/mcp:v1",
+        }),
+      ],
+    });
+    const handlers = createDynamicHandlers();
+
+    const atTheAddress = await handlers.POST(
+      initialize({ host: "cms.example.com" }, "http://localhost/api/mcp:v1"),
+      params("mcp:v1")
+    );
+
+    expect(atTheAddress.status).toBe(401);
+
+    // And at no other address, which a capture would have answered too. 400 is
+    // core declining a path it serves nothing for, the same answer the
+    // no-plugin case above gets.
+    const elsewhere = await handlers.POST(
+      initialize({ host: "cms.example.com" }, "http://localhost/api/mcp:v2"),
+      params("mcp:v2")
+    );
+
+    expect(elsewhere.status).toBe(400);
   });
 
   it("serves no endpoint at all while the plugin is off", async () => {

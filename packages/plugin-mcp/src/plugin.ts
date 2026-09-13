@@ -84,12 +84,6 @@ export interface McpPluginOptions {
 }
 
 /**
- * The Nextly plugin.
- *
- * Takes its options now so that enabling the surface later is a value change
- * rather than a signature change for everyone who has already installed it.
- */
-/**
  * Refuse a path that cannot address one endpoint, at the moment it is written.
  *
  * Shape only, and the limit is worth stating rather than leaving to look like
@@ -98,11 +92,18 @@ export interface McpPluginOptions {
  * would be a second one, drifting behind every route core adds. What it does
  * catch is the class it can decide, at config time rather than as a 404 an
  * operator has to explain.
+ *
+ * A capture is a SEGMENT that begins with `:`, which is the whole of the
+ * matcher's grammar and therefore the whole of the rule here. Refusing the
+ * character wherever it appears is a stricter grammar than the one that will
+ * route the request, and a validation stricter than its matcher refuses paths
+ * that would have worked: `/mcp:v1` addresses exactly one URL.
  */
 function endpointPathOrRefuse(path: string): string {
+  const capture = path.split("/").some(segment => segment.startsWith(":"));
   const problem = !path.startsWith("/")
     ? "must start with `/`"
-    : path.includes(":")
+    : capture
       ? "must name one address, not a `:param` pattern"
       : path.length > 1 && path.endsWith("/")
         ? "must not end with `/`"
@@ -122,6 +123,12 @@ function endpointPathOrRefuse(path: string): string {
   );
 }
 
+/**
+ * The Nextly plugin.
+ *
+ * Takes its options now so that enabling the surface later is a value change
+ * rather than a signature change for everyone who has already installed it.
+ */
 export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
   const { enabled = false } = options;
   const path = endpointPathOrRefuse(options.path ?? DEFAULT_ENDPOINT_PATH);

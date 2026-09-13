@@ -117,3 +117,65 @@ describe("the plugin is published and inert", () => {
     expect(asCoreReads(mcpPlugin({ enabled: true }))).toBe(true);
   });
 });
+
+/**
+ * Which paths may name the endpoint, decided while the config is being written.
+ *
+ * The refusal exists to catch a path that addresses more than one URL, because
+ * an endpoint reachable at many addresses is not the one address an operator
+ * published. What decides that is the matcher's grammar, so what this suite
+ * really holds is that the two agree: a rule stricter than the matcher refuses
+ * a path that would have worked, and a rule looser than it mounts a pattern.
+ */
+describe("the endpoint path names one address", () => {
+  const pathsOf = (path?: string) =>
+    (mcpPlugin({ enabled: true, path }).contributes?.routes ?? []).map(
+      route => route.path
+    );
+
+  it("serves the path it was given, so accepting one is not accepting nothing", () => {
+    // Without this every acceptance below is equally satisfied by a validation
+    // that returns and a plugin that then routes somewhere else entirely.
+    expect(pathsOf("/agents/mcp")).toEqual([
+      "/agents/mcp",
+      "/agents/mcp",
+      "/agents/mcp",
+    ]);
+  });
+
+  it("defaults to `/mcp` when an operator names none", () => {
+    expect(pathsOf()).toEqual(["/mcp", "/mcp", "/mcp"]);
+  });
+
+  it("accepts a colon inside a segment, which addresses one URL", () => {
+    // A capture is a SEGMENT beginning with `:`, so `mcp:v1` is a literal and
+    // the matcher will route exactly one request to it. Refusing the character
+    // wherever it appeared made this validation stricter than the matcher it
+    // validates for, which refuses a path that works.
+    expect(pathsOf("/mcp:v1")).toEqual(["/mcp:v1", "/mcp:v1", "/mcp:v1"]);
+  });
+
+  it("still refuses a segment that IS a capture", () => {
+    // The control on the case above, and the reason the check exists. Both
+    // strings contain a colon; only these two make the endpoint answer at every
+    // path of that shape, which is the misconfiguration worth catching early.
+    expect(() => mcpPlugin({ path: "/mcp/:id" })).toThrow(/:param/);
+    expect(() => mcpPlugin({ path: "/:mcp" })).toThrow(/:param/);
+  });
+
+  it("refuses a path that is not one under the mount", () => {
+    // The remaining shapes, each named by what it is rather than by a shared
+    // "invalid": the message is the whole remedy for an error raised while the
+    // developer's own config is being evaluated.
+    expect(() => mcpPlugin({ path: "mcp" })).toThrow(/must start with/);
+    expect(() => mcpPlugin({ path: "/mcp/" })).toThrow(/must not end with/);
+    expect(() => mcpPlugin({ path: "/" })).toThrow(/not the mount itself/);
+  });
+
+  it("refuses before the plugin exists, not when a request arrives", () => {
+    // Where the refusal lands is the point of doing it here at all. Raised on
+    // construction, an operator sees it on the first boot; deferred, they see a
+    // 404 and have nothing to connect it to.
+    expect(() => mcpPlugin({ enabled: false, path: "/mcp/:id" })).toThrow();
+  });
+});
