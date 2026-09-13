@@ -12,9 +12,9 @@
  * registry.
  *
  * Menu items carry only a route (`to`), not a component, so they contribute no
- * paths. Widgets are RESERVED / not rendered, so they are excluded
- * (generating an import for an unrendered/maybe-absent component would break
- * the module).
+ * paths. A widget contributes one only where it SHIPS a component: the
+ * declarative archetypes name an archetype and a query, and the host draws them
+ * from the result, so there is no module to import.
  *
  * Pure — no IO. The CLI writes the returned string to a generated file.
  *

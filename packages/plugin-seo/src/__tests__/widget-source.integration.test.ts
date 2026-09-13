@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { defaultSeoFields } from "../fields";
 import { seoPlugin } from "../plugin";
+import { seoIssuesWidget } from "../widget-card";
 import { SEO_ISSUES_SOURCE_ID, seoIssuesWidgetSource } from "../widget-source";
 
 const PROBE_NAME = "@test/seo-probe";
@@ -53,13 +54,21 @@ function probePlugin(collections: string[]): unknown {
           method: "GET",
           path: "/count",
           public: true,
-          handler: async (_req, ctx) => {
+          handler: async (req, ctx) => {
             const { resolve } = seoIssuesWidgetSource(
               collections,
               defaultSeoFields()
             );
+            // 🔴 The CARD's own cell query, taken from the card rather than
+            // rebuilt here. Reconstructing the filter would test this file's
+            // idea of what the card asks, which is the one thing the seam case
+            // exists to avoid assuming.
+            const cellKey = new URL(req.url).searchParams.get("cell");
+            const cell = seoIssuesWidget(defaultSeoFields())?.cells.find(
+              candidate => candidate.key === cellKey
+            );
             const result = await resolve(
-              { source: SEO_ISSUES_SOURCE_ID, op: "count" },
+              cell?.query ?? { source: SEO_ISSUES_SOURCE_ID, op: "count" },
               reader,
               ctx,
               undefined
@@ -104,13 +113,21 @@ async function write(
   });
 }
 
-async function countedIssues(): Promise<unknown> {
+async function countedIssues(cellKey?: string): Promise<unknown> {
   const handlers = createDynamicHandlers();
+  const query =
+    cellKey === undefined ? "" : `?cell=${encodeURIComponent(cellKey)}`;
   const res = await handlers.GET(
-    new Request(`http://localhost/api/plugins/${PROBE_NAME}/count`),
+    new Request(`http://localhost/api/plugins/${PROBE_NAME}/count${query}`),
     { params: Promise.resolve({ params: PROBE_PARAMS }) }
   );
   return (await res.json()) as unknown;
+}
+
+/** One cell's number, from the card's OWN query through the shipped resolver. */
+async function cellTotal(cellKey: string): Promise<number> {
+  const result = (await countedIssues(cellKey)) as { total: number };
+  return result.total;
 }
 
 describe("the SEO source, booted", () => {
@@ -158,5 +175,36 @@ describe("the SEO source, booted", () => {
     await write(t, "Bare");
 
     expect(await countedIssues()).toEqual({ op: "count", total: 0 });
+  });
+
+  it("draws a card whose cells the source can actually answer", async () => {
+    // 🔴 The SEAM. The card names each issue by LABEL in a `where` filter, and
+    // the resolver produces those labels independently. Nothing checks that the
+    // two spellings agree -- a renamed label leaves every cell reading zero,
+    // which looks exactly like a clean site.
+    //
+    // Reconciling the parts against the whole is what catches that: a cell whose
+    // filter matches nothing contributes nothing, so the sum falls short of the
+    // unfiltered total.
+    //
+    // Booting at all is the other half. A malformed `admin.widgets` entry fails
+    // boot, so a card that reached this line is one the host accepted.
+    const t = await boot(["pages"]);
+    await write(t, "Bare");
+    await write(t, "Titled", { metaTitle: "Titled" });
+    await write(t, "Hidden", { noindex: true });
+
+    const card = seoIssuesWidget(defaultSeoFields());
+    const cells = card?.cells ?? [];
+    expect(cells).toHaveLength(5);
+
+    const perCell = await Promise.all(cells.map(cell => cellTotal(cell.key)));
+    const whole = (await countedIssues()) as { total: number };
+
+    // Bare 4 + Titled 3 + Hidden 1.
+    expect(whole.total).toBe(8);
+    expect(perCell.reduce((sum, n) => sum + n, 0)).toBe(whole.total);
+    // And the numbers are not all zero, which would satisfy the sum trivially.
+    expect(perCell.filter(n => n > 0).length).toBeGreaterThan(1);
   });
 });

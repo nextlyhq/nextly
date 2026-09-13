@@ -128,6 +128,27 @@ export function checksFor(installed: readonly FieldConfig[]): IssueChecks {
   };
 }
 
+/**
+ * Every issue this source can report, in the order a reader should meet them.
+ *
+ * Priority, not declaration convenience: a `noindex` that nobody intended and a
+ * missing title both remove a page from results, while a missing social image
+ * changes how a link previews. The order is the one Screaming Frog, Search
+ * Console and Lighthouse agree on.
+ *
+ * Derived from the same {@link IssueChecks} the resolver counts by, so a card
+ * built from this cannot offer a number for a field the project never
+ * installed.
+ */
+export function reportableIssues(
+  checks: IssueChecks
+): readonly { key: string; label: string }[] {
+  return [
+    ...(checks.noindex ? [{ key: NOINDEX_FIELD, label: NOINDEX_ISSUE }] : []),
+    ...checks.missing.map(check => ({ key: check.field, label: check.label })),
+  ];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

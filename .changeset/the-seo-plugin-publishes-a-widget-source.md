@@ -57,3 +57,13 @@ the unfiltered total.
 A collection the reader may not see contributes zero; anything else that fails —
 a database outage, a failing hook — reaches the card as an error rather than
 being folded into a count that is quietly too small.
+
+It also draws the card. `@nextlyhq/plugin-seo` contributes an "SEO issues" stats
+widget to the dashboard — one labelled number per issue, so a reader sees that
+eleven pages have no title rather than that the site has twenty-three problems.
+The card is declarative: it names an archetype and a query per cell, the host
+draws it, and none of the plugin's code enters the admin bundle.
+
+Its cells are computed from the same checks the source counts by, so a project
+that replaced the default fields gets numbers only for what it installed, and one
+whose override leaves nothing to check gets no card rather than an empty frame.

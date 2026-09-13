@@ -34,3 +34,5 @@ export type {
   EntriesPage,
   EntriesQuery,
 } from "./collection-reads";
+export { seoIssuesWidget, SEO_ISSUES_WIDGET_ID } from "./widget-card";
+export { reportableIssues } from "./widget-source";

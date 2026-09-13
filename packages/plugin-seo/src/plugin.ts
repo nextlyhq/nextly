@@ -24,6 +24,7 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { seoIssuesWidget } from "./widget-card";
 import { seoIssuesWidgetSource } from "./widget-source";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -166,6 +167,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // would report the full set of missing fields and drown the real answer.
     widgetSources: [seoIssuesWidgetSource(targets, seoFields)],
   };
+
+  // The card that draws that source. Contributed only where the configured
+  // fields give it something to count -- see `widget-card`.
+  const issuesCard = seoIssuesWidget(seoFields);
+  if (issuesCard) {
+    contributes.admin = { ...contributes.admin, widgets: [issuesCard] };
+  }
 
   if (sitemapEnabled) {
     // Serve a sitemap of published entries over HTTP, mounted at

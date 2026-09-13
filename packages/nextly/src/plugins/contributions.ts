@@ -589,9 +589,11 @@ export interface PluginContributions {
    */
   widgetSources?: PluginWidgetSource[];
   /**
-   * @public Admin UI contributions: menu, pages +
-   * settings, per-collection view overrides. `widgets` is
-   * RESERVED — deferred; not rendered and stays `@experimental`.
+   * @public Admin UI contributions: menu, pages + settings, per-collection view
+   * overrides and dashboard widgets. `widgets` is drawn by `WidgetGrid` and
+   * permission-gated; it stays `@experimental` and graduates per D55, which is
+   * a statement about the CONTRACT settling rather than about the card being
+   * drawn. `PluginAdminContributions` documents each.
    */
   admin?: PluginAdminContributions;
   /**
