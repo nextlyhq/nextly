@@ -1,10 +1,22 @@
 ---
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
 "nextly": patch
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-postgres": patch
 "@nextlyhq/adapter-mysql": patch
 "@nextlyhq/adapter-sqlite": patch
 "@nextlyhq/admin": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
 "@nextlyhq/ui": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/plugin-form-builder": patch

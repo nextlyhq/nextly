@@ -14,6 +14,7 @@
 "@nextlyhq/module-specifiers": patch
 "nextly": patch
 "@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
 "@nextlyhq/plugin-page-builder": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/plugin-seo": patch

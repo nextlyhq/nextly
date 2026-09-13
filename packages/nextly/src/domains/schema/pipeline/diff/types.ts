@@ -120,7 +120,8 @@ export type Operation =
   | ChangeColumnNullableOp
   | ChangeColumnDefaultOp
   | AddIndexOp
-  | DropIndexOp;
+  | DropIndexOp
+  | ChangeForeignKeyActionOp;
 
 export interface AddTableOp {
   type: "add_table";
@@ -225,6 +226,42 @@ export interface DropIndexOp {
   type: "drop_index";
   tableName: string;
   index: IndexSpec;
+}
+
+/**
+ * Change what a foreign key does to its rows when the row it points at is
+ * deleted or its key updated, leaving the constraint's name, column and target
+ * exactly as they are.
+ *
+ * A referential action is not a property of the column, which is why this is
+ * its own operation rather than a field on a column change: the column's type,
+ * nullability and default all stay put, and the rewrite paths that serve those
+ * would rebuild storage for a change that only touches a constraint.
+ *
+ * No dialect can edit an action in place, so every implementation drops the
+ * constraint and declares it again. The name is unchanged by definition here,
+ * and that is what forces two statements rather than one: MySQL rejects a drop
+ * and an add of one name in a single `ALTER TABLE` outright (bug #68286, error
+ * 1826), and on PostgreSQL a single statement would depend on the order the
+ * server runs its subcommands in, which nothing here can test. SQLite cannot
+ * alter a constraint at all and refuses, as it already does for an in-place
+ * type, nullability or default change.
+ */
+export interface ChangeForeignKeyActionOp {
+  type: "change_foreign_key_action";
+  tableName: string;
+  /** Unchanged by this operation: it is dropped and redeclared under it. */
+  constraintName: string;
+  columnName: string;
+  referencesTable: string;
+  referencesColumn: string;
+  // Both sides are recorded, as every other change operation records them, so
+  // `migrate:create` can write the inverse by swapping them.
+  /** Already mapped to the dialect's spelling, e.g. "CASCADE", "NO ACTION". */
+  fromOnDelete: string;
+  fromOnUpdate: string;
+  toOnDelete: string;
+  toOnUpdate: string;
 }
 
 // =============================================================================

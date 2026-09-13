@@ -30,10 +30,12 @@ import {
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
 import {
+  readColumnsContainingNull,
   readForeignKeyColumns,
   readIndexNames,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
+import { columnsThatMayHoldNull } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
@@ -230,11 +232,22 @@ export class DynamicCollectionService extends BaseService {
    */
   private async readTableFacts(
     tableName: string,
-    pendingFields: FieldDefinition[]
+    pendingFields: FieldDefinition[],
+    /**
+     * The fields whose column does NOT live on this table — a localized
+     * collection keeps its translatable columns in the companion.
+     *
+     * Passed in rather than derived here, because deciding it needs the
+     * collection's localization flag and the classifier that owns that
+     * question; probing the main table for a companion-owned column asks for a
+     * column it does not have, and the error takes the whole save with it.
+     */
+    companionOwned: ReadonlySet<string> = new Set()
   ): Promise<{
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
+    columnsContainingNull: ReadonlySet<string>;
   }> {
     // A collection whose creation migration has not been deployed yet has a registry record and
     // no table. Reading from it throws, which would block every follow-up edit to a collection
@@ -248,15 +261,33 @@ export class DynamicCollectionService extends BaseService {
     if (!(await this.adapter.tableExists(tableName))) {
       return {
         tableHasRows: false,
+        // No table, no rows, so no column holds a null.
+        columnsContainingNull: new Set<string>(),
         ...this.schemaService.plannedAttachments(tableName, pendingFields),
       };
     }
 
     const db = this.adapter.getDrizzle();
-    const [hasRows, foreignKeys, indexes] = await Promise.all([
+    // Probed for the columns that CAN hold a null, which is the set this list
+    // — the collection as it stands — says is optional. A column behind a
+    // required field is already NOT NULL and cannot hold one, and a field the
+    // save is ADDING has no column yet, so neither is worth a query. Which of
+    // these a save then tightens is the generator's question: it holds both
+    // lists, and this reader holds only the live table.
+    const nullableColumns = columnsThatMayHoldNull(
+      pendingFields,
+      companionOwned
+    );
+    const [hasRows, foreignKeys, indexes, holdingNull] = await Promise.all([
       tableHasRows(db, this.adapter.dialect, tableName),
       readForeignKeyColumns(db, this.adapter.dialect, tableName),
       readIndexNames(db, this.adapter.dialect, tableName),
+      readColumnsContainingNull(
+        db,
+        this.adapter.dialect,
+        tableName,
+        nullableColumns
+      ),
     ]);
 
     // What the table carries, and only that.
@@ -276,6 +307,7 @@ export class DynamicCollectionService extends BaseService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
+      columnsContainingNull: holdingNull,
     };
   }
 
@@ -979,7 +1011,16 @@ export class DynamicCollectionService extends BaseService {
       (tableFacts ??= this.readTableFacts(
         collection.tableName,
         // What the pending create artefact builds from, for the not-yet-deployed case.
-        collection.fields ?? []
+        collection.fields ?? [],
+        // Which of those live in the companion instead, decided by the same
+        // classifier the localized diff uses and against the flag the LIVE
+        // table was built under.
+        new Set(
+          resolveLocalizedFieldNames(
+            collection.fields ?? [],
+            collectionWasLocalized
+          )
+        )
       ));
 
     // Why: the alter-table block runs when fields change, but a status-only

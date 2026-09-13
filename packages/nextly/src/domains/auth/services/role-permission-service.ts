@@ -160,7 +160,7 @@ export class RolePermissionService extends BaseService {
       permissionId = newPermId;
     }
 
-    void invalidatePermissionCache({ roleId });
+    await invalidatePermissionCache({ roleId });
   }
 
   /**
@@ -244,7 +244,7 @@ export class RolePermissionService extends BaseService {
         )
       );
 
-    void invalidatePermissionCache({ roleId });
+    await invalidatePermissionCache({ roleId });
   }
 
   /**
@@ -285,7 +285,7 @@ export class RolePermissionService extends BaseService {
       }
     }
 
-    void invalidatePermissionCache({ roleId });
+    await invalidatePermissionCache({ roleId });
 
     return this.listRolePermissions(roleId);
   }

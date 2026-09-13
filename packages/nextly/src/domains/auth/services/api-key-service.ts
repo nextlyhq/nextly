@@ -69,8 +69,8 @@ import { BaseService } from "../../../services/base-service";
 import {
   isSuperAdmin,
   listRoleSlugsForUserOrRefuse,
-  rbacRevision,
 } from "../../../services/lib/permissions";
+import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import type { Logger } from "../../../services/shared";
 
 /** The three token types that determine how permissions are resolved at request time. */
@@ -281,7 +281,7 @@ const _apiKeyPermissionsCache = new Map<
      * old set, which the comment in `UserRoleService` said was handled
      * elsewhere and was not.
      */
-    revision: number;
+    revision: string;
   }
 >();
 const _PERMISSIONS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -748,20 +748,37 @@ export class ApiKeyService extends BaseService {
     keyId: string
   ): Promise<readonly GrantedPermission[]> {
     const cacheKey = `apikey:${keyId}`;
-    const now = Date.now();
     // Read BEFORE the queries below, never after. An invalidation that lands
     // while they are in flight would otherwise be stamped onto the result they
     // return: the rows were read under the old revision and would be filed
     // under the new one, so the next request reuses grants the change was
     // meant to retire, for the whole TTL. Captured here, that entry is already
     // behind when it is written and the next read re-resolves.
-    const resolvedUnder = rbacRevision();
+    //
+    // Refreshed rather than read, which is what makes the comparison below
+    // answer for the INSTALL rather than for this process. These grants are a
+    // copy of the catalogue held for five minutes, and a role revoked on
+    // another instance has to retire them here too.
+    const resolvedUnder = await refreshEpoch();
+
+    // Read AFTER the refresh, not before it. That refresh can wait — on a slow
+    // database, or behind another forced read it queued for — and an age taken
+    // beforehand is the age the entry had when the request started rather than
+    // when it is being served, so an entry that expired during the wait passes
+    // the window one more time.
+    const now = Date.now();
 
     const cached = _apiKeyPermissionsCache.get(cacheKey);
     if (
       cached &&
-      now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS &&
-      cached.revision === resolvedUnder
+      // Asked through the shared predicate, not by comparing the stamp. A
+      // match means nothing while this process holds invalidations the shared
+      // row has not accepted: the value being matched against is then one no
+      // other instance has seen, so a revocation made here keeps answering
+      // from this copy for the whole window. The permission tiers ask the same
+      // question and this one was not.
+      stampIsCurrent(cached.revision) &&
+      now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS
     ) {
       return cached.grants;
     }

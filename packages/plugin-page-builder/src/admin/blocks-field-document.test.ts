@@ -201,6 +201,89 @@ describe("withoutSelf", () => {
     ).toEqual([]);
   });
 
+  it("withholds a candidate whose PLACEMENT override re-points at the row being edited", () => {
+    /*
+     * The edge neither document names. `c` places `b` and carries overrides
+     * aimed at `b`'s exposures; `b` exposes one of its own nested instances'
+     * `componentId`, so the override re-points it at `a` — the row being
+     * edited. `c` scans as referencing `b`, `b` scans as referencing `z`, and
+     * the loop is in neither scan, while the resolver applies the placement's
+     * overrides before expanding `b` and reaches it.
+     *
+     * Offering the tile is the failure that matters: the author is invited to
+     * make an insert the write then refuses.
+     */
+    const a = row("a", componentOf([text("t")]));
+    const z = row("z", componentOf([text("z1")]));
+    const b = row("b", {
+      ...componentOf([instanceOf("z", "b-z")]),
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "b-z",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+    } as ComponentDocument);
+    const c = row("c", {
+      ...componentOf([
+        {
+          id: "c-b",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "b", overrides: { swap: "a" } },
+        },
+      ]),
+    } as ComponentDocument);
+
+    const library = [a, b, c, z];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    // `c` is withheld; `b` and `z`, which reach nothing back, are still offered.
+    expect(
+      withoutSelf(library, editing, identity, graphOf(lookup)).map(r => r.id)
+    ).toEqual(["b", "z"]);
+  });
+
+  it("CONTROL: the same placement with a harmless override is still offered", () => {
+    // It is the override's TARGET that decides, not the presence of overrides.
+    // Without this, withholding every candidate that carries any override would
+    // satisfy the case above and empty the panel for any site using variants.
+    const a = row("a", componentOf([text("t")]));
+    const z = row("z", componentOf([text("z1")]));
+    const b = row("b", {
+      ...componentOf([instanceOf("z", "b-z")]),
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "b-z",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+    } as ComponentDocument);
+    const c = row("c", {
+      ...componentOf([
+        {
+          id: "c-b",
+          type: COMPONENT_INSTANCE_TYPE,
+          version: 1,
+          props: { componentId: "b", overrides: { swap: "z" } },
+        },
+      ]),
+    } as ComponentDocument);
+
+    const library = [a, b, c, z];
+    const lookup = new Map(library.map(r => [r.id, r.document!]));
+
+    expect(
+      withoutSelf(library, editing, identity, graphOf(lookup)).map(r => r.id)
+    ).toEqual(["b", "c", "z"]);
+  });
+
   it("ends a loop among other rows where it began, and follows nothing from a row the lookup does not hold", () => {
     // Each definition is read once per question, which is what makes a loop
     // finite: x names y, y names x, and the second visit to either is the

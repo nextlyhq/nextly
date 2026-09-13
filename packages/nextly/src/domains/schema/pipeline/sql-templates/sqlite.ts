@@ -17,6 +17,7 @@
 //
 // Pure functions. No I/O. No semicolons.
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import type {
   AddColumnOp,
   AddIndexOp,
@@ -32,6 +33,7 @@ import type {
 } from "../diff/types";
 
 import { columnDefinition, createTableBody } from "./create-table-body";
+import { unsupportedOperation } from "./foreign-key-action";
 import { quoteIdent } from "./identifier-quoting";
 
 const q = (n: string) => quoteIdent(n, "sqlite");
@@ -40,17 +42,81 @@ function columnDef(c: ColumnSpec): string {
   return columnDefinition(c, q);
 }
 
-export class SqliteUnsupportedOperationError extends Error {
+/**
+ * What SQLite cannot do in place, refused with the codebase's own error.
+ *
+ * A `NextlyError` rather than a bare `Error` subclass, so this refusal carries
+ * the code, status, public data and log context every other refusal in
+ * `packages/nextly` carries — it reaches a caller as a typed envelope instead
+ * of a message string. Kept as a named CLASS because callers and tests
+ * identify it by type, and the message is unchanged for the same reason.
+ */
+export class SqliteUnsupportedOperationError extends NextlyError {
   constructor(opType: string, hint: string) {
-    super(
+    const message =
       `SQLite does not support ${opType} in place. ${hint} For migrate:create, ` +
-        `you may need to write a manual recreate-table migration via --blank.`
-    );
+      `you may need to write a manual recreate-table migration via --blank.`;
+    super({
+      code: "VALIDATION_ERROR",
+      publicMessage: message,
+      publicData: {
+        errors: [
+          {
+            path: "dialect",
+            code: "SQLITE_UNSUPPORTED_OPERATION",
+            message,
+          },
+        ],
+      },
+      logContext: { reason: "sqlite-unsupported-operation", opType },
+    });
     this.name = "SqliteUnsupportedOperationError";
   }
 }
 
+/**
+ * What SQLite cannot change in place, and what it would take instead.
+ *
+ * One list rather than an arm each, so the set of refusals is readable as a
+ * set: everything here needs the table recreated, which is a different
+ * operation from the one that was asked for and one this pipeline does not
+ * perform on the author's behalf.
+ *
+ * The foreign-key entry is the one with teeth. Automating that rebuild has
+ * caused real data loss in three independent tools that tried it, because an
+ * unrelated table's cascade can fire during the window where the constraint
+ * is gone — so refusing is the answer here, not a limitation to be worked
+ * around later.
+ */
+const RECREATE_TABLE_HINTS: Record<
+  | "change_column_type"
+  | "change_column_nullable"
+  | "change_column_default"
+  | "change_foreign_key_action",
+  string
+> = {
+  change_column_type:
+    "Use ALTER TABLE ... RENAME TO ... + CREATE TABLE ... + INSERT INTO ... SELECT + DROP TABLE ...",
+  change_column_nullable:
+    "Same recreate-table workaround as change_column_type.",
+  change_column_default:
+    "Same recreate-table workaround as change_column_type.",
+  change_foreign_key_action:
+    "A referential action can only be changed by recreating the table, which drops and rebuilds it along with every index, trigger and view on it.",
+};
+
 export function generateSqliteSQL(op: Operation): string {
+  // The three dialect dispatchers are switches over the SAME `Operation`
+  // union, so their arms line up one for one and their tails are identical
+  // text. That parallelism is the safety property, not an accident: each
+  // narrows the union to `never` in its own default arm, so adding a member
+  // to `Operation` is a COMPILE error in every dialect that has not handled
+  // it — which is how `change_foreign_key_action` located all seven of its
+  // consumers instead of leaving one to fail at run time on whichever dialect
+  // a user happened to be on. Sharing them means a handler table keyed by op
+  // type, and a table is not exhaustiveness-checked per dialect: a missing
+  // entry becomes an undefined lookup while writing DDL.
+  // fallow-ignore-next-line code-duplication
   switch (op.type) {
     case "add_table":
       return generateAddTable(op);
@@ -65,31 +131,19 @@ export function generateSqliteSQL(op: Operation): string {
     case "rename_column":
       return generateRenameColumn(op);
     case "change_column_type":
-      throw new SqliteUnsupportedOperationError(
-        "change_column_type",
-        "Use ALTER TABLE ... RENAME TO ... + CREATE TABLE ... + INSERT INTO ... SELECT + DROP TABLE ..."
-      );
     case "change_column_nullable":
-      throw new SqliteUnsupportedOperationError(
-        "change_column_nullable",
-        "Same recreate-table workaround as change_column_type."
-      );
     case "change_column_default":
+    case "change_foreign_key_action":
       throw new SqliteUnsupportedOperationError(
-        "change_column_default",
-        "Same recreate-table workaround as change_column_type."
+        op.type,
+        RECREATE_TABLE_HINTS[op.type]
       );
     case "add_index":
       return generateAddIndex(op);
     case "drop_index":
       return generateDropIndex(op);
-    default: {
-      const exhaustive: never = op;
-      void exhaustive;
-      throw new Error(
-        `generateSqliteSQL: unsupported op ${(op as { type: string }).type}`
-      );
-    }
+    default:
+      return unsupportedOperation("generateSqliteSQL", op);
   }
 }
 

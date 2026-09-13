@@ -6,8 +6,13 @@
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
 "@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
 "@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
 "@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
 "@nextlyhq/plugin-page-builder": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/plugin-seo": patch

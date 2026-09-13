@@ -96,7 +96,7 @@ export class RoleInheritanceService extends BaseService {
       }
     }
 
-    void invalidatePermissionCache({ roleId: childRoleId });
+    await invalidatePermissionCache({ roleId: childRoleId });
   }
 
   /**
@@ -118,7 +118,7 @@ export class RoleInheritanceService extends BaseService {
         )
       );
 
-    void invalidatePermissionCache({ roleId: childRoleId });
+    await invalidatePermissionCache({ roleId: childRoleId });
   }
 
   /**

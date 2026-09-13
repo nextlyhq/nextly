@@ -111,6 +111,33 @@ export type ColumnKind =
   | "fkSingle" // single-target foreign key — text/varchar(36)
   | "skip"; // the field keeps its values in another table — no column emitted
 
+/**
+ * The columns of this table that a row could currently have left empty.
+ *
+ * Two exclusions, and each was a defect without it. A field the definitions
+ * call REQUIRED sits behind a `NOT NULL` column and cannot hold a null, so
+ * asking costs a query and returns nothing. And a field whose column lives in
+ * a localized collection's COMPANION table is not on this table at all —
+ * probing for it asks the main table for a column it does not have, and the
+ * error takes the whole save down before any migration is generated.
+ *
+ * Answered here because this module owns which physical column a field
+ * occupies; a caller recomputing it is the second implementation that drifts.
+ */
+export function columnsThatMayHoldNull(
+  fields: readonly { name: string; required?: boolean; type?: string }[],
+  companionOwned: ReadonlySet<string> = new Set()
+): string[] {
+  return fields
+    .filter(
+      field =>
+        field.required !== true &&
+        !companionOwned.has(field.name) &&
+        fieldProducesColumn(field as Parameters<typeof fieldProducesColumn>[0])
+    )
+    .map(field => toSnakeCase(field.name));
+}
+
 export function toSnakeCase(name: string): string {
   return name
     .replace(/([A-Z])/g, "_$1")

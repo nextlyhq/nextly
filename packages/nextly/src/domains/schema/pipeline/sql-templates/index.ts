@@ -24,24 +24,45 @@ import { generateMysqlSQL } from "./mysql";
 import { generatePgSQL } from "./postgres";
 import { generateSqliteSQL } from "./sqlite";
 
+export {
+  addForeignKeySql,
+  changeForeignKeyActionStatements,
+  dropForeignKeySql,
+} from "./foreign-key-action";
+export type { ForeignKeyActionDialect } from "./foreign-key-action";
 export { quoteIdent } from "./identifier-quoting";
 export { MysqlUnsupportedOperationError } from "./mysql";
 export { SqliteUnsupportedOperationError } from "./sqlite";
 
 /**
- * SQL for one operation.
+ * SQL for one operation, as a single string.
  *
- * The return value is not guaranteed to be a single statement. An operation
+ * The return value is NOT guaranteed to be a single statement. An operation
  * whose effect has no single-statement spelling returns several, separated by
- * `; ` — today that is PostgreSQL `drop_index` on a unique, which must drop a
- * possible owning constraint as well as the index. Callers that write the
- * result into a migration file are unaffected (the runner's splitter handles
- * it, and `index-sql.test.ts` pins that round-trip); callers that hand it to a
- * driver must be able to run a compound statement, which the pre-resolution
- * executor does on the simple-query protocol.
+ * `; ` — today PostgreSQL `drop_index` on a unique (it must drop a possible
+ * owning constraint as well as the index) and `change_foreign_key_action` on
+ * both dialects that can perform it.
  *
- * Anyone adding an operation type here should know compound returns are legal,
- * and anyone adding a consumer should decide which of those two it is.
+ * Which consumers can take that, measured rather than assumed:
+ *
+ * - A migration FILE is safe. `splitSqlStatements` (cli/commands/migrate.ts)
+ *   is a literal-aware `;` splitter, so a compound entry becomes separate
+ *   statements again; `index-sql.test.ts` pins that round-trip.
+ * - The pre-resolution executor is safe: it runs compound statements on the
+ *   simple-query protocol.
+ * - A caller that hands the string to a driver DIRECTLY is NOT safe. Both
+ *   `splitStatements` (pipeline/sql-statement-utils.ts) and
+ *   `CollectionFileManager.runMigration` split only on `--> statement-
+ *   breakpoint` and never on `;`, deliberately — a lexical `;` split corrupts
+ *   string literals. A compound entry therefore reaches the driver whole,
+ *   which PostgreSQL and SQLite tolerate and MySQL rejects outright, because
+ *   the adapter sets `multipleStatements = false`.
+ *
+ * That last case is a real defect this repository shipped, not a hypothetical:
+ * the Schema Builder's referential-action edit emitted a compound string and
+ * did nothing at all on MySQL. So a consumer that executes statements itself
+ * should ask the operation's own renderer for the LIST — see
+ * {@link changeForeignKeyActionStatements} — rather than this joined form.
  */
 export function generateSQL(op: Operation, dialect: SupportedDialect): string {
   switch (dialect) {

@@ -355,6 +355,18 @@ describe("emitAdditiveDdl — indexes and contracts", () => {
         fromDefault: undefined,
         toDefault: "'x'",
       },
+      change_foreign_key_action: {
+        type: "change_foreign_key_action",
+        tableName: "dc_a",
+        constraintName: "fk_dc_a_author_id",
+        columnName: "author_id",
+        referencesTable: "dc_authors",
+        referencesColumn: "id",
+        fromOnDelete: "CASCADE",
+        fromOnUpdate: "NO ACTION",
+        toOnDelete: "RESTRICT",
+        toOnUpdate: "NO ACTION",
+      },
     };
 
     for (const type of PRE_RESOLUTION_OP_TYPES) {

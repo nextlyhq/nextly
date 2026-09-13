@@ -1,0 +1,139 @@
+---
+"nextly": patch
+"create-nextly-app": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
+---
+
+An edit to what a relationship does when the row it points at is deleted now
+reaches the database.
+
+A foreign key carried the actions the statement that CREATED it wrote, and
+nothing else ever changed them. Moving \`posts.author\` from cascade to restrict
+saved successfully and recorded restrict, while the database went on cascading
+— so deleting an author still destroyed their posts. The same held for a
+many-to-many, whose junction kept the actions it was built with.
+
+Both are emitted now, through one implementation. PostgreSQL and MySQL drop
+the constraint and declare it again under its own name, as two statements:
+MySQL rejects a drop and an add of one name in a single \`ALTER TABLE\`, and on
+PostgreSQL a single statement would depend on the order the server applies its
+subcommands in. A junction has both of its foreign keys rebuilt, and the table
+itself is left alone — rebuilding it would destroy every link it holds for a
+change that never needed to touch one.
+
+SQLite refuses the edit by name rather than performing it. It cannot alter a
+constraint at all, and the table rebuild that would be required has caused
+real data loss in three independent tools that automated it; refusing is what
+this dialect already does for a foreign-key drop and for a unique constraint
+it cannot enforce.
+
+Three things the statements meet on the way to the database are handled with
+them, because emitting the right SQL is only half of arriving:
+
+- They are emitted one statement per chunk. The runner splits a migration on
+  its breakpoint markers and never on semicolons, and the MySQL driver is
+  configured to refuse a query carrying more than one statement — so a
+  semicolon-joined pair was rejected whole, and this edit did nothing at all
+  on MySQL.
+- Turning a link optional now relaxes its column as well as its key, in that
+  order, and turning one required replaces the key before tightening the
+  column. A relationship's requiredness never moved its column before: the
+  descriptor calls the column nullable whichever way `required` is set, so an
+  optional link kept a NOT NULL column while its key moved to `SET NULL` —
+  which MySQL rejects outright, and PostgreSQL accepts and then fails on the
+  first delete, in production.
+- The key that is dropped is the one the table actually carries, read from it
+  rather than derived from a naming convention. A column whose key was
+  installed under another name, or that carries none because it was edited
+  from a scalar into a relationship, no longer aborts the migration.
+
+The edit is also paired the way the rest of the save pairs, rather than by
+name alone: a relationship renamed in the same save carries its action edit
+(it previously emitted the rename and left the old action enforced), and a
+field whose storage moved leaves its key to the path that creates it rather
+than declaring the same constraint twice. Many-to-many junctions are paired
+once for both their table move and their action edit, so a save that did both
+can no longer fall between the two.
+
+Two referential actions are now refused rather than emitted for a server to
+reject halfway. `onUpdate: "set null"` on a required relationship is the pair
+`onDelete` has always refused, reached through the other half. And `set null`
+on a many-to-many cannot hold at all: both link columns are `NOT NULL`,
+because a link naming nothing on one side is not a link.
+
+One behaviour changed on SQLite. A junction action edit was refused by name
+when the junction kept its table and silently ignored when the same save also
+renamed it — so whether the edit was refused or lost depended on whether you
+happened to rename. It is refused in both cases now. SQLite still cannot
+change a junction's referential actions; renaming one on its own is
+unaffected.
+
+Two further things the column's METADATA cannot answer are now asked of the
+column itself:
+
+- Installing `SET NULL` states that the column accepts nulls rather than
+  inferring it from requiredness. A database migrated before a requiredness
+  toggle relaxed anything still carries whatever `CREATE TABLE` gave the
+  column, so a relationship both definitions call optional can be sitting on
+  a `NOT NULL` column right now — and the statement is idempotent, so this
+  also repairs the ones the old behaviour left behind.
+- Making a field required is refused, before any statement is written, when
+  entries still leave that column empty. The server rejects the tightening,
+  and by then the statements ahead of it have run — auto-committed on MySQL,
+  including the foreign-key replacement a relationship's tightening is
+  ordered behind, which would leave the table carrying no key at all while
+  the save was recorded as made. The check reads the live rows; a caller that
+  does not supply them keeps the behaviour it had.
+
+A definition already stored is read rather than judged. The previous creation
+path accepted a required relationship declaring `onUpdate: "set null"`, and
+refusing to READ that combination would have frozen the collection holding it:
+the repair is itself an edit, and every save visits every relationship the
+collection keeps, so one legacy field would have blocked unrelated changes to
+its neighbours. What a save ASKS FOR is still refused — including a save that
+flips requiredness onto a declaration that was legal before.
+
+What a field was is now answered in ONE place for every pass in a save. The
+action pass carried a renamed field's edit while the column pass, keyed on the
+new name, skipped the same field — so a link renamed and turned optional in
+one save had its key moved to `SET NULL` and its column left `NOT NULL`.
+
+The SQLite refusal in the schema templates is a `NextlyError` rather than a
+bare `Error` subclass, so it reaches a caller as the typed envelope every
+other refusal in the package uses. The class and its message are unchanged;
+callers and tests identify it by type.
+
+Two things about the check above, both found before it shipped:
+
+- It asks only about columns that are ON this table. A localized collection
+  keeps its translatable columns in a companion, so probing the main table for
+  one asked for a column it does not have — and that error arrives before any
+  migration is generated, which would have failed every save on a localized
+  collection with an optional translatable field.
+- Relaxing a column for a `SET NULL` key keeps the default it carries. MySQL
+  restates the entire column definition on `MODIFY`, so a narrower rendering
+  silently removed the relationship's configured default for future inserts.
+  Both callers now render that statement through one function.
