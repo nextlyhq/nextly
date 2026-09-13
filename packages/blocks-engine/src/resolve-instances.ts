@@ -46,7 +46,6 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
-  isComponentInstance,
   DOCUMENT_FORMAT_VERSION,
   isComponentDocument,
   isUnsetOverride,
@@ -481,83 +480,10 @@ function withVariantReferences(
   return { ids, complete: true };
 }
 
-/**
- * The props of a component instance that decide what it composes to.
- *
- * An exposure's `propPath` is a dot path into a node's props, so a write whose
- * path begins with one of these can change the composed graph: `componentId`
- * names the placed component outright, `variant` selects presets that can name
- * one, and `overrides` flows DOWN into the placed definition and can re-point a
- * node levels below. A write to any other path — a caption, a colour — reaches
- * the rendered output and never the graph.
- *
- * Listed here rather than inferred, because they are this package's own contract
- * (`ComponentInstanceProps`) rather than someone else's spelling.
- */
-const GRAPH_REACHING_PROPS: readonly string[] = [
-  "componentId",
-  "variant",
-  "overrides",
-];
-
-/**
- * The exposures a variant can reach the composed graph through, in two kinds.
- *
- * They are separate because what makes a write matter differs. A REWIRING
- * exposure matters whenever it is written at all: any value re-points a
- * reference. A REVEALING one matters only for the value `true` — hiding a node
- * removes references from the composition, and removing them closes no loop — so
- * a component offering many hide-only variants must not be charged for them.
- *
- * Rewiring is those three prop names ON AN INSTANCE NODE, because that is where
- * `componentIdOf` reads them and where `overrides` flow down from; an ordinary
- * block exposing a prop that happens to carry one of those names reaches nothing.
- * Revealing is a `visibility` exposure, which carries no usable prop path at all
- * — `applyExposure` decides from the value and never reads one — and which
- * reveals a whole subtree, so it counts wherever the forest holds an instance to
- * reveal.
- */
-interface ReachingExposures {
-  readonly rewiring: ReadonlySet<string>;
-  readonly revealing: ReadonlySet<string>;
-}
-
-function reachingExposures(
-  declared: readonly ExposedProperty[],
-  nodes: ReadonlyMap<string, BlockNode>,
-  revealable: boolean
-): ReachingExposures {
-  const rewiring = new Set<string>();
-  const revealing = new Set<string>();
-  for (const property of declared) {
-    if (property.type === "visibility") {
-      if (revealable) revealing.add(property.id);
-      continue;
-    }
-    const node = nodes.get(property.nodeId);
-    if (node === undefined || !isComponentInstance(node)) continue;
-    if (GRAPH_REACHING_PROPS.includes(property.propPath.split(".")[0] ?? "")) {
-      rewiring.add(property.id);
-    }
-  }
-  return { rewiring, revealing };
-}
-
-/** What each variant installs, whether it can change composition, and whether it could be read. */
+/** What each variant installs, and whether the variants could all be read. */
 export interface VariantReferences {
   /** Variant name to the component ids its overrides install, in declared order. */
   readonly byVariant: ReadonlyMap<string, readonly string[]>;
-  /**
-   * The variants whose overrides can change what the document composes to.
-   *
-   * A SUPERSET of `byVariant`'s keys, and the difference is the point. A variant
-   * may re-point a node two levels down by writing an `overrides` record without
-   * touching any `componentId` this document holds — so the ids it installs are
-   * unchanged while the composed tree is not. A caller choosing which selections
-   * to compose has to use this; choosing on installed ids alone drops exactly the
-   * variants whose effect no one-level scan can see.
-   */
-  readonly affecting: ReadonlySet<string>;
   /** `false` where the variants or the forest could not be read within the bounds. */
   readonly complete: boolean;
 }
@@ -582,10 +508,7 @@ export function variantReferencesIn(
   document: unknown,
   maxNodes: number = DEFAULT_LIMITS.maxNodes
 ): VariantReferences {
-  const nothing = {
-    byVariant: new Map<string, readonly string[]>(),
-    affecting: new Set<string>(),
-  };
+  const nothing = { byVariant: new Map<string, readonly string[]>() };
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
     return { ...nothing, complete: true };
   }
@@ -609,44 +532,12 @@ export function variantReferencesIn(
   const indexed = boundedNodeIndex(document.nodes as readonly BlockNode[], cap);
   if (!indexed.complete) return { ...nothing, complete: false };
 
-  // Whether this forest holds anything that could be REVEALED into the graph.
-  const revealable = [...indexed.index.values()].some(node =>
-    isComponentInstance(node)
-  );
-  const reaching = reachingExposures(declared, indexed.index, revealable);
-
   const byVariant = new Map<string, readonly string[]>();
-  const affecting = new Set<string>();
   for (const name of names) {
     const installed = installedBy(document, name, declared, indexed.index);
     if (installed.length > 0) byVariant.set(name, installed);
-    if (writesAnyOf(variants[name], reaching)) affecting.add(name);
   }
-  return { byVariant, affecting, complete: true };
-}
-
-/** Whether one variant's overrides reach the graph, by either route. */
-function writesAnyOf(variant: unknown, reaching: ReachingExposures): boolean {
-  if (reaching.rewiring.size === 0 && reaching.revealing.size === 0) {
-    return false;
-  }
-  if (!isPlainRecord(variant)) return false;
-  const overrides = variant.overrides;
-  if (!isPlainRecord(overrides)) return false;
-  const keys = boundedOwnKeys(overrides, MAX_ENVELOPE_ENTRIES);
-  // Unreadable overrides are treated as reaching the graph: this decides whether
-  // a selection is worth COMPOSING, and the safe answer is to compose it.
-  if (keys === null) return true;
-  return keys.some(key => {
-    if (reaching.rewiring.has(key)) return true;
-    // Only a REVEAL reaches the graph. `visibilityDecision` is the resolver's own
-    // reader for this, so `true`, `false` and a cleared override are judged here
-    // exactly as the composition would judge them.
-    return (
-      reaching.revealing.has(key) &&
-      visibilityDecision(ownEntry(overrides, key)) === true
-    );
-  });
+  return { byVariant, complete: true };
 }
 
 /**

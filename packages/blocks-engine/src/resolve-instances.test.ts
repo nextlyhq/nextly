@@ -2496,6 +2496,16 @@ describe("componentUsageIn", () => {
   });
 });
 
+/**
+ * What each variant installs.
+ *
+ * Three cases here previously covered an `affecting` set — a prediction of which
+ * variants could change a composition, by prop path and by whether a visibility
+ * write revealed. That prediction is gone: the write guard composes every
+ * selection under a work budget instead, because three rounds of refining it were
+ * each correct about the case that prompted them and wrong about a new one.
+ * There is no remaining behaviour those cases described.
+ */
 describe("variantReferencesIn", () => {
   /** One node placing `c`, exposing its componentId and its text separately. */
   const doc = (variants: Record<string, Variant>) =>
@@ -2575,98 +2585,6 @@ describe("variantReferencesIn", () => {
     const fits = variantReferencesIn(big, 5000);
     expect(fits.complete).toBe(true);
     expect([...fits.byVariant]).toEqual([["toA", ["a"]]]);
-  });
-
-  it("names a variant that reaches the graph WITHOUT installing a new id", () => {
-    /*
-     * The distinction `byVariant` alone cannot make. This variant writes an
-     * `overrides` record onto the placement, which flows DOWN into the placed
-     * definition — so what it installs at this level is the node's own unchanged
-     * id, while the composed tree below it is different.
-     */
-    const doc = component([instance("n1", "c")], {
-      exposed: [
-        {
-          id: "pass",
-          label: "Pass",
-          nodeId: "n1",
-          propPath: "overrides",
-          type: "select",
-        },
-      ],
-      variants: {
-        deep: { label: "Deep", overrides: { pass: { inner: "a" } } },
-      },
-    });
-    const out = variantReferencesIn(doc);
-
-    expect(out.affecting.has("deep")).toBe(true);
-    // And it installs only the id the node already stored, which is why a caller
-    // choosing on installed ids would have dropped it.
-    expect(out.byVariant.get("deep")).toEqual(["c"]);
-  });
-
-  it("names a variant whose VISIBILITY write can reveal a gated instance", () => {
-    /*
-     * A visibility exposure carries no usable prop path — `applyExposure` decides
-     * the node's visibility from the value and never reads one — and the resolver
-     * leaves a gated instance unexpanded. So setting it true adds references the
-     * default selection never followed, which a prop-path rule alone cannot see.
-     */
-    const doc = component([instance("n1", "c", {})], {
-      exposed: [
-        {
-          id: "show",
-          label: "Show",
-          nodeId: "n1",
-          propPath: "",
-          type: "visibility",
-        },
-      ],
-      variants: { reveal: { label: "Reveal", overrides: { show: true } } },
-    });
-
-    expect(variantReferencesIn(doc).affecting.has("reveal")).toBe(true);
-  });
-
-  it("does NOT name a variant writing a graph-shaped prop on an ordinary block", () => {
-    /*
-     * `componentId`, `variant` and `overrides` are special only on an instance
-     * node — that is where `componentIdOf` reads them. A text block exposing a
-     * prop that happens to be called `componentId` reaches nothing, and treating
-     * it as though it did refused a valid component once it offered enough such
-     * variants.
-     */
-    const doc = component([node("t1")], {
-      exposed: [
-        {
-          id: "cid",
-          label: "Cid",
-          nodeId: "t1",
-          propPath: "componentId",
-          type: "text",
-        },
-      ],
-      variants: { set: { label: "Set", overrides: { cid: "a" } } },
-    });
-
-    expect(variantReferencesIn(doc).affecting.size).toBe(0);
-
-    // CONTROL: the same exposure on an INSTANCE node does reach the graph, so the
-    // case above is about the node type and not about the fixture.
-    const onInstance = component([instance("n1", "c")], {
-      exposed: [
-        {
-          id: "cid",
-          label: "Cid",
-          nodeId: "n1",
-          propPath: "componentId",
-          type: "select",
-        },
-      ],
-      variants: { set: { label: "Set", overrides: { cid: "a" } } },
-    });
-    expect(variantReferencesIn(onInstance).affecting.has("set")).toBe(true);
   });
 
   it("is EMPTY for a document offering no variants or no exposures", () => {

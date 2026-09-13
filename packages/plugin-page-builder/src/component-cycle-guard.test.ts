@@ -1236,46 +1236,76 @@ describe("saving a component that would reference itself", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("refuses a component offering more id-installing variants than it will compose", async () => {
-    // The backstop for the case the skip cannot remove. Each of these genuinely
-    // installs a component id, so each composes differently and the work is real
-    // — and refusing is the same posture the read budget already takes.
+  it("refuses a component whose selections cost more than one save composes", async () => {
+    /*
+     * The bound is on the PRODUCT: each selection walks up to the document's
+     * nodes, so what a component can afford is its variant count against its
+     * size. A big forest affords few selections and a small one affords many,
+     * which is the honest shape of the cost rather than a count of variants.
+     *
+     * Refusing is the same posture the read budget takes: a prefix of the
+     * selections that found no loop is exactly what a component with no loop
+     * looks like.
+     */
     const c = context();
     register(c.ctx);
     const { nextly } = api({ stored: { b: [] } });
-    const many: Record<
-      string,
-      { label: string; overrides: Record<string, unknown> }
-    > = {};
-    for (let i = 0; i < 65; i += 1) {
-      many[`v${String(i)}`] = {
-        label: "V",
-        overrides: { swap: `t${String(i)}` },
+    const wide = (count: number) => {
+      const variants: Record<
+        string,
+        { label: string; overrides: Record<string, unknown> }
+      > = {};
+      for (let i = 0; i < count; i += 1) {
+        variants[`v${String(i)}`] = {
+          label: "V",
+          overrides: { swap: `t${String(i)}` },
+        };
+      }
+      return {
+        ...places("b"),
+        nodes: [
+          ...places("b").nodes,
+          ...Array.from({ length: 4000 }, (_, i) => ({
+            id: `f${String(i)}`,
+            type: "core/text",
+            version: 1,
+            props: {},
+          })),
+        ],
+        exposed: [
+          {
+            id: "swap",
+            label: "Which",
+            nodeId: "n0",
+            propPath: "componentId",
+            type: "select",
+          },
+        ],
+        variants,
       };
-    }
+    };
 
     await expect(
       c.run({
         collection: COMPONENTS,
         operation: "update",
         originalData: { id: "a" },
-        data: {
-          [FIELD]: {
-            ...places("b"),
-            exposed: [
-              {
-                id: "swap",
-                nodeId: "n0",
-                propPath: "componentId",
-                type: "select",
-              },
-            ],
-            variants: many,
-          },
-        },
+        data: { [FIELD]: wide(65) },
         req: { nextly },
       })
     ).rejects.toThrow(/could not all be read/);
+
+    // CONTROL: the SAME forest with few variants is affordable and saves, so the
+    // refusal is the product rather than the document being large.
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: wide(2) },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("allows a self-placement the renderer never expands", async () => {
@@ -1582,6 +1612,61 @@ describe("saving a component that would reference itself", () => {
         req: { nextly },
       })
     ).resolves.toBeUndefined();
+  });
+
+  it("refuses a variant that REVEALS a gated self-placement, with no Direct API", async () => {
+    /*
+     * The case no prediction caught. The node places the component itself and is
+     * condition-gated, so the default selection composes cleanly. A variant sets
+     * the node's visibility exposure true, the resolver then expands it, and the
+     * loop is real for every reader who picks that variant.
+     *
+     * It installs no component id at all — a visibility write carries no prop
+     * path and `finalProps` skips it — so every scan of what a variant INSTALLS
+     * reports nothing, and a scan of what it WRITES has to model the resolver to
+     * get it right. Composing every selection needs neither.
+     *
+     * Asserted with no Direct API, because that is where a miss is a persisted
+     * cycle rather than a deferred question.
+     */
+    const c = context();
+    register(c.ctx);
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "a" },
+                visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+              },
+            ],
+            exposed: [
+              {
+                id: "show",
+                label: "Show",
+                nodeId: "n0",
+                propPath: "",
+                type: "visibility",
+              },
+            ],
+            variants: {
+              reveal: { label: "Reveal", overrides: { show: true } },
+            },
+          },
+        },
+        req: {},
+      })
+    ).rejects.toThrow(/a → a/);
   });
 
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {

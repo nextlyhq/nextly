@@ -75,8 +75,8 @@ import {
   componentReachIn,
   componentReferencesFrom,
   resolveComponentInstances,
+  countNodes,
   variantNamesIn,
-  variantReferencesIn,
   type ComponentReach,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
@@ -284,16 +284,17 @@ function composesOnItself(
   self: string,
   options: CycleGuardOptions
 ): boolean {
-  const installing = variantReferencesIn(document, options.limits.maxNodes);
-  const naming = [...installing.byVariant]
-    .filter(([, ids]) => ids.includes(self))
-    .map(([variant]) => variant);
+  const selections = selectionsWorthComposing(document);
+  // Nothing can be afforded, so nothing is established here. The walk behind this
+  // is where an unestablished document is refused; this check only ever ADDS a
+  // refusal it can prove from the document alone.
+  if (selections === null) return false;
 
   const alone = {
     has: (id: string) => id === self,
     get: (id: string) => (id === self ? document : undefined),
   };
-  for (const variant of [undefined, ...naming]) {
+  for (const variant of selections) {
     const composition = resolveComponentInstances(
       hostPlacing(self, variant) as never,
       alone as never,
@@ -550,7 +551,7 @@ async function composesACycle(
   options: CycleGuardOptions,
   read: DocumentReader
 ): Promise<CompositionVerdict> {
-  const selections = selectionsWorthComposing(document, options);
+  const selections = selectionsWorthComposing(document);
   // The variants could not be enumerated, or more of them install a reference
   // than this will compose. Not an answer either way.
   if (selections === null) return "indeterminate";
@@ -575,63 +576,51 @@ async function composesACycle(
 }
 
 /**
- * How many SELECTIONS one save will compose before giving up.
+ * How much composing ONE save will do before it declines to answer.
  *
- * Each composition walks up to the document's whole node budget, and a component
- * may legally declare a thousand variants — so composing every selection
- * multiplies one bound by the other and makes an ordinary save do millions of
- * node visits synchronously. Most of that is avoidable rather than necessary:
- * only a variant that INSTALLS a component id can compose differently, and the
- * skip below removes the rest.
+ * A budget rather than a rule about which variants matter. Each selection walks
+ * up to the document's node bound, and a component may legally declare a
+ * thousand variants, so the product is what has to be bounded — not guessed at.
  *
- * What remains is a component that genuinely offers more id-installing variants
- * than this. Refusing there is the same posture as the read budget: the
- * expensive direction of the fail-closed choice, and the other one admits the
- * loop this exists to stop.
+ * Guessing is what this replaced. Three successive rounds tried to predict which
+ * variants could change a composition — by the ids they install, then by the
+ * prop paths they write, then by whether a visibility write reveals — and each
+ * refinement was correct about the case that prompted it and wrong about a new
+ * one, because the prediction has to model the whole resolver to be right. The
+ * budget needs no model: every selection is composed, and the only question is
+ * how many the document's size affords.
+ *
+ * Spending it REFUSES, for the reason the read budget does: a prefix of the
+ * selections that found no loop is exactly what a component with no loop looks
+ * like. A 250-node component affords its thousand variants; a 5,000-node one
+ * affords fifty, and past that this says so rather than guessing.
  */
-const MOST_SELECTIONS_COMPOSED = 64;
+const MOST_COMPOSED_NODES = 250_000;
 
 /**
- * The selections whose composition can differ from the default one.
+ * Every selection a reader can receive, or `null` where they cannot all be composed.
  *
- * A variant reaches the component graph only through an override that installs a
- * component id. One that changes text, a link or a colour does not touch the
- * graph at all; one that HIDES a node only removes references the default
- * selection was already judged on, and removing references cannot close a loop.
- * So a definition offering a thousand variants that install nothing costs ONE
- * composition rather than a thousand and one.
- *
- * Asked with one index of the forest rather than one per variant, because
- * rebuilding it per variant is the same quadratic this exists to remove.
+ * No variant is skipped. Which ones could matter is exactly the question that
+ * kept being answered wrongly, and the answer is not needed: composing one that
+ * changes nothing costs a walk over a document already in memory, while missing
+ * one costs a loop on every page that places it.
  */
 function selectionsWorthComposing(
-  document: unknown,
-  options: CycleGuardOptions
+  document: unknown
 ): readonly (string | undefined)[] | null {
   const named = variantNamesIn(document);
   if (named === null) return null;
-  if (named.length === 0) return [undefined];
 
-  const installing = variantReferencesIn(document, options.limits.maxNodes);
-  if (!installing.complete) return null;
+  const nodes = (document as { nodes?: unknown }).nodes;
+  // A document whose own forest cannot be counted is one nothing can be afforded
+  // for. The walk refuses such a document anyway; this simply does not guess.
+  if (!Array.isArray(nodes)) return null;
+  const size = Math.max(countNodes(nodes as never), 1);
+  const affordable = Math.floor(MOST_COMPOSED_NODES / size);
+  // The default selection is always one of them, so it is counted here too.
+  if (named.length + 1 > affordable) return null;
 
-  // Every variant that can CHANGE what the document composes to, which is not
-  // the same as every variant that installs a new id. A variant may write an
-  // `overrides` record onto a placement and re-point a node two levels below it
-  // while every componentId this document holds stays exactly as stored — so
-  // choosing on installed ids drops precisely the variants whose effect no
-  // one-level scan can see.
-  //
-  // What is skipped is what provably cannot reach the graph: a variant writing
-  // only captions, colours or visibility. One that hides a node reaches FEWER
-  // components than the default selection, and removing references closes no
-  // loop the default did not already have.
-  const worth = [...installing.affecting];
-  if (worth.length > MOST_SELECTIONS_COMPOSED) return null;
-
-  // The default selection first, so an ordinary save reaches its answer before
-  // paying for any variant at all.
-  return [undefined, ...worth];
+  return [undefined, ...named];
 }
 
 /** What the walk and the composition have read so far, shared across selections. */
