@@ -595,18 +595,54 @@ export type FamilyPartKind =
  */
 const VAR_CALL_SOURCE = `\\bvar\\(`;
 
+/** One character CSS reads as whitespace. */
+const CSS_WS_CHAR = new RegExp(`^${CSS_WS}$`);
+
+/** One unescaped character an identifier may carry. */
+const IDENT_CODE_POINT = /^[A-Za-z0-9_\-\u00a0-\uffff]$/;
+
+/** Where the run of CSS whitespace starting at `at` ends. */
+function skipCssWhitespace(text: string, at: number): number {
+  let next = at;
+  while (CSS_WS_CHAR.test(text[next] ?? "")) next += 1;
+  return next;
+}
+
 /**
- * What may follow `var(` for the call to be one CSS will make.
+ * Whether the text opens with a first `var()` argument CSS will substitute.
  *
  * `var()` takes a custom-property name and then either a comma introducing a
  * fallback or its own closing paren. `--` is what makes an identifier a custom
  * property, so `var(foo)` substitutes nothing; and a name followed by anything
  * else — `var(--brand extra)` — is a syntax error rather than a value, so the
  * terminator is checked as well as the opening.
+ *
+ * An escape inside the name is stepped over with {@link readCssEscape}, the same
+ * routine that decodes the name, so the two cannot disagree about where an
+ * escape ends. They did while this was a pattern stepping over a backslash and
+ * ONE character: `--\62 rand` decoded to `--brand`, while the pattern took the
+ * space that terminates `\62 ` for the end of the name and refused the call.
+ *
+ * A backslash before a newline is not an escape to CSS, so it ends the name
+ * here rather than being consumed with the newline.
  */
-const VAR_CALL_ARGUMENT = new RegExp(
-  `^${CSS_WS}*--(?:[A-Za-z0-9_\\-\\u00a0-\\uffff]|\\\\.)*${CSS_WS}*[,)]`
-);
+function varArgumentWellFormed(text: string): boolean {
+  let at = skipCssWhitespace(text, 0);
+  if (!text.startsWith("--", at)) return false;
+  at += 2;
+  for (;;) {
+    const char = text[at] ?? "";
+    if (char === "\\" && !/^[\n\r\f]$/.test(text[at + 1] ?? "")) {
+      at = readCssEscape(text, at).next;
+    } else if (IDENT_CODE_POINT.test(char)) {
+      at += 1;
+    } else {
+      break;
+    }
+  }
+  const terminator = text[skipCssWhitespace(text, at)];
+  return terminator === "," || terminator === ")";
+}
 
 /**
  * Whether every parenthesis in the text is closed.
@@ -622,8 +658,10 @@ function parensBalanced(text: string): boolean {
   for (let at = 0; at < text.length; at += 1) {
     const char = text[at];
     if (char === "\\") {
-      // The escaped character cannot open or close anything.
-      at += 1;
+      // Nothing an escape denotes can open or close anything. The whole escape
+      // is stepped over with the routine the decoder uses, so this and the
+      // name check agree on where it ends.
+      at = readCssEscape(text, at).next - 1;
       continue;
     }
     if (char === "(") depth += 1;
@@ -656,7 +694,7 @@ function varCallsWellFormed(text: string): boolean {
   const calls = new RegExp(VAR_CALL_SOURCE, "gi");
   for (let call = calls.exec(text); call !== null; call = calls.exec(text)) {
     const argument = text.slice(call.index + call[0].length);
-    if (!VAR_CALL_ARGUMENT.test(argument)) return false;
+    if (!varArgumentWellFormed(argument)) return false;
   }
   return true;
 }
@@ -1430,6 +1468,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * digits belongs to the escape rather than to the name — that trailing space is
  * how `\26 Co` says `&Co` instead of leaving the parser to guess where the hex
  * ended. Anything else after a backslash stands for itself.
+ *
+ * Covered: one to six digits, with or without the terminator; a terminator that
+ * is a space, tab, LF, CR, FF, or a CRLF pair; and a non-hex escape such as
+ * `\ ` for a literal space. The terminator is CSS whitespace only — a no-break
+ * space is an identifier character to CSS, so it stays in the name.
+ *
+ * Both the family-list decoder and the `var()` name check step over escapes
+ * with this, so they agree on where every escape ends.
  */
 function readCssEscape(
   text: string,
@@ -1441,8 +1487,10 @@ function readCssEscape(
   }
   const digits = hex[0];
   let next = at + 1 + digits.length;
-  // Exactly one whitespace character is consumed as the terminator.
-  if (/\s/.test(text[next] ?? "")) next += 1;
+  // One whitespace is consumed as the terminator. CSS turns CRLF into a single
+  // newline before it tokenises, so that pair counts as the one character.
+  if (text.startsWith("\r\n", next)) next += 2;
+  else if (CSS_WS_CHAR.test(text[next] ?? "")) next += 1;
   const code = Number.parseInt(digits, 16);
   // A zero or out-of-range code point is the replacement character, which is
   // what CSS says a parser must substitute.
