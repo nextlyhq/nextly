@@ -227,8 +227,18 @@ export function issuesFor(entry: unknown, checks: IssueChecks): string[] {
 /** Operators that mean something about a value drawn from a closed set. */
 const SUPPORTED_OPERATORS = ["equals", "not_equals", "in", "not_in"] as const;
 
+/**
+ * A membership operand as a list.
+ *
+ * A bare scalar is one member, which is what the collection query compiler does
+ * with the same shape (`query-operators.ts` wraps a non-array before building
+ * the clause). Reading it as an empty list instead made `in` match nothing and
+ * `not_in` match everything -- the two worst answers available, and both look
+ * like ordinary numbers.
+ */
 function asList(value: unknown): string[] {
-  return Array.isArray(value) ? value.map(entry => String(entry)) : [];
+  const members = Array.isArray(value) ? value : [value];
+  return members.map(entry => String(entry));
 }
 
 /**
@@ -345,33 +355,47 @@ interface ScanTally {
 }
 
 /**
- * The filter that leaves only what search engines see.
+ * Which documents a scan sees, and why this source writes no filter for it.
  *
- * A draft's SEO is not live yet, so a missing title on one is not a problem the
- * site has -- which is why published-only is the DEFAULT rather than the only
- * answer. A query naming `status: "all"` is asking a different and legitimate
- * question, "where is metadata missing anywhere", and gets it.
+ * 🔴 Core already decides this, correctly, and a filter written here could only
+ * narrow it wrongly. `callerReadOptions` reads as the caller rather than
+ * overriding access, and on that path `resolveStatusFilter` restricts the read
+ * to the PUBLIC STATES DERIVED FROM THE COLLECTION'S WORKFLOW -- every state the
+ * workflow declares public, not the single literal `published`. A collection
+ * whose workflow adds `featured` keeps it; a collection with no lifecycle at all
+ * is scanned whole, because that function returns no filter when there is no
+ * status column to filter on.
  *
- * 🔴 `all` is the one selector that can reach here. `assertValidStatus` refuses
- * `draft` and `published` for a source that does not declare a lifecycle, and
- * this source does not -- it spans several collections, which need not agree on
- * having one. Honouring `all` rather than ignoring it is what keeps the answer
- * the question that was asked.
+ * Writing `status = "published"` here was both redundant and narrower than what
+ * core does: it dropped live content on any workflow that names its public state
+ * anything else, and the card undercounted without appearing to.
  *
- * A collection without the built-in lifecycle has no `status` column to filter
- * on -- and may define an ordinary field by that name -- so it is scanned whole
- * either way.
+ * `status: "all"` is refused rather than answered -- see
+ * {@link assertStatusIsAnswerable}.
  */
-async function publishedOnly(
-  services: SeoIssueServices,
-  slug: string,
-  includeDrafts: boolean
-): Promise<Record<string, unknown> | undefined> {
-  if (includeDrafts) return undefined;
-  const meta = await services.collections.getCollection(slug, {});
-  return isRecord(meta) && meta.status === true
-    ? { status: { equals: "published" } }
-    : undefined;
+
+/**
+ * Refuse a status selector this source cannot deliver.
+ *
+ * 🔴 `assertValidStatus` admits `all` for a source that declares no lifecycle,
+ * so it arrives here -- but the managed `listEntries` forwards no lifecycle
+ * status from its options, and the read is not an overriding one, so the rows
+ * that come back are the public ones whatever the query asked for. Answering
+ * that as if it were "all" reports a published-only number under a name that
+ * promises every document, which nothing downstream could detect.
+ *
+ * So it refuses, and says which selector it cannot honour. Silently narrowing a
+ * caller's question is the one outcome worse than refusing it.
+ */
+function assertStatusIsAnswerable(status: string | undefined): void {
+  if (status === undefined) return;
+  throw new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage: "This widget reports on published content only",
+    logMessage:
+      `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" cannot answer status ` +
+      `"${status}"; the managed read forwards no lifecycle selector`,
+  });
 }
 
 /** How this scan counts one page's rows, and what it is allowed to read. */
@@ -395,7 +419,6 @@ interface ScanRules {
 async function scanCollection(
   services: SeoIssueServices,
   slug: string,
-  where: Record<string, unknown> | undefined,
   rules: ScanRules,
   pagesAllowed: number,
   abandoned: () => boolean
@@ -410,7 +433,6 @@ async function scanCollection(
     const result = await services.collections.listEntries(
       slug,
       {
-        ...(where === undefined ? {} : { where }),
         depth: 0,
         // Only the SEO group and the id the sort reads. Without it every page
         // carries each document whole -- rich text, blocks, every JSON payload
@@ -462,7 +484,6 @@ async function countIssues(
   caller: Parameters<PluginSourceResolver>[1],
   collections: readonly string[],
   rules: Omit<ScanRules, "readOptions">,
-  includeDrafts: boolean,
   signal: AbortSignal | undefined
 ): Promise<{ total: number; atLeast: boolean }> {
   const scanRules: ScanRules = {
@@ -491,7 +512,6 @@ async function countIssues(
       const tally = await scanCollection(
         services,
         slug,
-        await publishedOnly(services, slug, includeDrafts),
         scanRules,
         PAGE_BUDGET - pagesUsed,
         abandoned
@@ -534,6 +554,8 @@ export function seoIssuesWidgetSource(
   const checks = checksFor(installed);
 
   const resolve: PluginSourceResolver = async (query, caller, ctx, opts) => {
+    assertStatusIsAnswerable(query.status);
+
     if (query.op !== "count") {
       throw new Error(
         `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" answers "count", not "${query.op}"`
@@ -545,7 +567,6 @@ export function seoIssuesWidgetSource(
       caller,
       collections,
       { checks, keep: issueFilter(query.where) },
-      query.status === "all",
       opts?.signal
     );
 

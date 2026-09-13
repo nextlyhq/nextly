@@ -195,26 +195,28 @@ describe("counting across collections", () => {
     });
   });
 
-  it("asks only for published documents where a lifecycle exists", async () => {
-    // A draft's SEO is not what search engines see, so a missing title on one
-    // is not yet a problem the site has.
+  it("writes no status filter, leaving the decision to core", async () => {
+    // 🔴 `callerReadOptions` reads AS the caller rather than overriding access,
+    // and on that path `resolveStatusFilter` restricts the read to the public
+    // states derived from the collection's WORKFLOW. A `status = "published"`
+    // written here was redundant and narrower: a workflow naming its public
+    // state anything else -- `featured`, say -- lost live content, and the card
+    // undercounted without appearing to.
     const services = servicesWith({ pages: [clean] }, { lifecycle: true });
-    await countFor(services, ["pages"]);
-
-    expect(services.collections.listEntries.mock.calls[0]?.[1]).toMatchObject({
-      where: { status: { equals: "published" } },
-    });
-  });
-
-  it("does not filter on status where the collection has no lifecycle", async () => {
-    // The must-differ half: such a collection has no `status` column, and may
-    // define an ordinary field by that name, so filtering would drop live rows.
-    const services = servicesWith({ pages: [clean] }, { lifecycle: false });
     await countFor(services, ["pages"]);
 
     expect(
       services.collections.listEntries.mock.calls[0]?.[1]
     ).not.toHaveProperty("where");
+  });
+
+  it("does not read the collection lifecycle it no longer decides from", async () => {
+    // The metadata read existed only to build that filter. One fewer service
+    // call per collection, on every scan.
+    const services = servicesWith({ pages: [clean] }, { lifecycle: true });
+    await countFor(services, ["pages"]);
+
+    expect(services.collections.getCollection).not.toHaveBeenCalled();
   });
 });
 
@@ -576,46 +578,59 @@ describe("a field the caller may not read", () => {
 });
 
 describe("the status a query asks for", () => {
-  it("counts published documents alone by default", async () => {
-    // A draft's SEO is not what search engines see, so a missing title on one
-    // is not yet a problem the site has.
+  it("refuses a selector it cannot deliver", async () => {
+    // 🔴 `assertValidStatus` admits `all` for a source with no lifecycle of its
+    // own, so it reaches this resolver -- but the managed `listEntries` forwards
+    // no lifecycle selector, and the read is not an overriding one, so the rows
+    // are the public ones whatever was asked. Answering that as "all" reports a
+    // published-only number under a name promising every document.
     const services = servicesWith(
       { pages: [{ seo: {} }] },
       { lifecycle: true }
     );
-    await countFor(services, ["pages"]);
 
-    expect(services.collections.listEntries.mock.calls[0]?.[1]).toMatchObject({
-      where: { status: { equals: "published" } },
+    await expect(
+      countFor(services, ["pages"], { status: "all" })
+    ).rejects.toThrow(/published content only/);
+  });
+
+  it("answers a query that names no status", async () => {
+    // The must-differ half: refusing every query satisfies the case above while
+    // answering nothing for anyone.
+    const services = servicesWith(
+      { pages: [{ seo: {} }] },
+      { lifecycle: true }
+    );
+
+    expect(await countFor(services, ["pages"])).toEqual({
+      op: "count",
+      total: 4,
     });
   });
+});
 
-  it("drops the published filter when the query asks for all", async () => {
-    // 🔴 `assertValidStatus` admits `status: "all"` for a source with no
-    // lifecycle of its own, so it reaches this resolver -- and ignoring it
-    // answered a published-only question for a caller who explicitly asked
-    // about every document. "Where is metadata missing anywhere" is a different
-    // and legitimate question.
-    const services = servicesWith(
-      { pages: [{ seo: {} }] },
-      { lifecycle: true }
-    );
-    await countFor(services, ["pages"], { status: "all" });
+describe("a membership operand that is not a list", () => {
+  it("reads a bare scalar as one member, the way the compiler does", async () => {
+    // 🔴 `query-operators.ts` wraps a non-array before building the clause, and
+    // widget validation accepts the same shape. Reading it as an EMPTY list made
+    // `in` match nothing and `not_in` match everything -- the two worst answers
+    // available, and both look like ordinary numbers.
+    const services = servicesWith({ pages: [{ seo: {} }] });
 
     expect(
-      services.collections.listEntries.mock.calls[0]?.[1]
-    ).not.toHaveProperty("where");
+      await countFor(services, ["pages"], {
+        where: { [ISSUE_FIELD]: { in: "Missing meta title" } },
+      })
+    ).toEqual({ op: "count", total: 1 });
   });
 
-  it("does not read the collection's lifecycle when asked for all", async () => {
-    // Skipping the filter skips the metadata read it was for: one fewer service
-    // call per collection on a query that cannot use the answer.
-    const services = servicesWith(
-      { pages: [{ seo: {} }] },
-      { lifecycle: true }
-    );
-    await countFor(services, ["pages"], { status: "all" });
+  it("negates a bare scalar over the same one member", async () => {
+    const services = servicesWith({ pages: [{ seo: {} }] });
 
-    expect(services.collections.getCollection).not.toHaveBeenCalled();
+    expect(
+      await countFor(services, ["pages"], {
+        where: { [ISSUE_FIELD]: { not_in: "Missing meta title" } },
+      })
+    ).toEqual({ op: "count", total: 3 });
   });
 });
