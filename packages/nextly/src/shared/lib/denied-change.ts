@@ -66,6 +66,17 @@ export interface PromotionAccessInput {
    * different entities and this module has no business knowing which.
    */
   applyRules: (document: Record<string, unknown>) => Promise<void>;
+  /**
+   * Every field name the schema declares, at any depth.
+   *
+   * The store's own columns share names with plausible content, so a name is
+   * not enough to tell them apart: a collection that declares a field called
+   * `id` or `updatedAt` inside a group means it. Given this, the schema
+   * decides and the name list is consulted only for a name the schema does not
+   * claim. Omitted, the name list decides alone, which is right for a caller
+   * that has no schema to hand.
+   */
+  authoredFieldNames?: ReadonlySet<string>;
   slug: string;
   /** The language being published, for the log context; `null` when there is none. */
   locale?: string | null;
@@ -109,7 +120,7 @@ export async function resolvePromotedDocument(
       ...leafPaths(valueAt(input.live, path), path),
     ]);
     for (const leaf of leaves) {
-      if (isStoreBookkeeping(leaf)) continue;
+      if (isStoreBookkeeping(leaf, input.authoredFieldNames)) continue;
       if (
         sameStoredValue(valueAt(input.before, leaf), valueAt(input.live, leaf))
       ) {
@@ -274,10 +285,17 @@ const STORE_BOOKKEEPING: ReadonlySet<string> = new Set([
   "_locale",
 ]);
 
-function isStoreBookkeeping(path: string): boolean {
+function isStoreBookkeeping(
+  path: string,
+  authored: ReadonlySet<string> | undefined
+): boolean {
   const segments = path.split(/\.|\[\d+\]/).filter(Boolean);
   const last = segments[segments.length - 1];
-  return last !== undefined && STORE_BOOKKEEPING.has(last);
+  if (last === undefined || !STORE_BOOKKEEPING.has(last)) return false;
+  // The schema has the final word. A field the config declares is content
+  // whatever it is called, and skipping it would let an edit to it be
+  // published by someone the rules deny.
+  return !authored?.has(last);
 }
 
 /**

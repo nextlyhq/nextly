@@ -171,6 +171,36 @@ describe("resolvePromotedDocument", () => {
     expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
   });
 
+  it("judges a declared field named like a store column", async () => {
+    // `id` is one of the store's own column names, and the name list exists so
+    // a denied component's own row identity and timestamps do not refuse every
+    // publish. A collection that DECLARES a field called `id` means it, and
+    // skipping that one lets an edit the rules deny reach the row.
+    await expect(
+      resolve({
+        before: { meta: { id: "draft wrote this" } },
+        live: { meta: { id: "live" } },
+        authoredFieldNames: new Set(["meta", "id"]),
+        applyRules: denies("meta.id"),
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "meta.id" }] },
+    });
+  });
+
+  it("still skips a store column the schema does NOT declare", async () => {
+    // The control for the test above. A component row carries its own `id` and
+    // timestamps beside the author's fields, and a snapshot's never match the
+    // row's, so counted as content a denied component refuses every publish.
+    const out = await resolve({
+      before: { promo: { label: "live", id: "row-1", updated_at: "T1" } },
+      live: { promo: { label: "live", id: "row-1", updated_at: "T2" } },
+      authoredFieldNames: new Set(["promo", "label"]),
+      applyRules: denies("promo"),
+    });
+    expect(out).toBeDefined();
+  });
+
   it("leaves an allowed deletion deleted", async () => {
     const out = await resolve({
       before: { title: "new" },

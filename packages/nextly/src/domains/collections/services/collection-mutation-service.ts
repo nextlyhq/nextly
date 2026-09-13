@@ -6819,6 +6819,13 @@ export class CollectionMutationService extends BaseService {
                     grants: promoteGrants,
                     id: params.entryId,
                   }),
+                // What the schema declares, so a field named like one of the
+                // store's own columns is still judged as the content it is.
+                authoredFieldNames: new Set(
+                  addressableFields(fields, { descendInto: () => true })
+                    .map(entry => entry.name)
+                    .filter((name): name is string => typeof name === "string")
+                ),
                 slug: params.collectionName,
                 locale: draftLocaleKey ?? params.locale ?? null,
               });
