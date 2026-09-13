@@ -256,6 +256,11 @@ async function refuseASelfReference(
   const composed = await composesACycle(submitted.document, self, options, () =>
     Promise.resolve({ kind: "unreadable" as const })
   );
+  // Fails CLOSED, as the walk does. The survey has already found the subject
+  // naming itself, so this is not a document about which nothing is known — and
+  // a composition that could not be established must not be read as a clean one
+  // when the decline for a missing Direct API is the next thing to run.
+  if (composed === "indeterminate") throw unreadableRefusal();
   if (composed !== "cycle") return;
 
   throw refusal(
@@ -410,10 +415,15 @@ interface WalkOutcome {
 
 /** Whether a surveyed document names the subject, decided without any read. */
 function selfNamedIn(
-  survey: { readonly ids: readonly string[]; readonly complete: boolean },
+  survey: { readonly ids: readonly string[] },
   self: string
 ): boolean {
-  return survey.complete && survey.ids.includes(self);
+  // Completeness is NOT required, and the asymmetry is the point: a truncated
+  // survey makes an ABSENT id uncertain and a PRESENT one no less present. The
+  // walk it feeds already refuses an unread forest for the absent direction, so
+  // demanding completeness here only threw away evidence — and threw it away on
+  // the path that runs before the guard can ask the library anything.
+  return survey.ids.includes(self);
 }
 
 /**

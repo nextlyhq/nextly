@@ -25,6 +25,7 @@ import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
   componentReferencesFrom,
+  componentReachIn,
   componentReferencesIn,
   componentUsageIn,
   composedRootTypes,
@@ -2605,6 +2606,69 @@ describe("variantReferencesIn", () => {
     expect(out.byVariant.get("deep")).toEqual(["c"]);
   });
 
+  it("names a variant whose VISIBILITY write can reveal a gated instance", () => {
+    /*
+     * A visibility exposure carries no usable prop path — `applyExposure` decides
+     * the node's visibility from the value and never reads one — and the resolver
+     * leaves a gated instance unexpanded. So setting it true adds references the
+     * default selection never followed, which a prop-path rule alone cannot see.
+     */
+    const doc = component([instance("n1", "c", {})], {
+      exposed: [
+        {
+          id: "show",
+          label: "Show",
+          nodeId: "n1",
+          propPath: "",
+          type: "visibility",
+        },
+      ],
+      variants: { reveal: { label: "Reveal", overrides: { show: true } } },
+    });
+
+    expect(variantReferencesIn(doc).affecting.has("reveal")).toBe(true);
+  });
+
+  it("does NOT name a variant writing a graph-shaped prop on an ordinary block", () => {
+    /*
+     * `componentId`, `variant` and `overrides` are special only on an instance
+     * node — that is where `componentIdOf` reads them. A text block exposing a
+     * prop that happens to be called `componentId` reaches nothing, and treating
+     * it as though it did refused a valid component once it offered enough such
+     * variants.
+     */
+    const doc = component([node("t1")], {
+      exposed: [
+        {
+          id: "cid",
+          label: "Cid",
+          nodeId: "t1",
+          propPath: "componentId",
+          type: "text",
+        },
+      ],
+      variants: { set: { label: "Set", overrides: { cid: "a" } } },
+    });
+
+    expect(variantReferencesIn(doc).affecting.size).toBe(0);
+
+    // CONTROL: the same exposure on an INSTANCE node does reach the graph, so the
+    // case above is about the node type and not about the fixture.
+    const onInstance = component([instance("n1", "c")], {
+      exposed: [
+        {
+          id: "cid",
+          label: "Cid",
+          nodeId: "n1",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+      variants: { set: { label: "Set", overrides: { cid: "a" } } },
+    });
+    expect(variantReferencesIn(onInstance).affecting.has("set")).toBe(true);
+  });
+
   it("is EMPTY for a document offering no variants or no exposures", () => {
     expect(variantReferencesIn(doc({})).byVariant.size).toBe(0);
     expect(
@@ -2680,6 +2744,46 @@ describe("variantNamesIn", () => {
  * supported thing to expose — whose variant then re-points it, because the
  * stored id is never read at all in that case.
  */
+describe("the caller's node cap reaches the variant pass", () => {
+  it("does not report a document the DIRECT survey read as unread", () => {
+    /*
+     * The variant pass is derived, so it has to run under the bound the caller
+     * asked for. Defaulting it made a forest larger than the default — read
+     * completely by the direct survey under a larger cap — come back
+     * `complete: false` from the derived half, which every consumer reads as
+     * unreadable and the write guard turns into a refusal.
+     */
+    const big = component(
+      [
+        instance("n1", "c"),
+        ...Array.from({ length: DEFAULT_LIMITS.maxNodes }, (_, i) =>
+          node(`t${String(i)}`)
+        ),
+      ],
+      {
+        exposed: [
+          {
+            id: "swap",
+            label: "Which",
+            nodeId: "n1",
+            propPath: "componentId",
+            type: "select",
+          },
+        ],
+        variants: { toA: { label: "A", overrides: { swap: "a" } } },
+      }
+    );
+
+    const over = componentReachIn(big, DEFAULT_LIMITS.maxNodes + 1000);
+    expect(over.complete).toBe(true);
+    expect(over.ids).toContain("a");
+
+    // CONTROL: under the DEFAULT cap the same forest genuinely does not fit, so
+    // the case above is the cap being honoured rather than the fixture being small.
+    expect(componentReachIn(big).complete).toBe(false);
+  });
+});
+
 describe("componentReferencesIn", () => {
   /** A places B, exposes that node's componentId, and offers a variant naming A. */
   const swappable = component([instance("n1", "b")], {

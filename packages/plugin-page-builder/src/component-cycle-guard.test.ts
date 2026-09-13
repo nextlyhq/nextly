@@ -1406,6 +1406,87 @@ describe("saving a component that would reference itself", () => {
     ).rejects.toThrow(/would reference itself/);
   });
 
+  it("refuses a self-reference found in a TRUNCATED survey", async () => {
+    /*
+     * Completeness is not required to believe an id that was FOUND. A truncated
+     * survey makes an ABSENT id uncertain and a present one no less present.
+     *
+     * Asserted with NO Direct API, because that is the only configuration where
+     * the two behaviours differ. Demanding completeness made this document read
+     * as not naming itself, and the decline for a missing Direct API was then the
+     * next thing to run — so the write was permitted. With the id believed, the
+     * composition is consulted, cannot be established under this bound, and fails
+     * closed.
+     */
+    const c = context();
+    registerComponentCycleGuard({
+      ctx: c.ctx,
+      componentsCollection: COMPONENTS,
+      documentField: FIELD,
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        // Names itself FIRST, then outruns the bound.
+        data: { [FIELD]: places("a", "b", "cc", "dd", "ee", "ff") },
+        req: {},
+      })
+    ).rejects.toThrow(/could not all be read/);
+  });
+
+  it("refuses a self-reference it could not finish composing, with no Direct API", async () => {
+    /*
+     * The self check runs ahead of the decline for a missing Direct API, so an
+     * answer it could not establish must fail CLOSED — otherwise the decline is
+     * the next thing to run and the write is permitted.
+     *
+     * More graph-affecting variants than the guard will compose is exactly that
+     * state: the selections cannot be enumerated, so the composition establishes
+     * nothing while the survey has already found the subject naming itself.
+     */
+    const c = context();
+    register(c.ctx);
+    const many: Record<
+      string,
+      { label: string; overrides: Record<string, unknown> }
+    > = {};
+    for (let i = 0; i < 65; i += 1) {
+      many[`v${String(i)}`] = {
+        label: "V",
+        overrides: { swap: `t${String(i)}` },
+      };
+    }
+    many.loop = { label: "Loop", overrides: { swap: "a" } };
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...places("b"),
+            exposed: [
+              {
+                id: "swap",
+                label: "Which",
+                nodeId: "n0",
+                propPath: "componentId",
+                type: "select",
+              },
+            ],
+            variants: many,
+          },
+        },
+        req: {},
+      })
+    ).rejects.toThrow(/could not all be read/);
+  });
+
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {
     /*
      * The raw ids in the document name `b`, and the guard reading only those

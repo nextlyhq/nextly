@@ -46,6 +46,7 @@
  */
 import {
   COMPONENT_INSTANCE_TYPE,
+  isComponentInstance,
   DOCUMENT_FORMAT_VERSION,
   isComponentDocument,
   isUnsetOverride,
@@ -446,22 +447,26 @@ export function componentReachIn(
   if (!direct.complete) {
     return { ids: direct.ids, placements: direct.placements, complete: false };
   }
-  const withVariants = withVariantReferences(document, {
-    ids: direct.ids,
-    complete: true,
-  });
+  const withVariants = withVariantReferences(
+    document,
+    { ids: direct.ids, complete: true },
+    cap
+  );
   return { ...withVariants, placements: direct.placements };
 }
 
 /** {@link componentReferencesIn}'s variant pass, over a forest read whole. */
 function withVariantReferences(
   document: Record<string, unknown>,
-  direct: ComponentUsage
+  direct: ComponentUsage,
+  maxNodes: number
 ): ComponentUsage {
   // DERIVED from the per-variant answer rather than computed beside it: the
   // union is a view of the same walk, and two walks over one forest agree on the
-  // day they are written.
-  const perVariant = variantReferencesIn(document);
+  // day they are written. The CALLER's cap is forwarded: defaulting here made a
+  // document the direct survey read completely come back unread from the variant
+  // pass whenever the caller asked for a larger bound.
+  const perVariant = variantReferencesIn(document, maxNodes);
   if (!perVariant.complete) return { ids: direct.ids, complete: false };
 
   const ids = [...direct.ids];
@@ -494,6 +499,37 @@ const GRAPH_REACHING_PROPS: readonly string[] = [
   "variant",
   "overrides",
 ];
+
+/**
+ * Whether writing one exposure can change what the document composes to.
+ *
+ * Two ways, and only the first is about a prop path.
+ *
+ * A `visibility` write carries NO usable path — `applyExposure` decides the
+ * node's visibility from the value and never reads `propPath` — and the resolver
+ * leaves a gated instance unexpanded. So revealing a node reveals its whole
+ * subtree, and a variant that sets such an exposure true adds references the
+ * default selection never followed. It reaches the graph wherever the forest
+ * holds an instance to reveal; which instance is under which node is not asked,
+ * because composing one selection too many costs a walk and missing one costs a
+ * loop.
+ *
+ * The three prop names are special ONLY on an instance node, because that is
+ * where `componentIdOf` reads them and where `overrides` flow down from. An
+ * ordinary block exposing a prop that happens to be called `componentId` reaches
+ * nothing at all, and treating it as though it did refused a valid component on
+ * every save once it offered enough such variants.
+ */
+function reachesTheGraph(
+  property: ExposedProperty,
+  nodes: ReadonlyMap<string, BlockNode>,
+  revealable: boolean
+): boolean {
+  if (property.type === "visibility") return revealable;
+  const node = nodes.get(property.nodeId);
+  if (node === undefined || !isComponentInstance(node)) return false;
+  return GRAPH_REACHING_PROPS.includes(property.propPath.split(".")[0] ?? "");
+}
 
 /** What each variant installs, whether it can change composition, and whether it could be read. */
 export interface VariantReferences {
@@ -561,11 +597,13 @@ export function variantReferencesIn(
   const indexed = boundedNodeIndex(document.nodes as readonly BlockNode[], cap);
   if (!indexed.complete) return { ...nothing, complete: false };
 
+  // Whether this forest holds anything that could be REVEALED into the graph.
+  const revealable = [...indexed.index.values()].some(node =>
+    isComponentInstance(node)
+  );
   const reaching = new Set(
     declared
-      .filter(property =>
-        GRAPH_REACHING_PROPS.includes(property.propPath.split(".")[0] ?? "")
-      )
+      .filter(property => reachesTheGraph(property, indexed.index, revealable))
       .map(property => property.id)
   );
 
