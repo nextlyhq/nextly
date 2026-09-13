@@ -380,10 +380,10 @@ describe.each(["postgresql", "mysql"] as const)(
 
     it("carries the edit through a rename of the same field", () => {
       // A renamed field is the SAME field. Matching the old list by the NEW
-      // name finds nothing, so this pass skipped the pair entirely and the
-      // save emitted the column rename alone — registry recording `restrict`
-      // over a key still cascading, which is the defect this PR exists to fix,
-      // reached through a second door.
+      // name finds nothing, so the pair is skipped entirely and the save
+      // emits the column rename alone — leaving the registry recording
+      // `restrict` over a key that still cascades, which is the divergence
+      // between definition and database this whole file is about.
       const sql = service(dialect).generateAlterTableMigration(
         "dc_posts",
         [manyToOne({ onDelete: "cascade" })],
