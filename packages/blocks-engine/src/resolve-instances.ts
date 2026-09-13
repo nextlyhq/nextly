@@ -614,6 +614,20 @@ export function componentPlacementsIn(
   return { placements: survey.placements, complete: survey.complete };
 }
 
+/** What one placement installs, and whether the definition could all be read. */
+export interface PlacementReferences {
+  /** The component ids the placement's overrides put on the definition's nodes. */
+  readonly ids: readonly string[];
+  /**
+   * Whether the definition's forest fit within the node bound.
+   *
+   * `false` makes `ids` meaningless rather than partial: a caller deciding what
+   * a document reaches must treat it as unread, the way every other survey in
+   * this module reports the same case.
+   */
+  readonly complete: boolean;
+}
+
 /**
  * Every component a PLACEMENT can reach, which neither document names alone.
  *
@@ -640,18 +654,78 @@ export function componentPlacementsIn(
  */
 export function componentReferencesFrom(
   definition: unknown,
-  instance: unknown
-): readonly string[] {
-  if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) return [];
-  if (!isPlainRecord(instance)) return [];
+  instance: unknown,
+  maxNodes: number = DEFAULT_LIMITS.maxNodes
+): PlacementReferences {
+  if (!isPlainRecord(definition) || !Array.isArray(definition.nodes)) {
+    return NO_REFERENCES;
+  }
+  if (!isPlainRecord(instance)) return NO_REFERENCES;
   const declared = usableExposures(definition.exposed);
-  if (declared.length === 0) return [];
-  return installedOn(
-    definition,
-    instance as unknown as BlockNode,
-    declared,
-    nodeIndex(definition.nodes as readonly BlockNode[])
+  // No exposure means no override can reach a node, so the forest is not walked
+  // at all — which is what keeps the ordinary placement free.
+  if (declared.length === 0) return NO_REFERENCES;
+
+  const cap = boundedLimit(maxNodes, "maxNodes", "componentReferencesFrom");
+  const indexed = boundedNodeIndex(
+    definition.nodes as readonly BlockNode[],
+    cap
   );
+  // A TRUNCATED index cannot answer this. An override names an exposure, and the
+  // exposure names the node it writes to by id — so a node the index never
+  // reached is indistinguishable from an override that lands nowhere, and the
+  // ids found so far are a prefix. Reported as unread rather than returned,
+  // because a prefix here is exactly what "references nothing" looks like.
+  if (!indexed.complete) return { ids: [], complete: false };
+
+  return {
+    ids: installedOn(
+      definition,
+      instance as unknown as BlockNode,
+      declared,
+      indexed.index
+    ),
+    complete: true,
+  };
+}
+
+/** Shared, because the four "nothing to install" exits are the same answer. */
+const NO_REFERENCES: PlacementReferences = { ids: [], complete: true };
+
+/**
+ * {@link nodeIndex} under a node budget, and whether the whole forest fit.
+ *
+ * The unbounded form is safe where the caller has already surveyed the forest
+ * under a cap — `componentReachIn` returns before its variant pass for exactly
+ * that reason. It is NOT safe for a definition handed straight in: a stored or
+ * imported document can carry more nodes than any limit admits, and a caller
+ * that resolves one placement per node would then walk that whole forest once
+ * per placement, with the read cache hiding none of it.
+ */
+function boundedNodeIndex(
+  nodes: readonly BlockNode[],
+  cap: number
+): { index: ReadonlyMap<string, BlockNode>; complete: boolean } {
+  const index = new Map<string, BlockNode>();
+  let budget = cap;
+  let truncated = false;
+  walkForest(nodes, entry => {
+    if (budget <= 0) {
+      truncated = true;
+      return "stop";
+    }
+    budget -= 1;
+    // Persisted forests reach here unvalidated, so an entry may be `null` or a
+    // primitive and reading `id` off one throws — the same guard `findNode`
+    // carries, for the same reason.
+    if (!isPlainRecord(entry.node)) return "skip";
+    const id = entry.node.id;
+    if (typeof id === "string" && !index.has(id)) {
+      index.set(id, entry.node as unknown as BlockNode);
+    }
+    return "descend";
+  });
+  return { index, complete: !truncated };
 }
 
 /**
@@ -2486,19 +2560,15 @@ function inForce(
 function nodeIndex(
   nodes: readonly BlockNode[]
 ): ReadonlyMap<string, BlockNode> {
-  const index = new Map<string, BlockNode>();
-  walkForest(nodes, entry => {
-    // Persisted forests reach here unvalidated, so an entry may be `null` or a
-    // primitive and reading `id` off one throws — the same guard `findNode`
-    // carries, for the same reason.
-    if (!isPlainRecord(entry.node)) return "skip";
-    const id = entry.node.id;
-    if (typeof id === "string" && !index.has(id)) {
-      index.set(id, entry.node as unknown as BlockNode);
-    }
-    return "descend";
-  });
-  return index;
+  // DERIVED from the bounded form rather than walking the forest a second way.
+  // Two indexers agree on the day they are written and drift after, and the
+  // difference between them is only the budget.
+  //
+  // Unbounded is right for the two callers that reach here: `componentReachIn`
+  // returns before its variant pass whenever its own capped survey truncated, so
+  // a forest that arrives here has already fitted a bound; and
+  // `instanceExposure` is handed a definition its caller has already read.
+  return boundedNodeIndex(nodes, Number.POSITIVE_INFINITY).index;
 }
 
 /**

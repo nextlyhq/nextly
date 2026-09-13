@@ -310,6 +310,14 @@ export {
   // Both of the above from ONE walk, for the callers that need both.
   componentReachIn,
   componentUsageIn,
+  // What those three ANSWER WITH. Published alongside them because a caller that
+  // cannot name a return type cannot hold it in a field, pass it on, or declare
+  // a function over it — `ReturnType<typeof>` is a workaround for an omission,
+  // not an interface.
+  type ComponentPlacement,
+  type ComponentReachSurvey,
+  type DocumentPlacements,
+  type PlacementReferences,
   // The selections that union covers, separately. A caller that must agree with
   // the rendered page composes each one; the union answers about none of them.
   variantNamesIn,

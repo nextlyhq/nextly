@@ -75,6 +75,32 @@ const exposesItsPlacement = (stored: string) => ({
   ],
 });
 
+/**
+ * A definition with `count` nodes and one exposure, for the node-bound cases.
+ *
+ * The exposure matters: with none declared, no override can reach a node and the
+ * lookahead answers without walking the forest at all.
+ */
+const oversized = (count: number) => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "component",
+  nodes: Array.from({ length: count }, (_, i) => ({
+    id: `f${String(i)}`,
+    type: "core/text",
+    version: 1,
+    props: {},
+  })),
+  exposed: [
+    {
+      id: "swap",
+      label: "Which",
+      nodeId: "f0",
+      propPath: "componentId",
+      type: "select",
+    },
+  ],
+});
+
 /** A document placing `target`, with overrides aimed at the target's exposures. */
 const placesWithOverrides = (
   target: string,
@@ -893,6 +919,126 @@ describe("saving a component that would reference itself", () => {
     await expect(c.run(saving("a", ["x", "b"], nextly))).rejects.toThrow(
       /a → b → … → a/
     );
+  });
+
+  it("keeps the refusal when the loop is LONGER than the composed-depth cap", async () => {
+    /*
+     * `MAX_COMPOSED_DEPTH` is 5, so on `a → b → cc → d → e → f → a` the resolver
+     * stops at `f` with `composed-depth` and never expands it — the loop closes
+     * one level past where composition is allowed to look. Every placement it
+     * did reach then resolves, so the composition has nothing left to ask for.
+     *
+     * That is a limit reached, NOT a report that there is no loop. Reading it as
+     * one lets a chain longer than the cap clear a refusal the insert panel still
+     * applies to the same graph, using the walk, which has no such cap.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      stored: { b: ["cc"], cc: ["d"], d: ["e"], e: ["f"], f: ["a"] },
+    });
+
+    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+      /a → b → … → a/
+    );
+  });
+
+  it("CONTROL: the same chain one link SHORTER is composed and refused", async () => {
+    // Inside the cap the composition reaches the loop itself, so the case above
+    // is about the cap rather than about a chain the guard cannot follow at all.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: ["cc"], cc: ["d"], d: ["a"] } });
+
+    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+      /a → b → … → a/
+    );
+  });
+
+  it("allows a status write that CLEARS the document, without judging the old one", async () => {
+    /*
+     * `content: null` is a field this write stores, not one it leaves alone —
+     * core selects an update's columns with the same `hasOwnProperty` question.
+     * So what lands references nothing and can close no loop.
+     *
+     * Treated as an omitted field it would instead load the pending draft and
+     * judge THAT, which refuses the write for a chain the write itself removes:
+     * an author clearing a component to break a legacy loop would be told to
+     * break the loop first.
+     */
+    const c = context();
+    register(c.ctx);
+    // The stored draft carries a real loop, so a guard that judged it would
+    // refuse — which is what makes this fixture discriminating.
+    const { nextly, asked } = api({ stored: { a: ["b"], b: ["a"] } });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { status: "published", [FIELD]: null },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    // And it costs no reads: a cleared field is answered from the patch alone.
+    expect(asked).toEqual([]);
+  });
+
+  it("CONTROL: the same publish WITHOUT the field judges the pending draft", async () => {
+    // The field's PRESENCE is what separates the two, so this one must refuse.
+    // Otherwise the case above passes on a fixture whose draft was never judged.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { a: ["b"], b: ["a"] } });
+
+    await expect(c.run(publishingPending("a", nextly))).rejects.toThrow(
+      /a → b → a/
+    );
+  });
+
+  it("refuses a save whose PLACED definition is too large to read", async () => {
+    /*
+     * A definition holding more nodes than the bound admits cannot say what an
+     * override on it installs, and the ids found so far are a prefix — which is
+     * indistinguishable from a definition that installs nothing. So this must
+     * refuse rather than approve.
+     *
+     * Stated as the OUTCOME rather than the mechanism, because two bounds reach
+     * it: the placement lookahead's index, and the graph walk's own survey of the
+     * same definition. Removing either alone still refuses, so this test pins the
+     * behaviour and neither of those bounds individually.
+     *
+     * Registered with a small bound instead of building a document of five
+     * thousand nodes: the property is a bound being APPLIED, not its value.
+     */
+    const c = context();
+    registerComponentCycleGuard({
+      ctx: c.ctx,
+      componentsCollection: COMPONENTS,
+      documentField: FIELD,
+      limits: { ...DEFAULT_LIMITS, maxNodes: 4 },
+    });
+    const { nextly } = api({ documents: { b: oversized(12) } });
+
+    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
+      /could not all be read/
+    );
+  });
+
+  it("CONTROL: the same definition under a bound that FITS is allowed", async () => {
+    // One difference — the bound — and the opposite outcome, so the refusal above
+    // is attributable to it rather than to a definition the guard cannot read.
+    const c = context();
+    registerComponentCycleGuard({
+      ctx: c.ctx,
+      componentsCollection: COMPONENTS,
+      documentField: FIELD,
+      limits: { ...DEFAULT_LIMITS, maxNodes: 5000 },
+    });
+    const { nextly } = api({ documents: { b: oversized(12) } });
+
+    await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
   });
 
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {

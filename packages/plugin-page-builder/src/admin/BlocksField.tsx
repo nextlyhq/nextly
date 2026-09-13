@@ -607,9 +607,17 @@ function namedBy(
     // reports the uncertainty there. Answering unknown twice for one gap makes
     // the panel withhold a tile for a definition it could read perfectly well.
     if (target === undefined) continue;
-    for (const reached of componentReferencesFrom(target, placement.node)) {
-      ids.add(reached);
-    }
+    const installed = componentReferencesFrom(
+      target,
+      placement.node,
+      limits.maxNodes
+    );
+    // A definition too large to index cannot say what an override installs on
+    // it. SKIPPED here for the same reason an absent one is, and not treated as
+    // unknown: the target is already among the ids this returns, so the walk
+    // visits it and reports the uncertainty once, there.
+    if (!installed.complete) continue;
+    for (const reached of installed.ids) ids.add(reached);
   }
   return [...ids];
 }

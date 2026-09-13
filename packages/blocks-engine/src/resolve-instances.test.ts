@@ -2714,7 +2714,7 @@ describe("componentReferencesFrom", () => {
   it("finds the id a placing node's own overrides install", () => {
     const placing = instance("p", "b", { overrides: { swap: "a" } });
 
-    expect(componentReferencesFrom(B, placing)).toEqual(["a"]);
+    expect(componentReferencesFrom(B, placing).ids).toEqual(["a"]);
   });
 
   it("ORACLE: the resolver expands that id, and never reads the stored one", () => {
@@ -2751,12 +2751,13 @@ describe("componentReferencesFrom", () => {
   });
 
   it("answers nothing for a placement carrying no overrides", () => {
-    expect(componentReferencesFrom(B, instance("p", "b"))).toEqual([]);
+    expect(componentReferencesFrom(B, instance("p", "b")).ids).toEqual([]);
   });
 
   it("answers nothing when the definition exposes nothing", () => {
     expect(
       componentReferencesFrom(C, instance("p", "c", { overrides: { x: "a" } }))
+        .ids
     ).toEqual([]);
   });
 
@@ -2765,7 +2766,7 @@ describe("componentReferencesFrom", () => {
       componentReferencesFrom(
         B,
         instance("p", "b", { overrides: { nope: "a" } })
-      )
+      ).ids
     ).toEqual([]);
   });
 
@@ -2789,13 +2790,61 @@ describe("componentReferencesFrom", () => {
       componentReferencesFrom(
         withVariant,
         instance("p", "b", { variant: "loop" })
-      )
+      ).ids
     ).toEqual(["a"]);
   });
 
+  it("reports a definition too large to index as UNREAD, not as empty", () => {
+    /*
+     * The bound matters because this is asked once per PLACEMENT: the caller
+     * resolves each placing node against the definition it places, so an
+     * uncapped index over an oversized definition is walked again for every
+     * placement of it, and a read cache hides none of that work.
+     *
+     * Reported unread rather than truncated: the ids found so far are a prefix,
+     * and a prefix is exactly what "installs nothing" looks like here.
+     */
+    // `n1` is an INSTANCE node, because `componentIdOf` reads a componentId only
+    // off one — writing the override onto a text node installs nothing, and the
+    // control below would then pass while proving nothing.
+    const many = component(
+      [
+        instance("n1", "c"),
+        ...Array.from({ length: 11 }, (_, i) => node(`t${String(i)}`)),
+      ],
+      {
+        exposed: [
+          {
+            id: "swap",
+            label: "Which",
+            nodeId: "n1",
+            propPath: "componentId",
+            type: "select",
+          },
+        ],
+      }
+    );
+    const placing = instance("p", "b", { overrides: { swap: "a" } });
+
+    expect(componentReferencesFrom(many, placing, 4)).toEqual({
+      ids: [],
+      complete: false,
+    });
+
+    // CONTROL: the same definition and placement under a bound that fits DOES
+    // install the id, so the case above is about the bound rather than about a
+    // fixture that installs nothing either way.
+    expect(componentReferencesFrom(many, placing, 5000)).toEqual({
+      ids: ["a"],
+      complete: true,
+    });
+  });
+
   it("answers nothing for values that are not documents or nodes", () => {
-    expect(componentReferencesFrom(undefined, instance("p", "b"))).toEqual([]);
-    expect(componentReferencesFrom(B, undefined)).toEqual([]);
+    expect(componentReferencesFrom(undefined, instance("p", "b")).ids).toEqual(
+      []
+    );
+    expect(componentReferencesFrom(B, undefined).ids).toEqual([]);
   });
 });
 

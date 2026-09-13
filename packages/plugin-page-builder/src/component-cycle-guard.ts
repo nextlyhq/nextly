@@ -172,7 +172,14 @@ async function refuseACycle(
   // whether a document-less write is graph-neutral.
   const submitted = submittedDocument(context, options);
   const next = nextStatusOf(context);
-  if (submitted === "not-a-document" && next === undefined) return;
+  if (submitted === "absent" && next === undefined) return;
+
+  // The field IS in this patch and carries no document. What lands therefore
+  // holds no references at all, so it can close no loop whatever the status does
+  // — and judging the pending draft instead would refuse the write for a chain
+  // that this very write REMOVES. An author clearing a component to break a
+  // legacy loop would be told to break it first.
+  if (submitted === "empty") return;
 
   // AFTER the checks above, so a write that cannot change the reference graph is
   // not refused for being in a transaction. None of them needs a graph read, so
@@ -198,20 +205,44 @@ async function refuseACycle(
   // authorisation one.
   if (nextly === null) return;
 
-  // A status-only publish carries no document of its own and is NOT graph-
-  // neutral: core promotes the whole pending working draft into the live row
-  // (`draft-published-split.integration.test.ts`, "promotes the whole working
-  // draft to the live row when the publish omits its fields"). What goes live is
-  // that draft, so that is the document to judge — a cycle written into a draft
-  // before this guard existed, or through a write that skipped it, would
-  // otherwise reach the live library on a publish this never inspected.
-  const promoted =
-    submitted === "not-a-document"
-      ? await pendingDocument(self, options, nextly)
-      : ({ kind: "document", document: submitted.document } as const);
-  // No pending document to promote after all. Nothing changes and nothing is
+  const held = await documentPutLive(submitted, self, options, nextly);
+  // Nothing goes live that this write supplies. Nothing changes and nothing is
   // judged, rather than a refusal for a row this could not find.
-  if (promoted.kind === "absent") return;
+  if (held === null) return;
+
+  await refuseIfReached({
+    options,
+    nextly,
+    self,
+    document: held.document,
+    forms: formsChangedBy(next),
+  });
+}
+
+/**
+ * The document this write puts live, or `null` where it puts none there.
+ *
+ * A status-only publish carries no document of its own and is NOT graph-neutral:
+ * core promotes the whole pending working draft into the live row
+ * (`draft-published-split.integration.test.ts`, "promotes the whole working
+ * draft to the live row when the publish omits its fields"). What goes live is
+ * that draft, so that is the document to judge — a cycle written into a draft
+ * before this guard existed, or through a write that skipped it, would otherwise
+ * reach the live library on a publish this never inspected.
+ *
+ * Refuses where the subject's own stored document cannot be read, because a
+ * document this could not read is not a document it can clear.
+ */
+async function documentPutLive(
+  submitted: { readonly document: unknown } | "absent",
+  self: string,
+  options: CycleGuardOptions,
+  nextly: CycleGuardDirectApi
+): Promise<{ readonly document: unknown } | null> {
+  if (submitted !== "absent") return { document: submitted.document };
+
+  const promoted = await pendingDocument(self, options, nextly);
+  if (promoted.kind === "absent") return null;
   if (promoted.kind === "unreadable") {
     throw refusal(
       `This component cannot be saved: its own stored document could not be ` +
@@ -219,15 +250,7 @@ async function refuseACycle(
         `established.`
     );
   }
-  const document = promoted.document;
-
-  await refuseIfReached({
-    options,
-    nextly,
-    self,
-    document,
-    forms: formsChangedBy(next),
-  });
+  return { document: promoted.document };
 }
 
 /** Walk each named form, and refuse on the first that does not come back clean. */
@@ -392,6 +415,28 @@ interface HeldLibrary {
   readonly missing: Set<string>;
 }
 
+/**
+ * The reasons that mean the composition STOPPED rather than finished.
+ *
+ * A limit reached is not a report about references: the resolver stopped
+ * descending, so whatever lies past it was never looked at and a loop there is
+ * invisible to the composition — while the walk, which has no such cap, can have
+ * proven it. Reading these as "no loop" is what lets a chain longer than
+ * `MAX_COMPOSED_DEPTH` clear a refusal the insert panel still applies.
+ *
+ * The other non-`cycle` reasons are deliberately NOT here, because they describe
+ * a placement the reader sees resolved-as-absent rather than an unfinished
+ * search. `missing` is what drives the read loop below and means absent once it
+ * survives a read; `malformed` names no component at all; and `unreadable` is a
+ * definition the RENDERER declines, so it draws a placeholder and no reader can
+ * see a loop through it. The composition and the reader agree in all three.
+ */
+const STOPPED_SHORT: readonly string[] = [
+  "composed-depth",
+  "node-depth",
+  "budget",
+];
+
 /** Composing the subject under ONE variant selection, reading what it asks for. */
 async function composesUnder(
   variant: string | undefined,
@@ -400,7 +445,13 @@ async function composesUnder(
   read: DocumentReader,
   library: HeldLibrary
 ): Promise<CompositionVerdict> {
-  const { held, missing } = library;
+  const { held } = library;
+  // HELD until the reads are exhausted, rather than answered with on sight. A
+  // capped branch rules nothing out, and another branch may still compose a loop
+  // — so a `cycle` this can prove beats a limit it cannot see past, which is the
+  // rule `componentReach` already follows for a branch it could not read.
+  let stoppedShort = false;
+
   for (let round = 0; round <= MOST_COMPONENTS_READ; round += 1) {
     const composition = resolveComponentInstances(
       hostPlacing(self, variant) as never,
@@ -413,28 +464,61 @@ async function composesUnder(
     if (composition.unresolved.some(one => one.reason === "cycle")) {
       return "cycle";
     }
-
-    // Whatever it wanted and this has not read yet. The resolver names them, so
-    // the set to read is derived from what the COMPOSITION reached rather than
-    // from a second traversal predicting it.
-    const wanted = composition.unresolved
-      .map(one => one.componentId)
-      .filter(id => id !== "" && !held.has(id) && !missing.has(id));
-    // Nothing further to supply. Every placement this selection resolves was
-    // composed, and none of them closed on the subject.
-    if (wanted.length === 0) return "none";
-
-    for (const id of wanted) {
-      const answer = await read(id);
-      if (answer.kind === "unreadable") return "indeterminate";
-      if (answer.kind === "absent") {
-        missing.add(id);
-        continue;
-      }
-      held.set(id, answer.document);
+    if (
+      composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))
+    ) {
+      stoppedShort = true;
     }
+
+    const wanted = stillWanted(composition.unresolved, library);
+    // Nothing further to supply. Every placement this selection resolves was
+    // composed — so this is `none` only where nothing stopped the descent.
+    if (wanted.length === 0) return stoppedShort ? "indeterminate" : "none";
+    if (!(await supply(wanted, read, library))) return "indeterminate";
   }
   return "indeterminate";
+}
+
+/**
+ * What the composition asked for and the library has not answered yet.
+ *
+ * Derived from what the COMPOSITION reached rather than from a second traversal
+ * predicting it: the resolver names every instance it could not expand, so the
+ * set to read is the one the render itself needs.
+ */
+function stillWanted(
+  unresolved: readonly { readonly componentId: string }[],
+  library: HeldLibrary
+): readonly string[] {
+  return unresolved
+    .map(one => one.componentId)
+    .filter(
+      id => id !== "" && !library.held.has(id) && !library.missing.has(id)
+    );
+}
+
+/**
+ * Read each wanted definition into the library; `false` where one could not be.
+ *
+ * An absent row is RECORDED rather than refused: the resolver draws a placement
+ * of something nobody supplied as missing, and that is not a loop. A read that
+ * fails, or one past the budget, is the case a caller cannot conclude from.
+ */
+async function supply(
+  wanted: readonly string[],
+  read: DocumentReader,
+  library: HeldLibrary
+): Promise<boolean> {
+  for (const id of wanted) {
+    const answer = await read(id);
+    if (answer.kind === "unreadable") return false;
+    if (answer.kind === "absent") {
+      library.missing.add(id);
+      continue;
+    }
+    library.held.set(id, answer.document);
+  }
+  return true;
 }
 
 /** A page that places one component, so the resolver is asked about it. */
@@ -665,9 +749,24 @@ async function reachableFrom(
     // missing.
     if (target.kind === "absent") continue;
     if (target.kind === "unreadable") return undefined;
-    for (const id of componentReferencesFrom(target.document, placement.node)) {
-      ids.add(id);
-    }
+    const installed = componentReferencesFrom(
+      target.document,
+      placement.node,
+      options.limits.maxNodes
+    );
+    // The placed definition holds more nodes than the bound admits, so which of
+    // its nodes an override lands on could not be established. Unknown for the
+    // same reason an unreadable definition is: the walk must not read a prefix of
+    // an answer as the whole of it.
+    //
+    // Every definition reached here is also surveyed by the graph walk below,
+    // which applies the same bound and reports the same document unread — so on
+    // today's call graph this cannot be the only thing that catches it. Kept
+    // because it is an assertion over a value already in hand: it costs nothing
+    // while it never fires, and which walks reach a definition is a property of
+    // the callers rather than of this answer.
+    if (!installed.complete) return undefined;
+    for (const id of installed.ids) ids.add(id);
   }
   return [...ids];
 }
@@ -810,7 +909,13 @@ function isRowFor(row: unknown, id: string): boolean {
 }
 
 /**
- * The document this write carries, or `"not-a-document"` where it carries none.
+ * The document this write carries, and which KIND of nothing where it carries none.
+ *
+ * `absent` is a patch that does not mention the field, so the stored document
+ * survives the write and a promotion puts that document live. `empty` is a patch
+ * that mentions it and supplies no document — a cleared field — so what lands
+ * names nothing. The two look identical from the field's value and lead to
+ * opposite answers, which is why they are separate sentinels rather than one.
  *
  * The incoming value rather than the stored one, which is the point of asking at
  * write time: the stored copy is the version being replaced, and it is the new
@@ -822,17 +927,19 @@ function isRowFor(row: unknown, id: string): boolean {
 function submittedDocument(
   context: unknown,
   options: CycleGuardOptions
-): { readonly document: unknown } | "not-a-document" {
+): { readonly document: unknown } | "absent" | "empty" {
   const data = fieldOf(context, "data");
-  if (data === undefined) return "not-a-document";
-  if (!Object.hasOwn(data, options.documentField)) return "not-a-document";
+  if (data === undefined) return "absent";
+  // PRESENCE, not truthiness. Core selects the columns an update writes with the
+  // same question (`hasOwnProperty` over the patch), so a field carrying `null`
+  // is one this write STORES rather than one it leaves alone — and the two need
+  // opposite treatment below.
+  if (!Object.hasOwn(data, options.documentField)) return "absent";
   const document = data[options.documentField];
-  if (typeof document !== "object" || document === null) {
-    return "not-a-document";
-  }
+  if (typeof document !== "object" || document === null) return "empty";
   const nodes = (document as { nodes?: unknown }).nodes;
-  if (!Array.isArray(nodes)) return "not-a-document";
-  // Wrapped, because a bare `unknown` in a union with the sentinel collapses to
+  if (!Array.isArray(nodes)) return "empty";
+  // Wrapped, because a bare `unknown` in a union with the sentinels collapses to
   // `unknown` and every comparison against it would then type-check.
   return { document };
 }

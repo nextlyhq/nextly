@@ -73,6 +73,17 @@ A component that names ITSELF is refused from the submitted document alone,
 without reading the library at all — nothing in it can reopen an edge the
 document has already closed, and the reads it skips each run the site's hooks.
 
+A limit the composition reaches is not a report that there is no loop. Where a
+chain runs deeper than components may nest, the renderer stops before the loop
+closes and has seen nothing past that point — so the save is refused on the
+scan's own chain rather than approved on the renderer's silence. The same holds
+for a library it could not finish reading.
+
+Clearing a component's content is not the same as leaving it alone. A publish
+that also empties the field stores nothing, so it can close no loop, and it is
+allowed — where previously the accumulated draft was judged instead and the save
+was refused for a chain that very write removes.
+
 It judges the lifecycle form the write actually changes. An ordinary editor save
 is stored as a working draft and leaves the published row alone, so it is checked
 against what a preview would show; publishing checks the live library as well.
