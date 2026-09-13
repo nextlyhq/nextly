@@ -1041,6 +1041,64 @@ describe("saving a component that would reference itself", () => {
     await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
   });
 
+  it("refuses when the composition needs a row the walk never read", async () => {
+    /*
+     * The gap left by refusing an unfinished composition only where the WALK had
+     * already proven a loop. The walk's `none` cannot stand in for a composition,
+     * because the walk is precisely the approximation that misses a loop only
+     * composition shows — and the two do not read the same rows.
+     *
+     * Here the placement's override reaches two levels down and re-points `cc`'s
+     * nested instance at `ee`, which cannot be read. The walk never asks for `ee`
+     * at all: what it installs one level ahead is an `overrides` record, not a
+     * component id, so the walk finishes cleanly over `bb → cc → dd` and says
+     * none. The composition does ask, cannot be answered, and has established
+     * nothing — which is not the same as finding nothing.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: {
+        bb: {
+          ...places("cc"),
+          exposed: [
+            {
+              id: "pass",
+              label: "Pass",
+              nodeId: "n0",
+              propPath: "overrides",
+              type: "select",
+            },
+          ],
+        },
+        cc: {
+          ...places("dd"),
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        },
+      },
+      stored: { dd: [] },
+      unreadable: ["ee"],
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesWithOverrides("bb", { pass: { swap: "ee" } }) },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/could not all be read/);
+  });
+
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {
     /*
      * The raw ids in the document name `b`, and the guard reading only those
