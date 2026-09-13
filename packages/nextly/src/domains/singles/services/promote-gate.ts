@@ -30,8 +30,7 @@
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
-import { assertNoDeniedChange } from "../../../shared/lib/denied-change";
-import { detachData } from "../../../shared/lib/detach";
+import { resolvePromotedDocument } from "../../../shared/lib/denied-change";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldWriteAccess,
@@ -161,8 +160,11 @@ export async function assertDraftsMayBePromoted(
     }
     Object.assign(promoted, ctx.callerData ?? {});
 
-    await refuseADeniedChange(promoted, live, locale, ctx);
-    await assertSchemaStillAccepts(promoted, ctx);
+    // The document the write will persist, with every field this publisher may
+    // not write held at its live value. Validated as THAT document rather than
+    // as the one the promotion proposed, so the check and the row agree.
+    const resolved = await resolveForLocale(promoted, live, locale, ctx);
+    await assertSchemaStillAccepts(resolved, ctx);
   }
 }
 
@@ -173,12 +175,11 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Apply the field rules to what the write would persist, and refuse a denied
- * change.
+ * The document this language's promotion may write, or a refusal.
  *
- * The rules are applied here; whether a removal is a CHANGE, and the refusal
- * itself, are {@link assertNoDeniedChange}'s, shared with the collection
- * publish path so both answer one question one way.
+ * The rules are applied by {@link resolvePromotedDocument}, which also decides
+ * whether a removal is a CHANGE and hands back what to write, shared with the
+ * collection publish path so both answer one question one way.
  *
  * Judged on the PROMOTED document rather than on the snapshot that contributed
  * it, because a field rule reads its siblings. A draft whose protected field
@@ -188,40 +189,39 @@ function asRecord(value: unknown): Record<string, unknown> {
  * one language's snapshot changes and a later language's overwrites never
  * reaches the row, so judging the snapshot refuses an edit the write discards.
  */
-async function refuseADeniedChange(
+async function resolveForLocale(
   promoted: Record<string, unknown>,
   live: Record<string, unknown>,
   locale: string | null,
   ctx: PromoteGateContext
-): Promise<void> {
-  // A deep copy, because the rules delete a denied value in place and a
-  // shallow one shares every nested group, repeater row and component with the
-  // original: the deletion would land on both, and the comparison would then
-  // see a container still present and report nothing denied while the write
-  // persisted the forbidden nested edit.
-  const permitted = detachData(promoted);
-  await applyFieldWriteAccess({
-    kind: "single",
-    slug: ctx.slug,
-    data: permitted,
-    operation: "update",
-    user: ctx.user,
-    authenticatedScope: ctx.authenticatedScope,
-    overrideAccess: ctx.overrideAccess,
-    grants: ctx.grants,
-    id: ctx.entryId,
-  });
-
-  assertNoDeniedChange({
+): Promise<Record<string, unknown>> {
+  return resolvePromotedDocument({
     before: promoted,
-    permitted,
     live,
-    // The caller's own payload, so a denied value of theirs is stripped as it
-    // is on any other write rather than refusing the publish. Only the pending
-    // change's values are worth refusing over, since those belong to whoever
-    // saved them and a successful publish deletes the draft. The collection
-    // path draws the same line, which is the point of one judge.
-    callerSupplied: ctx.callerData,
+    // No caller-provenance exemption here, deliberately, and it is the one
+    // input this path withholds.
+    //
+    // Exempting a caller's denied value means writing the CORRECTED document,
+    // the one with that value dropped back to live. The collection path writes
+    // exactly what this returns, so it can. A Single's promotion writes from
+    // the stored snapshot with the caller's payload over it, a different
+    // representation from the logical document judged here, so a correction
+    // made here would not reach the row and the forbidden value would go live.
+    // Refusing is what this path already did, and it is safe: with nothing
+    // denied allowed to change, the snapshot's own copy of a denied field
+    // already equals live, so writing it changes nothing.
+    applyRules: document =>
+      applyFieldWriteAccess({
+        kind: "single",
+        slug: ctx.slug,
+        data: document,
+        operation: "update",
+        user: ctx.user,
+        authenticatedScope: ctx.authenticatedScope,
+        overrideAccess: ctx.overrideAccess,
+        grants: ctx.grants,
+        id: ctx.entryId,
+      }),
     slug: ctx.slug,
     locale,
   });
