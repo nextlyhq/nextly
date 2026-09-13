@@ -20,7 +20,7 @@
 // MySQL, a PRAGMA for SQLite.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { queryLiveColumnTypes } from "./live-column-types";
 
@@ -65,13 +65,20 @@ function mysqlRows<T>(result: unknown): T[] {
  * backfill needed, may an unregistered table be dropped — and `SELECT 1 ... LIMIT 1` costs the
  * same on a table of ten rows and a table of ten million, where `COUNT(*)` scans.
  */
-export async function tableHasRows(
+/**
+ * Whether a probe returned at least one row.
+ *
+ * Each dialect hands its rows back differently — node-postgres wraps them in a
+ * QueryResult, mysql2 may or may not nest them in a tuple, better-sqlite3
+ * returns a plain array — and every caller that asks "is there such a row?"
+ * had to spell all three. Two did, identically. Asked here once so a fourth
+ * caller cannot get one of the three shapes subtly wrong.
+ */
+async function probeReturnsRow(
   db: unknown,
   dialect: SupportedDialect,
-  tableName: string
+  probe: SQL
 ): Promise<boolean> {
-  const probe = sql`SELECT 1 FROM ${sql.identifier(tableName)} LIMIT 1`;
-
   if (dialect === "postgresql") {
     // node-postgres returns the QueryResult object, not a flat row array.
     const result = (await (db as PgMysqlExecute).execute(probe)) as {
@@ -79,14 +86,24 @@ export async function tableHasRows(
     };
     return result.rows.length > 0;
   }
-
   if (dialect === "mysql") {
     return (
       mysqlRows<unknown>(await (db as PgMysqlExecute).execute(probe)).length > 0
     );
   }
-
   return (await (db as SqliteAll).all(probe)).length > 0;
+}
+
+export async function tableHasRows(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<boolean> {
+  return probeReturnsRow(
+    db,
+    dialect,
+    sql`SELECT 1 FROM ${sql.identifier(tableName)} LIMIT 1`
+  );
 }
 
 /**
@@ -149,28 +166,12 @@ export async function readColumnNullState(
   if (live === undefined) return { holdingNull, absent };
 
   for (const column of columns) {
-    if (!live.has(column)) absent.add(column);
-  }
-
-  for (const column of columns.filter(name => live.has(name))) {
+    if (!live.has(column)) {
+      absent.add(column);
+      continue;
+    }
     const probe = sql`SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${sql.identifier(column)} IS NULL LIMIT 1`;
-    if (dialect === "postgresql") {
-      const result = (await (db as PgMysqlExecute).execute(probe)) as {
-        rows: unknown[];
-      };
-      if (result.rows.length > 0) holdingNull.add(column);
-      continue;
-    }
-    if (dialect === "mysql") {
-      const rows = mysqlRows<unknown>(
-        await (db as PgMysqlExecute).execute(probe)
-      );
-      if (rows.length > 0) holdingNull.add(column);
-      continue;
-    }
-    if ((await (db as SqliteAll).all(probe)).length > 0) {
-      holdingNull.add(column);
-    }
+    if (await probeReturnsRow(db, dialect, probe)) holdingNull.add(column);
   }
   return { holdingNull, absent };
 }
