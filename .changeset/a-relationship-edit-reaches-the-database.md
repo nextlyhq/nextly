@@ -160,3 +160,15 @@ other pass in a save. A field renamed and made required in one go read as
 newly added, skipped the refusal, and had the tightening emitted anyway; the
 nulls are recorded against the column the live table still has, so that is the
 name the check reads.
+
+Singles ask the same question of their own table. The precondition is keyed
+entirely on facts the caller supplies, so a caller that reads none does not get
+a weaker check — it gets no check: the refusal returns at its first guard. The
+singles path read whether the table had rows and which columns carried keys and
+indexes, and never read the null state, so a single that tightened a field over
+an entry leaving it empty, or over a column an undeployed migration has not
+added yet, still had the nullability statement written for PostgreSQL and MySQL
+to reject. It reads both now, through the same reader the collection path uses,
+narrowed to the columns this pass will actually diff — a localized single keeps
+its translatable columns in a companion table and they are not this pass's to
+ask about.
