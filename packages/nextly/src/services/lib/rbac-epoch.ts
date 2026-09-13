@@ -91,6 +91,33 @@ let inFlight: Promise<string> | null = null;
 let pendingBumps = 0;
 
 /**
+ * Whether the value this process is answering with came from the row.
+ *
+ * A write can land and the read that follows it fail, which leaves this process
+ * holding the value from BEFORE the write while owing nothing: the count is
+ * clear, so every stamp comparison starts passing again — against a stamp that
+ * predates the change. Trust needs both halves, so it is tracked as its own
+ * fact rather than inferred from the backlog being empty.
+ */
+let observed = true;
+
+/**
+ * How many retirements are running right now.
+ *
+ * A retirement empties caches, and emptying the shared tier is an awaited
+ * database write: while it runs, the stored rows are still readable and the
+ * epoch has not moved yet, so a check that starts and finishes inside that
+ * window sees two values that never changed and files a retired answer as
+ * current. A batch of permission writes holds this for its whole length, where
+ * the deferral is deliberate and the window is as long as the batch.
+ *
+ * It lives HERE rather than beside the caches because every tier has to ask it
+ * and only some of them remembered to. The one that did not was a derived cache
+ * in another module, which no list of maps to clear was ever going to reach.
+ */
+let retirements = 0;
+
+/**
  * Whether the shared counter has been found unreadable.
  *
  * Held so the warning is emitted once rather than on every check: an install
@@ -192,7 +219,7 @@ export function currentEpoch(): string {
  * than an invisible stale grant, and it is the direction to fail in.
  */
 export function epochIsTrustworthy(): boolean {
-  return pendingBumps === 0;
+  return pendingBumps === 0 && observed;
 }
 
 /**
@@ -211,8 +238,32 @@ export function epochIsTrustworthy(): boolean {
  * and the API key's copied grants add their own freshness window.
  */
 export function stampIsCurrent(stamp: string): boolean {
+  // Nothing is current while a retirement is running. The caches it is emptying
+  // are not all empty yet and the epoch has not moved, so the comparison below
+  // would compare two values that have not changed since the answer was
+  // computed — and pass.
+  if (retirements > 0) return false;
   if (!epochIsTrustworthy()) return false;
   return stamp === currentEpoch();
+}
+
+/**
+ * Run a retirement, with nothing servable or cacheable for its length.
+ *
+ * Scoped rather than begin-and-end, so the release cannot be missed on a path
+ * that threw — and a partial retirement is exactly when serving from cache is
+ * worst.
+ *
+ * Nested calls collapse by counting: a batch of permission writes holds one of
+ * these open across its whole body while each write inside it opens another.
+ */
+export async function duringRetirement<T>(run: () => Promise<T>): Promise<T> {
+  retirements += 1;
+  try {
+    return await run();
+  } finally {
+    retirements -= 1;
+  }
 }
 
 /**
@@ -264,14 +315,24 @@ async function readShared(): Promise<string> {
     // trust its caches again while the change it made is still nowhere.
     await persistPendingBumps();
 
-    const table = epochTable();
-    const rows = await executor()
-      .select({ revision: table.revision, generation: table.generation })
-      .from(table)
-      .where(eq(table.id, RBAC_EPOCH_ROW_ID))
-      .limit(1);
-    // A missing row is not a failure: the table exists and nothing has
-    // invalidated yet, which is epoch zero.
+    let rows = await selectSharedRow();
+    if (rows.length === 0) {
+      // A missing row is not a failure: the table exists and nothing has
+      // invalidated yet, which is epoch zero. It is not an IDENTITY, though,
+      // and answering `:0` for it gives every never-yet-invalidated store the
+      // same stamp — so a failover onto a different one, or a restore from a
+      // backup taken before its first role change, leaves every cached answer
+      // looking current. That is precisely what `generation` exists to catch,
+      // and epoch zero is where a fresh install sits for longest.
+      //
+      // So the row is created rather than imagined, and read back. Adding zero
+      // is the same statement the bump path makes, which is why it IS that
+      // statement: the row is created with an identity when absent and left
+      // alone when present, decided by the database rather than by a
+      // check-then-insert two instances can both win.
+      await raiseSharedRevision(0);
+      rows = await selectSharedRow();
+    }
     // Adopted whole, and never maxed against a local value. The row is the only
     // authority: taking the larger of the two is what let a process that had
     // invalidated while degraded stay permanently ahead of everyone else, and
@@ -280,6 +341,9 @@ async function readShared(): Promise<string> {
     generation = rows.length > 0 ? String(rows[0].generation) : "";
     readAt = Date.now();
     degraded = false;
+    // The value came from the row, which is the only thing that makes it worth
+    // comparing against.
+    observed = true;
   } catch (error) {
     reportDegraded(error);
     // Rate-limit the FAILING path too. Left unset, a missing table means one
@@ -316,22 +380,37 @@ async function readShared(): Promise<string> {
  * caught up — and so does a write still in flight, which the row has not
  * accepted yet either.
  */
-async function persistPendingBumps(): Promise<void> {
-  const owed = pendingBumps;
-  if (owed === 0) return;
-
+/** The one row, read. */
+async function selectSharedRow(): Promise<EpochRow[]> {
   const table = epochTable();
-  // ONE statement, so there is no row count to read and no create-or-update
-  // branch to get wrong. The previous shape asked the driver how many rows an
-  // UPDATE touched and inserted when the answer was zero, which is three
-  // different result shapes across three drivers and a silent no-op whenever
-  // one of them is misread — the counter then sticks at its first value and
-  // every later invalidation is lost, while every individual statement
-  // succeeds. An upsert cannot have that failure: the row is created if it is
-  // absent and incremented if it is present, decided by the database.
+  return executor()
+    .select({ revision: table.revision, generation: table.generation })
+    .from(table)
+    .where(eq(table.id, RBAC_EPOCH_ROW_ID))
+    .limit(1);
+}
+
+/**
+ * Add `by` to the shared revision, creating the row with an identity if absent.
+ *
+ * ONE statement, so there is no row count to read and no create-or-update
+ * branch to get wrong. The previous shape asked the driver how many rows an
+ * UPDATE touched and inserted when the answer was zero, which is three
+ * different result shapes across three drivers and a silent no-op whenever one
+ * of them is misread — the counter then sticks at its first value and every
+ * later invalidation is lost, while every individual statement succeeds. An
+ * upsert cannot have that failure: the row is created if it is absent and
+ * incremented if it is present, decided by the database.
+ *
+ * `by` is zero when the caller only needs the row to EXIST, which is the same
+ * statement rather than a second one — so seeding an empty store cannot drift
+ * from bumping a live one.
+ */
+async function raiseSharedRevision(by: number): Promise<void> {
+  const table = epochTable();
   const insert = executor().insert(table).values({
     id: RBAC_EPOCH_ROW_ID,
-    revision: owed,
+    revision: by,
     // Only ever written when the row is CREATED; the conflict branch below
     // leaves it alone, so a live counter keeps its identity for life.
     generation: randomUUID(),
@@ -340,7 +419,7 @@ async function persistPendingBumps(): Promise<void> {
   const raise = {
     target: table.id,
     set: {
-      revision: sql`${table.revision} + ${owed}`,
+      revision: sql`${table.revision} + ${by}`,
       updatedAt: new Date(),
     },
   };
@@ -352,8 +431,19 @@ async function persistPendingBumps(): Promise<void> {
   } else {
     await insert;
   }
+}
+
+async function persistPendingBumps(): Promise<void> {
+  const owed = pendingBumps;
+  if (owed === 0) return;
+
+  await raiseSharedRevision(owed);
 
   pendingBumps -= owed;
+  // The row has moved and this process has not seen where to. Until a read
+  // succeeds, the value here is the one from before the write, so nothing may
+  // be compared against it.
+  observed = false;
 }
 
 /**
@@ -395,5 +485,7 @@ export function resetEpochForTests(): void {
   readAt = 0;
   degraded = false;
   pendingBumps = 0;
+  observed = true;
+  retirements = 0;
   inFlight = null;
 }

@@ -8,6 +8,7 @@ import {
   currentEpoch,
   epochIsTrustworthy,
   refreshEpoch,
+  duringRetirement,
   resetEpochForTests,
   stampIsCurrent,
 } from "./rbac-epoch";
@@ -113,6 +114,43 @@ function pending(answer: Promise<Row[]>) {
     ) => answer.then(resolve, reject),
   };
   return self;
+}
+
+/**
+ * A shared store that actually holds the row, so creating it is observable.
+ *
+ * `countingAdapter` models the increment; this models the row's EXISTENCE, and
+ * whether it was given an identity when it was created.
+ */
+function storeWithRow(state: { row: Row | null }) {
+  return {
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+    getDrizzle: () => ({
+      select: () => chainOf(state.row === null ? [] : [state.row]),
+      insert: () => {
+        let pending: Row | null = null;
+        const self: Record<string, unknown> = {
+          values: (r: { revision: number; generation: string }) => {
+            pending = {
+              revision: Number(r.revision),
+              generation: r.generation,
+            };
+            return self;
+          },
+          onConflictDoUpdate: () => {
+            // The database decides: created when absent, left alone when
+            // present, which is what makes the identity stable for life.
+            if (state.row === null) state.row = pending;
+            return Promise.resolve([{ changes: 1 }]);
+          },
+          then: (resolve: (value: unknown) => unknown) =>
+            resolve([{ changes: 1 }]),
+        };
+        return self;
+      },
+      update: () => chainOf([{ changes: 1 }]),
+    }),
+  };
 }
 
 function install(adapter: unknown) {
@@ -431,9 +469,121 @@ describe("the RBAC epoch answers for the install", () => {
     expect(stampIsCurrent("g:3")).toBe(false);
   });
 
-  it("treats a missing row as epoch zero rather than as a failure", async () => {
-    // A table that exists with nothing in it is a fresh install that has never
-    // invalidated, which is zero — not an error, and not a reason to degrade.
+  it("gives a store with no row an identity instead of a shared zero", async () => {
+    // `:0` is what every never-yet-invalidated store answered, so two of them
+    // were indistinguishable — and a failover onto a different one, or a
+    // restore from a backup taken before the first role change, left every
+    // cached answer looking current. Epoch zero is where a fresh install sits
+    // for longest, which is the worst place to have no identity.
+    const store = { row: null as Row | null };
+    install(storeWithRow(store));
+
+    await refreshEpoch();
+
+    expect(store.row).not.toBeNull();
+    expect(currentEpoch()).not.toBe(":0");
+    expect(currentEpoch()).toBe(`${store.row?.generation}:0`);
+  });
+
+  it("gives a DIFFERENT store a different one, which is the whole point", async () => {
+    // The control, and the property itself. An identity that is the same for
+    // every empty store is the `:0` this replaced.
+    const first = { row: null as Row | null };
+    install(storeWithRow(first));
+    await refreshEpoch();
+    const before = currentEpoch();
+
+    // A different store, reached by the same process: a failover, or a restore.
+    resetEpochForTests();
+    const second = { row: null as Row | null };
+    install(storeWithRow(second));
+    await refreshEpoch();
+
+    expect(currentEpoch()).not.toBe(before);
+  });
+
+  it("stays untrusted when the write landed but the read did not", async () => {
+    // The half that made a landed write look settled. The count is clear —
+    // the row really did move — so every stamp comparison starts passing
+    // again, against the value from BEFORE the write.
+    let reads = 0;
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => ({
+        select: () => {
+          reads += 1;
+          if (reads === 1) return chainOf([{ revision: 3, generation: "g" }]);
+          throw new Error("the row cannot be read");
+        },
+        insert: () => chainOf([{ changes: 1 }]),
+        update: () => chainOf([{ changes: 1 }]),
+      }),
+    });
+
+    await refreshEpoch();
+    const stamp = currentEpoch();
+    expect(stampIsCurrent(stamp)).toBe(true);
+
+    // The write lands; the read that should have followed it does not.
+    await bumpEpoch();
+
+    expect(currentEpoch()).toBe(stamp);
+    expect(epochIsTrustworthy()).toBe(false);
+    expect(stampIsCurrent(stamp)).toBe(false);
+  });
+
+  it("trusts it again once a read finally succeeds", async () => {
+    // The control on the case above, and the recovery path: without it,
+    // "untrusted after an unread write" is satisfied by never trusting again.
+    const shared = { revision: 0, generation: "g" };
+    install(countingAdapter(shared));
+
+    await bumpEpoch();
+
+    expect(epochIsTrustworthy()).toBe(true);
+  });
+
+  it("serves nothing while a retirement is running", async () => {
+    // A retirement empties caches, and emptying the shared tier is an awaited
+    // write: inside that window the stored rows are still readable and the
+    // epoch has not moved, so a check starting and finishing there compares
+    // two values that never changed. Every tier asks this one predicate, which
+    // is what reaches the caches that are not maps in this module.
+    install(fakeAdapter(() => [{ revision: 1, generation: "g" }]));
+    await refreshEpoch();
+    const stamp = currentEpoch();
+
+    const during = await duringRetirement(async () => stampIsCurrent(stamp));
+
+    expect(during).toBe(false);
+    // And the control: it is current again once the retirement is over,
+    // otherwise "refuses during" is satisfied by refusing always.
+    expect(stampIsCurrent(stamp)).toBe(true);
+  });
+
+  it("releases the retirement even when the work throws", async () => {
+    // A partial retirement is exactly when serving from cache is worst, and a
+    // scope that leaked would leave the install permanently uncached.
+    install(fakeAdapter(() => [{ revision: 1, generation: "g" }]));
+    await refreshEpoch();
+    const stamp = currentEpoch();
+
+    await expect(
+      duringRetirement(async () => {
+        throw new Error("half the retirement landed");
+      })
+    ).rejects.toThrow("half the retirement landed");
+
+    expect(stampIsCurrent(stamp)).toBe(true);
+  });
+
+  it("answers zero rather than failing when the seed does not take", async () => {
+    // This fake accepts the write and stays empty, which is what a store that
+    // silently refuses the create looks like from here. Zero is the honest
+    // answer: a table that exists with nothing in it has never invalidated,
+    // which is not an error and not a reason to refuse an authorization check.
+    // It costs the identity, and the case above is what buys that back
+    // wherever the create does take.
     install(fakeAdapter(() => []));
 
     await expect(refreshEpoch()).resolves.toBe(":0");
