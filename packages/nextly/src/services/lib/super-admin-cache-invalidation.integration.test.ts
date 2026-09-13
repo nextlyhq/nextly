@@ -33,6 +33,7 @@ import {
   invalidatePermissionCache,
   isSuperAdmin,
   rbacRevision,
+  resolvedUnderCurrentRevision,
 } from "./permissions";
 import {
   EPOCH_TTL_MS,
@@ -494,30 +495,48 @@ describe("an API key's grants are retired when the roles behind them change", ()
  * previous one had already expired.
  */
 describe("a sweep of permission writes", () => {
-  it("advances the revision per write, so nothing in flight files as current", async () => {
-    // Deferring the table write must NOT defer the revision: a resolution
-    // running alongside the batch has to be refused, and the counter is what
-    // refuses it.
-    //
-    // Read after EACH write rather than once at the end. Comparing only the
-    // two ends is equally satisfied by three writes collapsing into a single
-    // announcement on the way out, which is exactly the deferral this exists to
-    // rule out.
+  it("files nothing as current while the batch is open", async () => {
+    // A resolution running alongside the batch has to be refused. What refuses
+    // it is not the counter: the counter stays where it is until the stored
+    // rows have actually been retired, because announcing sooner tells every
+    // other instance to drop its own answer and read one of those rows.
     harness = harness ?? (await createTestNextly());
-    const seen = [rbacRevision()];
+    const before = rbacRevision();
+    const cacheable: boolean[] = [];
+    const announced: string[] = [];
+
     await inPermissionSweep(async () => {
       await invalidateAllPermissionCaches();
-      seen.push(rbacRevision());
+      cacheable.push(resolvedUnderCurrentRevision(rbacRevision()));
+      announced.push(rbacRevision());
       await invalidateAllPermissionCaches();
-      seen.push(rbacRevision());
-      await invalidateAllPermissionCaches();
-      seen.push(rbacRevision());
+      cacheable.push(resolvedUnderCurrentRevision(rbacRevision()));
+      announced.push(rbacRevision());
     });
 
-    // Four distinct stamps: where it started, and one per write. The stamp
-    // carries the counter's identity as well as its number, so it is compared
-    // rather than ordered.
-    expect(new Set(seen).size).toBe(seen.length);
+    // Nothing was cacheable at any point inside the batch...
+    expect(cacheable).toEqual([false, false]);
+    // ...and nothing was announced while the stored rows were still live.
+    expect(new Set(announced)).toEqual(new Set([before]));
+    // The announcement happens once, on the way out, after the retirement.
+    expect(rbacRevision()).not.toBe(before);
+  });
+
+  it("still empties the tiers it holds in memory, per write", async () => {
+    // The half a batch never deferred. Emptying memory costs nothing, so an
+    // answer this process is already holding must not outlive the row it came
+    // from just because the expensive half is being batched.
+    const userId = `sweep-memory-${randomUUID()}`;
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+    await demote(userId);
+
+    const insideBatch = await inPermissionSweep(async () => {
+      await invalidateAllPermissionCaches();
+      return isSuperAdmin(userId);
+    });
+
+    expect(insideBatch).toBe(false);
   });
 
   it("clears the process caches by the time the batch returns", async () => {
@@ -704,6 +723,63 @@ describe("the order the two tiers are retired in", () => {
     // And the announcement did happen, so the assertion above is not passing
     // because nothing moved at all.
     expect(after).not.toBe(before);
+  });
+
+  it("announces nothing when the stored rows could not be retired", async () => {
+    // The epoch means "everything filed before this is gone". A tombstone that
+    // failed leaves those rows live, so the sentence is false — and announcing
+    // it anyway is worse than silence: every other instance rejects its own
+    // in-memory answer BECAUSE the epoch moved, reads one of those rows, and
+    // files it under the new epoch where nothing left to happen can reach it.
+    const proto = PermissionCacheService.prototype as unknown as Record<
+      string,
+      Tombstone
+    >;
+    const original = proto.invalidateAll;
+    const before = rbacRevision();
+    proto.invalidateAll = () =>
+      Promise.reject(new Error("the stored tier is unreachable"));
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      proto.invalidateAll = original;
+    }
+
+    expect(rbacRevision()).toBe(before);
+  });
+
+  it("announces when it CAN retire them, which is what makes silence a choice", async () => {
+    // The control. Without it, "announces nothing on failure" is equally
+    // satisfied by an epoch that never moves at all.
+    const before = rbacRevision();
+
+    await invalidateAllPermissionCaches();
+
+    expect(rbacRevision()).not.toBe(before);
+  });
+
+  it("still empties its own memory when the stored tier refuses", async () => {
+    // Withholding the announcement must not withhold the local retirement:
+    // this process knows the rows changed whatever the shared tier did.
+    const userId = `unreachable-${randomUUID()}`;
+    await promote(userId, `${userId}@example.com`);
+    expect(await isSuperAdmin(userId)).toBe(true);
+    await demote(userId);
+
+    const proto = PermissionCacheService.prototype as unknown as Record<
+      string,
+      Tombstone
+    >;
+    const original = proto.invalidateAll;
+    proto.invalidateAll = () =>
+      Promise.reject(new Error("the stored tier is unreachable"));
+    try {
+      await invalidateAllPermissionCaches();
+    } finally {
+      proto.invalidateAll = original;
+    }
+
+    expect(await isSuperAdmin(userId)).toBe(false);
   });
 
   it("does the same for an invalidation scoped to one user", async () => {

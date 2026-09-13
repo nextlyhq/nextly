@@ -1,3 +1,4 @@
+import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 // Raw CREATE TABLE IF NOT EXISTS DDL for all Nextly core SQLite tables.
@@ -248,7 +249,7 @@ export function generateSqliteCoreTableStatements(): string[] {
     // That is why the epoch is a TABLE rather than a column on the rows above:
     // SQLite skips a `CREATE TABLE` wholesale once the table exists, so a new
     // column there would never arrive.
-    `CREATE TABLE IF NOT EXISTS "nextly_rbac_epoch" (
+    `CREATE TABLE IF NOT EXISTS "${RBAC_EPOCH_TABLE}" (
       "id" TEXT PRIMARY KEY,
       "revision" INTEGER NOT NULL,
       "generation" TEXT NOT NULL,

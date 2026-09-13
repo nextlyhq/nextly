@@ -40,7 +40,9 @@
 
 import { bigint, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
-export const nextlyRbacEpoch = pgTable("nextly_rbac_epoch", {
+import { RBAC_EPOCH_TABLE } from "./table-name";
+
+export const nextlyRbacEpoch = pgTable(RBAC_EPOCH_TABLE, {
   id: text("id").primaryKey(),
   // `bigint` rather than `integer`: this only ever rises, and an install that
   // wrapped a 32-bit counter would start serving answers filed under a value

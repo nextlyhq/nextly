@@ -288,18 +288,16 @@ export class PermissionCacheService extends BaseService {
    * sees an expired row rather than a missing one.
    */
   async invalidateAll(): Promise<number> {
-    try {
-      const { userPermissionCache } = this.tables;
-      const result = await this.db
-        .update(userPermissionCache)
-        .set({ expiresAt: new Date() });
-      return affectedRowCount(result, this.dialect);
-    } catch (error) {
-      this.logger.error("Failed to invalidate the whole permission cache", {
-        error: String(error),
-      });
-      return 0;
-    }
+    // A failure is RAISED rather than reported as zero. Zero is also what a
+    // successful tombstone over an empty table answers, so swallowing the
+    // error makes the two indistinguishable — and the caller that publishes the
+    // epoch afterwards then announces a retirement that did not happen, which
+    // is the one announcement that must never be made.
+    const { userPermissionCache } = this.tables;
+    const result = await this.db
+      .update(userPermissionCache)
+      .set({ expiresAt: new Date() });
+    return affectedRowCount(result, this.dialect);
   }
 
   async invalidateByUser(userId: string): Promise<number> {
@@ -307,36 +305,27 @@ export class PermissionCacheService extends BaseService {
       return 0;
     }
 
-    try {
-      const { userPermissionCache } = this.tables;
+    // Raised rather than reported as zero, for the reason `invalidateAll`
+    // gives: zero is also a successful tombstone that matched no rows.
+    const { userPermissionCache } = this.tables;
 
-      // Write-through invalidation: mark as expired (tombstone) instead of deleting
-      const result = await this.db
-        .update(userPermissionCache)
-        .set({ expiresAt: new Date() })
-        .where(eq(userPermissionCache.userId, userId));
+    // Write-through invalidation: mark as expired (tombstone) instead of deleting
+    const result = await this.db
+      .update(userPermissionCache)
+      .set({ expiresAt: new Date() })
+      .where(eq(userPermissionCache.userId, userId));
 
-      const invalidatedCount = affectedRowCount(result, this.dialect);
+    const invalidatedCount = affectedRowCount(result, this.dialect);
 
-      if (process.env.DEBUG_CACHE === "1") {
-        console.log("[cache][dbg] invalidateByUser", {
-          userId,
-          invalidatedCount,
-          method: "tombstone",
-        });
-      }
-
-      return invalidatedCount;
-    } catch (error) {
-      getAuthLogger()?.log?.("error", {
-        category: "auth",
-        op: "cache",
-        message: "invalidateByUser failed",
+    if (process.env.DEBUG_CACHE === "1") {
+      console.log("[cache][dbg] invalidateByUser", {
         userId,
-        error: String(error),
+        invalidatedCount,
+        method: "tombstone",
       });
-      return 0;
     }
+
+    return invalidatedCount;
   }
 
   /**
@@ -364,7 +353,9 @@ export class PermissionCacheService extends BaseService {
       return 0;
     }
 
-    try {
+    // Raised rather than reported as zero, for the reason `invalidateAll`
+    // gives: zero is also a successful tombstone that matched no rows.
+    {
       const { userPermissionCache } = this.tables;
 
       // Write-through invalidation: mark as expired (tombstone) instead of deleting.
@@ -408,15 +399,6 @@ export class PermissionCacheService extends BaseService {
       }
 
       return invalidatedCount;
-    } catch (error) {
-      getAuthLogger()?.log?.("error", {
-        category: "auth",
-        op: "cache",
-        message: "invalidateByRole failed",
-        roleId,
-        error: String(error),
-      });
-      return 0;
     }
   }
 

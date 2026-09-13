@@ -29,8 +29,8 @@ import type { Logger } from "../shared";
 import {
   bumpEpoch,
   currentEpoch,
-  epochIsTrustworthy,
   refreshEpoch,
+  stampIsCurrent,
 } from "./rbac-epoch";
 
 if (typeof window !== "undefined") {
@@ -590,12 +590,11 @@ type CacheValue = { value: boolean; expiresAt: number; epoch: string };
  * one added later has somewhere obvious to ask.
  */
 function servable(entry: { expiresAt: number; epoch: string }): boolean {
-  // The epoch has to be worth comparing against before the comparison means
-  // anything. While this process holds invalidations the shared row has not
-  // accepted, its epoch is a value no other instance has seen, so a match
-  // proves nothing and the answer is recomputed instead.
-  if (!epochIsTrustworthy()) return false;
-  return entry.expiresAt > Date.now() && entry.epoch === currentEpoch();
+  // Derived rather than restated. Whether a stamp is still current is one
+  // question with one answer, and the tiers that asked it separately did not
+  // all remember that a stamp is only worth comparing while the epoch is
+  // trustworthy.
+  return stampIsCurrent(entry.epoch) && entry.expiresAt > Date.now();
 }
 const cacheTtlMs = 60_000; // 60 seconds
 // Memory cache size: configurable via PERMISSION_CACHE_MEMORY_SIZE env var
@@ -836,7 +835,12 @@ export function rbacRevision(): string {
  * Nothing is cacheable while the caches are being emptied.
  */
 export function resolvedUnderCurrentRevision(revision: string): boolean {
-  return permissionFlushDepth === 0 && revision === currentEpoch();
+  // Same derivation as `servable`, and it was missing here. Comparing the
+  // stamp alone accepts a result resolved under an epoch this process invented
+  // while the shared row was unreachable — and the forced refresh that was
+  // meant to close that window fails on exactly the installs where the row is
+  // unreachable, so the comparison is against the same unmoved value.
+  return permissionFlushDepth === 0 && stampIsCurrent(revision);
 }
 
 /**
@@ -921,8 +925,28 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await permissionSweep.run(batch, run);
   } finally {
-    if (batch.dirty) await flushPermissionCaches();
+    if (batch.dirty) {
+      // Released before the flush, which raises it again for its own window.
+      permissionFlushDepth -= 1;
+      await flushPermissionCaches();
+    }
   }
+}
+
+/**
+ * Empty the tiers this process holds in memory.
+ *
+ * Free, unlike the stored tier: no query, no lock, nothing to defer. So it
+ * happens on every invalidation including the ones a batch defers the expensive
+ * half of, and it is written once because four callers emptying five maps by
+ * hand is four chances to forget the fifth.
+ */
+function clearInMemoryTiers(): void {
+  cache.clear();
+  keyToRoleIds.clear();
+  roleIdToKeys.clear();
+  userIdToKeys.clear();
+  superAdminCache.clear();
 }
 
 export async function invalidateAllPermissionCaches(): Promise<void> {
@@ -935,14 +959,26 @@ export async function invalidateAllPermissionCaches(): Promise<void> {
   // caches now, however long the batch still has to run.
   const batch = permissionSweep.getStore();
   if (batch) {
-    batch.dirty = true;
-    // Published without emptying the shared tier first, which
-    // `retireSharedThenPublish` otherwise forbids. It is sound only because the
-    // batch's own exit empties that tier and publishes AGAIN: anything another
-    // instance promoted from a still-live stored row while the batch ran is
-    // retired by that second publication. What it buys in return is that
-    // nothing in flight can file a result as current for the batch's length.
-    await bumpEpoch();
+    if (!batch.dirty) {
+      batch.dirty = true;
+      // Held from the batch's first write to its exit. Nothing may be filed as
+      // current while a batch is open: its stored rows are deliberately still
+      // live, so a resolution that finished inside the batch would be caching
+      // an answer the batch has already invalidated.
+      permissionFlushDepth += 1;
+    }
+    // Retired here, announced at the exit. The tiers this process holds cost
+    // nothing to empty, so an answer it is already holding does not outlive the
+    // row it came from; what the batch defers is the unfiltered rewrite of
+    // every STORED row, which is the cost it exists for.
+    //
+    // The epoch stays where it is until that rewrite has happened. Publishing
+    // per write would tell every other instance to drop its in-memory answer
+    // and read a stored row this batch has deliberately not tombstoned yet,
+    // filing it under the new epoch where the batch's own exit cannot reach it
+    // — and for as long as the batch runs, which for a seeder is not bounded by
+    // anything this module controls.
+    clearInMemoryTiers();
     return;
   }
   await flushPermissionCaches();
@@ -1004,11 +1040,25 @@ export async function writingPermissions<TTable, T>(
  * The depth is held across both steps because THIS process has the same window
  * between the tombstone starting and the epoch being published; see
  * {@link resolvedUnderCurrentRevision}, which is where it is read.
+ *
+ * ## A retirement that failed publishes nothing
+ *
+ * The epoch means "everything filed before this is gone", and that sentence is
+ * false about stored rows a failed tombstone left live. Publishing it anyway is
+ * worse than staying quiet, not merely unhelpful: every other instance rejects
+ * its own in-memory answer BECAUSE the epoch moved, falls through to a row that
+ * is still there, and files it under the new epoch where nothing left to happen
+ * can reach it. Announcing the retirement is what converts rows that would have
+ * aged out into copies with a fresh life.
+ *
+ * Staying quiet leaves those rows served until their own expiry, which is what
+ * the install had before any of this existed. The write still happened and the
+ * failure is still reported; what is withheld is only the claim.
  */
 async function retireSharedThenPublish(
   // Whatever the retirement answers is discarded: how many rows a tombstone
   // touched is not a signal anything here acts on, and a driver that reports it
-  // differently must not become a branch.
+  // differently must not become a branch. Whether it THREW is the signal.
   retireShared: () => Promise<unknown>,
   logContext: Record<string, unknown> = {}
 ): Promise<void> {
@@ -1025,7 +1075,9 @@ async function retireSharedThenPublish(
           ...logContext,
           error: String(error),
         });
-        // Don't throw - cache invalidation failures should not break operations
+        // Reported, not thrown: an invalidation failure must not break the
+        // write that raised it. Unpublished, though, for the reason above.
+        return;
       }
     }
     await bumpEpoch();
@@ -1035,11 +1087,7 @@ async function retireSharedThenPublish(
 }
 
 async function flushPermissionCaches(): Promise<void> {
-  cache.clear();
-  keyToRoleIds.clear();
-  roleIdToKeys.clear();
-  userIdToKeys.clear();
-  superAdminCache.clear();
+  clearInMemoryTiers();
 
   await retireSharedThenPublish(() =>
     new PermissionCacheService(getAdapter(), getLogger(), {

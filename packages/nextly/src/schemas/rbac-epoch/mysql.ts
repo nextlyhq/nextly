@@ -9,7 +9,9 @@
 
 import { bigint, mysqlTable, timestamp, varchar } from "drizzle-orm/mysql-core";
 
-export const nextlyRbacEpoch = mysqlTable("nextly_rbac_epoch", {
+import { RBAC_EPOCH_TABLE } from "./table-name";
+
+export const nextlyRbacEpoch = mysqlTable(RBAC_EPOCH_TABLE, {
   id: varchar("id", { length: 32 }).primaryKey(),
   revision: bigint("revision", { mode: "number" }).notNull(),
   generation: varchar("generation", { length: 64 }).notNull(),

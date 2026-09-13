@@ -9,6 +9,7 @@ import {
   epochIsTrustworthy,
   refreshEpoch,
   resetEpochForTests,
+  stampIsCurrent,
 } from "./rbac-epoch";
 
 /**
@@ -396,6 +397,38 @@ describe("the RBAC epoch answers for the install", () => {
     await expect(first).resolves.toBe("g:1");
     await expect(forced).resolves.toBe("g:2");
     expect(reads).toBe(2);
+  });
+
+  it("refuses a stamp that matches while an invalidation is still owed", async () => {
+    // The whole reason the tiers ask this rather than comparing stamps
+    // themselves. The stamp matches — it is the value this process is
+    // answering with — and it matches nothing any other instance has seen,
+    // because the change that produced it never reached the shared row.
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => {
+        throw new Error("no such table: nextly_rbac_epoch");
+      },
+    });
+
+    const stamp = currentEpoch();
+    expect(stampIsCurrent(stamp)).toBe(true);
+
+    await bumpEpoch();
+
+    expect(currentEpoch()).toBe(stamp);
+    expect(stampIsCurrent(stamp)).toBe(false);
+  });
+
+  it("accepts a matching stamp and refuses a stale one when nothing is owed", async () => {
+    // The control on both halves. Without the first, "refuses while owed" is
+    // satisfied by refusing everything; without the second, by accepting
+    // everything.
+    install(fakeAdapter(() => [{ revision: 4, generation: "g" }]));
+    await refreshEpoch();
+
+    expect(stampIsCurrent("g:4")).toBe(true);
+    expect(stampIsCurrent("g:3")).toBe(false);
   });
 
   it("treats a missing row as epoch zero rather than as a failure", async () => {

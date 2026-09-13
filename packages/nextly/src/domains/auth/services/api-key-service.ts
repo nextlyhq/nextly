@@ -70,7 +70,7 @@ import {
   isSuperAdmin,
   listRoleSlugsForUserOrRefuse,
 } from "../../../services/lib/permissions";
-import { refreshEpoch } from "../../../services/lib/rbac-epoch";
+import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import type { Logger } from "../../../services/shared";
 
 /** The three token types that determine how permissions are resolved at request time. */
@@ -748,7 +748,6 @@ export class ApiKeyService extends BaseService {
     keyId: string
   ): Promise<readonly GrantedPermission[]> {
     const cacheKey = `apikey:${keyId}`;
-    const now = Date.now();
     // Read BEFORE the queries below, never after. An invalidation that lands
     // while they are in flight would otherwise be stamped onto the result they
     // return: the rows were read under the old revision and would be filed
@@ -762,11 +761,24 @@ export class ApiKeyService extends BaseService {
     // another instance has to retire them here too.
     const resolvedUnder = await refreshEpoch();
 
+    // Read AFTER the refresh, not before it. That refresh can wait — on a slow
+    // database, or behind another forced read it queued for — and an age taken
+    // beforehand is the age the entry had when the request started rather than
+    // when it is being served, so an entry that expired during the wait passes
+    // the window one more time.
+    const now = Date.now();
+
     const cached = _apiKeyPermissionsCache.get(cacheKey);
     if (
       cached &&
-      now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS &&
-      cached.revision === resolvedUnder
+      // Asked through the shared predicate, not by comparing the stamp. A
+      // match means nothing while this process holds invalidations the shared
+      // row has not accepted: the value being matched against is then one no
+      // other instance has seen, so a revocation made here keeps answering
+      // from this copy for the whole window. The permission tiers ask the same
+      // question and this one was not.
+      stampIsCurrent(cached.revision) &&
+      now - cached.cachedAt < _PERMISSIONS_CACHE_TTL_MS
     ) {
       return cached.grants;
     }

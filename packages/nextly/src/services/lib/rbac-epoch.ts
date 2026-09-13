@@ -196,6 +196,26 @@ export function epochIsTrustworthy(): boolean {
 }
 
 /**
+ * May an answer filed under `stamp` still be used?
+ *
+ * The one place that question is answered, because it has three askers and they
+ * were not asking the same thing. Comparing the stamp is only half of it: a
+ * match means nothing while this process holds invalidations the shared row has
+ * not accepted, since the value being matched against is then one no other
+ * instance has ever seen. A tier that compares stamps and omits the trust check
+ * looks correct beside one that does not, and serves a revoked answer for its
+ * whole life on an install whose epoch table is not yet reconciled.
+ *
+ * Every cache derives its own predicate from this rather than restating it:
+ * the in-memory tiers add their expiry, the shared tier adds its retirement,
+ * and the API key's copied grants add their own freshness window.
+ */
+export function stampIsCurrent(stamp: string): boolean {
+  if (!epochIsTrustworthy()) return false;
+  return stamp === currentEpoch();
+}
+
+/**
  * Bring this process's copy of the epoch up to date, at most once per TTL.
  *
  * Answers the epoch it settled on, so a caller can capture it in the same

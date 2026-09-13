@@ -9,7 +9,9 @@
 
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-export const nextlyRbacEpoch = sqliteTable("nextly_rbac_epoch", {
+import { RBAC_EPOCH_TABLE } from "./table-name";
+
+export const nextlyRbacEpoch = sqliteTable(RBAC_EPOCH_TABLE, {
   id: text("id").primaryKey(),
   revision: integer("revision").notNull(),
   generation: text("generation").notNull(),

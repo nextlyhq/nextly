@@ -14,23 +14,9 @@ import * as sl from "./sqlite";
 
 export { pg, my, sl };
 
-/**
- * The physical table name, spelled once.
- *
- * The counter is incremented by a statement the database evaluates itself, so
- * the name is written somewhere other than the declaration, and this is the
- * only place it may be read from.
- */
-export const RBAC_EPOCH_TABLE = "nextly_rbac_epoch";
-
-/**
- * The key of the single row.
- *
- * A constant rather than a parameter: the primary key is what makes a second
- * counter unrepresentable, and a caller free to choose the key could create
- * one whose bumps nothing else reads.
- */
-export const RBAC_EPOCH_ROW_ID = "global";
+// Re-exported from the leaf that declares them, so this barrel stays one of the
+// readers rather than becoming a second author. See `./table-name`.
+export { RBAC_EPOCH_TABLE, RBAC_EPOCH_ROW_ID } from "./table-name";
 
 /**
  * The ONE place a dialect is turned into an epoch table.

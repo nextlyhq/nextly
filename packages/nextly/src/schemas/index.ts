@@ -56,7 +56,7 @@ import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
-import { rbacEpochTables } from "./rbac-epoch";
+import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
 import { schemaEventsTables } from "./schema-events";
 import { siteSettingsMysql } from "./site-settings/mysql";
@@ -302,7 +302,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   // snapshot, so the drift check proposes adding it again on every run.
   "nextly_field_group_lock",
   "nextly_document_lock",
-  "nextly_rbac_epoch",
+  RBAC_EPOCH_TABLE,
   "nextly_widget_layout",
   "dynamic_collections",
   "dynamic_singles",

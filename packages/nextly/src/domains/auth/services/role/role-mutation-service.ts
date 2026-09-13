@@ -340,9 +340,10 @@ export class RoleMutationService extends BaseService {
           : // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle transaction callback type varies by dialect
             await this.db.transaction(async (tx: any) => runMutations(tx));
 
-        // Invalidate cache after successful transaction. `void` marks the
-        // promise as intentionally unawaited - cache invalidation is
-        // fire-and-forget and must not block the create response.
+        // Awaited, and the ordering is the invariant rather than a preference:
+        // a runtime that freezes after responding can abandon an unawaited
+        // shared write, leaving every other instance on the old epoch with no
+        // sign anything went wrong.
         await invalidatePermissionCache({ roleId: id });
 
         return {
@@ -689,7 +690,8 @@ export class RoleMutationService extends BaseService {
         await tx.delete("roles", this.whereEq("id", roleId));
       });
 
-      // Invalidate cache after successful transaction (fire-and-forget).
+      // Awaited, for the reason `createRole` gives: an abandoned shared write
+      // leaves the other instances holding answers this delete retired.
       await invalidatePermissionCache({ roleId });
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Raw DB errors map via
