@@ -39,7 +39,7 @@ import {
   declaredWidgets,
   type CanonicalWidget,
 } from "../domains/widgets/canonical";
-import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
+import { layoutConditions } from "../domains/widgets/conditions";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
@@ -289,7 +289,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // decides what this reader may be told exists; this decides which transient
   // cards are worth showing right now, and a lapsed onboarding card is not a
   // refusal.
-  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
+  const { widgets, contentEmpty } = await layoutConditions(
+    audience.visible,
+    reader
+  );
 
   const source: LayoutSource = stored.layout ? "own" : "default";
   const placements = visibleArrangement(stored.layout, widgets);
@@ -318,6 +321,12 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
     {
       placements,
       available,
+      // Beside the placements, never folded into `scope`: a PUT is refused
+      // when that token moves, and whether the reader has content yet decides
+      // how the dashboard is drawn, not which cards a write may name. From the
+      // same evaluation the placements were filtered by, so the empty state
+      // and a card naming `content:empty` cannot disagree.
+      contentEmpty,
       version: stored.version,
       source,
       // The reader's own column count, or the default when they have never
@@ -537,7 +546,10 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // GET and left in here, every save on an install that has any content would
   // answer 409 and no reader could rearrange their dashboard at all.
   const audience = await widgetAudience(caller);
-  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
+  const { widgets, contentEmpty } = await layoutConditions(
+    audience.visible,
+    reader
+  );
   const visibleIds = new Set(widgets.map(widget => widget.id));
 
   // 🔴 BEFORE the per-placement checks below, and before the write. The row's
@@ -688,6 +700,9 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       // change to it since would have to have happened during the write, and
       // the next PUT will catch that on its own terms.
       scope,
+      // Echoed with the rest of what a GET reports, from the same evaluation
+      // this write was checked against.
+      contentEmpty,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );

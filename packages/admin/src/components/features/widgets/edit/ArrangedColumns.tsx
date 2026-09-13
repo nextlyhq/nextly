@@ -9,7 +9,7 @@
  *
  * @module components/features/widgets/edit/ArrangedColumns
  */
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
@@ -35,6 +35,13 @@ export interface ArrangedColumnsProps {
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   announcement: string;
+  /**
+   * Drawn in place of the columns when given: the dashboard of a reader who can
+   * see no content yet. Inside the section rather than instead of it, so the
+   * live region and the focus target stay mounted as the page swaps between
+   * the two.
+   */
+  emptyState?: ReactNode;
   /** Whether a dismissal is in flight anywhere on this dashboard. */
   isDismissing: boolean;
   /**
@@ -106,6 +113,7 @@ export function ArrangedColumns({
   updatedAt,
   fetchingPlacementIds,
   announcement,
+  emptyState,
   isDismissing,
   sectionRef,
   onMove,
@@ -139,82 +147,89 @@ export function ArrangedColumns({
       >
         {announcement}
       </span>
-      <EmptyArrangement count={visible.length} isEditing={isEditing} />
-      {columns.map((rowsInColumn, columnIndex) => (
-        <WidgetColumn
-          key={columnIndex}
-          column={columnIndex}
-          columnCount={columnCount}
-          items={rowsInColumn.map(row => row.placementId)}
-          isEditing={isEditing}
-        >
-          {rowsInColumn.map((row, indexInColumn) => (
-            <ArrangedCell
-              key={row.placementId}
-              row={row}
+      {emptyState ?? (
+        <>
+          <EmptyArrangement count={visible.length} isEditing={isEditing} />
+          {columns.map((rowsInColumn, columnIndex) => (
+            <WidgetColumn
+              key={columnIndex}
+              column={columnIndex}
+              columnCount={columnCount}
+              items={rowsInColumn.map(row => row.placementId)}
               isEditing={isEditing}
-              isDismissing={isDismissing}
-              at={{
-                // 🔴 The SAME list the click resolves against. Derived from
-                // the global sequence instead, the first card of column 2 gets
-                // an enabled Up whose neighbour is not in its column -- an
-                // enabled control that does nothing, which is the failure SC
-                // 2.5.7 is about rather than a cosmetic one.
-                index: indexInColumn,
-                count: rowsInColumn.length,
-                column: columnIndex,
-                columnCount,
-              }}
-              data={{
-                slot: slots[row.placementId],
-                // This card's own answers, by cell key. Nested rather than a
-                // composite string, so no id can collide with another.
-                slotFor: key => cellSlots[row.placementId]?.[key],
-                // Only a card that actually ASKED can be waiting on an answer.
-                // One drawn entirely by a plugin component took no part in the
-                // batch, and neither did one whose archetype nothing can draw,
-                // so a refetch says nothing about either.
-                updatedAt: requested.has(row.placementId) ? updatedAt : null,
-                // 🔴 This card's own request, not the batch's. A dashboard
-                // above the per-request cap is split into partitions that
-                // settle independently, so the batch-wide flag left a card
-                // that had already answered reporting itself busy until every
-                // other partition answered too -- dimming settled numbers for
-                // no reason a reader could see.
-                isFetching: fetchingPlacementIds.has(row.placementId),
-              }}
-              on={{
-                // 🔴 Resolved against THIS column, not the whole arrangement.
-                // The sequence is interleaved across columns, so the row
-                // before this one globally is usually in a different column,
-                // and moving toward it swaps two cards a reader cannot see
-                // move. The arrangement hook announces, because it is the one
-                // that resolves the destination -- announcing here would name
-                // a position computed a second time, and the two would drift.
-                move: (delta: number) => {
-                  const neighbour = rowsInColumn[indexInColumn + delta];
-                  // The delta already says which way the reader asked to go,
-                  // so it says which side of that neighbour the card lands on.
-                  // Up is above it, down is below -- and below is the side
-                  // that makes the bottom of a column reachable at all.
-                  if (neighbour) {
-                    onMove(
-                      row.placementId,
-                      neighbour.placementId,
-                      delta < 0 ? "before" : "after"
-                    );
-                  }
-                },
-                moveColumn: onMoveColumn,
-                toggleHidden: onToggleHidden,
-                dismiss: onDismiss,
-                remove: onRemove,
-                saveSettings: config => onSaveSettings(row.placementId, config),
-              }}
-            />
+            >
+              {rowsInColumn.map((row, indexInColumn) => (
+                <ArrangedCell
+                  key={row.placementId}
+                  row={row}
+                  isEditing={isEditing}
+                  isDismissing={isDismissing}
+                  at={{
+                    // 🔴 The SAME list the click resolves against. Derived from
+                    // the global sequence instead, the first card of column 2 gets
+                    // an enabled Up whose neighbour is not in its column -- an
+                    // enabled control that does nothing, which is the failure SC
+                    // 2.5.7 is about rather than a cosmetic one.
+                    index: indexInColumn,
+                    count: rowsInColumn.length,
+                    column: columnIndex,
+                    columnCount,
+                  }}
+                  data={{
+                    slot: slots[row.placementId],
+                    // This card's own answers, by cell key. Nested rather than a
+                    // composite string, so no id can collide with another.
+                    slotFor: key => cellSlots[row.placementId]?.[key],
+                    // Only a card that actually ASKED can be waiting on an answer.
+                    // One drawn entirely by a plugin component took no part in the
+                    // batch, and neither did one whose archetype nothing can draw,
+                    // so a refetch says nothing about either.
+                    updatedAt: requested.has(row.placementId)
+                      ? updatedAt
+                      : null,
+                    // 🔴 This card's own request, not the batch's. A dashboard
+                    // above the per-request cap is split into partitions that
+                    // settle independently, so the batch-wide flag left a card
+                    // that had already answered reporting itself busy until every
+                    // other partition answered too -- dimming settled numbers for
+                    // no reason a reader could see.
+                    isFetching: fetchingPlacementIds.has(row.placementId),
+                  }}
+                  on={{
+                    // 🔴 Resolved against THIS column, not the whole arrangement.
+                    // The sequence is interleaved across columns, so the row
+                    // before this one globally is usually in a different column,
+                    // and moving toward it swaps two cards a reader cannot see
+                    // move. The arrangement hook announces, because it is the one
+                    // that resolves the destination -- announcing here would name
+                    // a position computed a second time, and the two would drift.
+                    move: (delta: number) => {
+                      const neighbour = rowsInColumn[indexInColumn + delta];
+                      // The delta already says which way the reader asked to go,
+                      // so it says which side of that neighbour the card lands on.
+                      // Up is above it, down is below -- and below is the side
+                      // that makes the bottom of a column reachable at all.
+                      if (neighbour) {
+                        onMove(
+                          row.placementId,
+                          neighbour.placementId,
+                          delta < 0 ? "before" : "after"
+                        );
+                      }
+                    },
+                    moveColumn: onMoveColumn,
+                    toggleHidden: onToggleHidden,
+                    dismiss: onDismiss,
+                    remove: onRemove,
+                    saveSettings: config =>
+                      onSaveSettings(row.placementId, config),
+                  }}
+                />
+              ))}
+            </WidgetColumn>
           ))}
-        </WidgetColumn>
-      ))}
+        </>
+      )}
     </section>
   );
 }

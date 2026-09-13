@@ -1,12 +1,13 @@
 "use client";
 
 /**
- * useSeedStatus — state machine for the dashboard SeedDemoContentCard.
+ * useSeedStatus — state machine for the demo-content offer on the empty dashboard.
  *
  * Composes two queries (probe + meta status) and two mutations (run seed,
- * skip) into a single discriminated-union state. The card consumes
- * `status.kind` to pick which markup to render, and calls `startSeed()` /
- * `skip()` to drive transitions.
+ * skip) into a single discriminated-union state. `EmptyDashboard` reads
+ * `status.kind` to choose what the page shows, hands the status to
+ * `SeedDemoContentCard` to draw, and calls `startSeed()` / `skip()` to drive
+ * transitions.
  *
  * Persistence: completedAt and skippedAt live in nextly_meta (server-side)
  * so the card's hidden state survives across browsers and team members.
@@ -36,6 +37,24 @@ export type SeedStatus =
   | { kind: "success"; result: SeedResult }
   | { kind: "error"; message: string };
 
+/**
+ * The states in which the offer is on screen.
+ *
+ * Derived from {@link SeedStatus} by exclusion rather than listed beside it, so
+ * the machine and what draws it cannot name different states.
+ */
+export type OfferedSeedStatus = Exclude<
+  SeedStatus,
+  { kind: "loading" } | { kind: "hidden" }
+>;
+
+/** Whether the offer is on screen in this state. */
+export function isOfferedSeedStatus(
+  status: SeedStatus
+): status is OfferedSeedStatus {
+  return status.kind !== "loading" && status.kind !== "hidden";
+}
+
 interface UseSeedStatusReturn {
   status: SeedStatus;
   startSeed: () => void;
@@ -50,8 +69,8 @@ export function useSeedStatus(): UseSeedStatusReturn {
 
   // Mid-flight overlay: takes precedence over the queries while a
   // mutation is in-flight or has just resolved. Cleared when the user
-  // navigates away or the component remounts (intentional — success
-  // state already auto-hides via the card's setTimeout).
+  // navigates away or the component remounts -- by which time a success has
+  // already been let go by the empty dashboard, on Continue or on its timer.
   const [overlay, setOverlay] = useState<SeedStatus | null>(null);
 
   const probeQ = useQuery<SeedProbeResult>({

@@ -1,6 +1,8 @@
 /**
  * Editing the dashboard: what the reader can do, what is sent when they save,
- * and what happens when the arrangement is not there.
+ * and what happens when the arrangement is not there -- or when the host says
+ * the reader can see no content yet, where the empty dashboard stands in for
+ * the cards and editing is the way past it.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -15,8 +17,11 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { layOutStacked, recordDragRegion } from "@admin/__tests__/helpers/drag";
+import { seedResult } from "@admin/__tests__/helpers/seed";
+import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
+import { seedApi, type SeedResult } from "@admin/services/seedApi";
 import type { AdminBranding } from "@admin/types/branding";
 import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 import { MAX_PLACEMENTS } from "nextly/config";
@@ -44,6 +49,14 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
     post: vi.fn(),
     put: vi.fn(),
     delete: vi.fn(),
+  },
+}));
+vi.mock("@admin/services/seedApi", () => ({
+  seedApi: {
+    probe: vi.fn(),
+    runSeed: vi.fn(),
+    getStatus: vi.fn(),
+    setSkipped: vi.fn(),
   },
 }));
 
@@ -1324,5 +1337,192 @@ describe("what a move announces", () => {
         /column 2 of 3, position 1 of 1/
       )
     );
+  });
+});
+
+describe("a reader the host says can see no content", () => {
+  /** The host's setup steps, answered beside the layout. */
+  let steps: Array<{ id: string; complete: boolean }>;
+
+  /** How many times the layout has been read, so a refetch can be waited on. */
+  function layoutReads(): number {
+    return api.get.mock.calls.filter(([path]) => path === "/dashboard/layout")
+      .length;
+  }
+
+  /** The seed's outcome, decided by the test when it chooses. */
+  function seedWillSettle() {
+    vi.mocked(seedApi.probe).mockResolvedValue({
+      available: true,
+      template: { slug: "blog", label: "Blog" },
+    });
+    vi.mocked(seedApi.getStatus).mockResolvedValue({
+      completedAt: null,
+      skippedAt: null,
+    });
+    let finish!: (result: SeedResult) => void;
+    vi.mocked(seedApi.runSeed).mockImplementation(
+      () =>
+        new Promise<SeedResult>(resolve => {
+          finish = resolve;
+        })
+    );
+    return (result: SeedResult) => act(async () => finish(result));
+  }
+
+  beforeEach(() => {
+    steps = [
+      { id: "account", complete: true },
+      { id: "collection", complete: true },
+      { id: "entry", complete: false },
+    ];
+    mockBranding = branding(["core/a"]);
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a", order: 0 }], {
+      contentEmpty: true,
+    });
+    api.get.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === "/dashboard/onboarding" ? { steps } : layoutResponse
+      )
+    );
+    vi.mocked(seedApi.probe).mockResolvedValue({ available: false });
+  });
+
+  it("draws what to do next in place of the cards", async () => {
+    renderGrid();
+
+    expect(
+      await screen.findByRole("heading", { name: "No content yet" })
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("widget-cell-core/a")).toBeNull();
+  });
+
+  it("draws the cards for a server that does not report it", async () => {
+    // An older server sends no `contentEmpty`, and its absence must read as
+    // content rather than blank a dashboard that has some. Waited on through
+    // the edit offer, which appears only once the layout read has landed --
+    // before that the grid draws its declarations whatever the answer will be.
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a", order: 0 }]);
+    renderGrid();
+
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.getByTestId("widget-cell-core/a")).toBeInTheDocument();
+    expect(screen.queryByTestId("empty-dashboard")).toBeNull();
+  });
+
+  it("draws the cards while editing, so the way past it is never behind it", async () => {
+    renderGrid();
+    await screen.findByRole("heading", { name: "No content yet" });
+
+    await beginEditing();
+
+    expect(screen.getByTestId("widget-cell-core/a")).toBeInTheDocument();
+    expect(screen.queryByTestId("empty-dashboard")).toBeNull();
+  });
+
+  it("keeps no card request alive while it stands in, and draws the cards once a write says there is content", async () => {
+    mockBranding = branding(["core/count"], {
+      "core/count": {
+        archetype: "metric",
+        defaultSize: "sm",
+        component: undefined,
+        query: { source: "collection:orders", op: "count" },
+      },
+    });
+    layoutResponse = layout([{ id: "p1", widgetId: "core/count", order: 0 }], {
+      contentEmpty: true,
+    });
+    api.post.mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 42 } }],
+    });
+    const { client } = renderGrid();
+    await screen.findByRole("heading", { name: "No content yet" });
+
+    // The grid draws its declarations before the layout read lands, so a
+    // request may already have gone out. What must not happen is a card query
+    // kept alive behind the empty state, which a refetch would re-issue.
+    api.post.mockClear();
+    await act(() =>
+      client.invalidateQueries({ queryKey: ["dashboard", "widget-queries"] })
+    );
+    expect(api.post).not.toHaveBeenCalled();
+
+    // What `useCreateEntry`, `useUpdateEntry` and `useDeleteEntry` send after a
+    // write. It names `["dashboard"]` and reaches the layout read only by
+    // prefix, which this pins: the empty state leaves when an entry is written.
+    layoutResponse = layout([{ id: "p1", widgetId: "core/count", order: 0 }], {
+      contentEmpty: false,
+    });
+    await act(() => client.invalidateQueries({ queryKey: ["dashboard"] }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-core/count")).toHaveTextContent(
+        "42"
+      )
+    );
+    expect(api.post).toHaveBeenCalled();
+  });
+
+  it("keeps a seed's outcome on screen after the host says there is content, until the reader continues", async () => {
+    const settle = seedWillSettle();
+    const user = userEvent.setup();
+    const { client } = renderGrid();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Seed demo content/ })
+    );
+    // The seed lands and the host's next read says there is content: the moment
+    // the empty state would otherwise give way while it is still reporting.
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a", order: 0 }], {
+      contentEmpty: false,
+    });
+    const readsBefore = layoutReads();
+    await settle(seedResult(["one image skipped"]));
+    await waitFor(() => expect(layoutReads()).toBeGreaterThan(readsBefore));
+    await waitFor(() =>
+      expect(
+        client.getQueryData<DashboardLayoutResponse>(DASHBOARD_LAYOUT_KEY)
+          ?.contentEmpty
+      ).toBe(false)
+    );
+
+    expect(
+      screen.getByRole("heading", { name: /Demo content seeded with warnings/ })
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("widget-cell-core/a")).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", { name: /Continue to your dashboard/ })
+    );
+    expect(await screen.findByTestId("widget-cell-core/a")).toBeInTheDocument();
+  });
+
+  it("says a seed's progress through the grid's one live region", async () => {
+    const settle = seedWillSettle();
+    const user = userEvent.setup();
+    const { container } = renderGrid();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Seed demo content/ })
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-grid-live")).toHaveTextContent(
+        "Loading demo content."
+      )
+    );
+
+    await settle(seedResult());
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-grid-live")).toHaveTextContent(
+        "Demo content seeded."
+      )
+    );
+    // Excluding the region dnd-kit contributes for drag narration.
+    const regions = [
+      ...container.querySelectorAll(
+        '[aria-live], [role="status"], [role="alert"]'
+      ),
+    ].filter(node => !node.id.startsWith("DndLiveRegion"));
+    expect(regions).toHaveLength(1);
   });
 });

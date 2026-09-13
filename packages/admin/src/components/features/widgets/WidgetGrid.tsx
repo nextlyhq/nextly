@@ -16,14 +16,17 @@
  *   refresh would interrupt each other, and a reader could not tell which
  *   announcement belonged to what they just did — so the grid speaks once, for
  *   the batch, and the cards stay silent.
+ * - **Emptiness.** A reader the host says can see no content is shown what to
+ *   do next in place of the cards, and no card is asked for meanwhile.
  *
  * @module components/features/widgets/WidgetGrid
  */
 
 import { DndContext, closestCorners } from "@dnd-kit/core";
 import { applyWidgetSettings } from "nextly/config";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
+import { EmptyDashboard } from "@admin/components/features/dashboard/EmptyDashboard";
 import {
   useBranding,
   useBrandingStatus,
@@ -235,7 +238,22 @@ export function WidgetGrid() {
     [declared]
   );
 
-  const cards = useMemo(() => askedWith(visible), [visible]);
+  // Whether the page shows the empty dashboard instead of the cards. The HOST
+  // decides that a reader has no content; `held` keeps the empty state up while
+  // it reports a seed, because seeding is exactly what makes the host's next
+  // answer say otherwise. Editing always draws the cards, so the edit controls
+  // are never stranded behind a message.
+  const [held, hold] = useState(false);
+  const showEmpty =
+    !editor.isEditing && (layout.layout?.contentEmpty === true || held);
+
+  // No card is asked for while the empty state stands in for them: a request
+  // for cards nobody sees spends a round trip, and its settling would be
+  // announced over a page that shows none of them.
+  const cards = useMemo(
+    () => (showEmpty ? [] : askedWith(visible)),
+    [showEmpty, visible]
+  );
 
   const {
     slots,
@@ -311,6 +329,15 @@ export function WidgetGrid() {
           updatedAt={updatedAt}
           fetchingPlacementIds={fetchingPlacementIds}
           announcement={announcement}
+          emptyState={
+            showEmpty ? (
+              <EmptyDashboard
+                announceStatus={gridAnnouncer.announceStatus}
+                onHold={hold}
+                onLeave={focus.restore}
+              />
+            ) : undefined
+          }
           onMove={moveWithinColumn}
           onMoveColumn={moveColumn}
           onToggleHidden={toggleHidden}

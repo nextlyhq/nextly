@@ -7,30 +7,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { seedApi, type SeedResult } from "@admin/services/seedApi";
+import { seedResult } from "@admin/__tests__/helpers/seed";
+import { seedApi } from "@admin/services/seedApi";
 
 import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import { useSeedStatus } from "./useSeedStatus";
-
-/** One successful seed, shared by every case that needs the mutation to land. */
-function seedResult(): SeedResult {
-  return {
-    message: "Demo content seeded.",
-    summary: {
-      rolesCreated: 3,
-      usersCreated: 3,
-      categoriesCreated: 5,
-      tagsCreated: 8,
-      postsCreated: 12,
-      mediaUploaded: 14,
-      mediaSkipped: 0,
-      collectionsRegistered: 0,
-      singlesRegistered: 0,
-      permissionsSynced: 0,
-    },
-    warnings: [],
-  };
-}
 
 vi.mock("@admin/services/seedApi", () => ({
   seedApi: {
