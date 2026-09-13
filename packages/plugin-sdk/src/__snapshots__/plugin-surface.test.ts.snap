@@ -363,6 +363,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "pluginAdminSlug (value)",
   "pluginField (value)",
   "readableContent (value)",
+  "readableContentKind (value)",
   "registerSource (value)",
   "registerWidget (value)",
   "resolvedCollectionDraftSplit (value)",

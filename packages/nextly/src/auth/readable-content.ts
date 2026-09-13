@@ -88,12 +88,18 @@ function asReadAccess(caller: ReadableContentCaller) {
 }
 
 /**
- * @public Whether this caller may read ONE named entity.
+ * @public Which kind of entity this is, if the caller may read it at all.
  *
- * The same decision {@link readableContent} takes per entity, for a caller that
- * already knows which entity it is asking about and should not pay for the
- * whole set to find out. Asking about one is the common case for a tool: an
- * agent that has the list wants the detail of a single item from it.
+ * Answers the registry question and the access question together, because a
+ * caller asking about one entity needs both and asking them separately costs a
+ * second registry enumeration for the same name. A tool reading a collection
+ * has to know it is not a single: the two are read through different services,
+ * so a caller that guesses sends the read to a path that cannot answer and gets
+ * a not-found in place of the refusal it should have had.
+ *
+ * `undefined` covers both "not registered" and "not readable", deliberately.
+ * A caller able to tell those apart can map an install's entities by asking
+ * about guesses, and the two have the same consequence here anyway.
  *
  * An UNREGISTERED slug is refused rather than judged. It has no registry entry
  * and no rule to decide against, and admitting what cannot be judged is the
@@ -102,13 +108,32 @@ function asReadAccess(caller: ReadableContentCaller) {
  * ever return registered entities: a caller allowed by one and refused by the
  * other would be exactly the drift these two share a module to prevent.
  */
+export async function readableContentKind(
+  slug: string,
+  caller: ReadableContentCaller
+): Promise<ReadableContentEntity["kind"] | undefined> {
+  const { kinds } = await registeredContentSnapshot();
+  const kind = kinds.get(slug);
+  if (kind === undefined) return undefined;
+  return (await canReadEntity(slug, asReadAccess(caller))) ? kind : undefined;
+}
+
+/**
+ * @public Whether this caller may read ONE named entity.
+ *
+ * The same decision {@link readableContent} takes per entity, for a caller that
+ * already knows which entity it is asking about and should not pay for the
+ * whole set to find out.
+ *
+ * Derived from {@link readableContentKind} rather than answered separately: two
+ * functions asking one question is how they come to disagree, and the narrower
+ * view is the one to derive.
+ */
 export async function canReadContent(
   slug: string,
   caller: ReadableContentCaller
 ): Promise<boolean> {
-  const { kinds } = await registeredContentSnapshot();
-  if (!kinds.has(slug)) return false;
-  return canReadEntity(slug, asReadAccess(caller));
+  return (await readableContentKind(slug, caller)) !== undefined;
 }
 
 /**

@@ -673,7 +673,11 @@ export { routePathIsLiteral } from "./plugins/routes/route-pattern";
 // reading one document. Published because the alternative is each such surface
 // composing the registry, the caller conversion and the per-entity decision
 // itself, and that composition is where the dashboard's own version went wrong.
-export { canReadContent, readableContent } from "./auth/readable-content";
+export {
+  canReadContent,
+  readableContent,
+  readableContentKind,
+} from "./auth/readable-content";
 export type {
   ReadableContent,
   ReadableContentCaller,

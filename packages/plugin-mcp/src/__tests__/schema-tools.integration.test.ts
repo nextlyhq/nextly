@@ -7,9 +7,9 @@ import {
   createTestNextly,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly/config";
+import { defineCollection, defineSingle, group, text } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { mcpPlugin } from "../plugin";
 
@@ -94,12 +94,34 @@ async function payloadOf(response: Response) {
         slug: string;
         kind: string;
         label?: string;
-        fields: { name: string; type: string }[];
+        fields: {
+          name?: string;
+          type: string;
+          options?: Record<string, unknown>;
+          fields?: { name?: string; type: string }[];
+        }[];
       };
     };
     error?: { code: number; message: string };
   };
 }
+
+const homepage = defineSingle({
+  slug: "homepage",
+  fields: [text({ name: "headline" })],
+});
+
+const layouts = defineCollection({
+  slug: "layouts",
+  fields: [
+    text({ name: "title" }),
+    group({
+      name: "hero",
+      label: "Hero",
+      fields: [text({ name: "heading" })],
+    }),
+  ],
+});
 
 const posts = defineCollection({
   slug: "posts",
@@ -112,7 +134,8 @@ const secrets = defineCollection({
 
 async function boot() {
   current = await createTestNextly({
-    collections: [posts, secrets],
+    collections: [posts, secrets, layouts],
+    singles: [homepage],
     plugins: [mcpPlugin({ enabled: true, allowedHosts: [ALLOWED] })],
   });
   return createDynamicHandlers();
@@ -282,6 +305,147 @@ describe("the schema tools describe only what the caller may read", () => {
     );
 
     expect(body.result?.isError).toBe(true);
+  });
+
+  it("returns a real single's declared fields", async () => {
+    // The case whose absence let a shape mismatch ship. Every other single
+    // assertion here exercises the REFUSAL path, which returns before the
+    // registry is read, so the read itself was never once driven successfully.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "single-reader", ["homepage"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_single_schema", { slug: "homepage" }, auth),
+        params("mcp")
+      )
+    );
+
+    expect(
+      body.result?.isError,
+      `expected a schema, got: ${JSON.stringify(body.error ?? body.result?.content ?? {})}`
+    ).not.toBe(true);
+    expect(body.result?.structuredContent?.slug).toBe("homepage");
+    expect(body.result?.structuredContent?.kind).toBe("single");
+    expect(
+      (body.result?.structuredContent?.fields ?? []).map(f => f.name)
+    ).toContain("headline");
+  });
+
+  it("does not answer a SINGLE through the collection tool", async () => {
+    // The inverse of the kind check the single tool already had. Without it a
+    // single's slug reaches the collection registry, which has no such record,
+    // and its not-found surfaces in place of the uniform refusal this file is
+    // careful to keep indistinguishable.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "wrong-kind", ["homepage"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_collection_schema", { slug: "homepage" }, auth),
+        params("mcp")
+      )
+    );
+
+    expect(body.result?.isError).toBe(true);
+    expect(
+      (body.result?.content ?? []).map(c => c.text).join(""),
+      "the refusal must be the uniform one, not a registry not-found"
+    ).toContain("No readable entity");
+  });
+
+  it("serves clients that read only `content`", async () => {
+    // A client on a 2025 revision consumes `content` and does not understand
+    // structured output. The protocol library appends a text rendering only
+    // when `structuredContent` is a NON-object value, so an object-shaped
+    // result reaches those clients as a success with an empty body unless the
+    // handler writes one itself.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "legacy", ["posts"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_collection_schema", { slug: "posts" }, auth),
+        params("mcp")
+      )
+    );
+
+    const text = (body.result?.content ?? []).map(c => c.text).join("");
+    expect(
+      text,
+      "a client reading only `content` must get the schema"
+    ).toContain("posts");
+    expect(text).toContain("title");
+  });
+
+  it("does not read the registry at all when it refuses", async () => {
+    // The ordering, asserted on the ACT rather than on the answer. A tool that
+    // read the unauthorized schema and discarded it afterwards returns exactly
+    // the same refusal, so the final value cannot tell the two apart.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "ordering", ["posts"]);
+    const auth = { authorization: `Bearer ${key}` };
+    await handlers.POST(initialize(auth), params("mcp"));
+
+    const service = current!.getService("collectionService") as unknown as {
+      getCollection: (...args: unknown[]) => Promise<unknown>;
+    };
+    const read = vi.spyOn(service, "getCollection");
+
+    await handlers.POST(
+      callTool("get_collection_schema", { slug: "secrets" }, auth),
+      params("mcp")
+    );
+    const afterDenied = read.mock.calls.length;
+
+    await handlers.POST(
+      callTool("get_collection_schema", { slug: "posts" }, auth),
+      params("mcp")
+    );
+    const afterAllowed = read.mock.calls.length;
+    read.mockRestore();
+
+    expect(
+      afterAllowed,
+      "the spy must observe the ALLOWED read, or its silence on the denied " +
+        "one is the instrument not reaching rather than the gate working"
+    ).toBeGreaterThan(afterDenied);
+    expect(afterDenied).toBe(0);
+  });
+
+  it("describes a container field's children, not just its name", async () => {
+    // A repeater or a group holds its own fields. A projection that stopped at
+    // the top level would report `hero` as a field of no particular shape, and
+    // an agent cannot read or write such a document's values from that.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "nested", ["layouts"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_collection_schema", { slug: "layouts" }, auth),
+        params("mcp")
+      )
+    );
+
+    const fields = body.result?.structuredContent?.fields ?? [];
+    const hero = fields.find(f => f.name === "hero");
+
+    expect(
+      hero,
+      `the group must be in the answer at all: ${JSON.stringify(fields)}`
+    ).toBeDefined();
+    expect(
+      (hero?.fields ?? []).map(f => f.name),
+      "the group's children must survive the projection"
+    ).toContain("heading");
   });
 
   it("advertises both schema tools alongside the initial context", async () => {

@@ -57,3 +57,41 @@ the same per-entity decision, and refuses an unregistered slug rather than
 judging it. A slug with no registry entry has no rule to decide against, and
 admitting what cannot be judged is the inversion the dashboard's readable
 resources were fixed to remove.
+
+Review round two, and most of it was mine to fix.
+
+`get_single_schema` read the singles facade's result as `items` when it answers
+with `data`, so every successful call threw. A locally redeclared interface hid
+the mismatch, and no test caught it because every single case exercised the
+REFUSAL path, which returns before the registry is read. Both tools now import
+the facade's own types, and a case drives a real single's schema end to end.
+
+Removing that redeclared interface exposed two more things it had been hiding: a
+read that passed a user context built from `ctx.user` alone, which carries no
+roles and no key scope, and a context parameter that is documented as unused.
+The registry read is not access-controlled and the authorization that matters
+already happened above it, so it now passes an empty context rather than a
+fabricated identity that would imply the call is gated by it.
+
+Both tools serve clients that read only `content`. A client on a 2025 revision
+does not understand structured output, and the protocol library appends a text
+rendering only when `structuredContent` is a non-object value, so an
+object-shaped result reached those clients as a success with an empty body.
+`get_initial_context` had the same defect and now carries its data as a second
+block, after the instructions block, which stays a constant.
+
+The kind is checked in both directions. A single's slug through the collection
+tool used to surface a registry not-found instead of the uniform refusal, which
+is a difference an unauthorized caller can measure.
+
+A container field's children survive the projection, and type-specific
+declaration travels with it, so a group or repeater no longer arrives as a field
+of no particular shape.
+
+`readableContentKind` answers the access question and the kind question
+together, and `canReadContent` is derived from it rather than asking separately.
+
+The stability ledger now lists these exports. It did not list `readableContent`
+or `routePathIsLiteral` either, both already published, and that ledger treats
+every unlisted export as internal, so three public APIs carried contradictory
+guarantees.
