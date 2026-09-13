@@ -147,9 +147,9 @@ describe("an API key", () => {
 
   it("is refused on a name only the Schema Builder's own list reserves", async () => {
     // `accounts` is in `RESERVED_COLLECTION_NAMES` without being a system
-    // resource, so this fails against any predicate that stops at
-    // `isReservedResourceSlug` -- including the one this file asserted before
-    // the create path was measured rather than reasoned about.
+    // resource and without being a SQL keyword, so it is refused by the
+    // Builder's validator and by nothing else here. That makes it the case a
+    // predicate stopping at `isReservedResourceSlug` cannot answer.
     expect(await wouldReadOwnNewCollection(key(["read-accounts"]))).toBe(false);
   });
 
