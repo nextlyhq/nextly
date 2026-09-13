@@ -3,15 +3,15 @@ title: Visual Schema Builder
 description: Design Collections, Singles, and Field Groups visually with drag-and-drop instead of writing code.
 ---
 
-The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces, plus the matching TypeScript types. Only the Collections Builder writes a file to disk: a Drizzle migration. Singles and Field Groups persist to the database alone — see [Persistence](#persistence). You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
+The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces, plus the matching TypeScript types. Every entity it saves is also written into the `ui-schema.json` manifest, which you commit — that is what `nextly migrate:create` reads, and for Singles and Field Groups it is the only artifact carrying them, since neither writes a migration file of its own. Only the Collections Builder writes one. See [Persistence](#persistence) and [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production). You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
 
 The Schema Builder has three variants that share the same canvas, palette, and field editor:
 
 | Variant | Route | Output |
 |---|---|---|
-| Collections Builder | `/admin/builder/collections` | Persists the schema row and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). No TypeScript schema file is written: the runtime builds its Drizzle table from the `dynamic_collections` row instead. |
-| Singles Builder | `/admin/builder/singles` | Persists the schema in the `dynamic_singles` database table. No files written to disk. |
-| Field Groups Builder | `/admin/builder/field-groups` | Persists the field group definition in the database. No files written to disk. |
+| Collections Builder | `/admin/builder/collections` | Persists the schema row, writes the entity into `ui-schema.json`, and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). No TypeScript schema file is written: the runtime builds its Drizzle table from the `dynamic_collections` row instead. |
+| Singles Builder | `/admin/builder/singles` | Persists the schema in the `dynamic_singles` database table and writes the entity into `ui-schema.json`. No migration file. |
+| Field Groups Builder | `/admin/builder/field-groups` | Persists the field group definition in the database and writes the entity into `ui-schema.json`. No migration file. |
 
 Create a new entity from any of the three list pages above. Edit an existing entity by appending its slug, e.g. `/admin/builder/collections/posts`.
 
@@ -85,8 +85,8 @@ After save, the new collection appears in the admin sidebar under Collections. T
 | Entity | Where it is stored | What gets generated |
 |---|---|---|
 | Collection | `dynamic_collections` table + a migration file on disk | A Drizzle migration in `db.migrationsDir`. No TypeScript schema file: the runtime builds the Drizzle table from the `dynamic_collections` row, so a generated file would only drift from it. |
-| Single | `dynamic_singles` table | Runtime-only: the schema is regenerated from the database row on each request. No files are written. |
-| Component | Database row | Runtime-only: stored alongside dynamic singles. No files are written. |
+| Single | `dynamic_singles` table + the `ui-schema.json` manifest | No migration file. The schema is regenerated from the database row on each request; the manifest entry is what `migrate:create` reads to carry the entity into a migration. |
+| Component | Database row + the `ui-schema.json` manifest | No migration file. Stored alongside dynamic singles; the manifest entry is what `migrate:create` reads. |
 
 When you edit and re-save a collection in a way that changes its **data table**, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar).
 
