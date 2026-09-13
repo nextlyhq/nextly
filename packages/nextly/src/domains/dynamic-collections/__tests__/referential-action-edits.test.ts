@@ -382,8 +382,7 @@ describe.each(["postgresql", "mysql"] as const)(
       // A renamed field is the SAME field. Matching the old list by the NEW
       // name finds nothing, so this pass skipped the pair entirely and the
       // save emitted the column rename alone — registry recording `restrict`
-      // over a key still cascading, which is the defect this PR exists to fix,
-      // reached through a second door.
+      // over a key still cascading, reached through a second door.
       const sql = service(dialect).generateAlterTableMigration(
         "dc_posts",
         [manyToOne({ onDelete: "cascade" })],
