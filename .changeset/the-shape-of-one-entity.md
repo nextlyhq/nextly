@@ -95,3 +95,23 @@ The stability ledger now lists these exports. It did not list `readableContent`
 or `routePathIsLiteral` either, both already published, and that ledger treats
 every unlisted export as internal, so three public APIs carried contradictory
 guarantees.
+
+Review round three, and the first two were consequences of the round-two fix
+that started forwarding type-specific declaration.
+
+`options` is not one shape. A `select` or `radio` field declares an ARRAY of
+label/value pairs, while the legacy registry definition uses the same key for an
+object bag carrying a number's format or a relation's target. The output schema
+admitted only the object, and the server validates a tool result against it, so
+forwarding a select field's options converted an otherwise successful lookup
+into a validation failure. Both shapes are admitted now.
+
+A relationship's `relationTo` and `hasMany` are top-level members, not entries
+in that bag, so a projection copying only the bag returned a relationship's name
+and type and nothing a client could act on: whether the value is one id, an
+array of ids, or a polymorphic reference is decided by exactly those two.
+
+`get_single_schema` now asks the registry for the one slug it wants, through the
+slug allowlist the list options already carry, rather than listing every Single
+and searching in memory. The registry deserializes each record it returns, so
+the unfiltered form materialized the whole registry to answer about one.

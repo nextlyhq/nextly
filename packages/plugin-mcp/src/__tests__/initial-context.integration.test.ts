@@ -91,6 +91,8 @@ function callInitialContext(headers: Record<string, string>): Request {
 }
 
 /** The JSON-RPC payload, whether the body is JSON or a single SSE frame. */
+type Payload = Awaited<ReturnType<typeof payloadOf>>;
+
 async function payloadOf(response: Response) {
   const text = await response.text();
   const line = text
@@ -107,6 +109,21 @@ async function payloadOf(response: Response) {
     };
     error?: { code: number; message: string };
   };
+}
+
+/**
+ * The two readings these cases take, each in one place.
+ *
+ * Each `?.` and `??` repeated per assertion is a branch, which is what made
+ * these cases read as large complex functions while asserting one thing apiece.
+ */
+function entitiesOf(body: Payload) {
+  return body.result?.structuredContent?.entities ?? [];
+}
+
+/** The answer's text blocks, in order. Block 0 is the instructions. */
+function blocksOf(body: Payload) {
+  return body.result?.content ?? [];
 }
 
 async function boot(collections: ReturnType<typeof defineCollection>[]) {
@@ -223,9 +240,7 @@ describe("get_initial_context answers for the caller who asked", () => {
     const res = await handlers.POST(callInitialContext(auth), params("mcp"));
     const body = await payloadOf(res);
 
-    const slugs = (body.result?.structuredContent?.entities ?? []).map(
-      e => e.slug
-    );
+    const slugs = entitiesOf(body).map(e => e.slug);
     expect(
       slugs,
       `the tool must answer at all, or the exclusion below is vacuous: ${JSON.stringify(body.error ?? {})}`
@@ -246,9 +261,7 @@ describe("get_initial_context answers for the caller who asked", () => {
       await handlers.POST(callInitialContext(auth), params("mcp"))
     );
 
-    const slugs = (body.result?.structuredContent?.entities ?? []).map(
-      e => e.slug
-    );
+    const slugs = entitiesOf(body).map(e => e.slug);
     expect(slugs).toContain("posts");
     expect(slugs).toContain("secrets");
   });
@@ -283,7 +296,9 @@ describe("get_initial_context answers for the caller who asked", () => {
     const body = await payloadOf(
       await handlers.POST(callInitialContext(auth), params("mcp"))
     );
-    const prose = (body.result?.content ?? []).map(c => c.text).join("\n");
+    const prose = blocksOf(body)
+      .map(c => c.text)
+      .join("\n");
 
     // Named, so the agent can find the field rather than infer the rule.
     expect(prose).toContain("`complete`");
@@ -291,7 +306,9 @@ describe("get_initial_context answers for the caller who asked", () => {
     expect(prose).toMatch(/whole answer/i);
     expect(prose).toMatch(/may not have been seen|not have been seen/i);
   });
+});
 
+describe("the instructions get_initial_context returns", () => {
   it("keeps a hostile entity name out of the instructions", async () => {
     // The security property. The instructions are a constant, so a slug an
     // attacker chose can only ever arrive as DATA. This is what fails the
@@ -317,9 +334,7 @@ describe("get_initial_context answers for the caller who asked", () => {
     const blocks = body.result?.content ?? [];
     const instructions = blocks[0]?.text ?? "";
     const dataBlock = blocks[1]?.text ?? "";
-    const slugs = (body.result?.structuredContent?.entities ?? []).map(
-      e => e.slug
-    );
+    const slugs = entitiesOf(body).map(e => e.slug);
 
     expect(
       slugs,
@@ -359,10 +374,8 @@ describe("get_initial_context answers for the caller who asked", () => {
         // The INSTRUCTIONS block only. The data block beside it differs per
         // caller by design, so joining them would compare the data, find it
         // different, and say nothing about the instructions.
-        prose: (body.result?.content ?? [])[0]?.text ?? "",
-        slugs: (body.result?.structuredContent?.entities ?? []).map(
-          e => e.slug
-        ),
+        prose: blocksOf(body)[0]?.text ?? "",
+        slugs: entitiesOf(body).map(e => e.slug),
       };
     };
 

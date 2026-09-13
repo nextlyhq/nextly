@@ -67,8 +67,29 @@ interface RegistryField {
   label?: string;
   required?: boolean;
   localized?: boolean;
-  /** Type-specific declaration: a relationship's `target`, a number's `format`. */
-  options?: Record<string, unknown>;
+  /**
+   * Type-specific declaration, and its shape depends on the field type.
+   *
+   * A `select` or `radio` declares `SelectOption[]`, an ARRAY of label/value
+   * pairs. The legacy registry definition uses the same key for an object bag
+   * carrying a number's `format` or a relation's `target`. One key, two shapes,
+   * neither reshapeable into the other without inventing meaning, so it travels
+   * as whichever it was and the output schema admits both. Declaring only the
+   * object turned every select field's successful lookup into a validation
+   * failure, because the server validates the result against that schema.
+   */
+  options?: unknown[] | Record<string, unknown>;
+  /**
+   * A relationship's target collection, and whether it holds many.
+   *
+   * Top-level on `RelationshipFieldConfig` rather than inside `options`, so a
+   * projection that copied only the bag returned a relationship's name and type
+   * and nothing a client could use: whether the value is one id, an array of
+   * them, or a polymorphic `{ relationTo, value }` is decided by exactly these
+   * two members.
+   */
+  relationTo?: string | string[];
+  hasMany?: boolean;
   /** Present for the container types, which is what makes this recursive. */
   fields?: RegistryField[];
 }
@@ -88,7 +109,11 @@ const FIELD: z.ZodType<RegistryField> = z.lazy(() =>
     label: z.string().optional(),
     required: z.boolean().optional(),
     localized: z.boolean().optional(),
-    options: z.record(z.string(), z.unknown()).optional(),
+    options: z
+      .union([z.array(z.unknown()), z.record(z.string(), z.unknown())])
+      .optional(),
+    relationTo: z.union([z.string(), z.array(z.string())]).optional(),
+    hasMany: z.boolean().optional(),
     fields: z.array(FIELD).optional(),
   })
 );
@@ -152,29 +177,25 @@ function describeFields(fields: readonly RegistryField[]): RegistryField[] {
     ...(field.required === undefined ? {} : { required: field.required }),
     ...(field.localized === undefined ? {} : { localized: field.localized }),
     ...(field.options === undefined ? {} : { options: field.options }),
+    ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
+    ...(field.hasMany === undefined ? {} : { hasMany: field.hasMany }),
     ...(field.fields === undefined
       ? {}
       : { fields: describeFields(field.fields) }),
   }));
 }
 
-export function registerSchemaTools(
+/** Readable AND of the kind the asking tool serves, or nothing to act on. */
+type Servable = (
+  slug: string,
+  kind: "collection" | "single"
+) => Promise<boolean>;
+
+function registerCollectionSchema(
   server: McpServer,
-  ctx: PluginRouteContext
+  ctx: PluginRouteContext,
+  servable: Servable
 ): void {
-  const caller = ctx.user
-    ? {
-        user: ctx.user,
-        ...(ctx.authenticatedScope
-          ? { authenticatedScope: ctx.authenticatedScope }
-          : {}),
-      }
-    : undefined;
-
-  /** Readable AND of the kind this tool serves, or nothing to act on. */
-  const servable = async (slug: string, kind: "collection" | "single") =>
-    caller !== undefined && (await readableContentKind(slug, caller)) === kind;
-
   server.registerTool(
     COLLECTION_SCHEMA_TOOL,
     {
@@ -208,7 +229,13 @@ export function registerSchemaTools(
       });
     }
   );
+}
 
+function registerSingleSchema(
+  server: McpServer,
+  ctx: PluginRouteContext,
+  servable: Servable
+): void {
   server.registerTool(
     SINGLE_SCHEMA_TOOL,
     {
@@ -226,7 +253,12 @@ export function registerSchemaTools(
       if (!(await servable(slug, "single"))) return refuse(slug);
 
       const singles: PluginSinglesService = ctx.services.singles;
-      const declared = await singles.list();
+      // Narrowed to the one slug rather than listed and searched here. The
+      // registry deserializes every record it returns, fields JSON included, so
+      // an unfiltered list materializes the whole registry to answer about one
+      // Single, and an agent walking the entities from `get_initial_context`
+      // would pay that once per entity.
+      const declared = await singles.list({ slugAllowlist: [slug], limit: 1 });
       const found = declared.data.find(item => item.slug === slug);
       // The registry named it a single a moment ago, so its absence from the
       // singles listing is the two registries disagreeing rather than a caller
@@ -241,4 +273,31 @@ export function registerSchemaTools(
       });
     }
   );
+}
+
+/**
+ * Both schema tools, on a server built for one caller.
+ *
+ * The access-and-kind question is resolved once here and handed to each tool,
+ * so the two cannot answer it differently: a caller admitted by one and refused
+ * by the other is the drift this shares a resolver to prevent.
+ */
+export function registerSchemaTools(
+  server: McpServer,
+  ctx: PluginRouteContext
+): void {
+  const caller = ctx.user
+    ? {
+        user: ctx.user,
+        ...(ctx.authenticatedScope
+          ? { authenticatedScope: ctx.authenticatedScope }
+          : {}),
+      }
+    : undefined;
+
+  const servable: Servable = async (slug, kind) =>
+    caller !== undefined && (await readableContentKind(slug, caller)) === kind;
+
+  registerCollectionSchema(server, ctx, servable);
+  registerSingleSchema(server, ctx, servable);
 }

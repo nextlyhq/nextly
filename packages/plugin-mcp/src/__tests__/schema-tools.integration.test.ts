@@ -7,7 +7,14 @@ import {
   createTestNextly,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, defineSingle, group, text } from "nextly/config";
+import {
+  defineCollection,
+  defineSingle,
+  group,
+  relationship,
+  select,
+  text,
+} from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -80,6 +87,8 @@ const callTool = (name: string, args: unknown, h: Record<string, string>) =>
     h
   );
 
+type Payload = Awaited<ReturnType<typeof payloadOf>>;
+
 async function payloadOf(response: Response) {
   const text = await response.text();
   const line = text
@@ -97,7 +106,9 @@ async function payloadOf(response: Response) {
         fields: {
           name?: string;
           type: string;
-          options?: Record<string, unknown>;
+          options?: unknown;
+          relationTo?: string | string[];
+          hasMany?: boolean;
           fields?: { name?: string; type: string }[];
         }[];
       };
@@ -109,6 +120,21 @@ async function payloadOf(response: Response) {
 const homepage = defineSingle({
   slug: "homepage",
   fields: [text({ name: "headline" })],
+});
+
+const catalog = defineCollection({
+  slug: "catalog",
+  fields: [
+    text({ name: "title" }),
+    select({
+      name: "status",
+      options: [
+        { label: "Draft", value: "draft" },
+        { label: "Live", value: "live" },
+      ],
+    }),
+    relationship({ name: "authors", relationTo: "posts", hasMany: true }),
+  ],
 });
 
 const layouts = defineCollection({
@@ -123,6 +149,24 @@ const layouts = defineCollection({
   ],
 });
 
+/**
+ * The two readings every case here takes, each in one place.
+ *
+ * Repeating `body.result?.structuredContent?.fields ?? []` per assertion is not
+ * only noise: each `?.` and `??` is a branch, so the repetition is what made
+ * these cases read as some of the most complex functions in the package while
+ * asserting one thing apiece.
+ */
+function fieldsOf(body: Payload) {
+  return body.result?.structuredContent?.fields ?? [];
+}
+
+/** Every text block of an answer, joined. */
+function textOf(body: Payload) {
+  const blocks = body.result?.content ?? [];
+  return blocks.map(c => c.text).join("");
+}
+
 const posts = defineCollection({
   slug: "posts",
   fields: [text({ name: "title" }), text({ name: "body" })],
@@ -134,7 +178,7 @@ const secrets = defineCollection({
 
 async function boot() {
   current = await createTestNextly({
-    collections: [posts, secrets, layouts],
+    collections: [posts, secrets, layouts, catalog],
     singles: [homepage],
     plugins: [mcpPlugin({ enabled: true, allowedHosts: [ALLOWED] })],
   });
@@ -230,9 +274,7 @@ describe("the schema tools describe only what the caller may read", () => {
     ).not.toBe(true);
     expect(body.result?.structuredContent?.slug).toBe("posts");
     expect(body.result?.structuredContent?.kind).toBe("collection");
-    const names = (body.result?.structuredContent?.fields ?? []).map(
-      f => f.name
-    );
+    const names = fieldsOf(body).map(f => f.name);
     expect(names).toContain("title");
     expect(names).toContain("body");
   });
@@ -329,9 +371,7 @@ describe("the schema tools describe only what the caller may read", () => {
     ).not.toBe(true);
     expect(body.result?.structuredContent?.slug).toBe("homepage");
     expect(body.result?.structuredContent?.kind).toBe("single");
-    expect(
-      (body.result?.structuredContent?.fields ?? []).map(f => f.name)
-    ).toContain("headline");
+    expect(fieldsOf(body).map(f => f.name)).toContain("headline");
   });
 
   it("does not answer a SINGLE through the collection tool", async () => {
@@ -353,7 +393,7 @@ describe("the schema tools describe only what the caller may read", () => {
 
     expect(body.result?.isError).toBe(true);
     expect(
-      (body.result?.content ?? []).map(c => c.text).join(""),
+      textOf(body),
       "the refusal must be the uniform one, not a registry not-found"
     ).toContain("No readable entity");
   });
@@ -376,7 +416,7 @@ describe("the schema tools describe only what the caller may read", () => {
       )
     );
 
-    const text = (body.result?.content ?? []).map(c => c.text).join("");
+    const text = textOf(body);
     expect(
       text,
       "a client reading only `content` must get the schema"
@@ -418,7 +458,9 @@ describe("the schema tools describe only what the caller may read", () => {
     ).toBeGreaterThan(afterDenied);
     expect(afterDenied).toBe(0);
   });
+});
 
+describe("the shape the schema tools return", () => {
   it("describes a container field's children, not just its name", async () => {
     // A repeater or a group holds its own fields. A projection that stopped at
     // the top level would report `hero` as a field of no particular shape, and
@@ -446,6 +488,95 @@ describe("the schema tools describe only what the caller may read", () => {
       (hero?.fields ?? []).map(f => f.name),
       "the group's children must survive the projection"
     ).toContain("heading");
+  });
+
+  it("returns a select field's options as the array they are declared as", async () => {
+    // The server validates a tool result against the advertised output schema,
+    // so a schema admitting only an object turned every select field's
+    // otherwise successful lookup into a validation failure. `options` is one
+    // key with two shapes: an array of label/value pairs here, an object bag on
+    // the legacy definition. Both have to be answerable.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "catalog-select", ["catalog"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_collection_schema", { slug: "catalog" }, auth),
+        params("mcp")
+      )
+    );
+
+    expect(
+      body.result?.isError,
+      `a select field must not fail validation: ${JSON.stringify(body.error ?? body.result?.content ?? {})}`
+    ).not.toBe(true);
+    const status = fieldsOf(body).find(f => f.name === "status");
+    expect(status, "the select field must be in the answer").toBeDefined();
+    expect(
+      Array.isArray(status?.options),
+      `options must survive as an array: ${JSON.stringify(status?.options)}`
+    ).toBe(true);
+    expect((status?.options as unknown[])?.length).toBe(2);
+  });
+
+  it("carries a relationship's target and cardinality", async () => {
+    // `relationTo` and `hasMany` are top-level on the field config, not entries
+    // in the options bag, so a projection copying only the bag returned the
+    // relationship's name and type and nothing a client could act on: one id,
+    // an array of ids and a polymorphic reference are told apart by these two.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "catalog-rel", ["catalog"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_collection_schema", { slug: "catalog" }, auth),
+        params("mcp")
+      )
+    );
+
+    const authors = fieldsOf(body).find(f => f.name === "authors");
+    expect(authors, "the relationship must be in the answer").toBeDefined();
+    expect(authors?.relationTo).toBe("posts");
+    expect(authors?.hasMany).toBe(true);
+  });
+
+  it("asks the registry for the one single it wants", async () => {
+    // The registry deserializes every record it returns, fields JSON included,
+    // so an unfiltered list materializes the whole registry to answer about
+    // one. Asserted on the ARGUMENTS rather than the answer, because listing
+    // everything and searching in memory returns exactly the same schema.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "single-narrow", ["homepage"]);
+    const auth = { authorization: `Bearer ${key}` };
+    await handlers.POST(initialize(auth), params("mcp"));
+
+    const registry = current!.getService(
+      "singleRegistryService"
+    ) as unknown as {
+      listSingles: (...args: unknown[]) => Promise<unknown>;
+    };
+    const listed = vi.spyOn(registry, "listSingles");
+
+    await handlers.POST(
+      callTool("get_single_schema", { slug: "homepage" }, auth),
+      params("mcp")
+    );
+
+    expect(
+      listed,
+      "the spy must observe the call, or its arguments prove nothing"
+    ).toHaveBeenCalled();
+    const args = listed.mock.calls[0]?.[0] as
+      | { slugAllowlist?: string[]; limit?: number }
+      | undefined;
+    listed.mockRestore();
+
+    expect(args?.slugAllowlist).toEqual(["homepage"]);
+    expect(args?.limit).toBe(1);
   });
 
   it("advertises both schema tools alongside the initial context", async () => {
