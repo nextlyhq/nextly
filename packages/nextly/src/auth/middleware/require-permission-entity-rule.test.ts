@@ -41,8 +41,9 @@ const services = vi.hoisted(() => ({
 }));
 
 // Relative specifiers, as the rest of this package's suites mock these modules:
-// the aliased spelling did not replace the module the middleware imports, so
-// the key service was never found and every request answered 503.
+// they name the same files the middleware's aliased imports resolve to, which
+// is what makes the replacement reach it. With the real container in place the
+// key service is absent and every request answers 503 instead.
 vi.mock("../../di/container", () => ({
   container: {
     has: (key: string) =>
