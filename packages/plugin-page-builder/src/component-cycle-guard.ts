@@ -75,10 +75,10 @@ import {
   componentReachIn,
   componentReferencesFrom,
   resolveComponentInstances,
-  countNodes,
   variantNamesIn,
   type ComponentReach,
   type DocumentLimits,
+  type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
@@ -199,9 +199,13 @@ async function refuseACycle(
     );
   }
 
+  // ONE allowance for every composition this save performs, so the bound is on
+  // the save rather than on each check that composes.
+  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
+
   // Decided from the document in hand, so it is decided BEFORE the declines
   // below. Those exist for the graph READS, and this question needs none.
-  refuseASelfReference(submitted, self, options);
+  refuseASelfReference(submitted, self, options, work);
 
   const nextly = directApiOf(context);
   // No Direct API to ask with. A guard that refused every write it could not
@@ -221,6 +225,7 @@ async function refuseACycle(
     self,
     document: held.document,
     forms: formsChangedBy(next),
+    work,
   });
 }
 
@@ -239,7 +244,8 @@ async function refuseACycle(
 function refuseASelfReference(
   submitted: { readonly document: unknown } | "absent",
   self: string,
-  options: CycleGuardOptions
+  options: CycleGuardOptions,
+  work: WorkAllowance
 ): void {
   if (submitted === "absent") return;
   // The ID survey only says where to LOOK. It reads a stored id off every node,
@@ -249,70 +255,64 @@ function refuseASelfReference(
   if (!namesItself(submitted.document, self, options)) return;
 
   // So the composition decides here too, over a library holding ONLY the subject.
-  if (!composesOnItself(submitted.document, self, options)) return;
+  const composed = composesOnItself(submitted.document, self, options, work);
+  if (composed === "none") return;
 
-  throw refusal(
-    `This component cannot be saved because it would reference itself: ` +
-      `${self} → ${self}. Remove that placement and save again.`
-  );
+  // The chain needs no walk: the survey found the subject naming itself, so the
+  // chain to name is the subject twice over.
+  const walked: WalkOutcome = {
+    reach: { kind: "cycle", path: [self, self] },
+    own: [],
+  };
+  if (composed === "cycle") throw cycleRefusal(walked, self);
+  // Not cleared either. On the path with no Direct API there is no walk behind
+  // this to decide instead, so a composition that could not finish refuses here.
+  throw indeterminateRefusal(walked, self, work);
 }
 
 /**
- * Whether this document closes a loop on the subject using nothing but itself.
+ * What composing this document over ITSELF alone establishes.
  *
  * Deliberately a narrower question than {@link composesACycle}, and the narrowing
  * is what makes it answerable with no library at all. Every other component is
  * simply ABSENT, which the resolver draws as a placeholder — so a chain that runs
- * out through some other component is not refused here, it is left to the walk
- * that can actually read it.
+ * out through some other component is not found here; it is left to the walk
+ * that can actually read it. With no reader there is nothing to fail, so an
+ * unrelated placement beside a gated self-placeholder never becomes a refusal.
  *
- * That is why there is no reader, no budget and no unestablished answer. An
- * earlier version composed against a reader that refused everything and treated
- * the resulting `indeterminate` as a refusal, which turned any UNRELATED
- * placement beside a gated self-placeholder into a false refusal: the composition
- * asked for that other component, could not be given it, and the write was
- * rejected for a question it had not answered.
- *
- * The selections asked are the default one plus every variant that installs the
- * SUBJECT's id — not every variant that can reach the graph. Only a selection
- * naming the subject can close a loop on it without leaving the document, so this
- * needs no cap: a component offering a thousand variants costs a composition for
- * each one that names itself, and those are the only ones that could refuse.
+ * Every selection is composed — the default one and each declared variant —
+ * against the save's allowance. A limit reached inside the subject's OWN forest,
+ * or an allowance spent before every selection was composed, answers
+ * `indeterminate`: the survey has already found the document naming itself, and
+ * a composition that could not finish has not shown that the placement resolves.
  */
 function composesOnItself(
   document: unknown,
   self: string,
-  options: CycleGuardOptions
-): boolean {
-  const selections = selectionsWorthComposing(document);
-  // Nothing can be afforded, so nothing is established here. The walk behind this
-  // is where an unestablished document is refused; this check only ever ADDS a
-  // refusal it can prove from the document alone.
-  if (selections === null) return false;
+  options: CycleGuardOptions,
+  work: WorkAllowance
+): CompositionVerdict {
+  const selections = everySelection(document);
+  if (selections === null) return "indeterminate";
 
   const alone = {
     has: (id: string) => id === self,
     get: (id: string) => (id === self ? document : undefined),
   };
   for (const variant of selections) {
-    const composition = resolveComponentInstances(
-      hostPlacing(self, variant) as never,
-      alone as never,
-      { limits: options.limits }
-    );
-    if (composition.unresolved.some(one => one.reason === "cycle")) return true;
-    // A limit reached while composing the subject's OWN forest. The survey has
-    // already found it naming itself and the composition could not get far
-    // enough to say whether that placement resolves — so this refuses, and it
-    // can do so without the false-refusal risk that made the reader go away: a
-    // component this could not supply reports `missing`, which is not here.
-    if (
-      composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))
-    ) {
-      return true;
-    }
+    // An optimisation, and stated as one because no outcome can hold it: a
+    // composition asked for once the allowance is spent comes back stopped short
+    // anyway. What it saves is the envelope planning each further call pays
+    // before its first entry is refused.
+    if (work.left <= 0) return "indeterminate";
+    const composed = composeSubject(self, variant, alone, options, work);
+    if (composed.reached === "cycle") return "cycle";
+    // A component this could not supply reports `missing`, which is not a
+    // stopping reason, so a stop here is a limit on the subject's own forest or
+    // on the allowance — never an absent neighbour.
+    if (composed.reached === "stopped") return "indeterminate";
   }
-  return false;
+  return "none";
 }
 
 /**
@@ -356,8 +356,9 @@ async function refuseIfReached(args: {
   self: string;
   document: unknown;
   forms: readonly boolean[];
+  work: WorkAllowance;
 }): Promise<void> {
-  const { options, nextly, self, document, forms } = args;
+  const { options, nextly, self, document, forms, work } = args;
   for (const draft of forms) {
     // One reader per FORM. A component's published and draft documents are
     // different documents, so a cache shared across the two would answer the
@@ -371,7 +372,7 @@ async function refuseIfReached(args: {
     // nesting, and long by a stored edge wherever an override re-points one away
     // from the loop. So the composition rules and the walk only supplies the
     // chain to name — which is the one thing the composition cannot report.
-    const composed = await composesACycle(document, self, options, read);
+    const composed = await composesACycle(document, self, options, read, work);
     if (composed === "cycle") throw cycleRefusal(walked, self);
 
     // Composing could not be FINISHED, which is not a report that there is no
@@ -380,12 +381,14 @@ async function refuseIfReached(args: {
     // nested override can send the resolver to a definition the walk never
     // needed, so the two do not even read the same rows.
     //
-    // Refused whatever the walk said, and that costs nothing it did not already
-    // cost: this state is a failed read or a spent budget, and the walk refuses
-    // on both of those itself. A definition the RENDERER declines is not this
-    // case — that resolves to a placeholder a reader sees, so it composes as
-    // `none` and stays savable.
-    if (composed === "indeterminate") throw indeterminateRefusal(walked, self);
+    // Refused whatever the walk said: this state is a failed read, a limit the
+    // composition reached, or the save's allowance spent, and none of them is
+    // evidence that no loop exists. A definition the RENDERER declines is not
+    // this case — that resolves to a placeholder a reader sees, so it composes
+    // as `none` and stays savable.
+    if (composed === "indeterminate") {
+      throw indeterminateRefusal(walked, self, work);
+    }
   }
 }
 
@@ -400,6 +403,19 @@ const UNESTABLISHED =
   `established.`;
 
 /**
+ * The refusal for a save whose compositions spent its allowance.
+ *
+ * Its own wording because its remedy is the author's to take, which a failed
+ * read is not: fewer variants, or less placed inside the component, is work they
+ * can do.
+ */
+const OUTGROWN =
+  `This component cannot be saved: composing it under each of its variants ` +
+  `takes more work than one save allows, so whether it would end up ` +
+  `referencing itself could not be established. Offer fewer variants, or ` +
+  `place fewer or smaller components inside it.`;
+
+/**
  * The refusal for a composition that could not be finished.
  *
  * Says only what is known, and the two halves are different claims. The
@@ -411,10 +427,17 @@ const UNESTABLISHED =
  * Offered as a lead rather than as the verdict, deliberately: a walk's chain can
  * be a stored edge an override re-points, which is why it does not decide.
  */
-function indeterminateRefusal(walked: WalkOutcome, self: string): Error {
-  if (walked.reach.kind !== "cycle") return refusal(UNESTABLISHED);
+function indeterminateRefusal(
+  walked: WalkOutcome,
+  self: string,
+  work: WorkAllowance
+): Error {
+  // Which unestablished state this is, because only one has a remedy the author
+  // controls. A spent allowance is that one, whatever else also stopped.
+  const reason = work.left <= 0 ? OUTGROWN : UNESTABLISHED;
+  if (walked.reach.kind !== "cycle") return refusal(reason);
   return refusal(
-    `${UNESTABLISHED} Its stored placements do lead back to it — ` +
+    `${reason} Its stored placements do lead back to it — ` +
       `${namedPath(walked.reach.path, walked.own, self)} — so start there.`
   );
 }
@@ -549,11 +572,11 @@ async function composesACycle(
   document: unknown,
   self: string,
   options: CycleGuardOptions,
-  read: DocumentReader
+  read: DocumentReader,
+  work: WorkAllowance
 ): Promise<CompositionVerdict> {
-  const selections = selectionsWorthComposing(document);
-  // The variants could not be enumerated, or more of them install a reference
-  // than this will compose. Not an answer either way.
+  const selections = everySelection(document);
+  // The variants could not be enumerated. Not an answer either way.
   if (selections === null) return "indeterminate";
 
   // The subject under its own id, so a chain leading back to it meets the
@@ -568,7 +591,19 @@ async function composesACycle(
 
   let indeterminate = false;
   for (const variant of selections) {
-    const one = await composesUnder(variant, self, options, read, library);
+    // A selection left uncomposed is not one that composed clean. Answered here
+    // as an optimisation: once the allowance is spent every further selection
+    // stops short on its first entry, so the verdict is the same either way and
+    // only the planning for each is saved.
+    if (work.left <= 0) return "indeterminate";
+    const one = await composesUnder(
+      variant,
+      self,
+      options,
+      read,
+      library,
+      work
+    );
     if (one === "cycle") return "cycle";
     if (one === "indeterminate") indeterminate = true;
   }
@@ -576,50 +611,41 @@ async function composesACycle(
 }
 
 /**
- * How much composing ONE save will do before it declines to answer.
+ * How much composing ONE save will do before it declines to answer, counted in
+ * the definition entries the resolver clones or prepares.
  *
- * A budget rather than a rule about which variants matter. Each selection walks
- * up to the document's node bound, and a component may legally declare a
- * thousand variants, so the product is what has to be bounded — not guessed at.
- *
- * Guessing is what this replaced. Three successive rounds tried to predict which
- * variants could change a composition — by the ids they install, then by the
- * prop paths they write, then by whether a visibility write reveals — and each
- * refinement was correct about the case that prompted it and wrong about a new
- * one, because the prediction has to model the whole resolver to be right. The
- * budget needs no model: every selection is composed, and the only question is
- * how many the document's size affords.
+ * A budget rather than a rule about which variants matter. Whether a selection
+ * can change a composition is a question only the whole resolver answers, so
+ * every selection is composed and the work itself is what is bounded. The
+ * resolver charges each entry as it examines it — the subject's own forest, the
+ * definitions it places, and expansions it attempts and abandons — so a one-node
+ * component placing a large definition pays for that definition under every
+ * variant it offers.
  *
  * Spending it REFUSES, for the reason the read budget does: a prefix of the
  * selections that found no loop is exactly what a component with no loop looks
- * like. A 250-node component affords its thousand variants; a 5,000-node one
- * affords fifty, and past that this says so rather than guessing.
+ * like.
  */
 const MOST_COMPOSED_NODES = 250_000;
 
 /**
- * Every selection a reader can receive, or `null` where they cannot all be composed.
+ * Every selection a reader can receive, or `null` where they cannot be listed.
  *
- * No variant is skipped. Which ones could matter is exactly the question that
- * kept being answered wrongly, and the answer is not needed: composing one that
- * changes nothing costs a walk over a document already in memory, while missing
- * one costs a loop on every page that places it.
+ * No variant is skipped. Which ones could matter is not decidable short of
+ * composing them, and composing one that changes nothing costs only work the
+ * save's allowance already bounds, while missing one costs a loop on every page
+ * that places it.
  */
-function selectionsWorthComposing(
+function everySelection(
   document: unknown
 ): readonly (string | undefined)[] | null {
   const named = variantNamesIn(document);
   if (named === null) return null;
 
-  const nodes = (document as { nodes?: unknown }).nodes;
-  // A document whose own forest cannot be counted is one nothing can be afforded
-  // for. The walk refuses such a document anyway; this simply does not guess.
-  if (!Array.isArray(nodes)) return null;
-  const size = Math.max(countNodes(nodes as never), 1);
-  const affordable = Math.floor(MOST_COMPOSED_NODES / size);
-  // The default selection is always one of them, so it is counted here too.
-  if (named.length + 1 > affordable) return null;
-
+  // A forest that is not a list is one nothing composes. The resolver hands such
+  // a document back unchanged with nothing unresolved, which would read as a
+  // clean composition rather than as no composition at all.
+  if (!Array.isArray((document as { nodes?: unknown }).nodes)) return null;
   return [undefined, ...named];
 }
 
@@ -651,13 +677,50 @@ const STOPPED_SHORT: readonly string[] = [
   "budget",
 ];
 
+/** How one composition of the subject ended, and what it left standing. */
+interface ComposedOnce {
+  /** A loop closed, a limit ended the descent, or the composition finished. */
+  readonly reached: "cycle" | "stopped" | "finished";
+  readonly unresolved: readonly { readonly componentId: string }[];
+}
+
+/**
+ * Compose the subject under ONE selection, over whatever definitions `lookup`
+ * supplies, charged to the save's allowance.
+ *
+ * The one place a composition is judged, so the self check and the walk cannot
+ * come to read the same result differently. A loop outranks a limit: a
+ * composition that closed one has shown it, whatever else also stopped it.
+ */
+function composeSubject(
+  self: string,
+  variant: string | undefined,
+  lookup: { has(id: string): boolean; get(id: string): unknown },
+  options: CycleGuardOptions,
+  work: WorkAllowance
+): ComposedOnce {
+  const { unresolved } = resolveComponentInstances(
+    hostPlacing(self, variant) as never,
+    lookup as never,
+    { limits: options.limits, work }
+  );
+  if (unresolved.some(one => one.reason === "cycle")) {
+    return { reached: "cycle", unresolved };
+  }
+  if (unresolved.some(one => STOPPED_SHORT.includes(one.reason))) {
+    return { reached: "stopped", unresolved };
+  }
+  return { reached: "finished", unresolved };
+}
+
 /** Composing the subject under ONE variant selection, reading what it asks for. */
 async function composesUnder(
   variant: string | undefined,
   self: string,
   options: CycleGuardOptions,
   read: DocumentReader,
-  library: HeldLibrary
+  library: HeldLibrary,
+  work: WorkAllowance
 ): Promise<CompositionVerdict> {
   const { held } = library;
   // HELD until the reads are exhausted, rather than answered with on sight. A
@@ -666,25 +729,19 @@ async function composesUnder(
   // rule `componentReach` already follows for a branch it could not read.
   let stoppedShort = false;
 
+  const lookup = {
+    has: (id: string) => held.has(id),
+    get: (id: string) => held.get(id),
+  };
   for (let round = 0; round <= MOST_COMPONENTS_READ; round += 1) {
-    const composition = resolveComponentInstances(
-      hostPlacing(self, variant) as never,
-      {
-        has: (id: string) => held.has(id),
-        get: (id: string) => held.get(id),
-      } as never,
-      { limits: options.limits }
-    );
-    if (composition.unresolved.some(one => one.reason === "cycle")) {
-      return "cycle";
-    }
-    if (
-      composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))
-    ) {
-      stoppedShort = true;
-    }
+    // Every round composes again from the top, so every round is charged. The
+    // early answer is the optimisation the loop above makes, for the same reason.
+    if (work.left <= 0) return "indeterminate";
+    const composed = composeSubject(self, variant, lookup, options, work);
+    if (composed.reached === "cycle") return "cycle";
+    if (composed.reached === "stopped") stoppedShort = true;
 
-    const wanted = stillWanted(composition.unresolved, library);
+    const wanted = stillWanted(composed.unresolved, library);
     // Nothing further to supply. Every placement this selection resolves was
     // composed — so this is `none` only where nothing stopped the descent.
     if (wanted.length === 0) return stoppedShort ? "indeterminate" : "none";
@@ -1099,9 +1156,9 @@ async function readComponent(
  * Whether a returned row is the component that was asked for.
  *
  * Equality on the id, and nothing else satisfies it — a row carrying NO `id` at
- * all included. The looser rule this replaced accepted a key-less row on the
- * grounds that the read was addressed by id anyway, and that is the case an
- * `afterRead` hook can manufacture: a lookup for B retargeted to an acyclic C
+ * all included. A looser rule, accepting a key-less row on the grounds that the
+ * read was addressed by id anyway, admits exactly the case an `afterRead` hook
+ * can manufacture: a lookup for B retargeted to an acyclic C
  * whose response omits `id` would be read as B's placements, and the chain
  * through the real B approved.
  *

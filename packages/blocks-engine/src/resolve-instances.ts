@@ -100,7 +100,10 @@ export const COMPONENT_UNRESOLVED_REASONS = [
    * stop nesting it inside others.
    */
   "node-depth",
-  /** Inlining it would pass the run's node budget. */
+  /**
+   * Inlining it would pass the run's node budget, or the work allowance the
+   * caller supplied. Both are limits on the same resolution and share a remedy.
+   */
   "budget",
   /** The instance node names no component at all. */
   "malformed",
@@ -205,12 +208,40 @@ export interface ComponentLookup {
   get(id: string): BlockDocument | undefined;
 }
 
+/**
+ * Work a caller lets its resolutions spend, shared across every call handed it.
+ *
+ * `left` is decremented in place as a resolution spends it, so a caller reads
+ * what remains after a call without being told separately.
+ */
+export interface WorkAllowance {
+  /** What remains. `Infinity` sets no bound; the allowance is spent at zero. */
+  left: number;
+}
+
 /** How much work one resolution may do. */
 export interface ResolveComponentOptions {
   /** Node and depth caps for the tree being built. Defaults to {@link DEFAULT_LIMITS}. */
   limits?: DocumentLimits;
   /** Levels of component nesting allowed. Defaults to {@link MAX_COMPOSED_DEPTH}. */
   maxComposedDepth?: number;
+  /**
+   * An allowance charged for every definition entry this resolution clones or
+   * prepares, for a caller that composes more than once and must bound the total.
+   *
+   * `limits.maxNodes` bounds what ONE composition may PRODUCE, which says nothing
+   * about the work behind it or how often that work is repeated. An expansion
+   * refused for the node budget is rolled back and gives its budget back, so each
+   * later instance of that definition attempts it again; a node an override hides
+   * is refunded the same way. This allowance is charged for all of it and gives
+   * nothing back.
+   *
+   * Once it is spent, every instance still to be expanded is refused for
+   * `budget`, exactly as one past the node budget is. The survey of the host
+   * document is not charged: every call makes it once, and `limits.maxNodes`
+   * already bounds it. Omitted, a resolution is bounded by its limits alone.
+   */
+  work?: WorkAllowance;
 }
 
 /** One instance that was left standing, and why. */
@@ -854,6 +885,11 @@ export function resolveComponentInstances(
     ),
     maxBytes: supplied.maxBytes,
   };
+  // Validated for the reason the caps above are: `left <= 0` is false against
+  // `NaN`, so an unusable allowance would bound nothing while reading as a bound.
+  if (options.work !== undefined) {
+    boundedLimit(options.work.left, "work.left", "resolveComponentInstances");
+  }
   const survey = surveyHost(document.nodes, limits.maxNodes);
   // A survey that stopped at the cap collected a PREFIX of the document's ids,
   // so every id minted afterwards would be checked against a set missing
@@ -885,6 +921,7 @@ export function resolveComponentInstances(
     // allowance here would let a page at the cap resolve to twice it while
     // every one of those passes believes it is reading a bounded document.
     budget: limits.maxNodes - survey.count,
+    work: options.work,
     taken: survey.ids,
     takenDomIds: survey.domIds,
     renamedDomIds: new Map<string, string>(),
@@ -925,6 +962,14 @@ interface ResolveRun {
   maxComposedDepth: number;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
+  /**
+   * The caller's work allowance, when it supplied one.
+   *
+   * Beside `budget` rather than inside the savepoint: a rollback gives the node
+   * budget back because the composed document does not hold what was abandoned,
+   * while the work of attempting it was done either way.
+   */
+  work: WorkAllowance | undefined;
   /** Every id in use, so a minted one cannot shadow a stored node. */
   taken: Set<string>;
   /** The same, for the ids that reach the DOM rather than the document. */
@@ -1931,6 +1976,49 @@ function savepoint(run: ResolveRun): Savepoint {
 }
 
 /**
+ * Charge one entry to the caller's work allowance, or report that it is spent.
+ *
+ * Never given back, which is what separates it from `budget`: the node budget
+ * measures what the composed document may still hold, so an abandoned expansion
+ * and a node an override hides return their charge to it. The work of cloning
+ * them was done either way, and an allowance that refunded it would let the same
+ * refused expansion be attempted again for nothing.
+ */
+function spendWork(run: ResolveRun): boolean {
+  const work = run.work;
+  if (work === undefined) return true;
+  if (work.left <= 0) return false;
+  work.left -= 1;
+  return true;
+}
+
+/**
+ * Charge one definition entry to the node budget and the caller's allowance
+ * together, or report that either is spent.
+ *
+ * The node budget is asked first, and an entry it refuses is charged to neither:
+ * the clone stops there without examining it.
+ */
+function chargeEntry(run: ResolveRun): boolean {
+  if (run.budget <= 0 || !spendWork(run)) return false;
+  run.budget -= 1;
+  return true;
+}
+
+/**
+ * Charge one slot-prepass entry to the pass's own bound and the caller's
+ * allowance together, or report that either is spent.
+ *
+ * The pass's bound is the one a node an override hides gives back; the allowance
+ * is not, for the reason {@link spendWork} gives.
+ */
+function chargePrepassEntry(work: WorkBudget, run: ResolveRun): boolean {
+  if (work.left <= 0 || !spendWork(run)) return false;
+  work.left -= 1;
+  return true;
+}
+
+/**
  * Undo a whole attempted expansion.
  *
  * All three, not the budget alone. A nested instance refused INSIDE an
@@ -2897,11 +2985,10 @@ function cloneDefinitionForest(
     // entry including malformed ones. A definition nothing validated can hold
     // a million nulls, and skipping them free lets it be walked in full under
     // any cap — then resolve to a partial tree rather than reporting `budget`.
-    if (ctx.run.budget <= 0) {
+    if (!chargeEntry(ctx.run)) {
       ctx.run.abort = "budget";
       return null;
     }
-    ctx.run.budget -= 1;
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const produced = cloneDefinitionNode(
       node as unknown as ResolvedBlockNode,
@@ -3015,8 +3102,7 @@ function composeSurvivingSlots(
     // definition nothing validated can hold a million siblings, and the depth
     // bound says nothing about breadth — so without this the pass walks all of
     // them to prepare content the clone refuses a moment later for `budget`.
-    if (work.left <= 0) return;
-    work.left -= 1;
+    if (!chargePrepassEntry(work, ctx.run)) return;
     if (!isPlainRecord(node) || typeof node.id !== "string") continue;
     const plan = ctx.plans.get(node.id);
     if (!survivesGating(node, plan)) {
