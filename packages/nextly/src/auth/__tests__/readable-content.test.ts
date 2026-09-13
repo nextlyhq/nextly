@@ -6,14 +6,24 @@
  * they compose the registry, the caller conversion and the per-entity decision
  * the same way, because a caller admitted by one and refused by the other is
  * exactly the drift they share a module to prevent.
+ *
+ * The two reach the registry differently and that is deliberate: the set
+ * enumerates, the single answer takes a point lookup, because a caller walking
+ * the entities the set just listed would otherwise scan both registries once
+ * per entity. Both registry readings are driven from ONE fixture here, so these
+ * cases are about the COMPOSITION rather than about the two registry paths
+ * agreeing. That they agree against real registries is a property of the
+ * registries and is asserted where real ones exist.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { checkAccessSpy, registeredAccessSpy, snapshotSpy } = vi.hoisted(() => ({
-  checkAccessSpy: vi.fn(),
-  registeredAccessSpy: vi.fn(),
-  snapshotSpy: vi.fn(),
-}));
+const { checkAccessSpy, registeredAccessSpy, snapshotSpy, kindOfSpy } =
+  vi.hoisted(() => ({
+    checkAccessSpy: vi.fn(),
+    registeredAccessSpy: vi.fn(),
+    snapshotSpy: vi.fn(),
+    kindOfSpy: vi.fn(),
+  }));
 
 vi.mock("../../di/container", () => ({
   container: {
@@ -27,6 +37,7 @@ vi.mock("../../di/container", () => ({
 
 vi.mock("../../services/lib/registered-content-slugs", () => ({
   registeredContentSnapshot: snapshotSpy,
+  registeredContentKindOf: kindOfSpy,
 }));
 
 import { canReadContent, readableContent } from "../readable-content";
@@ -34,11 +45,23 @@ import { canReadContent, readableContent } from "../readable-content";
 /** A signed-in person, whose grants `checkAccess` resolves. */
 const session = { user: { id: "user-1", roles: ["editor"] } };
 
+/**
+ * One registry state, answered through BOTH readings.
+ *
+ * Written from a single map on purpose. Setting the enumeration and the point
+ * lookup independently would let a case pass while describing an install whose
+ * two registry reads disagree, which is a state nothing can produce and which
+ * would make the agreement case below vacuous.
+ */
 function registry(
   entries: [string, "collection" | "single"][],
   degraded = false
 ) {
-  snapshotSpy.mockResolvedValue({ kinds: new Map(entries), degraded });
+  const kinds = new Map(entries);
+  snapshotSpy.mockResolvedValue({ kinds, degraded });
+  kindOfSpy.mockImplementation((slug: string) =>
+    Promise.resolve(kinds.get(slug))
+  );
 }
 
 beforeEach(() => {
@@ -109,6 +132,25 @@ describe("whether one named entity is in reach", () => {
     expect(
       checkAccessSpy,
       "the decision must not even be asked about a slug with no registry entry"
+    ).not.toHaveBeenCalled();
+  });
+
+  it("asks the registry for the ONE slug it was given", async () => {
+    // Asserted on the ARGUMENTS rather than the answer, because enumerating
+    // both registries and searching the result in memory returns exactly the
+    // same kind. The cost is what differs, and only the call can show it: a
+    // caller inspecting the N entities a description listed would otherwise
+    // scan every registry row N times to ask N questions that each name one
+    // slug.
+    registry([["posts", "collection"]]);
+    checkAccessSpy.mockResolvedValue(true);
+
+    await canReadContent("posts", session);
+
+    expect(kindOfSpy).toHaveBeenCalledWith("posts");
+    expect(
+      snapshotSpy,
+      "a point question must not enumerate the registries"
     ).not.toHaveBeenCalled();
   });
 

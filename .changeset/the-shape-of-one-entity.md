@@ -115,3 +115,53 @@ array of ids, or a polymorphic reference is decided by exactly those two.
 slug allowlist the list options already carry, rather than listing every Single
 and searching in memory. The registry deserializes each record it returns, so
 the unfiltered form materialized the whole registry to answer about one.
+
+Review round four, and the same finding shape arrived for the third time, so
+this round changes the design rather than adding another member to it.
+
+Rounds two, three and four each reported that the field projection had dropped a
+declaration key: a select's options, then a relationship's target and
+cardinality, then the slugs a component field points at. A projection written as
+a list of member names cannot notice a name missing from it, and three people
+reading carefully is not a control. A fourth key was missing and nobody reported
+it at all: the Schema Builder writes a select's choices as `fieldOptions` where
+code-first writes `options`, so every Builder-authored select answered with no
+choices while each code-first fixture looked correct.
+
+`declaredShape` is now the one projection every surface uses to describe a
+field, and which keys it publishes is data rather than control flow. Core
+classifies each key as describing the field's value or as withheld, and a test
+holds that classification TOTAL against the manifest field schema that every
+stored declaration is validated against. A key added there and classified
+nowhere fails the build on the commit that adds it, which is the only place
+somebody knows the answer. The allowlist direction is deliberate: a denylist
+cannot lose a key, but it publishes an unclassified one to a caller holding a
+narrowly scoped credential the day it is written, and losing a key is a defect
+somebody reports while disclosing one is not.
+
+The Singles facade published `name`, `type` and nested `fields` and nothing
+else, so no Single could answer with a select's choices or a relationship's
+target however the tool projected them. It now reduces records through the same
+projection, which fixes every consumer of `ctx.services.singles` rather than
+this tool alone.
+
+A relationship's target is now authorized before it travels. A schema names
+other entities from inside itself, so forwarding the target of a field pointing
+at a collection the caller was refused tells them it exists, which is the
+enumeration the uniform refusal exists to prevent reached from another
+direction. A polymorphic target keeps the arms the caller may read and drops the
+rest, and the key goes entirely when none survive rather than staying as an
+empty array.
+
+Redaction asks whether a target is WITHHELD, not whether it is unreadable, and
+the difference was measured rather than assumed. `users`, `media`, `roles` and
+`permissions` are in neither content registry, so a rule keyed on readability
+alone strips the target from every upload field and every relationship to a
+system entity, for a super administrator included. `contentReadability` reports
+the registry fact and the access fact together so the two cases can be told
+apart, and `readableContentKind` is derived from it rather than asking again.
+
+`readableContentKind` takes a point lookup where it took a full enumeration of
+both registries. An agent inspecting the entities `get_initial_context` listed
+was scanning every registry row once per entity, which is the whole registry
+read N times to answer N questions that each name one slug.

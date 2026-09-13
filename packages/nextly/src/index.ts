@@ -675,10 +675,12 @@ export { routePathIsLiteral } from "./plugins/routes/route-pattern";
 // itself, and that composition is where the dashboard's own version went wrong.
 export {
   canReadContent,
+  contentReadability,
   readableContent,
   readableContentKind,
 } from "./auth/readable-content";
 export type {
+  ContentReadability,
   ReadableContent,
   ReadableContentCaller,
   ReadableContentEntity,

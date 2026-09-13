@@ -17,6 +17,16 @@
  * blind to every collection an operator built in the admin, while looking right
  * in both.
  *
+ * ## What a field publishes is decided in core, not here
+ *
+ * `declaredShape` is the one projection every surface that describes a field
+ * uses. This file deliberately holds no list of member names: it held one for
+ * three review rounds and lost a declaration key in each, because a list of
+ * names cannot notice a name missing from it. Core classifies every key the
+ * manifest schema declares as published or withheld and a test holds that
+ * classification total, so a key added there fails the build rather than going
+ * quietly absent from this answer.
+ *
  * ## Authorization happens BEFORE the read, and it has to
  *
  * `collections.getCollection` takes a request context and does not use it: the
@@ -27,17 +37,19 @@
  *
  * The decision is core's `readableContentKind`, which answers the access
  * question and the KIND question together. Both are needed and asking them
- * separately costs a second registry enumeration for the same name. The kind
- * matters because a single is read through its own service: a tool that
- * accepted either kind would send a single's slug to the collection registry
- * and surface its not-found in place of the refusal this file is careful to
- * keep uniform.
+ * separately costs a second registry lookup for the same name. The kind matters
+ * because a single is read through its own service: a tool that accepted either
+ * kind would send a single's slug to the collection registry and surface its
+ * not-found in place of the refusal this file is careful to keep uniform.
  *
  * @module tools/schema
  */
 import type { McpServer } from "@modelcontextprotocol/server";
 import {
+  contentReadability,
+  declaredShape,
   readableContentKind,
+  type DeclaredField,
   type PluginCollectionService,
   type PluginRouteContext,
   type PluginSinglesService,
@@ -48,74 +60,29 @@ export const COLLECTION_SCHEMA_TOOL = "get_collection_schema";
 export const SINGLE_SCHEMA_TOOL = "get_single_schema";
 
 /**
- * A field as a registry declares one.
+ * The declared shape, to whatever depth it is declared, with an OPEN key set.
  *
- * Structural rather than imported, because the two registries answer with
- * different types: a single's fields are `SerializedFieldConfig` (name, type
- * and nested fields) and a collection's are `FieldDefinition`, which adds the
- * label, the flags and an `options` bag carrying a relationship's target and a
- * number's format. This is their intersection plus the members only one has,
- * every one optional, so neither source has to be reshaped to fit.
- *
- * `name` is optional at BOTH sources and stays optional here. Presentational
- * types carry none, and substituting an empty string would put a field in the
- * answer that an agent could then try to read.
- */
-interface RegistryField {
-  name?: string;
-  type: string;
-  label?: string;
-  required?: boolean;
-  localized?: boolean;
-  /**
-   * Type-specific declaration, and its shape depends on the field type.
-   *
-   * A `select` or `radio` declares `SelectOption[]`, an ARRAY of label/value
-   * pairs. The legacy registry definition uses the same key for an object bag
-   * carrying a number's `format` or a relation's `target`. One key, two shapes,
-   * neither reshapeable into the other without inventing meaning, so it travels
-   * as whichever it was and the output schema admits both. Declaring only the
-   * object turned every select field's successful lookup into a validation
-   * failure, because the server validates the result against that schema.
-   */
-  options?: unknown[] | Record<string, unknown>;
-  /**
-   * A relationship's target collection, and whether it holds many.
-   *
-   * Top-level on `RelationshipFieldConfig` rather than inside `options`, so a
-   * projection that copied only the bag returned a relationship's name and type
-   * and nothing a client could use: whether the value is one id, an array of
-   * them, or a polymorphic `{ relationTo, value }` is decided by exactly these
-   * two members.
-   */
-  relationTo?: string | string[];
-  hasMany?: boolean;
-  /** Present for the container types, which is what makes this recursive. */
-  fields?: RegistryField[];
-}
-
-/**
- * The declared shape, to whatever depth it is declared.
+ * `catchall` rather than a closed object, because the projection publishes what
+ * a declaration carries and that depends on the field's type and on which
+ * writer produced it. The server validates a tool result against this schema,
+ * so a closed one turns every field carrying a key not named here into a
+ * validation failure instead of an answer. `name`, `type` and `fields` are
+ * named because they are the three every consumer reads, and `fields` is what
+ * makes this recursive.
  *
  * Recursive because a repeater or a group holds its own fields, and a
  * projection that stopped at the top level would describe the document as
  * having a `sections` field of no particular shape. An agent cannot write or
  * even read such a document's values from that.
  */
-const FIELD: z.ZodType<RegistryField> = z.lazy(() =>
-  z.object({
-    name: z.string().optional(),
-    type: z.string(),
-    label: z.string().optional(),
-    required: z.boolean().optional(),
-    localized: z.boolean().optional(),
-    options: z
-      .union([z.array(z.unknown()), z.record(z.string(), z.unknown())])
-      .optional(),
-    relationTo: z.union([z.string(), z.array(z.string())]).optional(),
-    hasMany: z.boolean().optional(),
-    fields: z.array(FIELD).optional(),
-  })
+const FIELD: z.ZodType<DeclaredField> = z.lazy(() =>
+  z
+    .object({
+      name: z.string().optional(),
+      type: z.string(),
+      fields: z.array(FIELD).optional(),
+    })
+    .catchall(z.unknown())
 );
 
 const SCHEMA_OUTPUT = z.object({
@@ -168,21 +135,127 @@ function answer(schema: SchemaResult) {
   };
 }
 
-/** Passed through, with only the keys the source actually set, at every depth. */
-function describeFields(fields: readonly RegistryField[]): RegistryField[] {
-  return fields.map(field => ({
-    ...(field.name === undefined ? {} : { name: field.name }),
-    type: field.type,
-    ...(field.label === undefined ? {} : { label: field.label }),
-    ...(field.required === undefined ? {} : { required: field.required }),
-    ...(field.localized === undefined ? {} : { localized: field.localized }),
-    ...(field.options === undefined ? {} : { options: field.options }),
-    ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
-    ...(field.hasMany === undefined ? {} : { hasMany: field.hasMany }),
-    ...(field.fields === undefined
-      ? {}
-      : { fields: describeFields(field.fields) }),
-  }));
+/** Whether naming this slug inside a schema would disclose a withheld entity. */
+type Withholds = (slug: string) => Promise<boolean>;
+
+/** The slugs a relationship or upload field can point at, in either spelling. */
+function targetsOf(field: DeclaredField): string[] {
+  const declared = field.relationTo;
+  if (typeof declared === "string") return [declared];
+  if (Array.isArray(declared)) {
+    return declared.filter((slug): slug is string => typeof slug === "string");
+  }
+  return [];
+}
+
+/**
+ * The legacy definition's target, which lives in the options bag rather than at
+ * the top level.
+ *
+ * The Builder writes a relation's target as `options.target` where a code-first
+ * field writes `relationTo`. Both are the same disclosure, so both are
+ * redacted; reading only the top-level spelling would leave every
+ * Builder-authored relationship naming a withheld collection.
+ */
+function legacyTarget(field: DeclaredField): string | undefined {
+  const options = field.options;
+  if (options === null || typeof options !== "object") return undefined;
+  if (Array.isArray(options)) return undefined;
+  const target = (options as Record<string, unknown>).target;
+  return typeof target === "string" ? target : undefined;
+}
+
+/** The declared targets this caller may be told about. */
+async function visibleTargets(
+  targets: readonly string[],
+  withholds: Withholds
+): Promise<string[]> {
+  const visible: string[] = [];
+  for (const slug of targets) {
+    if (!(await withholds(slug))) visible.push(slug);
+  }
+  return visible;
+}
+
+/**
+ * `relationTo`, reduced to the arms the caller may know about.
+ *
+ * The key goes entirely when nothing survives, rather than staying as an empty
+ * array: a client should read "this field's target is not described" and not
+ * "this field points at no collection". A single target that is withheld is the
+ * same case, since one withheld arm of one is none.
+ */
+async function redactRelationTo(
+  field: DeclaredField,
+  into: DeclaredField,
+  withholds: Withholds
+): Promise<void> {
+  const targets = targetsOf(field);
+  if (targets.length === 0) return;
+  const visible = await visibleTargets(targets, withholds);
+  if (visible.length === 0) delete into.relationTo;
+  else if (typeof field.relationTo === "string") into.relationTo = visible[0];
+  else into.relationTo = visible;
+}
+
+/**
+ * The same disclosure in the Builder's spelling, which puts the target inside
+ * the options bag rather than at the top level.
+ *
+ * The bag is copied before the key is removed, because it belongs to the record
+ * the registry returned and deleting from it in place would edit the caller's
+ * own data.
+ */
+async function redactLegacyTarget(
+  field: DeclaredField,
+  into: DeclaredField,
+  withholds: Withholds
+): Promise<void> {
+  const legacy = legacyTarget(field);
+  if (legacy === undefined || !(await withholds(legacy))) return;
+  const options = { ...(field.options as Record<string, unknown>) };
+  delete options.target;
+  into.options = options;
+}
+
+/**
+ * A field with every target the caller may not know about removed.
+ *
+ * A schema names other entities from inside itself, and a relationship's target
+ * is the name of a collection. Forwarding it tells a caller that a collection
+ * it was refused by name nonetheless exists, which is the enumeration
+ * {@link refuse} is careful to prevent, reached from a different direction.
+ *
+ * 🔴 Redacted on WITHHELD, never on unreadable. Those differ: `users` and the
+ * media library are not registered content entities at all, so
+ * `contentReadability` reports no kind for them and they are kept. Redacting on
+ * readability alone would strip the target from every upload field and every
+ * relationship to a system entity, for a super administrator included, and the
+ * schema would describe a reference to nothing.
+ *
+ * A polymorphic target keeps the arm the caller may read and drops the rest,
+ * because the readable arms are still true and still usable. The key goes
+ * entirely when nothing survives, rather than staying as an empty array, so a
+ * client reads "this field's target is not described" instead of "this field
+ * points at no collection".
+ */
+async function withoutWithheldTargets(
+  fields: readonly DeclaredField[],
+  withholds: Withholds
+): Promise<DeclaredField[]> {
+  const kept: DeclaredField[] = [];
+  for (const field of fields) {
+    const next: DeclaredField = { ...field };
+    await redactRelationTo(field, next, withholds);
+    await redactLegacyTarget(field, next, withholds);
+    // A container's children name targets of their own, and a walk that stopped
+    // at the top level would forward every nested relationship untouched.
+    if (Array.isArray(field.fields)) {
+      next.fields = await withoutWithheldTargets(field.fields, withholds);
+    }
+    kept.push(next);
+  }
+  return kept;
 }
 
 /** Readable AND of the kind the asking tool serves, or nothing to act on. */
@@ -194,7 +267,8 @@ type Servable = (
 function registerCollectionSchema(
   server: McpServer,
   ctx: PluginRouteContext,
-  servable: Servable
+  servable: Servable,
+  withholds: Withholds
 ): void {
   server.registerTool(
     COLLECTION_SCHEMA_TOOL,
@@ -225,7 +299,10 @@ function registerCollectionSchema(
         slug,
         kind: "collection",
         ...(found.label ? { label: found.label } : {}),
-        fields: describeFields(found.schemaDefinition?.fields ?? []),
+        fields: await withoutWithheldTargets(
+          declaredShape(found.schemaDefinition?.fields ?? []),
+          withholds
+        ),
       });
     }
   );
@@ -234,7 +311,8 @@ function registerCollectionSchema(
 function registerSingleSchema(
   server: McpServer,
   ctx: PluginRouteContext,
-  servable: Servable
+  servable: Servable,
+  withholds: Withholds
 ): void {
   server.registerTool(
     SINGLE_SCHEMA_TOOL,
@@ -269,7 +347,10 @@ function registerSingleSchema(
         slug,
         kind: "single",
         ...(found.label ? { label: found.label } : {}),
-        fields: describeFields(found.fields),
+        // Already projected: the facade reduces a registry record's fields
+        // through the same `declaredShape` this file applies to a collection's.
+        // Projecting again here would be a second answer to one question.
+        fields: await withoutWithheldTargets(found.fields, withholds),
       });
     }
   );
@@ -280,7 +361,8 @@ function registerSingleSchema(
  *
  * The access-and-kind question is resolved once here and handed to each tool,
  * so the two cannot answer it differently: a caller admitted by one and refused
- * by the other is the drift this shares a resolver to prevent.
+ * by the other is the drift this shares a resolver to prevent. The disclosure
+ * question is resolved once for the same reason.
  */
 export function registerSchemaTools(
   server: McpServer,
@@ -298,6 +380,15 @@ export function registerSchemaTools(
   const servable: Servable = async (slug, kind) =>
     caller !== undefined && (await readableContentKind(slug, caller)) === kind;
 
-  registerCollectionSchema(server, ctx, servable);
-  registerSingleSchema(server, ctx, servable);
+  // With no caller there is nobody to judge a target against, so every named
+  // entity is withheld. The tools refuse before reaching this, since `servable`
+  // is false for the same reason; it fails closed rather than relying on that.
+  const withholds: Withholds = async slug => {
+    if (caller === undefined) return true;
+    const { kind, readable } = await contentReadability(slug, caller);
+    return kind !== undefined && !readable;
+  };
+
+  registerCollectionSchema(server, ctx, servable, withholds);
+  registerSingleSchema(server, ctx, servable, withholds);
 }

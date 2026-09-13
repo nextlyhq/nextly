@@ -75,6 +75,73 @@ interface SlugRegistry {
   getAllSlugs: () => Promise<string[]>;
 }
 
+/** A registry's point lookup, named as each registry spells it. */
+interface CollectionLookup {
+  getCollectionBySlug: (slug: string) => Promise<unknown>;
+}
+interface SingleLookup {
+  getSingleBySlug: (slug: string) => Promise<unknown>;
+}
+
+/**
+ * Whether one registry holds a record for a NAMED slug.
+ *
+ * 🔴 Fails closed, and its failure is not distinguishable from absence here on
+ * purpose. {@link registeredContentSnapshot} separates the two because its
+ * callers want opposite things from an unreachable registry: an access decision
+ * wants the empty set, a COUNT does not. A caller asking about one slug is
+ * always the first kind — the answer feeds a decision about that entity alone,
+ * and "I could not tell" has the same safe consequence as "there is no such
+ * thing". Nothing here reports a floor, because a floor of one is a verdict.
+ */
+async function registryHolds<T>(
+  service: string,
+  read: (registry: T) => Promise<unknown>
+): Promise<boolean> {
+  // Absent: this install registers no content of that kind, so the answer is
+  // no rather than a shortfall — the same reading `registryRead` takes.
+  if (!container.has(service)) return false;
+  try {
+    return (await read(container.get<T>(service))) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which registry owns a NAMED slug, asked as two point lookups.
+ *
+ * The same question {@link registeredContentKinds} answers for every slug at
+ * once, for a caller that already holds the one name it cares about. Enumerating
+ * both registries to answer about a single slug costs a full scan per call, and
+ * a caller walking the entities a description just listed pays that once per
+ * entity — the whole registry read N times to ask N questions it could ask
+ * directly.
+ *
+ * Collections are asked FIRST, which is the same precedence the snapshot
+ * applies by writing them last: a slug claimed by both resolves to the
+ * collection. The registries do not permit that overlap; stating the order in
+ * both places keeps them from disagreeing if they ever do.
+ *
+ * Deliberately NOT an access decision. It reports what is registered, and
+ * {@link readableContentKind} is where that meets the caller's grants.
+ */
+export async function registeredContentKindOf(
+  slug: string
+): Promise<"collection" | "single" | undefined> {
+  if (!slug) return undefined;
+  const isCollection = await registryHolds<CollectionLookup>(
+    "collectionRegistryService",
+    registry => registry.getCollectionBySlug(slug)
+  );
+  if (isCollection) return "collection";
+  const isSingle = await registryHolds<SingleLookup>(
+    "singleRegistryService",
+    registry => registry.getSingleBySlug(slug)
+  );
+  return isSingle ? "single" : undefined;
+}
+
 /** The registered collection slugs, or none when the registry is unreachable. */
 function collectionSlugs(): Promise<RegistryRead> {
   return registryRead("collectionRegistryService");

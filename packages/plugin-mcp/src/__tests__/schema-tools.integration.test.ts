@@ -110,6 +110,7 @@ async function payloadOf(response: Response) {
           relationTo?: string | string[];
           hasMany?: boolean;
           fields?: { name?: string; type: string }[];
+          [key: string]: unknown;
         }[];
       };
     };
@@ -119,7 +120,16 @@ async function payloadOf(response: Response) {
 
 const homepage = defineSingle({
   slug: "homepage",
-  fields: [text({ name: "headline" })],
+  fields: [
+    text({ name: "headline" }),
+    select({
+      name: "theme",
+      options: [
+        { label: "Light", value: "light" },
+        { label: "Dark", value: "dark" },
+      ],
+    }),
+  ],
 });
 
 const catalog = defineCollection({
@@ -134,6 +144,7 @@ const catalog = defineCollection({
       ],
     }),
     relationship({ name: "authors", relationTo: "posts", hasMany: true }),
+    relationship({ name: "owner", relationTo: "users" }),
   ],
 });
 
@@ -526,8 +537,15 @@ describe("the shape the schema tools return", () => {
     // in the options bag, so a projection copying only the bag returned the
     // relationship's name and type and nothing a client could act on: one id,
     // an array of ids and a polymorphic reference are told apart by these two.
+    //
+    // The key is granted BOTH slugs. Targets are authorized now, so a
+    // catalog-only key is the redaction case rather than this one, and it is
+    // covered below.
     const handlers = await boot();
-    const key = await keyGranting(current!, "catalog-rel", ["catalog"]);
+    const key = await keyGranting(current!, "catalog-rel", [
+      "catalog",
+      "posts",
+    ]);
     const auth = { authorization: `Bearer ${key}` };
 
     await handlers.POST(initialize(auth), params("mcp"));
@@ -596,5 +614,84 @@ describe("the shape the schema tools return", () => {
     expect(listed).toContain("get_initial_context");
     expect(listed).toContain("get_collection_schema");
     expect(listed).toContain("get_single_schema");
+  });
+});
+
+describe("what a schema discloses about OTHER entities", () => {
+  it("carries a single's type-specific declaration, not just its name", async () => {
+    // The Singles facade published `name`, `type` and nested `fields` and
+    // nothing else, so a Single's select could not answer with its choices
+    // however this tool projected them. Driven end to end because the defect
+    // lived a layer below this file: every case here passed with it in place,
+    // and the tool's own projection looked correct the whole time.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "single-decl", ["homepage"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_single_schema", { slug: "homepage" }, auth),
+        params("mcp")
+      )
+    );
+
+    const theme = fieldsOf(body).find(f => f.name === "theme");
+    expect(
+      theme,
+      `the select must be in the answer: ${JSON.stringify(fieldsOf(body))}`
+    ).toBeDefined();
+    expect(
+      Array.isArray(theme?.options),
+      `a single's select must carry its choices: ${JSON.stringify(theme)}`
+    ).toBe(true);
+    expect((theme?.options as unknown[])?.length).toBe(2);
+  });
+
+  it("withholds a relationship target the caller may not read, and keeps one that is not content", async () => {
+    // A schema names other entities from inside itself. `catalog.authors`
+    // points at `posts`, which this key was never granted, so forwarding the
+    // slug would tell the caller that a collection it is refused by name
+    // nonetheless exists — the same enumeration the uniform refusal prevents,
+    // reached from a different direction.
+    //
+    // The second assertion is the CONTROL, and without it the first is
+    // satisfied by a tool that strips every target it sees. `users` is not in
+    // either content registry, so it is not a withheld entity and must
+    // survive; a redaction keyed on readability alone cannot tell the two apart
+    // and would leave every upload and every system relationship describing a
+    // reference to nothing.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "catalog-only", ["catalog"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_collection_schema", { slug: "catalog" }, auth),
+        params("mcp")
+      )
+    );
+
+    const fields = fieldsOf(body);
+    const authors = fields.find(f => f.name === "authors");
+    const owner = fields.find(f => f.name === "owner");
+
+    expect(
+      authors,
+      `the relationship must still be described: ${JSON.stringify(fields)}`
+    ).toBeDefined();
+    expect(
+      authors?.relationTo,
+      "a withheld collection's slug must not travel in another schema"
+    ).toBeUndefined();
+    // Still a relationship, and still says it holds many: what is withheld is
+    // the target's NAME, not the fact that the field exists.
+    expect(authors?.hasMany).toBe(true);
+
+    expect(
+      owner?.relationTo,
+      "a target outside both content registries is not a withheld entity"
+    ).toBe("users");
   });
 });

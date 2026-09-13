@@ -20,7 +20,10 @@
  * @module auth/readable-content
  */
 
-import { registeredContentSnapshot } from "../services/lib/registered-content-slugs";
+import {
+  registeredContentKindOf,
+  registeredContentSnapshot,
+} from "../services/lib/registered-content-slugs";
 
 import type { AuthenticatedScope } from "./authenticated-scope";
 import {
@@ -88,34 +91,86 @@ function asReadAccess(caller: ReadableContentCaller) {
 }
 
 /**
+ * @public What this caller may know about ONE named entity.
+ *
+ * Both facts from one registry lookup: whether the install registers the slug
+ * at all, and whether this caller may read it. Answered together because every
+ * surface that asks needs both, and asking separately costs a second lookup for
+ * the same name and gives the two facts a second place to be composed
+ * differently.
+ *
+ * A POINT lookup rather than an enumeration. A caller walking the entities
+ * {@link readableContent} just listed would otherwise scan both registries once
+ * per entity: the whole registry read N times to answer N questions that each
+ * name one slug.
+ *
+ * Three states, and they are not interchangeable:
+ *
+ * - registered and readable: `kind` is set, `readable` is true.
+ * - registered and WITHHELD: `kind` is set, `readable` is false. The entity
+ *   exists and this caller may not see it.
+ * - UNREGISTERED: `kind` is absent. Neither registry answers to the name, so
+ *   there is no rule to judge it against.
+ *
+ * 🔴 The three-way is for a caller deciding what to DISCLOSE, never for one
+ * deciding how to answer a request. A refusal that separated "you may not read
+ * this" from "no such entity" lets a caller map an install by asking about
+ * guesses, which is why {@link readableContentKind} collapses both to
+ * `undefined` and why anything answering a request should ask that instead.
+ *
+ * What it IS for: a description that names one entity from inside another. A
+ * relationship field carries its target collection, and forwarding that name
+ * discloses a withheld collection's existence — while a target that is not a
+ * registered content entity at all, `users` or the media library, discloses
+ * nothing about the install's content and must not be stripped. Readability
+ * alone cannot separate those two, and redacting on it removes both.
+ */
+export interface ContentReadability {
+  /** The registry that owns the slug; absent when neither does. */
+  kind?: ReadableContentEntity["kind"];
+  /** Whether this caller may read it. Always false when it is unregistered. */
+  readable: boolean;
+}
+
+export async function contentReadability(
+  slug: string,
+  caller: ReadableContentCaller
+): Promise<ContentReadability> {
+  const kind = await registeredContentKindOf(slug);
+  // An unregistered slug is not judged. It has no registry entry and no rule to
+  // decide against, and admitting what cannot be judged is the inversion the
+  // dashboard's readable-resources endpoint was fixed to remove. Asking anyway
+  // would also let a super admin's bypass, which short-circuits before it reads
+  // any rule, answer yes for a slug that exists nowhere.
+  if (kind === undefined) return { readable: false };
+  return { kind, readable: await canReadEntity(slug, asReadAccess(caller)) };
+}
+
+/**
  * @public Which kind of entity this is, if the caller may read it at all.
  *
- * Answers the registry question and the access question together, because a
- * caller asking about one entity needs both and asking them separately costs a
- * second registry enumeration for the same name. A tool reading a collection
- * has to know it is not a single: the two are read through different services,
- * so a caller that guesses sends the read to a path that cannot answer and gets
- * a not-found in place of the refusal it should have had.
+ * The answer anything SERVING a request should ask, because it collapses the
+ * two ways of being unavailable into one. A caller able to tell "not permitted"
+ * from "no such entity" can map an install's entities by asking about guesses,
+ * and the two have the same consequence for a request anyway.
  *
- * `undefined` covers both "not registered" and "not readable", deliberately.
- * A caller able to tell those apart can map an install's entities by asking
- * about guesses, and the two have the same consequence here anyway.
+ * A tool reading a collection also has to know it is not a single: the two are
+ * read through different services, so a caller that guesses sends the read to a
+ * path that cannot answer and gets a not-found in place of the refusal it
+ * should have had.
  *
- * An UNREGISTERED slug is refused rather than judged. It has no registry entry
- * and no rule to decide against, and admitting what cannot be judged is the
- * inversion the dashboard's readable-resources endpoint was fixed to remove.
- * That also keeps this in step with {@link readableContent}, which can only
- * ever return registered entities: a caller allowed by one and refused by the
- * other would be exactly the drift these two share a module to prevent.
+ * Derived from {@link contentReadability} rather than answered separately. Two
+ * functions asking one question is how they come to disagree, and the narrower
+ * view is the one to derive — which also keeps this in step with
+ * {@link readableContent}, since a caller allowed by one and refused by the
+ * other is exactly the drift these share a module to prevent.
  */
 export async function readableContentKind(
   slug: string,
   caller: ReadableContentCaller
 ): Promise<ReadableContentEntity["kind"] | undefined> {
-  const { kinds } = await registeredContentSnapshot();
-  const kind = kinds.get(slug);
-  if (kind === undefined) return undefined;
-  return (await canReadEntity(slug, asReadAccess(caller))) ? kind : undefined;
+  const { kind, readable } = await contentReadability(slug, caller);
+  return readable ? kind : undefined;
 }
 
 /**
