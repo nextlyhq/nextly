@@ -39,7 +39,17 @@ const allChecks = checksFor(defaultSeoFields());
  */
 function servicesWith(
   rows: Record<string, Record<string, unknown>[]>,
-  options: { lifecycle?: boolean; denied?: string[]; broken?: string[] } = {}
+  options: {
+    lifecycle?: boolean;
+    denied?: string[];
+    broken?: string[];
+    /**
+     * Rows an `afterRead` hook left of each page. `hasMore` is still derived
+     * from the DATABASE total, the way core derives it, which is the whole
+     * point: the response no longer says how much was read.
+     */
+    survivingPerPage?: number;
+  } = {}
 ) {
   const listEntries = vi.fn(
     async (
@@ -53,11 +63,13 @@ function servicesWith(
       const limit = query.pagination?.limit ?? 200;
       const page = query.pagination?.page ?? 1;
       const start = (page - 1) * limit;
-      const data = all.slice(start, start + limit);
-      return {
-        data,
-        pagination: { hasMore: start + data.length < all.length },
-      };
+      const fetched = all.slice(start, start + limit);
+      const hasMore = start + fetched.length < all.length;
+      const data =
+        options.survivingPerPage === undefined
+          ? fetched
+          : fetched.slice(0, options.survivingPerPage);
+      return { data, pagination: { hasMore } };
     }
   );
   const getCollection = vi.fn(async (slug: string) => {
@@ -426,26 +438,136 @@ describe("what the scan reads", () => {
     });
   });
 
-  it("keeps the page width fixed once the budget stops being a round number", async () => {
+  it("asks every page for the same width, at ascending pages", async () => {
     // 🔴 The managed service derives its window as `(page - 1) * limit`, so a
-    // page narrowed to fit the remaining budget moves BACKWARDS: page 10 at a
-    // limit of 50 starts at row 450, not 1800. It re-reads rows already counted
-    // and never reads the ones that follow.
-    //
-    // Only the tail of `wide` carries an issue, so a scan that jumps back finds
-    // none of them -- which is what makes this case discriminating rather than
-    // a restatement of the budget.
-    const lead = Array.from({ length: 150 }, () => clean);
-    const wide = Array.from({ length: 3000 }, (_unused, index) =>
-      index >= 1800 ? untitled : clean
-    );
-    const services = servicesWith({ lead, wide });
+    // page narrowed to fit a remaining budget moves BACKWARDS -- page 10 at a
+    // limit of 50 starts at row 450, not 1800. Holding the width constant is
+    // what makes the offsets correct by construction, so the invariant is
+    // asserted directly rather than inferred from a total.
+    const rows = Array.from({ length: 1000 }, () => untitled);
+    const services = servicesWith({ pages: rows });
+    await countFor(services, ["pages"]);
 
-    // 150 clean rows, then 1850 of `wide`: rows 1800-1849 are the issues.
-    expect(await countFor(services, ["lead", "wide"])).toEqual({
-      op: "count",
-      total: 50,
-      atLeast: true,
-    });
+    const pagination = services.collections.listEntries.mock.calls.map(
+      call =>
+        (call[1] as { pagination: { limit: number; page: number } }).pagination
+    );
+    expect(pagination.length).toBeGreaterThan(1);
+    expect(new Set(pagination.map(p => p.limit)).size).toBe(1);
+    expect(pagination.map(p => p.page)).toEqual(
+      pagination.map((_unused, index) => index + 1)
+    );
+  });
+
+  it("stops when a hook leaves fewer rows than the page it came from", async () => {
+    // 🔴 `data.length` is what survived the collection's `afterRead` hooks;
+    // `hasMore` is computed from the database total, before them. A budget
+    // charged on rows RETURNED is therefore never spent by a hook that drops
+    // them -- and the scan walks the whole collection, issuing a query and
+    // running hooks for every page of it, while claiming a bounded read.
+    //
+    // Charging the fetch cannot be fooled that way.
+    const rows = Array.from({ length: 100_000 }, () => untitled);
+    const services = servicesWith({ pages: rows }, { survivingPerPage: 0 });
+
+    const result = await countFor(services, ["pages"]);
+
+    expect(services.collections.listEntries).toHaveBeenCalledTimes(
+      ISSUE_SCAN_ROW_BUDGET / 200
+    );
+    expect(result).toEqual({ op: "count", total: 0, atLeast: true });
+  });
+});
+
+describe("every where shape a validated query may carry", () => {
+  it("reads a bare scalar as the equality it is shorthand for", async () => {
+    // 🔴 `validateReadWidgetQuery` accepts `where: { issue: "..." }` as the same
+    // request as the `equals` object. Reading only the object form answered the
+    // narrowed question with the unfiltered total -- and nothing downstream
+    // could tell, because the number is a plausible one.
+    const services = servicesWith({ pages: [{ seo: {} }] });
+
+    expect(
+      await countFor(services, ["pages"], {
+        where: { [ISSUE_FIELD]: "Missing meta title" },
+      })
+    ).toEqual({ op: "count", total: 1 });
+  });
+
+  it("combines an `and` of conditions", async () => {
+    const services = servicesWith({ pages: [{ seo: {} }] });
+
+    expect(
+      await countFor(services, ["pages"], {
+        where: {
+          and: [
+            {
+              [ISSUE_FIELD]: {
+                in: ["Missing meta title", "Missing social image"],
+              },
+            },
+            { [ISSUE_FIELD]: { not_equals: "Missing social image" } },
+          ],
+        },
+      })
+    ).toEqual({ op: "count", total: 1 });
+  });
+
+  it("combines an `or` of conditions", async () => {
+    const services = servicesWith({ pages: [{ seo: {} }] });
+
+    expect(
+      await countFor(services, ["pages"], {
+        where: {
+          or: [
+            { [ISSUE_FIELD]: { equals: "Missing meta title" } },
+            { [ISSUE_FIELD]: { equals: "Missing canonical URL" } },
+          ],
+        },
+      })
+    ).toEqual({ op: "count", total: 2 });
+  });
+
+  it("refuses a field it never published", async () => {
+    // Unreachable for a validated query, since the source declares one field --
+    // but ignoring it is what turns a narrowed question into a wider answer, so
+    // it refuses rather than passing everything.
+    const services = servicesWith({ pages: [{ seo: {} }] });
+
+    await expect(
+      countFor(services, ["pages"], { where: { slug: { equals: "x" } } })
+    ).rejects.toThrow(/cannot filter on that field/);
+  });
+});
+
+describe("a field the caller may not read", () => {
+  it("is not checked, because redaction is not absence", async () => {
+    // 🔴 A field carrying `access.read` may be stripped from the row before this
+    // source sees it, and a stripped value looks exactly like one nobody filled
+    // in. Checking it would report every document the caller CAN see as missing
+    // a field that is populated and merely hidden from them.
+    const guarded = {
+      ...text({ name: "metaTitle" }),
+      access: { read: () => false },
+    } as unknown as FieldConfig;
+    const services = servicesWith({ pages: [{ seo: {} }] });
+
+    expect(
+      await countFor(services, ["pages"], {
+        installed: [guarded, text({ name: "canonical" })],
+      })
+    ).toEqual({ op: "count", total: 1 });
+  });
+
+  it("is checked when it declares no rule of its own", async () => {
+    // The must-differ half: excluding every field satisfies the case above at a
+    // total of zero, and would report a clean site for everyone.
+    const services = servicesWith({ pages: [{ seo: {} }] });
+
+    expect(
+      await countFor(services, ["pages"], {
+        installed: [text({ name: "metaTitle" }), text({ name: "canonical" })],
+      })
+    ).toEqual({ op: "count", total: 2 });
   });
 });

@@ -65,14 +65,29 @@ export const ISSUE_SCAN_ROW_BUDGET = 2000;
 /**
  * Rows per page while scanning.
  *
- * 🔴 FIXED, never narrowed to fit the remaining budget. The managed service
- * derives its offset as `(page - 1) * limit`, so shrinking the limit on a later
- * page moves that page's window backwards -- page 10 at a limit of 150 starts at
- * row 1350 rather than 1800, re-reading rows already counted and skipping the
- * ones that follow. The budget is enforced on rows CONSUMED instead, which
- * leaves the paging arithmetic alone.
+ * 🔴 FIXED for every page of every scan. The managed service derives its offset
+ * as `(page - 1) * limit`, so narrowing the limit on a later page moves that
+ * page's window BACKWARDS -- page 10 at a limit of 150 starts at row 1350 rather
+ * than 1800, re-reading rows already counted and skipping the ones that follow.
+ * Keeping it constant is what makes the offsets correct by construction.
  */
 const PAGE_SIZE = 200;
+
+/**
+ * How many pages one answer may fetch.
+ *
+ * 🔴 The bound is on PAGES, not on rows returned, and that is the difference
+ * between a bound and an intention. `data.length` is what survived the
+ * collection's `afterRead` hooks; `hasMore` is computed from the database total,
+ * before them. A hook that drops rows -- or returns none -- therefore leaves a
+ * row counter untouched while paging continues, and the scan walks the entire
+ * collection issuing a query and running hooks for every page of it.
+ *
+ * Counting the fetches cannot be fooled that way: whatever comes back, the work
+ * this answer causes is bounded by {@link ISSUE_SCAN_ROW_BUDGET} rows' worth of
+ * pages.
+ */
+const PAGE_BUDGET = Math.ceil(ISSUE_SCAN_ROW_BUDGET / PAGE_SIZE);
 
 /** Only what the scan reads: the SEO group, and the id the sort orders by. */
 const SCAN_SELECT = { id: true, seo: true } as const;
@@ -115,10 +130,29 @@ export interface IssueChecks {
   missing: readonly { field: string; label: string }[];
 }
 
+/**
+ * Whether a field declares its own read rule.
+ *
+ * 🔴 A field carrying `access.read` may be stripped from the row before this
+ * source ever sees it, and a stripped value is indistinguishable from one
+ * nobody filled in. Counting it would report every document the caller CAN see
+ * as missing a field that is populated and merely hidden from them -- a number
+ * that is wrong in the direction that invents work.
+ *
+ * So such a field is not checked at all. Reporting nothing about it is the only
+ * honest option: the alternative is reading it as somebody else, which would
+ * make the card describe rows the reader is not allowed to know about.
+ */
+function hasOwnReadRule(field: FieldConfig): boolean {
+  const access = (field as { access?: unknown }).access;
+  return isRecord(access) && access.read !== undefined;
+}
+
 /** The checks the installed `seo` fields support. */
 export function checksFor(installed: readonly FieldConfig[]): IssueChecks {
   const names = new Set(
     installed
+      .filter(field => !hasOwnReadRule(field))
       .map(field => (field as { name?: unknown }).name)
       .filter((name): name is string => typeof name === "string")
   );
@@ -226,19 +260,62 @@ function operatorTest(
 }
 
 /**
+ * One field condition's test.
+ *
+ * A bare scalar is the equality shorthand the query validator accepts -- `where:
+ * { issue: "Missing meta title" }` is the same request as the `equals` object,
+ * and reading only the object form would have answered it with the unfiltered
+ * total. Several operators on one field are ANDed, matching how the collection
+ * query compiler reads the same shape.
+ */
+function conditionTest(condition: unknown): (label: string) => boolean {
+  if (!isRecord(condition)) {
+    return label => label === String(condition);
+  }
+  const tests = Object.entries(condition).map(([operator, operand]) =>
+    operatorTest(operator, operand)
+  );
+  return label => tests.every(test => test(label));
+}
+
+/**
  * The predicate a query's `where` puts on each issue label.
  *
- * Several operators on one field are ANDed, matching how the collection query
- * compiler reads the same shape.
+ * 🔴 Walks the whole accepted grammar, not the shape this plugin's own card
+ * happens to generate. `validateReadWidgetQuery` admits a bare scalar and
+ * recursively admits `and`/`or`, so a widget somebody else writes against this
+ * source can arrive in any of them -- and a resolver that recognised one form
+ * and silently returned match-all for the rest would answer a narrowed question
+ * with a wider number.
+ *
+ * Sibling keys are ANDed, which is how the collection query compiler reads the
+ * same object.
  */
 export function issueFilter(where: unknown): (label: string) => boolean {
   if (!isRecord(where)) return () => true;
-  const clause = where[ISSUE_FIELD];
-  if (!isRecord(clause)) return () => true;
 
-  const tests = Object.entries(clause).map(([operator, operand]) =>
-    operatorTest(operator, operand)
-  );
+  const tests = Object.entries(where).map(([key, value]) => {
+    if (key === "and" || key === "or") {
+      const parts = (Array.isArray(value) ? value : []).map(issueFilter);
+      return key === "and"
+        ? (label: string) => parts.every(part => part(label))
+        : (label: string) => parts.some(part => part(label));
+    }
+    if (key !== ISSUE_FIELD) {
+      // Unreachable for a validated query -- the source declares one field and
+      // validation refuses any other name. Refused rather than ignored, because
+      // ignoring it is what turns a narrowed question into a wider answer.
+      throw new NextlyError({
+        code: "VALIDATION_ERROR",
+        publicMessage: "This widget cannot filter on that field",
+        logMessage:
+          `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" publishes "${ISSUE_FIELD}" ` +
+          `alone, and was asked about "${key}"`,
+      });
+    }
+    return conditionTest(value);
+  });
+
   return label => tests.every(test => test(label));
 }
 
@@ -252,9 +329,10 @@ type SeoIssueServices = CollectionReads<ReturnType<typeof callerReadOptions>>;
 
 /** What one collection's scan contributed. */
 interface ScanTally {
-  rowsRead: number;
+  /** Pages FETCHED, which is the work this scan caused. */
+  pagesUsed: number;
   issues: number;
-  /** Whether rows were left unread because the budget ran out. */
+  /** Whether pages were left unfetched because the budget ran out. */
   bounded: boolean;
 }
 
@@ -284,28 +362,30 @@ interface ScanRules {
 }
 
 /**
- * Page through one collection, consuming at most `budget` rows.
+ * Page through one collection, fetching at most `pagesAllowed` pages.
  *
  * Paged by 1-indexed `page`, because that is what the managed service reads --
  * advancing an offset it ignores would re-read the first page forever while
- * `hasMore` stayed true. The sort is unique and stable so consecutive pages
- * neither repeat nor skip rows, and the page WIDTH never changes: see
- * {@link PAGE_SIZE}.
+ * `hasMore` stayed true.
+ *
+ * Every row that comes back is counted. The page has already been fetched and
+ * its hooks have already run, so reading all of it costs nothing further and
+ * gives a closer answer than discarding a remainder would.
  */
 async function scanCollection(
   services: SeoIssueServices,
   slug: string,
   where: Record<string, unknown> | undefined,
   rules: ScanRules,
-  budget: number,
+  pagesAllowed: number,
   abandoned: () => boolean
 ): Promise<ScanTally> {
-  let rowsRead = 0;
+  let pagesUsed = 0;
   let issues = 0;
 
   for (let page = 1; ; page += 1) {
-    if (rowsRead >= budget) return { rowsRead, issues, bounded: true };
-    if (abandoned()) return { rowsRead, issues, bounded: false };
+    if (pagesUsed >= pagesAllowed) return { pagesUsed, issues, bounded: true };
+    if (abandoned()) return { pagesUsed, issues, bounded: false };
 
     const result = await services.collections.listEntries(
       slug,
@@ -314,25 +394,24 @@ async function scanCollection(
         depth: 0,
         // Only the SEO group and the id the sort reads. Without it every page
         // carries each document whole -- rich text, blocks, every JSON payload
-        // -- so the row cap would bound the row COUNT while the bytes behind it
-        // stayed unbounded.
+        // -- so the page cap would bound the QUERIES while the bytes behind
+        // them stayed unbounded.
         select: { ...SCAN_SELECT },
+        // A stable, unique sort, so consecutive pages neither repeat nor skip
+        // rows.
         sort: { field: "id", direction: "asc" as const },
         pagination: { limit: PAGE_SIZE, page },
       },
       rules.readOptions
     );
+    pagesUsed += 1;
 
-    // The budget is enforced HERE, on rows consumed, rather than by narrowing
-    // the page. A page may arrive wider than the budget allows; the surplus is
-    // simply not counted, and the answer says it is a floor.
     for (const row of result.data) {
-      if (rowsRead >= budget) return { rowsRead, issues, bounded: true };
-      rowsRead += 1;
       issues += issuesFor(row, rules.checks).filter(rules.keep).length;
     }
 
-    if (!result.pagination.hasMore) return { rowsRead, issues, bounded: false };
+    if (!result.pagination.hasMore)
+      return { pagesUsed, issues, bounded: false };
   }
 }
 
@@ -373,12 +452,12 @@ async function countIssues(
   // and an inline check narrows it for the rest of the block, so the second
   // look would be compiled away as unreachable.
   const abandoned = (): boolean => signal?.aborted === true;
-  let rowsRead = 0;
+  let pagesUsed = 0;
   let total = 0;
   let bounded = false;
 
   for (const slug of collections) {
-    if (rowsRead >= ISSUE_SCAN_ROW_BUDGET) {
+    if (pagesUsed >= PAGE_BUDGET) {
       bounded = true;
       break;
     }
@@ -393,10 +472,10 @@ async function countIssues(
         slug,
         await publishedOnly(services, slug),
         scanRules,
-        ISSUE_SCAN_ROW_BUDGET - rowsRead,
+        PAGE_BUDGET - pagesUsed,
         abandoned
       );
-      rowsRead += tally.rowsRead;
+      pagesUsed += tally.pagesUsed;
       total += tally.issues;
       if (tally.bounded) bounded = true;
     } catch (error) {
