@@ -99,7 +99,11 @@ function applyBoundary(state, line) {
  * inline command as running nothing.
  */
 function runScript(lines, index) {
-  const run = /^(\s*)run:(\s*\|)?(.*)$/.exec(lines[index]);
+  // The key may share its line with the list item that opens the step — `- run: pnpm test` — and
+  // the first group then carries the dash as well as the indentation. Its length is therefore the
+  // column `run:` STARTS at, which is what bounds a block scalar under it: measured from the dash
+  // instead, a `- run: |` block would swallow the step's own `env:`, which sits at that same column.
+  const run = /^(\s*(?:-\s+)?)run:(\s*\|)?(.*)$/.exec(lines[index]);
   if (run === null) return null;
   if (run[2] !== undefined) return blockBody(lines, index + 1, run[1].length);
   return run[3].trim() === "" ? null : run[3].trim();
@@ -242,4 +246,58 @@ export function jobTimeouts(text) {
     if (minutes !== null && job !== null) timeouts.set(job, minutes);
   });
   return timeouts;
+}
+
+/**
+ * Each job's steps, keyed by job id, in file order.
+ *
+ * The per-job view of {@link workflowSteps}, for a check that judges a job by what ITS OWN steps
+ * run — whether it installs dependencies, which scripts it starts. The file-wide list says what
+ * runs but not where. {@link jobsMentioning} says where, but matches every line, comments
+ * included, so a job whose comment explains that it does not run `pnpm install` would read as
+ * running it.
+ *
+ * Built on the same walk as {@link jobIds}, so a job's boundary means the same thing here, and
+ * each job's lines go through {@link workflowSteps} unchanged, so a step's script does too. Every
+ * declared job is present, an empty list for one with no scripts, because a caller iterating the
+ * answer must not mistake a job it was never told about for a job with nothing to check.
+ *
+ * @param {string} text the workflow file's contents
+ * @returns {Map<string, {name: string|null, block: string}[]>} job id to its steps' scripts
+ */
+export function jobSteps(text) {
+  const linesByJob = new Map();
+  walkJobs(text, (job, line) => {
+    if (job === null) return;
+    if (!linesByJob.has(job)) linesByJob.set(job, []);
+    linesByJob.get(job).push(line);
+  });
+
+  const steps = new Map();
+  for (const [job, lines] of linesByJob) {
+    steps.set(job, workflowSteps(lines.join("\n")));
+  }
+  return steps;
+}
+
+/**
+ * The composite actions from this repository that each job uses, keyed by job id.
+ *
+ * A job can install dependencies without one `run:` of its own saying so, by calling a local
+ * action that does. Only `uses: ./…` is read — an action from elsewhere is not a file here to
+ * inspect — and a comment naming an action is not a step that runs it, which the pattern's anchor
+ * already excludes.
+ *
+ * @param {string} text the workflow file's contents
+ * @returns {Map<string, string[]>} job id to each local action's repository-relative directory
+ */
+export function jobLocalActions(text) {
+  const actions = new Map();
+  walkJobs(text, (job, line) => {
+    if (job === null) return;
+    if (!actions.has(job)) actions.set(job, []);
+    const local = /^\s*(?:-\s*)?uses:\s*\.\/([^\s#]+)/.exec(line);
+    if (local !== null) actions.get(job).push(local[1]);
+  });
+  return actions;
 }
