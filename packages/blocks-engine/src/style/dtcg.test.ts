@@ -1560,6 +1560,121 @@ describe("what the reader reports it did not keep", () => {
     expect(said(extensions)).toContain('"foo.$extensions" is not an object');
   });
 
+  it("gives a group-only field on a token the plain unread line", () => {
+    // `$extends` and `$root` mean something only on a group. On a token there
+    // is nothing to inherit and no group token to hold, so calling either a
+    // lost inheritance or a group's token would describe a loss that did not
+    // happen.
+    const document = {
+      foo: {
+        $type: "number",
+        $value: 1,
+        $extends: "{base}",
+        $root: { $value: 2 },
+      },
+    };
+    expect(names(document)).toEqual(["foo"]);
+    expect(said(document)).toContain(
+      '"foo.$extends" is a design-token field this site does not read'
+    );
+    expect(said(document)).toContain(
+      '"foo.$root" is a design-token field this site does not read'
+    );
+    expect(said(document)).not.toContain("inherits from another group");
+    expect(said(document)).not.toContain("group's own token");
+  });
+
+  describe("reports a field exactly when the reader did not take it", () => {
+    /*
+     * The property the report exists for, asserted as AGREEMENT over several
+     * shapes of each field rather than as one message per shape: a type is said
+     * to be unusable if and only if the token did not take it. Widening what
+     * the reader accepts without the report, or the report without the reader,
+     * breaks one of these rows whatever the code looks like.
+     */
+    /*
+     * Labelled rows walked by a loop rather than `it.each`: `it.each` spreads an
+     * ARRAY row into arguments, so a row meant to test the array `["number"]`
+     * tested the string `"number"` instead, and the array shapes went untested.
+     */
+    const types = [
+      { label: "a name", stated: "number" },
+      { label: "a number", stated: 42 },
+      { label: "null", stated: null },
+      { label: "an array", stated: ["number"] },
+      { label: "an object", stated: { name: "number" } },
+    ];
+
+    for (const { label, stated } of types) {
+      it(`a token's $type given ${label}`, () => {
+        // A group type the stated one must beat, so "taken" is observable.
+        const read = dtcgToTokens({
+          g: { $type: "fontWeight", t: { $type: stated, $value: 400 } },
+        });
+        expect(read.tokens).toHaveLength(1);
+        const taken = read.tokens[0]?.kind === "number";
+        const reported = read.issues.some(item =>
+          item.message.includes('"g.t.$type" is not a usable type')
+        );
+        expect(reported).toBe(!taken);
+      });
+
+      it(`a group's $type given ${label}`, () => {
+        // With no type of its own the token has only the group's to inherit.
+        const read = dtcgToTokens({ g: { $type: stated, t: { $value: 400 } } });
+        const taken = read.tokens.length === 1;
+        const reported = read.issues.some(item =>
+          item.message.includes('"g.$type" is not a usable type')
+        );
+        expect(reported).toBe(!taken);
+      });
+    }
+
+    const descriptions = [
+      { label: "text", stated: "fine" },
+      { label: "a number", stated: 42 },
+      { label: "null", stated: null },
+      { label: "an array", stated: ["fine"] },
+      { label: "an object", stated: { text: "fine" } },
+    ];
+
+    for (const { label, stated } of descriptions) {
+      it(`a token's $description given ${label}`, () => {
+        const read = dtcgToTokens({
+          t: { $type: "number", $value: 1, $description: stated },
+        });
+        expect(read.tokens).toHaveLength(1);
+        const taken = read.tokens[0]?.description !== undefined;
+        const reported = read.issues.some(item =>
+          item.message.includes('"t.$description" is not a string')
+        );
+        expect(reported).toBe(!taken);
+      });
+    }
+
+    const extensions = [
+      { label: "an object", stated: { "com.figma": { id: 1 } } },
+      { label: "text", stated: "x" },
+      { label: "null", stated: null },
+      { label: "an array", stated: [{ "com.figma": { id: 1 } }] },
+      { label: "a number", stated: 7 },
+    ];
+
+    for (const { label, stated } of extensions) {
+      it(`a token's $extensions given ${label}`, () => {
+        const read = dtcgToTokens({
+          t: { $type: "number", $value: 1, $extensions: stated },
+        });
+        expect(read.tokens).toHaveLength(1);
+        const taken = read.tokens[0]?.extensions !== undefined;
+        const reported = read.issues.some(item =>
+          item.message.includes('"t.$extensions" is not an object')
+        );
+        expect(reported).toBe(!taken);
+      });
+    }
+  });
+
   it("says nothing about metadata a token keeps", () => {
     const document = {
       foo: {

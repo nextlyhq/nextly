@@ -911,6 +911,29 @@ export function dtcgToTokens(input: unknown): {
   return { tokens, issues };
 }
 
+/**
+ * A node's own `$type` as the reader takes it: a name, or nothing.
+ *
+ * This and the two below are the ONE place each field's acceptance is decided.
+ * The walk, the token reader and the report of what was passed over all ask
+ * them, so the report cannot call a field ignored that the reader used, or stay
+ * silent about one it dropped — a disagreement that would otherwise have no
+ * symptom until someone widened one side.
+ */
+function statedType(node: DtcgNode): string | undefined {
+  return typeof node.$type === "string" ? node.$type : undefined;
+}
+
+/** A token's own `$description` as the reader takes it: text, or nothing. */
+function statedDescription(node: DtcgNode): string | undefined {
+  return typeof node.$description === "string" ? node.$description : undefined;
+}
+
+/** A token's own `$extensions` as the reader takes them: an object, or nothing. */
+function statedExtensions(node: DtcgNode): DtcgNode | undefined {
+  return isPlainObject(node.$extensions) ? node.$extensions : undefined;
+}
+
 /** Walk a group, carrying the `$type` its children inherit. */
 function read(
   node: DtcgNode,
@@ -919,7 +942,7 @@ function read(
   tokens: SiteToken[],
   issues: ValidationIssue[]
 ): void {
-  const groupType = typeof node.$type === "string" ? node.$type : inherited;
+  const groupType = statedType(node) ?? inherited;
 
   for (const [key, child] of Object.entries(node)) {
     const here = [...path, key];
@@ -927,7 +950,7 @@ function read(
     // Each is either a field a group is read for or said to be skipped, here,
     // where the decision to pass over it is made.
     if (key.startsWith("$")) {
-      const unread = unreadGroupField(key, child, here.join("."));
+      const unread = unreadGroupField(key, node, here.join("."));
       if (unread !== undefined) issues.push(issue(unread));
       continue;
     }
@@ -978,16 +1001,16 @@ function read(
  */
 function unreadGroupField(
   key: string,
-  value: unknown,
+  node: DtcgNode,
   at: string
 ): string | undefined {
   if (key === "$type") {
-    return typeof value === "string" ? undefined : unusableType(at);
+    return statedType(node) === undefined ? unusableType(at) : undefined;
   }
   if (key === "$description" || key === "$extensions") {
     return `"${at}" belongs to a group rather than to a token, and this site keeps only tokens, so it was skipped.`;
   }
-  return unreadReservedField(key, at);
+  return unreadReservedField(key, at, "group");
 }
 
 /**
@@ -1000,9 +1023,9 @@ function unreadGroupField(
  */
 function unreadTokenParts(node: DtcgNode, at: string): string[] {
   const unread: string[] = [];
-  for (const [key, value] of Object.entries(node)) {
+  for (const key of Object.keys(node)) {
     const said = key.startsWith("$")
-      ? unreadTokenField(key, value, `${at}.${key}`)
+      ? unreadTokenField(key, node, `${at}.${key}`)
       : `"${at}.${key}" is written inside a token, where this site's reader does not look, so it was skipped.`;
     if (said !== undefined) unread.push(said);
   }
@@ -1012,30 +1035,30 @@ function unreadTokenParts(node: DtcgNode, at: string): string[] {
 /**
  * Why one of a token's own `$` fields is not kept, or `undefined` when it is.
  *
- * The shapes named here are the ones {@link readToken} takes — a string type
- * and description, an object of extensions — so a field in any other shape is
- * one the token arrives without, looking entirely successful.
+ * Asked through the same accessors {@link readToken} reads with, so a field in a
+ * shape the reader does not take is exactly one the token arrives without —
+ * looking entirely successful.
  */
 function unreadTokenField(
   key: string,
-  value: unknown,
+  node: DtcgNode,
   at: string
 ): string | undefined {
   if (key === "$value") return undefined;
   if (key === "$type") {
-    return typeof value === "string" ? undefined : unusableType(at);
+    return statedType(node) === undefined ? unusableType(at) : undefined;
   }
   if (key === "$description") {
-    return typeof value === "string"
-      ? undefined
-      : `"${at}" is not a string, so it was skipped and the token arrived without it.`;
+    return statedDescription(node) === undefined
+      ? `"${at}" is not a string, so it was skipped and the token arrived without it.`
+      : undefined;
   }
   if (key === "$extensions") {
-    return isPlainObject(value)
-      ? undefined
-      : `"${at}" is not an object, so it was skipped and the token arrived without it.`;
+    return statedExtensions(node) === undefined
+      ? `"${at}" is not an object, so it was skipped and the token arrived without it.`
+      : undefined;
   }
-  return unreadReservedField(key, at);
+  return unreadReservedField(key, at, "token");
 }
 
 /**
@@ -1045,12 +1068,20 @@ function unreadTokenField(
  * site does not read" undersells two of them. `$extends` brings in another
  * group's tokens, so skipping it loses tokens rather than a note; `$root` is
  * not a field at all but a group's own token under a reserved name.
+ *
+ * Both of those meanings exist only on a GROUP. On a token neither inherits
+ * nor holds anything, so there they are what any unknown key is, and saying
+ * otherwise would describe a loss the file could not have had.
  */
-function unreadReservedField(key: string, at: string): string {
-  if (key === "$root") {
+function unreadReservedField(
+  key: string,
+  at: string,
+  on: "group" | "token"
+): string {
+  if (on === "group" && key === "$root") {
     return `"${at}" is a group's own token, which this site cannot read yet, so it was skipped.`;
   }
-  if (key === "$extends") {
+  if (on === "group" && key === "$extends") {
     return `"${at}" inherits from another group, which this site cannot follow yet, so nothing it would bring in was imported.`;
   }
   if (key === "$deprecated") {
@@ -1123,9 +1154,8 @@ function readToken(
     return undefined;
   }
 
-  const extensions = isPlainObject(node.$extensions)
-    ? { ...node.$extensions }
-    : {};
+  const declared = statedExtensions(node);
+  const extensions = declared === undefined ? {} : { ...declared };
   const own = extensions[NEXTLY_EXTENSION];
   if (own !== undefined && !isPlainObject(own)) {
     // Deleted below with nothing read from it, so what it held is gone and the
@@ -1145,8 +1175,7 @@ function readToken(
   const unread = unreadIn(own);
   reportUnreadMembers(own, name, issues);
 
-  const description =
-    typeof node.$description === "string" ? node.$description : undefined;
+  const description = statedDescription(node);
   const carried = Object.keys(extensions).length > 0 ? extensions : undefined;
 
   // Read ahead of the branch below, because identity does not depend on which
@@ -1238,7 +1267,7 @@ function readToken(
     }
   }
 
-  const type = typeof node.$type === "string" ? node.$type : inherited;
+  const type = statedType(node) ?? inherited;
   const kind = type === undefined ? undefined : KIND_BY_TYPE.get(type);
   if (kind === undefined) {
     issues.push(
