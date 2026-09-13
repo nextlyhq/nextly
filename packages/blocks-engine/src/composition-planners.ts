@@ -28,7 +28,7 @@ import {
   isComponentDocument,
   isComponentInstance,
   isPatternDocument,
-  patternRenames,
+  patternRenameRecord,
   renderedDomId,
 } from "./document";
 import type {
@@ -925,8 +925,14 @@ function restampOps(
       // page-specific suffix went into the pattern and the insert-save cycle
       // resumed growing it. The round trip held once and failed on the second
       // pass, which is why a test that never applied these ops could not see it.
+      //
+      // The node lists travel with it, verbatim. A list naming a node that has
+      // since gone is still what the insert did, and pruning it here would be
+      // this save deciding the rename is over; a record without lists stays
+      // without, since inventing them would pick a node for a record that
+      // never said which.
       patch: {
-        origin: insertOrigin(patternId, digest, renamedIn(origin)),
+        origin: recordedOrigin(patternId, digest, origin),
       },
     })),
   };
@@ -3475,14 +3481,55 @@ function withInsertOrigin(
   // Asked of the whole forest ONCE: the relink pass runs per root either way,
   // but the candidate map is built a single time rather than per root.
   const referenced = referencedDomIds(source, renamed);
-  return copied.map((root, index) => ({
-    ...root,
-    origin: insertOrigin(
-      patternId,
-      digest,
-      renamedFor(source[index], renamed, referenced[index])
-    ),
-  }));
+  const carriers = carriersIn(copied, renamed);
+  return copied.map((root, index) => {
+    const mine = renamedFor(source[index], renamed, referenced[index]);
+    return {
+      ...root,
+      origin: insertOrigin(patternId, digest, mine, nodesFor(mine, carriers)),
+    };
+  });
+}
+
+/**
+ * Every node of the COPY carrying each id the copy renamed, keyed by how the
+ * source spells it.
+ *
+ * Read off the copy after renaming rather than off the source, so the list is
+ * what the rename actually did: a node it skipped — one gated when it was
+ * inserted keeps the source's spelling — carries no replacement and is not
+ * named. Across the whole forest, because a root records a rename it only
+ * references, and the node carrying that id sits under a sibling root.
+ */
+function carriersIn(
+  copied: readonly BlockNode[],
+  renamed: ReadonlyMap<string, string>
+): Map<string, Set<string>> {
+  const carriers = new Map<string, Set<string>>();
+  if (renamed.size === 0) return carriers;
+  const sources = new Map<string, string>();
+  for (const [was, now] of renamed) sources.set(now, was);
+  walkNodes([...copied], node => {
+    const domId = renderedDomId(node);
+    const was = domId === undefined ? undefined : sources.get(domId);
+    if (was === undefined) return;
+    const found = carriers.get(was);
+    if (found === undefined) carriers.set(was, new Set([node.id]));
+    else found.add(node.id);
+  });
+  return carriers;
+}
+
+/** One root's node lists: one per rename it records, possibly empty. */
+function nodesFor(
+  mine: ReadonlyMap<string, string>,
+  carriers: ReadonlyMap<string, ReadonlySet<string>>
+): Map<string, ReadonlySet<string>> {
+  const nodes = new Map<string, ReadonlySet<string>>();
+  for (const was of mine.keys()) {
+    nodes.set(was, carriers.get(was) ?? new Set());
+  }
+  return nodes;
 }
 
 /**
@@ -3522,17 +3569,29 @@ function renamedFor(
  * `renamed` is omitted when nothing moved rather than written empty, matching
  * every other "absent means none" field in this contract — and making a copy
  * that renamed nothing byte-identical to one taken before this was recorded.
+ * `renamedNodes` goes with it for the same reason, and is also omitted when the
+ * caller has no lists to write: a record restamped from one that predates them
+ * stays in that shape rather than acquiring lists nobody recorded.
  */
 function insertOrigin(
   patternId: string,
   digest: string,
-  renamed: ReadonlyMap<string, string>
+  renamed: ReadonlyMap<string, string>,
+  renamedNodes: ReadonlyMap<string, ReadonlySet<string>> | undefined
 ): BlockOrigin {
+  if (renamed.size === 0) return { from: "pattern", id: patternId, digest };
   return {
     from: "pattern",
     id: patternId,
     digest,
-    ...(renamed.size === 0 ? {} : { renamed: Object.fromEntries(renamed) }),
+    renamed: Object.fromEntries(renamed),
+    ...(renamedNodes === undefined
+      ? {}
+      : {
+          renamedNodes: Object.fromEntries(
+            [...renamedNodes].map(([was, nodes]) => [was, [...nodes]])
+          ),
+        }),
   };
 }
 
@@ -3619,24 +3678,139 @@ function nodeOrigin(node: BlockNode): NodeOrigin {
 }
 
 /**
- * The rename map a root already carries, as the record spells it.
+ * The renames a root already carries and the nodes they were applied to, as
+ * the record spells them.
  *
  * Read back out of the provenance rather than recomputed, because only the
  * insert that did the renaming knows it — recovering it from the values is the
  * inference this feature exists instead of.
+ *
+ * `nodes` is absent for a record written before node lists were recorded, and
+ * every reader of this keeps that apart from an empty list: the first is read
+ * by value, the second names no node.
  */
-function renamedIn(
-  origin: BlockOrigin | undefined
-): ReadonlyMap<string, string> {
-  // The DOCUMENT module's reading, not a second one here. What a record must
-  // carry to be trusted and what it says once trusted are one question, and
-  // this file used to answer the second half itself: it validated through
-  // `isBlockOrigin` and then walked the record again for its contents, so a
-  // stored Proxy ran its traps twice and the two readings could disagree about
-  // an entry. They now cannot, because there is one of them.
-  return (
-    (origin === undefined ? undefined : patternRenames(origin)) ?? NO_RENAMES
-  );
+interface RecordedRenames {
+  readonly renames: ReadonlyMap<string, string>;
+  readonly nodes: ReadonlyMap<string, ReadonlySet<string>> | undefined;
+}
+
+function recordedRenames(origin: BlockOrigin | undefined): RecordedRenames {
+  // The DOCUMENT module's reading, not a second one here, and ONE of it for
+  // both halves. What a record must carry to be trusted and what it says once
+  // trusted are one question, and this file used to answer the second half
+  // itself: it validated through `isBlockOrigin` and then walked the record
+  // again for its contents, so a stored Proxy ran its traps twice and the two
+  // readings could disagree about an entry. Asking for the renames and the
+  // node lists separately would reopen exactly that between the two.
+  const read = origin === undefined ? undefined : patternRenameRecord(origin);
+  return { renames: read?.renamed ?? NO_RENAMES, nodes: read?.renamedNodes };
+}
+
+/** The record a save-over writes: new digest, the renames it already held. */
+function recordedOrigin(
+  patternId: string,
+  digest: string,
+  origin: BlockOrigin
+): BlockOrigin {
+  const { renames, nodes } = recordedRenames(origin);
+  return insertOrigin(patternId, digest, renames, nodes);
+}
+
+/**
+ * The renames in scope for a node, and where each was applied.
+ *
+ * `carriers` is keyed by the CURRENT id, which is what a restore holds when it
+ * asks, and is absent for a record written before node lists were recorded.
+ */
+interface RenameScope {
+  readonly renames: ReadonlyMap<string, string>;
+  readonly carriers: ReadonlyMap<string, ReadonlySet<string>> | undefined;
+}
+
+function scopeOf(origin: BlockOrigin | undefined): RenameScope {
+  const { renames, nodes } = recordedRenames(origin);
+  if (nodes === undefined) {
+    return renames === NO_RENAMES ? NO_SCOPE : { renames, carriers: undefined };
+  }
+  const carriers = new Map<string, ReadonlySet<string>>();
+  for (const [was, now] of renames) {
+    carriers.set(now, nodes.get(was) ?? new Set());
+  }
+  return { renames, carriers };
+}
+
+/**
+ * Where each node id occurs in a document and the DOM id it carries there,
+ * and from that, which recorded renames are still live.
+ *
+ * A rename recorded against node ids applies while one of those nodes occurs
+ * EXACTLY ONCE and still carries the replacement. Deleted, edited to another
+ * id, or spelled twice by an untrusted document — any of those, and the entry
+ * says nothing about this document, so it is dropped from the scope rather
+ * than applied to whatever now carries the value.
+ *
+ * Asked of the stored node, never of what renders. A gated node renders
+ * nothing and still holds the id it was given, which a later save has to put
+ * back; reading gating here would retire a rename that is still live.
+ *
+ * A node whose fields cannot be read — a revoked Proxy somewhere in the
+ * document — leaves the index unable to say any id occurs once, so every
+ * recorded entry is dropped. Keeping the page's id is the answer that
+ * corrupts nothing.
+ */
+function occurrenceIndex(): {
+  note: (node: BlockNode) => void;
+  liveScope: (scope: RenameScope) => RenameScope;
+} {
+  const seen = new Map<string, { count: number; domId: string | undefined }>();
+  const live = new Map<RenameScope, RenameScope>();
+  let unreadable = false;
+  const lookup = (id: string) => (unreadable ? undefined : seen.get(id));
+  return {
+    note(node) {
+      try {
+        const id: unknown = node.id;
+        if (typeof id !== "string") return;
+        const found = seen.get(id);
+        if (found === undefined) {
+          seen.set(id, { count: 1, domId: renderedDomId(node) });
+        } else found.count += 1;
+      } catch {
+        unreadable = true;
+      }
+    },
+    liveScope(scope) {
+      if (scope.carriers === undefined) return scope;
+      const known = live.get(scope);
+      if (known !== undefined) return known;
+      const built = liveEntries(scope.renames, scope.carriers, lookup);
+      live.set(scope, built);
+      return built;
+    },
+  };
+}
+
+/** A scope keeping only the entries a node listed for them still carries. */
+function liveEntries(
+  renames: ReadonlyMap<string, string>,
+  recorded: ReadonlyMap<string, ReadonlySet<string>>,
+  lookup: (
+    id: string
+  ) => { count: number; domId: string | undefined } | undefined
+): RenameScope {
+  const kept = new Map<string, string>();
+  const carriers = new Map<string, ReadonlySet<string>>();
+  for (const [was, now] of renames) {
+    const holding = new Set<string>();
+    for (const id of recorded.get(now) ?? []) {
+      const found = lookup(id);
+      if (found?.count === 1 && found.domId === now) holding.add(id);
+    }
+    if (holding.size === 0) continue;
+    kept.set(was, now);
+    carriers.set(now, holding);
+  }
+  return { renames: kept, carriers };
 }
 
 /**
@@ -3656,6 +3830,13 @@ function renamedIn(
  * answer: the run really does hold two elements the source names identically,
  * and storing them under their minted names would put two ids nobody wrote into
  * a library, each to be suffixed again on the next insert.
+ *
+ * Where a record lists the nodes each rename was applied to, only those nodes
+ * are the ones it renamed. A node the author added later and gave the same id
+ * carries the value and not the history, so it answers that nothing renamed
+ * it — and a record whose listed nodes are gone restores nothing at all. A
+ * record written before those lists existed is read by value, as it always
+ * was, because it cannot say which node it meant.
  */
 function restoredDomIds(
   document: BlockDocument,
@@ -3674,9 +3855,9 @@ function restoredDomIds(
   const carrying = carriersOf(survey, scopes);
 
   const claims = new Map<string, Claim>();
-  for (const renamed of survey.applicable) {
-    for (const [was, now] of renamed) {
-      if (governs(renamed, now, carrying)) {
+  for (const scope of survey.applicable) {
+    for (const [was, now] of scope.renames) {
+      if (governs(scope, now, carrying)) {
         claim(claims, now, was);
       }
     }
@@ -3698,22 +3879,39 @@ function restoredDomIds(
  */
 function carriersOf(
   survey: SelectionSurvey,
-  scopes: ReadonlyMap<BlockNode, ReadonlyMap<string, string>>
+  scopes: ReadonlyMap<BlockNode, RenameScope>
 ): Map<string, Set<string | undefined>> {
   // Every id any record names, asked of every node at once.
   const named = new Map<string, string>();
-  for (const renamed of survey.applicable) {
-    for (const now of renamed.values()) named.set(now, now);
+  for (const scope of survey.applicable) {
+    for (const now of scope.renames.values()) named.set(now, now);
   }
   const carrying = referencesByScope(survey.nodes, scopes, named);
   for (const { node, domId } of survey.rendering) {
     if (!named.has(domId)) continue;
-    const said = answerOf(scopes.get(node), domId);
+    const said = renderedAnswer(scopes.get(node), node, domId);
     const holders = carrying.get(domId);
     if (holders === undefined) carrying.set(domId, new Set([said]));
     else holders.add(said);
   }
   return carrying;
+}
+
+/**
+ * What a node's scope says the id it RENDERS used to be — and nothing when
+ * the scope lists the nodes it renamed and this is not one of them.
+ *
+ * Only for the node carrying the id itself. A reference follows whatever that
+ * id's target is, so it is answered by the scope alone.
+ */
+function renderedAnswer(
+  scope: RenameScope | undefined,
+  node: BlockNode,
+  now: string
+): string | undefined {
+  const said = answerOf(scope, now);
+  if (said === undefined || scope?.carriers === undefined) return said;
+  return scope.carriers.get(now)?.has(node.id) === true ? said : undefined;
 }
 
 /**
@@ -3767,7 +3965,7 @@ interface SelectionSurvey {
   /** Every node in it, for the reference probe. */
   readonly nodes: BlockNode[];
   /** Every DISTINCT record in scope anywhere in it. */
-  readonly applicable: Set<ReadonlyMap<string, string>>;
+  readonly applicable: Set<RenameScope>;
   /**
    * Every node that RENDERS an id a record might name, with the id it renders.
    *
@@ -3781,13 +3979,13 @@ interface SelectionSurvey {
 
 function surveyedSelection(
   selected: readonly BlockNode[],
-  scopes: ReadonlyMap<BlockNode, ReadonlyMap<string, string>>
+  scopes: ReadonlyMap<BlockNode, RenameScope>
 ): SelectionSurvey {
   const nodes: BlockNode[] = [];
   // Collected by identity, so the whole of a large selection costs one entry
   // per DISTINCT record rather than one per node: an inherited scope is the
-  // same map object on every node that inherits it.
-  const applicable = new Set<ReadonlyMap<string, string>>();
+  // same object on every node that inherits it.
+  const applicable = new Set<RenameScope>();
   const rendering: { node: BlockNode; domId: string }[] = [];
   walkNodes([...selected], node => {
     nodes.push(node);
@@ -3814,7 +4012,7 @@ function surveyedSelection(
  * the node holding THAT has to be one this record governs.
  */
 function governs(
-  renamed: ReadonlyMap<string, string>,
+  scope: RenameScope,
   now: string,
   carrying: ReadonlyMap<string, Set<string | undefined>>
 ): boolean {
@@ -3831,7 +4029,7 @@ function governs(
   // nothing about the answer.
   const said = carrying.get(now);
   if (said === undefined) return false;
-  return said.size === 1 && said.has(answerOf(renamed, now));
+  return said.size === 1 && said.has(answerOf(scope, now));
 }
 
 /**
@@ -3847,15 +4045,16 @@ const inverses = new WeakMap<
 >();
 
 function answerOf(
-  scope: ReadonlyMap<string, string> | undefined,
+  scope: RenameScope | undefined,
   now: string
 ): string | undefined {
   if (scope === undefined) return undefined;
-  let inverse = inverses.get(scope);
+  const renames = scope.renames;
+  let inverse = inverses.get(renames);
   if (inverse === undefined) {
     const built = new Map<string, string>();
-    for (const [was, minted] of scope) built.set(minted, was);
-    inverses.set(scope, built);
+    for (const [was, minted] of renames) built.set(minted, was);
+    inverses.set(renames, built);
     inverse = built;
   }
   return inverse.get(now);
@@ -3881,7 +4080,7 @@ function answerOf(
  */
 function referencesByScope(
   nodes: readonly BlockNode[],
-  scopes: ReadonlyMap<BlockNode, ReadonlyMap<string, string>>,
+  scopes: ReadonlyMap<BlockNode, RenameScope>,
   candidates: ReadonlyMap<string, string>
 ): Map<string, Set<string | undefined>> {
   const found = new Map<string, Set<string | undefined>>();
@@ -3951,8 +4150,12 @@ function referencesByScope(
 function renameScopes(
   nodes: readonly BlockNode[],
   limits: DocumentLimits
-): ReadonlyMap<BlockNode, ReadonlyMap<string, string>> | undefined {
-  const scopes = new Map<BlockNode, ReadonlyMap<string, string>>();
+): ReadonlyMap<BlockNode, RenameScope> | undefined {
+  const scopes = new Map<BlockNode, RenameScope>();
+  // Which recorded renames still apply depends on the WHOLE document — a node
+  // a record lists may sit anywhere, or twice — so it is gathered on this walk,
+  // which already reaches every node under the same bound, and applied after.
+  const occurrences = occurrenceIndex();
   const seen = new Set<BlockNode>();
   // One reading per node OBJECT, not one per visit. A node placed in two slots
   // is reached twice, and a stored node can be a Proxy whose reflection answers
@@ -3991,6 +4194,7 @@ function renameScopes(
   walkNodes(
     [...nodes],
     (node, parent) => {
+      occurrences.note(node);
       // A node carrying provenance of its OWN is where inheritance stops, and the
       // test is the RECORD rather than the size of its map. An insert that
       // renamed nothing writes no `renamed` at all — the ordinary case, since a
@@ -4023,7 +4227,7 @@ function renameScopes(
       // rebuilt equal map is a second cache entry for an answer already computed.
       const own = ownOf(node);
       if (own.claims) {
-        scopes.set(node, scopes.get(node) ?? renamedIn(own.origin));
+        scopes.set(node, scopes.get(node) ?? scopeOf(own.origin));
         return;
       }
 
@@ -4039,8 +4243,8 @@ function renameScopes(
         // Two inserted roots carry two copies of one record, so equal maps are
         // the ordinary case for a node reached under both — and there is no
         // ambiguity to decline when both occurrences give the same answer.
-        if (!sameRenames(scopes.get(node), inherited)) {
-          scopes.set(node, NO_RENAMES);
+        if (!sameScope(scopes.get(node), inherited)) {
+          scopes.set(node, NO_SCOPE);
         }
         return;
       }
@@ -4058,7 +4262,53 @@ function renameScopes(
   // is a scope whose nearest claiming ancestor may simply not have been reached
   // — so it would restore an id against the wrong record, silently, on a
   // document the engine already refuses to store.
-  return overCap ? undefined : scopes;
+  if (overCap) return undefined;
+  for (const [node, scope] of scopes) {
+    scopes.set(node, occurrences.liveScope(scope));
+  }
+  return scopes;
+}
+
+/**
+ * Whether two scopes give the same answer for every id and every node.
+ *
+ * Content and not identity, for the reason {@link sameRenames} gives — and the
+ * node lists too, since two records renaming alike can have renamed different
+ * nodes.
+ */
+function sameScope(
+  one: RenameScope | undefined,
+  other: RenameScope | undefined
+): boolean {
+  if (one === other) return true;
+  if (one === undefined || other === undefined) return false;
+  return (
+    sameRenames(one.renames, other.renames) &&
+    sameCarriers(one.carriers, other.carriers)
+  );
+}
+
+function sameCarriers(
+  one: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  other: ReadonlyMap<string, ReadonlySet<string>> | undefined
+): boolean {
+  if (one === other) return true;
+  if (one === undefined || other === undefined) return false;
+  if (one.size !== other.size) return false;
+  for (const [now, ids] of one) {
+    if (!sameNodeIds(ids, other.get(now))) return false;
+  }
+  return true;
+}
+
+/** Whether two node lists name exactly the same nodes. */
+function sameNodeIds(
+  one: ReadonlySet<string>,
+  other: ReadonlySet<string> | undefined
+): boolean {
+  if (other === undefined || other.size !== one.size) return false;
+  for (const id of one) if (!other.has(id)) return false;
+  return true;
 }
 
 /**
@@ -4091,3 +4341,6 @@ function sameRenames(
  * allocation and a cache entry each, for the same empty answer.
  */
 const NO_RENAMES: ReadonlyMap<string, string> = new Map();
+
+/** The scope of a node with no record in reach, shared for the same reason. */
+const NO_SCOPE: RenameScope = { renames: NO_RENAMES, carriers: undefined };

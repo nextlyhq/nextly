@@ -171,7 +171,7 @@ jobs:
 
 If step 2 or 3 fails, step 4 doesn't run.
 
-**Setting `NEXTLY_APPLIED_BY`** is optional but recommended. It populates the `applied_by` column in `nextly_migrations` so post-incident debugging can answer "which CI job applied this row?" When unset, the runtime falls back to `GITHUB_ACTOR` -> `USER` -> hostname.
+**`NEXTLY_APPLIED_BY`** is read by nothing in the current codebase. The `nextly_schema_events` table has an `applied_by` column, but the migration runner does not populate it, so setting this variable has no effect today.
 
 ## Pattern 2: Migration in Vercel's build step (simplest)
 
@@ -277,11 +277,11 @@ Specific examples:
 ## What `nextly migrate` does
 
 1. Connects to the database via `DATABASE_URL`.
-2. Reads the `nextly_migrations` table to see which `.sql` files have been applied.
+2. Reads the `nextly_schema_events` ledger to see which `.sql` files have been applied (a `file_apply` event per file).
 3. Verifies SHA-256 hashes of already-applied files. **Hash mismatch = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs.
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
 5. Applies each pending file in a transaction (PostgreSQL/SQLite) or statement-by-statement (MySQL; see [database support](/docs/database/support) for MySQL caveats).
-6. Records each applied file in `nextly_migrations` with `applied_at`, `applied_by`, `duration_ms`, `sha256`.
+6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
 
 | Exit code | Meaning |
 |---|---|
@@ -289,6 +289,102 @@ Specific examples:
 | 1 | A migration failed during execution |
 | 2 | `MIGRATION_TAMPERED`. Abort before running any. |
 | 3 | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+
+## Builder entities and production
+
+Everything above describes how **columns** reach production. Entities created in the
+[Visual Schema Builder](/docs/schema-builder) carry a second thing: a row in a registry table —
+`dynamic_collections`, `dynamic_singles`, or for Field Groups `dynamic_components` — holding the
+label, description and admin display settings. A database that has run
+`nextly migrate:field-groups --apply --backup-confirmed` holds the Field Group registry as
+`dynamic_field_groups` instead, and the runtime reads whichever of the two the database has.
+Collections and Singles additionally carry the Versions, Revalidate and Webhooks switches; Field
+Groups have none of those, and the Field Group registry has no columns for them under either name.
+The runtime reads its Drizzle table from that row, so the row matters as much as the columns do.
+
+### Commit `ui-schema.json`
+
+The Builder dual-writes every entity it creates or saves into the UI-schema manifest — the file
+`db.uiSchemaFile` names, `./ui-schema.json` by default — for all three entity kinds. Commit that
+file with your migrations: it is the **input** `nextly migrate:create` reads to know a Builder
+entity exists, and a Builder change missing from the commit cannot appear in any migration.
+
+Two things to know before relying on it:
+
+- **The Builder's own `.sql` file is unpaired.** Saving a Collection writes a timestamped migration
+  but no `meta/*.snapshot.json`, and `nextly migrate:check` reports an unpaired `.sql` as
+  `MISSING_SNAPSHOT`. Run `nextly migrate:create` to regenerate the pair, and commit the `.sql` and
+  its snapshot together rather than committing the Builder's file as-is.
+- **A collection created with a starting field is mirrored without it.** The create call writes the
+  manifest entry with an empty field list, so the fields arrive only on the next save. Open the new
+  collection and save it once before generating the migration.
+
+It is input, not a deployment artifact. `nextly migrate` never reads `ui-schema.json`; it applies
+`.sql` files. An entity's registry row reaches another database only when a migration file carries
+its upsert, and `migrate:create` appends that upsert **only for entities whose table the migration
+actually changes**. So the manifest gets an entity into the generator's view; a DDL change to that
+entity is what gets its row into production.
+
+The manifest is written by a development-only route, so it is a dev-time artifact you commit rather
+than something production generates.
+
+### What does not travel
+
+- A **metadata-only** edit — a label, a description, or the Versions, Revalidate or Webhooks switch,
+  with no column change for that entity — produces no upsert, because `migrate:create` writes a file
+  only for DDL and filters metadata upserts to the tables that file touches. With no DDL anywhere in
+  the run it writes nothing at all (`No changes detected`, exit code 2). The value stays in the
+  manifest until some later migration changes that entity's table and carries the row with it.
+  A **cleared** description is the exception, because it never travels: the manifest records an
+  empty description as absent, and the upsert leaves a column the manifest does not carry as it
+  was, so the other database keeps the old text through every later migration.
+- Status and Internationalization are **not** metadata: both change columns. Note that an
+  Internationalization toggle whose column moves are emitted as a companion migration can still
+  leave the `localized` registry value behind, because the upsert is filtered by the same
+  touched-table set the companion file does not populate. Check the registry row after toggling
+  localization on an existing entity.
+- **A deletion leaves the registry row behind.** Deleting a Collection in the Builder writes a
+  migration that drops its table. Deleting a Single or a Field Group writes none: the Builder drops
+  the development table and removes the manifest entry, and the next `migrate:create` finds that
+  table in the previous snapshot but not in the manifest and writes the `DROP TABLE`. Either way the
+  table goes. Its registry row does not: `migrate:create`
+  builds registry upserts only for entities still in the manifest, and nothing on the
+  `nextly migrate` path removes a row. The other environment keeps a row describing a table that no
+  longer exists. There is no supported way to remove it through `nextly migrate` today, and
+  `nextly prune` does not apply — it only removes `plugin:` provenance and always retains Builder
+  entities.
+
+### What `migrate` repairs
+
+After applying files, `reconcileMigrationMetadata` does two things. It registers entities that an
+applied migration's snapshot describes but the registry lacks, and it promotes a pending row to
+`applied` once no unapplied migration still names that entity and its table exists. Which of those
+reach a Builder entity is narrower than it sounds:
+
+| Case | Repaired by `nextly migrate`? |
+|---|---|
+| A pending row, once every migration naming the entity has run and its table exists | Yes — promoted to `applied` |
+| A missing **collection** or **single** row from a `migrate:create` deployment | **No** — a `migrate:create` snapshot records tables, not entities, so registration finds nothing to insert. Only an entity-level snapshot, such as a scaffolded template's, restores a row |
+| A missing **field group** row | No — registration covers collections and singles only |
+| An existing row with stale labels, descriptions or fields | No — the pass promotes status; it does not refresh content |
+| A metadata-only edit that produced no file | No — there is no artifact to read |
+| The row of a **deleted** entity | No — nothing on this path removes a row |
+
+So run `nextly migrate` to settle a pending status, but do not rely on it to recreate a registry row
+that a Builder deployment is missing.
+
+### Moving an entity into code
+
+Declaring an entity in `nextly.config.ts` versions its settings, but it is a conversion of the whole
+entity rather than a way to version one switch: `defineCollection` and `defineSingle` take a
+**complete** definition, fields included.
+
+Remove the entity from the manifest (`db.uiSchemaFile`) as part of the move. `migrate:create` tolerates the
+collision — it warns and lets the code-first definition win. What CI then catches depends on the
+kind: `nextly migrate:check` runs `validateCrossFile`, which compares manifest entries against
+code-first **Collection** slugs only. A Collection whose manifest entry stays behind fails there on
+`NEXTLY_SCHEMA_SLUG_COLLISION`, so it generates a migration locally and is then rejected by CI. A
+Single or Field Group left behind passes `migrate:check`, so nothing reminds you to remove it.
 
 ## What `nextly migrate:check` does (CI-friendly, no DB)
 
@@ -309,7 +405,7 @@ Run it in your PR CI to catch mistakes before they reach production.
 | Variable                     | Where used | Purpose                                                                 |
 |------------------------------|------------|-------------------------------------------------------------------------|
 | `DATABASE_URL`               | All commands | Target database. Required (except SQLite, which falls back to `file:./data/nextly.db`). |
-| `NEXTLY_APPLIED_BY`          | `migrate`  | Recorded in `nextly_migrations.applied_by`. Falls back to `GITHUB_ACTOR` -> `USER` -> hostname. |
+| `NEXTLY_APPLIED_BY`          | `migrate`  | No effect today: the column exists on `nextly_schema_events` but the runner does not write it. |
 | `NEXTLY_ACCEPT_DATA_LOSS=1`  | `migrate`, `db:sync` | Acknowledge destructive changes (drops, type narrowings) without an interactive prompt. Required for CI runs of destructive migrations. |
 | `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` | `migrate` | Allow a destructive change to Nextly's **own** core tables, which `migrate` otherwise refuses with `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. Applies to every operation in the run — see below before setting it. |
 

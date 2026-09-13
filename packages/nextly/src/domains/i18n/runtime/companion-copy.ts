@@ -352,7 +352,7 @@ export async function refreshDefaultLocaleFromMain(
   }
   if (Object.keys(values).length === 0) return;
 
-  // 🔴 Clear this locale's `_updated_at` BEFORE replacing its content (i18n B2).
+  // 🔴 Clear this locale's `_updated_at` BEFORE replacing its content.
   //
   // This is a companion CONTENT write that does not go through `upsertCompanionRow`: it copies the
   // source locale's columns from the now-authoritative main table when localization is re-enabled

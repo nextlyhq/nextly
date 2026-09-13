@@ -4478,3 +4478,435 @@ describe("provenance is read once, and only where storage would keep it", () => 
     expect(marked([...saved.nodes], "target").cssId).toBe("hero");
   });
 });
+
+describe("a rename record names the nodes it renamed", () => {
+  /**
+   * A page holding `pricing`, with a pattern inserted beside it whose own
+   * `pricing` sits two levels under the root and so had to be renamed. A link
+   * under the same root names it, so the reference half of the rule is
+   * reachable from the same fixture.
+   */
+  function insertedPage(): BlockDocument {
+    const authored = page([
+      node(
+        "wrap",
+        { props: { mark: "wrap" } },
+        {
+          children: [
+            node(
+              "mid",
+              { props: { mark: "mid" } },
+              {
+                children: [
+                  node("t", { cssId: "pricing", props: { mark: "renamed" } }),
+                  node("l", {
+                    props: { mark: "link" },
+                    attributes: { "aria-describedby": "pricing" },
+                  }),
+                ],
+              }
+            ),
+          ],
+        }
+      ),
+    ]);
+    const stored = created(
+      planSaveAsPattern(authored, ["wrap"], target, anyParent)
+    ).document;
+    const destination = page([node("existing", { cssId: "pricing" })]);
+    const insert = planInsertPattern(
+      destination,
+      { id: "hero-pattern", document: stored },
+      { index: 1 },
+      anyParent
+    );
+    return applyOps(destination, pageOps(insert)).document;
+  }
+
+  /** The stored record on the inserted root, as plain data. */
+  function recordOn(doc: BlockDocument): Record<string, unknown> {
+    return marked([...doc.nodes], "wrap").origin as unknown as Record<
+      string,
+      unknown
+    >;
+  }
+
+  /** Replace the inserted root's record, keeping the node otherwise intact. */
+  function withRecord(
+    doc: BlockDocument,
+    record: Record<string, unknown>
+  ): BlockDocument {
+    const wrap = marked([...doc.nodes], "wrap");
+    return applyOps(doc, [
+      {
+        kind: "update",
+        id: wrap.id,
+        patch: { origin: record as unknown as BlockNode["origin"] },
+      },
+    ]).document;
+  }
+
+  /** The same page with the record in the shape written before node ids. */
+  function withoutNodeIds(doc: BlockDocument): BlockDocument {
+    const { renamedNodes, ...older } = recordOn(doc);
+    // A record already in the older shape is left as it is: an update writing
+    // the same record back is refused as an edit that changes nothing.
+    return renamedNodes === undefined ? doc : withRecord(doc, older);
+  }
+
+  /**
+   * The page after the renamed node stopped being the one carrying its minted
+   * id, and a NEW node under the same root was given exactly that id.
+   *
+   * The new node's id is asserted equal to the record's minted value IN THE
+   * SAME DOCUMENT. Every insert mints a different suffix, so a namesake built
+   * against one insert and saved from another carries an id no record names,
+   * and the test would pass for that reason alone.
+   */
+  function withNamesake(
+    doc: BlockDocument,
+    how: "deleted" | "renamed away"
+  ): BlockDocument {
+    const renamed = marked([...doc.nodes], "renamed");
+    const mid = marked([...doc.nodes], "mid");
+    const minted = renamed.cssId ?? "";
+    const retired: BuilderOp =
+      how === "deleted"
+        ? { kind: "remove", id: renamed.id }
+        : { kind: "update", id: renamed.id, patch: { cssId: "elsewhere" } };
+    const after = applyOps(doc, [
+      retired,
+      {
+        kind: "insert",
+        node: node("namesake", { cssId: minted, props: { mark: "namesake" } }),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+    ]).document;
+    const record = recordOn(after).renamed as Record<string, string>;
+    expect(marked([...after.nodes], "namesake").cssId).toBe(record.pricing);
+    return after;
+  }
+
+  /** What a save of one selected node stores for the node carrying a mark. */
+  function stored(doc: BlockDocument, selectedMark: string, mark: string) {
+    const selected = marked([...doc.nodes], selectedMark);
+    const saved = created(
+      planSaveAsPattern(doc, [selected.id], target, anyParent)
+    ).document;
+    return marked([...saved.nodes], mark);
+  }
+
+  it("records which node carries each id it renamed", () => {
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const record = recordOn(doc);
+
+    expect(record.renamed).toEqual({ pricing: renamed.cssId });
+    expect(record.renamedNodes).toEqual({ pricing: [renamed.id] });
+  });
+
+  it("writes no node list for an insert that renamed nothing", () => {
+    // Absent rather than empty, so a copy that renamed nothing stays
+    // byte-identical to one written before either field existed.
+    const stored = created(
+      planSaveAsPattern(
+        page([node("t", { cssId: "pricing" })]),
+        ["t"],
+        target,
+        anyParent
+      )
+    ).document;
+    const destination = page([node("existing", { cssId: "unrelated" })]);
+    const placed = pageOps(
+      planInsertPattern(
+        destination,
+        { id: "hero-pattern", document: stored },
+        { index: 1 },
+        anyParent
+      )
+    ).flatMap(op => (op.kind === "insert" ? [op.node] : []));
+
+    expect(Object.keys(placed[0]?.origin ?? {}).sort()).toEqual([
+      "digest",
+      "from",
+      "id",
+    ]);
+  });
+
+  it.each([
+    ["the root", "wrap"],
+    ["the node itself", "namesake"],
+  ] as const)(
+    "does not restore a NEW node given the minted id, selecting %s",
+    (_form, selectedMark) => {
+      for (const how of ["deleted", "renamed away"] as const) {
+        const doc = withNamesake(insertedPage(), how);
+        const minted = marked([...doc.nodes], "namesake").cssId;
+
+        expect(stored(doc, selectedMark, "namesake").cssId).toBe(minted);
+      }
+    }
+  );
+
+  it.each([
+    ["the root", "wrap"],
+    ["the node itself", "renamed"],
+  ] as const)(
+    "still restores the node the insert renamed, selecting %s",
+    (_form, selectedMark) => {
+      expect(stored(insertedPage(), selectedMark, "renamed").cssId).toBe(
+        "pricing"
+      );
+    }
+  );
+
+  it("tells apart two nodes the value map alone cannot", () => {
+    // One page, then the same page with the renamed node swapped for a new node
+    // identical in every field but its node id. The rename map, every DOM id
+    // and every prop are the same in both, so a rule reading values gives one
+    // answer twice; only the node list separates them.
+    const genuine = insertedPage();
+    const renamed = marked([...genuine.nodes], "renamed");
+    const mid = marked([...genuine.nodes], "mid");
+    const { id: _id, ...fields } = renamed;
+    const swapped = applyOps(genuine, [
+      { kind: "remove", id: renamed.id },
+      {
+        kind: "insert",
+        node: { ...fields, id: "a-new-node" },
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+    ]).document;
+    expect(recordOn(swapped).renamed).toEqual(recordOn(genuine).renamed);
+    expect(marked([...swapped.nodes], "renamed").cssId).toBe(renamed.cssId);
+
+    const now = [genuine, swapped].map(
+      doc => stored(doc, "wrap", "renamed").cssId
+    );
+    const before = [genuine, swapped].map(
+      doc => stored(withoutNodeIds(doc), "wrap", "renamed").cssId
+    );
+
+    expect(now).toEqual(["pricing", renamed.cssId]);
+    expect(before).toEqual(["pricing", "pricing"]);
+  });
+
+  it("keeps the value rule for a record written before node ids", () => {
+    // Such a record cannot say which node it meant, so it is read exactly as it
+    // always was: the renamed node restores, and so does a later namesake.
+    const fresh = insertedPage();
+    expect(recordOn(fresh).renamedNodes).toBeDefined();
+    const older = withoutNodeIds(fresh);
+    expect(recordOn(older).renamedNodes).toBeUndefined();
+
+    expect(stored(older, "wrap", "renamed").cssId).toBe("pricing");
+    expect(
+      stored(withNamesake(older, "deleted"), "wrap", "namesake").cssId
+    ).toBe("pricing");
+  });
+
+  it("restores a renamed node the author gated after inserting", () => {
+    // Whether a recorded node still holds the id is a question about the
+    // stored node, not about what renders: a gated node renders nothing and
+    // still carries the id it was given.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const gated = applyOps(doc, [
+      {
+        kind: "update",
+        id: renamed.id,
+        patch: {
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        },
+      },
+    ]).document;
+
+    expect(stored(gated, "wrap", "renamed").cssId).toBe("pricing");
+  });
+
+  it("carries the node list through a save over the pattern", () => {
+    const doc = insertedPage();
+    const wrap = marked([...doc.nodes], "wrap");
+    const edited = applyOps(doc, [
+      {
+        kind: "update",
+        id: wrap.id,
+        patch: { props: { mark: "wrap", edited: true } },
+      },
+    ]).document;
+    const before = recordOn(edited).renamedNodes;
+    const plan = planUpdatePatternFromSelection(
+      edited,
+      [wrap.id],
+      { collection: "patterns", id: "hero-pattern" },
+      anyParent
+    );
+    const restamped = applyOps(edited, pageOps(plan)).document;
+    expect(recordOn(restamped).digest).not.toBe(recordOn(edited).digest);
+
+    expect(recordOn(restamped).renamedNodes).toEqual(before);
+    const doc2 = withNamesake(restamped, "deleted");
+    expect(stored(doc2, "wrap", "namesake").cssId).toBe(
+      marked([...doc2.nodes], "namesake").cssId
+    );
+  });
+
+  it("does not restore a reference once the renamed node stops holding the id", () => {
+    // A reference follows its target. With the renamed node deleted, or given
+    // another id, the minted id names only the namesake — which nothing
+    // renamed — so a link saved on its own keeps pointing at it.
+    const genuine = insertedPage();
+    const minted = marked([...genuine.nodes], "renamed").cssId;
+
+    expect(
+      stored(genuine, "link", "link").attributes?.["aria-describedby"]
+    ).toBe("pricing");
+    for (const how of ["deleted", "renamed away"] as const) {
+      const replaced = withNamesake(genuine, how);
+      expect(
+        stored(replaced, "link", "link").attributes?.["aria-describedby"]
+      ).toBe(minted);
+    }
+  });
+
+  it("restores neither when the renamed node and a namesake are saved together", () => {
+    // A restore is one map for the forest, so it cannot put one back and leave
+    // the other. The namesake is gated so the page may hold the id twice.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const mid = marked([...doc.nodes], "mid");
+    const both = applyOps(doc, [
+      {
+        kind: "insert",
+        node: node("namesake", {
+          cssId: renamed.cssId,
+          props: { mark: "namesake" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        }),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+    ]).document;
+
+    expect(stored(both, "wrap", "namesake").cssId).toBe(renamed.cssId);
+    expect(stored(both, "wrap", "renamed").cssId).toBe(renamed.cssId);
+  });
+
+  it("restores nothing when the recorded node id occurs twice", () => {
+    // A document reaching a planner is untrusted and may spell one node id
+    // twice. Either occurrence could be the one the record meant.
+    const doc = page([
+      node(
+        "wrap",
+        {
+          props: { mark: "wrap" },
+          origin: {
+            from: "pattern",
+            id: "hero-pattern",
+            digest: "d",
+            renamed: { pricing: "pricing-1" },
+            renamedNodes: { pricing: ["x"] },
+          },
+        } as Partial<BlockNode>,
+        {
+          children: [
+            node("x", { cssId: "pricing-1", props: { mark: "renamed" } }),
+          ],
+        }
+      ),
+      node("x", { props: { mark: "twin" } }),
+    ]);
+    const control = page([doc.nodes[0]!]);
+
+    expect(stored(control, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(doc, "wrap", "renamed").cssId).toBe("pricing-1");
+  });
+
+  it("answers a node reached under two records the same whichever comes first", () => {
+    // Two records renaming alike, one listing a node the page still holds and
+    // one listing a node that is gone. A node reached under both cannot say
+    // which it belongs to, so it declines — rather than taking whichever record
+    // the walk met first, which would make the saved content depend on order.
+    const recorded = (id: string, listed: string) =>
+      ({
+        from: "pattern",
+        id,
+        digest: "d",
+        renamed: { pricing: "pricing-1" },
+        renamedNodes: { pricing: [listed] },
+      }) as unknown as BlockNode["origin"];
+    const shared = node("x", {
+      props: { mark: "shared" },
+      attributes: { "aria-describedby": "pricing-1" },
+    });
+    const live = node(
+      "a",
+      { origin: recorded("p-a", "z") },
+      {
+        children: [
+          node("z", { cssId: "pricing-1", props: { mark: "z" } }),
+          shared,
+        ],
+      }
+    );
+    const dead = node(
+      "b",
+      { origin: recorded("p-b", "gone") },
+      {
+        children: [shared],
+      }
+    );
+    const referenceIn = (doc: BlockDocument) =>
+      created(planSaveAsPattern(doc, ["x"], target, anyParent)).document;
+    const described = (doc: BlockDocument) =>
+      marked([...referenceIn(doc).nodes], "shared").attributes?.[
+        "aria-describedby"
+      ];
+
+    expect(described(page([live]))).toBe("pricing");
+    expect(described(page([live, dead]))).toBe("pricing-1");
+    expect(described(page([dead, live]))).toBe("pricing-1");
+  });
+
+  it("restores nothing by node when a node in the document cannot be read", () => {
+    // An unreadable node might be the recorded one spelled a second time, so no
+    // listed node can be shown to occur once — and reading it must not take the
+    // save out with a native error. A node whose `id` read throws, because the
+    // walk hands that one to its visitor; a revoked proxy is not a node to the
+    // walk at all, and never reaches the question.
+    const recordedRoot = node(
+      "wrap",
+      {
+        props: { mark: "wrap" },
+        origin: {
+          from: "pattern",
+          id: "hero-pattern",
+          digest: "d",
+          renamed: { pricing: "pricing-1" },
+          renamedNodes: { pricing: ["x"] },
+        },
+      } as Partial<BlockNode>,
+      {
+        children: [
+          node("x", { cssId: "pricing-1", props: { mark: "renamed" } }),
+        ],
+      }
+    );
+    const unreadable = new Proxy(node("unreadable"), {
+      get(held, key, receiver) {
+        if (key === "id") throw new Error("an unreadable node");
+        return Reflect.get(held, key, receiver) as unknown;
+      },
+    });
+
+    expect(stored(page([recordedRoot]), "wrap", "renamed").cssId).toBe(
+      "pricing"
+    );
+    expect(
+      stored(page([recordedRoot, unreadable]), "wrap", "renamed").cssId
+    ).toBe("pricing-1");
+  });
+});

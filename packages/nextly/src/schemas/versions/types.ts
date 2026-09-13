@@ -26,7 +26,7 @@ export type VersionScopeKind = "collection" | "single" | "page";
 /**
  * Physical name of the version-history table, identical on all three dialects.
  *
- * Exported because a second reader now addresses it in raw SQL: i18n B2 seeds a companion's
+ * Exported because a second reader now addresses it in raw SQL: the companion reconcile seeds a companion's
  * `_updated_at` from `MAX(created_at)` per locale, and a migration statement cannot go through
  * the repository. Two spellings of a table name is exactly the kind of divergence that survives
  * every test until the table is renamed.

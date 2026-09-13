@@ -121,6 +121,23 @@ export const FORBIDDEN = [
     why: "names a task or plan rather than the code",
   },
   {
+    // A localization ROADMAP milestone: the word "i18n" followed by a milestone code - one capital
+    // letter, digits, and an optional sub-letter. The code names a delivery phase, which a reader
+    // cannot look up and which says nothing about what the code does; the mechanism it stands for
+    // (a per-locale column, a fallback read, a staleness stamp) is what belongs in its place.
+    //
+    // Anchored on the word AND the code shape together, because neither half alone is a label:
+    // "i18n" is ordinary vocabulary here, and a capital-plus-digit token is a heading level, a
+    // storage service or a key name. Case-sensitive for the same reason - a lowercase version
+    // token after the word is prose about a library.
+    //
+    // A code written WITHOUT the word - bracketed after a sentence, or leading a line with a
+    // colon - is NOT matched, because nothing in that syntax separates it from the same tokens
+    // used in prose. The convention still forbids it; nothing mechanical catches it.
+    pattern: /\bi18n\s+[A-Z]\d+[a-z]?\b/,
+    why: "names a roadmap milestone rather than the code",
+  },
+  {
     // An explicit process label: "Review finding:", "Review feedback:", "Review comment".
     // Mechanically distinct from the reviewer-as-role uses the negative controls protect, because
     // the noun that follows names the review artefact rather than a person or a permission.

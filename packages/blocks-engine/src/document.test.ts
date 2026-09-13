@@ -7,6 +7,7 @@ import { renderedDomId, renderedDomIdIn } from "./document";
 import {
   COMPONENT_INSTANCE_TYPE,
   isBlockOrigin,
+  patternRenameRecord,
   patternRenames,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
@@ -463,5 +464,126 @@ describe("a provenance record's rename map", () => {
     expect(
       isBlockOrigin({ from: "component", id: "c1", renamed: "nonsense" })
     ).toBe(true);
+  });
+});
+
+describe("a provenance record's node lists", () => {
+  const base = {
+    from: "pattern" as const,
+    id: "p1",
+    digest: "d1",
+    renamed: { pricing: "pricing-1", hero: "hero-1" },
+  };
+  const lists = { pricing: ["n1"], hero: ["n2", "n3"] };
+
+  /** A list whose first member is missing, as an array literal cannot say. */
+  function holed(): unknown[] {
+    const list: unknown[] = [];
+    list[1] = "n2";
+    return list;
+  }
+
+  it("accepts lists naming exactly the renamed ids", () => {
+    expect(isBlockOrigin({ ...base, renamedNodes: lists })).toBe(true);
+  });
+
+  it("accepts a record with no lists, which is every older record", () => {
+    // The fallback's own control: the renames are still read, and what the
+    // record says about nodes is nothing rather than an empty answer.
+    expect(isBlockOrigin(base)).toBe(true);
+    expect(patternRenames(base)?.size).toBe(2);
+    expect(patternRenameRecord(base)?.renamed.size).toBe(2);
+    expect(patternRenameRecord(base)?.renamedNodes).toBeUndefined();
+  });
+
+  it("accepts an empty list, which names no node", () => {
+    expect(
+      isBlockOrigin({ ...base, renamedNodes: { ...lists, hero: [] } })
+    ).toBe(true);
+  });
+
+  it.each([
+    ["not a record", "n1"],
+    ["an array", [["n1"]]],
+    ["null", null],
+    ["a list for an id nothing renamed", { ...lists, other: ["n4"] }],
+    ["a rename with no list", { pricing: ["n1"] }],
+    ["a list that is not an array", { ...lists, hero: "n2" }],
+    ["a non-string member", { ...lists, hero: [2] }],
+    ["an empty member", { ...lists, hero: [""] }],
+    ["a list with a hole in it", { ...lists, hero: holed() }],
+  ])("refuses %s", (_name, renamedNodes) => {
+    // A half-record decides by node for some ids and by value for the rest, on
+    // the strength of a record that is wrong about at least one of them.
+    expect(isBlockOrigin({ ...base, renamedNodes })).toBe(false);
+  });
+
+  it("refuses lists on a record that renamed nothing", () => {
+    const { renamed: _renamed, ...none } = base;
+    expect(isBlockOrigin({ ...none, renamedNodes: { pricing: ["n1"] } })).toBe(
+      false
+    );
+    expect(isBlockOrigin({ ...none, renamedNodes: {} })).toBe(true);
+  });
+
+  it.each(["list", "member"])(
+    "refuses a %s that computes itself, without running it",
+    where => {
+      let reads = 0;
+      const boom = {
+        enumerable: true,
+        configurable: true,
+        get() {
+          reads += 1;
+          throw new Error("a stored list must never be invoked");
+        },
+      };
+      const renamedNodes: Record<string, unknown> = { ...lists };
+      if (where === "list") {
+        Object.defineProperty(renamedNodes, "hero", boom);
+      } else {
+        const member: unknown[] = ["n2"];
+        Object.defineProperty(member, 0, boom);
+        renamedNodes.hero = member;
+      }
+
+      expect(isBlockOrigin({ ...base, renamedNodes })).toBe(false);
+      expect(reads).toBe(0);
+    }
+  );
+
+  it("refuses a list storage would not keep", () => {
+    const renamedNodes: Record<string, unknown> = { pricing: ["n1"] };
+    Object.defineProperty(renamedNodes, "hero", {
+      value: ["n2"],
+      enumerable: false,
+      configurable: true,
+    });
+
+    expect(JSON.parse(JSON.stringify(renamedNodes)).hero).toBeUndefined();
+    expect(isBlockOrigin({ ...base, renamedNodes })).toBe(false);
+  });
+
+  it("says which nodes each rename was applied to", () => {
+    const read = patternRenameRecord({
+      ...base,
+      renamedNodes: lists,
+    })?.renamedNodes;
+
+    expect([...(read ?? [])].map(([was, ids]) => [was, [...ids]])).toEqual([
+      ["pricing", ["n1"]],
+      ["hero", ["n2", "n3"]],
+    ]);
+  });
+
+  it("says nothing about a record it would not trust", () => {
+    // The RECORD is absent, not merely its lists: a half-record is not one a
+    // caller may act on for its renames either.
+    expect(
+      patternRenameRecord({ ...base, renamedNodes: { pricing: ["n1"] } })
+    ).toBeUndefined();
+    expect(
+      patternRenameRecord({ from: "component", id: "c1", renamedNodes: lists })
+    ).toBeUndefined();
   });
 });

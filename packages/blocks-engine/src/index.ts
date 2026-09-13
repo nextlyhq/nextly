@@ -252,11 +252,16 @@ export type {
 // The guard, the richer reading it is derived from, and what a trusted record
 // says. Published together because they are one read: a caller that must tell a
 // record it cannot READ from one that is merely wrong — the validator does — or
-// that needs the renames a trusted record carries would otherwise name the
-// guard's fields a second time to find out, and a second reading of a stored
-// record runs its own reflection twice.
-export { isBlockOrigin, patternRenames, readBlockOrigin } from "./document";
-export type { OriginReading } from "./document";
+// that needs the renames a trusted record carries, or the nodes they were
+// applied to, would otherwise name the guard's fields a second time to find
+// out, and a second reading of a stored record runs its own reflection twice.
+export {
+  isBlockOrigin,
+  patternRenameRecord,
+  patternRenames,
+  readBlockOrigin,
+} from "./document";
+export type { OriginReading, PatternRenameRecord } from "./document";
 // The one rule for which DOM id a node actually renders. A node can spell one
 // two ways and emits at most one, so anything asking "what ids are on this
 // page" — a planner steering an insert around collisions, a duplicate check —
