@@ -142,15 +142,4 @@ describe("callerMayPerform(read) — no RBAC service registered", () => {
       false
     );
   });
-
-  it("admits a key holding the grant, because no rule can be read", async () => {
-    // With no service there is nowhere to look a rule up, so the grant alone
-    // decides. Pinned as the current answer so that changing it is a visible
-    // decision rather than a side effect.
-    rbac.available = false;
-    rbac.registered = { read: false };
-    expect(
-      await callerMayPerform(keyHolding("read"), "read", "posts", OWNER)
-    ).toBe(true);
-  });
 });

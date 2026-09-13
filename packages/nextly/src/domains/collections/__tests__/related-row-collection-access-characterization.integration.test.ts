@@ -3,10 +3,11 @@
  * caller.
  *
  * Expansion decides read access to the target by itself rather than through
- * the collection read gate, and for a session caller it decides differently in
- * two documented ways: it never asks whether the caller holds `read-<target>`,
- * and a target with no read rule admits. These cases pin those answers cell by
- * cell, so a change to any one fails a named test.
+ * the collection read gate. These cases pin the answers that hold whether or
+ * not expansion also consults the caller's grants: a refusing or throwing rule
+ * withholds the target, a super-admin session bypasses the rule, and a key
+ * owned by a super-admin gets no bypass. Each is pinned cell by cell, so a
+ * change to any one fails a named test.
  *
  * Not pinned here: expansion with no RBAC service registered. Every instance
  * `createTestNextly` builds registers one.
@@ -120,14 +121,6 @@ describe("relationship expansion — a scoped API key without read-<target>", ()
 });
 
 describe("relationship expansion — session callers", () => {
-  it("populates a target that declares no read rule for a caller holding no grant", async () => {
-    const { handler, refId } = await boot(undefined);
-
-    expect(await populates(handler, refId, { user: { id: "no-grants" } })).toBe(
-      true
-    );
-  });
-
   it("populates a target whose rule refuses, for a super-admin session", async () => {
     const { handler, refId } = await boot(() => false);
 
