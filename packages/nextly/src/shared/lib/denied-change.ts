@@ -104,10 +104,20 @@ export async function resolvePromotedDocument(
   const permittedLive = detachData(input.live);
   await input.applyRules(permittedLive);
 
-  const denied = new Set([
-    ...deniedPaths(input.before, permittedBefore, ""),
-    ...deniedPaths(input.live, permittedLive, ""),
-  ]);
+  // The promoted document's own verdict, plus — from the live row — ONLY the
+  // fields the promotion no longer carries.
+  //
+  // Live is consulted for one reason: a rule is never asked about a key that is
+  // absent, so a field the pending change removes outright is judged nowhere.
+  // Taking live's verdict for a field the promotion still holds would import a
+  // stale answer instead, because a rule reads its siblings: where live says
+  // `kind: "private"` denies `guarded`, and the pending change sets `kind` to
+  // `public` and edits `guarded` legitimately, the promoted document is the one
+  // that has the right of it.
+  const denied = new Set(deniedPaths(input.before, permittedBefore, ""));
+  for (const path of deniedPaths(input.live, permittedLive, "")) {
+    if (!pathExists(input.before, path)) denied.add(path);
+  }
 
   const refusals: string[] = [];
   for (const path of denied) {
