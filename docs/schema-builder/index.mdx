@@ -90,9 +90,11 @@ After save, the new collection appears in the admin sidebar under Collections. T
 
 When you edit and re-save a collection in a way that changes its **data table**, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar).
 
-An edit that changes only metadata — a label, a description, or the Status, Internationalization, Versions, Revalidate or Webhooks switches — changes no column, so no migration file is written. That edit applies to the database the running process is connected to and does not travel to another environment on its own. Plan for it: see [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production).
+**Status and Internationalization are schema changes, not settings.** Turning Status on or off adds or drops the lifecycle's system columns, and turning Internationalization on or off moves translatable columns between the table and its `_locales` companion. Both produce a migration; treat them like any other column change.
 
-Applied migrations are not re-run: `nextly migrate` records every file it applies in the `nextly_migrations` table and skips what is already there. That ledger belongs to the migration runner, not to the Builder's file writer.
+An edit that changes only **registry metadata** — a label, a description, or the Versions, Revalidate or Webhooks switches — changes no column, so no migration file is written for it on its own. It reaches other environments through the committed `ui-schema.json` manifest instead: see [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production).
+
+Applied migrations are not re-run: `nextly migrate` records a `file_apply` event for every file it applies in the `nextly_schema_events` ledger and skips what is already recorded there. That ledger belongs to the migration runner, not to the Builder's file writer.
 
 ## Permissions and visibility
 
