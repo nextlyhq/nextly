@@ -4825,6 +4825,47 @@ describe("a rename record names the nodes it renamed", () => {
     ).toBe("pricing");
   });
 
+  it("points an unrelated link at the visible renamed node past a gated namesake", () => {
+    // The namesake is gated, so the page renders only the renamed node. The
+    // link belongs to a component that renamed nothing; it has to follow the
+    // node that actually renders the id rather than keep one nothing renders.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const mid = marked([...doc.nodes], "mid");
+    const withGatedNamesake = applyOps(doc, [
+      {
+        kind: "insert",
+        node: node("namesake", {
+          cssId: renamed.cssId,
+          props: { mark: "namesake" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        }),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+      {
+        kind: "insert",
+        node: node("stranger", {
+          origin: { from: "component", id: "def-1" },
+          attributes: { "aria-describedby": renamed.cssId ?? "" },
+          props: { mark: "stranger" },
+        } as Partial<BlockNode>),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+    ]).document;
+
+    expect(stored(withGatedNamesake, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(withGatedNamesake, "wrap", "namesake").cssId).toBe(
+      renamed.cssId
+    );
+    expect(
+      stored(withGatedNamesake, "wrap", "stranger").attributes?.[
+        "aria-describedby"
+      ]
+    ).toBe("pricing");
+  });
+
   it("keeps a governed link pointing at a target that keeps its id", () => {
     // The listed node stays on the page but outside the selection, so the
     // record is live and the link's own record would put the source name back.

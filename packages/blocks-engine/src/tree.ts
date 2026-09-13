@@ -1506,8 +1506,12 @@ type RestoreEach = (node: BlockNode, value: string) => string | undefined;
 /** What the per-node copier carries from node to node. */
 interface EachCopy {
   readonly nodeIds: Map<string, string>;
-  /** Each rendered id → every id the nodes rendering it ended up with. */
+  /** Each id a VISIBLE node renders → every id those nodes ended up with. */
   readonly outcomes: Map<string, Set<string>>;
+  /** The same, for nodes inside a subtree the renderer prunes. */
+  readonly gatedOutcomes: Map<string, Set<string>>;
+  /** Every node the renderer would prune, by identity. */
+  readonly hidden: ReadonlySet<BlockNode>;
   /** Each copy's id → the original it was made from, for the reference pass. */
   readonly holders: Map<string, BlockNode>;
   readonly restoreEach: RestoreEach;
@@ -1522,14 +1526,21 @@ interface EachCopy {
  * settle takes the settled id, so it follows its target; any other reference is
  * decided by the node holding it.
  *
- * No hidden-subtree set, and no shared memo of replacements. Putting an id back
- * asks nothing about the page, so gating is irrelevant; and two nodes spelling
- * one id may now answer differently, which a memo keyed by the id alone would
- * collapse into one answer for both.
+ * Gating decides only which nodes a reference follows, never which ids move.
+ * Putting an id back asks nothing about the page, so a gated node still has its
+ * own id restored. But a reference resolves to the element the page RENDERS,
+ * and a gated namesake renders nothing — so the nodes the renderer keeps settle
+ * a reference first, and gated ones only when no visible node carries the id.
+ * Treating both alike made a visible target and its gated namesake look
+ * contested, and left an unrelated link on an id nothing renders.
  *
- * `domIds` reports a rendered id only where every node rendering it moved to
- * the same id — the one reading of "what this copy moved" that stays true when
- * renderers disagree.
+ * No shared memo of replacements: two nodes spelling one id may answer
+ * differently, which a memo keyed by the id alone would collapse into one
+ * answer for both.
+ *
+ * `domIds` reports a rendered id only where the nodes that settle it all moved
+ * to the same id — the one reading of "what this copy moved" that stays true
+ * when renderers disagree.
  */
 function reidForestRestoringEach(
   nodes: BlockNode[],
@@ -1538,6 +1549,10 @@ function reidForestRestoringEach(
   const each: EachCopy = {
     nodeIds: new Map(),
     outcomes: new Map(),
+    gatedOutcomes: new Map(),
+    // The renderer's own pruning rule, inherited gating included, rather than
+    // a second reading of which nodes are visible.
+    hidden: hiddenSubtreeNodes(nodes),
     holders: new Map(),
     restoreEach,
   };
@@ -1553,7 +1568,7 @@ function reidForestRestoringEach(
   return {
     nodes: linked,
     nodeIds: each.nodeIds,
-    domIds: settledMoves(each.outcomes),
+    domIds: settledMoves(each),
   };
 }
 
@@ -1566,7 +1581,11 @@ function reidOneRestoringEach(node: BlockNode, each: EachCopy): BlockNode {
   const rendered = renderedDomId(node);
   if (rendered !== undefined) {
     const answer = each.restoreEach(node, rendered);
-    noteOutcome(each.outcomes, rendered, answer ?? rendered);
+    noteOutcome(
+      each.hidden.has(node) ? each.gatedOutcomes : each.outcomes,
+      rendered,
+      answer ?? rendered
+    );
     if (answer !== undefined) {
       moveOwnIds(
         copy,
@@ -1598,13 +1617,29 @@ function soleOutcome(
   return only;
 }
 
-/** Each rendered id that moved, to the one id all of its renderers became. */
-function settledMoves(
-  outcomes: ReadonlyMap<string, ReadonlySet<string>>
-): Map<string, string> {
+/**
+ * The one id a reference to `value` follows, or nothing when the copy does not
+ * settle it.
+ *
+ * The nodes the page renders decide whenever any of them carries the id; gated
+ * nodes decide only where none does, so a link to a target that is gated today
+ * still follows it and is not split from it when the gate opens.
+ */
+function settledTarget(each: EachCopy, value: string): string | undefined {
+  const visible = each.outcomes.get(value);
+  if (visible !== undefined) return soleOutcome(visible);
+  return soleOutcome(each.gatedOutcomes.get(value));
+}
+
+/** Each rendered id that moved, to the one id the nodes settling it became. */
+function settledMoves(each: EachCopy): Map<string, string> {
   const moved = new Map<string, string>();
-  for (const [value, became] of outcomes) {
-    const only = soleOutcome(became);
+  const values = new Set([
+    ...each.outcomes.keys(),
+    ...each.gatedOutcomes.keys(),
+  ]);
+  for (const value of values) {
+    const only = settledTarget(each, value);
     if (only !== undefined && only !== value) moved.set(value, only);
   }
   return moved;
@@ -1629,11 +1664,8 @@ function referenceAnswers(
   return {
     size: 1,
     get(value: string): string | undefined {
-      const became = each.outcomes.get(value);
-      if (became !== undefined && became.size === 1) {
-        const settled = soleOutcome(became);
-        return settled === value ? undefined : settled;
-      }
+      const settled = settledTarget(each, value);
+      if (settled !== undefined) return settled === value ? undefined : settled;
       return holder === undefined ? undefined : each.restoreEach(holder, value);
     },
   };

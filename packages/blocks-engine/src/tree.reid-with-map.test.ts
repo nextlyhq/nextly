@@ -987,6 +987,62 @@ describe('the "restoreEach" DOM id policy', () => {
 
     expect([...domIds.entries()]).toEqual([["hero-7f3", "hero"]]);
   });
+  /** A condition gate the renderer prunes for a viewer who does not match. */
+  const gate = {
+    conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+  } as BlockNode["visibility"];
+
+  it("follows the visible target past a gated namesake", () => {
+    // The gated namesake renders nothing, so the reference resolves to the
+    // visible node on the page. Counting both as targets made the id look
+    // contested and left the reference on an id nothing renders.
+    const { nodes } = reidForestWithMap(
+      [
+        node("visible", { cssId: "shared-1" }),
+        node("hidden", { cssId: "shared-1", visibility: gate }),
+        node("holder", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ visible: { "shared-1": "shared" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("shared");
+    expect(nodes[1].cssId).toBe("shared-1");
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("follows a gated target when nothing visible carries the id", () => {
+    // Excluding gated nodes outright would hand this reference to its holder,
+    // which answers nothing — storing a link to an id its target no longer
+    // carries once the gate opens.
+    const { nodes } = reidForestWithMap(
+      [
+        node("hidden", { cssId: "shared-1", visibility: gate }),
+        node("holder", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ hidden: { "shared-1": "shared" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("shared");
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("treats a node inside a gated subtree as gated", () => {
+    // Gating is inherited: the renderer prunes the whole subtree, so a
+    // namesake under a gated parent renders nothing either.
+    const { nodes } = reidForestWithMap(
+      [
+        node("visible", { cssId: "shared-1" }),
+        node("wrapper", { visibility: gate }, [
+          node("nested", { cssId: "shared-1" }),
+        ]),
+        node("holder", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ visible: { "shared-1": "shared" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("shared");
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe("shared");
+  });
 });
 
 describe("only the id a node RENDERS may be reminted", () => {
