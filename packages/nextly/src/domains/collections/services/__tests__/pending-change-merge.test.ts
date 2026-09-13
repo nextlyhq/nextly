@@ -10,6 +10,7 @@ import {
   languageTarget,
   pendingChangesToApply,
   sameContent,
+  translationsHeldBy,
   withTranslationsFrom,
   withoutTranslations,
   type ComponentValueShape,
@@ -100,6 +101,31 @@ describe("withoutTranslations and withTranslationsFrom", () => {
       { id: "r1", heading: "Hallo", variant: "wide" },
       { id: "r2", heading: "added elsewhere", variant: "narrow" },
     ]);
+  });
+});
+
+describe("translationsHeldBy", () => {
+  it("leaves out the translations of an instance the pending change does not hold", () => {
+    expect(
+      translationsHeldBy({
+        value: [
+          { id: "r1", heading: "DE", variant: "wide" },
+          { id: "r2", heading: null, variant: "narrow" },
+        ],
+        pending: [{ id: "r1", heading: "DE", variant: "wide" }],
+        shape: FLAT,
+      })
+    ).toEqual([
+      { id: "r1", heading: "DE", variant: "wide" },
+      { id: "r2", variant: "narrow" },
+    ]);
+  });
+
+  it("keeps an instance the change added, which has no id yet", () => {
+    const added = { heading: "EN two", variant: "narrow" };
+    expect(
+      translationsHeldBy({ value: [added], pending: [added], shape: FLAT })
+    ).toEqual([added]);
   });
 });
 

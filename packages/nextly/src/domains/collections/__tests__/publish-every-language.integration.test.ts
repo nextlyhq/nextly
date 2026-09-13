@@ -8,7 +8,12 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -25,6 +30,7 @@ afterEach(async () => {
 
 const SLUG = "pages";
 const GUARDED_SLUG = "guardedpages";
+const BLOCKS_SLUG = "blockpages";
 
 const OPEN_ACCESS = {
   read: () => true,
@@ -36,7 +42,28 @@ const OPEN_ACCESS = {
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "hero",
+        localized: true,
+        fields: [
+          text({ name: "heading", localized: true }),
+          text({ name: "variant", localized: false }),
+        ],
+      }),
+    ],
     collections: [
+      defineCollection({
+        slug: BLOCKS_SLUG,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: OPEN_ACCESS,
+        fields: [
+          text({ name: "title", localized: true }),
+          fieldGroup({ name: "blocks", component: "hero", repeatable: true }),
+        ],
+      }),
       defineCollection({
         slug: SLUG,
         localized: true,
@@ -156,6 +183,103 @@ async function pendingLocales(t: TestNextly, id: string): Promise<string[]> {
     .sort();
 }
 
+type Block = { id: string; heading?: unknown; variant?: unknown };
+
+/** A document with one block, published and translated in both languages. */
+async function publishedWithOneBlock(
+  t: TestNextly
+): Promise<{ id: string; firstBlockId: string }> {
+  const created = await handlerOf(t).createEntry(
+    { collectionName: BLOCKS_SLUG, overrideAccess: true, locale: "en" },
+    {
+      title: "EN",
+      blocks: [{ heading: "EN one", variant: "wide" }],
+      status: "published",
+    }
+  );
+  const id = (created.data as { id?: string } | undefined)?.id;
+  if (typeof id !== "string") throw new Error("no id from create");
+  const blocks = (await live(t, id, "en", BLOCKS_SLUG)).blocks as Block[];
+  const firstBlockId = blocks[0].id;
+  await handlerOf(t).updateEntry(
+    {
+      collectionName: BLOCKS_SLUG,
+      entryId: id,
+      overrideAccess: true,
+      locale: "de",
+    },
+    {
+      title: "DE",
+      blocks: [{ id: firstBlockId, heading: "DE eins", variant: "wide" }],
+      status: "published",
+    }
+  );
+  return { id, firstBlockId };
+}
+
+/** Whether a block holds a stored translation for one language. */
+async function hasTranslation(
+  t: TestNextly,
+  blockId: string,
+  locale: string
+): Promise<boolean> {
+  const rows = await t.adapter.select<Record<string, unknown>>(
+    "comp_hero_locales",
+    {
+      where: {
+        and: [
+          { column: "_parent", op: "=", value: blockId },
+          { column: "_locale", op: "=", value: locale },
+        ],
+      },
+    }
+  );
+  return rows.length > 0;
+}
+
+/**
+ * English adds a block while German translates the existing one; `germanLater`
+ * decides which pending change was saved last.
+ */
+async function blockAddedBesideATranslation(
+  t: TestNextly,
+  germanLater: boolean
+): Promise<string> {
+  const { id, firstBlockId } = await publishedWithOneBlock(t);
+  await holdEdit(
+    t,
+    id,
+    "de",
+    { blocks: [{ id: firstBlockId, heading: "DE eins v2", variant: "wide" }] },
+    BLOCKS_SLUG
+  );
+  await holdEdit(
+    t,
+    id,
+    "en",
+    {
+      blocks: [
+        { id: firstBlockId, heading: "EN one", variant: "wide" },
+        { heading: "EN two", variant: "narrow" },
+      ],
+    },
+    BLOCKS_SLUG
+  );
+  await dateChange(
+    t,
+    id,
+    "de",
+    germanLater ? "2026-01-02T00:00:00.000Z" : "2026-01-01T00:00:00.000Z"
+  );
+  await dateChange(
+    t,
+    id,
+    "en",
+    germanLater ? "2026-01-01T00:00:00.000Z" : "2026-01-02T00:00:00.000Z"
+  );
+  return id;
+}
+
 async function publishEveryLanguage(t: TestNextly, id: string, slug = SLUG) {
   return handlerOf(t).updateEntry(
     { collectionName: slug, entryId: id, overrideAccess: true, locale: "*" },
@@ -209,6 +333,30 @@ describe.each(getConfiguredTestDialects())(
       expect(res.success, JSON.stringify(res)).toBe(true);
       expect((await live(t, id, "de")).note).toBe("EN note");
     });
+
+    it.each([
+      ["saved before", false],
+      ["saved after", true],
+    ])(
+      "keeps a block English added when the German translation was %s it",
+      async (_label, germanLater) => {
+        const t = await boot(dialect);
+        const id = await blockAddedBesideATranslation(t, germanLater);
+
+        const res = await publishEveryLanguage(t, id, BLOCKS_SLUG);
+
+        expect(res.success, JSON.stringify(res)).toBe(true);
+        const en = (await live(t, id, "en", BLOCKS_SLUG)).blocks as Block[];
+        const de = (await live(t, id, "de", BLOCKS_SLUG)).blocks as Block[];
+        expect(en.map(block => block.heading)).toEqual(["EN one", "EN two"]);
+        expect(de.map(block => block.variant)).toEqual(["wide", "narrow"]);
+        expect(de[0].heading).toBe("DE eins v2");
+        // German never translated the new block, so no German value is stored
+        // for it: a read falling back to English is not a translation.
+        expect(await hasTranslation(t, en[1].id, "de")).toBe(false);
+        expect(await pendingLocales(t, id)).toEqual([]);
+      }
+    );
 
     it("refuses the whole write, and keeps every pending change, when one edits a field the publisher may not", async () => {
       const t = await boot(dialect);

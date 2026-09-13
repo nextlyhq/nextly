@@ -212,6 +212,7 @@ import {
   changedKeys,
   languageTarget,
   pendingChangesToApply,
+  translationsHeldBy,
   type ComponentValueShape,
   type PendingLanguageChange,
 } from "./pending-change-merge";
@@ -5752,6 +5753,7 @@ export class CollectionMutationService extends BaseService {
       ctx.restoreCtx
     ).payload;
     const current = await this.restoreShapedInTx(tx, ctx, change.locale);
+    const shapes = this.componentValueShapes(ctx.fields, ctx.componentSchemas);
     const target = languageTarget({
       pending,
       live,
@@ -5759,10 +5761,7 @@ export class CollectionMutationService extends BaseService {
       localizedFieldNames:
         ctx.localeContexts.get(change.locale)?.localizedFieldNames ??
         NO_TRANSLATABLE_KEYS,
-      componentFields: this.componentValueShapes(
-        ctx.fields,
-        ctx.componentSchemas
-      ),
+      componentFields: shapes,
     });
     // The statuses this write sets are the ones that count.
     const liveContent = { ...live };
@@ -5777,14 +5776,24 @@ export class CollectionMutationService extends BaseService {
     );
     const changed = changedKeys(judged, current);
     if (changed.size === 0) return;
-    await this.writeLanguageChangeInTx(
-      tx,
-      ctx,
-      change.locale,
-      Object.fromEntries(
-        Object.entries(judged).filter(([key]) => changed.has(key))
-      )
+    // Judged whole, written narrow: a component carries only the translations
+    // this language's pending change holds.
+    const writable = Object.fromEntries(
+      [...changed].map(key => {
+        const shape = shapes.get(key);
+        return [
+          key,
+          shape
+            ? translationsHeldBy({
+                value: judged[key],
+                pending: pending[key],
+                shape,
+              })
+            : judged[key],
+        ];
+      })
     );
+    await this.writeLanguageChangeInTx(tx, ctx, change.locale, writable);
   }
 
   /** The document one language may write, or a refusal. */

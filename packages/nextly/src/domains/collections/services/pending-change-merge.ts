@@ -152,6 +152,34 @@ export function withTranslationsFrom(args: {
     : overlay(args.current);
 }
 
+/**
+ * A component value carrying translations only for the instances a language's
+ * pending change holds.
+ *
+ * An instance the change does not hold keeps whatever translations it has in
+ * storage, so its translatable keys are left out of the write: the value a
+ * read returned for it is not something this language authored, and writing it
+ * back would store a blank translation nobody wrote. An instance with no id is
+ * one the change itself added.
+ */
+export function translationsHeldBy(args: {
+  value: unknown;
+  pending: unknown;
+  shape: ComponentValueShape;
+}): unknown {
+  const held = instancesById(args.pending);
+  const keep = (instance: unknown): unknown => {
+    if (!isPlainRecord(instance) || typeof instance.id !== "string") {
+      return instance;
+    }
+    const source = held.get(instance.id);
+    return source
+      ? keepHeldNested(instance, source, args.shape)
+      : withoutTranslations(instance, args.shape);
+  };
+  return Array.isArray(args.value) ? args.value.map(keep) : keep(args.value);
+}
+
 /** The document one language's promotion writes. */
 export function languageTarget(
   input: LanguageTargetInput
@@ -225,6 +253,29 @@ function overlayInstance(
     } else {
       assign(out, key, child);
     }
+  }
+  return out;
+}
+
+function keepHeldNested(
+  instance: Record<string, unknown>,
+  source: Record<string, unknown>,
+  shape: ComponentValueShape
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(instance)) {
+    const nested = shape.nested(instance, key);
+    assign(
+      out,
+      key,
+      nested
+        ? translationsHeldBy({
+            value: child,
+            pending: source[key],
+            shape: nested,
+          })
+        : child
+    );
   }
   return out;
 }
