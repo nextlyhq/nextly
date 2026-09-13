@@ -23,7 +23,11 @@
 import { registeredContentSnapshot } from "../services/lib/registered-content-slugs";
 
 import type { AuthenticatedScope } from "./authenticated-scope";
-import { readAccessCaller, readableEntities } from "./entity-read-access";
+import {
+  canReadEntity,
+  readAccessCaller,
+  readableEntities,
+} from "./entity-read-access";
 
 /**
  * Who is asking, in exactly the fields the decision reads.
@@ -69,6 +73,45 @@ export interface ReadableContent {
 }
 
 /**
+ * The caller in the shape the per-entity decision reads.
+ *
+ * One conversion for both entry points below, so the set and the single answer
+ * cannot be resolved from different views of the same caller.
+ */
+function asReadAccess(caller: ReadableContentCaller) {
+  return readAccessCaller({
+    user: { id: caller.user.id, roles: caller.user.roles },
+    ...(caller.authenticatedScope
+      ? { authenticatedScope: caller.authenticatedScope }
+      : {}),
+  });
+}
+
+/**
+ * @public Whether this caller may read ONE named entity.
+ *
+ * The same decision {@link readableContent} takes per entity, for a caller that
+ * already knows which entity it is asking about and should not pay for the
+ * whole set to find out. Asking about one is the common case for a tool: an
+ * agent that has the list wants the detail of a single item from it.
+ *
+ * An UNREGISTERED slug is refused rather than judged. It has no registry entry
+ * and no rule to decide against, and admitting what cannot be judged is the
+ * inversion the dashboard's readable-resources endpoint was fixed to remove.
+ * That also keeps this in step with {@link readableContent}, which can only
+ * ever return registered entities: a caller allowed by one and refused by the
+ * other would be exactly the drift these two share a module to prevent.
+ */
+export async function canReadContent(
+  slug: string,
+  caller: ReadableContentCaller
+): Promise<boolean> {
+  const { kinds } = await registeredContentSnapshot();
+  if (!kinds.has(slug)) return false;
+  return canReadEntity(slug, asReadAccess(caller));
+}
+
+/**
  * @public Which collections and singles this caller may read.
  *
  * Coarse only in WHAT it decides: whether an entity is in reach at all. The
@@ -88,12 +131,7 @@ export async function readableContent(
   const { kinds, degraded } = await registeredContentSnapshot();
   const allowed = await readableEntities(
     [...kinds.keys()],
-    readAccessCaller({
-      user: { id: caller.user.id, roles: caller.user.roles },
-      ...(caller.authenticatedScope
-        ? { authenticatedScope: caller.authenticatedScope }
-        : {}),
-    })
+    asReadAccess(caller)
   );
   return {
     entities: [...kinds.entries()]

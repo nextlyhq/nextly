@@ -22,6 +22,7 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import { registerInitialContext } from "../tools/initial-context";
+import { registerSchemaTools } from "../tools/schema";
 
 import { callerNow, whileServing } from "./caller";
 import { refuseUnlessAddressedHere } from "./guard";
@@ -75,6 +76,7 @@ export function buildServer(options: EndpointOptions): McpServer {
   // ambient scope instead would run when the callback fires rather than when
   // the server was built, and the two are not the same request.
   registerInitialContext(server, ctx);
+  registerSchemaTools(server, ctx);
   return server;
 }
 

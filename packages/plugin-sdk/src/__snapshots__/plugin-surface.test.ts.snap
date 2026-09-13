@@ -347,6 +347,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "WidgetSourceResolver (type)",
   "addressableFields (value)",
   "callerReadOptions (value)",
+  "canReadContent (value)",
   "checkbox (value)",
   "collectionDraftSplit (value)",
   "defineEmailProvider (value)",

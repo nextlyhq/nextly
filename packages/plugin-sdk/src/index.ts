@@ -370,7 +370,7 @@ export { routePathIsLiteral } from "nextly";
 // set, and deriving it from permission slugs is the second implementation that
 // disclosed a refused collection's contents on one surface while hiding a
 // code-authorized one on another.
-export { readableContent } from "nextly";
+export { canReadContent, readableContent } from "nextly";
 export type {
   ReadableContent,
   ReadableContentCaller,
