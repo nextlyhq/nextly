@@ -10,6 +10,10 @@ import type { RBACAccessControlService } from "@nextly/domains/auth/services/rba
 import { env } from "@nextly/lib/env";
 import { permissionSlug } from "@nextly/schemas/_zod/rbac";
 import {
+  ACCESS_OPERATIONS,
+  type AccessOperation,
+} from "@nextly/services/access/types";
+import {
   hasPermission,
   hasAnyPermission,
 } from "@nextly/services/lib/permissions";
@@ -462,6 +466,15 @@ export async function requirePermission(
         `You do not have permission to ${action} ${resource}`
       );
     }
+    // The grant is necessary, not sufficient. Plugin routes declare entity
+    // grants here, and a key the entity's own `access` rule refuses is refused
+    // on this gate exactly as `requireCollectionAccess` refuses it.
+    const ruleRefusal = await apiKeyEntityRuleRefusal(
+      action,
+      resource,
+      authResult
+    );
+    if (ruleRefusal) return ruleRefusal;
     return authResult;
   }
 
@@ -563,19 +576,12 @@ export async function requireCollectionAccess(
 
     // Permission slug matched — also check code-defined access functions
     // (e.g. defineCollection({ access: { create: ({ roles }) => ... } }))
-    const rbac = getRBACService();
-    if (rbac) {
-      const codeAccess = rbac.getRegisteredAccess(collectionSlug);
-      if (codeAccess) {
-        const denied = await evaluateCodeAccess(
-          codeAccess,
-          action as "create" | "read" | "update" | "delete",
-          collectionSlug,
-          authResult
-        );
-        if (denied) return denied;
-      }
-    }
+    const ruleRefusal = await apiKeyEntityRuleRefusal(
+      action,
+      collectionSlug,
+      authResult
+    );
+    if (ruleRefusal) return ruleRefusal;
 
     return authResult;
   }
@@ -602,6 +608,32 @@ export async function requireCollectionAccess(
 }
 
 /**
+ * Whether an entity's code-defined rule refuses a scoped API key an operation
+ * its grant already admitted.
+ *
+ * The one implementation both API-key branches ask. A grant says the key may
+ * attempt the operation; the entity's own `access` rule still decides, as it
+ * does for every other caller. Only operations a rule can name are judged:
+ * `export-submissions` or `manage-settings` name no rule, so they stay decided
+ * by the grant alone. With no RBAC service registered, no rule is judged.
+ */
+async function apiKeyEntityRuleRefusal(
+  action: string,
+  resource: string,
+  authResult: AuthContext
+): Promise<ErrorResponse | null> {
+  if (!isAccessOperation(action)) return null;
+  const codeAccess = getRBACService()?.getRegisteredAccess(resource);
+  if (!codeAccess) return null;
+  return evaluateCodeAccess(codeAccess, action, resource, authResult);
+}
+
+/** Whether an action names an operation an entity access rule can declare. */
+function isAccessOperation(action: string): action is AccessOperation {
+  return ACCESS_OPERATIONS.some(operation => operation === action);
+}
+
+/**
  * Evaluate a code-defined access function for an API key request.
  *
  * Builds an `AccessControlContext` using the API key's pre-resolved
@@ -613,7 +645,7 @@ export async function requireCollectionAccess(
  */
 async function evaluateCodeAccess(
   codeAccess: CollectionAccessControl | SingleAccessControl,
-  operation: "create" | "read" | "update" | "delete",
+  operation: AccessOperation,
   resource: string,
   authResult: AuthContext
 ): Promise<ErrorResponse | null> {
