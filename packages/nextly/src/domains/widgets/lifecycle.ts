@@ -60,6 +60,11 @@ export type WidgetLifecycle = (typeof WIDGET_LIFECYCLES)[number];
  * reader-scoped one is both the safe answer and the true one about what that
  * person is looking at.
  *
+ * Content is an entry in a collection the reader may read, drafts included, or
+ * a single the reader may read that somebody has SAVED. A single's row is
+ * created with its defaults the first time anything reads it, so a single
+ * that exists is not content, and neither is a collection with no entries.
+ *
  * What follows for the COPY of any card using it: it may say there is nothing
  * here yet, and it may not claim the install is empty. A limited editor seeing
  * "nothing to show" is correct; the same editor told the install is empty is

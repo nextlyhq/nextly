@@ -209,8 +209,9 @@ export interface DashboardLayoutResponse {
    *
    * The SERVER's reader-scoped answer, from the same condition pass that
    * decides which transient cards are offered -- so a reader who may read one
-   * collection and nothing else is asked about that collection alone, and a
-   * draft counts as content.
+   * collection and nothing else is asked about that collection alone. A draft
+   * counts as content, and so does a single someone has saved; a single
+   * nobody has saved does not, whatever defaults it was created with.
    *
    * Optional, and absent reads as `false`: a server that predates the field
    * draws the grid exactly as it did before the empty dashboard existed,

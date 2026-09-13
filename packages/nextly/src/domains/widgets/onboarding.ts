@@ -56,11 +56,12 @@ const ALWAYS = (): Promise<boolean> => Promise.resolve(true);
  * The two detected steps share one read of the readable collections: asking
  * separately would resolve the same permission set twice for one answer.
  *
- * `entry` is answered by {@link readerHasContent} rather than by a count of its
- * own, which is what keeps this and the `content:empty` condition one
- * implementation. They ask the same question of the same rows through the same
- * guard, so a reader who is told the install has content cannot also be told
- * the first-entry step is outstanding.
+ * `entry` is answered by {@link readerHasEntries} rather than by a count of its
+ * own, and `content:empty` starts from the same count, so the two cannot
+ * disagree about whether this reader has an entry. They are not one question:
+ * `content:empty` also counts a single somebody saved, while this step asks for
+ * a first ENTRY -- so a reader whose only content is a saved single sees their
+ * cards and still has this step outstanding.
  */
 export async function onboardingSteps(
   probe: ConditionProbe
@@ -69,7 +70,7 @@ export async function onboardingSteps(
   // Short-circuits inside, and skipped entirely where no collection exists:
   // with nothing to read there is no row to find, and the walk would be a
   // guaranteed-empty pass over an empty list.
-  const hasContent = slugs.length > 0 && (await probe.hasContent());
+  const hasEntries = slugs.length > 0 && (await probe.hasEntries());
 
   const candidates: Array<
     OnboardingStep & { offered: () => Promise<boolean> }
@@ -84,7 +85,7 @@ export async function onboardingSteps(
     },
     {
       id: "entry",
-      complete: hasContent,
+      complete: hasEntries,
       offered: () => probe.mayCreateEntry(),
     },
   ];

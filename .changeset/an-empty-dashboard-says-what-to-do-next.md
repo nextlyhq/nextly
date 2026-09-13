@@ -29,8 +29,9 @@
 
 A reader who can see no content yet no longer meets a dashboard of empty
 cards. The layout read reports `contentEmpty` — whether this reader can see any
-content at all, from the same reader-scoped count the onboarding steps use —
-and the admin draws one next step in place of the cards: create a collection,
+content at all: an entry in a collection they may read, drafts included, or a
+single they may read that someone has saved — and the admin draws one next
+step in place of the cards: create a collection,
 load the template's demo content, add a first entry, or, for a reader who can
 do none of those, a plain note that nothing is here yet. The demo-content offer
 moved out of the card grid into that state; it announces its progress to

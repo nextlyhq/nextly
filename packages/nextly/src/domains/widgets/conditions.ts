@@ -26,20 +26,22 @@ import {
 import { onboardingIsIncomplete } from "./onboarding";
 
 /**
- * Whether this reader can see any content at all.
+ * Whether this reader can see no content at all.
  *
- * DERIVED from {@link readerHasContent} rather than counting here, because the
- * onboarding steps ask the same question of the same rows. Counted in both
- * places the two would agree on the day they were written and drift after:
- * one counting drafts and the other not, or one reading the source registry
- * and the other the collections registry, produces a dashboard that offers an
- * onboarding card while telling the reader their install has content.
+ * Content is an entry in a collection they may read, drafts included, or a
+ * single they may read that somebody has saved. Both reads live in
+ * `reader-content.ts` with their scoping and their short-circuits. The entry
+ * read is the one the onboarding `entry` step takes too, so the two cannot
+ * count entries differently; the step reads nothing else, because it asks for
+ * a first ENTRY and a saved single is content without being one.
  *
- * The scoping, the short-circuit and the `status: "all"` reasoning now live
- * with the counting, in `reader-content.ts`.
+ * Entries first, so a reader who has one is answered without a single being
+ * read. A read that fails leaves the condition unanswered rather than true,
+ * so an install is called empty only once both reads have answered.
  */
 async function contentIsEmpty(probe: ConditionProbe): Promise<boolean> {
-  return !(await probe.hasContent());
+  if (await probe.hasEntries()) return false;
+  return !(await probe.hasSavedSingle());
 }
 
 /**
@@ -233,7 +235,7 @@ export interface LayoutConditions<T> {
   /**
    * Whether this reader can see no content at all.
    *
-   * `true` only on a verdict that said so. A count that failed leaves no
+   * `true` only on a verdict that said so. A read that failed leaves no
    * verdict, and reading that as empty would draw the first-run empty state
    * over the cards of a reader whose install is full of content.
    */
@@ -254,9 +256,9 @@ export interface LayoutConditions<T> {
  * dashboard itself asks it: a reader who can see no content is shown what to
  * do next rather than a grid of cards about nothing. Both answers come from
  * ONE evaluation, so the dashboard and a card naming the condition cannot
- * disagree about it. The count is memoised by the probe, so another condition
- * asking the same question shares it, and a reader who may read no collection
- * is answered without issuing one.
+ * disagree about it. The reads are memoised by the probe, so another condition
+ * asking the same question shares them, and a reader who may read nothing is
+ * answered without issuing either.
  */
 export async function layoutConditions<T extends ConditionalDeclaration>(
   widgets: readonly T[],

@@ -7,10 +7,10 @@
  * onboarding steps tick -- is the registries' own readable listing, the same
  * one the list endpoints scope their rows by, so a card and the condition that
  * offers it describe one set. Which of those a widget may QUERY is narrower:
- * a collection whose stored shape is known to be ahead of its table has no
- * source, and a count over it would throw. The content question walks only
- * the second set, so an install whose one collection is mid-migration is told
- * it has a collection and no content, rather than nothing at all.
+ * an entity whose stored shape is known to be ahead of its table has no
+ * source, and a read of it would throw. The content questions walk only the
+ * second set, so an install whose one collection is mid-migration is told it
+ * has a collection and no content, rather than nothing at all.
  *
  * Each question has one implementation here because three callers ask them
  * -- the conditions, the onboarding steps and the dashboard's onboarding
@@ -32,10 +32,12 @@ import {
   authorizationGroups,
   readAccessCaller,
 } from "../../auth/entity-read-access";
+import { getService } from "../../di";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
+import { resolveSingleForRequest } from "../singles/services/ensure-runtime-table";
 
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
 
@@ -140,27 +142,30 @@ export async function readerMayCreateEntry(
 }
 
 /**
- * Of the reader's collections, the ones a widget may QUERY.
+ * Of the reader's collections or singles, the ones a widget may QUERY.
  *
- * A published `collection:` source is what says a collection's stored shape is
- * not known to be ahead of its table: the source builder withholds one whose
- * DDL a reload refused, and one whose migration label declines to claim the
- * table. A count over a collection outside this set may throw -- the table
- * can be absent -- and a condition that throws goes unanswered, which HIDES
- * its widget; so the walk below stays inside it, and a fresh install whose one
- * collection is mid-migration keeps its onboarding card.
+ * A published `collection:` or `single:` source is what says an entity's
+ * stored shape is not known to be ahead of its table: the source builders
+ * withhold one whose DDL a reload refused, and one whose migration label
+ * declines to claim the table. A read of an entity outside this set may throw
+ * -- the table can be absent -- and a condition that throws goes unanswered,
+ * which HIDES its widget; so the walks below stay inside it, and a fresh
+ * install whose one collection is mid-migration keeps its onboarding card.
  */
-function queryableCollectionSlugs(readable: readonly string[]): string[] {
+function queryableSlugs(
+  kind: "collection" | "single",
+  readable: readonly string[]
+): string[] {
   const published = new Set(
     listSources()
-      .filter(source => sourceKindFromId(source.id) === "collection")
+      .filter(source => sourceKindFromId(source.id) === kind)
       .map(source => sourceTarget(source.id))
   );
   return readable.filter(slug => published.has(slug));
 }
 
 /**
- * Whether this reader can see any content at all.
+ * Whether this reader can see any collection entry at all.
  *
  * SHORT-CIRCUITS on the first collection holding a row, so the expensive shape
  * — many collections — is the one that returns soonest, and the exhaustive walk
@@ -168,15 +173,15 @@ function queryableCollectionSlugs(readable: readonly string[]): string[] {
  * against an empty table.
  *
  * Asked per collection through the ordinary counted read rather than through
- * one unscoped total, because "any content" has to mean "any content THIS
- * reader may read": a total taken with the guard off would answer from rows the
+ * one unscoped total, because "any entry" has to mean "any entry THIS reader
+ * may read": a total taken with the guard off would answer from rows the
  * reader is not allowed to know exist.
  *
  * `status: "all"` because a draft is content. A reader who has written one post
  * and not published it is not looking at an empty install, and telling them
  * they are is the onboarding equivalent of losing their work.
  */
-export async function readerHasContent(
+export async function readerHasEntries(
   caller: ReadCaller,
   /**
    * The reader's collections, when the caller already has them.
@@ -187,7 +192,8 @@ export async function readerHasContent(
    */
   resolved?: readonly string[]
 ): Promise<boolean> {
-  const slugs = queryableCollectionSlugs(
+  const slugs = queryableSlugs(
+    "collection",
     resolved ?? (await readableCollectionSlugs(caller))
   );
 
@@ -198,6 +204,81 @@ export async function readerHasContent(
       ...readArgs(caller),
     });
     if (total > 0) return true;
+  }
+
+  return false;
+}
+
+/** The two stored instants a save is told apart by, under their column names. */
+interface StoredInstants {
+  created_at?: unknown;
+  updated_at?: unknown;
+}
+
+/**
+ * Whether a single's row has been written since it was created.
+ *
+ * Both columns are timestamps on every dialect, so both arrive as `Date`s; a
+ * value that is not one is not a write this can see.
+ */
+function writtenSinceCreated(row: StoredInstants): boolean {
+  return (
+    row.created_at instanceof Date &&
+    row.updated_at instanceof Date &&
+    row.updated_at.getTime() > row.created_at.getTime()
+  );
+}
+
+/**
+ * Whether any single this reader may read has been SAVED.
+ *
+ * Saved rather than present, because a single's row is created with its
+ * defaults the first time anything reads it: the singles read path answers a
+ * missing document by creating it. Counted on existence, every install whose
+ * template defines a single would stop being empty the moment its dashboard
+ * or its singles screen was opened.
+ *
+ * A save is told apart by its timestamps. The default row is stamped with ONE
+ * instant for both, and every write stamps `updated_at` afresh, so a later
+ * `updated_at` means a write. The limit is the columns' precision: SQLite and
+ * MySQL keep whole seconds, so a first write that creates the row itself
+ * within the same second reads as unsaved until the next write. A save made in
+ * the admin is never that write, because opening the single to edit it is
+ * what created the row.
+ *
+ * Read from the table rather than through the singles read path, which would
+ * create the row it could not find and turn every dashboard load into a write
+ * per single. The table is opened the way the request-scoped single services
+ * open it, so a process that has not registered it yet still can.
+ *
+ * SHORT-CIRCUITS on the first saved single, for the reason the entry walk does.
+ */
+export async function readerHasSavedSingle(
+  caller: ReadCaller,
+  /** The reader's singles, when the caller already has them. */
+  resolved?: readonly string[]
+): Promise<boolean> {
+  const slugs = queryableSlugs(
+    "single",
+    resolved ?? (await readableSingleSlugs(caller))
+  );
+  if (slugs.length === 0) return false;
+
+  const adapter = getService("adapter");
+  const registry = getService("singleRegistryService");
+  const logger = getService("logger");
+  for (const slug of slugs) {
+    const single = await resolveSingleForRequest(
+      adapter,
+      registry,
+      slug,
+      logger
+    );
+    if (!single) continue;
+    const row = await adapter.selectOne<StoredInstants>(single.tableName, {
+      columns: ["created_at", "updated_at"],
+    });
+    if (row && writtenSinceCreated(row)) return true;
   }
 
   return false;

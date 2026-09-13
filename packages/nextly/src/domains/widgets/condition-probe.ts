@@ -39,7 +39,8 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
   readableCollectionSlugs,
   readableSingleSlugs,
-  readerHasContent,
+  readerHasEntries,
+  readerHasSavedSingle,
   readerMayCreateEntry,
 } from "./reader-content";
 
@@ -51,8 +52,10 @@ export interface ConditionProbe {
   readableSlugs(): Promise<string[]>;
   /** The singles this reader may read, resolved at most once. */
   readableSingles(): Promise<string[]>;
-  /** Whether this reader can see any row at all, resolved at most once. */
-  hasContent(): Promise<boolean>;
+  /** Whether this reader has any collection entry, resolved at most once. */
+  hasEntries(): Promise<boolean>;
+  /** Whether a single this reader may read was saved, resolved at most once. */
+  hasSavedSingle(): Promise<boolean>;
   /**
    * Whether this reader could write a first entry, resolved at most once.
    *
@@ -77,13 +80,19 @@ export interface ConditionProbe {
 export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let slugs: Promise<string[]> | undefined;
   let singles: Promise<string[]> | undefined;
-  let content: Promise<boolean> | undefined;
+  let entries: Promise<boolean> | undefined;
+  let savedSingle: Promise<boolean> | undefined;
   let createEntry: Promise<boolean> | undefined;
   let createCollection: Promise<boolean> | undefined;
 
   const readableSlugs = (): Promise<string[]> => {
     slugs ??= readableCollectionSlugs(caller);
     return slugs;
+  };
+
+  const readableSingles = (): Promise<string[]> => {
+    singles ??= readableSingleSlugs(caller);
+    return singles;
   };
 
   const mayCreateCollection = (): Promise<boolean> => {
@@ -121,20 +130,24 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
   return {
     caller,
     readableSlugs,
-    readableSingles: () => {
-      singles ??= readableSingleSlugs(caller);
-      return singles;
-    },
-    hasContent: () => {
+    readableSingles,
+    hasEntries: () => {
       // Takes the slugs from the same memo rather than resolving its own, which
       // is the duplication this module was added to remove.
-      content ??= readableSlugs().then(resolved =>
-        readerHasContent(caller, resolved)
+      entries ??= readableSlugs().then(resolved =>
+        readerHasEntries(caller, resolved)
       );
-      return content;
+      return entries;
+    },
+    hasSavedSingle: () => {
+      // From the singles memo `singles:present` reads, for the same reason.
+      savedSingle ??= readableSingles().then(resolved =>
+        readerHasSavedSingle(caller, resolved)
+      );
+      return savedSingle;
     },
     mayCreateEntry: () => {
-      // From the same memo `hasContent` reads, for the same reason: the create
+      // From the same memo `hasEntries` reads, for the same reason: the create
       // decision is taken over the collections this reader can read, and
       // resolving that list twice is the duplication this module removes.
       // 🔴 NOT composed with `mayCreateCollection`. Being able to create a

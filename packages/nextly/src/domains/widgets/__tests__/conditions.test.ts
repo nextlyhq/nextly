@@ -7,8 +7,8 @@
  * would be slower and would confirm the read rather than the rule.
  *
  * The layout read's composition of the two is asked the same way, with the
- * probe replaced so a case can state what the count answered -- including a
- * count that FAILED, which a real install cannot be made to produce on demand.
+ * probe replaced so a case can state what each read answered -- including a
+ * read that FAILED, which a real install cannot be made to produce on demand.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,12 +16,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import {
   conditionsNeeded,
+  evaluateConditions,
   layoutConditions,
   widgetsHeldByVerdict,
 } from "../conditions";
 import type { WidgetCondition } from "../lifecycle";
 
-const hasContent = vi.hoisted(() => vi.fn());
+const hasEntries = vi.hoisted(() => vi.fn());
+const hasSavedSingle = vi.hoisted(() => vi.fn());
 
 // Only `content:empty` is asked of the probe here. Every other read rejects, so
 // a condition that reached one would have no verdict rather than an answer this
@@ -31,7 +33,8 @@ vi.mock("../condition-probe", () => {
   return {
     conditionProbe: (caller: unknown) => ({
       caller,
-      hasContent,
+      hasEntries,
+      hasSavedSingle,
       readableSlugs: unexpected,
       readableSingles: unexpected,
       mayCreateEntry: unexpected,
@@ -225,31 +228,63 @@ describe("what the layout read learns", () => {
   const reader: ReadCaller = { user: { id: "user-1", roles: ["editor"] } };
 
   beforeEach(() => {
-    hasContent.mockReset();
+    hasEntries.mockReset();
+    hasSavedSingle.mockReset();
+    // No saved single unless a case says there is one.
+    hasSavedSingle.mockResolvedValue(false);
   });
 
   it("asks whether the reader has content even when no widget names it", async () => {
-    hasContent.mockResolvedValue(false);
+    hasEntries.mockResolvedValue(false);
 
     const result = await layoutConditions([permanent], reader);
 
     expect(result.contentEmpty).toBe(true);
     expect(result.widgets).toEqual([permanent]);
-    expect(hasContent).toHaveBeenCalledTimes(1);
+    expect(hasEntries).toHaveBeenCalledTimes(1);
+    expect(hasSavedSingle).toHaveBeenCalledTimes(1);
   });
 
-  it("reports content once the reader can see a row", async () => {
-    hasContent.mockResolvedValue(true);
+  it("reports content once the reader can see an entry", async () => {
+    hasEntries.mockResolvedValue(true);
 
     const result = await layoutConditions([permanent], reader);
 
     expect(result.contentEmpty).toBe(false);
   });
 
+  it("reports content for a reader whose only content is a saved single", async () => {
+    // A site built from singles alone has no entry to count. Asked about
+    // entries only, it is shown the first-run empty state in place of the
+    // cards, over the settings and pages it has already written.
+    hasEntries.mockResolvedValue(false);
+    hasSavedSingle.mockResolvedValue(true);
+
+    const result = await layoutConditions([permanent, transient], reader);
+
+    expect(result.contentEmpty).toBe(false);
+    // The card that shows only on an empty install goes with it.
+    expect(result.widgets).toEqual([permanent]);
+  });
+
+  it("reads no single for a reader who has an entry", async () => {
+    // An entry settles it. Reading singles as well would be a query per single
+    // on every dashboard load of every install that has content.
+    hasEntries.mockResolvedValue(true);
+
+    const verdicts = await evaluateConditions(
+      new Set<WidgetCondition>(["content:empty"]),
+      reader
+    );
+
+    expect(verdicts.get("content:empty")).toBe(false);
+    expect(hasSavedSingle).not.toHaveBeenCalled();
+  });
+
   it("does not call an install empty because the count FAILED", async () => {
     // The empty state is drawn in place of every card, so it may only follow
     // an answer. A failed count read as empty would blank a full dashboard.
-    hasContent.mockRejectedValue(new Error("count failed"));
+    hasEntries.mockRejectedValue(new Error("count failed"));
 
     const result = await layoutConditions([permanent, transient], reader);
 
@@ -259,16 +294,34 @@ describe("what the layout read learns", () => {
     expect(result.widgets).toEqual([permanent]);
   });
 
+  it("does not call an install empty because the singles read FAILED", async () => {
+    // No entries is half an answer: a reader whose singles could not be read
+    // may have saved every one of them. Unanswered, not answered either way.
+    hasEntries.mockResolvedValue(false);
+    hasSavedSingle.mockRejectedValue(new Error("single read failed"));
+
+    const verdicts = await evaluateConditions(
+      new Set<WidgetCondition>(["content:empty"]),
+      reader
+    );
+    expect(verdicts.has("content:empty")).toBe(false);
+
+    const result = await layoutConditions([permanent, transient], reader);
+    expect(result.contentEmpty).toBe(false);
+    expect(result.widgets).toEqual([permanent]);
+  });
+
   it("answers the dashboard and a card naming the condition from ONE count", async () => {
     // Two counts could straddle the reader's first entry and disagree: the
     // empty state drawn while the card that shows only on an empty install
     // has been dropped, or the reverse.
-    hasContent.mockResolvedValue(false);
+    hasEntries.mockResolvedValue(false);
 
     const result = await layoutConditions([permanent, transient], reader);
 
     expect(result.contentEmpty).toBe(true);
     expect(result.widgets).toEqual([permanent, transient]);
-    expect(hasContent).toHaveBeenCalledTimes(1);
+    expect(hasEntries).toHaveBeenCalledTimes(1);
+    expect(hasSavedSingle).toHaveBeenCalledTimes(1);
   });
 });
