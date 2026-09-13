@@ -1638,23 +1638,39 @@ describe("what the reader reports it did not keep", () => {
 
   it("reads a key as a group name exactly when a reference may name it", () => {
     // A reference names a group, so a segment it accepts must be one the walk
-    // reads as a group, and a segment the walk refuses must name nothing. The
-    // rows are the ways a DTCG name can fail; a group holding a token is read
-    // as a group precisely when that token's name comes back.
-    for (const key of ["brand", "$private", "$root", "a{b", "a}b"]) {
-      const walked = names({
-        [key]: { t: { $type: "number", $value: 1 } },
-      }).includes(`${key}.t`);
+    // accepts as a group's name, and a segment the walk refuses must name
+    // nothing. Each key is judged by the WALK's own line about it: the
+    // reserved-field line when it routes the key aside, the malformed-name line
+    // when it rejects the name. A token name coming back would not do, because
+    // later checks refuse `$private.t` whether or not the walk routed it aside.
+    const walkRefusals = (key: string): string[] => [
+      `"${key}" is a design-token field this site does not read`,
+      `"${key}" is not a usable name in a design-token file`,
+    ];
+    const rows: { key: string; refusedBy?: number }[] = [
+      { key: "brand" },
+      { key: "$private", refusedBy: 0 },
+      { key: "$root", refusedBy: 0 },
+      { key: "a{b", refusedBy: 1 },
+      { key: "a}b", refusedBy: 1 },
+    ];
+    for (const { key, refusedBy } of rows) {
+      const walk = said({ [key]: { t: { $type: "number", $value: 1 } } });
+      // Each refusal is observed by its own line, so a key the walk accepts
+      // cannot pass merely because neither line was written.
+      const refused = walkRefusals(key).map(line => walk.includes(line));
+      expect({ key, refused }).toEqual({
+        key,
+        refused: walkRefusals(key).map((_, index) => index === refusedBy),
+      });
       const referenced = said({
         g: { $extends: `{${key}}`, t: { $type: "number", $value: 1 } },
       }).includes("inherits from another group");
-      expect({ key, referenced }).toEqual({ key, referenced: walked });
+      expect({ key, referenced }).toEqual({
+        key,
+        referenced: refusedBy === undefined,
+      });
     }
-    // The control: both answers occur, so agreement cannot come from one side
-    // answering the same way for every key.
-    expect(names({ brand: { t: { $type: "number", $value: 1 } } })).toEqual([
-      "brand.t",
-    ]);
   });
 
   it("never says a token arrived or was imported, which only the merge decides", () => {
