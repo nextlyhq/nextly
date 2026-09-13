@@ -27,7 +27,7 @@ export interface LocaleTranslationMeta {
    */
   pendingChange?: boolean;
   /**
-   * Whether the SOURCE language was written after this one was (i18n B2).
+   * Whether the SOURCE language was written after this one was.
    *
    * A THIRD independent fact, alongside `status` and `pendingChange`, and kept apart from both
    * for the reason `pendingChange` already gives: a stale translation is still translated, and

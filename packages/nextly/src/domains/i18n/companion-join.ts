@@ -471,7 +471,7 @@ export function buildTranslationStatusCondition(args: {
   /**
    * Whether the companion physically carries `_updated_at` (the `stale` filter needs it).
    *
-   * A companion created before i18n B2 does not have the column until a reconcile reaches it, and
+   * A companion created before `_updated_at` existed lacks the column until a reconcile reaches it, and
    * naming a missing column would fail the whole query. Absent or `false` makes `stale` answer
    * "nothing here is known to be stale" rather than erroring or, far worse, matching everything.
    */
@@ -534,7 +534,7 @@ export function buildTranslationStatusCondition(args: {
       // not a draft translation.
       return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state} AND (${nonBlank})`)})`;
     case "stale":
-      // i18n B2 — translated, but the source moved afterwards.
+      // Translated, but the source moved afterwards.
       //
       // 🔴 `1=0`, never `undefined`, in BOTH refusing branches, and the difference is the whole
       // safety of this arm. `undefined` means "no restriction", so a worklist tab asking "what
@@ -675,7 +675,7 @@ export interface LocaleTranslationMeta {
    */
   pendingChange?: boolean;
   /**
-   * Whether the SOURCE language was written after this one was (i18n B2).
+   * Whether the SOURCE language was written after this one was.
    *
    * 🔴 Separate from `translated` and from `status`, exactly as `pendingChange` is, and for the
    * same reason that field states: these are different facts about one language, and collapsing
@@ -704,7 +704,7 @@ export interface TranslationStatusArgs {
   /** Whether the companion carries a per-locale `_status` column (i18n M6). */
   hasStatus: boolean;
   /**
-   * What is needed to read `_updated_at` (i18n B2): the physical companion name and its dialect.
+   * What is needed to read `_updated_at`: the physical companion name and its dialect.
    * The column is deliberately not declared on the companion's runtime table — see
    * {@link readCompanionStamps} — so it is read through its own narrow handle instead.
    *

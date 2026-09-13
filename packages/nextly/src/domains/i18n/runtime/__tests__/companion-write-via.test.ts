@@ -5,7 +5,7 @@
  * for one reason: it holds a transaction, and the shared helper took an
  * adapter. The two implementations built byte-identical SQL and drifted only in
  * where they read the dialect from. A second copy of an INSERT is not a style
- * problem here — i18n B2 adds an `_updated_at` column to this row, and a column
+ * problem here — this row carries an `_updated_at` column, and a column
  * written by one copy and not the other leaves those locales permanently
  * unstamped, which makes a stale translation read as fresh. That failure is
  * silent, so the duplication had to go before the column arrives.
@@ -87,7 +87,7 @@ describe("companionWriteVia", () => {
     const [sql, params] = execute.mock.calls[0];
     // Transcribed from the implementation this replaced, so the assertion is
     // about equivalence with the deleted code and not merely about the survivor
-    // agreeing with itself -- plus exactly one deliberate addition, the B2
+    // agreeing with itself -- plus exactly one deliberate addition, the `_updated_at`
     // stamp this convergence existed to make possible. Spelled out in full
     // rather than matched loosely, because "the same statement, plus one named
     // column" is the whole claim; a `toContain` would pass for a statement that
@@ -221,7 +221,7 @@ describe("companionWriteVia", () => {
     // would create an empty companion row, and an empty row is not nothing --
     // it is a row that reads as "this locale exists" to every join.
     //
-    // 🔴 The B2 stamp made this load-bearing a second way. `_updated_at` is
+    // 🔴 The `_updated_at` stamp made this load-bearing a second way. `_updated_at` is
     // added to the column set, so counting the columns AFTER stamping would
     // make every no-op call a real write -- and because staleness is
     // `source._updated_at > target._updated_at`, moving the source's timestamp

@@ -159,7 +159,7 @@ export async function restoreI18nArchive(
       g.locale,
       g.data,
       undefined,
-      // 🔴 Replay must not date these translations to the moment they were restored (i18n B2).
+      // 🔴 Replay must not date these translations to the moment they were restored.
       // The archive stores per-FIELD rows -- `field` and `value` -- so it never held the original
       // `_updated_at` and there is nothing to put back. Stamping would fabricate a chronology:
       // source content edited after re-enabling but before the replay would look OLDER than the

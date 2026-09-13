@@ -135,7 +135,7 @@ describe("untranslatedLocales", () => {
   });
 });
 
-describe("staleness is a qualifier, not a state (i18n B2)", () => {
+describe("staleness is a qualifier, not a state", () => {
   it("still classifies a stale translation by the state it is IN", () => {
     // 🔴 The decision the whole vocabulary rests on. `languageState` returns
     // exactly one value per locale, so had `stale` been added to
