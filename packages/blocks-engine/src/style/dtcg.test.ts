@@ -1616,6 +1616,11 @@ describe("what the reader reports it did not keep", () => {
       "{base",
       "{a..b}",
       "{a.}",
+      // A `$`-prefixed segment is one of the format's own keys, which the walk
+      // never reads as a group, so a path through one names no group either.
+      "{base.$private}",
+      "{$root}",
+      "{a.$b}",
     ]) {
       const document = {
         g: { $extends: stated, t: { $type: "number", $value: 1 } },
@@ -1629,6 +1634,27 @@ describe("what the reader reports it did not keep", () => {
     expect(said(referencing)).toContain(
       '"g.$extends" inherits from another group'
     );
+  });
+
+  it("reads a key as a group name exactly when a reference may name it", () => {
+    // A reference names a group, so a segment it accepts must be one the walk
+    // reads as a group, and a segment the walk refuses must name nothing. The
+    // rows are the ways a DTCG name can fail; a group holding a token is read
+    // as a group precisely when that token's name comes back.
+    for (const key of ["brand", "$private", "$root", "a{b", "a}b"]) {
+      const walked = names({
+        [key]: { t: { $type: "number", $value: 1 } },
+      }).includes(`${key}.t`);
+      const referenced = said({
+        g: { $extends: `{${key}}`, t: { $type: "number", $value: 1 } },
+      }).includes("inherits from another group");
+      expect({ key, referenced }).toEqual({ key, referenced: walked });
+    }
+    // The control: both answers occur, so agreement cannot come from one side
+    // answering the same way for every key.
+    expect(names({ brand: { t: { $type: "number", $value: 1 } } })).toEqual([
+      "brand.t",
+    ]);
   });
 
   it("never says a token arrived or was imported, which only the merge decides", () => {
@@ -1753,6 +1779,94 @@ describe("what the reader reports it did not keep", () => {
       expect(names(refused)).toEqual([]);
       expect(said(refused)).toContain('"t.$type" is not a usable type');
       expect(said(refused)).not.toContain("group's type");
+    });
+
+    it("is named ahead of every refusal, whichever check refused the token", () => {
+      // An unusable type is ignored whatever else is wrong with the token, so
+      // each way of refusing one still names it, before the refusal and
+      // crediting no group. Each row reaches a different refusal, which the
+      // row's own line proves.
+      const long = "g".repeat(MAX_TOKEN_NAME_LENGTH);
+      const badType = { $type: 42, $value: 1 };
+      const rows: {
+        label: string;
+        document: object;
+        at: string;
+        refusal: string;
+      }[] = [
+        {
+          label: "a name holding a forbidden character",
+          document: { "a{b": badType },
+          at: "a{b",
+          refusal: "may not contain",
+        },
+        {
+          label: "a name this site cannot author",
+          document: { Brand: badType },
+          at: "Brand",
+          refusal: '"Brand" is not a usable token name',
+        },
+        {
+          label: "an id that is not a usable name",
+          document: {
+            t: {
+              ...badType,
+              $extensions: { [NEXTLY_EXTENSION]: { id: "Bad Id" } },
+            },
+          },
+          at: "t",
+          refusal: "carries an id that is not a usable token name",
+        },
+        {
+          label: "a name over the length cap",
+          document: { [long]: { t: badType } },
+          at: `${long}.t`,
+          refusal: "is written under more than",
+        },
+        {
+          label: "no type to take a kind from",
+          document: { t: badType },
+          at: "t",
+          refusal: "which this site has no token kind for",
+        },
+        {
+          label: "a value the kind cannot read",
+          document: { g: { $type: "number", t: { $type: 42, $value: "x" } } },
+          at: "g.t",
+          refusal: "has a value that could not be read",
+        },
+      ];
+      for (const { label, document, at, refusal } of rows) {
+        const read = dtcgToTokens(document);
+        const lines = read.issues.map(item => item.message);
+        const typeLine = lines.findIndex(line =>
+          line.startsWith(`"${at}.$type" is not a usable type`)
+        );
+        const refusalLine = lines.findIndex(line => line.includes(refusal));
+        expect({ label, tokens: read.tokens.length }).toEqual({
+          label,
+          tokens: 0,
+        });
+        expect({ label, refused: refusalLine >= 0 }).toEqual({
+          label,
+          refused: true,
+        });
+        expect({ label, typeLine: typeLine >= 0 }).toEqual({
+          label,
+          typeLine: true,
+        });
+        expect({ label, before: typeLine < refusalLine }).toEqual({
+          label,
+          before: true,
+        });
+        expect({
+          label,
+          credited: lines.join("\n").includes("group's type"),
+        }).toEqual({
+          label,
+          credited: false,
+        });
+      }
     });
   });
 
