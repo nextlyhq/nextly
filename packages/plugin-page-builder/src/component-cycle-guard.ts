@@ -201,7 +201,7 @@ async function refuseACycle(
 
   // Decided from the document in hand, so it is decided BEFORE the declines
   // below. Those exist for the graph READS, and this question needs none.
-  await refuseASelfReference(submitted, self, options);
+  refuseASelfReference(submitted, self, options);
 
   const nextly = directApiOf(context);
   // No Direct API to ask with. A guard that refused every write it could not
@@ -236,11 +236,11 @@ async function refuseACycle(
  * The chain is the subject twice over, so there is nothing to redact: both ids
  * are the one the author is saving.
  */
-async function refuseASelfReference(
+function refuseASelfReference(
   submitted: { readonly document: unknown } | "absent",
   self: string,
   options: CycleGuardOptions
-): Promise<void> {
+): void {
   if (submitted === "absent") return;
   // The ID survey only says where to LOOK. It reads a stored id off every node,
   // and the renderer does not expand a condition-gated instance at all — so a
@@ -248,25 +248,70 @@ async function refuseASelfReference(
   // refusing on the survey alone makes that component unsavable.
   if (!namesItself(submitted.document, self, options)) return;
 
-  // So the composition decides here too, and still costs no read: the subject is
-  // the one document in hand, so a loop it closes on itself is found in the
-  // first round and nothing is ever asked of the library. A reader that refuses
-  // everything is therefore not a limitation — it is the assertion that this
-  // answer needed nothing.
-  const composed = await composesACycle(submitted.document, self, options, () =>
-    Promise.resolve({ kind: "unreadable" as const })
-  );
-  // Fails CLOSED, as the walk does. The survey has already found the subject
-  // naming itself, so this is not a document about which nothing is known — and
-  // a composition that could not be established must not be read as a clean one
-  // when the decline for a missing Direct API is the next thing to run.
-  if (composed === "indeterminate") throw unreadableRefusal();
-  if (composed !== "cycle") return;
+  // So the composition decides here too, over a library holding ONLY the subject.
+  if (!composesOnItself(submitted.document, self, options)) return;
 
   throw refusal(
     `This component cannot be saved because it would reference itself: ` +
       `${self} → ${self}. Remove that placement and save again.`
   );
+}
+
+/**
+ * Whether this document closes a loop on the subject using nothing but itself.
+ *
+ * Deliberately a narrower question than {@link composesACycle}, and the narrowing
+ * is what makes it answerable with no library at all. Every other component is
+ * simply ABSENT, which the resolver draws as a placeholder — so a chain that runs
+ * out through some other component is not refused here, it is left to the walk
+ * that can actually read it.
+ *
+ * That is why there is no reader, no budget and no unestablished answer. An
+ * earlier version composed against a reader that refused everything and treated
+ * the resulting `indeterminate` as a refusal, which turned any UNRELATED
+ * placement beside a gated self-placeholder into a false refusal: the composition
+ * asked for that other component, could not be given it, and the write was
+ * rejected for a question it had not answered.
+ *
+ * The selections asked are the default one plus every variant that installs the
+ * SUBJECT's id — not every variant that can reach the graph. Only a selection
+ * naming the subject can close a loop on it without leaving the document, so this
+ * needs no cap: a component offering a thousand variants costs a composition for
+ * each one that names itself, and those are the only ones that could refuse.
+ */
+function composesOnItself(
+  document: unknown,
+  self: string,
+  options: CycleGuardOptions
+): boolean {
+  const installing = variantReferencesIn(document, options.limits.maxNodes);
+  const naming = [...installing.byVariant]
+    .filter(([, ids]) => ids.includes(self))
+    .map(([variant]) => variant);
+
+  const alone = {
+    has: (id: string) => id === self,
+    get: (id: string) => (id === self ? document : undefined),
+  };
+  for (const variant of [undefined, ...naming]) {
+    const composition = resolveComponentInstances(
+      hostPlacing(self, variant) as never,
+      alone as never,
+      { limits: options.limits }
+    );
+    if (composition.unresolved.some(one => one.reason === "cycle")) return true;
+    // A limit reached while composing the subject's OWN forest. The survey has
+    // already found it naming itself and the composition could not get far
+    // enough to say whether that placement resolves — so this refuses, and it
+    // can do so without the false-refusal risk that made the reader go away: a
+    // component this could not supply reports `missing`, which is not here.
+    if (
+      composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

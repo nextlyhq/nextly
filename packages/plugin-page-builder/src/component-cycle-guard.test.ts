@@ -1414,9 +1414,12 @@ describe("saving a component that would reference itself", () => {
      * Asserted with NO Direct API, because that is the only configuration where
      * the two behaviours differ. Demanding completeness made this document read
      * as not naming itself, and the decline for a missing Direct API was then the
-     * next thing to run — so the write was permitted. With the id believed, the
-     * composition is consulted, cannot be established under this bound, and fails
-     * closed.
+     * next thing to run — so the write was permitted.
+     *
+     * With the id believed, the composition is consulted and cannot get through
+     * the subject's OWN forest under this bound. That refuses — and it is a
+     * different case from a neighbour it could not supply, which reports
+     * `missing` and is left to the walk that can read it.
      */
     const c = context();
     registerComponentCycleGuard({
@@ -1435,18 +1438,18 @@ describe("saving a component that would reference itself", () => {
         data: { [FIELD]: places("a", "b", "cc", "dd", "ee", "ff") },
         req: {},
       })
-    ).rejects.toThrow(/could not all be read/);
+    ).rejects.toThrow(/a → a/);
   });
 
-  it("refuses a self-reference it could not finish composing, with no Direct API", async () => {
+  it("refuses a self-naming VARIANT past the composition cap, with no Direct API", async () => {
     /*
-     * The self check runs ahead of the decline for a missing Direct API, so an
-     * answer it could not establish must fail CLOSED — otherwise the decline is
-     * the next thing to run and the write is permitted.
+     * The self check runs ahead of the decline for a missing Direct API, so a
+     * document naming itself through a variant must be caught here or the write
+     * is simply permitted.
      *
-     * More graph-affecting variants than the guard will compose is exactly that
-     * state: the selections cannot be enumerated, so the composition establishes
-     * nothing while the survey has already found the subject naming itself.
+     * The cap on selections does not reach this question: only a selection that
+     * names the SUBJECT can close a loop on it without leaving the document, so
+     * this composes exactly those, however many other variants exist.
      */
     const c = context();
     register(c.ctx);
@@ -1484,7 +1487,101 @@ describe("saving a component that would reference itself", () => {
         },
         req: {},
       })
-    ).rejects.toThrow(/could not all be read/);
+    ).rejects.toThrow(/a → a/);
+  });
+
+  it("allows a gated self-placeholder BESIDE an unrelated placement", async () => {
+    /*
+     * The case that decides the self check's shape. The gated placeholder is not
+     * expanded, so nothing closes on the subject — but the document also places
+     * `b`, and a check that composed against a reader refusing everything asked
+     * for `b`, could not be given it, and rejected the write for a question it
+     * had not answered.
+     *
+     * So the check composes the subject ALONE: every other component is simply
+     * absent, which the resolver draws as a placeholder. A chain running out
+     * through `b` is not this check's business — the walk that can read `b`
+     * handles it, and does so here too, which is why this still reaches the store.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({ stored: { b: [] } });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "a" },
+                visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+              },
+              {
+                id: "n1",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "b" },
+              },
+            ],
+          },
+        },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    // And the walk did run: the unrelated placement was read, which is what
+    // separates "the check declined to answer" from "the check answered".
+    expect(asked.map(one => one.id)).toContain("b");
+  });
+
+  it("allows a hide-only variant however many of them there are", async () => {
+    /*
+     * A visibility write reaches the graph only when it REVEALS. Hiding removes
+     * references from the composition, and removing them closes no loop — so a
+     * component offering many hide-only variants must not be charged a
+     * composition for each and then refused for exceeding the cap.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [] } });
+    const many: Record<
+      string,
+      { label: string; overrides: Record<string, unknown> }
+    > = {};
+    for (let i = 0; i < 65; i += 1) {
+      many[`v${String(i)}`] = { label: "V", overrides: { show: false } };
+    }
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...places("b"),
+            exposed: [
+              {
+                id: "show",
+                label: "Show",
+                nodeId: "n0",
+                propPath: "",
+                type: "visibility",
+              },
+            ],
+            variants: many,
+          },
+        },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {

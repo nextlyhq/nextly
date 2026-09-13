@@ -501,34 +501,46 @@ const GRAPH_REACHING_PROPS: readonly string[] = [
 ];
 
 /**
- * Whether writing one exposure can change what the document composes to.
+ * The exposures a variant can reach the composed graph through, in two kinds.
  *
- * Two ways, and only the first is about a prop path.
+ * They are separate because what makes a write matter differs. A REWIRING
+ * exposure matters whenever it is written at all: any value re-points a
+ * reference. A REVEALING one matters only for the value `true` — hiding a node
+ * removes references from the composition, and removing them closes no loop — so
+ * a component offering many hide-only variants must not be charged for them.
  *
- * A `visibility` write carries NO usable path — `applyExposure` decides the
- * node's visibility from the value and never reads `propPath` — and the resolver
- * leaves a gated instance unexpanded. So revealing a node reveals its whole
- * subtree, and a variant that sets such an exposure true adds references the
- * default selection never followed. It reaches the graph wherever the forest
- * holds an instance to reveal; which instance is under which node is not asked,
- * because composing one selection too many costs a walk and missing one costs a
- * loop.
- *
- * The three prop names are special ONLY on an instance node, because that is
- * where `componentIdOf` reads them and where `overrides` flow down from. An
- * ordinary block exposing a prop that happens to be called `componentId` reaches
- * nothing at all, and treating it as though it did refused a valid component on
- * every save once it offered enough such variants.
+ * Rewiring is those three prop names ON AN INSTANCE NODE, because that is where
+ * `componentIdOf` reads them and where `overrides` flow down from; an ordinary
+ * block exposing a prop that happens to carry one of those names reaches nothing.
+ * Revealing is a `visibility` exposure, which carries no usable prop path at all
+ * — `applyExposure` decides from the value and never reads one — and which
+ * reveals a whole subtree, so it counts wherever the forest holds an instance to
+ * reveal.
  */
-function reachesTheGraph(
-  property: ExposedProperty,
+interface ReachingExposures {
+  readonly rewiring: ReadonlySet<string>;
+  readonly revealing: ReadonlySet<string>;
+}
+
+function reachingExposures(
+  declared: readonly ExposedProperty[],
   nodes: ReadonlyMap<string, BlockNode>,
   revealable: boolean
-): boolean {
-  if (property.type === "visibility") return revealable;
-  const node = nodes.get(property.nodeId);
-  if (node === undefined || !isComponentInstance(node)) return false;
-  return GRAPH_REACHING_PROPS.includes(property.propPath.split(".")[0] ?? "");
+): ReachingExposures {
+  const rewiring = new Set<string>();
+  const revealing = new Set<string>();
+  for (const property of declared) {
+    if (property.type === "visibility") {
+      if (revealable) revealing.add(property.id);
+      continue;
+    }
+    const node = nodes.get(property.nodeId);
+    if (node === undefined || !isComponentInstance(node)) continue;
+    if (GRAPH_REACHING_PROPS.includes(property.propPath.split(".")[0] ?? "")) {
+      rewiring.add(property.id);
+    }
+  }
+  return { rewiring, revealing };
 }
 
 /** What each variant installs, whether it can change composition, and whether it could be read. */
@@ -601,11 +613,7 @@ export function variantReferencesIn(
   const revealable = [...indexed.index.values()].some(node =>
     isComponentInstance(node)
   );
-  const reaching = new Set(
-    declared
-      .filter(property => reachesTheGraph(property, indexed.index, revealable))
-      .map(property => property.id)
-  );
+  const reaching = reachingExposures(declared, indexed.index, revealable);
 
   const byVariant = new Map<string, readonly string[]>();
   const affecting = new Set<string>();
@@ -617,9 +625,11 @@ export function variantReferencesIn(
   return { byVariant, affecting, complete: true };
 }
 
-/** Whether a variant's overrides name any of the exposures given. */
-function writesAnyOf(variant: unknown, reaching: ReadonlySet<string>): boolean {
-  if (reaching.size === 0) return false;
+/** Whether one variant's overrides reach the graph, by either route. */
+function writesAnyOf(variant: unknown, reaching: ReachingExposures): boolean {
+  if (reaching.rewiring.size === 0 && reaching.revealing.size === 0) {
+    return false;
+  }
   if (!isPlainRecord(variant)) return false;
   const overrides = variant.overrides;
   if (!isPlainRecord(overrides)) return false;
@@ -627,7 +637,16 @@ function writesAnyOf(variant: unknown, reaching: ReadonlySet<string>): boolean {
   // Unreadable overrides are treated as reaching the graph: this decides whether
   // a selection is worth COMPOSING, and the safe answer is to compose it.
   if (keys === null) return true;
-  return keys.some(key => reaching.has(key));
+  return keys.some(key => {
+    if (reaching.rewiring.has(key)) return true;
+    // Only a REVEAL reaches the graph. `visibilityDecision` is the resolver's own
+    // reader for this, so `true`, `false` and a cleared override are judged here
+    // exactly as the composition would judge them.
+    return (
+      reaching.revealing.has(key) &&
+      visibilityDecision(ownEntry(overrides, key)) === true
+    );
+  });
 }
 
 /**
