@@ -27,6 +27,7 @@ export {
   SEO_ISSUES_SOURCE_ID,
   ISSUE_FIELD,
   ISSUE_SCAN_ROW_BUDGET,
+  ISSUE_SCAN_PAGE_SIZE,
 } from "./widget-source";
 export type { IssueChecks } from "./widget-source";
 export type {

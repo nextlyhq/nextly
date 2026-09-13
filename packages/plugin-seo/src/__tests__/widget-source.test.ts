@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 import { defaultSeoFields } from "../fields";
 import {
   checksFor,
+  ISSUE_SCAN_PAGE_SIZE,
   ISSUE_FIELD,
   ISSUE_SCAN_ROW_BUDGET,
   issuesFor,
@@ -473,7 +474,7 @@ describe("what the scan reads", () => {
     const result = await countFor(services, ["pages"]);
 
     expect(services.collections.listEntries).toHaveBeenCalledTimes(
-      ISSUE_SCAN_ROW_BUDGET / 200
+      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
     );
     expect(result).toEqual({ op: "count", total: 0, atLeast: true });
   });

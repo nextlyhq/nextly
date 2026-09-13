@@ -70,8 +70,16 @@ export const ISSUE_SCAN_ROW_BUDGET = 2000;
  * page's window BACKWARDS -- page 10 at a limit of 150 starts at row 1350 rather
  * than 1800, re-reading rows already counted and skipping the ones that follow.
  * Keeping it constant is what makes the offsets correct by construction.
+ *
+ * 🔴 As LARGE as the managed service permits, which is the opposite of the usual
+ * reason to page. `listEntries` runs a full filtered `countEntries` alongside
+ * EVERY page to build its pagination metadata, and offers no way to decline it
+ * -- so each page costs a collection-wide count as well as its rows. Pages are
+ * therefore the expensive unit here, and the fewest that cover the budget is the
+ * cheapest scan. 500 is the service's own `maxLimit`; asking for more is clamped
+ * to it, which would quietly halve the budget.
  */
-const PAGE_SIZE = 200;
+export const ISSUE_SCAN_PAGE_SIZE = 500;
 
 /**
  * How many pages one answer may fetch.
@@ -87,7 +95,7 @@ const PAGE_SIZE = 200;
  * this answer causes is bounded by {@link ISSUE_SCAN_ROW_BUDGET} rows' worth of
  * pages.
  */
-const PAGE_BUDGET = Math.ceil(ISSUE_SCAN_ROW_BUDGET / PAGE_SIZE);
+const PAGE_BUDGET = Math.ceil(ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE);
 
 /** Only what the scan reads: the SEO group, and the id the sort orders by. */
 const SCAN_SELECT = { id: true, seo: true } as const;
@@ -400,7 +408,7 @@ async function scanCollection(
         // A stable, unique sort, so consecutive pages neither repeat nor skip
         // rows.
         sort: { field: "id", direction: "asc" as const },
-        pagination: { limit: PAGE_SIZE, page },
+        pagination: { limit: ISSUE_SCAN_PAGE_SIZE, page },
       },
       rules.readOptions
     );

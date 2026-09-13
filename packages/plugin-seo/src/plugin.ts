@@ -169,8 +169,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   };
 
   // The card that draws that source. Contributed only where the configured
-  // fields give it something to count -- see `widget-card`.
-  const issuesCard = seoIssuesWidget(seoFields);
+  // fields give it something to count (see `widget-card`) AND some collection
+  // carries them: a plugin registered with no collections extends nothing, so
+  // every cell would answer zero and the card would report a clean site for a
+  // plugin that is doing nothing at all.
+  const issuesCard =
+    targets.length > 0 ? seoIssuesWidget(seoFields) : undefined;
   if (issuesCard) {
     contributes.admin = { ...contributes.admin, widgets: [issuesCard] };
   }
@@ -222,14 +226,23 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   return definePlugin({
     name: "@nextlyhq/plugin-seo",
     version: PLUGIN_VERSION,
-    // Core-compat range (the field is literally `nextly`). Floor set by the
-    // OLDEST core that exports everything this plugin imports, not by the
-    // oldest one its features conceptually need: `sitemap.ts` reaches
-    // `slugToStaticParam` and `isReservedPath` from `nextly/runtime`, and
-    // `slugToStaticParam` first shipped in 0.0.2-alpha.55. On an earlier core
-    // the ESM import fails at module load, before the plugin can initialise, so
-    // a wider range advertises a compatibility that cannot resolve.
-    nextly: ">=0.0.2-alpha.55",
+    // Core-compat range (the field is literally `nextly`), DERIVED from the
+    // version this plugin ships at rather than typed.
+    //
+    // 🔴 A hand-written floor goes stale the moment the plugin starts using
+    // something newer, and the staleness is silent in the direction that
+    // accepts: an older core satisfying the wider range is installed, registers
+    // no source for `contributes.widgetSources`, and leaves the contributed card
+    // querying a source that does not exist. The floor stood at alpha.55 -- the
+    // release that first exported `slugToStaticParam` -- while this plugin had
+    // begun requiring a contract that shipped much later.
+    //
+    // Every package in this repository releases at ONE version, so the core
+    // published beside this plugin always carries exactly what it was built
+    // against. Naming that version is therefore both the tightest honest floor
+    // and one that cannot fall behind, because it is the same string the
+    // package already reads for its own `version`.
+    nextly: `>=${PLUGIN_VERSION}`,
     author: "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)",
     homepage: "https://nextlyhq.com",
     repository: "https://github.com/nextlyhq/nextly",
