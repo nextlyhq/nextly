@@ -1043,6 +1043,80 @@ describe('the "restoreEach" DOM id policy', () => {
     expect(nodes[0].cssId).toBe("shared");
     expect(nodes[2].attributes?.["aria-describedby"]).toBe("shared");
   });
+  it("lets a link inside a gated subtree follow the target it renders with", () => {
+    // The link renders only when its gate opens, and then its gated target
+    // renders too, beside an unrelated visible namesake. The two disagree, so
+    // there is no single target and the link's own record decides — it must not
+    // be handed to the visible namesake just because that one always renders.
+    const { nodes } = reidForestWithMap(
+      [
+        node("unrelated", { cssId: "shared-1" }),
+        node("wrapper", { visibility: gate }, [
+          node("target", { cssId: "shared-1" }),
+          node("link", { attributes: { "aria-describedby": "shared-1" } }),
+        ]),
+      ],
+      {
+        restoreEach: answers({
+          target: { "shared-1": "shared" },
+          link: { "shared-1": "shared" },
+        }),
+      }
+    );
+    const inside = nodes[1].slots?.children ?? [];
+
+    expect(nodes[0].cssId).toBe("shared-1");
+    expect(inside[0]?.cssId).toBe("shared");
+    expect(inside[1]?.attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("keeps a gated link on the one node that renders with it", () => {
+    // Nothing visible carries the id; inside the gate the only node rendering
+    // it keeps its id. Following the link's own record instead would restore
+    // the link and leave its target behind.
+    const { nodes } = reidForestWithMap(
+      [
+        node("wrapper", { visibility: gate }, [
+          node("namesake", { cssId: "shared-1" }),
+          node("link", { attributes: { "aria-describedby": "shared-1" } }),
+        ]),
+      ],
+      { restoreEach: answers({ link: { "shared-1": "shared" } }) }
+    );
+    const inside = nodes[0].slots?.children ?? [];
+
+    expect(inside[0]?.cssId).toBe("shared-1");
+    expect(inside[1]?.attributes?.["aria-describedby"]).toBe("shared-1");
+  });
+
+  it("counts every gate above a link, not only the nearest", () => {
+    // The target sits under the outer gate; the link under the outer gate and
+    // an inner one. Whenever the link renders both gates are open, so the target
+    // renders with it — and disagrees with the visible namesake, leaving the
+    // link's own record to decide.
+    const { nodes } = reidForestWithMap(
+      [
+        node("unrelated", { cssId: "shared-1" }),
+        node("outer", { visibility: gate }, [
+          node("target", { cssId: "shared-1" }),
+          node("inner", { visibility: gate }, [
+            node("link", { attributes: { "aria-describedby": "shared-1" } }),
+          ]),
+        ]),
+      ],
+      {
+        restoreEach: answers({
+          target: { "shared-1": "shared" },
+          link: { "shared-1": "shared" },
+        }),
+      }
+    );
+    const outer = nodes[1].slots?.children ?? [];
+    const inner = outer[1]?.slots?.children ?? [];
+
+    expect(outer[0]?.cssId).toBe("shared");
+    expect(inner[0]?.attributes?.["aria-describedby"]).toBe("shared");
+  });
 });
 
 describe("only the id a node RENDERS may be reminted", () => {

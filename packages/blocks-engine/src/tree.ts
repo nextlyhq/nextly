@@ -1506,12 +1506,13 @@ type RestoreEach = (node: BlockNode, value: string) => string | undefined;
 /** What the per-node copier carries from node to node. */
 interface EachCopy {
   readonly nodeIds: Map<string, string>;
-  /** Each id a VISIBLE node renders → every id those nodes ended up with. */
-  readonly outcomes: Map<string, Set<string>>;
-  /** The same, for nodes inside a subtree the renderer prunes. */
-  readonly gatedOutcomes: Map<string, Set<string>>;
-  /** Every node the renderer would prune, by identity. */
-  readonly hidden: ReadonlySet<BlockNode>;
+  /**
+   * Each rendered id → the nearest gate over the nodes rendering it
+   * (`undefined` for none) → every id those nodes ended up with.
+   */
+  readonly outcomes: Map<string, Map<BlockNode | undefined, Set<string>>>;
+  /** The condition gates over every node of the forest. */
+  readonly gates: ConditionGates;
   /** Each copy's id → the original it was made from, for the reference pass. */
   readonly holders: Map<string, BlockNode>;
   readonly restoreEach: RestoreEach;
@@ -1528,11 +1529,13 @@ interface EachCopy {
  *
  * Gating decides only which nodes a reference follows, never which ids move.
  * Putting an id back asks nothing about the page, so a gated node still has its
- * own id restored. But a reference resolves to the element the page RENDERS,
- * and a gated namesake renders nothing — so the nodes the renderer keeps settle
- * a reference first, and gated ones only when no visible node carries the id.
- * Treating both alike made a visible target and its gated namesake look
- * contested, and left an unrelated link on an id nothing renders.
+ * own id restored. But a reference resolves to the element that renders WITH
+ * it: a reference renders only when every gate above it is open, and then so
+ * does every node behind those same gates, as well as everything ungated. Those
+ * nodes settle it. A gated namesake the reference does not share a gate with
+ * renders nothing when the reference does, so it has no say — and a reference
+ * inside a gated subtree is not handed to a visible namesake just because that
+ * one always renders.
  *
  * No shared memo of replacements: two nodes spelling one id may answer
  * differently, which a memo keyed by the id alone would collapse into one
@@ -1549,10 +1552,9 @@ function reidForestRestoringEach(
   const each: EachCopy = {
     nodeIds: new Map(),
     outcomes: new Map(),
-    gatedOutcomes: new Map(),
-    // The renderer's own pruning rule, inherited gating included, rather than
-    // a second reading of which nodes are visible.
-    hidden: hiddenSubtreeNodes(nodes),
+    // The reading the renderer's pruning rule is derived from, inherited gating
+    // included, rather than a second reading of which nodes are visible.
+    gates: conditionGates(nodes),
     holders: new Map(),
     restoreEach,
   };
@@ -1581,11 +1583,7 @@ function reidOneRestoringEach(node: BlockNode, each: EachCopy): BlockNode {
   const rendered = renderedDomId(node);
   if (rendered !== undefined) {
     const answer = each.restoreEach(node, rendered);
-    noteOutcome(
-      each.hidden.has(node) ? each.gatedOutcomes : each.outcomes,
-      rendered,
-      answer ?? rendered
-    );
+    noteOutcome(each, node, rendered, answer ?? rendered);
     if (answer !== undefined) {
       moveOwnIds(
         copy,
@@ -1599,12 +1597,19 @@ function reidOneRestoringEach(node: BlockNode, each: EachCopy): BlockNode {
 }
 
 function noteOutcome(
-  outcomes: Map<string, Set<string>>,
+  each: EachCopy,
+  node: BlockNode,
   value: string,
   became: string
 ): void {
-  const found = outcomes.get(value);
-  if (found === undefined) outcomes.set(value, new Set([became]));
+  let byGate = each.outcomes.get(value);
+  if (byGate === undefined) {
+    byGate = new Map();
+    each.outcomes.set(value, byGate);
+  }
+  const gate = each.gates.nearest.get(node);
+  const found = byGate.get(gate);
+  if (found === undefined) byGate.set(gate, new Set([became]));
   else found.add(became);
 }
 
@@ -1618,28 +1623,47 @@ function soleOutcome(
 }
 
 /**
- * The one id a reference to `value` follows, or nothing when the copy does not
- * settle it.
+ * The one id a reference to `value`, held by `holder`, follows — or nothing
+ * when the copy does not settle it.
  *
- * The nodes the page renders decide whenever any of them carries the id; gated
- * nodes decide only where none does, so a link to a target that is gated today
- * still follows it and is not split from it when the gate opens.
+ * The nodes that render whenever the holder does decide: everything ungated,
+ * and everything behind a gate that is also over the holder. Where they agree
+ * on one id, the reference takes it; where they disagree, nothing is settled.
+ * Where none of them carries the id at all, every node carrying it decides, so
+ * a link whose only target is gated today still follows it and is not split
+ * from it when that gate opens.
  */
-function settledTarget(each: EachCopy, value: string): string | undefined {
-  const visible = each.outcomes.get(value);
-  if (visible !== undefined) return soleOutcome(visible);
-  return soleOutcome(each.gatedOutcomes.get(value));
+function settledTarget(
+  each: EachCopy,
+  value: string,
+  holder: BlockNode | undefined
+): string | undefined {
+  const byGate = each.outcomes.get(value);
+  if (byGate === undefined) return undefined;
+  const alongside = outcomesBehind(byGate, gatesOver(each.gates, holder));
+  return soleOutcome(alongside ?? outcomesBehind(byGate, byGate.keys()));
 }
 
-/** Each rendered id that moved, to the one id the nodes settling it became. */
+/** Every id the renderers behind these gates became, or nothing if none did. */
+function outcomesBehind(
+  byGate: ReadonlyMap<BlockNode | undefined, ReadonlySet<string>>,
+  gates: Iterable<BlockNode | undefined>
+): Set<string> | undefined {
+  let found: Set<string> | undefined;
+  for (const gate of gates) {
+    const became = byGate.get(gate);
+    if (became === undefined) continue;
+    found ??= new Set();
+    for (const id of became) found.add(id);
+  }
+  return found;
+}
+
+/** Each rendered id that moved, to the one id the page's own renderers became. */
 function settledMoves(each: EachCopy): Map<string, string> {
   const moved = new Map<string, string>();
-  const values = new Set([
-    ...each.outcomes.keys(),
-    ...each.gatedOutcomes.keys(),
-  ]);
-  for (const value of values) {
-    const only = settledTarget(each, value);
+  for (const value of each.outcomes.keys()) {
+    const only = settledTarget(each, value, undefined);
     if (only !== undefined && only !== value) moved.set(value, only);
   }
   return moved;
@@ -1664,7 +1688,7 @@ function referenceAnswers(
   return {
     size: 1,
     get(value: string): string | undefined {
-      const settled = settledTarget(each, value);
+      const settled = settledTarget(each, value, holder);
       if (settled !== undefined) return settled === value ? undefined : settled;
       return holder === undefined ? undefined : each.restoreEach(holder, value);
     },
@@ -1789,15 +1813,64 @@ export function remapIdReferences(
 export function hiddenSubtreeNodes(
   nodes: readonly BlockNode[]
 ): ReadonlySet<BlockNode> {
-  const hidden = new Set<BlockNode>();
-  const seen = new Map<BlockNode, boolean>();
+  return new Set(conditionGates(nodes).nearest.keys());
+}
+
+/**
+ * Which condition gates cover each node, by identity.
+ *
+ * `nearest` maps a node to the innermost condition-gated node on its path —
+ * itself when it is gated — and holds no entry for a node no gate covers.
+ * `enclosing` maps each gated node to the next gate out. Following one into the
+ * other lists every gate that has to open before a node renders.
+ */
+interface ConditionGates {
+  readonly nearest: ReadonlyMap<BlockNode, BlockNode>;
+  readonly enclosing: ReadonlyMap<BlockNode, BlockNode | undefined>;
+}
+
+/**
+ * The gates over every node of a forest.
+ *
+ * The richer reading {@link hiddenSubtreeNodes} is derived from, so which nodes
+ * are pruned and which gates prune them come from one walk and cannot disagree.
+ *
+ * A node inherits from its parent's CURRENT visit, the way the pruning rule
+ * always has: the walk reaches a node placed in two slots twice, and the gate
+ * over it is the one on the path it was reached by. It is covered if any visit
+ * found a gate.
+ */
+function conditionGates(nodes: readonly BlockNode[]): ConditionGates {
+  const nearest = new Map<BlockNode, BlockNode>();
+  const enclosing = new Map<BlockNode, BlockNode | undefined>();
+  const current = new Map<BlockNode, BlockNode | undefined>();
   walkNodes([...nodes], (node, parent) => {
-    const inherited = parent !== undefined && seen.get(parent) === true;
-    const gated = inherited || isConditionGated(node);
-    seen.set(node, gated);
-    if (gated) hidden.add(node);
+    const inherited = parent === undefined ? undefined : current.get(parent);
+    const gate = isConditionGated(node) ? node : inherited;
+    if (gate === node) enclosing.set(node, inherited);
+    current.set(node, gate);
+    if (gate !== undefined) nearest.set(node, gate);
   });
-  return hidden;
+  return { nearest, enclosing };
+}
+
+/**
+ * Every gate that has to open for a node to render, innermost first, with
+ * `undefined` standing for the page itself — what renders with no gate at all.
+ *
+ * Bounded by what it has already listed, so a malformed chain cannot loop.
+ */
+function gatesOver(
+  gates: ConditionGates,
+  node: BlockNode | undefined
+): Set<BlockNode | undefined> {
+  const chain = new Set<BlockNode | undefined>([undefined]);
+  let gate = node === undefined ? undefined : gates.nearest.get(node);
+  while (gate !== undefined && !chain.has(gate)) {
+    chain.add(gate);
+    gate = gates.enclosing.get(gate);
+  }
+  return chain;
 }
 
 /**

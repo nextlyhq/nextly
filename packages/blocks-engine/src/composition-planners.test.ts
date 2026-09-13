@@ -4866,6 +4866,44 @@ describe("a rename record names the nodes it renamed", () => {
     ).toBe("pricing");
   });
 
+  it("restores a pattern's link inside a gated container beside a visible namesake", () => {
+    // The container holding the renamed node and its link is gated, and an
+    // unrelated visible node carries the minted id. Whenever the link renders,
+    // its own target renders with it, so the visible namesake must not decide.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const wrap = marked([...doc.nodes], "wrap");
+    const mid = marked([...doc.nodes], "mid");
+    const gatedWithNamesake = applyOps(doc, [
+      {
+        kind: "update",
+        id: mid.id,
+        patch: {
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        },
+      },
+      {
+        kind: "insert",
+        node: node("unrelated", {
+          origin: { from: "component", id: "def-1" },
+          cssId: renamed.cssId,
+          props: { mark: "unrelated" },
+        } as Partial<BlockNode>),
+        at: { parentId: wrap.id, slot: "children", index: 1 },
+      },
+    ]).document;
+
+    expect(stored(gatedWithNamesake, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(gatedWithNamesake, "wrap", "unrelated").cssId).toBe(
+      renamed.cssId
+    );
+    expect(
+      stored(gatedWithNamesake, "wrap", "link").attributes?.["aria-describedby"]
+    ).toBe("pricing");
+  });
+
   it("keeps a governed link pointing at a target that keeps its id", () => {
     // The listed node stays on the page but outside the selection, so the
     // record is live and the link's own record would put the source name back.
