@@ -13,6 +13,10 @@ export * from "./types";
 // Field type guards for runtime type narrowing
 export * from "./guards";
 
+// The declared shape of a field, projected once for every surface that has to
+// describe one to a consumer outside core.
+export * from "./declared-shape";
+
 // Field builder helpers for code-first collections
 export * from "./helpers";
 
