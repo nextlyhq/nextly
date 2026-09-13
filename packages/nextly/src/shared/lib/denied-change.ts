@@ -78,11 +78,22 @@ export function assertNoDeniedChange(input: DeniedChangeInput): void {
   const denied = deniedPaths(input.before, input.permitted, "");
   if (denied.length === 0) return;
 
-  const changes = denied.filter(
-    path =>
-      !pathExists(input.callerSupplied, path) &&
-      !sameStoredValue(valueAt(input.before, path), valueAt(input.live, path))
-  );
+  // Judged LEAF by leaf, never by the subtree the removal was reported at.
+  //
+  // The rules delete a denied container whole, so `deniedPaths` names the
+  // container. Its contents are not one caller's: a component the caller
+  // patched one field of still carries the pending change's other fields,
+  // because the assembly keeps the draft's unsupplied siblings. Exempting the
+  // subtree because the caller supplied something in it would drop those
+  // siblings and delete the draft, which is the loss this whole check exists
+  // to prevent, one level down.
+  const changes = denied
+    .flatMap(path => leafPaths(valueAt(input.before, path), path))
+    .filter(
+      leaf =>
+        !pathExists(input.callerSupplied, leaf) &&
+        !sameStoredValue(valueAt(input.before, leaf), valueAt(input.live, leaf))
+    );
   if (changes.length === 0) return;
 
   throw NextlyError.validation({
@@ -99,6 +110,26 @@ export function assertNoDeniedChange(input: DeniedChangeInput): void {
       fields: changes,
     },
   });
+}
+
+/**
+ * Every value-bearing path under a removed one, so each is judged on its own
+ * provenance. A scalar is its own leaf, and so is an empty container, which
+ * still carries the fact that it is empty.
+ */
+function leafPaths(value: unknown, prefix: string): string[] {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [prefix];
+    return value.flatMap((row, index) => leafPaths(row, `${prefix}[${index}]`));
+  }
+  if (isRecord(value)) {
+    const keys = Object.keys(value);
+    if (keys.length === 0) return [prefix];
+    return keys.flatMap(key =>
+      leafPaths(value[key], prefix ? `${prefix}.${key}` : key)
+    );
+  }
+  return [prefix];
 }
 
 /**

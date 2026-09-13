@@ -439,6 +439,38 @@ function openNestedContainer(
  * never shows its data to app code, so copying it would be pure cost on every
  * row of every list read.
  */
+/**
+ * Whether any field of this entity declares an access rule for one operation,
+ * at any depth.
+ *
+ * Answers the question a caller asks before paying to resolve the caller's
+ * grants: the pass consults them only for a field carrying `access[operation]`,
+ * so an entity whose registered functions are all validators, defaults, hooks
+ * or READ rules never reaches a grants lookup, and resolving them for it is
+ * pure cost on every write.
+ */
+export function hasFieldAccessRule(
+  kind: EntityKind,
+  slug: string,
+  operation: "create" | "update" | "read"
+): boolean {
+  const fns = getFieldFunctions(kind, slug);
+  return fns ? nestedHasAccessCallback(fns, operation) : false;
+}
+
+function nestedHasAccessCallback(
+  fns: Record<string, FieldFunctions>,
+  operation: "create" | "update" | "read"
+): boolean {
+  for (const entry of Object.values(fns)) {
+    if (typeof entry.access?.[operation] === "function") return true;
+    if (entry.fields && nestedHasAccessCallback(entry.fields, operation)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function levelHasAccessCallback(
   fns: Record<string, FieldFunctions>,
   operation: "create" | "update" | "read"

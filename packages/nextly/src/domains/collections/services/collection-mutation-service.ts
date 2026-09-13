@@ -85,6 +85,7 @@ import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
+  hasFieldAccessRule,
   resolvedCallerGrants,
   callerAccessGrants,
   attachFieldValidators,
@@ -6198,16 +6199,17 @@ export class CollectionMutationService extends BaseService {
       //
       // Only where a promotion could happen AND a rule could ask. A trusted
       // write returns from `applyFieldWriteAccess` on `overrideAccess` before
-      // it looks at grants, and so does a collection that registers no
-      // field-level functions at all, which is the common shape: without this
-      // second test every publish, unpublish and republish on a
-      // draft-enabled collection paid for the roles and permissions queries to
-      // answer a question nothing would ask. The registry lookup is a map read,
-      // and it is the same condition the pass itself returns on.
+      // it looks at grants, and so does a collection with no `access.update`
+      // rule on any field at any depth: grants are consulted for that rule
+      // alone, so a collection whose registered functions are validators,
+      // defaults, hooks or READ rules never reaches a lookup. Without this
+      // every publish, unpublish and republish on a draft-enabled collection
+      // paid for the roles and permissions queries to answer a question
+      // nothing would ask. Both tests are map reads.
       const promoteRulesCouldRun =
         promotePossible &&
         params.overrideAccess !== true &&
-        getFieldFunctions("collection", params.collectionName) !== undefined;
+        hasFieldAccessRule("collection", params.collectionName, "update");
       const promoteGrants = promoteRulesCouldRun
         ? await resolvedCallerGrants(params.user, params.authenticatedScope)
         : undefined;

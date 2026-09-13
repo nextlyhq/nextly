@@ -1356,6 +1356,93 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(live.secret).toBe("live-secret");
   });
 
+  it("refuses when a denied component still carries the draft's own sibling", async () => {
+    // The caller patches ONE field of a component the merged document denies.
+    // The rules delete the component whole, so the removal is reported at the
+    // component, but its other field is the pending change's: exempting the
+    // whole subtree because the caller supplied part of it would drop that
+    // sibling and delete the draft on a successful publish.
+    handle = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "promo",
+          fields: [text({ name: "label" }), text({ name: "tagline" })],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+          },
+          fields: [
+            text({ name: "approved" }),
+            fieldGroup({
+              name: "promo",
+              component: "promo",
+              access: {
+                update: (args: { data?: { approved?: unknown } }) =>
+                  args.data?.approved !== "no",
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+
+    await entries.createEntry(
+      { collectionName: COLLECTION, overrideAccess: true },
+      {
+        approved: "yes",
+        promo: { label: "live", tagline: "live-tagline" },
+        status: "published",
+      }
+    );
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // The pending change edits the TAGLINE, which the caller never mentions.
+    await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { approved: "no", promo: { label: "draft", tagline: "draft-tagline" } }
+    );
+
+    const res = await entries.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        user: { id: "editor" },
+        overrideAccess: false,
+      },
+      { status: "published", promo: { label: "caller" } }
+    );
+
+    expect(res.success).toBe(false);
+    const issues = (
+      res as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    // The caller owns `label`, so that one is theirs to lose. `tagline` is the
+    // pending change's and is what refuses the publish.
+    expect(issues?.map(i => i.path)).toEqual(["promo.tagline"]);
+
+    const pending = await handle.adapter.select<{
+      entryId?: unknown;
+      versionNo?: unknown;
+    }>("nextly_versions", {});
+    expect(
+      JSON.stringify(
+        pending.filter(r => String(r.entryId) === id && r.versionNo === null)
+      )
+    ).toContain("draft-tagline");
+  });
+
   it("does not promote a caller's component value a field-access rule denies", async () => {
     // The scalar case above is caught by the merged access pass, but a component
     // (and m2m) value is EXTRACTED out of the caller payload before promotion, so
