@@ -118,7 +118,7 @@ let observed = true;
 let retirements = 0;
 
 /**
- * Whether the shared counter has been found unreadable.
+ * Whether the shared counter has been found not to be in play.
  *
  * Held so the warning is emitted once rather than on every check: an install
  * that has not reconciled its core tables would otherwise log per request, and
@@ -180,16 +180,33 @@ function epochTable() {
   return rbacEpochTables(dialect).nextlyRbacEpoch;
 }
 
-function reportDegraded(error: unknown): void {
+/** The table is not there, which is a schema an upgrade has not reached. */
+const TABLE_NOT_RECONCILED =
+  "RBAC epoch table unreadable; cache invalidation is local to this " +
+  "process until `nextly db:sync` reconciles the core tables";
+
+/** The table is there and will not hold the one row, which is not a schema gap. */
+const ROW_NOT_ESTABLISHED =
+  "RBAC epoch row could not be established; this process cannot tell whether " +
+  "a cached authorization answer belongs to the store it is now reading, so " +
+  "it serves none until the row can be written and read back";
+
+/**
+ * Warn once that the shared counter is not in play, saying which way.
+ *
+ * The two ways here have different remedies: a table that is not there yet is
+ * what `nextly db:sync` reconciles, while a row that will not persist is a
+ * permission or a storage problem no schema command can fix. One message for
+ * both sends an operator to the wrong place, so the caller names its own.
+ */
+function reportDegraded(message: string, detail?: string): void {
   if (degraded) return;
   degraded = true;
   getAuthLogger()?.log?.("warn", {
     category: "auth",
     op: "cache",
-    message:
-      "RBAC epoch table unreadable; cache invalidation is local to this " +
-      "process until `nextly db:sync` reconciles the core tables",
-    error: String(error),
+    message,
+    ...(detail === undefined ? {} : { error: detail }),
   });
 }
 
@@ -330,6 +347,16 @@ async function readShared(): Promise<string> {
       // statement: the row is created with an identity when absent and left
       // alone when present, decided by the database rather than by a
       // check-then-insert two instances can both win.
+      //
+      // Trust drops HERE, ahead of the write rather than after it. A store with
+      // no row cannot confirm the identity this process is holding, and that
+      // identity came from whichever store answered last. Waiting for the write
+      // is waiting for something that may never come back: a rejected insert,
+      // which is what a read-only credential gives, goes straight to the catch
+      // below with the previous store's stamp still trusted, and every answer
+      // cached against that store then reads as current for as long as this
+      // process runs.
+      observed = false;
       await raiseSharedRevision(0);
       rows = await selectSharedRow();
     }
@@ -337,15 +364,23 @@ async function readShared(): Promise<string> {
     // authority: taking the larger of the two is what let a process that had
     // invalidated while degraded stay permanently ahead of everyone else, and
     // taking only the number is what let a REPLACED store read as the same one.
-    revision = rows.length > 0 ? Number(rows[0].revision) : 0;
-    generation = rows.length > 0 ? String(rows[0].generation) : "";
+    const adopted = rows.length > 0;
+    revision = adopted ? Number(rows[0].revision) : 0;
+    generation = adopted ? String(rows[0].generation) : "";
     readAt = Date.now();
-    degraded = false;
-    // The value came from the row, which is the only thing that makes it worth
-    // comparing against.
-    observed = true;
+    if (adopted) {
+      degraded = false;
+      // The value came from the row, which is the only thing that makes it
+      // worth comparing against.
+      observed = true;
+    } else {
+      // Seeded without an error and still absent. Zero is still the answer
+      // rather than a refused authorization check, but it is an answer with no
+      // identity behind it, so it is not one to measure a cached stamp against.
+      reportDegraded(ROW_NOT_ESTABLISHED);
+    }
   } catch (error) {
-    reportDegraded(error);
+    reportDegraded(TABLE_NOT_RECONCILED, String(error));
     // Rate-limit the FAILING path too. Left unset, a missing table means one
     // failing query per authorization check rather than one per interval,
     // which is the upgrade window turned into a load problem.

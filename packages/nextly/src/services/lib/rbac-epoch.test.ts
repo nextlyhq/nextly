@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../di/container";
+import { getAuthLogger, setAuthLogger } from "../../lib/logger";
 
 import {
   EPOCH_TTL_MS,
@@ -543,6 +544,102 @@ describe("the RBAC epoch answers for the install", () => {
     expect(epochIsTrustworthy()).toBe(true);
   });
 
+  it("distrusts the old store's stamp when a store with no row refuses the seed", async () => {
+    // A failover that a read-only credential makes permanent. This process is
+    // holding store A's identity; store B has the table, no row, and no
+    // permission to create one. Nothing here can establish which store the held
+    // stamp belongs to, so answers cached against A must stop being served.
+    //
+    // The write is where this used to be decided, which is too late: a rejected
+    // insert never comes back to clear anything, so the old stamp stayed
+    // trusted for the life of the process.
+    let rows: Row[] = [{ revision: 4, generation: "store-a" }];
+    let writable = true;
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => ({
+        select: () => chainOf(rows),
+        insert: () => {
+          const chain = chainOf([{ changes: 1 }]) as Record<string, unknown>;
+          chain.values = () => chain;
+          chain.onConflictDoUpdate = () =>
+            writable
+              ? Promise.resolve([{ changes: 1 }])
+              : Promise.reject(new Error("read-only credential"));
+          return chain;
+        },
+        update: () => chainOf([{ changes: 1 }]),
+      }),
+    });
+
+    await refreshEpoch();
+    const stampFromA = currentEpoch();
+    expect(stampIsCurrent(stampFromA)).toBe(true);
+
+    rows = [];
+    writable = false;
+    vi.advanceTimersByTime(EPOCH_TTL_MS);
+    await refreshEpoch();
+
+    expect(epochIsTrustworthy()).toBe(false);
+    expect(stampIsCurrent(stampFromA)).toBe(false);
+  });
+
+  it("distrusts it when the seeded row cannot be read back either", async () => {
+    // The other half of the same window. The create is accepted, so nothing
+    // rejects, and the read that was supposed to establish the new identity
+    // fails instead — leaving this process with store A's value and no way to
+    // know it. Both doors have to be shut, not the louder one.
+    let reads = 0;
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => ({
+        select: () => {
+          reads += 1;
+          // The old store, then the new store's empty answer, then the read
+          // back after seeding.
+          if (reads === 1) {
+            return chainOf([{ revision: 4, generation: "store-a" }]);
+          }
+          if (reads === 2) return chainOf([]);
+          throw new Error("the row cannot be read");
+        },
+        insert: () => {
+          const chain = chainOf([{ changes: 1 }]) as Record<string, unknown>;
+          chain.values = () => chain;
+          chain.onConflictDoUpdate = () => Promise.resolve([{ changes: 1 }]);
+          return chain;
+        },
+        update: () => chainOf([{ changes: 1 }]),
+      }),
+    });
+
+    await refreshEpoch();
+    const stampFromA = currentEpoch();
+    expect(stampIsCurrent(stampFromA)).toBe(true);
+
+    vi.advanceTimersByTime(EPOCH_TTL_MS);
+    await refreshEpoch();
+
+    expect(epochIsTrustworthy()).toBe(false);
+    expect(stampIsCurrent(stampFromA)).toBe(false);
+  });
+
+  it("trusts the new store as soon as its row is written and read back", async () => {
+    // The control on both cases above, and the reason the drop is placed at the
+    // missing row rather than at the top of every read. Without it, "distrusts
+    // a store with no row" is satisfied by never trusting one again — and the
+    // seed path is the FIRST thing every fresh install takes, so that would
+    // leave a new install permanently uncached.
+    const store = { row: null as Row | null };
+    install(storeWithRow(store));
+
+    await refreshEpoch();
+
+    expect(epochIsTrustworthy()).toBe(true);
+    expect(stampIsCurrent(currentEpoch())).toBe(true);
+  });
+
   it("serves nothing while a retirement is running", async () => {
     // A retirement empties caches, and emptying the shared tier is an awaited
     // write: inside that window the stored rows are still readable and the
@@ -577,15 +674,51 @@ describe("the RBAC epoch answers for the install", () => {
     expect(stampIsCurrent(stamp)).toBe(true);
   });
 
+  it("names which way the counter is out of play, because the remedies differ", async () => {
+    // Two situations, two fixes. A table an upgrade has not reached is what
+    // `nextly db:sync` reconciles; a row that will not persist is a permission
+    // or a storage problem no schema command touches. One message for both
+    // sends an operator to run the wrong thing and conclude it did not help.
+    const said: string[] = [];
+    const previous = getAuthLogger();
+    setAuthLogger({ log: (_level, event) => said.push(String(event.message)) });
+
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => {
+        throw new Error("no such table: nextly_rbac_epoch");
+      },
+    });
+    await refreshEpoch();
+
+    // A process that starts clean against a store whose table IS there and
+    // which stays empty however many times the row is created.
+    resetEpochForTests();
+    install(fakeAdapter(() => []));
+    await refreshEpoch();
+
+    setAuthLogger(previous);
+
+    expect(said).toHaveLength(2);
+    expect(said[0]).toContain("db:sync");
+    expect(said[1]).toContain("could not be established");
+    expect(said[1]).not.toContain("db:sync");
+  });
+
   it("answers zero rather than failing when the seed does not take", async () => {
     // This fake accepts the write and stays empty, which is what a store that
-    // silently refuses the create looks like from here. Zero is the honest
-    // answer: a table that exists with nothing in it has never invalidated,
-    // which is not an error and not a reason to refuse an authorization check.
-    // It costs the identity, and the case above is what buys that back
-    // wherever the create does take.
+    // silently refuses the create looks like from here. Zero is still the
+    // answer rather than a refused authorization check: a table that exists
+    // with nothing in it has never invalidated, and refusing every request
+    // would be worse than the staleness this replaces.
+    //
+    // It costs the identity, though, so the answer is one nothing may be
+    // compared against. Serving a cached stamp here is what let a replaced
+    // store read as the same one.
     install(fakeAdapter(() => []));
 
     await expect(refreshEpoch()).resolves.toBe(":0");
+    expect(epochIsTrustworthy()).toBe(false);
+    expect(stampIsCurrent(":0")).toBe(false);
   });
 });
