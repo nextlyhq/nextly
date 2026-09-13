@@ -3,15 +3,15 @@ title: Visual Schema Builder
 description: Design Collections, Singles, and Field Groups visually with drag-and-drop instead of writing code.
 ---
 
-The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces, plus the matching TypeScript types. Every entity it saves is also written into the `ui-schema.json` manifest, which you commit — that is what `nextly migrate:create` reads, and for Singles and Field Groups it is the only artifact carrying them, since neither writes a migration file of its own. Only the Collections Builder writes one. See [Persistence](#persistence) and [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production). You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
+The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces, plus the matching TypeScript types. Every entity it saves is also written into the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`), which you commit — that is what `nextly migrate:create` reads, and for Singles and Field Groups it is the only artifact carrying them, since neither writes a migration file of its own. Only the Collections Builder writes one. See [Persistence](#persistence) and [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production). You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
 
 The Schema Builder has three variants that share the same canvas, palette, and field editor:
 
 | Variant | Route | Output |
 |---|---|---|
-| Collections Builder | `/admin/builder/collections` | Persists the schema row, writes the entity into `ui-schema.json`, and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). No TypeScript schema file is written: the runtime builds its Drizzle table from the `dynamic_collections` row instead. |
-| Singles Builder | `/admin/builder/singles` | Persists the schema in the `dynamic_singles` database table and writes the entity into `ui-schema.json`. No migration file. |
-| Field Groups Builder | `/admin/builder/field-groups` | Persists the field group definition in the database and writes the entity into `ui-schema.json`. No migration file. |
+| Collections Builder | `/admin/builder/collections` | Persists the schema row, writes the entity into the UI-schema manifest (`db.uiSchemaFile`), and writes a Drizzle migration under `db.migrationsDir` (default `./src/db/migrations/`). No TypeScript schema file is written: the runtime builds its Drizzle table from the `dynamic_collections` row instead. |
+| Singles Builder | `/admin/builder/singles` | Persists the schema in the `dynamic_singles` database table and writes the entity into the UI-schema manifest (`db.uiSchemaFile`). No migration file. |
+| Field Groups Builder | `/admin/builder/field-groups` | Persists the field group definition in the database and writes the entity into the UI-schema manifest (`db.uiSchemaFile`). No migration file. |
 
 Create a new entity from any of the three list pages above. Edit an existing entity by appending its slug, e.g. `/admin/builder/collections/posts`.
 
@@ -78,21 +78,25 @@ A Component field embeds a reusable field group definition (created via the Fiel
 9. Reorder the fields by dragging the grip handles.
 10. Click **Save**. For Collections, the toolbar previews the schema diff before applying it; for Singles and Components the change applies immediately.
 
-After save, the new collection appears in the admin sidebar under Collections. The Drizzle migration is written to your `db.migrationsDir` and should be committed alongside your code.
+After save, the new collection appears in the admin sidebar under Collections. The Drizzle migration is written to your `db.migrationsDir`.
+
+<Callout type="warn">
+The Builder writes the `.sql` file **without** the paired `meta/*.snapshot.json` that `nextly migrate:create` produces. `nextly migrate:check` reports an unpaired `.sql` as `MISSING_SNAPSHOT` and exits non-zero, so committing the Builder's migration as-is fails that check. Regenerate the pair with `nextly migrate:create` before committing, and commit the `.sql` and its snapshot together.
+</Callout>
 
 ## Persistence
 
 | Entity | Where it is stored | What gets generated |
 |---|---|---|
 | Collection | `dynamic_collections` table + a migration file on disk | A Drizzle migration in `db.migrationsDir`. No TypeScript schema file: the runtime builds the Drizzle table from the `dynamic_collections` row, so a generated file would only drift from it. |
-| Single | `dynamic_singles` table + the `ui-schema.json` manifest | No migration file. The schema is regenerated from the database row on each request; the manifest entry is what `migrate:create` reads to carry the entity into a migration. |
-| Component | Database row + the `ui-schema.json` manifest | No migration file. Stored alongside dynamic singles; the manifest entry is what `migrate:create` reads. |
+| Single | `dynamic_singles` table + the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`) | No migration file. The schema is regenerated from the database row on each request; the manifest entry is what `migrate:create` reads to carry the entity into a migration. |
+| Component | Database row + the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`) | No migration file. Stored alongside dynamic singles; the manifest entry is what `migrate:create` reads. |
 
 When you edit and re-save a collection in a way that changes its **data table**, Nextly emits an additive migration (or, when destructive, prompts for confirmation in the toolbar).
 
 **Status and Internationalization are schema changes, not settings.** Turning Status on or off adds or drops the lifecycle's system columns, and turning Internationalization on or off moves translatable columns between the table and its `_locales` companion. Both produce a migration; treat them like any other column change.
 
-An edit that changes only **registry metadata** — a label, a description, or the Versions, Revalidate or Webhooks switches — changes no column, so no migration file is written for it on its own. It reaches other environments through the committed `ui-schema.json` manifest instead: see [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production).
+An edit that changes only **registry metadata** — a label, a description, or the Versions, Revalidate or Webhooks switches — changes no column, so no migration file is written for it on its own, and it does **not** reach another environment by itself. `nextly migrate` never reads the manifest, and `migrate:create` emits a registry upsert only for an entity whose table a migration actually changes. The new value sits in the manifest until some later migration to that entity carries it. See [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production).
 
 Applied migrations are not re-run: `nextly migrate` records a `file_apply` event for every file it applies in the `nextly_schema_events` ledger and skips what is already recorded there. That ledger belongs to the migration runner, not to the Builder's file writer.
 

@@ -294,16 +294,28 @@ Specific examples:
 
 Everything above describes how **columns** reach production. Entities created in the
 [Visual Schema Builder](/docs/schema-builder) carry a second thing: a row in a registry table —
-`dynamic_collections`, `dynamic_singles` or `dynamic_components` — holding the label, description,
-admin display settings and the Versions, Revalidate and Webhooks switches. The runtime reads its
-Drizzle table from that row, so the row matters as much as the columns do.
+`dynamic_collections`, `dynamic_singles` or `dynamic_components` — holding the label, description
+and admin display settings. Collections and Singles additionally carry the Versions, Revalidate and
+Webhooks switches; Field Groups have none of those, and `dynamic_components` has no columns for
+them. The runtime reads its Drizzle table from that row, so the row matters as much as the columns
+do.
 
 ### Commit `ui-schema.json`
 
-The Builder dual-writes every entity it creates or saves into the `ui-schema.json` manifest, for all
-three entity kinds. Commit it with your migrations: it is the **input** `nextly migrate:create` reads
-to know a Builder entity exists, and a Builder change missing from the commit cannot appear in any
-migration.
+The Builder dual-writes every entity it creates or saves into the UI-schema manifest — the file
+`db.uiSchemaFile` names, `./ui-schema.json` by default — for all three entity kinds. Commit that
+file with your migrations: it is the **input** `nextly migrate:create` reads to know a Builder
+entity exists, and a Builder change missing from the commit cannot appear in any migration.
+
+Two things to know before relying on it:
+
+- **The Builder's own `.sql` file is unpaired.** Saving a Collection writes a timestamped migration
+  but no `meta/*.snapshot.json`, and `nextly migrate:check` reports an unpaired `.sql` as
+  `MISSING_SNAPSHOT`. Run `nextly migrate:create` to regenerate the pair, and commit the `.sql` and
+  its snapshot together rather than committing the Builder's file as-is.
+- **A collection created with a starting field is mirrored without it.** The create call writes the
+  manifest entry with an empty field list, so the fields arrive only on the next save. Open the new
+  collection and save it once before generating the migration.
 
 It is input, not a deployment artifact. `nextly migrate` never reads `ui-schema.json`; it applies
 `.sql` files. An entity's registry row reaches another database only when a migration file carries
@@ -349,7 +361,7 @@ Declaring an entity in `nextly.config.ts` versions its settings, but it is a con
 entity rather than a way to version one switch: `defineCollection` and `defineSingle` take a
 **complete** definition, fields included.
 
-Remove the entity from `ui-schema.json` as part of the move. `migrate:create` tolerates the
+Remove the entity from the manifest (`db.uiSchemaFile`) as part of the move. `migrate:create` tolerates the
 collision — it warns and lets the code-first definition win — but `nextly migrate:check` runs
 `validateCrossFile` and fails on `NEXTLY_SCHEMA_SLUG_COLLISION`, so a conversion that leaves the
 manifest entry in place generates a migration locally and is then rejected by CI.
