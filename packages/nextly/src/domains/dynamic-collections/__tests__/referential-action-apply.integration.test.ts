@@ -25,6 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { createAdapter } from "../../../database/factory";
+import { CollectionFileManager } from "../../../services/collection-file-manager";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -83,31 +84,29 @@ async function connect(leg: Leg): Promise<TestAdapter> {
 }
 
 /**
- * Apply a migration the way `CollectionFileManager.runMigration` applies one:
- * split on the breakpoint marker, drop standalone comment lines, and execute
- * each remaining chunk AS ONE QUERY.
+ * Apply a migration through the PRODUCTION runner.
  *
- * Deliberately not a `;` split. The runner does not do one — a lexical split on
- * semicolons corrupts string literals — so a test that split on `;` would run
- * statements the product cannot, and would have passed against the defect this
- * suite exists to catch.
+ * `CollectionFileManager.runMigration` itself, not a copy of it. A copy is the
+ * same instrument twice: it would go on passing while the real splitter, the
+ * real comment handling or the real `db.execute(sql.raw(...))` regressed — the
+ * exact class of false coverage this suite exists to remove, since the claim
+ * being made is about the trip through THAT code.
+ *
+ * Both configured directories are unused by `runMigration` — only the save
+ * paths read them — and nothing here writes a file, so neither is created.
  */
-async function applyLikeTheRunner(
+async function applyThroughTheRunner(
   adapter: TestAdapter,
   migration: string
 ): Promise<void> {
-  for (const chunk of migration.split("--> statement-breakpoint")) {
-    const statement = chunk
-      .split("\n")
-      .filter(line => !line.trim().startsWith("--"))
-      .join("\n")
-      .trim();
-    if (!statement) continue;
-    // The trailing `;` is kept, because the runner keeps it: it hands the chunk
-    // to the driver exactly as the generator wrote it. Stripping it here would
-    // be a different program from the one that ships.
-    await adapter.executeQuery(statement);
-  }
+  const runner = new CollectionFileManager(
+    (adapter as unknown as { getDrizzle: () => unknown }).getDrizzle() as never,
+    {
+      migrationsDir: "unused-by-runMigration",
+      schemasDir: "unused-by-runMigration",
+    }
+  );
+  await runner.runMigration(migration);
 }
 
 /** Where this server keeps the schema a name resolves in. */
@@ -169,11 +168,11 @@ for (const leg of LEGS) {
 
     /** Build both tables with `author` in the given starting shape. */
     async function createFixture(field: FieldDefinition): Promise<void> {
-      await applyLikeTheRunner(
+      await applyThroughTheRunner(
         adapter!,
         schema.generateMigrationSQL(AUTHORS_TABLE, [])
       );
-      await applyLikeTheRunner(
+      await applyThroughTheRunner(
         adapter!,
         schema.generateMigrationSQL(POSTS_TABLE, [field])
       );
@@ -198,7 +197,7 @@ for (const leg of LEGS) {
         onUpdate: "NO ACTION",
       });
 
-      await applyLikeTheRunner(
+      await applyThroughTheRunner(
         adapter!,
         schema.generateAlterTableMigration(
           POSTS_TABLE,
@@ -226,7 +225,7 @@ for (const leg of LEGS) {
         "RESTRICT"
       );
 
-      await applyLikeTheRunner(
+      await applyThroughTheRunner(
         adapter!,
         schema.generateAlterTableMigration(
           POSTS_TABLE,

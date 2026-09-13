@@ -97,6 +97,46 @@ export async function tableHasRows(
  * while the reference stands, and PostgreSQL's CASCADE silently strips the referrer's constraint
  * instead, so the caller has to deal with the referrers first either way.
  */
+/**
+ * Which of the named columns currently hold at least one NULL.
+ *
+ * Asked per column rather than for the whole table: the caller knows which
+ * columns a save is about to make required, and that is a short list, while
+ * probing every column would read the table once per column for no reason.
+ *
+ * The answer is a PRECONDITION, not a diagnostic. A column being made NOT NULL
+ * while a row still holds a null fails at the server — after the statements
+ * before it have been applied and, on MySQL, auto-committed — so the edit has
+ * to be refused before any of them is written rather than discovered partway.
+ */
+export async function readColumnsContainingNull(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string,
+  columns: readonly string[]
+): Promise<Set<string>> {
+  const holding = new Set<string>();
+  for (const column of columns) {
+    const probe = sql`SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${sql.identifier(column)} IS NULL LIMIT 1`;
+    if (dialect === "postgresql") {
+      const result = (await (db as PgMysqlExecute).execute(probe)) as {
+        rows: unknown[];
+      };
+      if (result.rows.length > 0) holding.add(column);
+      continue;
+    }
+    if (dialect === "mysql") {
+      const rows = mysqlRows<unknown>(
+        await (db as PgMysqlExecute).execute(probe)
+      );
+      if (rows.length > 0) holding.add(column);
+      continue;
+    }
+    if ((await (db as SqliteAll).all(probe)).length > 0) holding.add(column);
+  }
+  return holding;
+}
+
 export async function readReferencingTables(
   db: unknown,
   dialect: SupportedDialect,

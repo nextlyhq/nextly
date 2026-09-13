@@ -90,3 +90,20 @@ renamed it — so whether the edit was refused or lost depended on whether you
 happened to rename. It is refused in both cases now. SQLite still cannot
 change a junction's referential actions; renaming one on its own is
 unaffected.
+
+Two further things the column's METADATA cannot answer are now asked of the
+column itself:
+
+- Installing `SET NULL` states that the column accepts nulls rather than
+  inferring it from requiredness. A database migrated before a requiredness
+  toggle relaxed anything still carries whatever `CREATE TABLE` gave the
+  column, so a relationship both definitions call optional can be sitting on
+  a `NOT NULL` column right now — and the statement is idempotent, so this
+  also repairs the ones the old behaviour left behind.
+- Making a field required is refused, before any statement is written, when
+  entries still leave that column empty. The server rejects the tightening,
+  and by then the statements ahead of it have run — auto-committed on MySQL,
+  including the foreign-key replacement a relationship's tightening is
+  ordered behind, which would leave the table carrying no key at all while
+  the save was recorded as made. The check reads the live rows; a caller that
+  does not supply them keeps the behaviour it had.

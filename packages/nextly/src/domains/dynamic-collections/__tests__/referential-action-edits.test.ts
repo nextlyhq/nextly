@@ -558,3 +558,122 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
     });
   }
 );
+
+describe.each(["postgresql", "mysql"] as const)(
+  "the column's live state, not its metadata, on %s",
+  dialect => {
+    const relax =
+      dialect === "mysql"
+        ? "MODIFY COLUMN `author` varchar(36) NULL"
+        : 'ALTER COLUMN "author" DROP NOT NULL';
+
+    it("states that the column accepts nulls when installing SET NULL", () => {
+      // Both definitions are optional, so requiredness has not moved and the
+      // column pass emits nothing — yet the live column may still be NOT NULL,
+      // because a database migrated before a requiredness toggle relaxed
+      // anything carries whatever CREATE gave it. Metadata cannot see that, so
+      // the nullability is STATED rather than inferred.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [manyToOne({ onDelete: "cascade" })],
+        [manyToOne({ onDelete: "set null" })]
+      );
+      expect(indexOf(sql, relax)).toBeLessThan(
+        indexOf(sql, "ON DELETE SET NULL")
+      );
+    });
+
+    it("states it once, not twice, when requiredness moved as well", () => {
+      // The control for the case above: where the column pass already relaxes
+      // the column, this must not relax it a second time.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [{ ...manyToOne(), required: true } as FieldDefinition],
+        [{ ...manyToOne(), required: false } as FieldDefinition]
+      );
+      expect(sql.split(relax).length).toBe(2);
+    });
+
+    it("says nothing about nullability when no SET NULL is installed", () => {
+      // The other control: an action edit that installs RESTRICT has no reason
+      // to touch the column, and touching it on MySQL would restate its type.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [manyToOne({ onDelete: "cascade" })],
+        [manyToOne({ onDelete: "restrict" })]
+      );
+      expect(sql).not.toContain(relax);
+    });
+  }
+);
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "making a column required over rows that left it empty, on %s",
+  dialect => {
+    // `onDelete` is DECLARED on both sides so the resolved action does not move
+    // with requiredness. Leaving it undefined makes this edit an action change
+    // too — `restrict` derived from required, `set null` from optional — which
+    // SQLite refuses on its own, and the refusal under test would then be
+    // indistinguishable from that one.
+    const optional = manyToOne({ onDelete: "cascade" });
+    const required = {
+      ...manyToOne({ onDelete: "cascade" }),
+      required: true,
+    } as FieldDefinition;
+    const alter = (options?: Record<string, unknown>) =>
+      service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [optional],
+        [required],
+        options as never
+      );
+
+    it("refuses before a single statement is written", () => {
+      // A precondition. The server rejects the tightening, and by then the
+      // statements ahead of it have run — on MySQL auto-committed, including
+      // the foreign-key replacement this tightening is deliberately ordered
+      // behind, which would leave the table carrying no key at all.
+      try {
+        alter({ columnsContainingNull: new Set(["author"]) });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain("REQUIRED_COLUMN_HAS_NULLS");
+      }
+    });
+
+    it("allows it when the caller looked and found no nulls", () => {
+      // The control that matters most: an empty set is a real answer, and
+      // refusing on it would block every legitimate tightening.
+      expect(() =>
+        alter({ columnsContainingNull: new Set<string>() })
+      ).not.toThrow();
+    });
+
+    it("allows it when the nulls are in a DIFFERENT column", () => {
+      expect(() =>
+        alter({ columnsContainingNull: new Set(["headline"]) })
+      ).not.toThrow();
+    });
+
+    it("leaves the edit alone when the caller did not look", () => {
+      // Undefined is "I did not ask", which keeps the behaviour this had
+      // before anything was measured rather than guessing either way.
+      expect(() => alter()).not.toThrow();
+    });
+
+    it("says nothing about a field that was ALREADY required", () => {
+      // Not a transition: the column is already NOT NULL, so it cannot be
+      // holding the null the set claims — and refusing here would make an
+      // unrelated edit to a required field impossible.
+      expect(() =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [required],
+          [{ ...required, index: true } as FieldDefinition],
+          { columnsContainingNull: new Set(["author"]) } as never
+        )
+      ).not.toThrow();
+    });
+  }
+);

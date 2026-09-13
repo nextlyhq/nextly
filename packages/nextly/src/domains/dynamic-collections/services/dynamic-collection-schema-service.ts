@@ -249,6 +249,46 @@ export class DynamicCollectionSchemaService {
    * plain type's column stayed behind as a ghost the next sync then offered to remove, and the
    * reverse was treated as a modification of a column that did not exist.
    */
+  /**
+   * Refuse a save that makes a column required while the rows say it cannot be.
+   *
+   * The live answer or nothing: `columnsContainingNull` undefined means the
+   * caller did not look, and this leaves the tightening exactly as it behaved
+   * before anything was measured rather than guessing in either direction.
+   *
+   * @throws NextlyError (validation, `REQUIRED_COLUMN_HAS_NULLS`)
+   */
+  private refuseTighteningOverNulls(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: { columnsContainingNull?: ReadonlySet<string> }
+  ): void {
+    const holdingNull = options?.columnsContainingNull;
+    if (holdingNull === undefined || holdingNull.size === 0) return;
+    const oldByName = new Map(oldFields.map(f => [f.name, f]));
+    for (const field of newFields) {
+      if (field.required !== true) continue;
+      if (!fieldProducesColumn(field)) continue;
+      const previous = oldByName.get(field.name);
+      if (!previous || previous.required === true) continue;
+      const column = toSnakeCase(field.name);
+      if (!holdingNull.has(column)) continue;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${field.name}`,
+            code: "REQUIRED_COLUMN_HAS_NULLS",
+            message:
+              `"${field.name}" cannot be made required while entries still ` +
+              `leave it empty. Give every entry a value for it first, or ` +
+              `leave the field optional.`,
+          },
+        ],
+        logContext: { field: field.name, column },
+      });
+    }
+  }
+
   private storageClassChanged(
     previous: FieldDefinition,
     next: FieldDefinition
@@ -940,6 +980,16 @@ ${allColumnDefs.join(",\n")}
        */
       foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
       /**
+       * The columns that currently hold at least one NULL, read from the live table by
+       * `readColumnsContainingNull`.
+       *
+       * Consulted before a column is made NOT NULL. Whether a column can take that is a fact
+       * about the ROWS, which no field definition records: the save says "required" and the data
+       * decides whether that is possible. Undefined means the caller did not look, which leaves
+       * the tightening exactly as it behaved before anything was measured.
+       */
+      columnsContainingNull?: ReadonlySet<string>;
+      /**
        * The index names the table carries, read from the live table by `readIndexNames`.
        *
        * Consulted before dropping one. Which columns are indexed is not derivable from the
@@ -974,6 +1024,14 @@ ${allColumnDefs.join(",\n")}
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
     this.assertDecimalDimensions(newFields);
+
+    // A precondition, so it runs before a single statement is written. Making a
+    // column NOT NULL while a row still holds a null is refused by the server,
+    // and by then the statements ahead of it have been applied — on MySQL
+    // auto-committed, including the foreign-key replacement a relationship's
+    // tightening is ordered behind, which leaves the table carrying no key at
+    // all while the registry records the save as made.
+    this.refuseTighteningOverNulls(oldFields, newFields, options);
 
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
 
@@ -1790,11 +1848,61 @@ ${allColumnDefs.join(",\n")}
     // `relationOnDelete` refuses `set null` on a required field, so an action
     // that IS `SET NULL` always accompanies a column that is, or is becoming,
     // nullable.
-    return {
-      statements,
-      emitAfterColumnWork:
-        to.onDelete === "SET NULL" || to.onUpdate === "SET NULL",
-    };
+    const installsSetNull =
+      to.onDelete === "SET NULL" || to.onUpdate === "SET NULL";
+
+    // A column this key is about to allow nulls in must ACCEPT one, and
+    // metadata is not evidence that it does. A database migrated before this
+    // pass existed carries whatever `CREATE TABLE` gave the column and nothing
+    // has moved it since — so an optional relationship can be sitting on a
+    // NOT NULL column right now, both definitions agreeing it is optional and
+    // `requirednessChanged` therefore false. Installing `SET NULL` against
+    // that is refused by MySQL after the drop has auto-committed, and accepted
+    // by PostgreSQL until the first delete.
+    //
+    // Stated rather than inferred, and only where the column pass is not
+    // already stating it: relaxing a column that already accepts nulls is a
+    // no-op both dialects accept, so this costs an idempotent statement and
+    // repairs the databases the old behaviour left behind.
+    const columnPassStatesNullability = oldField.required !== newField.required;
+    if (installsSetNull && !columnPassStatesNullability) {
+      statements.unshift(
+        this.relaxColumnForSetNull(tableName, columnName, newField)
+      );
+    }
+
+    return { statements, emitAfterColumnWork: installsSetNull };
+  }
+
+  /**
+   * State that a relationship's column accepts nulls, in the dialect's own
+   * spelling.
+   *
+   * MySQL restates the whole definition on `MODIFY`, so the type travels with
+   * the nullability or it is lost. The type asked for is THIS generator's —
+   * the one that created the column — rather than the descriptor's, for the
+   * reason the column pass gives where it makes the same choice: the two do
+   * not agree, and restating the descriptor's answer would rewrite a column
+   * this edit never touched.
+   */
+  private relaxColumnForSetNull(
+    tableName: string,
+    columnName: string,
+    field: FieldDefinition
+  ): string {
+    const table = this.quoteIdentifier(tableName);
+    const column = this.quoteIdentifier(columnName);
+    if (this.dialect === "mysql") {
+      const type = this.mapFieldTypeToSQL(
+        field.type,
+        field.length,
+        field.options,
+        field.validation,
+        field
+      );
+      return `ALTER TABLE ${table} MODIFY COLUMN ${column} ${type} NULL;`;
+    }
+    return `ALTER TABLE ${table} ALTER COLUMN ${column} DROP NOT NULL;`;
   }
 
   /**
