@@ -1041,6 +1041,634 @@ describe("saving a component that would reference itself", () => {
     await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
   });
 
+  it("refuses when the composition needs a row the walk never read", async () => {
+    /*
+     * The gap left by refusing an unfinished composition only where the WALK had
+     * already proven a loop. The walk's `none` cannot stand in for a composition,
+     * because the walk is precisely the approximation that misses a loop only
+     * composition shows — and the two do not read the same rows.
+     *
+     * Here the placement's override reaches two levels down and re-points `cc`'s
+     * nested instance at `ee`, which cannot be read. The walk never asks for `ee`
+     * at all: what it installs one level ahead is an `overrides` record, not a
+     * component id, so the walk finishes cleanly over `bb → cc → dd` and says
+     * none. The composition does ask, cannot be answered, and has established
+     * nothing — which is not the same as finding nothing.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: {
+        bb: {
+          ...places("cc"),
+          exposed: [
+            {
+              id: "pass",
+              label: "Pass",
+              nodeId: "n0",
+              propPath: "overrides",
+              type: "select",
+            },
+          ],
+        },
+        cc: {
+          ...places("dd"),
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        },
+      },
+      stored: { dd: [] },
+      unreadable: ["ee"],
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesWithOverrides("bb", { pass: { swap: "ee" } }) },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/could not all be read/);
+  });
+
+  it("redacts an id learned through a PLACEMENT's variant", async () => {
+    /*
+     * The allowlist is what the AUTHOR supplied, not what the walk reached. `cc`
+     * is named nowhere in the submitted document: it is installed by the variant
+     * the placement selects, which lives in `b`'s definition and is read with
+     * `overrideAccess: true`. Printing it would hand out the identifier of a
+     * component the author may not be able to open, for the price of one save
+     * they already know will fail.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: {
+        b: {
+          ...places("other"),
+          exposed: [
+            {
+              id: "swap",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+          variants: { pick: { label: "Pick", overrides: { swap: "cc" } } },
+        },
+      },
+      stored: { cc: ["a"], other: [] },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "b", variant: "pick" },
+              },
+            ],
+          },
+        },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/a → … → a/);
+
+    // The property, asserted directly: the private id must not appear at all.
+    // The chain shape above is satisfied by a redaction that dropped the wrong
+    // id, so it cannot carry this on its own.
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "b", variant: "pick" },
+              },
+            ],
+          },
+        },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/^(?!.*cc).*$/s);
+  });
+
+  it("CONTROL: the same chain names `cc` when the AUTHOR's document places it", async () => {
+    // Same id, same chain, one difference: the submitted document names `cc`
+    // itself. So the redaction above is about where the id came from rather than
+    // about `cc` never being printable.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { cc: ["a"] } });
+
+    await expect(c.run(saving("a", ["cc"], nextly))).rejects.toThrow(
+      /a → cc → a/
+    );
+  });
+
+  it("composes ONCE for variants that install nothing", async () => {
+    /*
+     * A component may declare up to a thousand variants, and composing every selection
+     * multiplies the envelope bound by the document's node bound. Only a variant
+     * that installs a component id can compose differently — one changing text or
+     * a colour does not reach the graph — so the rest are skipped.
+     *
+     * Observable through the CAP: without the skip, nine hundred selections is far
+     * past what this will compose and the save would be refused as unestablished.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [] } });
+    const many: Record<
+      string,
+      { label: string; overrides: Record<string, unknown> }
+    > = {};
+    for (let i = 0; i < 900; i += 1) {
+      many[`v${String(i)}`] = { label: "V", overrides: { caption: "hi" } };
+    }
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...places("b"),
+            exposed: [
+              {
+                id: "caption",
+                nodeId: "n0",
+                propPath: "props.text",
+                type: "text",
+              },
+            ],
+            variants: many,
+          },
+        },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a component whose selections cost more than one save composes", async () => {
+    /*
+     * The bound is on the PRODUCT: each selection walks up to the document's
+     * nodes, so what a component can afford is its variant count against its
+     * size. A big forest affords few selections and a small one affords many,
+     * which is the honest shape of the cost rather than a count of variants.
+     *
+     * Refusing is the same posture the read budget takes: a prefix of the
+     * selections that found no loop is exactly what a component with no loop
+     * looks like.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [] } });
+    const wide = (count: number) => {
+      const variants: Record<
+        string,
+        { label: string; overrides: Record<string, unknown> }
+      > = {};
+      for (let i = 0; i < count; i += 1) {
+        variants[`v${String(i)}`] = {
+          label: "V",
+          overrides: { swap: `t${String(i)}` },
+        };
+      }
+      return {
+        ...places("b"),
+        nodes: [
+          ...places("b").nodes,
+          ...Array.from({ length: 4000 }, (_, i) => ({
+            id: `f${String(i)}`,
+            type: "core/text",
+            version: 1,
+            props: {},
+          })),
+        ],
+        exposed: [
+          {
+            id: "swap",
+            label: "Which",
+            nodeId: "n0",
+            propPath: "componentId",
+            type: "select",
+          },
+        ],
+        variants,
+      };
+    };
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: wide(65) },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/could not all be read/);
+
+    // CONTROL: the SAME forest with few variants is affordable and saves, so the
+    // refusal is the product rather than the document being large.
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: wide(2) },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows a self-placement the renderer never expands", async () => {
+    /*
+     * A condition-gated instance is left unexpanded by `resolveComponentInstances`,
+     * so a component holding a gated placeholder of ITSELF composes with no loop
+     * in it and no reader ever sees one.
+     *
+     * The id survey cannot tell that: it reads the stored id off every node. So
+     * the survey says where to LOOK and the composition still decides — which it
+     * can do here without a single read, because the subject is the one document
+     * already in hand.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({ stored: {} });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "a" },
+                visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+              },
+            ],
+          },
+        },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    // And it establishes that without asking the library anything.
+    expect(asked).toEqual([]);
+  });
+
+  it("CONTROL: the same placement UNGATED is refused", async () => {
+    // One difference — the visibility envelope — and the opposite outcome, so the
+    // case above is about the gate rather than about a fixture that never closed
+    // a loop at all.
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: {} });
+
+    await expect(c.run(saving("a", ["a"], nextly))).rejects.toThrow(/a → a/);
+  });
+
+  it("composes a variant that re-points a node through NESTED overrides", async () => {
+    /*
+     * The variant writes an `overrides` record onto its own placement of `bb`,
+     * and that record re-points `cc`'s nested instance at the component being
+     * saved — two levels below the node the variant touched. Every componentId
+     * this document stores is unchanged, so a scan of what the variant INSTALLS
+     * reports nothing new and would skip the selection entirely.
+     *
+     * Which is why the skip is decided by what a variant can REACH rather than by
+     * the ids it installs.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({
+      documents: {
+        bb: {
+          ...places("cc"),
+          exposed: [
+            {
+              id: "pass",
+              label: "Pass",
+              nodeId: "n0",
+              propPath: "overrides",
+              type: "select",
+            },
+          ],
+        },
+        cc: {
+          ...places("dd"),
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+        },
+      },
+      stored: { dd: [] },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...places("bb"),
+            // The subject exposes its OWN placement's overrides record, so the
+            // variant writes the record `bb` then reads through its own `pass`.
+            exposed: [
+              {
+                id: "outer",
+                label: "Outer",
+                nodeId: "n0",
+                propPath: "overrides",
+                type: "select",
+              },
+            ],
+            variants: {
+              loop: {
+                label: "Loop",
+                overrides: { outer: { pass: { swap: "a" } } },
+              },
+            },
+          },
+        },
+        req: { nextly },
+      })
+    ).rejects.toThrow(/would reference itself/);
+  });
+
+  it("refuses a self-reference found in a TRUNCATED survey", async () => {
+    /*
+     * Completeness is not required to believe an id that was FOUND. A truncated
+     * survey makes an ABSENT id uncertain and a present one no less present.
+     *
+     * Asserted with NO Direct API, because that is the only configuration where
+     * the two behaviours differ. Demanding completeness made this document read
+     * as not naming itself, and the decline for a missing Direct API was then the
+     * next thing to run — so the write was permitted.
+     *
+     * With the id believed, the composition is consulted and cannot get through
+     * the subject's OWN forest under this bound. That refuses — and it is a
+     * different case from a neighbour it could not supply, which reports
+     * `missing` and is left to the walk that can read it.
+     */
+    const c = context();
+    registerComponentCycleGuard({
+      ctx: c.ctx,
+      componentsCollection: COMPONENTS,
+      documentField: FIELD,
+      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
+    });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        // Names itself FIRST, then outruns the bound.
+        data: { [FIELD]: places("a", "b", "cc", "dd", "ee", "ff") },
+        req: {},
+      })
+    ).rejects.toThrow(/a → a/);
+  });
+
+  it("refuses a self-naming VARIANT past the composition cap, with no Direct API", async () => {
+    /*
+     * The self check runs ahead of the decline for a missing Direct API, so a
+     * document naming itself through a variant must be caught here or the write
+     * is simply permitted.
+     *
+     * The cap on selections does not reach this question: only a selection that
+     * names the SUBJECT can close a loop on it without leaving the document, so
+     * this composes exactly those, however many other variants exist.
+     */
+    const c = context();
+    register(c.ctx);
+    const many: Record<
+      string,
+      { label: string; overrides: Record<string, unknown> }
+    > = {};
+    for (let i = 0; i < 65; i += 1) {
+      many[`v${String(i)}`] = {
+        label: "V",
+        overrides: { swap: `t${String(i)}` },
+      };
+    }
+    many.loop = { label: "Loop", overrides: { swap: "a" } };
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...places("b"),
+            exposed: [
+              {
+                id: "swap",
+                label: "Which",
+                nodeId: "n0",
+                propPath: "componentId",
+                type: "select",
+              },
+            ],
+            variants: many,
+          },
+        },
+        req: {},
+      })
+    ).rejects.toThrow(/a → a/);
+  });
+
+  it("allows a gated self-placeholder BESIDE an unrelated placement", async () => {
+    /*
+     * The case that decides the self check's shape. The gated placeholder is not
+     * expanded, so nothing closes on the subject — but the document also places
+     * `b`, and a check that composed against a reader refusing everything asked
+     * for `b`, could not be given it, and rejected the write for a question it
+     * had not answered.
+     *
+     * So the check composes the subject ALONE: every other component is simply
+     * absent, which the resolver draws as a placeholder. A chain running out
+     * through `b` is not this check's business — the walk that can read `b`
+     * handles it, and does so here too, which is why this still reaches the store.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly, asked } = api({ stored: { b: [] } });
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "a" },
+                visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+              },
+              {
+                id: "n1",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "b" },
+              },
+            ],
+          },
+        },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+    // And the walk did run: the unrelated placement was read, which is what
+    // separates "the check declined to answer" from "the check answered".
+    expect(asked.map(one => one.id)).toContain("b");
+  });
+
+  it("allows a hide-only variant however many of them there are", async () => {
+    /*
+     * A visibility write reaches the graph only when it REVEALS. Hiding removes
+     * references from the composition, and removing them closes no loop — so a
+     * component offering many hide-only variants must not be charged a
+     * composition for each and then refused for exceeding the cap.
+     */
+    const c = context();
+    register(c.ctx);
+    const { nextly } = api({ stored: { b: [] } });
+    const many: Record<
+      string,
+      { label: string; overrides: Record<string, unknown> }
+    > = {};
+    for (let i = 0; i < 65; i += 1) {
+      many[`v${String(i)}`] = { label: "V", overrides: { show: false } };
+    }
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...places("b"),
+            exposed: [
+              {
+                id: "show",
+                label: "Show",
+                nodeId: "n0",
+                propPath: "",
+                type: "visibility",
+              },
+            ],
+            variants: many,
+          },
+        },
+        req: { nextly },
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses a variant that REVEALS a gated self-placement, with no Direct API", async () => {
+    /*
+     * The case no prediction caught. The node places the component itself and is
+     * condition-gated, so the default selection composes cleanly. A variant sets
+     * the node's visibility exposure true, the resolver then expands it, and the
+     * loop is real for every reader who picks that variant.
+     *
+     * It installs no component id at all — a visibility write carries no prop
+     * path and `finalProps` skips it — so every scan of what a variant INSTALLS
+     * reports nothing, and a scan of what it WRITES has to model the resolver to
+     * get it right. Composing every selection needs neither.
+     *
+     * Asserted with no Direct API, because that is where a miss is a persisted
+     * cycle rather than a deferred question.
+     */
+    const c = context();
+    register(c.ctx);
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "component",
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "a" },
+                visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+              },
+            ],
+            exposed: [
+              {
+                id: "show",
+                label: "Show",
+                nodeId: "n0",
+                propPath: "",
+                type: "visibility",
+              },
+            ],
+            variants: {
+              reveal: { label: "Reveal", overrides: { show: true } },
+            },
+          },
+        },
+        req: {},
+      })
+    ).rejects.toThrow(/a → a/);
+  });
+
   it("refuses a document whose VARIANT re-points a node at the component itself", async () => {
     /*
      * The raw ids in the document name `b`, and the guard reading only those
@@ -1103,7 +1731,9 @@ describe("saving a component that would reference itself", () => {
   it("leaves the write alone when the request carries no Direct API", async () => {
     // There is nothing to ask with, and a guard that refused every write it
     // could not evaluate would make the collection unwritable on any path that
-    // shapes its context differently.
+    // shapes its context differently. The document must not name ITSELF here:
+    // that case needs no library and is refused below, so using it would make
+    // this test pass for a reason it is not about.
     const c = context();
     register(c.ctx);
 
@@ -1112,10 +1742,51 @@ describe("saving a component that would reference itself", () => {
         collection: COMPONENTS,
         operation: "update",
         originalData: { id: "a" },
-        data: { [FIELD]: places("a") },
+        data: { [FIELD]: places("b") },
         req: {},
       })
     ).resolves.toBeUndefined();
+  });
+
+  it("refuses a self-reference even with NO Direct API to ask with", async () => {
+    /*
+     * The decline above is for the graph READS. This question needs none: the
+     * submitted document names the id it is being stored under, so the loop is
+     * closed by the document alone and no row in the library can reopen it.
+     *
+     * Left to the decline, an internal or early-runtime write — any path that
+     * shapes its context without a Direct API — could persist `a → a` while the
+     * guard is registered and reports nothing.
+     */
+    const c = context();
+    register(c.ctx);
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: places("b", "a") },
+        req: {},
+      })
+    ).rejects.toThrow(/a → a/);
+  });
+
+  it("refuses one its own VARIANT installs, still with no Direct API", async () => {
+    // The same question, through the other way a document can name itself: the
+    // stored id is harmless and the variant's preset is what closes the loop.
+    const c = context();
+    register(c.ctx);
+
+    await expect(
+      c.run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: { [FIELD]: placesViaVariant("b", "a") },
+        req: {},
+      })
+    ).rejects.toThrow(/a → a/);
   });
 
   it("refuses rather than stopping quietly when the graph outruns its read budget", async () => {

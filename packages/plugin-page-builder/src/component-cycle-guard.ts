@@ -75,6 +75,7 @@ import {
   componentReachIn,
   componentReferencesFrom,
   resolveComponentInstances,
+  countNodes,
   variantNamesIn,
   type ComponentReach,
   type DocumentLimits,
@@ -198,6 +199,10 @@ async function refuseACycle(
     );
   }
 
+  // Decided from the document in hand, so it is decided BEFORE the declines
+  // below. Those exist for the graph READS, and this question needs none.
+  refuseASelfReference(submitted, self, options);
+
   const nextly = directApiOf(context);
   // No Direct API to ask with. A guard that refused every write it could not
   // evaluate would make the collection unwritable on any path that shapes its
@@ -217,6 +222,97 @@ async function refuseACycle(
     document: held.document,
     forms: formsChangedBy(next),
   });
+}
+
+/**
+ * Refuse a submitted document that closes a loop on the subject by itself.
+ *
+ * Separate from the walk because it needs no library at all, which is what lets
+ * it run ahead of every decline the graph reads require. A write on a path that
+ * shapes its context differently — an early-runtime write, an internal one with
+ * no Direct API bound — could otherwise persist the one loop that takes no
+ * library to see, with the guard registered and reporting nothing.
+ *
+ * The chain is the subject twice over, so there is nothing to redact: both ids
+ * are the one the author is saving.
+ */
+function refuseASelfReference(
+  submitted: { readonly document: unknown } | "absent",
+  self: string,
+  options: CycleGuardOptions
+): void {
+  if (submitted === "absent") return;
+  // The ID survey only says where to LOOK. It reads a stored id off every node,
+  // and the renderer does not expand a condition-gated instance at all — so a
+  // component holding a gated self-placeholder composes with no loop in it, and
+  // refusing on the survey alone makes that component unsavable.
+  if (!namesItself(submitted.document, self, options)) return;
+
+  // So the composition decides here too, over a library holding ONLY the subject.
+  if (!composesOnItself(submitted.document, self, options)) return;
+
+  throw refusal(
+    `This component cannot be saved because it would reference itself: ` +
+      `${self} → ${self}. Remove that placement and save again.`
+  );
+}
+
+/**
+ * Whether this document closes a loop on the subject using nothing but itself.
+ *
+ * Deliberately a narrower question than {@link composesACycle}, and the narrowing
+ * is what makes it answerable with no library at all. Every other component is
+ * simply ABSENT, which the resolver draws as a placeholder — so a chain that runs
+ * out through some other component is not refused here, it is left to the walk
+ * that can actually read it.
+ *
+ * That is why there is no reader, no budget and no unestablished answer. An
+ * earlier version composed against a reader that refused everything and treated
+ * the resulting `indeterminate` as a refusal, which turned any UNRELATED
+ * placement beside a gated self-placeholder into a false refusal: the composition
+ * asked for that other component, could not be given it, and the write was
+ * rejected for a question it had not answered.
+ *
+ * The selections asked are the default one plus every variant that installs the
+ * SUBJECT's id — not every variant that can reach the graph. Only a selection
+ * naming the subject can close a loop on it without leaving the document, so this
+ * needs no cap: a component offering a thousand variants costs a composition for
+ * each one that names itself, and those are the only ones that could refuse.
+ */
+function composesOnItself(
+  document: unknown,
+  self: string,
+  options: CycleGuardOptions
+): boolean {
+  const selections = selectionsWorthComposing(document);
+  // Nothing can be afforded, so nothing is established here. The walk behind this
+  // is where an unestablished document is refused; this check only ever ADDS a
+  // refusal it can prove from the document alone.
+  if (selections === null) return false;
+
+  const alone = {
+    has: (id: string) => id === self,
+    get: (id: string) => (id === self ? document : undefined),
+  };
+  for (const variant of selections) {
+    const composition = resolveComponentInstances(
+      hostPlacing(self, variant) as never,
+      alone as never,
+      { limits: options.limits }
+    );
+    if (composition.unresolved.some(one => one.reason === "cycle")) return true;
+    // A limit reached while composing the subject's OWN forest. The survey has
+    // already found it naming itself and the composition could not get far
+    // enough to say whether that placement resolves — so this refuses, and it
+    // can do so without the false-refusal risk that made the reader go away: a
+    // component this could not supply reports `missing`, which is not here.
+    if (
+      composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -268,13 +364,7 @@ async function refuseIfReached(args: {
     // second walk with the first one's reading.
     const read = documentReader(options, nextly, draft);
     const walked = await walkFrom(document, self, options, read);
-    if (walked.reach.kind === "unknown") {
-      throw refusal(
-        `This component cannot be saved: the components it uses could not all ` +
-          `be read, so whether it would end up referencing itself could not be ` +
-          `established.`
-      );
-    }
+    if (walked.reach.kind === "unknown") throw unreadableRefusal();
 
     // The walk answers about IDS and never decides. It is an approximation in
     // BOTH directions: short by one level wherever overrides flow down through
@@ -283,12 +373,50 @@ async function refuseIfReached(args: {
     // chain to name — which is the one thing the composition cannot report.
     const composed = await composesACycle(document, self, options, read);
     if (composed === "cycle") throw cycleRefusal(walked, self);
-    // Composing could not be finished. The walk's own verdict stands, so a
-    // library this cannot read does not become a way to save a loop into it.
-    if (composed === "indeterminate" && walked.reach.kind === "cycle") {
-      throw cycleRefusal(walked, self);
-    }
+
+    // Composing could not be FINISHED, which is not a report that there is no
+    // loop — and the walk's `none` cannot stand in for one, because the walk is
+    // exactly the approximation that misses a loop only composition shows. A
+    // nested override can send the resolver to a definition the walk never
+    // needed, so the two do not even read the same rows.
+    //
+    // Refused whatever the walk said, and that costs nothing it did not already
+    // cost: this state is a failed read or a spent budget, and the walk refuses
+    // on both of those itself. A definition the RENDERER declines is not this
+    // case — that resolves to a placeholder a reader sees, so it composes as
+    // `none` and stays savable.
+    if (composed === "indeterminate") throw indeterminateRefusal(walked, self);
   }
+}
+
+/** The refusal for a graph this could not establish, worded once. */
+function unreadableRefusal(): Error {
+  return refusal(UNESTABLISHED);
+}
+
+const UNESTABLISHED =
+  `This component cannot be saved: the components it uses could not all be ` +
+  `read, so whether it would end up referencing itself could not be ` +
+  `established.`;
+
+/**
+ * The refusal for a composition that could not be finished.
+ *
+ * Says only what is known, and the two halves are different claims. The
+ * composition established nothing, so it cannot be reported as a loop. But where
+ * the WALK found a chain over stored ids, that chain is the one thing an author
+ * can act on — and withholding it to keep the message short leaves them re-saving
+ * and getting the same refusal with nowhere to start.
+ *
+ * Offered as a lead rather than as the verdict, deliberately: a walk's chain can
+ * be a stored edge an override re-points, which is why it does not decide.
+ */
+function indeterminateRefusal(walked: WalkOutcome, self: string): Error {
+  if (walked.reach.kind !== "cycle") return refusal(UNESTABLISHED);
+  return refusal(
+    `${UNESTABLISHED} Its stored placements do lead back to it — ` +
+      `${namedPath(walked.reach.path, walked.own, self)} — so start there.`
+  );
 }
 
 /**
@@ -304,7 +432,7 @@ function cycleRefusal(walked: WalkOutcome, self: string): Error {
   if (walked.reach.kind === "cycle") {
     return refusal(
       `This component cannot be saved because it would reference itself: ` +
-        `${namedPath(walked.reach.path, walked.places, self)}. Remove that ` +
+        `${namedPath(walked.reach.path, walked.own, self)}. Remove that ` +
         `placement and save again.`
     );
   }
@@ -318,7 +446,44 @@ function cycleRefusal(walked: WalkOutcome, self: string): Error {
 /** The walk's verdict, with the ids used to decide which of them to name. */
 interface WalkOutcome {
   readonly reach: ComponentReach;
-  readonly places: readonly string[] | undefined;
+  /**
+   * The ids the SUBMITTED document names, and only those.
+   *
+   * The redaction allowlist, so it must not be the walk's enriched reach. That
+   * list grows by reading other definitions with `overrideAccess: true` — a
+   * placement's selected variant can install an id that lives in a definition
+   * this author cannot open — and naming such an id in a refusal hands out an
+   * identifier the author could not otherwise obtain. What the author already
+   * holds is what their own document says, their own variants included.
+   */
+  readonly own: readonly string[];
+}
+
+/** Whether a surveyed document names the subject, decided without any read. */
+function selfNamedIn(
+  survey: { readonly ids: readonly string[] },
+  self: string
+): boolean {
+  // Completeness is NOT required, and the asymmetry is the point: a truncated
+  // survey makes an ABSENT id uncertain and a PRESENT one no less present. The
+  // walk it feeds already refuses an unread forest for the absent direction, so
+  // demanding completeness here only threw away evidence — and threw it away on
+  // the path that runs before the guard can ask the library anything.
+  return survey.ids.includes(self);
+}
+
+/**
+ * Whether the submitted document closes a loop on the subject by itself.
+ *
+ * Answerable with no library at all, which is why it is asked before the guard
+ * declines a write it cannot read the graph for.
+ */
+function namesItself(
+  document: unknown,
+  self: string,
+  options: CycleGuardOptions
+): boolean {
+  return selfNamedIn(componentReachIn(document, options.limits.maxNodes), self);
 }
 
 /**
@@ -338,15 +503,16 @@ async function walkFrom(
   read: DocumentReader
 ): Promise<WalkOutcome> {
   const survey = componentReachIn(document, options.limits.maxNodes);
-  if (survey.complete && survey.ids.includes(self)) {
-    return { reach: { kind: "cycle", path: [self, self] }, places: survey.ids };
+  const own = survey.ids;
+  if (selfNamedIn(survey, self)) {
+    return { reach: { kind: "cycle", path: [self, self] }, own };
   }
 
   const places = await reachableFrom(document, options, read);
   const graph = await placementsReachedFrom(places, options, read);
   return {
     reach: componentReach({ places, self, placedBy: id => graph.get(id) }),
-    places,
+    own,
   };
 }
 
@@ -385,10 +551,10 @@ async function composesACycle(
   options: CycleGuardOptions,
   read: DocumentReader
 ): Promise<CompositionVerdict> {
-  const named = variantNamesIn(document);
-  // More variants than the envelope admits, so which ones a reader can select
-  // cannot be established. Not an answer either way.
-  if (named === null) return "indeterminate";
+  const selections = selectionsWorthComposing(document);
+  // The variants could not be enumerated, or more of them install a reference
+  // than this will compose. Not an answer either way.
+  if (selections === null) return "indeterminate";
 
   // The subject under its own id, so a chain leading back to it meets the
   // document being SAVED rather than the copy the store still holds. Shared
@@ -401,12 +567,60 @@ async function composesACycle(
   };
 
   let indeterminate = false;
-  for (const variant of [undefined, ...named]) {
+  for (const variant of selections) {
     const one = await composesUnder(variant, self, options, read, library);
     if (one === "cycle") return "cycle";
     if (one === "indeterminate") indeterminate = true;
   }
   return indeterminate ? "indeterminate" : "none";
+}
+
+/**
+ * How much composing ONE save will do before it declines to answer.
+ *
+ * A budget rather than a rule about which variants matter. Each selection walks
+ * up to the document's node bound, and a component may legally declare a
+ * thousand variants, so the product is what has to be bounded — not guessed at.
+ *
+ * Guessing is what this replaced. Three successive rounds tried to predict which
+ * variants could change a composition — by the ids they install, then by the
+ * prop paths they write, then by whether a visibility write reveals — and each
+ * refinement was correct about the case that prompted it and wrong about a new
+ * one, because the prediction has to model the whole resolver to be right. The
+ * budget needs no model: every selection is composed, and the only question is
+ * how many the document's size affords.
+ *
+ * Spending it REFUSES, for the reason the read budget does: a prefix of the
+ * selections that found no loop is exactly what a component with no loop looks
+ * like. A 250-node component affords its thousand variants; a 5,000-node one
+ * affords fifty, and past that this says so rather than guessing.
+ */
+const MOST_COMPOSED_NODES = 250_000;
+
+/**
+ * Every selection a reader can receive, or `null` where they cannot all be composed.
+ *
+ * No variant is skipped. Which ones could matter is exactly the question that
+ * kept being answered wrongly, and the answer is not needed: composing one that
+ * changes nothing costs a walk over a document already in memory, while missing
+ * one costs a loop on every page that places it.
+ */
+function selectionsWorthComposing(
+  document: unknown
+): readonly (string | undefined)[] | null {
+  const named = variantNamesIn(document);
+  if (named === null) return null;
+
+  const nodes = (document as { nodes?: unknown }).nodes;
+  // A document whose own forest cannot be counted is one nothing can be afforded
+  // for. The walk refuses such a document anyway; this simply does not guess.
+  if (!Array.isArray(nodes)) return null;
+  const size = Math.max(countNodes(nodes as never), 1);
+  const affordable = Math.floor(MOST_COMPOSED_NODES / size);
+  // The default selection is always one of them, so it is counted here too.
+  if (named.length + 1 > affordable) return null;
+
+  return [undefined, ...named];
 }
 
 /** What the walk and the composition have read so far, shared across selections. */

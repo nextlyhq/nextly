@@ -21,6 +21,8 @@ import type {
   RouteMethod,
 } from "@nextlyhq/plugin-sdk";
 
+import { registerInitialContext } from "../tools/initial-context";
+
 import { callerNow, whileServing } from "./caller";
 import { refuseUnlessAddressedHere } from "./guard";
 
@@ -49,11 +51,10 @@ const SERVER_NAME = "nextly";
 /**
  * Build the protocol server for one request.
  *
- * It carries no tools, resources or prompts yet, and that is the whole of what
- * this stage ships: an endpoint a client can reach, speaking the protocol,
- * exposing nothing. A client that connects sees a server with no capabilities,
- * which is an honest description of an install that has published nothing to
- * it.
+ * It carries one tool and no resources or prompts, so a client sees a server
+ * advertising `tools` alone. Built per request rather than once, because the
+ * tool answers for the caller and a server shared between them would answer for
+ * whichever one built it.
  *
  * The caller is resolved HERE, before anything is constructed, so a request
  * whose caller cannot be established is refused rather than served a server
@@ -68,8 +69,13 @@ const SERVER_NAME = "nextly";
  * re-export it.
  */
 export function buildServer(options: EndpointOptions): McpServer {
-  callerNow();
-  return new McpServer({ name: SERVER_NAME, version: options.version });
+  const ctx = callerNow();
+  const server = new McpServer({ name: SERVER_NAME, version: options.version });
+  // Registered per request, with THIS caller closed over. A tool reading the
+  // ambient scope instead would run when the callback fires rather than when
+  // the server was built, and the two are not the same request.
+  registerInitialContext(server, ctx);
+  return server;
 }
 
 /**
@@ -94,8 +100,11 @@ const ENDPOINT_METHODS: readonly RouteMethod[] = ["POST", "GET", "DELETE"];
  *
  * `public` is deliberately left unset, so the route is authenticated like every
  * other plugin route: a session, or `Authorization: Bearer` with an API key.
- * The endpoint exposes nothing yet, so no permission is named beyond that.
- * Tools reaching content authorize their own reads as they arrive.
+ * No `requiredPermission` is named beyond that, deliberately: a route-level
+ * permission would be a second gate in front of tools that already authorize
+ * their own reads, and the coarser of two gates is the one that goes stale.
+ * `get_initial_context` decides per entity, and the read tools will do the same
+ * per document.
  *
  * ## What that costs, stated rather than left to be found
  *

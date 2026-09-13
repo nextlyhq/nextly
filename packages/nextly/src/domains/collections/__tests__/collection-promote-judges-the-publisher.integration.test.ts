@@ -302,6 +302,148 @@ describe("a collection publish re-judges the draft it promotes", () => {
     expect(doc?.body).toBe("edited");
   });
 
+  it("keeps an UNCHANGED denied child when its group is written", async () => {
+    // The rules delete a denied value, and the group is one JSON column: hand
+    // the write what the rules returned and the partial group is serialised
+    // over the whole column, clearing a protected value nobody touched. The
+    // document the write gets holds the denied child at its LIVE value.
+    const t = await boot();
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: SLUG, overrideAccess: true },
+      {
+        body: "live",
+        ops: { runbook: "live-runbook" },
+        status: "published",
+      }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    // CLERK, who may not write `ops.runbook`, edits only the unrestricted field.
+    await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    const published = await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published" }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const live = await liveDoc(t, id);
+    expect(live.body).toBe("edited");
+    // The protected value is still here. Nobody asked for it to go.
+    expect(live.ops).toEqual({ runbook: "live-runbook" });
+  });
+
+  it("refuses a pending change that CLEARS a field it may not write", async () => {
+    // A GUARD, not a demonstration: this passes against the previous revision
+    // too. Clearing a field sends `null`, which is a present key and so is
+    // judged like any other value. The case the live-side pass exists for is a
+    // key ABSENT from the promoted document entirely, which no route through
+    // the public API was found to produce, since a collection snapshot is a
+    // full copy of the row. That half stays defensive.
+    const t = await boot();
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: SLUG, overrideAccess: true },
+      { body: "live", guarded: "live-value", status: "published" }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    // BOSS may write it, so clearing it is a legitimate pending change.
+    await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
+      { body: "edited", guarded: null }
+    );
+
+    const published = await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published" }
+    );
+
+    expect(published.success).toBe(false);
+    const issues = (
+      published as { publicData?: { errors?: Array<{ path: string }> } }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
+    // The value is untouched, and the deletion is still pending for someone
+    // who may make it.
+    const live = await liveDoc(t, id);
+    expect(live.guarded).toBe("live-value");
+    expect(await pendingDrafts(t, id)).toHaveLength(1);
+  });
+
+  it("publishes a date the CALLER supplies alongside the status", async () => {
+    // The shaping pass coerces a caller's date to a `Date` before the resolver
+    // sees it, and a `Date` is an object with no enumerable keys: a rebuild
+    // that treats every object as a container returns `{}` and the driver then
+    // refuses the write outright. Measured before the fix: the publish failed
+    // with "value.getTime is not a function" and nothing went live.
+    const slug = "dated";
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "body" }),
+            date({ name: "goesLive" }),
+            // One denied field, so the resolver runs at all.
+            text({
+              name: "guarded",
+              access: { update: ({ req }) => req.user?.email === BOSS.email },
+            }),
+          ],
+        }),
+      ],
+    });
+    const h = handlerOf(current);
+
+    const created = await h.createEntry(
+      { collectionName: slug, overrideAccess: true },
+      {
+        body: "live",
+        goesLive: "2026-01-02T03:04:05.000Z",
+        guarded: "live-value",
+        status: "published",
+      }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    const published = await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published", goesLive: "2026-09-09T09:09:09.000Z" }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const doc = (await current.nextly.findByID({
+      collection: slug as never,
+      id,
+      overrideAccess: true,
+      status: "all",
+    } as never)) as Record<string, unknown> | null;
+    expect(new Date(doc?.goesLive as string).toISOString()).toBe(
+      "2026-09-09T09:09:09.000Z"
+    );
+    expect(doc?.guarded).toBe("live-value");
+  });
+
   it("still promotes the change for a publisher who MAY write it", async () => {
     const t = await boot();
     const h = handlerOf(t);

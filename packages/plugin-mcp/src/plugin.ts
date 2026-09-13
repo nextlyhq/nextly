@@ -3,9 +3,9 @@
  * Nextly.
  *
  * EXPERIMENTAL. The surface lands in small reviewable pieces rather than as one
- * drop, and this piece is the transport: an address that speaks the protocol
- * and exposes nothing through it. No tool, resource or prompt is registered
- * yet, so a client that connects finds a server with no capabilities.
+ * drop. What is here is the address, and one tool on it: `get_initial_context`,
+ * which tells a connecting agent what its own credential may read. No resource
+ * and no prompt is registered, and no tool writes anything.
  *
  * Installing the package still changes nothing. The endpoint exists only once
  * an operator passes `enabled: true`, and while it is off the plugin
@@ -163,7 +163,7 @@ export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
     license: "MIT",
     admin: {
       description:
-        "Experimental. Serves a Model Context Protocol endpoint for AI agents when enabled, authenticated like every other Nextly route. It exposes no tools yet, so an agent that connects can read nothing.",
+        "Experimental. Serves a Model Context Protocol endpoint for AI agents when enabled, authenticated like every other Nextly route. Read-only: its one tool reports what the connecting credential may read, and nothing here creates, updates or deletes content.",
     },
     // Contributed only while the endpoint is on. Core independently skips a
     // disabled plugin's routes, so the two agree rather than one relying on the

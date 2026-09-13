@@ -321,6 +321,11 @@ export {
   // The selections that union covers, separately. A caller that must agree with
   // the rendered page composes each one; the union answers about none of them.
   variantNamesIn,
+  // What each of those selections installs, from one index of the forest. A
+  // caller composing selections separately needs them apart, and needs them
+  // without walking the forest again per variant.
+  variantReferencesIn,
+  type VariantReferences,
   // The roots a document composes to, read without composing it. Published
   // because the palette judges every definition's placement by its roots and
   // composing three thousand of them to read their roots is the cost this

@@ -25,10 +25,12 @@ import { isConditionGated } from "./visibility";
 import {
   componentIdsIn,
   componentReferencesFrom,
+  componentReachIn,
   componentReferencesIn,
   componentUsageIn,
   composedRootTypes,
   variantNamesIn,
+  variantReferencesIn,
   instanceExposure,
   readableDefinition,
   resolveComponentInstances,
@@ -2495,6 +2497,106 @@ describe("componentUsageIn", () => {
 });
 
 /**
+ * What each variant installs.
+ *
+ * Three cases here previously covered an `affecting` set — a prediction of which
+ * variants could change a composition, by prop path and by whether a visibility
+ * write revealed. That prediction is gone: the write guard composes every
+ * selection under a work budget instead, because three rounds of refining it were
+ * each correct about the case that prompted them and wrong about a new one.
+ * There is no remaining behaviour those cases described.
+ */
+describe("variantReferencesIn", () => {
+  /** One node placing `c`, exposing its componentId and its text separately. */
+  const doc = (variants: Record<string, Variant>) =>
+    component([instance("n1", "c")], {
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "n1",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+      variants,
+    });
+
+  it("reports what each variant installs, and omits the ones installing nothing", () => {
+    const out = variantReferencesIn(
+      doc({
+        toA: { label: "A", overrides: { swap: "a" } },
+        toB: { label: "B", overrides: { swap: "b" } },
+        untouched: { label: "None", overrides: {} },
+      })
+    );
+
+    expect(out.complete).toBe(true);
+    expect([...out.byVariant]).toEqual([
+      ["toA", ["a"]],
+      ["toB", ["b"]],
+    ]);
+    // ORACLE: the union the other reader gives is these, plus the stored id.
+    expect(
+      componentReferencesIn(
+        doc({ toA: { label: "A", overrides: { swap: "a" } } })
+      ).ids
+    ).toEqual(["c", "a"]);
+  });
+
+  it("answers NULL where the variants cannot be enumerated", () => {
+    const many: Record<string, Variant> = {};
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i += 1) {
+      many[`v${String(i)}`] = { label: "V", overrides: {} };
+    }
+    const out = variantReferencesIn(doc(many));
+
+    expect(out.complete).toBe(false);
+    expect(out.byVariant.size).toBe(0);
+  });
+
+  it("reports a forest too large to index as UNREAD", () => {
+    // A published entry point takes its own bound. That its internal callers
+    // happen to survey the forest first is a property of today's call graph, not
+    // a guarantee this function offers a caller holding an imported document.
+    const big = component(
+      [
+        instance("n1", "c"),
+        ...Array.from({ length: 11 }, (_, i) => node(`t${String(i)}`)),
+      ],
+      {
+        exposed: [
+          {
+            id: "swap",
+            label: "Which",
+            nodeId: "n1",
+            propPath: "componentId",
+            type: "select",
+          },
+        ],
+        variants: { toA: { label: "A", overrides: { swap: "a" } } },
+      }
+    );
+
+    expect(variantReferencesIn(big, 4).complete).toBe(false);
+
+    // CONTROL: under a bound that fits, the same document reads completely AND
+    // reports the variant — so the case above is the bound, not the fixture.
+    const fits = variantReferencesIn(big, 5000);
+    expect(fits.complete).toBe(true);
+    expect([...fits.byVariant]).toEqual([["toA", ["a"]]]);
+  });
+
+  it("is EMPTY for a document offering no variants or no exposures", () => {
+    expect(variantReferencesIn(doc({})).byVariant.size).toBe(0);
+    expect(
+      variantReferencesIn(component([instance("n1", "c")])).byVariant.size
+    ).toBe(0);
+    expect(variantReferencesIn(null).complete).toBe(true);
+  });
+});
+
+/**
  * The selections `componentReferencesIn` unions, listed separately.
  *
  * A caller confirming against the RENDER composes one selection at a time, so
@@ -2560,6 +2662,46 @@ describe("variantNamesIn", () => {
  * supported thing to expose — whose variant then re-points it, because the
  * stored id is never read at all in that case.
  */
+describe("the caller's node cap reaches the variant pass", () => {
+  it("does not report a document the DIRECT survey read as unread", () => {
+    /*
+     * The variant pass is derived, so it has to run under the bound the caller
+     * asked for. Defaulting it made a forest larger than the default — read
+     * completely by the direct survey under a larger cap — come back
+     * `complete: false` from the derived half, which every consumer reads as
+     * unreadable and the write guard turns into a refusal.
+     */
+    const big = component(
+      [
+        instance("n1", "c"),
+        ...Array.from({ length: DEFAULT_LIMITS.maxNodes }, (_, i) =>
+          node(`t${String(i)}`)
+        ),
+      ],
+      {
+        exposed: [
+          {
+            id: "swap",
+            label: "Which",
+            nodeId: "n1",
+            propPath: "componentId",
+            type: "select",
+          },
+        ],
+        variants: { toA: { label: "A", overrides: { swap: "a" } } },
+      }
+    );
+
+    const over = componentReachIn(big, DEFAULT_LIMITS.maxNodes + 1000);
+    expect(over.complete).toBe(true);
+    expect(over.ids).toContain("a");
+
+    // CONTROL: under the DEFAULT cap the same forest genuinely does not fit, so
+    // the case above is the cap being honoured rather than the fixture being small.
+    expect(componentReachIn(big).complete).toBe(false);
+  });
+});
+
 describe("componentReferencesIn", () => {
   /** A places B, exposes that node's componentId, and offers a variant naming A. */
   const swappable = component([instance("n1", "b")], {

@@ -43,6 +43,25 @@ each referenced component as it currently stands, and refuses rather than
 guessing when it cannot read them all. A component the saving author cannot read
 is named only as `…`, so a refusal does not hand out identifiers.
 
+What it does NOT close is a chain that mixes lifecycle states. The published
+walk reads every state, so a component that has never been published can join a
+chain the public renderer cannot draw — it could not load that row — and a save
+is then refused for a loop no reader sees. Reading only public states is not
+available to a plugin: naming the state matches nothing on a site whose workflow
+calls its public state something else, and dropping the system-level read would
+hide a component the author cannot see, which is a MISSED loop rather than a
+false one. So it over-refuses, which is the recoverable direction.
+
+What it does NOT close is a loop that only an EXISTING placement of the saved
+component completes. A page or component already placing it may carry an override
+keyed for an exposure it does not yet declare, which is inert; declaring that
+exposure activates the override and can point a nested node back at the placer.
+Measured on the renderer: the same library composes cleanly before the exposure is
+declared and reports a cycle after, while the saved component judged on its own
+composes cleanly either way. Seeing it means asking which components place this
+one — the reverse direction, which neither the walk nor the composition of a
+single subject can supply.
+
 What it does NOT close is two authors closing a loop between them at the SAME
 moment. The check runs before its own write commits and takes no lock the other
 write contends for, and a plugin hook has no transaction to enlist in — so two
