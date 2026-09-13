@@ -122,21 +122,24 @@ export const FORBIDDEN = [
   },
   {
     // A localization ROADMAP milestone: the word "i18n" followed by a milestone code - one capital
-    // letter, digits, and an optional sub-letter - either after whitespace or opening a bracket
-    // that follows the word. The code names a delivery phase, which a reader cannot look up and
-    // which says nothing about what the code does; the mechanism it stands for (a per-locale
-    // column, a fallback read, a staleness stamp) is what belongs in its place.
+    // letter, digits, and an optional sub-letter - either after whitespace, or ALONE inside a
+    // bracket that follows the word. The code names a delivery phase, which a reader cannot look
+    // up and which says nothing about what the code does; the mechanism it stands for (a
+    // per-locale column, a fallback read, a staleness stamp) is what belongs in its place.
     //
     // Anchored on the word AND the code shape together, because neither half alone is a label:
     // "i18n" is ordinary vocabulary here, and a capital-plus-digit token is a heading level, a
     // storage service or a key name. Case-sensitive for the same reason - a lowercase version
-    // token after the word is prose about a library, and a bracket after the word that opens
-    // lowercase prose (an example list, a locale code) is an aside rather than a label.
+    // token after the word is prose about a library.
+    //
+    // The bracketed form must CLOSE right after the code. A bracket after the word that goes on
+    // into a sentence is an aside, and that sentence may well start with one of those ordinary
+    // capital-plus-digit tokens; only a bracket holding nothing but the code is a label.
     //
     // A code written WITHOUT the word - bracketed after a sentence, or leading a line with a
     // colon - is NOT matched, because nothing in that syntax separates it from the same tokens
     // used in prose. The convention still forbids it; nothing mechanical catches it.
-    pattern: /\bi18n(?:\s+|\s*\(\s*)[A-Z]\d+[a-z]?\b/,
+    pattern: /\bi18n(?:\s+[A-Z]\d+[a-z]?\b|\s*\(\s*[A-Z]\d+[a-z]?\s*\))/,
     why: "names a roadmap milestone rather than the code",
   },
   {

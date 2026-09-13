@@ -538,9 +538,10 @@ describe("localization roadmap milestones", () => {
     "/** Whether the source moved after this one was written (i18n B2). */",
     "// forwarded so localized fields resolve (see i18n M4c)",
     "/* i18n M5b keeps the draft companion */",
-    // The bracket may sit between the word and the code, with or without a space before it.
+    // The bracket may sit between the word and the code, with or without spaces around the code.
     "// i18n (M4) — companion-aware read helpers",
     "// i18n(M6) per-locale status",
+    "// i18n ( M7 ) translation-status overview",
   ])("rejects %j", text => {
     const found = offencesIn(text);
     // The WHY is asserted, not just a non-empty result, so a different pattern firing on the same
@@ -557,9 +558,13 @@ describe("localization roadmap milestones", () => {
     "// compatible with i18next v2 and i18n v3 message formats",
     // A capital-plus-digit token WITHOUT the word is a heading, a service or a key.
     "// render the title as an H1 and store the asset in S3",
-    // A bracket after the word that opens lowercase prose is an aside, not a label.
+    // A bracket after the word that goes on into prose is an aside, not a label - including when
+    // that prose opens with an ordinary capital-plus-digit token, which only a closing bracket
+    // straight after the code can tell apart from a milestone.
     "/** Request locale for i18n (e.g., 'en', 'es', 'fr') */",
     "// resolved through i18n (see the locale table)",
+    "// i18n (S3 storage keeps translated media beside the source)",
+    "// i18n (H1 headings require translated names)",
   ])("accepts %j", text => {
     expect(offencesIn(text)).toEqual([]);
   });
