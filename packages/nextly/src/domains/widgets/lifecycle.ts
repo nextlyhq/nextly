@@ -4,11 +4,10 @@
  * Most widgets are permanent: a reader places one and it stays until they
  * remove it. A CONDITIONAL widget is transient — it shows only while a named
  * condition holds, and stops being offered the moment it does not. Onboarding
- * is the case that needs it, and today every such card decides for itself:
- * `core/seed-demo-content` is placed in the grid, given an order, and then
- * renders nothing once seeding is done. The grid reserves a slot for a card
- * that draws nothing, and the reason lives in a component rather than in the
- * declaration.
+ * is the case that needs it: a card that decided for itself would be placed in
+ * the grid, given an order, and then render nothing once its work was done --
+ * so the grid would reserve a slot for a card drawing nothing, and the reason
+ * would live in a component rather than in the declaration.
  *
  * 🔴 The condition is NAMED, from a closed set this module owns, and the HOST
  * evaluates it. A plugin never supplies a predicate, a callback or an
