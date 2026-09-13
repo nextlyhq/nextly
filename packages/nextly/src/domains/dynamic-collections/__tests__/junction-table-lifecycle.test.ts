@@ -16,6 +16,22 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
+/**
+ * Run something expected to refuse, and hand back what it threw.
+ *
+ * The assertion on the CODE is the point: `toThrow(NextlyError)` passes for any
+ * refusal this generator makes, including one about an unrelated part of the
+ * same save.
+ */
+const captureRefusal = (run: () => unknown): unknown => {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a refusal");
+};
+
 type Dialect = "postgresql" | "mysql" | "sqlite";
 const DIALECTS: Dialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -224,14 +240,28 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       // A renamed constraint keeps its actions: the registry would record
       // `restrict` while the database went on cascading. PostgreSQL can rename
       // a foreign key and so must be told not to; MySQL re-declares one in any
-      // case; SQLite cannot alter a constraint, so the links keep the table
-      // they are in and the old actions with it, which is stated where the
-      // statements are written.
-      const sql = service().generateAlterTableMigration(
-        "dc_posts",
-        [manyToMany("tags")],
-        [manyToMany("categories", "tags", { onDelete: "restrict" })]
-      );
+      // case.
+      const run = () =>
+        service().generateAlterTableMigration(
+          "dc_posts",
+          [manyToMany("tags")],
+          [manyToMany("categories", "tags", { onDelete: "restrict" })]
+        );
+      if (dialect === "sqlite") {
+        // REFUSED here, where this once emitted the rename alone and left the
+        // old actions enforced. SQLite still cannot alter a constraint — what
+        // changed is what it does about that. An action edit it cannot perform
+        // is refused by name on this dialect, and was already refused for a
+        // junction whose table does NOT move and for a plain relationship; a
+        // save that happened to rename as well fell between those and diverged
+        // silently instead, which is the defect the rest of this file is about.
+        expect(run).toThrow(NextlyError);
+        expect(JSON.stringify(captureRefusal(run))).toContain(
+          "FOREIGN_KEY_ACTION_UNSUPPORTED"
+        );
+        return;
+      }
+      const sql = run();
       const from = junction("tags");
       const to = junction("categories");
       const expected: Record<Dialect, string[]> = {
@@ -248,12 +278,13 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
           `ALTER TABLE \`${to}\` ADD CONSTRAINT \`fk_${to}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
           `ALTER TABLE \`${to}\` RENAME INDEX \`uq_${from}_pair\` TO \`uq_${to}_pair\`;`,
         ],
-        sqlite: [`ALTER TABLE "${from}" RENAME TO "${to}";`],
+        // SQLite returned above, refused.
+        sqlite: [],
       };
       const forbidden: Record<Dialect, string[]> = {
         postgresql: [`RENAME CONSTRAINT "fk_`, "ON DELETE CASCADE"],
         mysql: ["ON DELETE CASCADE"],
-        sqlite: ["CONSTRAINT"],
+        sqlite: [],
       };
       for (const statement of expected[dialect]) {
         expect(sql).toContain(statement);
@@ -274,11 +305,24 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       // bug #68286, and untestable ordering on PostgreSQL), SQLite nothing
       // (it cannot alter a constraint).
       const named = { junctionTable: "post_tag_links" };
-      const sql = service().generateAlterTableMigration(
-        "dc_posts",
-        [manyToMany("tags", "tags", named)],
-        [manyToMany("categories", "tags", { ...named, onDelete: "restrict" })]
-      );
+      const run = () =>
+        service().generateAlterTableMigration(
+          "dc_posts",
+          [manyToMany("tags", "tags", named)],
+          [manyToMany("categories", "tags", { ...named, onDelete: "restrict" })]
+        );
+      if (dialect === "sqlite") {
+        // Refused, for the reason given in the test above: emitting nothing
+        // left the registry recording `restrict` over a database still
+        // cascading, and the identical edit without a rename was already
+        // refused on this dialect.
+        expect(run).toThrow(NextlyError);
+        expect(JSON.stringify(captureRefusal(run))).toContain(
+          "FOREIGN_KEY_ACTION_UNSUPPORTED"
+        );
+        return;
+      }
+      const sql = run();
       const t = "post_tag_links";
       const expected: Record<Dialect, string[]> = {
         postgresql: [
@@ -293,19 +337,16 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
           `ALTER TABLE \`${t}\` DROP FOREIGN KEY \`fk_${t}_tags\`;`,
           `ALTER TABLE \`${t}\` ADD CONSTRAINT \`fk_${t}_tags\` FOREIGN KEY (\`tags_id\`) REFERENCES \`dc_tags\`(\`id\`) ON DELETE RESTRICT ON UPDATE NO ACTION;`,
         ],
+        // SQLite returned above, refused.
         sqlite: [],
       };
       for (const statement of expected[dialect]) {
         expect(sql).toContain(statement);
       }
-      if (dialect === "sqlite") {
-        expect(sql).not.toContain(t);
-      } else {
-        // Same name both sides: the unique pair and the indexes have nothing
-        // to carry, and there is no rename to perform.
-        expect(sql).not.toContain("RENAME");
-        expect(sql).not.toContain("ON DELETE CASCADE");
-      }
+      // Same name both sides: the unique pair and the indexes have nothing
+      // to carry, and there is no rename to perform.
+      expect(sql).not.toContain("RENAME");
+      expect(sql).not.toContain("ON DELETE CASCADE");
       expect(sql).not.toContain("CREATE TABLE");
       expect(sql).not.toContain("DROP TABLE");
     });

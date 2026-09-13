@@ -402,6 +402,43 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * What happens to this row when the id it points at changes.
+   *
+   * The same rule as {@link relationOnDelete} and asked the same way, because
+   * the column is the same column: `SET NULL` writes a null into it, so a
+   * required relationship cannot carry that action on either side. Only the
+   * DELETE half was ever checked, which left the identical impossible pair
+   * reachable through `onUpdate` — MySQL refusing the constraint outright and
+   * PostgreSQL accepting it and failing later, on the first update of a
+   * referenced key, in production.
+   *
+   * Requiredness derives nothing here: an undeclared `onUpdate` is `no action`
+   * whether or not the field is required, so only a declared `set null` can
+   * reach the refusal.
+   */
+  private relationOnUpdate(field: FieldDefinition): string {
+    const declared = field.options?.onUpdate;
+    if (declared === undefined) return "no action";
+    if (declared === "set null" && field.required) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `fields.${field.name}`,
+            code: "REQUIRED_RELATION_CANNOT_SET_NULL",
+            message:
+              `"${field.name}" is required, so it cannot be emptied when the ` +
+              `${field.type} it points at changes its id. Choose "cascade" to ` +
+              `follow the new id, "restrict" to prevent the change, or make ` +
+              `the field optional.`,
+          },
+        ],
+        logContext: { field: field.name, onUpdate: declared },
+      });
+    }
+    return declared;
+  }
+
+  /**
    * Every name this generator may have given one column's index, current first.
    *
    * Bounding long names changed what they are called, and an index already in a database still
@@ -657,9 +694,7 @@ export class DynamicCollectionSchemaService {
             relationType === "oneToMany"
           ) {
             const onDelete = this.mapOnDeleteAction(this.relationOnDelete(f));
-            const onUpdate = this.mapOnUpdateAction(
-              f.options.onUpdate || "no action"
-            );
+            const onUpdate = this.mapOnUpdateAction(this.relationOnUpdate(f));
 
             const fkColName = toSnakeCase(f.name);
             constraints.push(
@@ -1156,7 +1191,7 @@ ${allColumnDefs.join(",\n")}
           if (field.type === "relationship" && field.options?.target) {
             const targetTable = `dc_${field.options.target}`;
             const onDelete = this.relationOnDelete(field);
-            const onUpdate = field.options.onUpdate || "no action";
+            const onUpdate = this.relationOnUpdate(field);
             statements.push(
               `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`fk_${tableName}_${addColName}`)} FOREIGN KEY (${this.quoteIdentifier(addColName)}) REFERENCES ${this.quoteIdentifier(targetTable)}(${this.quoteIdentifier("id")}) ON DELETE ${this.mapOnDeleteAction(onDelete)} ON UPDATE ${this.mapOnUpdateAction(onUpdate)};`
             );
@@ -1371,10 +1406,28 @@ ${allColumnDefs.join(",\n")}
     const fkActionsBeforeColumns: string[] = [];
     const fkActionsAfterColumns: string[] = [];
     for (const field of newFields) {
-      const previous = oldFieldMap.get(field.name);
+      // Paired the way the column passes above pair, not by name alone. A
+      // renamed field is the SAME field under a new name, and an exact-name
+      // lookup finds nothing for it — so a save that renamed a relationship
+      // and changed its action emitted the rename and left the key enforcing
+      // the old one, with the registry recording the new.
+      const previous =
+        renamedToName !== null &&
+        renamedFromName !== null &&
+        field.name === renamedToName
+          ? oldFieldMap.get(renamedFromName)
+          : oldFieldMap.get(field.name);
       if (!previous) continue;
+      // A field whose STORAGE moved is created by the add path, which writes
+      // the column and its key together with the actions this save asks for.
+      // Emitting here as well means a second `ADD CONSTRAINT` under the same
+      // name: the migration aborts, and on MySQL the column and the first key
+      // have already auto-committed. The column loop skips these for the
+      // matching reason — the add path owns them.
+      if (this.storageClassChanged(previous, field)) continue;
       const change = this.referentialActionStatements(
         tableName,
+        toSnakeCase(previous.name),
         toSnakeCase(field.name),
         previous,
         field,
@@ -1621,6 +1674,7 @@ ${allColumnDefs.join(",\n")}
    */
   private referentialActionStatements(
     tableName: string,
+    previousColumnName: string,
     columnName: string,
     oldField: FieldDefinition,
     newField: FieldDefinition,
@@ -1634,7 +1688,7 @@ ${allColumnDefs.join(",\n")}
 
     const actionsOf = (f: FieldDefinition) => ({
       onDelete: this.mapOnDeleteAction(this.relationOnDelete(f)),
-      onUpdate: this.mapOnUpdateAction(f.options?.onUpdate || "no action"),
+      onUpdate: this.mapOnUpdateAction(this.relationOnUpdate(f)),
     });
     const from = actionsOf(oldField);
     const to = actionsOf(newField);
@@ -1700,10 +1754,15 @@ ${allColumnDefs.join(",\n")}
     // exactly as it behaved before anything was measured. An empty entry means
     // the caller looked and found nothing, which is a different answer and is
     // read as one: install the key, remove nothing.
+    // Keyed on the column as the live table has it, which is the name BEFORE
+    // this save: `foreignKeysByColumn` was read from the database, and a
+    // rename in this same migration has not happened yet when it was. The key
+    // is then installed under the name the new column takes, which also
+    // converges a constraint an older path left named for the old column.
     const liveNames =
       liveForeignKeys === undefined
-        ? [op.constraintName]
-        : (liveForeignKeys.get(columnName) ?? []);
+        ? [`fk_${tableName}_${previousColumnName}`]
+        : (liveForeignKeys.get(previousColumnName) ?? []);
 
     // Statement by statement rather than as one joined string. What runs this
     // is `CollectionFileManager.runMigration`, which splits on
@@ -2093,6 +2152,10 @@ ${allColumnDefs.join(",\n")}
     // statements. The UNIQUE pair constraint belongs inside the CREATE TABLE
     // body only; it must not appear again as a trailing fragment (a bare
     // `CONSTRAINT ... );` is not valid SQL on any dialect).
+    // The same rule the edit path applies, at the point the columns are
+    // declared NOT NULL: a junction created with `set null` could never have
+    // enforced it, and would meet the refusal on its first action edit.
+    this.refuseJunctionSetNull(field, j);
     return `-- Junction table for many-to-many: ${j.sourceCollection}.${field.name} -> ${j.targetCollection}
 CREATE TABLE IF NOT EXISTS ${q(j.table)} (
   ${q("id")} ${idType} PRIMARY KEY NOT NULL,
@@ -2347,20 +2410,23 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): string[] {
-    const newByName = new Map(newFields.map(f => [f.name, f]));
     const out: string[] = [];
     // Narrowed once, into a local, as the plain path does: the refusal below
     // removes SQLite and the renderer takes only the dialects that remain.
     const dialect = this.dialect;
-    for (const field of oldFields.filter(usesJunctionTable)) {
-      const next = newByName.get(field.name);
-      if (!next || !this.sameRelationTarget(field, next)) continue;
-      const from = this.junctionShape(tableName, field);
-      const to = this.junctionShape(tableName, next);
-      if (from.table !== to.table) continue;
+    for (const { field: next, from, to } of this.junctionPairs(
+      tableName,
+      oldFields,
+      newFields
+    )) {
       if (from.onDelete === to.onDelete && from.onUpdate === to.onUpdate) {
         continue;
       }
+
+      // Before any dialect question and before the table move is considered:
+      // an action the junction's own columns cannot perform is refused on
+      // every dialect, rather than emitted for a server to reject halfway.
+      this.refuseJunctionSetNull(next, to);
 
       if (dialect === "sqlite") {
         throw NextlyError.validation({
@@ -2385,6 +2451,13 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
           },
         });
       }
+
+      // A junction whose TABLE also moved is rebuilt by the carry path, which
+      // already redeclares both keys with the new actions rather than renaming
+      // them. Emitting here as well would drop a constraint that move has
+      // already replaced. The refusals above still had to run for it, which is
+      // why this sits below them rather than at the top of the loop.
+      if (from.table !== to.table) continue;
 
       // Both ends. A junction's row is only meaningful while both the source
       // and the target it names exist, so an edit to what happens on delete
@@ -2469,22 +2542,95 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): Array<{ from: JunctionShape; to: JunctionShape }> {
+    // A carry is a pair whose TABLE moves, plus any detected rename — a rename
+    // is carried whether or not its table name happened to move, because an
+    // explicit `junctionTable` can hold the name still while the field changes.
+    return this.junctionPairs(tableName, oldFields, newFields)
+      .filter(pair => pair.renamed || pair.from.table !== pair.to.table)
+      .map(({ from, to }) => ({ from, to }));
+  }
+
+  /**
+   * Every many-to-many this save KEEPS, paired old shape to new — whether or
+   * not its table moved.
+   *
+   * One pairing, because there were two. {@link junctionCarries} paired for the
+   * table move and the action diff paired again for itself, by name only; a
+   * save that moved a junction AND edited its actions therefore fell between
+   * them, and on SQLite — which can neither alter a constraint nor refuse what
+   * it has not been shown — the table was renamed while the old actions stayed
+   * enforced and the registry recorded the new ones.
+   */
+  private junctionPairs(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): Array<{
+    field: FieldDefinition;
+    from: JunctionShape;
+    to: JunctionShape;
+    renamed: boolean;
+  }> {
     const newByName = new Map(newFields.map(f => [f.name, f]));
-    const carries = oldFields.filter(usesJunctionTable).flatMap(field => {
+    const pairs = oldFields.filter(usesJunctionTable).flatMap(field => {
       const next = newByName.get(field.name);
       if (!next || !this.sameRelationTarget(field, next)) return [];
-      const from = this.junctionShape(tableName, field);
-      const to = this.junctionShape(tableName, next);
-      return from.table === to.table ? [] : [{ from, to }];
+      return [
+        {
+          field: next,
+          from: this.junctionShape(tableName, field),
+          to: this.junctionShape(tableName, next),
+          renamed: false,
+        },
+      ];
     });
     const renamed = this.detectJunctionRename(oldFields, newFields);
     if (renamed) {
-      carries.push({
+      pairs.push({
+        field: renamed.to,
         from: this.junctionShape(tableName, renamed.from),
         to: this.junctionShape(tableName, renamed.to),
+        renamed: true,
       });
     }
-    return carries;
+    return pairs;
+  }
+
+  /**
+   * Refuse a referential action no junction column can perform.
+   *
+   * Both link columns are created `NOT NULL` — a link row that names nothing
+   * on one side is not a link — so `SET NULL` can never hold on either key,
+   * on any dialect and at any point in the table's life. MySQL refuses the
+   * constraint outright, and because its DDL auto-commits, a rebuild that met
+   * the refusal on the second key would already have dropped the first;
+   * PostgreSQL accepts the pair and fails later, when the action fires.
+   */
+  private refuseJunctionSetNull(
+    field: FieldDefinition,
+    shape: JunctionShape
+  ): void {
+    if (shape.onDelete !== "SET NULL" && shape.onUpdate !== "SET NULL") return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `fields.${field.name}`,
+          code: "JUNCTION_CANNOT_SET_NULL",
+          message:
+            `"${field.name}" links two collections through "${shape.table}", ` +
+            `and a link must name a row on both sides — so it cannot be ` +
+            `emptied when one of them is deleted or changes its id. Choose ` +
+            `"cascade" to remove the link, or "restrict" to prevent the ` +
+            `change.`,
+        },
+      ],
+      logContext: {
+        junctionTable: shape.table,
+        field: field.name,
+        onDelete: shape.onDelete,
+        onUpdate: shape.onUpdate,
+      },
+    });
   }
 
   /**

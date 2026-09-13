@@ -360,3 +360,201 @@ describe.each(["postgresql", "mysql"] as const)(
     });
   }
 );
+
+describe.each(["postgresql", "mysql"] as const)(
+  "an action edit paired the way the other passes pair it, on %s",
+  dialect => {
+    const dropVerb =
+      dialect === "mysql" ? "DROP FOREIGN KEY" : "DROP CONSTRAINT";
+
+    it("carries the edit through a rename of the same field", () => {
+      // A renamed field is the SAME field. Matching the old list by the NEW
+      // name finds nothing, so this pass skipped the pair entirely and the
+      // save emitted the column rename alone — registry recording `restrict`
+      // over a key still cascading, which is the defect this PR exists to fix,
+      // reached through a second door.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [manyToOne({ onDelete: "cascade" })],
+        [
+          {
+            ...manyToOne({ onDelete: "restrict" }),
+            name: "writer",
+          } as FieldDefinition,
+        ]
+      );
+      expect(sql).toContain(
+        `RENAME COLUMN ${q(dialect, "author")} TO ${q(dialect, "writer")}`
+      );
+      // Dropped under the name the LIVE table carries — derived from the
+      // column as it was before this save — and installed under the new one.
+      expect(sql).toContain(`${dropVerb} ${q(dialect, "fk_dc_posts_author")}`);
+      expect(sql).toContain(
+        `ADD CONSTRAINT ${q(dialect, "fk_dc_posts_writer")}`
+      );
+      expect(sql).toContain("ON DELETE RESTRICT");
+    });
+
+    it("reads the live key by the column's name BEFORE the save", () => {
+      // The map was read from the database, so it is keyed on the old column;
+      // keying the lookup on the new one finds nothing and emits an ADD beside
+      // a key that is still there.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [manyToOne({ onDelete: "cascade" })],
+        [
+          {
+            ...manyToOne({ onDelete: "restrict" }),
+            name: "writer",
+          } as FieldDefinition,
+        ],
+        { foreignKeysByColumn: new Map([["author", ["posts_author_fkey"]]]) }
+      );
+      expect(sql).toContain(`${dropVerb} ${q(dialect, "posts_author_fkey")}`);
+      expect(sql).toContain(
+        `ADD CONSTRAINT ${q(dialect, "fk_dc_posts_writer")}`
+      );
+    });
+
+    it("leaves the key to the add path when the storage class moved", () => {
+      // A field moving from a junction to its own column is CREATED by the add
+      // path, which writes the column and its key together with the actions
+      // this save asks for. Emitting here as well is a second ADD CONSTRAINT
+      // under one name: the migration aborts, and on MySQL the column and the
+      // first key have already auto-committed.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [
+          {
+            name: "author",
+            type: "relationship",
+            options: {
+              relationType: "manyToMany",
+              target: "authors",
+              onDelete: "cascade",
+            },
+          } as unknown as FieldDefinition,
+        ],
+        [manyToOne({ onDelete: "restrict" })]
+      );
+      const adds = sql.split(
+        `ADD CONSTRAINT ${q(dialect, "fk_dc_posts_author")}`
+      ).length;
+      // `split` yields occurrences + 1, so exactly one ADD means 2 parts.
+      expect(adds).toBe(2);
+      expect(sql).toContain("ON DELETE RESTRICT");
+    });
+
+    it("emits a moved junction's keys once, not twice", () => {
+      // The carry path already redeclares both keys with the new actions when
+      // a junction's table moves. The action pass must leave those alone or
+      // the second drop meets a constraint the first already replaced.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [manyToMany({ onDelete: "cascade" })],
+        [
+          {
+            ...manyToMany({ onDelete: "restrict" }),
+            name: "labels",
+          } as FieldDefinition,
+        ]
+      );
+      // The carry path drops the key under its OLD name and adds it under the
+      // new one. A second emitter here would drop the NEW name — a constraint
+      // that does not exist until the carry's own ADD creates it — so that is
+      // the string to rule out. Counting the old name cannot see it, because
+      // both emitters would leave that count at one.
+      expect(sql).toContain(
+        `${dropVerb} ${q(dialect, "fk_dc_posts_dc_tags_tags_posts")}`
+      );
+      expect(sql).not.toContain(
+        `${dropVerb} ${q(dialect, "fk_dc_posts_dc_tags_labels_posts")}`
+      );
+    });
+  }
+);
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "an action the column cannot perform is refused on %s",
+  dialect => {
+    const refusal = (run: () => unknown): string => {
+      try {
+        run();
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        return JSON.stringify(error);
+      }
+      throw new Error("expected a refusal");
+    };
+
+    it("refuses `onUpdate: set null` on a required relationship", () => {
+      // The identical impossible pair `onDelete` has always refused, reachable
+      // through the other half. Requiredness is unchanged by this save, so
+      // nothing relaxes the column: MySQL rejects the key after the drop has
+      // auto-committed, and PostgreSQL accepts it and fails on the first
+      // update of a referenced id, in production.
+      const required = (options: Record<string, unknown>) =>
+        ({ ...manyToOne(options), required: true }) as FieldDefinition;
+      expect(
+        refusal(() =>
+          service(dialect).generateAlterTableMigration(
+            "dc_posts",
+            [required({ onUpdate: "no action" })],
+            [required({ onUpdate: "set null" })]
+          )
+        )
+      ).toContain("REQUIRED_RELATION_CANNOT_SET_NULL");
+    });
+
+    it("refuses it at creation too, not only on an edit", () => {
+      const required = (options: Record<string, unknown>) =>
+        ({ ...manyToOne(options), required: true }) as FieldDefinition;
+      expect(
+        refusal(() =>
+          service(dialect).generateMigrationSQL("dc_posts", [
+            required({ onUpdate: "set null" }),
+          ])
+        )
+      ).toContain("REQUIRED_RELATION_CANNOT_SET_NULL");
+    });
+
+    it("refuses `set null` on a many-to-many, whose columns are NOT NULL", () => {
+      // Both link columns are created NOT NULL — a link naming nothing on one
+      // side is not a link — so SET NULL can never hold on either key, on any
+      // dialect. Refused before the dialect question, because no dialect can
+      // do it.
+      expect(
+        refusal(() =>
+          service(dialect).generateAlterTableMigration(
+            "dc_posts",
+            [manyToMany({ onDelete: "cascade" })],
+            [manyToMany({ onDelete: "set null" })]
+          )
+        )
+      ).toContain("JUNCTION_CANNOT_SET_NULL");
+    });
+
+    it("refuses a junction created with it, which could never enforce it", () => {
+      expect(
+        refusal(() =>
+          service(dialect).generateJunctionTable(
+            "dc_posts",
+            manyToMany({ onDelete: "set null" })
+          )
+        )
+      ).toContain("JUNCTION_CANNOT_SET_NULL");
+    });
+
+    it("still allows the actions a junction CAN perform", () => {
+      // The control: the refusal is about `set null`, not about junction
+      // action edits in general — which remain refused on SQLite by name and
+      // emitted on the other two.
+      const run = () =>
+        service(dialect).generateJunctionTable(
+          "dc_posts",
+          manyToMany({ onDelete: "cascade" })
+        );
+      expect(run).not.toThrow();
+    });
+  }
+);

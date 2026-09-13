@@ -69,3 +69,24 @@ them, because emitting the right SQL is only half of arriving:
   rather than derived from a naming convention. A column whose key was
   installed under another name, or that carries none because it was edited
   from a scalar into a relationship, no longer aborts the migration.
+
+The edit is also paired the way the rest of the save pairs, rather than by
+name alone: a relationship renamed in the same save carries its action edit
+(it previously emitted the rename and left the old action enforced), and a
+field whose storage moved leaves its key to the path that creates it rather
+than declaring the same constraint twice. Many-to-many junctions are paired
+once for both their table move and their action edit, so a save that did both
+can no longer fall between the two.
+
+Two referential actions are now refused rather than emitted for a server to
+reject halfway. `onUpdate: "set null"` on a required relationship is the pair
+`onDelete` has always refused, reached through the other half. And `set null`
+on a many-to-many cannot hold at all: both link columns are `NOT NULL`,
+because a link naming nothing on one side is not a link.
+
+One behaviour changed on SQLite. A junction action edit was refused by name
+when the junction kept its table and silently ignored when the same save also
+renamed it — so whether the edit was refused or lost depended on whether you
+happened to rename. It is refused in both cases now. SQLite still cannot
+change a junction's referential actions; renaming one on its own is
+unaffected.
