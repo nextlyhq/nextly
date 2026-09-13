@@ -19,3 +19,9 @@ export type {
   SitemapServices,
   UrlForEntry,
 } from "./sitemap";
+export {
+  seoIssuesWidgetSource,
+  issuesFor,
+  SEO_ISSUES_SOURCE_ID,
+  ISSUE_SCAN_ROW_BUDGET,
+} from "./widget-source";

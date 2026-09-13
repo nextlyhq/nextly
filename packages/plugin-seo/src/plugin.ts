@@ -24,6 +24,7 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { seoIssuesWidgetSource } from "./widget-source";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -158,6 +159,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
+    // A dashboard source counting the SEO issues in those same collections.
+    // Bound to `targets` rather than to every collection: a collection this
+    // plugin never extended has no `seo` group, so every one of its documents
+    // would report the full set of missing fields and drown the real answer.
+    widgetSources: [seoIssuesWidgetSource(targets)],
   };
 
   if (sitemapEnabled) {
