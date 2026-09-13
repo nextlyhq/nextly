@@ -378,3 +378,53 @@ describe("a field declaring unique on the slug column", () => {
     }
   );
 });
+
+/**
+ * A unique field is enforced SOMEHOW, whichever of the two mechanisms applies.
+ *
+ * The two are exclusive by construction: a column MySQL can key carries a named index, and a column
+ * it cannot carries the inline `UNIQUE` instead. That makes "neither" reachable by a disagreement
+ * rather than by a decision — the create path bounds a MySQL `select` through the descriptor, which
+ * skips the inline form because the column IS keyable, while a prediction asking the legacy
+ * renderer still sees unbounded `text` and suppresses the named index. The table is then created
+ * enforcing nothing, and a duplicate is accepted with no error anywhere.
+ *
+ * Asserted as a disjunction on purpose: which mechanism is used is an implementation choice that
+ * may move, and pinning one of them would fail on a correct change while still missing the case
+ * this exists to catch.
+ */
+describe("a unique field is enforced by one mechanism or the other", () => {
+  const uniqueField = (type: string): FieldDefinition =>
+    ({
+      name: "code",
+      type,
+      unique: true,
+      ...(type === "select" || type === "radio"
+        ? { options: [{ label: "A", value: "a" }] }
+        : {}),
+    }) as unknown as FieldDefinition;
+
+  it.each([["select"], ["radio"], ["upload"], ["text"]] as const)(
+    "enforces uniqueness for a %s field on mysql",
+    type => {
+      const sql = new DynamicCollectionSchemaService(
+        undefined,
+        "mysql"
+      ).generateMigrationSQL("dc_codes", [uniqueField(type)], {});
+
+      const named = new RegExp(
+        `CREATE\\s+UNIQUE\\s+INDEX[^;]*\`?${uniqueIndexNameForColumn("dc_codes", "code")}\`?`,
+        "i"
+      ).test(sql);
+      const inline = /`code`[^,\n]*\bUNIQUE\b/i.test(sql);
+
+      // The control that makes the disjunction meaningful: the column must exist at all, so a
+      // generator that emitted nothing for this field cannot satisfy the assertion by absence.
+      expect(sql).toMatch(/`code`/);
+      expect(
+        named || inline,
+        `neither a named unique index nor an inline UNIQUE was emitted for a unique ${type} field:\n${sql}`
+      ).toBe(true);
+    }
+  );
+});

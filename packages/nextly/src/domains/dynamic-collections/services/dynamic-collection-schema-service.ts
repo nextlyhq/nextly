@@ -480,15 +480,17 @@ export class DynamicCollectionSchemaService {
     // emitting both makes a freshly created table disagree with its own snapshot, and
     // every write maintains two identical unique indexes until a reconcile drops one.
     if (toSnakeCase(field.name) === "slug") return null;
-    const rendered =
-      this.canonicalSlugType(field) ??
-      this.mapFieldTypeToSQL(
-        field.type,
-        field.length,
-        field.options,
-        field.validation,
-        field
-      );
+    // Judged on the type the create path EMITS, because that is what the index will stand on.
+    // Asking the legacy renderer instead reports an unbounded MySQL `text` for a field the
+    // descriptor bounds, so the named index is suppressed while the inline `UNIQUE` is skipped too
+    // — the column being keyable is exactly what skips it — and the table is created enforcing no
+    // uniqueness at all.
+    //
+    // The note on `uniquenessCanBeAnIndex` says bounding a MySQL text column belongs in the shared
+    // descriptor rather than here, and that is still true: this READS the descriptor's answer
+    // rather than bounding anything itself, so the created column and this prediction cannot
+    // disagree.
+    const rendered = this.newColumnType(field);
     if (!this.uniquenessCanBeAnIndex(rendered)) return null;
     return uniqueIndexNameForColumn(tableName, toSnakeCase(field.name));
   }
@@ -949,10 +951,13 @@ ${allColumnDefs.join(",\n")}
         // indexed column so this matches the actual physical column (created
         // snake_cased) and the migrate:create desired-state index naming.
         const col = toSnakeCase(f.name);
+        // The same question as the unique index above, and it has to reach the same answer: this
+        // shapes an index over a column this statement is creating, so it judges the type being
+        // created rather than the one the legacy renderer would have chosen.
         const indexSql = this.createIndexSql(
           tableName,
           col,
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f)
+          this.newColumnType(f)
         );
         if (indexSql) indexStatements.push(indexSql);
       }
