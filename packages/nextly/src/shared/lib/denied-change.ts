@@ -132,16 +132,35 @@ export async function resolvePromotedDocument(
   const permittedLive = detachData(input.live);
   await input.applyRules(permittedLive);
 
-  // The promoted document's own verdict, plus — from the live row — ONLY the
-  // fields the promotion no longer carries.
-  //
-  // Live is consulted for one reason: a rule is never asked about a key that is
-  // absent, so a field the pending change removes outright is judged nowhere.
-  // Taking live's verdict for a field the promotion still holds would import a
-  // stale answer instead, because a rule reads its siblings: where live says
-  // `kind: "private"` denies `guarded`, and the pending change sets `kind` to
-  // `public` and edits `guarded` legitimately, the promoted document is the one
-  // that has the right of it.
+  const denied = collectDenied(input, permittedBefore, permittedLive);
+  const refusals = [...denied].flatMap(path => refusedLeaves(input, path));
+  if (refusals.length > 0) refuse(input, refusals);
+
+  return restoreDenied(
+    input.before,
+    permittedBefore,
+    input.live,
+    permittedLive
+  ) as Record<string, unknown>;
+}
+
+/**
+ * Every path the rules deny: the promoted document's own verdict, plus from the
+ * live row ONLY the fields the promotion no longer carries.
+ *
+ * Live is consulted for one reason: a rule is never asked about a key that is
+ * absent, so a field the pending change removes outright is judged nowhere.
+ * Taking live's verdict for a field the promotion still holds would import a
+ * stale answer instead, because a rule reads its siblings: where live says
+ * `kind: "private"` denies `guarded`, and the pending change sets `kind` to
+ * `public` and edits `guarded` legitimately, the promoted document is the one
+ * that has the right of it.
+ */
+function collectDenied(
+  input: PromotionAccessInput,
+  permittedBefore: Record<string, unknown>,
+  permittedLive: Record<string, unknown>
+): Set<string> {
   const denied = new Set(deniedPaths(input.before, permittedBefore, ""));
   for (const path of deniedPaths(input.live, permittedLive, "")) {
     // Expanded to leaves BEFORE the filter, because a rule denies a container
@@ -152,54 +171,52 @@ export async function resolvePromotedDocument(
       if (!pathExists(input.before, leaf)) denied.add(leaf);
     }
   }
+  return denied;
+}
 
-  const refusals: string[] = [];
-  for (const path of denied) {
-    // Leaf by leaf, over the UNION of both sides. The rules delete a denied
-    // container whole, so the removal names the container while its contents
-    // can have two authors, and a property present only on the live side is one
-    // this document deletes.
-    const leaves = new Set([
-      ...leafPaths(valueAt(input.before, path), path),
-      ...leafPaths(valueAt(input.live, path), path),
-    ]);
-    for (const leaf of leaves) {
-      if (isStoreBookkeeping(leaf, input.authoredFieldNames)) continue;
-      if (
-        sameStoredValue(valueAt(input.before, leaf), valueAt(input.live, leaf))
-      ) {
-        continue;
-      }
-      // The caller's own edit is dropped back to live below, not refused.
-      if (pathExists(input.callerSupplied, leaf)) continue;
-      refusals.push(leaf);
-    }
+/**
+ * The leaves under one denied path that the pending change would change.
+ *
+ * Leaf by leaf, over the UNION of both sides. The rules delete a denied
+ * container whole, so the removal names the container while its contents can
+ * have two authors, and a property present only on the live side is one this
+ * document deletes.
+ */
+function refusedLeaves(input: PromotionAccessInput, path: string): string[] {
+  const leaves = new Set([
+    ...leafPaths(valueAt(input.before, path), path),
+    ...leafPaths(valueAt(input.live, path), path),
+  ]);
+  return [...leaves].filter(leaf => isRefusal(input, leaf));
+}
+
+/** Whether one denied leaf is a change the pending change makes. */
+function isRefusal(input: PromotionAccessInput, leaf: string): boolean {
+  if (isStoreBookkeeping(leaf, input.authoredFieldNames)) return false;
+  if (sameStoredValue(valueAt(input.before, leaf), valueAt(input.live, leaf))) {
+    return false;
   }
+  // The caller's own edit is dropped back to live, not refused.
+  return !pathExists(input.callerSupplied, leaf);
+}
 
-  if (refusals.length > 0) {
-    const fields = [...new Set(refusals)].sort();
-    throw NextlyError.validation({
-      errors: fields.map(path => ({
-        path,
-        code: "FORBIDDEN",
-        message:
-          "The pending change edits this field and you do not have permission to write it, so it cannot be published. The change is kept.",
-      })),
-      logContext: {
-        cause: "promote-denied-field",
-        slug: input.slug,
-        locale: input.locale ?? null,
-        fields,
-      },
-    });
-  }
-
-  return restoreDenied(
-    input.before,
-    permittedBefore,
-    input.live,
-    permittedLive
-  ) as Record<string, unknown>;
+/** Refuse the promotion, naming every field at fault, in a stable order. */
+function refuse(input: PromotionAccessInput, refusals: string[]): never {
+  const fields = [...new Set(refusals)].sort();
+  throw NextlyError.validation({
+    errors: fields.map(path => ({
+      path,
+      code: "FORBIDDEN",
+      message:
+        "The pending change edits this field and you do not have permission to write it, so it cannot be published. The change is kept.",
+    })),
+    logContext: {
+      cause: "promote-denied-field",
+      slug: input.slug,
+      locale: input.locale ?? null,
+      fields,
+    },
+  });
 }
 
 /**
@@ -217,58 +234,93 @@ function restoreDenied(
   permittedLive: unknown
 ): unknown {
   if (Array.isArray(before)) {
-    if (!Array.isArray(permitted)) return live;
-    return before.map((row, index) =>
-      restoreDenied(
-        row,
-        permitted[index],
-        Array.isArray(live) ? live[index] : undefined,
-        Array.isArray(permittedLive) ? permittedLive[index] : undefined
-      )
-    );
+    return restoreArray(before, permitted, live, permittedLive);
   }
   if (!isRecord(before)) return before;
   // The rules removed this whole level, so the row keeps what it has.
   if (!isRecord(permitted)) return live;
+  return restoreRecord(
+    before,
+    permitted,
+    recordOrUndefined(live),
+    recordOrUndefined(permittedLive)
+  );
+}
 
-  const liveRecord = isRecord(live) ? live : undefined;
-  const permittedLiveRecord = isRecord(permittedLive)
-    ? permittedLive
-    : undefined;
+function restoreArray(
+  before: unknown[],
+  permitted: unknown,
+  live: unknown,
+  permittedLive: unknown
+): unknown {
+  // The rules removed the whole list, so the row keeps what it has.
+  if (!Array.isArray(permitted)) return live;
+  return before.map((row, index) =>
+    restoreDenied(
+      row,
+      permitted[index],
+      itemAt(live, index),
+      itemAt(permittedLive, index)
+    )
+  );
+}
+
+function restoreRecord(
+  before: Record<string, unknown>,
+  permitted: Record<string, unknown>,
+  live: Record<string, unknown> | undefined,
+  permittedLive: Record<string, unknown> | undefined
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-
   for (const key of Object.keys(before)) {
-    if (!hasOwn(permitted, key)) {
-      if (liveRecord && hasOwn(liveRecord, key)) {
-        assign(out, key, liveRecord[key]);
-      }
-      continue;
-    }
-    assign(
-      out,
-      key,
-      restoreDenied(
-        before[key],
-        permitted[key],
-        liveRecord?.[key],
-        permittedLiveRecord?.[key]
-      )
-    );
-  }
-
-  // A key the row holds that this document drops. Allowed, that is a deletion
-  // the promotion is entitled to make; denied, it is one the caller may not,
-  // so the value stays. Anything the pending change was deleting has already
-  // been refused above, so what reaches here is the caller's own.
-  if (liveRecord) {
-    for (const key of Object.keys(liveRecord)) {
-      if (hasOwn(before, key)) continue;
-      if (permittedLiveRecord && hasOwn(permittedLiveRecord, key)) continue;
-      assign(out, key, liveRecord[key]);
+    if (hasOwn(permitted, key)) {
+      assign(
+        out,
+        key,
+        restoreDenied(
+          before[key],
+          permitted[key],
+          live?.[key],
+          permittedLive?.[key]
+        )
+      );
+    } else if (live && hasOwn(live, key)) {
+      // Denied: the row keeps what it has.
+      assign(out, key, live[key]);
     }
   }
-
+  keepDeniedLiveOnlyKeys(out, before, live, permittedLive);
   return out;
+}
+
+/**
+ * A key the row holds that this document drops. Allowed, that is a deletion the
+ * promotion is entitled to make; denied, it is one the caller may not, so the
+ * value stays. Anything the pending change was deleting has already been
+ * refused, so what reaches here is the caller's own.
+ */
+function keepDeniedLiveOnlyKeys(
+  out: Record<string, unknown>,
+  before: Record<string, unknown>,
+  live: Record<string, unknown> | undefined,
+  permittedLive: Record<string, unknown> | undefined
+): void {
+  if (!live) return;
+  for (const key of Object.keys(live)) {
+    if (hasOwn(before, key)) continue;
+    if (permittedLive && hasOwn(permittedLive, key)) continue;
+    assign(out, key, live[key]);
+  }
+}
+
+function recordOrUndefined(
+  value: unknown
+): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function itemAt(value: unknown, index: number): unknown {
+  return Array.isArray(value) ? value[index] : undefined;
 }
 
 /**
