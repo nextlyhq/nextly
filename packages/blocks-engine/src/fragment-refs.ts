@@ -106,7 +106,7 @@ const FRAGMENT_REFERENCE_SET = new Set(FRAGMENT_REFERENCE_PROPS);
  */
 export function remapFragmentProps(
   props: unknown,
-  domIds: ReadonlyMap<string, string>
+  domIds: Pick<ReadonlyMap<string, string>, "get" | "size">
 ): unknown {
   if (domIds.size === 0 || !isTraversable(props)) return props;
 
@@ -136,7 +136,7 @@ export function remapFragmentProps(
  */
 export function remapFragmentBindings(
   bindings: unknown,
-  domIds: ReadonlyMap<string, string>
+  domIds: Pick<ReadonlyMap<string, string>, "get" | "size">
 ): unknown {
   if (domIds.size === 0 || !isPlainRecord(bindings)) return bindings;
   let changed = false;
@@ -155,7 +155,7 @@ export function remapFragmentBindings(
 /** One binding, with a fragment fallback pointed at the copy's own target. */
 function withRemappedFallback(
   binding: unknown,
-  domIds: ReadonlyMap<string, string>
+  domIds: Pick<ReadonlyMap<string, string>, "get">
 ): unknown {
   if (!isPlainRecord(binding)) return binding;
   const fallback = ownEntry(binding, "fallback");
@@ -178,7 +178,7 @@ interface Frame {
 
 /** Everything one rebuild carries between steps. */
 interface Rebuild {
-  readonly domIds: ReadonlyMap<string, string>;
+  readonly domIds: Pick<ReadonlyMap<string, string>, "get">;
   /** Source object → the single replacement standing in for it. */
   readonly copies: Map<Traversable, Traversable>;
   readonly stack: Frame[];
@@ -267,7 +267,7 @@ function descend(run: Rebuild, value: unknown): unknown {
 /** One target, rewritten only if it is exactly a fragment this run minted. */
 function remapOneFragment(
   value: string,
-  domIds: ReadonlyMap<string, string>
+  domIds: Pick<ReadonlyMap<string, string>, "get">
 ): string {
   if (!value.startsWith("#")) return value;
   const target = domIds.get(value.slice(1));
