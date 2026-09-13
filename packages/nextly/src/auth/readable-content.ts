@@ -104,13 +104,17 @@ function asReadAccess(caller: ReadableContentCaller) {
  * per entity: the whole registry read N times to answer N questions that each
  * name one slug.
  *
- * Three states, and they are not interchangeable:
+ * FOUR states, and they are not interchangeable:
  *
- * - registered and readable: `kind` is set, `readable` is true.
+ * - registered and readable: `kind` is set, `readable` is true, `known` true.
  * - registered and WITHHELD: `kind` is set, `readable` is false. The entity
  *   exists and this caller may not see it.
- * - UNREGISTERED: `kind` is absent. Neither registry answers to the name, so
- *   there is no rule to judge it against.
+ * - UNREGISTERED: `kind` is absent and `known` is true. Neither registry
+ *   answers to the name, so there is no rule to judge it against.
+ * - UNKNOWN: `kind` is absent and `known` is FALSE. A lookup threw, so the
+ *   slug's absence was never established. A caller that reads this as
+ *   unregistered has chosen a failure direction by accident, and for a
+ *   disclosure decision it is the unsafe one.
  *
  * 🔴 The three-way is for a caller deciding what to DISCLOSE, never for one
  * deciding how to answer a request. A refusal that separated "you may not read
@@ -126,24 +130,37 @@ function asReadAccess(caller: ReadableContentCaller) {
  * alone cannot separate those two, and redacting on it removes both.
  */
 export interface ContentReadability {
-  /** The registry that owns the slug; absent when neither does. */
+  /** The registry that owns the slug; absent when neither does, or none could answer. */
   kind?: ReadableContentEntity["kind"];
-  /** Whether this caller may read it. Always false when it is unregistered. */
+  /** Whether this caller may read it. Always false when it is not registered. */
   readable: boolean;
+  /**
+   * Whether the registries answered at all.
+   *
+   * False when a lookup threw. `kind` is then absent because the answer is
+   * unknown, NOT because the slug is unregistered, and the two have opposite
+   * safe responses: refuse the read, and withhold the name.
+   */
+  known: boolean;
 }
 
 export async function contentReadability(
   slug: string,
   caller: ReadableContentCaller
 ): Promise<ContentReadability> {
-  const kind = await registeredContentKindOf(slug);
-  // An unregistered slug is not judged. It has no registry entry and no rule to
-  // decide against, and admitting what cannot be judged is the inversion the
+  const { kind, known } = await registeredContentKindOf(slug);
+  // A slug with no registry entry is not judged. It has no rule to decide
+  // against, and admitting what cannot be judged is the inversion the
   // dashboard's readable-resources endpoint was fixed to remove. Asking anyway
   // would also let a super admin's bypass, which short-circuits before it reads
-  // any rule, answer yes for a slug that exists nowhere.
-  if (kind === undefined) return { readable: false };
-  return { kind, readable: await canReadEntity(slug, asReadAccess(caller)) };
+  // any rule, answer yes for a slug that exists nowhere. An unknown answer
+  // takes the same branch and is reported as unknown, so a caller can tell.
+  if (kind === undefined) return { readable: false, known };
+  return {
+    kind,
+    readable: await canReadEntity(slug, asReadAccess(caller)),
+    known,
+  };
 }
 
 /**

@@ -66,13 +66,19 @@ export interface DeclaredField {
 /**
  * The keys that describe what a field's VALUE is, and may be published.
  *
- * Drawn from the two writers that produce stored declarations: the manifest
- * schema (`schemas/_zod/ui-schema.ts`), which every schema-surface write is
- * validated against, and the legacy Builder type
- * (`schemas/dynamic-collections/legacy-types.ts`), which names several keys the
- * manifest does not. The two disagree about spelling in places — a select's
- * choices are `options` from code and `fieldOptions` from the Builder — so both
- * spellings are here and a consumer reads whichever arrived.
+ * Drawn from THREE sources, because no one of them names every key a stored
+ * declaration can carry: the manifest schema (`schemas/_zod/ui-schema.ts`),
+ * which every schema-surface write is validated against; the legacy Builder
+ * type (`schemas/dynamic-collections/legacy-types.ts`), which names several
+ * keys the manifest does not; and the code-first field interfaces
+ * (`collections/fields/types/*.ts`), which let a constraint be written FLAT
+ * where the manifest only nests it.
+ *
+ * They disagree about spelling in places, and the disagreements are the whole
+ * reason this list is long. A select's choices are `options` from code and
+ * `fieldOptions` from the Builder. A text field's bounds are `minLength` and
+ * `maxLength` written flat, or the same names inside `validation` written
+ * nested. Both spellings are here, and a consumer reads whichever arrived.
  *
  * Ordered by what a reader asks first: identity, then constraints, then the
  * type-specific declaration, then containment.
@@ -90,6 +96,18 @@ export const SCHEMA_FIELD_KEYS: readonly string[] = [
   "localized",
   "private",
   "validation",
+
+  // The FLAT spelling of the same bounds. A code-first field may write
+  // `minLength`/`maxLength` or `min`/`max` directly instead of nesting them
+  // under `validation`, and `domains/schema/services/zod-generator.ts` reads
+  // the flat form when it builds the entity's validation schema. A projection
+  // carrying only the nested spelling therefore describes a field as unbounded
+  // while the API still rejects a value that exceeds it, which is the worst of
+  // both: the reader is not told, and the write still fails.
+  "minLength",
+  "maxLength",
+  "min",
+  "max",
 
   // What the value is, per type. `options` is the code-first spelling of a
   // select or radio's choices and `fieldOptions` the Builder's; on the legacy

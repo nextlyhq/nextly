@@ -75,7 +75,7 @@ describe("the two registry readings agree", () => {
     );
 
     for (const [slug, kind] of enumerated) {
-      expect(await registeredContentKindOf(slug), slug).toBe(kind);
+      expect((await registeredContentKindOf(slug)).kind, slug).toBe(kind);
     }
   });
 
@@ -84,8 +84,8 @@ describe("the two registry readings agree", () => {
     // Single as absent, and one that took the first registry to answer would
     // report whichever it happened to ask first. Both directions are checked
     // because only one of them is visible from the loop above.
-    expect(await registeredContentKindOf("posts")).toBe("collection");
-    expect(await registeredContentKindOf("homepage")).toBe("single");
+    expect((await registeredContentKindOf("posts")).kind).toBe("collection");
+    expect((await registeredContentKindOf("homepage")).kind).toBe("single");
   });
 
   it("agrees that a name in neither registry belongs to neither", async () => {
@@ -93,9 +93,9 @@ describe("the two registry readings agree", () => {
 
     // A slug nothing ever declared.
     expect(enumerated.has("no-such-entity-anywhere")).toBe(false);
-    expect(await registeredContentKindOf("no-such-entity-anywhere")).toBe(
-      undefined
-    );
+    expect(await registeredContentKindOf("no-such-entity-anywhere")).toEqual({
+      known: true,
+    });
 
     // The system entities, which are real and are not CONTENT. A relationship
     // pointing at one of these must keep its target: they disclose nothing
@@ -107,7 +107,7 @@ describe("the two registry readings agree", () => {
       expect(
         await registeredContentKindOf(slug),
         `${slug} in the point lookup`
-      ).toBe(undefined);
+      ).toEqual({ known: true });
     }
   });
 });

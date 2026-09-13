@@ -83,29 +83,53 @@ interface SingleLookup {
   getSingleBySlug: (slug: string) => Promise<unknown>;
 }
 
+/** What a point lookup could establish about one slug. */
+type Presence = "present" | "absent" | "unknown";
+
 /**
  * Whether one registry holds a record for a NAMED slug.
  *
- * 🔴 Fails closed, and its failure is not distinguishable from absence here on
- * purpose. {@link registeredContentSnapshot} separates the two because its
- * callers want opposite things from an unreachable registry: an access decision
- * wants the empty set, a COUNT does not. A caller asking about one slug is
- * always the first kind — the answer feeds a decision about that entity alone,
- * and "I could not tell" has the same safe consequence as "there is no such
- * thing". Nothing here reports a floor, because a floor of one is a verdict.
+ * 🔴 THREE answers rather than two, because the callers read this with OPPOSITE
+ * safety directions and a boolean forces one of them to be wrong.
+ *
+ * An access decision treats "cannot tell" as refuse, which is the same
+ * consequence it gives "no such thing". A DISCLOSURE decision inverts that: it
+ * withholds a slug precisely because the entity is registered and unreadable,
+ * so a failed lookup folded into "absent" tells it the entity does not exist
+ * and it publishes the name it exists to hide. One value cannot answer both.
+ *
+ * {@link registryRead} keeps the same distinction for the enumeration path and
+ * says why at length; this is that reasoning applied one slug at a time.
  */
 async function registryHolds<T>(
   service: string,
   read: (registry: T) => Promise<unknown>
-): Promise<boolean> {
+): Promise<Presence> {
   // Absent: this install registers no content of that kind, so the answer is
   // no rather than a shortfall — the same reading `registryRead` takes.
-  if (!container.has(service)) return false;
+  if (!container.has(service)) return "absent";
   try {
-    return (await read(container.get<T>(service))) !== null;
+    const row = await read(container.get<T>(service));
+    return row === null ? "absent" : "present";
   } catch {
-    return false;
+    // Registered and unable to answer, a construction failure inside the
+    // factory included. NOT absence: the row may well exist.
+    return "unknown";
   }
+}
+
+/** What the registries could establish about one slug. */
+export interface RegistryPresence {
+  /** The registry that owns it. Absent when none does, or none could answer. */
+  kind?: "collection" | "single";
+  /**
+   * Whether the registries actually answered.
+   *
+   * False when a lookup threw, and then `kind` is absent because the answer is
+   * UNKNOWN rather than because the slug is unregistered. A caller that treats
+   * those alike is choosing one of the two failure directions by accident.
+   */
+  known: boolean;
 }
 
 /**
@@ -123,23 +147,28 @@ async function registryHolds<T>(
  * collection. The registries do not permit that overlap; stating the order in
  * both places keeps them from disagreeing if they ever do.
  *
+ * A PRESENT answer settles the question whatever the other registry would have
+ * said, so a lookup that threw only matters when neither found the slug: then
+ * its absence is unestablished rather than observed, and `known` says so.
+ *
  * Deliberately NOT an access decision. It reports what is registered, and
  * {@link readableContentKind} is where that meets the caller's grants.
  */
 export async function registeredContentKindOf(
   slug: string
-): Promise<"collection" | "single" | undefined> {
-  if (!slug) return undefined;
-  const isCollection = await registryHolds<CollectionLookup>(
+): Promise<RegistryPresence> {
+  if (!slug) return { known: true };
+  const asCollection = await registryHolds<CollectionLookup>(
     "collectionRegistryService",
     registry => registry.getCollectionBySlug(slug)
   );
-  if (isCollection) return "collection";
-  const isSingle = await registryHolds<SingleLookup>(
+  if (asCollection === "present") return { kind: "collection", known: true };
+  const asSingle = await registryHolds<SingleLookup>(
     "singleRegistryService",
     registry => registry.getSingleBySlug(slug)
   );
-  return isSingle ? "single" : undefined;
+  if (asSingle === "present") return { kind: "single", known: true };
+  return { known: asCollection === "absent" && asSingle === "absent" };
 }
 
 /** The registered collection slugs, or none when the registry is unreachable. */

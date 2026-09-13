@@ -11,6 +11,9 @@
  * commit that adds the key, which is the only place the question can be
  * answered by the person who knows the answer.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
@@ -42,6 +45,68 @@ function manifestFieldKeys(): string[] {
   const object = inner as { shape?: Record<string, unknown> } | undefined;
   return Object.keys(object?.shape ?? {});
 }
+
+/**
+ * The field keys the type generator reads off a declaration.
+ *
+ * A SECOND domain, because the manifest schema is not the whole one. It nests a
+ * text field's bounds under `validation`, so a classification total over it
+ * alone cannot see `minLength` written flat, which is how a code-first field is
+ * allowed to write it and how the generator reads it. A guard that is total
+ * over one of two schemas is a guard with the other one's keys outside it.
+ *
+ * Read from the generator's source rather than re-listed, for the same reason
+ * the manifest keys are: a copy here is the thing this file exists to make
+ * unnecessary. The caller asserts what the scan found before judging it.
+ */
+function generatorConsumedKeys(): string[] {
+  const src = readFileSync(
+    fileURLToPath(
+      new URL(
+        "../../../domains/schema/services/zod-generator.ts",
+        import.meta.url
+      )
+    ),
+    "utf8"
+  );
+  const keys = new Set<string>();
+  for (const m of src.matchAll(/"([a-zA-Z_]+)" in field/g)) keys.add(m[1]);
+  for (const m of src.matchAll(/\bfield\.([a-zA-Z_]+)\b/g)) keys.add(m[1]);
+  return [...keys].sort();
+}
+
+describe("every key the GENERATOR consumes is classified", () => {
+  it("reaches the generator source at all", () => {
+    // The control. An empty scan satisfies the totality check below perfectly,
+    // and a moved file would produce exactly that.
+    const keys = generatorConsumedKeys();
+
+    expect(
+      keys.length,
+      "the generator source could not be scanned, so the check below proves " +
+        "nothing"
+    ).toBeGreaterThan(5);
+    expect(keys).toContain("minLength");
+  });
+
+  it("classifies each one, so a constraint the API enforces is described", () => {
+    // A key the generator reads is a key that shapes what the API will ACCEPT.
+    // Leaving it unclassified means the projection describes a field as
+    // unbounded while a write that exceeds the bound is still rejected.
+    const published = new Set(SCHEMA_FIELD_KEYS);
+    const withheld = new Set(WITHHELD_FIELD_KEYS);
+
+    const unclassified = generatorConsumedKeys().filter(
+      key => !published.has(key) && !withheld.has(key)
+    );
+    expect(
+      unclassified,
+      "these keys shape the generated validation schema and are classified " +
+        "neither way. Publish the ones that describe the value; withhold the " +
+        "rest deliberately"
+    ).toEqual([]);
+  });
+});
 
 describe("every key the manifest declares is classified", () => {
   it("reaches the manifest schema at all", () => {

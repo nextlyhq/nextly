@@ -40,7 +40,11 @@ vi.mock("../../services/lib/registered-content-slugs", () => ({
   registeredContentKindOf: kindOfSpy,
 }));
 
-import { canReadContent, readableContent } from "../readable-content";
+import {
+  canReadContent,
+  contentReadability,
+  readableContent,
+} from "../readable-content";
 
 /** A signed-in person, whose grants `checkAccess` resolves. */
 const session = { user: { id: "user-1", roles: ["editor"] } };
@@ -60,8 +64,13 @@ function registry(
   const kinds = new Map(entries);
   snapshotSpy.mockResolvedValue({ kinds, degraded });
   kindOfSpy.mockImplementation((slug: string) =>
-    Promise.resolve(kinds.get(slug))
+    Promise.resolve({ kind: kinds.get(slug), known: true })
   );
+}
+
+/** A registry that could not answer: absence was never established. */
+function registryCannotAnswer() {
+  kindOfSpy.mockResolvedValue({ known: false });
 }
 
 beforeEach(() => {
@@ -152,6 +161,34 @@ describe("whether one named entity is in reach", () => {
       snapshotSpy,
       "a point question must not enumerate the registries"
     ).not.toHaveBeenCalled();
+  });
+
+  it("refuses a read when the registry could not answer", async () => {
+    // A lookup that threw has not reported the slug absent. For a READ the safe
+    // response is the same as for absence, refuse, so this case pins that the
+    // unknown state does not accidentally admit.
+    registryCannotAnswer();
+    checkAccessSpy.mockResolvedValue(true);
+
+    expect(await canReadContent("posts", session)).toBe(false);
+    expect(
+      checkAccessSpy,
+      "an unestablished slug must not reach the access decision"
+    ).not.toHaveBeenCalled();
+  });
+
+  it("reports the unknown separately from the unregistered", async () => {
+    // The distinction the disclosure path turns on. Both refuse the read, and
+    // only one of them means "there is no such entity": a caller that folds
+    // them together publishes the name of an entity whose lookup merely failed.
+    registryCannotAnswer();
+    const unknown = await contentReadability("posts", session);
+    expect(unknown).toEqual({ readable: false, known: false });
+
+    registry([["posts", "collection"]]);
+    checkAccessSpy.mockResolvedValue(true);
+    const absent = await contentReadability("ghost", session);
+    expect(absent).toEqual({ readable: false, known: true });
   });
 
   it("agrees with the set, entity for entity", async () => {

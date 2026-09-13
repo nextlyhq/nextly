@@ -648,6 +648,63 @@ describe("what a schema discloses about OTHER entities", () => {
     expect((theme?.options as unknown[])?.length).toBe(2);
   });
 
+  it("withholds a target whose registry lookup FAILED, rather than publishing it", async () => {
+    // The disclosure path reads absence as permission: a target that is not a
+    // registered content entity is safe to name. So a lookup that THREW must
+    // not arrive as absence, or a degraded registry publishes the slug of the
+    // very collection the caller was refused, exactly when the install is
+    // already unwell.
+    //
+    // The key is granted BOTH slugs, so `posts` would otherwise be named. Only
+    // the collection lookup for `posts` is made to fail; everything else
+    // answers normally, which is what keeps the tool reaching the read at all.
+    const handlers = await boot();
+    const key = await keyGranting(current!, "degraded-registry", [
+      "catalog",
+      "posts",
+    ]);
+    const auth = { authorization: `Bearer ${key}` };
+    await handlers.POST(initialize(auth), params("mcp"));
+
+    const registry = current!.getService(
+      "collectionRegistryService"
+    ) as unknown as {
+      getCollectionBySlug: (slug: string) => Promise<unknown>;
+    };
+    const real = registry.getCollectionBySlug.bind(registry);
+    const lookup = vi
+      .spyOn(registry, "getCollectionBySlug")
+      .mockImplementation((slug: string) =>
+        slug === "posts"
+          ? Promise.reject(new Error("registry unavailable"))
+          : real(slug)
+      );
+
+    const body = await payloadOf(
+      await handlers.POST(
+        callTool("get_collection_schema", { slug: "catalog" }, auth),
+        params("mcp")
+      )
+    );
+
+    expect(
+      lookup,
+      "the spy must observe the failing lookup, or this case proves nothing"
+    ).toHaveBeenCalled();
+    lookup.mockRestore();
+
+    const fields = fieldsOf(body);
+    const authors = fields.find(f => f.name === "authors");
+    expect(
+      authors,
+      `the relationship must still be described: ${JSON.stringify(fields)}`
+    ).toBeDefined();
+    expect(
+      authors?.relationTo,
+      "a target whose existence could not be established must not be named"
+    ).toBeUndefined();
+  });
+
   it("withholds a relationship target the caller may not read, and keeps one that is not content", async () => {
     // A schema names other entities from inside itself. `catalog.authors`
     // points at `posts`, which this key was never granted, so forwarding the

@@ -386,7 +386,13 @@ export function registerSchemaTools(
   // is false for the same reason; it fails closed rather than relying on that.
   const withholds: Withholds = async slug => {
     if (caller === undefined) return true;
-    const { kind, readable } = await contentReadability(slug, caller);
+    const { kind, readable, known } = await contentReadability(slug, caller);
+    // 🔴 A registry that could not answer has NOT reported the target absent.
+    // Reading that as "not withheld" publishes the slug of a collection whose
+    // lookup happened to fail, which is the disclosure this exists to stop, and
+    // it does so exactly when the install is already degraded. Absence has to
+    // be observed before it can be relied on.
+    if (!known) return true;
     return kind !== undefined && !readable;
   };
 
