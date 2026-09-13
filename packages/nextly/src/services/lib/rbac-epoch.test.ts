@@ -705,6 +705,65 @@ describe("the RBAC epoch answers for the install", () => {
     expect(said[1]).not.toContain("db:sync");
   });
 
+  it("blames the row, not the schema, when the create is REFUSED", async () => {
+    // The case the two messages exist for, and the one a report keyed on the
+    // catch alone gets wrong. A read-only credential answers the read and
+    // rejects the create, so the table is demonstrably there: sending the
+    // operator to `nextly db:sync` is sending them to the one remedy that
+    // cannot help, and they would conclude it did not work.
+    const said: string[] = [];
+    const previous = getAuthLogger();
+    setAuthLogger({ log: (_level, event) => said.push(String(event.message)) });
+
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => ({
+        select: () => chainOf([]),
+        insert: () => {
+          const chain = chainOf([{ changes: 1 }]) as Record<string, unknown>;
+          chain.values = () => chain;
+          chain.onConflictDoUpdate = () =>
+            Promise.reject(new Error("read-only credential"));
+          return chain;
+        },
+        update: () => chainOf([{ changes: 1 }]),
+      }),
+    });
+
+    await refreshEpoch();
+    setAuthLogger(previous);
+
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("could not be established");
+    expect(
+      said[0],
+      "the table answered a read a moment earlier, so `db:sync` is the wrong remedy"
+    ).not.toContain("db:sync");
+    expect(epochIsTrustworthy()).toBe(false);
+  });
+
+  it("still blames the schema when the table itself cannot be read", async () => {
+    // The control on the case above. Without it, "names the row" is satisfied
+    // by naming the row for every failure, which loses the distinction the
+    // other direction and sends an unreconciled install nowhere.
+    const said: string[] = [];
+    const previous = getAuthLogger();
+    setAuthLogger({ log: (_level, event) => said.push(String(event.message)) });
+
+    install({
+      getCapabilities: () => ({ dialect: "sqlite" as const }),
+      getDrizzle: () => {
+        throw new Error("no such table: nextly_rbac_epoch");
+      },
+    });
+
+    await refreshEpoch();
+    setAuthLogger(previous);
+
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("db:sync");
+  });
+
   it("answers zero rather than failing when the seed does not take", async () => {
     // This fake accepts the write and stays empty, which is what a store that
     // silently refuses the create looks like from here. Zero is still the

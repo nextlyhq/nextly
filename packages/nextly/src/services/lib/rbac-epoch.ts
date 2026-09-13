@@ -325,6 +325,11 @@ export async function refreshEpoch(options?: {
 }
 
 async function readShared(): Promise<string> {
+  // Which of the two degraded reports a failure below belongs to. Once the row
+  // has been found missing, the table has just answered a read, so nothing from
+  // that point on is a table an upgrade has not reached: a rejected create and
+  // a read-back that fails are both the row failing to be established.
+  let establishing = false;
   try {
     // Owed invalidations go in BEFORE the value comes out, and that order is
     // the point: a read taken first answers with a number that does not
@@ -357,6 +362,7 @@ async function readShared(): Promise<string> {
       // cached against that store then reads as current for as long as this
       // process runs.
       observed = false;
+      establishing = true;
       await raiseSharedRevision(0);
       rows = await selectSharedRow();
     }
@@ -380,7 +386,10 @@ async function readShared(): Promise<string> {
       reportDegraded(ROW_NOT_ESTABLISHED);
     }
   } catch (error) {
-    reportDegraded(TABLE_NOT_RECONCILED, String(error));
+    reportDegraded(
+      establishing ? ROW_NOT_ESTABLISHED : TABLE_NOT_RECONCILED,
+      String(error)
+    );
     // Rate-limit the FAILING path too. Left unset, a missing table means one
     // failing query per authorization check rather than one per interval,
     // which is the upgrade window turned into a load problem.
