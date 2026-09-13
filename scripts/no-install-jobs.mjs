@@ -23,6 +23,12 @@
  * dependencies and does nothing else, unconditionally, in the repository root. Everything before
  * that step is read, and nothing after it.
  *
+ * A step's script is read only under a shell whose grammar `shell-commands.mjs` implements: bash,
+ * sh, zsh or dash, named by the step or by a job's or the workflow's default, or given by a runner
+ * whose labels say it runs Linux or macOS. A Windows runner's default is PowerShell, whose
+ * assignments, quoting and call operator are another language, so a script under it is refused
+ * rather than misread.
+ *
  * Each script read is split into commands by `shell-commands.mjs`. A `node` command's arguments
  * are read with Node's own grammar, so an option's value is not taken for the script, and a module
  * an option preloads is walked like the script. A shell script in the repository, named by a
@@ -34,15 +40,18 @@
  * settle it refuses, naming the step and the reason, rather than passing over it: a `node` command
  * with an argument that is not literal, an option it does not know, inline code or no script file;
  * the word `node` anywhere else; a package manager running scripts or installed binaries; a
- * directory change before a `node` command; `NODE_OPTIONS`; a program named only at run time,
- * unless the caller maps it to the repository file it is a copy of; an action it cannot read; and a
- * working directory that is not a fixed path inside the repository.
+ * directory change before a `node` command; `NODE_OPTIONS`; a script under a shell whose grammar
+ * this does not parse, including a runner's default that `runs-on` does not name; a program named
+ * only at run time, unless the caller maps it to the repository file it is a copy of; an action it
+ * cannot read; and a working directory that is not a fixed path inside the repository.
  *
  * Outside it: the code a remote action brings with it, which is that action's to load.
  *
  * Imports are read by `@nextlyhq/module-specifiers`, the repository's one reader for what a source
- * file loads, so this sees every form the layering guards see, and it follows a relative specifier
- * with the resolver that reader says finds it.
+ * file loads, so this sees every form the layering guards see. A relative specifier is followed only
+ * where that reader says the module runs, since `require.resolve` and `import.meta.resolve` find a
+ * file without running it, and it is followed the way the resolver that reader names finds it:
+ * exactly as written for an ES module, and through Node's documented CommonJS search for a require.
  *
  * @module no-install-jobs
  */
@@ -123,6 +132,7 @@ export function jobSequences(text, repo) {
       where: id,
       defaults,
       defaultShell: job.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
+      runnerShell: runnerDefaultShell(job["runs-on"]),
       env: [workflow.env, job.env],
       actions: [],
       conditional: false,
@@ -170,10 +180,64 @@ function readRunStep(step, scope) {
     steps.push(refusal(scope.where, NODE_OPTIONS_REASON));
   } else if (shellRunsNode(shell)) {
     steps.push(refusal(scope.where, "runs its script as inline Node code; move it into a file"));
+  } else if (!POSIX_SHELLS.has(scriptShell(shell, scope))) {
+    steps.push(refusal(scope.where, unparsedShellReason(shell, scope)));
   } else {
     const script = withKnownPaths(step.run, scope);
     steps.push({ kind: "script", where: scope.where, script, cwd: cwd.path });
   }
+}
+
+/**
+ * The program that runs a step's script: the shell it names, or its runner's default.
+ *
+ * @param {unknown} shell what the step, or the job's or the workflow's default, names as its shell
+ * @returns {string | null} the program's name, or null when nothing says which shell runs it
+ */
+function scriptShell(shell, scope) {
+  if (shell !== undefined) {
+    const [program = ""] = String(shell).trim().split(/\s+/);
+    return program.replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
+  }
+  // A composite action's run step has to name its shell, so no runner's default reaches one.
+  return scope.actions.length > 0 ? null : scope.runnerShell;
+}
+
+/** Why a step's script is not read under the shell that runs it. */
+function unparsedShellReason(shell, scope) {
+  const name = scriptShell(shell, scope);
+  if (name !== null) {
+    return `runs its script under ${name}, whose grammar this reader does not parse; give the step \`shell: bash\``;
+  }
+  if (scope.actions.length > 0) {
+    return "is a composite action step that names no shell, which GitHub requires of every one";
+  }
+  return (
+    "names no shell, and its job's `runs-on` does not say which system's default shell runs it; " +
+    "give the step `shell: bash`"
+  );
+}
+
+/**
+ * The shell a runner gives a step that names none: bash on Linux and macOS, PowerShell on Windows.
+ *
+ * Told from labels that begin with a system's name: an `ubuntu-` or `macos-` image, or a self-hosted
+ * `linux` or `macOS` label, gives bash, and a `windows-` image or `windows` label gives PowerShell. A
+ * runner chosen by an expression, or labelled with no system or with two, leaves the default
+ * unknown, and a script under an unknown shell is refused rather than read as bash.
+ *
+ * @param {unknown} runsOn a job's `runs-on`: a label, a list of them, or a group with `labels`
+ * @returns {"bash" | "pwsh" | null}
+ */
+function runnerDefaultShell(runsOn) {
+  const labels = [Array.isArray(runsOn) || typeof runsOn !== "object" ? runsOn : runsOn?.labels].flat();
+  const shells = new Set();
+  for (const label of labels) {
+    if (typeof label !== "string") return null;
+    if (/^windows(?:-|$)/i.test(label)) shells.add("pwsh");
+    else if (/^(?:ubuntu|macos)(?:-|$)|^linux$/i.test(label)) shells.add("bash");
+  }
+  return shells.size === 1 ? [...shells][0] : null;
 }
 
 /**
@@ -327,7 +391,9 @@ function shellRunsNode(shell) {
 }
 
 const DIRECTORY_CHANGES = new Set(["cd", "pushd", "popd"]);
-const SHELLS = new Set(["bash", "sh", "zsh", "dash", "source", "."]);
+/** The shells whose grammar `shell-commands.mjs` implements, whether they run a step or a command. */
+const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash"]);
+const SHELLS = new Set([...POSIX_SHELLS, "source", "."]);
 const PACKAGE_RUNNERS = new Set(["npx", "pnpx", "bunx"]);
 const PACKAGE_MANAGERS = new Set(["pnpm", "npm", "yarn", "corepack"]);
 
@@ -672,17 +738,68 @@ function readable(file, read) {
   }
 }
 
-/** The forms `require` tries for a relative specifier, in the order it tries them. */
-const REQUIRE_FORMS = ["", ".js", ".json", "/index.js", "/index.json"];
+/** The extensions `require` adds to a path, in the order it tries them. */
+const REQUIRE_EXTENSIONS = [".js", ".json", ".node"];
+
+/**
+ * The file `require` loads for a relative specifier, found by Node's documented search.
+ *
+ * The path as written, then with each extension; then the path as a directory: the file its
+ * `package.json` `main` names, tried the same way and then as a directory's index, and failing that
+ * the directory's own index. A specifier ending in `/`, `.` or `..` names only a directory. A
+ * `package.json` that does not parse makes Node throw, so nothing is found through one.
+ *
+ * @see https://nodejs.org/api/modules.html#all-together
+ * @param {string} path the specifier joined to the requiring file's directory
+ * @param {string} specifier the specifier as written
+ * @param {(path: string) => string} read a file's contents, throwing when it does not exist
+ * @returns {string | undefined}
+ */
+function requireTarget(path, specifier, read) {
+  const directoryOnly = /(?:^|\/)\.\.?$|\/$/.test(specifier);
+  return (directoryOnly ? undefined : loadAsFile(path, read)) ?? loadAsDirectory(path, read);
+}
+
+function loadAsFile(path, read) {
+  return [path, ...REQUIRE_EXTENSIONS.map(extension => path + extension)].find(file =>
+    readable(file, read)
+  );
+}
+
+function loadIndex(directory, read) {
+  return REQUIRE_EXTENSIONS.map(extension => posix.join(directory, `index${extension}`)).find(file =>
+    readable(file, read)
+  );
+}
+
+function loadAsDirectory(directory, read) {
+  let manifest;
+  try {
+    manifest = read(posix.join(directory, "package.json"));
+  } catch {
+    return loadIndex(directory, read);
+  }
+  let main;
+  try {
+    main = JSON.parse(manifest)?.main;
+  } catch {
+    return undefined;
+  }
+  if (typeof main !== "string" || main === "") return loadIndex(directory, read);
+  const target = posix.join(directory, main);
+  return loadAsFile(target, read) ?? loadIndex(target, read) ?? loadIndex(directory, read);
+}
 
 /**
  * What an entry's static module graph reaches that Node alone cannot load.
  *
- * Relative specifiers are followed through `read` — one the ES module resolver finds at exactly the
- * path it names, one CommonJS finds through the forms `require` tries — and a bare one must be a
- * builtin. Whatever the walk cannot settle is reported rather than passed over: a file that cannot
- * be read, or a module named only at run time, because an unexamined import and a clean one look
- * identical otherwise.
+ * A relative specifier is followed through `read` where the reference runs the module: at exactly
+ * the path it names for the ES module resolver, and through Node's CommonJS search for a require.
+ * One that is only resolved is not followed, because the file a resolve finds never runs. A bare
+ * specifier must be a builtin whether it is loaded or only resolved, since resolving a package that
+ * is not installed throws exactly as loading it does. Whatever the walk cannot settle is reported
+ * rather than passed over: a file that cannot be read, or a module named only at run time, because
+ * an unexamined import and a clean one look identical otherwise.
  *
  * @param {string} entry repository-relative path of the file a job starts
  * @param {(path: string) => string} read a file's contents, throwing when it does not exist
@@ -691,25 +808,24 @@ const REQUIRE_FORMS = ["", ".js", ".json", "/index.js", "/index.json"];
 export function nonBuiltinImports(entry, read) {
   const files = new Set();
   const offenders = [];
-  const follow = (file, specifier, forms) => {
-    if (!specifier.startsWith(".")) {
-      if (!isBuiltin(specifier)) offenders.push(`${file} imports ${specifier}`);
-      return;
-    }
-    const base = posix.normalize(posix.join(posix.dirname(file), specifier));
-    walk(forms.map(form => base + form).find(candidate => readable(candidate, read)) ?? base);
-  };
   const walk = file => {
     if (files.has(file)) return;
     files.add(file);
     const text = readOrReport(file, read, offenders);
-    if (text === null || file.endsWith(".json")) return;
+    // JSON and a native addon are loaded, but name no modules of their own.
+    if (text === null || file.endsWith(".json") || file.endsWith(".node")) return;
     for (const ref of moduleSpecifierRefs(text, file)) {
       if (ref.typeOnly) continue;
       if (ref.specifier === UNRESOLVABLE_SPECIFIER) {
-        offenders.push(`${file}: loads a module named at run time, which a static walk cannot follow`);
-      } else {
-        follow(file, ref.specifier, ref.resolution === "cjs" ? REQUIRE_FORMS : [""]);
+        const verb = ref.loads ? "loads" : "resolves";
+        offenders.push(`${file}: ${verb} a module named at run time, which a static walk cannot follow`);
+      } else if (!ref.specifier.startsWith(".")) {
+        if (!isBuiltin(ref.specifier)) {
+          offenders.push(`${file} ${ref.loads ? "imports" : "resolves"} ${ref.specifier}`);
+        }
+      } else if (ref.loads) {
+        const path = posix.normalize(posix.join(posix.dirname(file), ref.specifier));
+        walk(ref.resolution === "cjs" ? (requireTarget(path, ref.specifier, read) ?? path) : path);
       }
     }
   };

@@ -164,13 +164,13 @@ describe("whether a reference survives to runtime", () => {
 
   it("reports a plain import as reaching runtime", () => {
     expect(refs(`import a from "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution: "esm" },
+      { specifier: "pkg", typeOnly: false, resolution: "esm", loads: true },
     ]);
   });
 
   it("reports a bare side-effect import as reaching runtime", () => {
     expect(refs(`import "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution: "esm" },
+      { specifier: "pkg", typeOnly: false, resolution: "esm", loads: true },
     ]);
   });
 
@@ -191,25 +191,25 @@ describe("whether a reference survives to runtime", () => {
     // governing the whole clause erases a real runtime edge, which is the direction that answers
     // "clean" for a bundle guard.
     expect(refs(`import { a, type B } from "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution: "esm" },
+      { specifier: "pkg", typeOnly: false, resolution: "esm", loads: true },
     ]);
   });
 
   it("reports a dynamic import as reaching runtime", () => {
     expect(refs(`const f = () => import("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution: "esm" },
+      { specifier: "pkg", typeOnly: false, resolution: "esm", loads: true },
     ]);
   });
 
   it("reports require as reaching runtime", () => {
     expect(refs(`const a = require("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution: "cjs" },
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: true },
     ]);
   });
 
   it("reports an import-equals as reaching runtime", () => {
     expect(refs(`import a = require("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution: "cjs" },
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: true },
     ]);
   });
 
@@ -237,7 +237,12 @@ describe("whether a reference survives to runtime", () => {
   it("keeps an unreadable target unreadable, and at runtime", () => {
     // An unresolvable target has to stay a violation for both consumers.
     expect(refs(`const a = require(name);`)).toEqual([
-      { specifier: UNRESOLVABLE_SPECIFIER, typeOnly: false, resolution: "cjs" },
+      {
+        specifier: UNRESOLVABLE_SPECIFIER,
+        typeOnly: false,
+        resolution: "cjs",
+        loads: true,
+      },
     ]);
   });
 
@@ -271,7 +276,9 @@ describe("module.require", () => {
     ).toEqual(["pkg"]);
     expect(
       moduleSpecifierRefs(`const a = module.require("pkg");`, "m.ts")
-    ).toEqual([{ specifier: "pkg", typeOnly: false, resolution: "cjs" }]);
+    ).toEqual([
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: true },
+    ]);
   });
 
   it("reads the bracket spelling the same way", () => {
@@ -358,9 +365,10 @@ describe("the resolver that finds a runtime reference", () => {
     [`const a = require("pkg");`, "cjs"],
     [`const a = module.require("pkg");`, "cjs"],
     [`import a = require("pkg");`, "cjs"],
+    [`const a = (require)("pkg");`, "cjs"],
   ])("finds %s with the %s resolver", (text, resolution) => {
     expect(moduleSpecifierRefs(text, "module.ts")).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution },
+      { specifier: "pkg", typeOnly: false, resolution, loads: true },
     ]);
   });
 });
@@ -381,15 +389,22 @@ describe("a require function createRequire returned", () => {
       moduleSpecifierRefs(text, "module.mjs").filter(
         ref => ref.specifier === "pkg"
       )
-    ).toEqual([{ specifier: "pkg", typeOnly: false, resolution: "cjs" }]);
+    ).toEqual([
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: true },
+    ]);
   });
 
   it("reads a createRequire destructured from require", () => {
     const text = `const { createRequire } = require("node:module");\nconst load = createRequire(__filename);\nload("pkg");`;
 
     expect(moduleSpecifierRefs(text, "module.cjs")).toEqual([
-      { specifier: "node:module", typeOnly: false, resolution: "cjs" },
-      { specifier: "pkg", typeOnly: false, resolution: "cjs" },
+      {
+        specifier: "node:module",
+        typeOnly: false,
+        resolution: "cjs",
+        loads: true,
+      },
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: true },
     ]);
   });
 
@@ -411,7 +426,50 @@ describe("a require function createRequire returned", () => {
   });
 });
 
-/** Resolving a package that is not installed fails exactly as loading it does. */
+/**
+ * `createRequire(import.meta.url)("pkg")` never binds the require function to a name, and this
+ * repository loads drizzle-kit exactly that way. A reader that knows only named require functions
+ * reports such a file as loading nothing.
+ */
+describe("a created require called where it is made", () => {
+  it.each([
+    `import { createRequire } from "node:module";\nexport const load = () => createRequire(import.meta.url)("pkg");`,
+    `import * as nodeModule from "node:module";\nnodeModule.createRequire(import.meta.url)("pkg");`,
+    `import { createRequire } from "node:module";\n(createRequire(import.meta.url))("pkg");`,
+  ])("reads its call as a CommonJS load: %s", text => {
+    expect(
+      moduleSpecifierRefs(text, "module.mjs").filter(
+        ref => ref.specifier === "pkg"
+      )
+    ).toEqual([
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: true },
+    ]);
+  });
+
+  it("reads resolve on it as finding the module without running it", () => {
+    const text = `import { createRequire } from "node:module";\nconst where = createRequire(import.meta.url).resolve("pkg");`;
+
+    expect(
+      moduleSpecifierRefs(text, "module.mjs").filter(
+        ref => ref.specifier === "pkg"
+      )
+    ).toEqual([
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: false },
+    ]);
+  });
+
+  it("does not read a helper of the same name from anywhere else", () => {
+    // 🔴 The negative control, as for a created require bound to a name.
+    const text = `import { createRequire } from "./helpers.mjs";\ncreateRequire(import.meta.url)("pkg");`;
+
+    expect(importedSpecifiers(text, "module.mjs")).toEqual(["./helpers.mjs"]);
+  });
+});
+
+/**
+ * Resolving a package that is not installed fails exactly as loading it does, but the file a
+ * resolve finds never runs.
+ */
 describe("calls that find a module without loading it", () => {
   it.each([
     [`const p = require.resolve("pkg");`, "cjs"],
@@ -419,16 +477,30 @@ describe("calls that find a module without loading it", () => {
     [`const p = import.meta.resolve("pkg");`, "esm"],
   ])("reads %s with the %s resolver", (text, resolution) => {
     expect(moduleSpecifierRefs(text, "module.mjs")).toEqual([
-      { specifier: "pkg", typeOnly: false, resolution },
+      { specifier: "pkg", typeOnly: false, resolution, loads: false },
     ]);
   });
 
   it("reads resolve on a created require", () => {
     const text = `import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nconst p = load.resolve("pkg");`;
 
-    expect(importedSpecifiers(text, "module.mjs")).toEqual([
-      "node:module",
-      "pkg",
+    expect(moduleSpecifierRefs(text, "module.mjs")).toEqual([
+      {
+        specifier: "node:module",
+        typeOnly: false,
+        resolution: "esm",
+        loads: true,
+      },
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: false },
+    ]);
+  });
+
+  it("tells a resolve of a module from a load of the same module", () => {
+    const text = `const where = require.resolve("pkg");\nconst loaded = require("pkg");`;
+
+    expect(moduleSpecifierRefs(text, "module.cjs")).toEqual([
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: false },
+      { specifier: "pkg", typeOnly: false, resolution: "cjs", loads: true },
     ]);
   });
 

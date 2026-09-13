@@ -56,13 +56,15 @@ export const UNRESOLVABLE_SPECIFIER = "<unresolvable-specifier>";
  *   which resolves exactly as the free function does. `loader.require("x")` is a
  *   method on some other object and is not a module resolve.
  * - A function `createRequire` returned: `const load = createRequire(import.meta.url)`
- *   and then `load("pkg")`, which is how an ES module reaches CommonJS and loads
- *   exactly as `require` does. Counted only when `createRequire` comes from
- *   `module` or `node:module`, since a helper of that name from anywhere else
- *   returns whatever that helper returns.
+ *   and then `load("pkg")`, or `createRequire(import.meta.url)("pkg")` called where
+ *   it is made. That is how an ES module reaches CommonJS, and it loads exactly as
+ *   `require` does. Counted only when `createRequire` comes from `module` or
+ *   `node:module`, since a helper of that name from anywhere else returns whatever
+ *   that helper returns.
  * - `require.resolve("pkg")`, the same on a created require, and
- *   `import.meta.resolve("pkg")`. They find a module without loading it, and fail
- *   exactly as loading it would when the package is not there.
+ *   `import.meta.resolve("pkg")`. They find a module without running it: a package
+ *   that is not there fails exactly as loading it would, but the file found never
+ *   runs, so each is reported with `loads: false`.
  * - `import x = require("pkg")`, the documented CommonJS-interop spelling, which
  *   is neither of the above.
  * - `typeof import("pkg")` in type position, which the parser gives as an
@@ -338,8 +340,10 @@ function callsCreateRequire(
  * require to a name, that name reads as a require everywhere in the file. Resolving
  * each use to its own declaration needs a checker, which this reader works without.
  */
-function createdRequireNames(source: ts.SourceFile): ReadonlySet<string> {
-  const bindings = createRequireBindings(source);
+function createdRequireNames(
+  source: ts.SourceFile,
+  bindings: CreateRequireBindings
+): ReadonlySet<string> {
   const names = new Set<string>();
   if (bindings.factories.size === 0 && bindings.namespaces.size === 0) {
     return names;
@@ -359,34 +363,71 @@ function createdRequireNames(source: ts.SourceFile): ReadonlySet<string> {
   return names;
 }
 
+/** The require functions a file can call: `require` itself, and what `createRequire` gave it. */
+interface RequireFunctions {
+  readonly bindings: CreateRequireBindings;
+  /** The names a created require was bound to. */
+  readonly names: ReadonlySet<string>;
+}
+
 /**
- * Which resolver a call hands its argument to, or null when the call resolves no module.
+ * Whether an expression is a require function: `require` itself, a name a created require was
+ * bound to, or a `createRequire(...)` call used where it is made.
  *
- * `import()` and `import.meta.resolve()` take the ES module resolver. `require()`,
- * `module.require()`, a created require, and `.resolve()` on `require` or on a created
- * require take CommonJS's. A `.resolve` on any other object is that object's own method.
+ * The one answer for both ways a require function is used, called and `.resolve`d, so the two
+ * cannot come to disagree about what counts.
  */
-function callResolution(
+function isRequireFunction(
+  expression: ts.Expression,
+  requires: RequireFunctions
+): boolean {
+  const target = unwrapReceiver(expression);
+  if (ts.isIdentifier(target)) {
+    return target.text === "require" || requires.names.has(target.text);
+  }
+  return callsCreateRequire(target, requires.bindings);
+}
+
+/** What a call naming a module does with it. */
+interface ModuleCall {
+  readonly resolution: ModuleResolution;
+  /** False for a call that only finds the module. */
+  readonly loads: boolean;
+}
+
+/**
+ * Which resolver a call hands its argument to and whether it runs what that finds, or null when
+ * the call names no module.
+ *
+ * `import()` loads through the ES module resolver, and `import.meta.resolve()` only finds through
+ * it. `require()`, `module.require()` and a created require load through CommonJS's, and
+ * `.resolve()` on `require` or on a created require only finds through it. A `.resolve` on any
+ * other object is that object's own method.
+ */
+function moduleCall(
   callee: ts.Expression,
   shadowsModule: boolean,
-  requires: ReadonlySet<string>
-): ModuleResolution | null {
-  if (callee.kind === ts.SyntaxKind.ImportKeyword) return "esm";
-  if (ts.isIdentifier(callee)) {
-    return callee.text === "require" || requires.has(callee.text)
-      ? "cjs"
-      : null;
+  requires: RequireFunctions
+): ModuleCall | null {
+  if (callee.kind === ts.SyntaxKind.ImportKeyword) {
+    return { resolution: "esm", loads: true };
   }
-  if (readsModuleRequire(callee, shadowsModule)) return "cjs";
+  if (
+    readsModuleRequire(callee, shadowsModule) ||
+    isRequireFunction(callee, requires)
+  ) {
+    return { resolution: "cjs", loads: true };
+  }
   const receiver = accessReceiver(callee);
   if (accessedName(callee) !== "resolve" || receiver === null) return null;
   if (ts.isMetaProperty(receiver)) {
-    return receiver.keywordToken === ts.SyntaxKind.ImportKeyword ? "esm" : null;
+    return receiver.keywordToken === ts.SyntaxKind.ImportKeyword
+      ? { resolution: "esm", loads: false }
+      : null;
   }
-  const requireFunction =
-    ts.isIdentifier(receiver) &&
-    (receiver.text === "require" || requires.has(receiver.text));
-  return requireFunction ? "cjs" : null;
+  return isRequireFunction(receiver, requires)
+    ? { resolution: "cjs", loads: false }
+    : null;
 }
 
 export function importedSpecifiers(text: string, fileName: string): string[] {
@@ -426,16 +467,23 @@ export type ModuleSpecifierRef =
        * relative specifier needs this to find the file Node would load.
        */
       readonly resolution: ModuleResolution;
+      /**
+       * Whether Node runs the module, or only finds it. `require.resolve()` and
+       * `import.meta.resolve()` return where a module is: a package that is not
+       * installed still throws, but the file found never runs, so nothing it
+       * imports is needed.
+       */
+      readonly loads: boolean;
     };
 
-/** The reference an import or export declaration makes, which the ES module resolver finds. */
+/** The reference an import or export declaration makes, which the ES module resolver finds and loads. */
 function declarationRef(
   specifier: string,
   typeOnly: boolean
 ): ModuleSpecifierRef {
   return typeOnly
     ? { specifier, typeOnly: true }
-    : { specifier, typeOnly: false, resolution: "esm" };
+    : { specifier, typeOnly: false, resolution: "esm", loads: true };
 }
 
 /**
@@ -464,7 +512,11 @@ export function moduleSpecifierRefs(
   );
   const found: ModuleSpecifierRef[] = [];
   const shadowsModule = declaresOwnModule(source);
-  const requires = createdRequireNames(source);
+  const bindings = createRequireBindings(source);
+  const requires: RequireFunctions = {
+    bindings,
+    names: createdRequireNames(source, bindings),
+  };
   const seen = new Set<ts.Node>();
 
   const visit = (node: ts.Node): void => {
@@ -520,14 +572,11 @@ export function moduleSpecifierRefs(
           : UNRESOLVABLE_SPECIFIER,
         typeOnly: false,
         resolution: "cjs",
+        loads: true,
       });
     } else if (ts.isCallExpression(node)) {
-      const resolution = callResolution(
-        node.expression,
-        shadowsModule,
-        requires
-      );
-      if (resolution !== null) {
+      const call = moduleCall(node.expression, shadowsModule, requires);
+      if (call !== null) {
         const target = node.arguments[0];
         found.push({
           specifier:
@@ -535,7 +584,7 @@ export function moduleSpecifierRefs(
               ? target.text
               : UNRESOLVABLE_SPECIFIER,
           typeOnly: false,
-          resolution,
+          ...call,
         });
       }
     }

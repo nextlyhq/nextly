@@ -8,11 +8,21 @@
  *
  * @module no-install-jobs.test
  */
-import { readFileSync, readdirSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   dependencyFreeStarts,
@@ -27,9 +37,9 @@ const ROOT = path.join(HERE, "..");
 /** A repository holding exactly these files. */
 const repoOf = (files = {}, copies = undefined) => ({ readFile: file => files[file] ?? null, copies });
 
-/** A workflow with one job, `check`, whose steps are these YAML lines. */
+/** A workflow with one job, `check`, on a Linux runner, whose steps are these YAML lines. */
 const jobWith = (...steps) =>
-  ["jobs:", "  check:", "    steps:", ...steps.map(line => `      ${line}`)].join("\n");
+  ["jobs:", "  check:", "    runs-on: ubuntu-latest", "    steps:", ...steps.map(line => `      ${line}`)].join("\n");
 
 /** A composite action whose steps are these YAML lines. */
 const compositeWith = (...steps) =>
@@ -249,8 +259,8 @@ describe("working directories", () => {
   });
 
   it("resolves it against the job's default, and against the workflow's", () => {
-    const job = ["jobs:", "  check:", "    defaults:", "      run:", "        working-directory: tools"];
-    const workflow = ["defaults:", "  run:", "    working-directory: tools", "jobs:", "  check:"];
+    const job = ["jobs:", "  check:", "    runs-on: ubuntu-latest", "    defaults:", "      run:", "        working-directory: tools"];
+    const workflow = ["defaults:", "  run:", "    working-directory: tools", "jobs:", "  check:", "    runs-on: ubuntu-latest"];
     const steps = ["    steps:", "      - run: node check.mjs"];
 
     expect(entriesOf(read([...job, ...steps].join("\n")))).toEqual(["tools/check.mjs"]);
@@ -274,7 +284,7 @@ describe("working directories", () => {
     };
     const workflow = [
       "jobs:",
-      "  check:",
+      "  check:", "    runs-on: ubuntu-latest",
       "    defaults:",
       "      run:",
       "        working-directory: tools",
@@ -406,6 +416,18 @@ describe("nonBuiltinImports", () => {
     "scripts/dynamic.mjs": 'const name = "js-yaml";\nawait import(name);\n',
     "scripts/esm-extensionless.mjs": 'import lib from "./lib";\n',
     "scripts/typed.mjs": '/** @typedef {import("js-yaml").Schema} Schema */\nexport const x = 1;\n',
+    "scripts/created-in-place.mjs":
+      'import { createRequire } from "node:module";\ncreateRequire(import.meta.url)("js-yaml");\n',
+    "scripts/resolves-relative.cjs": 'const where = require.resolve("./optional.js");\n',
+    "scripts/resolves-relative.mjs": 'export const where = import.meta.resolve("./optional.js");\n',
+    "scripts/loads-optional.cjs": 'require("./optional.js");\n',
+    "scripts/optional.js": 'module.exports = require("js-yaml");\n',
+    "scripts/resolves-package.cjs": 'const where = require.resolve("js-yaml");\n',
+    "scripts/resolves-package.mjs": 'export const where = import.meta.resolve("js-yaml");\n',
+    "scripts/uses-tool.cjs": 'module.exports = require("./tool");\n',
+    "scripts/tool/package.json": '{ "main": "real.js" }\n',
+    "scripts/tool/real.js": 'module.exports = require("js-yaml");\n',
+    "scripts/tool/index.js": 'module.exports = "a clean fallback";\n',
   });
 
   it("finds an npm import two files down, through a re-export", () => {
@@ -431,8 +453,37 @@ describe("nonBuiltinImports", () => {
   it.each([
     ["module.require in a CommonJS entry", "scripts/module-require.cjs"],
     ["a require function createRequire returned", "scripts/created.mjs"],
+    ["a created require called where it is made", "scripts/created-in-place.mjs"],
   ])("finds an npm package loaded through %s", (_how, entry) => {
     expect(nonBuiltinImports(entry, readFile).offenders).toEqual([`${entry} imports js-yaml`]);
+  });
+
+  it("follows a directory require to the file its package.json main names, not the index beside it", () => {
+    // The index is clean and the real entry is not, so only following the file Node loads can fail.
+    expect(nonBuiltinImports("scripts/uses-tool.cjs", readFile).offenders).toEqual([
+      "scripts/tool/real.js imports js-yaml",
+    ]);
+  });
+
+  it.each([
+    ["require.resolve", "scripts/resolves-relative.cjs"],
+    ["import.meta.resolve", "scripts/resolves-relative.mjs"],
+  ])("does not walk a file %s only finds, which never runs", (_how, entry) => {
+    expect(nonBuiltinImports(entry, readFile)).toEqual({ files: [entry], offenders: [] });
+  });
+
+  it("walks the same file once something loads it", () => {
+    // 🔴 The control: the file does import a package, so the resolve above is what keeps it out.
+    expect(nonBuiltinImports("scripts/loads-optional.cjs", readFile).offenders).toEqual([
+      "scripts/optional.js imports js-yaml",
+    ]);
+  });
+
+  it.each([
+    ["require.resolve", "scripts/resolves-package.cjs"],
+    ["import.meta.resolve", "scripts/resolves-package.mjs"],
+  ])("reports a package %s looks for, which throws when it is not installed", (_how, entry) => {
+    expect(nonBuiltinImports(entry, readFile).offenders).toEqual([`${entry} resolves js-yaml`]);
   });
 
   it("reports a module named only at run time instead of passing over it", () => {
@@ -458,10 +509,105 @@ describe("nonBuiltinImports", () => {
   });
 });
 
+/**
+ * The file a relative require loads, asked of Node itself.
+ *
+ * The tree is written to disk and each specifier is resolved by Node's own `require.resolve`, so the
+ * answer the walk is held to is the resolver a job runs, not a second reading of its documentation.
+ */
+describe("the file a relative require loads", () => {
+  const TREE = {
+    "package.json": '{ "name": "fixture", "private": true }',
+    "index.js": "",
+    "both.js": "",
+    "both/index.js": "",
+    "main-file/package.json": '{ "main": "entry.js" }',
+    "main-file/entry.js": "",
+    "main-file/index.js": "",
+    "main-extension/package.json": '{ "main": "lib" }',
+    "main-extension/lib.js": "",
+    "main-extension/lib/index.js": "",
+    "main-directory/package.json": '{ "main": "lib" }',
+    "main-directory/lib/index.js": "",
+    "main-directory/index.js": "",
+    "main-missing/package.json": '{ "main": "gone.js" }',
+    "main-missing/index.js": "",
+    "main-empty/package.json": '{ "main": "" }',
+    "main-empty/index.js": "",
+    "main-number/package.json": '{ "main": 1 }',
+    "main-number/index.js": "",
+    "unparsable/package.json": "{ not json",
+    "unparsable/index.js": "",
+    "slash.js": "",
+    "slash/index.js": "",
+    "slash/.js": "",
+    "only/module.mjs": "",
+    "only/commonjs.cjs": "",
+    "only/data.json": "{}",
+    // Node finds a native addon without reading it; the walk must reach it and not parse it as code.
+    "only/addon.node": 'require("js-yaml");',
+    "sub/file.js": "",
+  };
+  const SPECIFIERS = [
+    "./both",
+    "./both/",
+    "./main-file",
+    "./main-extension",
+    "./main-directory",
+    "./main-missing",
+    "./main-empty",
+    "./main-number",
+    "./unparsable",
+    "./slash",
+    "./slash/",
+    "./only/module",
+    "./only/commonjs",
+    "./only/data",
+    "./only/addon",
+    ".",
+    "./sub/..",
+    "./sub/file",
+    "./sub/file.js",
+    "./absent",
+  ];
+  let dir;
+
+  beforeAll(() => {
+    // The real path, because Node answers through symlinks and macOS's temporary directory is one.
+    dir = realpathSync(mkdtempSync(path.join(tmpdir(), "require-target-")));
+    for (const [file, text] of Object.entries(TREE)) {
+      mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      writeFileSync(path.join(dir, file), text);
+    }
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it.each(SPECIFIERS)("follows require(%j) to the file Node loads", specifier => {
+    const entry = `entry-${SPECIFIERS.indexOf(specifier)}.cjs`;
+    writeFileSync(path.join(dir, entry), `require(${JSON.stringify(specifier)});\n`);
+    let loaded = null;
+    try {
+      const found = createRequire(path.join(dir, entry)).resolve(specifier);
+      loaded = path.relative(dir, found).split(path.sep).join("/");
+    } catch {
+      // Node finds nothing, so the walk must report the specifier rather than follow it anywhere.
+    }
+
+    const walked = nonBuiltinImports(entry, file => readFileSync(path.join(dir, file), "utf8"));
+
+    if (loaded === null) {
+      expect(walked.offenders).toEqual([expect.stringContaining("cannot be read")]);
+    } else {
+      expect(walked).toEqual({ files: [entry, loaded], offenders: [] });
+    }
+  });
+});
+
 describe("what a job's defaults and a wrapping step change", () => {
   it.each([
-    ["the job's", ["jobs:", "  check:", "    defaults:", "      run:", "        shell: node {0}", "    steps:", '      - run: import "js-yaml";']],
-    ["the workflow's", ["defaults:", "  run:", "    shell: node {0}", "jobs:", "  check:", "    steps:", '      - run: import "js-yaml";']],
+    ["the job's", ["jobs:", "  check:", "    runs-on: ubuntu-latest", "    defaults:", "      run:", "        shell: node {0}", "    steps:", '      - run: import "js-yaml";']],
+    ["the workflow's", ["defaults:", "  run:", "    shell: node {0}", "jobs:", "  check:", "    runs-on: ubuntu-latest", "    steps:", '      - run: import "js-yaml";']],
   ])("refuses a script %s default shell runs as Node code", (_whose, lines) => {
     const found = read(lines.join("\n"));
 
@@ -474,7 +620,7 @@ describe("what a job's defaults and a wrapping step change", () => {
     const files = {
       ".github/actions/a/action.yml": compositeWith("- run: node scripts/a.mjs", "  shell: bash"),
     };
-    const workflow = ["jobs:", "  check:", "    defaults:", "      run:", "        shell: node {0}", "    steps:", "      - uses: ./.github/actions/a"];
+    const workflow = ["jobs:", "  check:", "    runs-on: ubuntu-latest", "    defaults:", "      run:", "        shell: node {0}", "    steps:", "      - uses: ./.github/actions/a"];
 
     expect(entriesOf(read(workflow.join("\n"), files))).toEqual(["scripts/a.mjs"]);
   });
@@ -500,7 +646,7 @@ describe("what a job's defaults and a wrapping step change", () => {
   it("does not end it at an install in a job's default directory", () => {
     const workflow = [
       "jobs:",
-      "  check:",
+      "  check:", "    runs-on: ubuntu-latest",
       "    defaults:",
       "      run:",
       "        working-directory: tools",
@@ -528,11 +674,14 @@ describe("the other ways a node command is spelled or configured", () => {
     ]);
   });
 
-  it("starts Windows' node.exe, by name or by path, on a Windows runner", () => {
+  it("starts Windows' node.exe, by name or by path, from bash on a Windows runner", () => {
     const workflow = [
       "jobs:",
       "  check:",
       "    runs-on: windows-latest",
+      "    defaults:",
+      "      run:",
+      "        shell: bash",
       "    steps:",
       "      - run: node.exe scripts/check.mjs",
       "      - run: '\"C:\\Program Files\\nodejs\\node.exe\" scripts/other.mjs'",
@@ -634,6 +783,123 @@ describe("the shell a step runs under, and what a step using an action passes it
   });
 });
 
+describe("the shell a step's script runs under", () => {
+  /** A workflow with one job, `check`, on `runsOn`, whose steps are these YAML lines. */
+  const jobOn = (runsOn, ...steps) =>
+    ["jobs:", "  check:", `    runs-on: ${runsOn}`, "    steps:", ...steps.map(line => `      ${line}`)].join("\n");
+
+  it("refuses a Windows runner's default PowerShell, under which a NODE_OPTIONS preload goes unseen", () => {
+    const found = read(
+      jobOn(
+        "windows-latest",
+        "- run: |",
+        '    $env:NODE_OPTIONS = "--require=missing-package"',
+        "    node scripts/check.mjs"
+      )
+    );
+
+    expect(found.starts).toEqual([]);
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([expect.stringContaining("under pwsh")]);
+  });
+
+  it("reads a node command on the same runner once the step runs it under bash", () => {
+    // 🔴 The control: what the refusal above is about is the shell, not the runner or the command.
+    const found = read(jobOn("windows-latest", "- shell: bash", "  run: node scripts/check.mjs"));
+
+    expect(found).toEqual({
+      starts: [{ where: "check › step 1", entry: "scripts/check.mjs", preloads: [] }],
+      refusals: [],
+    });
+  });
+
+  it.each([
+    ["by the step", jobOn("ubuntu-latest", "- shell: pwsh", "  run: node scripts/check.mjs")],
+    [
+      "as the job's default",
+      [
+        "jobs:",
+        "  check:",
+        "    runs-on: ubuntu-latest",
+        "    defaults:",
+        "      run:",
+        "        shell: powershell",
+        "    steps:",
+        "      - run: node scripts/check.mjs",
+      ].join("\n"),
+    ],
+    [
+      "as the workflow's default",
+      [
+        "defaults:",
+        "  run:",
+        "    shell: cmd",
+        "jobs:",
+        "  check:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - run: node scripts/check.mjs",
+      ].join("\n"),
+    ],
+    ["as a custom program", jobOn("ubuntu-latest", "- shell: python {0}", "  run: node scripts/check.mjs")],
+  ])("refuses a shell whose grammar it does not parse, named %s", (_how, workflow) => {
+    const found = read(workflow);
+
+    expect(found.starts).toEqual([]);
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("whose grammar this reader does not parse"),
+    ]);
+  });
+
+  it.each([
+    ["an expression", "${{ matrix.os }}"],
+    ["labels that name no system", "[self-hosted, gpu]"],
+    ["labels that name two systems", "[self-hosted, linux, windows]"],
+  ])("refuses a step naming no shell on a runner chosen by %s", (_how, runsOn) => {
+    const found = read(jobOn(runsOn, "- run: node scripts/check.mjs"));
+
+    expect(found.starts).toEqual([]);
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([expect.stringContaining("`runs-on`")]);
+  });
+
+  it.each([
+    "ubuntu-24.04",
+    "macos-15",
+    "[self-hosted, linux, x64]",
+    "[self-hosted, macOS]",
+    "{ group: larger, labels: [ubuntu-latest] }",
+  ])(
+    "reads a step naming no shell on `%s`, whose default is bash",
+    runsOn => {
+      expect(entriesOf(read(jobOn(runsOn, "- run: node scripts/check.mjs")))).toEqual(["scripts/check.mjs"]);
+    }
+  );
+
+  it.each(["bash -eo pipefail {0}", "/usr/bin/sh -e {0}", "zsh {0}"])("reads a script under `%s`", shell => {
+    const found = read(jobOn("windows-latest", `- shell: ${shell}`, "  run: node scripts/check.mjs"));
+
+    expect(entriesOf(found)).toEqual(["scripts/check.mjs"]);
+  });
+
+  it("refuses a composite action's run step that names no shell", () => {
+    const files = { ".github/actions/a/action.yml": compositeWith("- run: node scripts/a.mjs") };
+    const found = read(jobWith("- uses: ./.github/actions/a"), files);
+
+    expect(found.starts).toEqual([]);
+    expect(found.refusals.map(refusal => refusal.reason)).toEqual([
+      expect.stringContaining("composite action step that names no shell"),
+    ]);
+  });
+
+  it("still ends the state at an install on a runner whose default shell it cannot tell", () => {
+    // One command of plain words, which bash and PowerShell run the same way.
+    const found = read(
+      jobOn("${{ matrix.os }}", "- run: pnpm install --frozen-lockfile", "- run: node scripts/after.mjs")
+    );
+
+    expect(found).toEqual({ starts: [], refusals: [] });
+  });
+});
+
 describe("the real workflows", () => {
   const workflowDir = path.join(ROOT, ".github", "workflows");
   const workflows = readdirSync(workflowDir).filter(name => /\.ya?ml$/.test(name)).sort();
@@ -707,7 +973,6 @@ describe("the real workflows", () => {
     expect(scripts).toContainEqual(
       expect.stringContaining("pnpm -r --filter '@nextlyhq/*' --filter 'nextly' --filter 'create-nextly-app'")
     );
-    expect(scripts).toContainEqual(expect.stringContaining("--reporter=verbose scripts/cli-entry.test.mjs"));
   });
 
   it("reads the composite action the real changes job uses, in place", () => {

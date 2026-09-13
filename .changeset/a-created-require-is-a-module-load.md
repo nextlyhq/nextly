@@ -27,4 +27,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-`@nextlyhq/module-specifiers` reads a require function that `createRequire` returned, `require.resolve` and `import.meta.resolve`, and labels every reference that reaches runtime with the resolver that finds it, so a caller can follow a relative specifier to the file Node would load.
+`@nextlyhq/module-specifiers` reads a require function that `createRequire` returned, whether bound to a name or called where it is made, `require.resolve` and `import.meta.resolve`, and labels every reference that reaches runtime with the resolver that finds it and whether it runs the module or only finds it, so a caller can follow a relative specifier to the file Node would load and skip a file Node never runs.
