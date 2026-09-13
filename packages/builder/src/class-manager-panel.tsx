@@ -249,6 +249,21 @@ export interface ClassManagerPanelProps {
    */
   onRename: (classId: string, slug: string) => ClassRenameAnswer;
   /**
+   * The live rename attempt for a class, as the HOST counts it.
+   *
+   * Required rather than optional, and read rather than kept here, because this
+   * panel cannot hold the identity it needs: `BuilderShell` keys its content by
+   * the open panel, so switching rails unmounts these fields while a write is
+   * still on the network. A counter kept per field starts again at zero on the
+   * way back, and an older answer then passes for the current one — reporting a
+   * refusal for a rename nobody is attempting, or clearing one the retry had
+   * already raised.
+   *
+   * Read SYNCHRONOUSLY in the same event that calls {@link onRename}, so the
+   * host must have taken the attempt by the time that call returns.
+   */
+  currentRenameAttempt: (classId: string) => number;
+  /**
    * Delete a class, removing it from every document that references it.
    *
    * Optional, because that removal is a site-wide write and a host without one
@@ -271,6 +286,7 @@ export function ClassManagerPanel({
   suppliedClassIds,
   styleContext,
   onRename,
+  currentRenameAttempt,
   onDelete,
 }: ClassManagerPanelProps): React.ReactElement {
   const [filter, setFilter] = React.useState<ClassFilter>("all");
@@ -424,6 +440,7 @@ export function ClassManagerPanel({
         stylesById={stylesById}
         styleContext={styleContext}
         onRename={onRename}
+        currentRenameAttempt={currentRenameAttempt}
         onDelete={onDelete}
       />
     </div>
@@ -700,6 +717,7 @@ function ClassList({
   stylesById,
   styleContext,
   onRename,
+  currentRenameAttempt,
   onDelete,
 }: {
   rows: readonly ClassRow[];
@@ -730,6 +748,7 @@ function ClassList({
   /** Forwarded to each row's summary; see `classDeclarations`. */
   styleContext: StyleCompileContext | undefined;
   onRename: ClassManagerPanelProps["onRename"];
+  currentRenameAttempt: ClassManagerPanelProps["currentRenameAttempt"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
   /*
@@ -782,6 +801,7 @@ function ClassList({
               canDelete={rowIsDeletable(row, supplied, onDelete)}
               usageKnown={usageKnown}
               onRename={onRename}
+              currentRenameAttempt={currentRenameAttempt}
               onDelete={onDelete}
             />
           </li>
@@ -812,6 +832,7 @@ function ClassRowView({
   canDelete,
   usageKnown,
   onRename,
+  currentRenameAttempt,
   onDelete,
 }: {
   row: ClassRow;
@@ -834,6 +855,7 @@ function ClassRowView({
   canDelete: boolean;
   usageKnown: boolean;
   onRename: ClassManagerPanelProps["onRename"];
+  currentRenameAttempt: ClassManagerPanelProps["currentRenameAttempt"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
   const [confirming, setConfirming] = React.useState(false);
@@ -857,6 +879,7 @@ function ClassRowView({
         <NameField
           library={library}
           onRename={onRename}
+          currentRenameAttempt={currentRenameAttempt}
           pendingSlug={pendingSlug}
           row={row}
         />
@@ -927,11 +950,13 @@ function NameField({
   pendingSlug,
   library,
   onRename,
+  currentRenameAttempt,
 }: {
   row: ClassRow;
   pendingSlug?: string;
   library: readonly NamedClass[];
   onRename: ClassManagerPanelProps["onRename"];
+  currentRenameAttempt: ClassManagerPanelProps["currentRenameAttempt"];
 }): React.ReactElement {
   const [draft, setDraft] = React.useState<string | null>(null);
   /*
@@ -949,8 +974,13 @@ function NameField({
    * the superseded attempt lands after the newer edit cleared it, and the row
    * reports a failure for a rename that is no longer being attempted — or,
    * with the orders reversed, keeps reporting one the retry already fixed.
+   *
+   * The identity comes from the HOST rather than from a ref here. A rename
+   * outlives this field: the rail unmounts the manager on every panel switch,
+   * which is exactly the window that makes two answers race, and a counter kept
+   * here restarts at zero on the way back — so the first answer to arrive after
+   * a switch matched `mine` whatever it described.
    */
-  const attempt = React.useRef(0);
   /*
    * Where a refusal goes when this row is no longer on screen.
    *
@@ -1006,8 +1036,6 @@ function NameField({
      * threw, never took the number — so an older pending promise could resolve
      * afterwards and overwrite or clear what the newer attempt had said.
      */
-    attempt.current += 1;
-    const mine = attempt.current;
     let answered: ClassRenameAnswer;
     try {
       answered = onRename(row.id, outcome.slug);
@@ -1023,6 +1051,13 @@ function NameField({
      * about — the row is still there to name it, which is why this needs no
      * shell-level surface the way an unmounting control does.
      */
+    /*
+     * Read AFTER the call, because the host takes the attempt inside it. That
+     * ordering is the contract this prop documents: by the time `onRename`
+     * returns, the number it recorded for this class is the one this commit
+     * owns, and a later answer reading a different number is superseded.
+     */
+    const mine = currentRenameAttempt(row.id);
     setDraft(null);
     setRefused(null);
     if (!isPromiseLike(answered)) {
@@ -1050,7 +1085,7 @@ function NameField({
       .then(result => {
         // Superseded: a newer rename on this row is the one being awaited, and
         // this answer describes a name the author has already moved past.
-        if (attempt.current !== mine) return;
+        if (currentRenameAttempt(row.id) !== mine) return;
         // Anything that is not an outcome is silence rather than refusal —
         // reading `.ok` off it would throw, and the catch below would then
         // present a SUCCESSFUL rename as a failed one.
@@ -1067,7 +1102,7 @@ function NameField({
        * was added to remove.
        */
       .catch(() => {
-        if (attempt.current !== mine) return;
+        if (currentRenameAttempt(row.id) !== mine) return;
         report(UNEXPLAINED_REFUSAL);
       });
   };
