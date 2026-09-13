@@ -17,6 +17,7 @@
 //
 // Pure functions. No I/O. No semicolons.
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import type {
   AddColumnOp,
   AddIndexOp,
@@ -41,12 +42,34 @@ function columnDef(c: ColumnSpec): string {
   return columnDefinition(c, q);
 }
 
-export class SqliteUnsupportedOperationError extends Error {
+/**
+ * What SQLite cannot do in place, refused with the codebase's own error.
+ *
+ * A `NextlyError` rather than a bare `Error` subclass, so this refusal carries
+ * the code, status, public data and log context every other refusal in
+ * `packages/nextly` carries — it reaches a caller as a typed envelope instead
+ * of a message string. Kept as a named CLASS because callers and tests
+ * identify it by type, and the message is unchanged for the same reason.
+ */
+export class SqliteUnsupportedOperationError extends NextlyError {
   constructor(opType: string, hint: string) {
-    super(
+    const message =
       `SQLite does not support ${opType} in place. ${hint} For migrate:create, ` +
-        `you may need to write a manual recreate-table migration via --blank.`
-    );
+      `you may need to write a manual recreate-table migration via --blank.`;
+    super({
+      code: "VALIDATION_ERROR",
+      publicMessage: message,
+      publicData: {
+        errors: [
+          {
+            path: "dialect",
+            code: "SQLITE_UNSUPPORTED_OPERATION",
+            message,
+          },
+        ],
+      },
+      logContext: { reason: "sqlite-unsupported-operation", opType },
+    });
     this.name = "SqliteUnsupportedOperationError";
   }
 }

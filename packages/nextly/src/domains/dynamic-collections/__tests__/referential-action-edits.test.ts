@@ -76,6 +76,17 @@ const indexOf = (sql: string, needle: string): number => {
 const relationRequired = (required: boolean): FieldDefinition =>
   ({ ...manyToOne(), required }) as FieldDefinition;
 
+/** Run something expected to refuse, and hand back what it threw. */
+const captureRefusal = (run: () => unknown): unknown => {
+  try {
+    run();
+  } catch (error) {
+    expect(NextlyError.is(error)).toBe(true);
+    return error;
+  }
+  throw new Error("expected a refusal");
+};
+
 describe.each(["postgresql", "mysql"] as const)(
   "a relationship's referential actions on %s",
   dialect => {
@@ -674,6 +685,113 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           { columnsContainingNull: new Set(["author"]) } as never
         )
       ).not.toThrow();
+    });
+  }
+);
+
+describe.each(["postgresql", "mysql"] as const)(
+  "one pairing serves every pass, on %s",
+  dialect => {
+    const relaxWriter =
+      dialect === "mysql"
+        ? "MODIFY COLUMN `writer` varchar(36) NULL"
+        : 'ALTER COLUMN "writer" DROP NOT NULL';
+
+    it("relaxes a RENAMED field's column as well as moving its key", () => {
+      // The action pass carried the rename and the column pass did not, so the
+      // key moved to SET NULL while the column stayed NOT NULL — the two
+      // halves of one edit disagreeing because each answered "what was this
+      // field before?" for itself.
+      const sql = service(dialect).generateAlterTableMigration(
+        "dc_posts",
+        [{ ...manyToOne(), required: true } as FieldDefinition],
+        [{ ...manyToOne(), name: "writer", required: false } as FieldDefinition]
+      );
+      expect(sql).toContain(
+        `RENAME COLUMN ${q(dialect, "author")} TO ${q(dialect, "writer")}`
+      );
+      // Named for the column AFTER the rename, and ahead of the key that needs it.
+      expect(indexOf(sql, relaxWriter)).toBeLessThan(
+        indexOf(sql, "ON DELETE SET NULL")
+      );
+    });
+  }
+);
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "a definition already stored is read, not judged, on %s",
+  dialect => {
+    // What the OLD creation path accepted and the new one refuses: required,
+    // with an `onUpdate` that empties the column it forbids emptying.
+    const legacy = {
+      ...manyToOne({ onUpdate: "set null" }),
+      required: true,
+    } as FieldDefinition;
+
+    it("lets the collection be repaired rather than freezing it", () => {
+      // Refusing to READ the stored definition makes the repair impossible:
+      // the repair IS an edit, and this pass visits every retained
+      // relationship on every save.
+      const repair = () =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [legacy],
+          [
+            {
+              ...manyToOne({ onUpdate: "cascade" }),
+              required: true,
+            } as FieldDefinition,
+          ]
+        );
+      if (dialect === "sqlite") {
+        // Still refused HERE, but for the dialect's own reason — it cannot
+        // alter a constraint — rather than because the stored definition was
+        // unreadable. The distinction is the point: one is fixable by moving
+        // to another dialect, the other was fixable nowhere.
+        expect(JSON.stringify(captureRefusal(repair))).toContain(
+          "FOREIGN_KEY_ACTION_UNSUPPORTED"
+        );
+        return;
+      }
+      expect(repair).not.toThrow();
+    });
+
+    it("does not let a legacy field block edits to its neighbours", () => {
+      // The same save touching a DIFFERENT field. The legacy relationship is
+      // carried through unchanged and must not refuse on the way past.
+      expect(() =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [legacy, { name: "headline", type: "text" } as FieldDefinition],
+          [
+            legacy,
+            { name: "headline", type: "text", index: true } as FieldDefinition,
+          ]
+        )
+      ).not.toThrow();
+    });
+
+    it("still refuses a save that ASKS for the impossible pair", () => {
+      // The control, and the whole point of the split: reading is permitted,
+      // writing it is not.
+      try {
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [
+            {
+              ...manyToOne({ onUpdate: "cascade" }),
+              required: true,
+            } as FieldDefinition,
+          ],
+          [legacy]
+        );
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain(
+          "REQUIRED_RELATION_CANNOT_SET_NULL"
+        );
+      }
     });
   }
 );

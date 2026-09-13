@@ -412,9 +412,10 @@ export class DynamicCollectionSchemaService {
    * That is the same rule Prisma applies, for the same reason: the action has to be one the
    * column can actually perform.
    */
-  private relationOnDelete(field: FieldDefinition): string {
+  private relationOnDelete(field: FieldDefinition, refuse = true): string {
     const declared = field.options?.onDelete;
     if (declared === undefined) return field.required ? "restrict" : "set null";
+    if (!refuse) return declared;
 
     // Declared, and still impossible: nulling a reference the column forbids cannot be done by
     // any database. MySQL refuses the constraint outright; PostgreSQL accepts it and fails
@@ -456,10 +457,10 @@ export class DynamicCollectionSchemaService {
    * whether or not the field is required, so only a declared `set null` can
    * reach the refusal.
    */
-  private relationOnUpdate(field: FieldDefinition): string {
+  private relationOnUpdate(field: FieldDefinition, refuse = true): string {
     const declared = field.options?.onUpdate;
     if (declared === undefined) return "no action";
-    if (declared === "set null" && field.required) {
+    if (refuse && declared === "set null" && field.required) {
       throw NextlyError.validation({
         errors: [
           {
@@ -1448,6 +1449,24 @@ ${allColumnDefs.join(",\n")}
       }
     }
 
+    // What this save says a field WAS, by identity rather than by spelling.
+    //
+    // A renamed field is the same field under a new name, so an exact-name
+    // lookup finds nothing for it and every pass keyed on one silently treats
+    // the rename as having no other edit in it. Both passes below ask this,
+    // because they were answering it separately and disagreeing: the action
+    // pass carried a renamed field's edit while the column pass skipped the
+    // same field, so a link renamed and turned optional in one save had its
+    // key moved to `SET NULL` and its column left `NOT NULL`.
+    const previousDefinitionOf = (
+      field: FieldDefinition
+    ): FieldDefinition | undefined =>
+      renamedToName !== null &&
+      renamedFromName !== null &&
+      field.name === renamedToName
+        ? oldFieldMap.get(renamedFromName)
+        : oldFieldMap.get(field.name);
+
     // Find modified fields
     // What a relationship does when the row it points at is deleted, or its
     // key updated. Its own pass, OUTSIDE the column loop, for two reasons that
@@ -1464,17 +1483,7 @@ ${allColumnDefs.join(",\n")}
     const fkActionsBeforeColumns: string[] = [];
     const fkActionsAfterColumns: string[] = [];
     for (const field of newFields) {
-      // Paired the way the column passes above pair, not by name alone. A
-      // renamed field is the SAME field under a new name, and an exact-name
-      // lookup finds nothing for it — so a save that renamed a relationship
-      // and changed its action emitted the rename and left the key enforcing
-      // the old one, with the registry recording the new.
-      const previous =
-        renamedToName !== null &&
-        renamedFromName !== null &&
-        field.name === renamedToName
-          ? oldFieldMap.get(renamedFromName)
-          : oldFieldMap.get(field.name);
+      const previous = previousDefinitionOf(field);
       if (!previous) continue;
       // A field whose STORAGE moved is created by the add path, which writes
       // the column and its key together with the actions this save asks for.
@@ -1505,7 +1514,7 @@ ${allColumnDefs.join(",\n")}
         // A field with no parent column has nothing to alter. Toggling `required` on a
         // many-to-many emitted ALTER COLUMN against a name the table does not have.
         if (!fieldProducesColumn(field)) continue;
-        const oldField = oldFieldMap.get(field.name);
+        const oldField = previousDefinitionOf(field);
         // A storage move is handled by the add and remove loops above; altering the column here
         // would target one the table does not have yet, or no longer has.
         if (oldField && this.storageClassChanged(oldField, field)) continue;
@@ -1744,12 +1753,29 @@ ${allColumnDefs.join(",\n")}
       return NO_REFERENTIAL_ACTION_CHANGE;
     }
 
-    const actionsOf = (f: FieldDefinition) => ({
-      onDelete: this.mapOnDeleteAction(this.relationOnDelete(f)),
-      onUpdate: this.mapOnUpdateAction(this.relationOnUpdate(f)),
+    // The PREVIOUS definition is read without being judged, and the new one is
+    // judged. A combination the old creation path accepted — a required
+    // relationship declaring `onUpdate: "set null"` — is a fact about what is
+    // already stored, and refusing to READ it would make the collection
+    // unfixable: the repair is an edit, and every edit visits every retained
+    // relationship, so one legacy field would block unrelated changes to its
+    // neighbours. What a save is asking FOR still has to be possible.
+    const actionsOf = (f: FieldDefinition, refuse: boolean) => ({
+      onDelete: this.mapOnDeleteAction(this.relationOnDelete(f, refuse)),
+      onUpdate: this.mapOnUpdateAction(this.relationOnUpdate(f, refuse)),
     });
-    const from = actionsOf(oldField);
-    const to = actionsOf(newField);
+    // Judged only where this save TOUCHES the pairing. A field carried through
+    // a save untouched is not being asked for — refusing it would make one
+    // legacy relationship freeze every other field on its collection, since
+    // this pass visits all of them. Requiredness counts as touching it: the
+    // impossible pair is `set null` WITH `required`, so flipping either half
+    // onto a declaration that was legal before is a save asking for it.
+    const carriedUntouched =
+      oldField.required === newField.required &&
+      oldField.options?.onDelete === newField.options?.onDelete &&
+      oldField.options?.onUpdate === newField.options?.onUpdate;
+    const from = actionsOf(oldField, false);
+    const to = actionsOf(newField, !carriedUntouched);
     if (from.onDelete === to.onDelete && from.onUpdate === to.onUpdate) {
       return NO_REFERENTIAL_ACTION_CHANGE;
     }

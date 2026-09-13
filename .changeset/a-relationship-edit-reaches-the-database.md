@@ -107,3 +107,21 @@ column itself:
   ordered behind, which would leave the table carrying no key at all while
   the save was recorded as made. The check reads the live rows; a caller that
   does not supply them keeps the behaviour it had.
+
+A definition already stored is read rather than judged. The previous creation
+path accepted a required relationship declaring `onUpdate: "set null"`, and
+refusing to READ that combination would have frozen the collection holding it:
+the repair is itself an edit, and every save visits every relationship the
+collection keeps, so one legacy field would have blocked unrelated changes to
+its neighbours. What a save ASKS FOR is still refused — including a save that
+flips requiredness onto a declaration that was legal before.
+
+What a field was is now answered in ONE place for every pass in a save. The
+action pass carried a renamed field's edit while the column pass, keyed on the
+new name, skipped the same field — so a link renamed and turned optional in
+one save had its key moved to `SET NULL` and its column left `NOT NULL`.
+
+The SQLite refusal in the schema templates is a `NextlyError` rather than a
+bare `Error` subclass, so it reaches a caller as the typed envelope every
+other refusal in the package uses. The class and its message are unchanged;
+callers and tests identify it by type.

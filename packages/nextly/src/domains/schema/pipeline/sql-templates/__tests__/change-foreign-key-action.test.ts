@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChangeForeignKeyActionOp } from "../../diff/types";
+import { NextlyError } from "../../../../../errors/nextly-error";
 import { generateSQL, SqliteUnsupportedOperationError } from "../index";
 
 const op: ChangeForeignKeyActionOp = {
@@ -64,6 +65,21 @@ describe("change_foreign_key_action", () => {
     expect(() => generateSQL(op, "sqlite")).toThrow(
       /change_foreign_key_action/
     );
+  });
+
+  it("refuses with this codebase's error, not a bare one", () => {
+    // The refusal leaves `packages/nextly` through the same envelope as every
+    // other one — code, status, public data, log context — rather than as a
+    // message string a caller would have to parse. The class is kept because
+    // callers identify it by type; what changed is what it extends.
+    try {
+      generateSQL(op, "sqlite");
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect(NextlyError.is(error)).toBe(true);
+      expect(error).toBeInstanceOf(SqliteUnsupportedOperationError);
+      expect(JSON.stringify(error)).toContain("SQLITE_UNSUPPORTED_OPERATION");
+    }
   });
 
   it("writes the NEW actions, and carries the old ones for the inverse", () => {
