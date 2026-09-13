@@ -171,6 +171,26 @@ describe("resolvePromotedDocument", () => {
     expect(out).toEqual({ kind: "public", guarded: "edited" });
   });
 
+  it("refuses a deleted child even when the live rule denies its whole container", async () => {
+    // The live rule removes `seo` entirely, so the live-side denial names the
+    // container. The promotion keeps `seo` and drops `secret` from inside it,
+    // so a filter applied at the container asks the wrong question and the
+    // deletion goes through unjudged.
+    const rulesByKind = (document: Record<string, unknown>): Promise<void> => {
+      if (document.kind === "private") delete document.seo;
+      return Promise.resolve();
+    };
+    await expect(
+      resolve({
+        before: { kind: "public", seo: { title: "new" } },
+        live: { kind: "private", seo: { title: "old", secret: "live" } },
+        applyRules: rulesByKind,
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "seo.secret" }] },
+    });
+  });
+
   it("keeps an own __proto__ key instead of invoking the prototype setter", async () => {
     const before: Record<string, unknown> = { guarded: "live" };
     Object.defineProperty(before, "__proto__", {

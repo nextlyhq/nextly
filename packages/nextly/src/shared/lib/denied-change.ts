@@ -144,7 +144,13 @@ export async function resolvePromotedDocument(
   // that has the right of it.
   const denied = new Set(deniedPaths(input.before, permittedBefore, ""));
   for (const path of deniedPaths(input.live, permittedLive, "")) {
-    if (!pathExists(input.before, path)) denied.add(path);
+    // Expanded to leaves BEFORE the filter, because a rule denies a container
+    // whole. Filtering at the container asks "does the promotion still carry
+    // `seo`", which is yes even when it has dropped `seo.secret` from inside
+    // it, and the dropped child is what the live side was consulted for.
+    for (const leaf of leafPaths(valueAt(input.live, path), path)) {
+      if (!pathExists(input.before, leaf)) denied.add(leaf);
+    }
   }
 
   const refusals: string[] = [];
