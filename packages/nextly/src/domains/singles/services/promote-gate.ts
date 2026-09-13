@@ -15,24 +15,29 @@
  * gates would be two answers to one question, and the second would be the one
  * nobody remembered to update.
  *
- * Called BEFORE the write transaction opens, never inside it. Both a field's
- * `access` rule and its `validate` are user code, and resolving the caller's
- * grants issues its own queries on the pooled connection: run inside an open
- * transaction on a small pool, those queries wait for a connection the
- * transaction is holding and the publish hangs. The collection publish path
- * gates its promotion outside the transaction for the same reason.
+ * Called INSIDE the write transaction, on the draft that transaction has
+ * locked. Judged before it, the gate can only judge a copy of the world as it
+ * was: another writer saving a draft in between, a `beforeChange` hook
+ * rewriting the status, or the fold merging several languages onto one row all
+ * make the checked document and the written document different documents. The
+ * one thing that cannot be done inside the transaction is resolve the caller's
+ * grants, which queries the pooled connection the transaction is holding, so
+ * that is resolved by the caller beforehand and handed in.
  *
  * @module domains/singles/services/promote-gate
  */
 
 import { isDeepStrictEqual } from "node:util";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import {
   applyFieldWriteAccess,
   attachFieldValidators,
+  type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import { relationshipValidationView } from "../../../shared/lib/field-transform";
 
@@ -44,13 +49,28 @@ export interface PromotableDraft {
   snapshot: unknown;
 }
 
-/** What judging a draft needs from the service that holds it. */
+/** What judging a promotion needs from the service that performs it. */
 export interface PromoteGateContext {
   slug: string;
   entryId: string;
   fields: FieldConfig[];
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
+  /**
+   * The caller's grants, resolved on the pooled connection BEFORE the
+   * transaction opened.
+   *
+   * Resolving them here would issue queries while the transaction holds a
+   * connection, and on a small pool those queries wait for the connection the
+   * transaction is holding: the publish hangs rather than fails.
+   */
+  grants?: () => Promise<CallerGrants>;
+  /**
+   * The scope an API key arrived with, so a key is judged on ITS grants rather
+   * than on the database roles of whoever owns it. There is no request-local
+   * scope to inherit on the Direct API, so it travels as an argument.
+   */
+  authenticatedScope?: AuthenticatedScope;
   /**
    * A stored document in the logical shape the rules are written against.
    *
@@ -61,14 +81,15 @@ export interface PromoteGateContext {
    */
   toLogical: (doc: Record<string, unknown>) => Record<string, unknown>;
   /**
-   * The live document as a reader of that language sees it, used to decide
-   * whether promoting a denied field would CHANGE anything.
+   * The live row for one language, as STORED, used to decide whether promoting
+   * a denied field would change anything. It goes through `toLogical` here, as
+   * the snapshot does, so both sides of the comparison are one representation.
    *
-   * Language-aware by necessity: a localized field's live value is on the
-   * companion row, so a main-table row alone reports every translation as
-   * absent and every unchanged translation as an edit.
+   * A read's expanded document is the wrong source: it turns an upload or a
+   * relationship into the document behind the identifier, so an untouched
+   * field reads as an edit and a publish nobody objected to is refused.
    */
-  liveDocumentFor: (
+  liveStoredFor: (
     locale: string | null
   ) => Promise<Record<string, unknown> | undefined>;
   /**
@@ -82,24 +103,51 @@ export interface PromoteGateContext {
 }
 
 /**
- * Refuse the publish unless every pending change may be promoted as it stands.
+ * Refuse the publish unless the pending changes may be promoted as they stand.
  *
- * Throws on the first draft that cannot be, so nothing is written: a publish
- * either applies the whole pending change or none of it.
+ * The drafts are judged as ONE outcome, not one at a time. `publishAllLocales`
+ * applies every language's snapshot to the same main row, so the shared values
+ * that survive are the last writer's: judged separately, each draft can pass
+ * against its own shared values while the document that actually lands holds
+ * another language's. What is judged here is the state the write produces.
+ *
+ * Throws on the first problem, so nothing is written: a publish applies the
+ * whole pending change or none of it.
  */
 export async function assertDraftsMayBePromoted(
   drafts: readonly PromotableDraft[],
   ctx: PromoteGateContext
 ): Promise<void> {
+  if (drafts.length === 0) return;
+
+  // The shared half of what the write produces, in the order the write applies
+  // it, so the last value to land is the one judged.
+  let shared: Record<string, unknown> = {};
   for (const draft of drafts) {
+    shared = { ...shared, ...ctx.toLogical(asRecord(draft.snapshot)) };
+  }
+
+  for (const draft of drafts) {
+    // This language's own values over the shared outcome, then the caller's
+    // payload over both: the document this language ends up with.
     const promoted = {
-      ...ctx.toLogical((draft.snapshot ?? {}) as Record<string, unknown>),
+      ...shared,
+      ...ctx.toLogical(asRecord(draft.snapshot)),
       ...(ctx.callerData ?? {}),
     };
-
-    await assertNoDeniedChange(promoted, draft.locale, ctx);
+    await assertNoDeniedChange(
+      ctx.toLogical(asRecord(draft.snapshot)),
+      draft.locale,
+      ctx
+    );
     await assertSchemaStillAccepts(promoted, ctx);
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 /**
@@ -113,33 +161,45 @@ export async function assertDraftsMayBePromoted(
  * and take that author's edit with it, reporting success. Refusing keeps the
  * draft for someone who can write the field.
  *
- * Judged on what would CHANGE, not on what the snapshot holds. A snapshot is a
- * full copy of the document, so a denied field appears in every one of them;
- * only a value that differs from what is live is a change being made.
+ * Judged in STORED shape, on both sides, and on what would CHANGE rather than
+ * on what the snapshot holds: a snapshot is a full copy of the document, so a
+ * denied field appears in every one of them, and only a value that differs
+ * from what is live is a change being made.
  */
 async function assertNoDeniedChange(
-  promoted: Record<string, unknown>,
+  logicalSnapshot: Record<string, unknown>,
   locale: string | null,
   ctx: PromoteGateContext
 ): Promise<void> {
-  const permitted = { ...promoted };
+  // A deep copy, because the rules delete a denied value in place and a
+  // shallow one shares every nested group, repeater row and component with the
+  // original: the deletion would land on both, and the comparison below would
+  // then see a container still present and report nothing denied while the
+  // write persisted the forbidden nested edit.
+  const permitted = detachData(logicalSnapshot);
   await applyFieldWriteAccess({
     kind: "single",
     slug: ctx.slug,
     data: permitted,
     operation: "update",
     user: ctx.user,
+    authenticatedScope: ctx.authenticatedScope,
     overrideAccess: ctx.overrideAccess,
+    grants: ctx.grants,
     id: ctx.entryId,
   });
-  const denied = Object.keys(promoted).filter(
-    key => !Object.prototype.hasOwnProperty.call(permitted, key)
-  );
+
+  const denied = deniedPaths(logicalSnapshot, permitted, "");
   if (denied.length === 0) return;
 
-  const live = (await ctx.liveDocumentFor(locale)) ?? {};
+  // Both sides through the same conversion, so a JSON-backed value is an
+  // object on both and an upload or a relationship is the identifier it is
+  // stored as on both. Compared across representations, an untouched field
+  // reads as an edit and a publish nobody objected to is refused.
+  const live = ctx.toLogical(asRecord(await ctx.liveStoredFor(locale)));
   const deniedChanges = denied.filter(
-    key => !isDeepStrictEqual(promoted[key], live[key])
+    path =>
+      !isDeepStrictEqual(valueAt(logicalSnapshot, path), valueAt(live, path))
   );
   if (deniedChanges.length === 0) return;
 
@@ -160,8 +220,65 @@ async function assertNoDeniedChange(
 }
 
 /**
+ * Every path the rules removed, at any depth.
+ *
+ * A field rule can sit on a child of a group or of a repeater row, and the
+ * removal there leaves the container in place: comparing only the top level
+ * reports nothing denied and lets the forbidden nested edit through.
+ */
+function deniedPaths(
+  before: unknown,
+  after: unknown,
+  prefix: string
+): string[] {
+  if (Array.isArray(before)) {
+    if (!Array.isArray(after)) return [prefix];
+    return before.flatMap((row, index) =>
+      deniedPaths(row, after[index], `${prefix}[${index}]`)
+    );
+  }
+  if (!isRecord(before)) return [];
+  if (!isRecord(after)) return [prefix];
+  const out: string[] = [];
+  for (const key of Object.keys(before)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (!Object.prototype.hasOwnProperty.call(after, key)) {
+      out.push(path);
+      continue;
+    }
+    out.push(...deniedPaths(before[key], after[key], path));
+  }
+  return out;
+}
+
+/** Read a dotted/bracketed path the way {@link deniedPaths} writes one. */
+function valueAt(root: unknown, path: string): unknown {
+  let current: unknown = root;
+  for (const step of path.split(/\.|\[(\d+)\]/).filter(Boolean)) {
+    if (Array.isArray(current) && /^\d+$/.test(step)) {
+      current = current[Number(step)];
+      continue;
+    }
+    if (!isRecord(current)) return undefined;
+    current = current[step];
+  }
+  return current;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
  * Refuse a promotion the schema no longer accepts, naming every field at
  * fault so the author can see what to fix.
+ *
+ * Judged as a CREATE would be, not as a patch. A patch checks the keys it
+ * carries and skips the ones it does not, which is right for a caller sending
+ * a few fields and wrong here: a snapshot older than a newly required field
+ * simply has no property for it, so patch semantics report nothing and publish
+ * a document that violates the contract. The promoted document is the whole
+ * document, so it is judged whole.
  *
  * Judged on the snapshot being promoted and never on the live document: a
  * schema change must not block someone from fixing and republishing content
@@ -175,7 +292,7 @@ async function assertSchemaStillAccepts(
     relationshipValidationView(promoted, ctx.fields),
     attachFieldValidators("single", ctx.slug, ctx.fields),
     {
-      mode: "update",
+      mode: "create",
       req: ctx.user ? { user: ctx.user } : {},
       localizedFieldNames: ctx.localizedFieldNames,
       enforceLocalizedRequired: ctx.enforceLocalizedRequired,

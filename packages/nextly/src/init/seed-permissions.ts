@@ -13,6 +13,7 @@
  * @module init/seed-permissions
  */
 
+import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/register";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 
@@ -56,5 +57,42 @@ export async function seedAllPermissions(): Promise<void> {
 
   if (allNewIds.length > 0) {
     await permissionSeedService.assignNewPermissionsToSuperAdmin(allNewIds);
+  }
+}
+
+/**
+ * Seed every permission, then bring the preset roles in line with what now
+ * exists -- the pair, because a boot that does one without the other leaves a
+ * role describing content it has no grants for.
+ *
+ * 🔴 Preset seeding was in exactly the position custom permissions were in
+ * before this module existed: performed by the instrumentation boot's post-init
+ * tasks and by nothing else. An app that cold boots only through
+ * `createDynamicHandlers` got its permissions and not the presets that are
+ * supposed to cover them, so an administrator never received a new collection's
+ * grants however many times it restarted. The dashboard's onboarding checklist
+ * reads the preset predicates to decide whether creating a collection is a step
+ * this reader could finish, so on that path it offered one that could not be.
+ *
+ * Ordered rather than merely grouped: a preset resolves against the permission
+ * list as it then stands, so the seeding has to have happened first.
+ *
+ * Each half is attempted independently and neither failure propagates, because
+ * a boot must not depend on tables a migration has not created yet. That is the
+ * behaviour both call sites already had, moved here so they cannot drift apart
+ * again.
+ */
+export async function seedPermissionsAndRolePresets(): Promise<void> {
+  try {
+    await seedAllPermissions();
+  } catch {
+    // Silently skip — permissions table may not exist yet (migrations not run),
+    // or permissionSeedService may not be registered.
+  }
+
+  try {
+    await seedRolePresets(getService("adapter"), getService("logger"));
+  } catch {
+    // Silently skip — roles/permissions tables may not exist yet.
   }
 }

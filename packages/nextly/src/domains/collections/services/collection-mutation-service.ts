@@ -78,11 +78,13 @@ import {
   rehydrateSystemTimestamps,
   SYSTEM_TIMESTAMP_KEYS,
 } from "../../../shared/lib/case-conversion";
+import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
+  callerAccessGrants,
   attachFieldValidators,
   getFieldFunctions,
   runFieldHooks,
@@ -3095,12 +3097,83 @@ export class CollectionMutationService extends BaseService {
       // of write access matches generation, so a field the caller may not
       // create is not reintroduced.
       const seededBody: Record<string, unknown> = { ...body };
+      // One resolver for both write-access passes over this record, so the
+      // caller's roles and permissions are read once and both judge with one
+      // authority.
+      const writeGrants = callerAccessGrants(
+        params.user,
+        params.authenticatedScope
+      );
+      // What a function default is allowed to READ, which is not the same as
+      // what this write is allowed to STORE.
+      //
+      // A function default receives the data built so far, and that data still
+      // holds every value the caller sent, including one a field rule denies
+      // them. Left alone, a default could read the forbidden value and carry it
+      // into a field the caller IS allowed to write: the denied field would be
+      // stripped below and its value persisted anyway, one column across.
+      //
+      // So the rules are applied to a COPY, and the copy is what the functions
+      // read. Applying them to the record itself would be wrong in the other
+      // direction: a rule may depend on a sibling the caller omitted BECAUSE it
+      // has a default (`data.kind === "public"` where `kind` defaults to
+      // `public`), and judging that rule before the defaults exist denies it.
+      // Deleting the value then would lose it for good, since the pass that
+      // decides correctly runs after the defaults and has nothing left to keep.
+      // A DEEP copy. The rules delete a denied value in place, and a shallow
+      // copy shares every nested group, repeater row and component with the
+      // record: the deletion would land on the record too, which is the data
+      // loss this whole arrangement exists to avoid, one level down.
+      const readableByDefaults = detachData(seededBody);
+      const fieldFunctions = getFieldFunctions(
+        "collection",
+        params.collectionName
+      );
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: readableByDefaults,
+        operation: "create",
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        overrideAccess: params.overrideAccess,
+        grants: writeGrants,
+      });
+      // The view is defaulted BEFORE it is judged a second time, and both
+      // halves matter.
+      //
+      // Defaulted, because a rule may depend on a sibling the caller omitted
+      // because it has a default, and a view judged without it hides a value
+      // the caller may in fact write.
+      //
+      // Judged again, because a default of its own is a value like any other:
+      // a field the caller may not write still takes its declared default
+      // here, and left in the view a later function default would read it and
+      // carry it into a field they CAN write. The pass below removes the field
+      // it came from and keeps the copy, so the rule is defeated one column
+      // across.
+      //
+      // These fill the view only. The record is filled from it afterwards, so
+      // a default the rules removed here is one the record's own pass will not
+      // put back.
+      applyFieldDefaults(readableByDefaults, fields, fieldFunctions);
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: readableByDefaults,
+        operation: "create",
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        overrideAccess: params.overrideAccess,
+        grants: writeGrants,
+      });
       // The stored fields carry constant defaults; a function default exists
       // only in the live config, which the registry captured at boot.
       applyFieldDefaults(
         seededBody,
         fields,
-        getFieldFunctions("collection", params.collectionName)
+        fieldFunctions,
+        readableByDefaults
       );
 
       const beforeOpArgs =
@@ -3187,7 +3260,9 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "create",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
+        grants: writeGrants,
       });
 
       // Field-level beforeValidate hooks transform values ahead of the

@@ -146,6 +146,19 @@ function requiredIsEnforced(
   return true;
 }
 
+/**
+ * What "no value" means for a required field, in one place.
+ *
+ * Exported because a caller deciding whether a document it assembled would
+ * satisfy the schema has to ask the same question this validator will ask of
+ * it later. A narrower second implementation (a nullish check, say) calls a
+ * whitespace string or an empty array present, stores the document, and the
+ * next write rejects it.
+ */
+export function isEmptyRequiredValue(value: unknown): boolean {
+  return isEmpty(value);
+}
+
 function isEmpty(value: unknown): boolean {
   return (
     value === undefined ||

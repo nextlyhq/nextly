@@ -32,6 +32,10 @@ import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import {
+  callerAccessGrants,
+  type CallerGrants,
+} from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
@@ -165,19 +169,18 @@ export class SinglePublishAllService extends BaseService {
       const denial = await this.authorizePublish(plan, options);
       if (denial) return denial;
 
-      // Every language's pending change is promoted below, so every one of
-      // them is judged first, against the schema and the permissions as they
-      // stand now. Before the transaction, because a field's `access` rule and
-      // its `validate` are user code and resolving the caller's grants issues
-      // its own pooled queries: run inside the open transaction on a small
-      // pool they would wait for the connection it holds.
-      //
-      // The same gate the ordinary publish path runs. Two gates would be two
-      // answers to one question, and this is the path that had none.
-      await this.assertPendingChangesMayBePromoted(plan, options);
+      // Resolved here because the gate that uses them runs inside the write
+      // transaction, and resolving grants queries the pooled connection that
+      // transaction is holding.
+      const promoteGrants = callerAccessGrants(
+        options.user,
+        options.authenticatedScope
+      );
 
       const outcome = await withVersionConflictRetry(() =>
-        this.adapter.transaction(tx => this.commitPublish(tx, plan, options))
+        this.adapter.transaction(tx =>
+          this.commitPublish(tx, plan, options, promoteGrants)
+        )
       );
 
       // The document was deleted out from under the publish: nothing was
@@ -389,7 +392,9 @@ export class SinglePublishAllService extends BaseService {
   private async commitPublish(
     tx: TransactionContext,
     plan: PublishPlan,
-    options: PublishAllSingleLocalesOptions
+    options: PublishAllSingleLocalesOptions,
+    /** Resolved before this transaction opened; see `publishAllLocales`. */
+    promoteGrants?: () => Promise<CallerGrants>
   ): Promise<PublishOutcome> {
     const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
 
@@ -423,7 +428,9 @@ export class SinglePublishAllService extends BaseService {
       tx,
       plan,
       lockedRow,
-      priorCompanionStatuses
+      priorCompanionStatuses,
+      options,
+      promoteGrants
     );
 
     if (singleMeta.versions?.enabled) {
@@ -471,7 +478,10 @@ export class SinglePublishAllService extends BaseService {
     tx: TransactionContext,
     plan: PublishPlan,
     lockedRow: Record<string, unknown>,
-    priorCompanionStatuses: Map<string, string | null>
+    priorCompanionStatuses: Map<string, string | null>,
+    options: PublishAllSingleLocalesOptions,
+    /** Resolved before this transaction opened; see `publishAllLocales`. */
+    promoteGrants?: () => Promise<CallerGrants>
   ): Promise<{
     publishedRow: Record<string, unknown>;
     mainRowTransitioned: boolean;
@@ -506,7 +516,13 @@ export class SinglePublishAllService extends BaseService {
     // the statuses would all say published while the content each author was
     // holding stayed unapplied — the document would report itself fully
     // published and show none of the work being published.
-    await this.promotePendingChanges(tx, plan, publishNow);
+    await this.promotePendingChanges(
+      tx,
+      plan,
+      publishNow,
+      options,
+      promoteGrants
+    );
 
     if (companion && plan.companionPublishable) {
       // Every stored translation moves in ONE statement, through the adapter's
@@ -540,12 +556,22 @@ export class SinglePublishAllService extends BaseService {
    * transaction, so publishing some and refusing others would leave a caller
    * with no way to say what happened.
    */
+  /**
+   * Judge every pending change this publish would promote, and refuse the
+   * whole publish if any of them may not be.
+   *
+   * All-or-nothing matches the write it guards: `promotePendingChanges`
+   * applies every language's change and deletes them all together, so
+   * publishing some and refusing others would leave a caller with no way to
+   * say what happened.
+   */
   private async assertPendingChangesMayBePromoted(
     plan: PublishPlan,
-    options: PublishAllSingleLocalesOptions
+    pending: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
+    options: PublishAllSingleLocalesOptions,
+    promoteGrants?: () => Promise<CallerGrants>
   ): Promise<void> {
     const { slug, singleMeta, existingDoc, companion, fieldConfigs } = plan;
-    if (singleMeta.versions?.drafts?.enabled !== true) return;
     const reader = this.queryService;
     // Constructed without a reader only by a caller that built this service
     // directly. The gate cannot run blind, and silently skipping it would make
@@ -561,47 +587,30 @@ export class SinglePublishAllService extends BaseService {
       });
     }
 
-    const pending = await new VersionsRepository(
-      this.adapter
-    ).findAllWorkingDrafts({
-      scopeKind: "single",
-      scopeSlug: slug,
+    await assertDraftsMayBePromoted(pending, {
+      slug,
       entryId: existingDoc.id,
+      fields: fieldConfigs,
+      user: options.user,
+      overrideAccess: options.overrideAccess,
+      authenticatedScope: options.authenticatedScope,
+      grants: promoteGrants,
+      toLogical: doc =>
+        reader.deserializeJsonFields(
+          { id: existingDoc.id, updatedAt: existingDoc.updatedAt, ...doc },
+          singleMeta.fields
+        ),
+      // The stored row, in the shape a snapshot holds, so an untouched upload
+      // or relationship is compared identifier with identifier rather than
+      // identifier with the document a read would have expanded it into.
+      liveStoredFor: () => Promise.resolve(existingDoc),
+      localizedFieldNames: new Set(
+        (companion?.localizedFields ?? []).map(f => f.name)
+      ),
+      // Every language goes live here, so none of them is falling back to
+      // another and each one's required values are enforced.
+      enforceLocalizedRequired: true,
     });
-    if (pending.length === 0) return;
-
-    const localizedFieldNames = new Set(
-      (companion?.localizedFields ?? []).map(f => f.name)
-    );
-    await assertDraftsMayBePromoted(
-      pending.map(draft => ({
-        locale: draft.locale ?? null,
-        snapshot: draft.snapshot,
-      })),
-      {
-        slug,
-        entryId: existingDoc.id,
-        fields: fieldConfigs,
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        toLogical: doc =>
-          reader.deserializeJsonFields(
-            { id: existingDoc.id, updatedAt: existingDoc.updatedAt, ...doc },
-            singleMeta.fields
-          ),
-        liveDocumentFor: async locale =>
-          (
-            await reader.get(slug, {
-              locale: locale ?? undefined,
-              overrideAccess: true,
-            })
-          ).data,
-        localizedFieldNames,
-        // This publish makes every language live, so every language's required
-        // values are enforced: none of them is falling back to another.
-        enforceLocalizedRequired: true,
-      }
-    );
   }
 
   /**
@@ -614,7 +623,9 @@ export class SinglePublishAllService extends BaseService {
   private async promotePendingChanges(
     tx: TransactionContext,
     plan: PublishPlan,
-    publishNow: Date
+    publishNow: Date,
+    options: PublishAllSingleLocalesOptions,
+    promoteGrants?: () => Promise<CallerGrants>
   ): Promise<void> {
     const { slug, singleMeta, existingDoc, companion } = plan;
     if (singleMeta.versions?.drafts?.enabled !== true) return;
@@ -627,6 +638,18 @@ export class SinglePublishAllService extends BaseService {
     };
     const pending = await repo.findAllWorkingDrafts(ref);
     if (pending.length === 0) return;
+
+    // Judged here, on the drafts this transaction has read under its lock, and
+    // as ONE outcome: the loop below applies every language's snapshot to the
+    // same main row, so the shared values that survive are the last writer's.
+    // Judged one at a time, each draft can pass against its own shared values
+    // while the document that actually lands holds another language's.
+    await this.assertPendingChangesMayBePromoted(
+      plan,
+      pending,
+      options,
+      promoteGrants
+    );
 
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this

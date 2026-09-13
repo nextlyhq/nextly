@@ -40,6 +40,7 @@ import {
   listEffectivePermissions,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
+import { addressableFields } from "../addressable-fields";
 
 import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
@@ -67,7 +68,7 @@ type FieldAccessFn = (args: {
  * the single source for the string, so this carries what it returns rather
  * than re-deriving it.
  */
-interface CallerGrants {
+export interface CallerGrants {
   permissions: string[];
   roles: string[];
 }
@@ -156,7 +157,17 @@ export interface FieldFunctions {
   fields?: Record<string, FieldFunctions>;
 }
 
-type EntityKind = "collection" | "single";
+/**
+ * What a registration is keyed by.
+ *
+ * A field group joins the two entity kinds because it has the same problem and
+ * only the registry solves it: its fields are read from a stored definition on
+ * every write, and a function does not survive being stored. What is CONSUMED
+ * from a field group's entry today is the `defaultValue` alone. Its `access`
+ * rules and hooks are captured by the same walk but nothing reads them for a
+ * field group, so registering one does not mean they are enforced.
+ */
+type EntityKind = "collection" | "single" | "fieldGroup";
 type Store = Map<string, Record<string, FieldFunctions>>;
 
 const GLOBAL_KEY = "__nextlyFieldFunctionRegistry";
@@ -220,14 +231,46 @@ function extractFieldFunctions(
   return hasAny ? out : undefined;
 }
 
+/**
+ * An unnamed GROUP is layout: its children are stored at the level the group
+ * sits in, which is the level this map is keyed by. An unnamed REPEATER is not:
+ * its children are stored PER ROW, so flattening them here would file a row's
+ * field under the parent's name and hand its rules the wrong object.
+ *
+ * The same distinction `collection-sources` draws, and it has to be made DURING
+ * the walk: the walk emits the children themselves, so by the time a predicate
+ * could read the result, a field reached through an unnamed repeater is
+ * indistinguishable from one reached through an unnamed group.
+ */
+function storedAtThisLevel(container: { type?: unknown }): boolean {
+  return container.type === "group";
+}
+
+/**
+ * The function-bearing fields at one level, keyed by name.
+ *
+ * Flattened through the shared `addressableFields` walk rather than a loop over
+ * the array, because an unnamed presentational container stores its children at
+ * the level it sits in. A loop over named entries drops every rule declared
+ * inside one: not just a `defaultValue`, but the `access` rule deciding whether
+ * a caller may read or write that field, and the hooks that shape it. The data
+ * side already flattens these containers, so the two now agree.
+ *
+ * `defineCollection` refuses a field with no name, so the documented code-first
+ * path cannot build this shape. A plugin contributing raw config can:
+ * `assertPluginFieldDeclarations` checks each field's TYPE and not its name, so
+ * an unnamed `group` reaches the live config and this map. Silently dropping
+ * the access rules inside it is the failure worth spending a walk to avoid.
+ */
 function collectFieldFunctions(
   fields: unknown[]
 ): Record<string, FieldFunctions> | undefined {
   const map: Record<string, FieldFunctions> = {};
   let hasAny = false;
-  for (const raw of fields) {
-    if (raw === null || typeof raw !== "object") continue;
-    const field = raw as Record<string, unknown>;
+  for (const raw of addressableFields(fields, {
+    descendInto: storedAtThisLevel,
+  })) {
+    const field = raw as unknown as Record<string, unknown>;
     if (typeof field.name !== "string" || !field.name) continue;
     const fns = extractFieldFunctions(field);
     if (fns) {
@@ -253,6 +296,42 @@ export function registerFieldFunctions(
   } else {
     store().delete(key(kind, slug));
   }
+}
+
+/** One entity's live config, for a wholesale registry replacement. */
+export interface FieldFunctionSource {
+  kind: EntityKind;
+  slug: string;
+  fields: unknown[];
+}
+
+/**
+ * Rebuild the whole registry from the config that is now in force.
+ *
+ * Replacing rather than adding, because a reload can REMOVE an entity: a
+ * collection dropped from `nextly.config.ts` keeps its registry row and its
+ * table so an orphan sweep can find them later, so it stays addressable, and
+ * an entry left behind here would keep deciding its access, running its hooks
+ * and filling its defaults from a config that no longer declares it.
+ *
+ * Called at the reload's commit point, not when the new config is read. A
+ * reload that is refused after its DDL has run still parsed a valid config,
+ * and installing these early would leave a rule the process explicitly
+ * rejected deciding writes while every other service still ran the previous
+ * one.
+ */
+export function replaceFieldFunctions(
+  sources: readonly FieldFunctionSource[]
+): void {
+  const next: Store = new Map();
+  for (const source of sources) {
+    if (!source.slug || !Array.isArray(source.fields)) continue;
+    const map = collectFieldFunctions(source.fields);
+    if (map) next.set(key(source.kind, source.slug), map);
+  }
+  const current = store();
+  current.clear();
+  for (const [k, v] of next) current.set(k, v);
 }
 
 export function getFieldFunctions(
@@ -287,7 +366,16 @@ function attachValidators(
   fns: Record<string, FieldFunctions>
 ): ValidatableField[] {
   return fields.map(field => {
-    const entry = field.name ? fns[field.name] : undefined;
+    // An unnamed container holds no entry of its own, and its children are
+    // registered at THIS level because that is where their values are stored.
+    // Descending with the same map is what makes the two agree; returning it
+    // untouched left a validator captured at registration unattached, so a
+    // value it should have rejected was accepted.
+    if (!field.name) {
+      if (!field.fields || !storedAtThisLevel(field)) return field;
+      return { ...field, fields: attachValidators(field.fields, fns) };
+    }
+    const entry = fns[field.name];
     if (!entry) return field;
     const next: ValidatableField = { ...field };
     if (entry.validate) next.validate = entry.validate;
@@ -432,6 +520,13 @@ export async function applyFieldWriteAccess(opts: {
   authenticatedScope?: AuthenticatedScope;
   overrideAccess?: boolean;
   id?: string;
+  /**
+   * A resolver shared with another pass over the same write, so the caller's
+   * roles and permissions are read once and both passes judge with one
+   * authority. Build it with {@link callerAccessGrants}. Omitted, this pass
+   * builds its own, which is right for a write judged only once.
+   */
+  grants?: () => Promise<CallerGrants>;
 }): Promise<void> {
   // Bypass for a caller that has SAID it is trusted, and only that. The read
   // side gates on the same single condition, and the two must agree: a rule
@@ -458,10 +553,12 @@ export async function applyFieldWriteAccess(opts: {
     // answers `{ permissions: [], roles: [] }` — so a rule written as
     // `({ permissions }) => permissions.includes(...)` refuses it, which is
     // the correct answer rather than an accident of the shape.
-    grants: grantsResolver(
-      typeof opts.user?.id === "string" ? opts.user.id : undefined,
-      opts.authenticatedScope
-    ),
+    grants:
+      opts.grants ??
+      grantsResolver(
+        typeof opts.user?.id === "string" ? opts.user.id : undefined,
+        opts.authenticatedScope
+      ),
   });
 }
 
@@ -667,11 +764,16 @@ async function applyReadAccessRec(
 }
 
 /**
- * The caller's grants resolver for a read, to hand to every field-access pass
- * over one document so roles and permissions are read once. Memoised on first
- * use, like the resolver each pass would otherwise build for itself.
+ * The caller's grants resolver, to hand to every field-access pass over one
+ * document or record so roles and permissions are read once.
+ *
+ * One function for reads and writes, because they ask the same question of the
+ * same authority. Two constructors of it drifted apart the moment either was
+ * changed: a fix to how an anonymous caller or an API key resolves would land
+ * on one side and leave the other judging by different rules, which is the
+ * shape of an access bug nobody sees until it is exploited.
  */
-export function readAccessGrants(
+export function callerAccessGrants(
   user: Record<string, unknown> | undefined,
   authenticatedScope?: AuthenticatedScope
 ): () => Promise<CallerGrants> {
@@ -704,7 +806,7 @@ export async function applyFieldReadAccess(
     /**
      * A resolver shared with another pass over the same document, so the two
      * passes read the caller's roles and permissions once and judge with one
-     * authority; see {@link readAccessGrants}.
+     * authority; see {@link callerAccessGrants}.
      */
     grants?: () => Promise<CallerGrants>;
   },

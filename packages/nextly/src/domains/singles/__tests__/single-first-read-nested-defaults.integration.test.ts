@@ -168,4 +168,65 @@ describe("a Single's first read fills nested defaults (integration)", () => {
 
     expect(messages).toContain("must be a page document");
   });
+  it("leaves an invented group absent when a required child has no value", async () => {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "partial",
+          fields: [
+            group({
+              name: "contact",
+              fields: [
+                text({ name: "label", defaultValue: "Support" }),
+                // Required, with no default and nothing to supply it on a
+                // first read: a group created for `label` alone would be a
+                // document the next write refuses.
+                text({ name: "email", required: true }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const doc = (await current.nextly.findSingle({
+      slug: "partial",
+      overrideAccess: true,
+    })) as { contact?: unknown } | null;
+
+    expect(doc?.contact ?? null).toBeNull();
+  });
+
+  it("still fills a group whose required children are all satisfied", async () => {
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "complete",
+          fields: [
+            group({
+              name: "contact",
+              fields: [
+                text({ name: "label", defaultValue: "Support" }),
+                text({
+                  name: "email",
+                  required: true,
+                  defaultValue: "support@example.test",
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+
+    const doc = (await current.nextly.findSingle({
+      slug: "complete",
+      overrideAccess: true,
+    })) as { contact?: { label?: string; email?: string } } | null;
+
+    expect(doc?.contact).toEqual({
+      label: "Support",
+      email: "support@example.test",
+    });
+  });
 });

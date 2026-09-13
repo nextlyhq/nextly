@@ -19,6 +19,7 @@ import type { FieldGroupRegistryService } from "../../../services/field-groups/f
 import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
+import { getFieldFunctions } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
@@ -667,7 +668,8 @@ export class FieldGroupMutationService extends BaseService {
         data,
         componentFields,
         existing.length > 0 ? "update" : "create",
-        req
+        req,
+        componentMeta.slug
       );
 
       // i18n: split translatable values out of the main comp_ write — they live on the
@@ -784,7 +786,8 @@ export class FieldGroupMutationService extends BaseService {
         data,
         componentFields,
         existing.length > 0 ? "update" : "create",
-        req
+        req,
+        componentMeta.slug
       );
 
       // i18n: split translatable values out of the main comp_ write (companion-owned).
@@ -898,7 +901,8 @@ export class FieldGroupMutationService extends BaseService {
           instance,
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
-          req
+          req,
+          componentMeta.slug
         );
 
         // i18n: split translatable values out per instance (companion-owned). The
@@ -1032,7 +1036,8 @@ export class FieldGroupMutationService extends BaseService {
           instance,
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
-          req
+          req,
+          componentMeta.slug
         );
 
         // i18n: split translatable values out (companion-owned) per instance.
@@ -1217,7 +1222,8 @@ export class FieldGroupMutationService extends BaseService {
           instance,
           componentFields,
           instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
-          req
+          req,
+          meta.slug
         );
 
         // i18n: split translatable values out per instance using its own component meta.
@@ -1385,7 +1391,8 @@ export class FieldGroupMutationService extends BaseService {
           instance,
           componentFields,
           instanceId && globalExistingMap.has(instanceId) ? "update" : "create",
-          req
+          req,
+          meta.slug
         );
 
         // i18n: split translatable values out per instance using its own component meta.
@@ -1630,7 +1637,13 @@ export class FieldGroupMutationService extends BaseService {
     instance: ComponentInstanceData,
     componentFields: FieldConfig[],
     mode: "create" | "update",
-    req: Record<string, unknown> = {}
+    req: Record<string, unknown> = {},
+    /**
+     * The field group's slug, so a `defaultValue` written as a FUNCTION can be
+     * read from the field-level registry. The fields above come from the
+     * stored definition, which carries constants and cannot carry a function.
+     */
+    slug?: string
   ): Promise<void> {
     // A component instance must be a plain object. A primitive (e.g. a bare
     // string sent for a non-repeatable component field) would make the field
@@ -1653,7 +1666,11 @@ export class FieldGroupMutationService extends BaseService {
     // instance the caller could not have completed. An existing instance is
     // left alone: its absent keys are the caller's patch, not missing values.
     if (mode === "create") {
-      applyFieldDefaults(instance, componentFields);
+      applyFieldDefaults(
+        instance,
+        componentFields,
+        slug ? getFieldFunctions("fieldGroup", slug) : undefined
+      );
     }
     // Reduced in place, and before validation, because both halves of the write
     // depend on it. A validator is written against a field's public value, the

@@ -62,14 +62,36 @@ const NON_COLUMN_TYPES: ReadonlySet<string> = new Set(fieldGroupFieldTypes);
 export function applyFieldDefaults(
   data: Record<string, unknown>,
   fields: readonly ValidatableField[],
-  functions?: DefaultFunctions
+  functions?: DefaultFunctions,
+  /**
+   * What a FUNCTION default reads, when that is not the record being filled.
+   *
+   * A function default receives the document built so far, and on a create
+   * that document still holds every value the caller sent, including one a
+   * field rule denies them. The caller passes a filtered view here so a
+   * default cannot read a value its writer was not allowed to send, while the
+   * record being filled keeps that value for the authoritative access pass to
+   * remove. Filtering the record itself instead would delete the value before
+   * the defaults that decide whether it is allowed have run at all.
+   *
+   * The view arrives ALREADY DEFAULTED and already judged: its caller fills it
+   * with this same function and then runs the field rules over it, so what it
+   * holds is what this caller may store, defaults included. That is what makes
+   * a default the rules remove from it stay removed here.
+   *
+   * Defaults to the record, which is right wherever there is nothing to hide.
+   */
+  view?: Record<string, unknown>
 ): void {
+  const readFrom = view ?? data;
   for (const field of fields) {
     // A layout container (row, tabs, collapsible) groups fields visually
     // without holding a value: its children are stored on the parent, so they
     // are filled against the same object.
     if (!field.name) {
-      if (field.fields) applyFieldDefaults(data, field.fields, functions);
+      if (field.fields) {
+        applyFieldDefaults(data, field.fields, functions, readFrom);
+      }
       continue;
     }
     if (NON_COLUMN_TYPES.has(field.type)) continue;
@@ -90,11 +112,28 @@ export function applyFieldDefaults(
     if (declared !== undefined && supplied === undefined) {
       // Resolved against the data built so far, so a default may read the
       // values the caller did supply, and earlier defaults in this same pass.
-      data[field.name] = cloneDefault(
+      const filled = cloneDefault(
         typeof declared === "function"
-          ? (declared as (d: Record<string, unknown>) => unknown)(data)
+          ? (declared as (d: Record<string, unknown>) => unknown)(readFrom)
           : declared
       );
+      data[field.name] = filled;
+      // The view follows what has been filled, so a later function default
+      // reading an earlier one sees the value the record will actually store
+      // rather than `undefined` from a document that visibly holds it.
+      //
+      // Only a key the view still HOLDS is refreshed. The view was defaulted
+      // and judged before this pass, so a default missing from it is one the
+      // rules removed, and writing the record's copy back would hand a later
+      // default a value this caller may not write. It would then be carried
+      // into a field they can, stored there, and survive the access pass that
+      // removes only the field it came from.
+      if (
+        readFrom !== data &&
+        Object.prototype.hasOwnProperty.call(readFrom, field.name)
+      ) {
+        readFrom[field.name] = filled;
+      }
     }
 
     if (!field.fields) continue;
@@ -103,9 +142,12 @@ export function applyFieldDefaults(
     // before it runs or a required child fails on an entry the caller could
     // not have satisfied.
     if (field.type === "group") {
-      fillGroup(data, field.name, field.fields, own?.fields);
+      // `view`, not `readFrom`: with no explicit view the recursion must
+      // read the copy it fills, or it would write defaults into the caller's
+      // own nested container.
+      fillGroup(data, field.name, field.fields, own?.fields, view);
     } else if (field.type === "repeater") {
-      fillRepeaterRows(data, field.name, field.fields, own?.fields);
+      fillRepeaterRows(data, field.name, field.fields, own?.fields, view);
     }
   }
 }
@@ -143,8 +185,11 @@ function fillGroup(
   data: Record<string, unknown>,
   name: string,
   fields: readonly ValidatableField[],
-  functions: DefaultFunctions | undefined
+  functions: DefaultFunctions | undefined,
+  /** The parent's view; a child reads the view's matching container. */
+  view?: Record<string, unknown>
 ): void {
+  const childView = isPlainObject(view?.[name]) ? view[name] : undefined;
   const existing = Object.prototype.hasOwnProperty.call(data, name)
     ? data[name]
     : undefined;
@@ -154,7 +199,7 @@ function fillGroup(
     // A shallow copy per level is enough, because each level down copies again
     // before it writes.
     const filled = { ...existing };
-    applyFieldDefaults(filled, fields, functions);
+    applyFieldDefaults(filled, fields, functions, childView);
     data[name] = filled;
     return;
   }
@@ -163,7 +208,7 @@ function fillGroup(
   if (existing !== undefined) return;
 
   const seeded: Record<string, unknown> = {};
-  applyFieldDefaults(seeded, fields, functions);
+  applyFieldDefaults(seeded, fields, functions, childView);
   if (Object.keys(seeded).length > 0) data[name] = seeded;
 }
 
@@ -178,17 +223,26 @@ function fillRepeaterRows(
   data: Record<string, unknown>,
   name: string,
   fields: readonly ValidatableField[],
-  functions: DefaultFunctions | undefined
+  functions: DefaultFunctions | undefined,
+  /** The parent's view; each row reads the view's row at the same index. */
+  view?: Record<string, unknown>
 ): void {
+  const viewRows = Array.isArray(view?.[name]) ? view[name] : undefined;
   const value = data[name];
   if (!Array.isArray(value)) return;
   // Rows are the caller's objects, so each one that gains a default is filled
   // through a copy and the list is rebuilt from the results.
   let changed = false;
-  const rows = value.map(row => {
+  const rows = value.map((row, index) => {
     if (!isPlainObject(row)) return row;
     const filled = { ...row };
-    applyFieldDefaults(filled, fields, functions);
+    const rowView = viewRows?.[index];
+    applyFieldDefaults(
+      filled,
+      fields,
+      functions,
+      isPlainObject(rowView) ? rowView : undefined
+    );
     changed = true;
     return filled;
   });

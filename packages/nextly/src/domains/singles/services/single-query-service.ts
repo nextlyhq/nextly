@@ -66,14 +66,17 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
-import type { ValidatableField } from "../../../shared/lib/entry-validation";
+import {
+  isEmptyRequiredValue,
+  type ValidatableField,
+} from "../../../shared/lib/entry-validation";
 import {
   applyFieldDefaults,
   cloneDefault,
 } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
-  readAccessGrants,
+  callerAccessGrants,
   runFieldHooks,
   type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
@@ -421,6 +424,41 @@ function hasFieldName<T extends { name?: string }>(
   field: T
 ): field is T & { name: string } {
   return typeof field.name === "string" && field.name.length > 0;
+}
+
+/**
+ * Whether a filled container is missing a child its own declaration requires.
+ *
+ * Only asked of a container the default fill created, so "missing" means no
+ * default reached it and no caller supplied it. A required child inside a
+ * nested container counts as well: an incomplete group two levels down is
+ * still a document the write path would refuse.
+ */
+function missesARequiredChild(
+  fields: readonly ValidatableField[] | undefined,
+  filled: unknown
+): boolean {
+  if (!fields) return false;
+  if (Array.isArray(filled)) {
+    return filled.some(row => missesARequiredChild(fields, row));
+  }
+  if (!isPlainRecord(filled)) return false;
+  for (const child of fields) {
+    if (!child.name) {
+      // A layout container holds no value; its children are on this object.
+      if (missesARequiredChild(child.fields, filled)) return true;
+      continue;
+    }
+    const value = filled[child.name];
+    // The same question the write validator will ask of this document later.
+    // A nullish check calls a whitespace string or an empty array present, so
+    // the group would be stored and the next write would reject it.
+    if (child.required && isEmptyRequiredValue(value)) return true;
+    if (value !== undefined && missesARequiredChild(child.fields, value)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1108,7 +1146,7 @@ export class SingleQueryService extends BaseService {
         overrideAccess: skipFieldRules,
         // One grants resolver for both passes, so the caller's roles and
         // permissions are read once and both passes judge with one authority.
-        grants: readAccessGrants(fieldAccessUser),
+        grants: callerAccessGrants(fieldAccessUser),
       };
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
       await applyFieldReadAccess(fieldAccess, sourceRedactions);
@@ -1581,6 +1619,22 @@ export class SingleQueryService extends BaseService {
       applyFieldDefaults(logicalDefaults, [source]);
       const after = logicalDefaults[field.name];
       if (after === before) return;
+      // A group the fill INVENTED has to be complete to be stored. This insert
+      // is direct and runs no validation pass, so a group created for the sake
+      // of one defaulted child, while a required sibling has no default and no
+      // value, would persist a document that the next create or update refuses.
+      // Left absent instead, which is where it stood before anything was
+      // filled, rather than stored knowing it is invalid.
+      if (
+        before === undefined &&
+        missesARequiredChild(
+          (source as { fields?: readonly ValidatableField[] }).fields,
+          after
+        )
+      ) {
+        delete logicalDefaults[field.name];
+        return;
+      }
       await assertNestedDefaultsValid(
         (source as { fields?: readonly ValidatableField[] }).fields,
         after,
