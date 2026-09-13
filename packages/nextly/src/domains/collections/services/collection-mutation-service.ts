@@ -6196,14 +6196,21 @@ export class CollectionMutationService extends BaseService {
       // the publish hangs rather than fails. Awaited, not merely constructed,
       // since the resolver is lazy and building it early is not resolving it.
       //
-      // Only where a promotion could happen and the rules will actually be
-      // asked. A trusted write returns from `applyFieldWriteAccess` on
-      // `overrideAccess` before it looks at grants, so paying for the roles and
-      // permissions queries there buys nothing.
-      const promoteGrants =
-        promotePossible && params.overrideAccess !== true
-          ? await resolvedCallerGrants(params.user, params.authenticatedScope)
-          : undefined;
+      // Only where a promotion could happen AND a rule could ask. A trusted
+      // write returns from `applyFieldWriteAccess` on `overrideAccess` before
+      // it looks at grants, and so does a collection that registers no
+      // field-level functions at all, which is the common shape: without this
+      // second test every publish, unpublish and republish on a
+      // draft-enabled collection paid for the roles and permissions queries to
+      // answer a question nothing would ask. The registry lookup is a map read,
+      // and it is the same condition the pass itself returns on.
+      const promoteRulesCouldRun =
+        promotePossible &&
+        params.overrideAccess !== true &&
+        getFieldFunctions("collection", params.collectionName) !== undefined;
+      const promoteGrants = promoteRulesCouldRun
+        ? await resolvedCallerGrants(params.user, params.authenticatedScope)
+        : undefined;
       const isPluginForRestore =
         (
           (collection as Record<string, unknown>).admin as
@@ -6798,10 +6805,25 @@ export class CollectionMutationService extends BaseService {
               // remove the draft, and destroy the author's edit while reporting
               // success. Compared against the row as it stands, so only a
               // denied value this write would CHANGE refuses it.
+              // The caller's own contribution, assembled by the SAME function
+              // with no draft behind it, so it lands in the same shape as the
+              // document it is compared against. A denied value of theirs is
+              // stripped as it is on any other write; only the pending
+              // change's own values are worth refusing over.
+              const callerContribution = this.assemblePromotedDocument(
+                {},
+                finalData,
+                componentFieldData,
+                manyToManyData,
+                fields,
+                manyToManyFields,
+                splitComponentSchemas
+              );
               assertNoDeniedChange({
                 before: mergedPromoteData,
                 permitted: permittedPromoteData,
                 live: previousDocument ?? {},
+                callerSupplied: callerContribution,
                 slug: params.collectionName,
                 locale: draftLocaleKey ?? params.locale ?? null,
               });

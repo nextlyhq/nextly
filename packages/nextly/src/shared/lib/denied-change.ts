@@ -48,6 +48,21 @@ export interface DeniedChangeInput {
    * behind its identifier disagrees with a stored value that is the identifier.
    */
   live: Record<string, unknown>;
+  /**
+   * What the CALLER sent with this publish, in the same shape as `before`.
+   *
+   * A denied value the caller supplied themselves is stripped, not refused,
+   * because that is the ordinary write's answer and dropping the caller's own
+   * input costs them nothing they did not already have. Only a value that came
+   * from the pending change is refused, since that one belongs to whoever saved
+   * it and a successful publish would delete it.
+   *
+   * A caller's value can be allowed when their payload is judged on its own and
+   * denied once the pending change is folded in, because a rule reads its
+   * siblings: the publish patch may carry a field that turns a rule against a
+   * value the same patch supplies.
+   */
+  callerSupplied?: Record<string, unknown>;
   slug: string;
   /** The language being published, for the log context; `null` when there is none. */
   locale?: string | null;
@@ -65,7 +80,8 @@ export function assertNoDeniedChange(input: DeniedChangeInput): void {
 
   const changes = denied.filter(
     path =>
-      !isDeepStrictEqual(valueAt(input.before, path), valueAt(input.live, path))
+      !pathExists(input.callerSupplied, path) &&
+      !sameStoredValue(valueAt(input.before, path), valueAt(input.live, path))
   );
   if (changes.length === 0) return;
 
@@ -83,6 +99,58 @@ export function assertNoDeniedChange(input: DeniedChangeInput): void {
       fields: changes,
     },
   });
+}
+
+/**
+ * Whether two stored values are the same value, across the representations the
+ * two sides arrive in.
+ *
+ * A pending change is JSON, so a timestamp reaches here as the ISO string it
+ * was serialised to, while the live row comes back from the driver as a `Date`.
+ * Compared as they are, every date-bearing field the publisher may not write
+ * reads as an edit and refuses a publish that touches nothing. Measured: of
+ * text, number, boolean, JSON, group and date, only the date diverged.
+ */
+function sameStoredValue(a: unknown, b: unknown): boolean {
+  return isDeepStrictEqual(asComparable(a), asComparable(b));
+}
+
+/** A value in one representation: instants as their ISO string, at any depth. */
+function asComparable(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(asComparable);
+  if (isRecord(value)) {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) out[key] = asComparable(value[key]);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Whether a document carries this path at all.
+ *
+ * Presence, not truthiness: a caller who sent `null` to clear a field supplied
+ * it, and their own input is theirs to lose.
+ */
+function pathExists(
+  root: Record<string, unknown> | undefined,
+  path: string
+): boolean {
+  if (!root) return false;
+  let current: unknown = root;
+  for (const step of path.split(/\.|\[(\d+)\]/).filter(Boolean)) {
+    if (Array.isArray(current) && /^\d+$/.test(step)) {
+      const next = current[Number(step)];
+      if (next === undefined) return false;
+      current = next;
+      continue;
+    }
+    if (!isRecord(current)) return false;
+    if (!Object.prototype.hasOwnProperty.call(current, step)) return false;
+    current = current[step];
+  }
+  return true;
 }
 
 /**

@@ -22,7 +22,15 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, group, text } from "../../../config";
+import {
+  checkbox,
+  date,
+  defineCollection,
+  group,
+  json,
+  number,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -213,6 +221,85 @@ describe("a collection publish re-judges the draft it promotes", () => {
     expect(live.body).toBe("edited");
     expect(live.guarded).toBe("live-value");
     expect(await pendingDrafts(t, id)).toHaveLength(0);
+  });
+
+  it("does not read an UNCHANGED denied field as an edit, whatever its type", async () => {
+    // The pending change is JSON, so a timestamp arrives here as the ISO string
+    // it was serialised to while the live row comes back from the driver as a
+    // `Date`. Compared as they arrive, a date-bearing field the publisher may
+    // not write reads as an edit and refuses a publish that touches nothing.
+    // Every type is covered rather than the one that broke: measured, text,
+    // number, boolean, JSON and group agreed and only the date did not, and a
+    // suite that checked one of them would not have said so.
+    const onlyBoss = {
+      update: ({ req }: { req?: { user?: { email?: string } } }) =>
+        req?.user?.email === BOSS.email,
+    };
+    const slug = "everytype";
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "body" }),
+            text({ name: "gtext", access: onlyBoss }),
+            date({ name: "gdate", access: onlyBoss }),
+            number({ name: "gnum", access: onlyBoss }),
+            checkbox({ name: "gbool", access: onlyBoss }),
+            json({ name: "gjson", access: onlyBoss }),
+            group({
+              name: "ggroup",
+              access: onlyBoss,
+              fields: [text({ name: "note" })],
+            }),
+          ],
+        }),
+      ],
+    });
+    const h = handlerOf(current);
+
+    const created = await h.createEntry(
+      { collectionName: slug, overrideAccess: true },
+      {
+        body: "live",
+        gtext: "t",
+        gdate: "2026-01-02T03:04:05.000Z",
+        gnum: 42,
+        gbool: true,
+        gjson: { a: 1 },
+        ggroup: { note: "i" },
+        status: "published",
+      }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    // CLERK edits ONLY the unrestricted field; every guarded one is untouched.
+    await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    const published = await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published" }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const doc = (await current.nextly.findByID({
+      collection: slug as never,
+      id,
+      overrideAccess: true,
+      status: "all",
+    } as never)) as Record<string, unknown> | null;
+    expect(doc?.body).toBe("edited");
   });
 
   it("still promotes the change for a publisher who MAY write it", async () => {
