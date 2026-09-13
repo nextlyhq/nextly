@@ -11,6 +11,7 @@ import {
   readForeignKeyColumns,
   readIndexNames,
   tableHasRows,
+  readColumnsContainingNull,
 } from "../live-table-facts";
 
 /** One row of `PRAGMA foreign_key_list("dc_posts")`, verbatim from SQLite 3.51. */
@@ -182,4 +183,53 @@ describe("readForeignKeyColumns", () => {
       expect(found.size).toBe(0);
     }
   );
+});
+
+describe("readColumnsContainingNull", () => {
+  it("probes exactly the columns it was given, and nothing else", () => {
+    // The probe list is the caller's decision; inventing one here would reach
+    // for a column the table may not have.
+    const seen: string[] = [];
+    const execute = vi.fn(async (query: unknown) => {
+      seen.push(JSON.stringify(query));
+      return { rows: [] };
+    });
+    return readColumnsContainingNull({ execute }, "postgresql", "dc_posts", [
+      "author",
+      "editor",
+    ]).then(found => {
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(found.size).toBe(0);
+      expect(seen.join(" ")).toContain("author");
+      expect(seen.join(" ")).toContain("editor");
+    });
+  });
+
+  it("reports only the columns that answered with a row", () => {
+    let call = 0;
+    const execute = vi.fn(async () => {
+      call += 1;
+      return { rows: call === 1 ? [{ "?column?": 1 }] : [] };
+    });
+    return readColumnsContainingNull({ execute }, "postgresql", "dc_posts", [
+      "author",
+      "editor",
+    ]).then(found => {
+      expect([...found]).toEqual(["author"]);
+    });
+  });
+
+  it("asks nothing when there is nothing to ask about", () => {
+    // The control: an empty list is a real answer and must not cost a query.
+    const execute = vi.fn(async () => ({ rows: [] }));
+    return readColumnsContainingNull(
+      { execute },
+      "postgresql",
+      "dc_posts",
+      []
+    ).then(found => {
+      expect(execute).not.toHaveBeenCalled();
+      expect(found.size).toBe(0);
+    });
+  });
 });

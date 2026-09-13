@@ -35,10 +35,7 @@ import {
   readIndexNames,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
-import {
-  fieldProducesColumn,
-  toSnakeCase,
-} from "../../schema/services/field-column-descriptor";
+import { columnsThatMayHoldNull } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
@@ -235,7 +232,17 @@ export class DynamicCollectionService extends BaseService {
    */
   private async readTableFacts(
     tableName: string,
-    pendingFields: FieldDefinition[]
+    pendingFields: FieldDefinition[],
+    /**
+     * The fields whose column does NOT live on this table — a localized
+     * collection keeps its translatable columns in the companion.
+     *
+     * Passed in rather than derived here, because deciding it needs the
+     * collection's localization flag and the classifier that owns that
+     * question; probing the main table for a companion-owned column asks for a
+     * column it does not have, and the error takes the whole save with it.
+     */
+    companionOwned: ReadonlySet<string> = new Set()
   ): Promise<{
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
@@ -267,9 +274,10 @@ export class DynamicCollectionService extends BaseService {
     // save is ADDING has no column yet, so neither is worth a query. Which of
     // these a save then tightens is the generator's question: it holds both
     // lists, and this reader holds only the live table.
-    const nullableColumns = pendingFields
-      .filter(field => field.required !== true && fieldProducesColumn(field))
-      .map(field => toSnakeCase(field.name));
+    const nullableColumns = columnsThatMayHoldNull(
+      pendingFields,
+      companionOwned
+    );
     const [hasRows, foreignKeys, indexes, holdingNull] = await Promise.all([
       tableHasRows(db, this.adapter.dialect, tableName),
       readForeignKeyColumns(db, this.adapter.dialect, tableName),
@@ -1003,7 +1011,16 @@ export class DynamicCollectionService extends BaseService {
       (tableFacts ??= this.readTableFacts(
         collection.tableName,
         // What the pending create artefact builds from, for the not-yet-deployed case.
-        collection.fields ?? []
+        collection.fields ?? [],
+        // Which of those live in the companion instead, decided by the same
+        // classifier the localized diff uses and against the flag the LIVE
+        // table was built under.
+        new Set(
+          resolveLocalizedFieldNames(
+            collection.fields ?? [],
+            collectionWasLocalized
+          )
+        )
       ));
 
     // Why: the alter-table block runs when fields change, but a status-only

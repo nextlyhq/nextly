@@ -12,6 +12,7 @@ import {
   isTextStorageKind,
   type ColumnKind,
   type ColumnOrigin,
+  columnsThatMayHoldNull,
 } from "../field-column-descriptor";
 
 const field = (overrides: Partial<FieldDefinition>): FieldDefinition =>
@@ -476,4 +477,50 @@ describe("getColumnDescriptor & fieldProducesColumn — field groups and compone
       expect(getColumnDescriptor(f, "sqlite", "collection")).toBeNull();
     }
   );
+});
+
+describe("columnsThatMayHoldNull", () => {
+  const plain = (
+    name: string,
+    extra: Record<string, unknown> = {}
+  ): { name: string; type: string; required?: boolean } =>
+    ({ name, type: "text", ...extra }) as never;
+
+  it("names the optional columns of this table", () => {
+    expect(
+      columnsThatMayHoldNull([plain("headline"), plain("subTitle")])
+    ).toEqual(["headline", "sub_title"]);
+  });
+
+  it("skips a required field, whose column cannot hold a null", () => {
+    // Not a filter for tidiness: the probe is a query per column, and a NOT
+    // NULL column can only ever answer "none".
+    expect(
+      columnsThatMayHoldNull([plain("headline", { required: true })])
+    ).toEqual([]);
+  });
+
+  it("skips a column that lives in the companion table", () => {
+    // A localized collection keeps its translatable columns elsewhere, so
+    // probing the main table for one asks for a column it does not have — and
+    // that error arrives before any migration is generated, failing the save.
+    expect(
+      columnsThatMayHoldNull(
+        [plain("headline"), plain("body")],
+        new Set(["body"])
+      )
+    ).toEqual(["headline"]);
+  });
+
+  it("skips a field that occupies no column of its own", () => {
+    expect(
+      columnsThatMayHoldNull([
+        {
+          name: "tags",
+          type: "relationship",
+          options: { relationType: "manyToMany", target: "tags" },
+        } as never,
+      ])
+    ).toEqual([]);
+  });
 });

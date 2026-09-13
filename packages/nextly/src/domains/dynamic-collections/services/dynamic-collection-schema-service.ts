@@ -1594,11 +1594,6 @@ ${allColumnDefs.join(",\n")}
             // Issued when the column's shape changed OR its nullability did, because on this dialect
             // one statement carries both.
             if (columnChanged || nullabilityChanged) {
-              const nullability = field.required ? " NOT NULL" : " NULL";
-              const defaultClause =
-                field.default !== undefined && field.default !== null
-                  ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
-                  : "";
               // 🔴 Which type a MODIFY restates depends on WHY it is being issued, and getting this
               // wrong rewrites a column nobody asked to change.
               //
@@ -1619,7 +1614,7 @@ ${allColumnDefs.join(",\n")}
                     field
                   );
               statements.push(
-                `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(alterCol)} ${restated}${nullability}${defaultClause};`
+                this.modifyColumnSql(tableName, alterCol, field, restated)
               );
             }
           } else if (!columnChanged) {
@@ -1916,19 +1911,49 @@ ${allColumnDefs.join(",\n")}
     columnName: string,
     field: FieldDefinition
   ): string {
-    const table = this.quoteIdentifier(tableName);
-    const column = this.quoteIdentifier(columnName);
     if (this.dialect === "mysql") {
-      const type = this.mapFieldTypeToSQL(
-        field.type,
-        field.length,
-        field.options,
-        field.validation,
-        field
+      // The type asked for is THIS generator's — the one that created the
+      // column — rather than the descriptor's, for the reason the column pass
+      // gives where it makes the same choice: the two do not agree, and the
+      // descriptor's answer would rewrite a column this edit never touched.
+      return this.modifyColumnSql(
+        tableName,
+        columnName,
+        field,
+        this.mapFieldTypeToSQL(
+          field.type,
+          field.length,
+          field.options,
+          field.validation,
+          field
+        )
       );
-      return `ALTER TABLE ${table} MODIFY COLUMN ${column} ${type} NULL;`;
     }
-    return `ALTER TABLE ${table} ALTER COLUMN ${column} DROP NOT NULL;`;
+    return `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(columnName)} DROP NOT NULL;`;
+  }
+
+  /**
+   * MySQL's `MODIFY COLUMN`, with everything the column carries.
+   *
+   * This dialect restates the WHOLE definition, so anything omitted here is
+   * silently removed from the column: its nullability and the default the
+   * create path emits from `field.default`. Written once because it was
+   * written twice — the second copy relaxed a column for a `SET NULL` key and
+   * dropped the relationship's configured default on the way past, for an edit
+   * that never mentioned defaults.
+   */
+  private modifyColumnSql(
+    tableName: string,
+    columnName: string,
+    field: FieldDefinition,
+    type: string
+  ): string {
+    const nullability = field.required ? " NOT NULL" : " NULL";
+    const defaultClause =
+      field.default !== undefined && field.default !== null
+        ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
+        : "";
+    return `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(columnName)} ${type}${nullability}${defaultClause};`;
   }
 
   /**

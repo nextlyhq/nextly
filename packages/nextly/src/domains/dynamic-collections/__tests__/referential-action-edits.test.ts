@@ -795,3 +795,31 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
     });
   }
 );
+
+describe("relaxing a column for SET NULL keeps what the column carries", () => {
+  it("preserves the DEFAULT on mysql, which restates the whole definition", () => {
+    // MySQL's `MODIFY` replaces the entire column definition, so anything the
+    // statement omits is removed. Relaxing the column for a `SET NULL` key had
+    // its own narrower rendering and left the default out, quietly dropping it
+    // for future inserts on an edit that never mentioned defaults.
+    const withDefault = (options: Record<string, unknown>) =>
+      ({ ...manyToOne(options), default: "seed-author" }) as FieldDefinition;
+    const sql = service("mysql").generateAlterTableMigration(
+      "dc_posts",
+      [withDefault({ onDelete: "cascade" })],
+      [withDefault({ onDelete: "set null" })]
+    );
+    expect(sql).toContain("MODIFY COLUMN `author` varchar(36) NULL DEFAULT");
+    expect(sql).toContain("ON DELETE SET NULL");
+  });
+
+  it("states no default when the field carries none", () => {
+    // The control: the clause is the column's, not decoration.
+    const sql = service("mysql").generateAlterTableMigration(
+      "dc_posts",
+      [manyToOne({ onDelete: "cascade" })],
+      [manyToOne({ onDelete: "set null" })]
+    );
+    expect(sql).toContain("MODIFY COLUMN `author` varchar(36) NULL;");
+  });
+});

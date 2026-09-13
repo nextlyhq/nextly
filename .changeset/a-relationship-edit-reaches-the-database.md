@@ -125,3 +125,15 @@ The SQLite refusal in the schema templates is a `NextlyError` rather than a
 bare `Error` subclass, so it reaches a caller as the typed envelope every
 other refusal in the package uses. The class and its message are unchanged;
 callers and tests identify it by type.
+
+Two things about the check above, both found before it shipped:
+
+- It asks only about columns that are ON this table. A localized collection
+  keeps its translatable columns in a companion, so probing the main table for
+  one asked for a column it does not have — and that error arrives before any
+  migration is generated, which would have failed every save on a localized
+  collection with an optional translatable field.
+- Relaxing a column for a `SET NULL` key keeps the default it carries. MySQL
+  restates the entire column definition on `MODIFY`, so a narrower rendering
+  silently removed the relationship's configured default for future inserts.
+  Both callers now render that statement through one function.
