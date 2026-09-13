@@ -68,7 +68,7 @@ export interface CompanionSchema {
   /** Whether the companion carries a per-locale `_status` column (entity has Draft/Published). */
   hasStatus: boolean;
   /**
-   * Whether the companion carries the per-locale `_updated_at` column (i18n B2).
+   * Whether the companion carries the per-locale `_updated_at` column.
    *
    * Unconditionally `true`, because unlike `_status` this column is part of every companion's
    * declared shape rather than a consequence of the entity's configuration. It is still a FIELD
@@ -178,7 +178,7 @@ interface CompanionWriteAdapter {
  * `companionData` is empty. Optionally stamps a per-locale `_status` (entities with Draft/Published).
  */
 /**
- * How a companion write treats `_updated_at` (i18n B2).
+ * How a companion write treats `_updated_at`.
  *
  * - `"stamp"` (default) — write the current time when the write carries translated content.
  * - `"omit"` — leave the column out of the statement entirely, for a companion that physically
@@ -193,7 +193,7 @@ interface CompanionWriteAdapter {
 export type CompanionStampMode = "stamp" | "omit" | "clear";
 
 /**
- * The `_updated_at` a companion write should carry, or nothing at all (i18n B2).
+ * The `_updated_at` a companion write should carry, or nothing at all.
  *
  * Exported because TWO write paths reach the companion and both must answer this the same way.
  * The update path goes through {@link upsertCompanionRow}; the collection CREATE path inserts the
@@ -262,7 +262,7 @@ export async function upsertCompanionRow(
   // that nobody edited.
   if (Object.keys(withStatus).length === 0) return;
 
-  // i18n B2: when THIS locale was last written. Bound as a `Date`, which every dialect handles —
+  // `_updated_at`: when THIS locale was last written. Bound as a `Date`, which every dialect handles —
   // node-postgres and mysql2 serialize it natively, and the SQLite adapter converts it to epoch
   // seconds in `sanitizeSqliteValue`, on BOTH surfaces this function runs over (the adapter's
   // `executeQuery` and a transaction's `execute` via `companionWriteVia`). Verified rather than
@@ -358,7 +358,7 @@ export async function upsertCompanionRow(
  * That difference is the entire reason a SECOND hand-written companion upsert existed inside
  * `collection-mutation-service.ts` — the collection write path holds a `tx`, could not pass it
  * here, and grew its own copy of the same INSERT ... ON CONFLICT. Naming the difference in one
- * place is what lets one upsert serve both, so a column added to the companion row (i18n B2's
+ * place is what lets one upsert serve both, so a column added to the companion row (such as
  * `_updated_at`) is written by every path rather than by whichever one the author remembered.
  *
  * @param tx - The caller's open transaction; writes land on its connection, not a pooled one.
@@ -412,7 +412,7 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
  */
 /**
  * The version scope an i18n entity kind records its history under, or `undefined` when it records
- * none — which is what decides whether `_updated_at` can be back-filled for it (i18n B2).
+ * none — which is what decides whether `_updated_at` can be back-filled for it.
  *
  * Stated once rather than at each call site, because the two are the same question and a second
  * spelling of it would let one unattended path seed a companion the other leaves blank, for the
@@ -453,7 +453,7 @@ export async function reconcileCompanionColumns(
     status?: boolean;
     /**
      * Which version scope this entity's history is recorded under, enabling the `_updated_at`
-     * back-fill (i18n B2). Omit for an entity with no version history — a field group — where
+     * back-fill. Omit for an entity with no version history — a field group — where
      * NULL is the true answer rather than a gap.
      */
     versionScope?: VersionScopeKind;
@@ -497,7 +497,7 @@ export async function reconcileCompanionColumns(
     // every run, so a partial apply simply finishes on the next one.
     const hasStatus = present.has("_status");
 
-    // i18n B2: `_updated_at` IS reconciled here, and the contrast with `_status` above is the
+    // `_updated_at` IS reconciled here, and the contrast with `_status` above is the
     // whole justification rather than an inconsistency.
     //
     // `_status` cannot be added unattended because ADD-then-back-fill is not retryable from

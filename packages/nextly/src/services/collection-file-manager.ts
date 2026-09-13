@@ -53,7 +53,7 @@ export type CollectionMetadataFetcher = (
 /**
  * The companion `_locales` runtime schema, re-exported from the module that OWNS it.
  *
- * 🔴 This was a verbatim second declaration of the same four fields until i18n B2, and B2 is
+ * 🔴 This was a verbatim second declaration of the same four fields until `_updated_at` arrived, and that is
  * exactly the drift event a duplicated shape invites: `_updated_at` was added to the i18n
  * definition, this copy silently did not have it, and the reader here went on compiling while
  * describing a companion that no longer matched the one being created. The two never disagreed
@@ -341,7 +341,7 @@ export class CollectionFileManager {
     ).map(name => ({ name, column: toSnakeCase(name) }));
     if (localizedFields.length === 0) return null;
     const hasStatus = metadata.status === true; // i18n M6: per-locale `_status` column
-    // i18n B2: unconditional, unlike `_status` -- every companion's declared shape carries
+    // `_updated_at`: unconditional, unlike `_status` -- every companion's declared shape carries
     // `_updated_at`, so there is no metadata flag to read it from. Stated at each
     // construction rather than defaulted in the type, so adding a further structural column
     // stops these compiling instead of leaving them describing a companion that has moved on.

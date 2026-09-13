@@ -223,7 +223,7 @@ function buildCompanionColumnRecord(
           : sqliteText("_status").notNull().default("draft");
   }
 
-  // 🔴 `_updated_at` is deliberately NOT declared here (i18n B2), and the reason is an upgrade
+  // 🔴 `_updated_at` is deliberately NOT declared here, and the reason is an upgrade
   // path rather than a preference.
   //
   // This runtime table is registered for EVERY localized entity, including collections created in

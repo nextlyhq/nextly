@@ -1,5 +1,5 @@
 /**
- * Encoding for the companion's `_updated_at` value (i18n B2).
+ * Encoding for the companion's `_updated_at` value.
  *
  * `upsertCompanionRow` builds one `INSERT ... ON CONFLICT` by hand — it has to, because the
  * conflict clause differs per dialect and one Drizzle query cannot express all three — so its

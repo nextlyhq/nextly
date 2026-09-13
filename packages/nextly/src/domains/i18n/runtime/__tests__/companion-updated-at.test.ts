@@ -1,5 +1,5 @@
 /**
- * `_updated_at` against a real database (i18n B2 — "changed since translated").
+ * `_updated_at` against a real database ("changed since translated").
  *
  * 🔴 Driven through a real `SqliteAdapter` rather than a spy, because every claim here is about
  * what the DATABASE does with the statement and a spy can only confirm what the statement says.
@@ -541,7 +541,7 @@ describe("companion `_updated_at`", () => {
   });
 
   describe("the back-fill", () => {
-    /** The companion as it stands on a database that predates B2: no `_updated_at`. */
+    /** The companion as it stands on a database that predates the column: no `_updated_at`. */
     async function createLegacyCompanion(): Promise<void> {
       await adapter.executeQuery(
         `CREATE TABLE "${COMPANION}" (` +

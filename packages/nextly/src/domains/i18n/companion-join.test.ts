@@ -113,7 +113,7 @@ describe("populateTranslationStatus (read failures)", () => {
   });
 });
 
-describe("populateTranslationStatus — staleness (i18n B2)", () => {
+describe("populateTranslationStatus — staleness", () => {
   /** A db returning fixed companion rows, so the assertion is about the derivation. */
   /**
    * The two reads this function makes, kept apart.

@@ -221,6 +221,31 @@ export type BlockOrigin =
        * behaves exactly as it does today.
        */
       readonly renamed?: Readonly<Record<string, string>>;
+      /**
+       * Which of this copy's nodes each rename was applied to, keyed as
+       * `renamed` is: the source's spelling → the ids of the nodes carrying the
+       * replacement.
+       *
+       * `renamed` says what an id became and not where, and the value cannot
+       * say where. A node the author adds later and gives the same id is
+       * indistinguishable from the one the insert renamed, so restoring by value
+       * stores a name that node never had. With the node ids, a save puts an id
+       * back only on a node listed here that still occurs once in the document
+       * and still carries the replacement: the namesake of a deleted node, a
+       * node whose id was edited away, and a copy given the id again all keep
+       * what they carry.
+       *
+       * Node ids on the record rather than a marker on each renamed node,
+       * because a duplicate clones a node's own fields — a marker would travel
+       * onto a copy nothing renamed.
+       *
+       * ABSENT on a record written before this field existed, and such a record
+       * is read exactly as before: every node in its scope carrying a
+       * replacement is restored. Which node it meant is not recoverable from
+       * what it stores, so it is not guessed. Present, it names exactly the
+       * entries of `renamed`, each with a list of node ids.
+       */
+      readonly renamedNodes?: Readonly<Record<string, readonly string[]>>;
     }
   | {
       /** Detached from a component, severing the link deliberately. */
@@ -272,6 +297,8 @@ interface OriginRead {
   readonly reading: OriginReading;
   /** The rename map of a whole PATTERN record, and nothing for every other. */
   readonly renamed?: ReadonlyMap<string, string>;
+  /** The nodes each rename was applied to, where the record says. */
+  readonly renamedNodes?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
@@ -294,9 +321,7 @@ function readOrigin(value: unknown): OriginRead {
     const whole = wholeOrigin(reader.read);
     if (reader.computed()) return { reading: "computed" };
     if (whole === undefined) return { reading: "malformed" };
-    return whole.renamed === undefined
-      ? { reading: "whole" }
-      : { reading: "whole", renamed: whole.renamed };
+    return { reading: "whole", ...whole };
   } catch {
     return { reading: "unreadable" };
   }
@@ -321,6 +346,40 @@ export function patternRenames(
   origin: unknown
 ): ReadonlyMap<string, string> | undefined {
   return readOrigin(origin).renamed;
+}
+
+/** What a whole PATTERN record says it renamed, and where. */
+export interface PatternRenameRecord {
+  /** The source's spelling → the copy's. Empty when nothing was renamed. */
+  readonly renamed: ReadonlyMap<string, string>;
+  /**
+   * The source's spelling → the ids of the nodes each rename was applied to.
+   *
+   * Absent for a record written before node ids were recorded, which a restore
+   * reads by value exactly as it always did — kept apart from an empty list,
+   * which names no node.
+   */
+  readonly renamedNodes?: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/**
+ * A whole PATTERN record's renames and the nodes they were applied to, from ONE
+ * reading of it — or nothing for every record {@link patternRenames} answers
+ * nothing for.
+ *
+ * Both halves in one answer because a caller acting on them needs them to
+ * agree. Two published questions asked one after the other read a stored record
+ * twice, and a Proxy record can answer the second differently: trusted for its
+ * renames, then read otherwise for where they apply.
+ */
+export function patternRenameRecord(
+  origin: unknown
+): PatternRenameRecord | undefined {
+  const read = readOrigin(origin);
+  if (read.renamed === undefined) return undefined;
+  return read.renamedNodes === undefined
+    ? { renamed: read.renamed }
+    : { renamed: read.renamed, renamedNodes: read.renamedNodes };
 }
 
 /**
@@ -398,6 +457,8 @@ function storedReader(record: object): {
 interface WholeOrigin {
   /** A pattern record's renames. Absent on a component, which renames none. */
   readonly renamed?: ReadonlyMap<string, string>;
+  /** Where those renames were applied. Absent on a record that predates it. */
+  readonly renamedNodes?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
@@ -414,8 +475,79 @@ function wholeOrigin(read: (key: string) => unknown): WholeOrigin | undefined {
   if (from !== "pattern") return undefined;
   const digest = read("digest");
   if (typeof digest !== "string" || digest === "") return undefined;
+  return patternRenamesIn(read);
+}
+
+/**
+ * What a pattern record says it renamed and where, or nothing when either half
+ * is not something a restore could trust.
+ *
+ * Read after the fields every record needs, in the same pass and through the
+ * same reader, so a computed field anywhere in the record is still noticed.
+ */
+function patternRenamesIn(
+  read: (key: string) => unknown
+): WholeOrigin | undefined {
   const renamed = readRenameRecord(read("renamed"));
-  return renamed === undefined ? undefined : { renamed };
+  if (renamed === undefined) return undefined;
+  const renamedNodes = readRenamedNodes(read("renamedNodes"), renamed);
+  if (renamedNodes === null) return undefined;
+  return renamedNodes === undefined ? { renamed } : { renamed, renamedNodes };
+}
+
+/**
+ * The node lists a record keeps beside its renames: nothing when it keeps
+ * none, and `null` when what it keeps is not something a restore could trust.
+ *
+ * Absent is valid, because it is how every record written before node ids
+ * were recorded reads. Present, the lists name EXACTLY the entries of the
+ * rename map. A list for an id nothing renamed, or a rename with no list, is a
+ * half-record — and reading one would decide by node for some ids and by value
+ * for others, on the strength of a record that is wrong about at least one.
+ */
+function readRenamedNodes(
+  value: unknown,
+  renamed: ReadonlyMap<string, string>
+): ReadonlyMap<string, ReadonlySet<string>> | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) return null;
+  // The same stored-data reader as every other field of the record, so an
+  // accessor or a non-enumerable list reads as absent and refuses the record.
+  const { read } = storedReader(value);
+  const lists = new Map<string, ReadonlySet<string>>();
+  for (const name of ownKeys(value)) {
+    if (!renamed.has(name)) return null;
+    const nodes = nodeIdList(read(name));
+    if (nodes === undefined) return null;
+    lists.set(name, nodes);
+  }
+  return lists.size === renamed.size ? lists : null;
+}
+
+/**
+ * A stored list of node ids, or nothing when it is not one.
+ *
+ * Every member through the descriptor, as every other stored field is read,
+ * and every one a non-empty string: an empty id names no node, and a list that
+ * held one would be trusted to mean something it cannot.
+ */
+function nodeIdList(value: unknown): ReadonlySet<string> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  // `length` is non-enumerable on every array, so it is read from its own
+  // descriptor rather than through the reader that treats that as absent.
+  const length: unknown = Object.getOwnPropertyDescriptor(
+    value,
+    "length"
+  )?.value;
+  if (typeof length !== "number") return undefined;
+  const { read } = storedReader(value);
+  const nodes = new Set<string>();
+  for (let index = 0; index < length; index += 1) {
+    const id = read(String(index));
+    if (typeof id !== "string" || id === "") return undefined;
+    nodes.add(id);
+  }
+  return nodes;
 }
 
 /**
