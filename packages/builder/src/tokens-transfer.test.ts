@@ -1226,6 +1226,41 @@ describe("what the report says about a token named twice", () => {
   });
 });
 
+describe("a token the reader read and the merge refused", () => {
+  it("is never reported as both imported and not imported", () => {
+    /*
+     * The reader reports how it read a token; only the merge decides whether
+     * it lands. Here the stored kind overrides the file's type — which the
+     * reader names — and the token's name is already held by a different token
+     * on this site, so the merge refuses it. A reader line saying the token
+     * "was imported" would sit beside the refusal saying it was not.
+     */
+    const into: SiteTokenSet = {
+      tokens: [
+        { id: "other", name: "t", kind: "number", values: { light: "1" } },
+      ],
+    };
+    const document = {
+      t: {
+        $type: "color",
+        $value: 1,
+        $extensions: {
+          "com.nextlyhq.nextly": { css: { light: "5" }, kind: "number" },
+        },
+      },
+    };
+    const result = importDtcg(JSON.stringify(document), into);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The control: the refusal happened, and the reader did speak.
+    expect(result.imported).toBe(0);
+    const said = result.skipped.join(" ");
+    expect(said).toContain("not imported");
+    expect(said).toContain('the type "color"');
+    expect(said).not.toMatch(/\bwas imported\b|\barrived\b/);
+  });
+});
+
 describe("the reader's whole condition for stored CSS", () => {
   it("names a kind the format has no type for", () => {
     /*

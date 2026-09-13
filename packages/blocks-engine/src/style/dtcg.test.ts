@@ -1572,7 +1572,7 @@ describe("what the reader reports it did not keep", () => {
         t: { $type: "color", $value: 1, $extensions: storedNumber },
       };
       expect(dtcgToTokens(document).tokens[0]?.kind).toBe("number");
-      expect(said(document)).toContain('"t" was imported as the kind "number"');
+      expect(said(document)).toContain('"t" is read as the kind "number"');
       expect(said(document)).toContain('the type "color"');
     });
 
@@ -1580,9 +1580,7 @@ describe("what the reader reports it did not keep", () => {
       const inherited = {
         g: { $type: "color", t: { $value: 1, $extensions: storedNumber } },
       };
-      expect(said(inherited)).toContain(
-        '"g.t" was imported as the kind "number"'
-      );
+      expect(said(inherited)).toContain('"g.t" is read as the kind "number"');
       const unmapped = {
         t: { $type: "gradient", $value: 1, $extensions: storedNumber },
       };
@@ -1604,7 +1602,21 @@ describe("what the reader reports it did not keep", () => {
     // `$extends` is a reference to another group. A value that is not a
     // non-empty string references nothing, so there is no inheritance to have
     // lost — only a malformed field.
-    for (const stated of [42, null, "", [], { group: "base" }]) {
+    for (const stated of [
+      42,
+      null,
+      "",
+      [],
+      { group: "base" },
+      // A string that is not a DTCG reference: a reference is `{group.path}`.
+      "base",
+      "   ",
+      "{}",
+      "{ }",
+      "{base",
+      "{a..b}",
+      "{a.}",
+    ]) {
       const document = {
         g: { $extends: stated, t: { $type: "number", $value: 1 } },
       };
@@ -1617,6 +1629,47 @@ describe("what the reader reports it did not keep", () => {
     expect(said(referencing)).toContain(
       '"g.$extends" inherits from another group'
     );
+  });
+
+  it("never says a token arrived or was imported, which only the merge decides", () => {
+    /*
+     * The reader cannot know whether a token lands: an import can still refuse
+     * it afterwards, for a clash with the site's own tokens. So every line the
+     * reader writes about a token it read describes the READ. A line saying
+     * the token arrived or was imported would contradict that refusal.
+     */
+    const stored = (css: unknown, kind = "number") => ({
+      "com.nextlyhq.nextly": { css, kind },
+    });
+    const document = {
+      typed: {
+        $type: "color",
+        $value: 1,
+        $extensions: stored({ light: "5" }),
+      },
+      darkened: {
+        $type: "number",
+        $value: 5,
+        $extensions: stored({ light: "5", dark: 42 }),
+      },
+      // A COLOUR, because only a colour can be shown to differ in meaning: for
+      // other kinds a different spelling may be the same value, so the reader
+      // stays silent and this row would say nothing.
+      valued: {
+        $type: "color",
+        $value: { colorSpace: "srgb", components: [0, 0, 0] },
+        $extensions: stored({ light: "#111111" }, "color"),
+      },
+    };
+    const read = dtcgToTokens(document);
+    expect(read.tokens).toHaveLength(3);
+    // The control: each of the three says something, so silence cannot pass.
+    for (const name of ["typed", "darkened", "valued"]) {
+      expect(said(document)).toContain(`"${name}`);
+    }
+    for (const item of read.issues) {
+      expect(item.message).not.toMatch(/\barrived\b|\bwas imported\b/);
+    }
   });
 
   it("calls a group's $root a token only when it has a token's shape", () => {

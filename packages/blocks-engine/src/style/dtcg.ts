@@ -925,6 +925,15 @@ function statedType(node: DtcgNode): string | undefined {
 }
 
 /**
+ * What a DTCG name may not contain: "the following characters MUST NOT be used
+ * anywhere in a token or group name: `{`, `}`, `.`".
+ *
+ * One rule for both places a name is read — a token's own path and a reference
+ * to a group — so the two cannot disagree about what counts as a name.
+ */
+const DTCG_NAME_FORBIDDEN = /[.{}]/;
+
+/**
  * Whether a node is a token: an object carrying `$value`.
  *
  * The walk reads a child as a token by this, and the report calls a group's
@@ -1095,7 +1104,7 @@ function unreadReservedField(
     return `"${at}" is a group's own token, which this site cannot read yet, so it was skipped.`;
   }
   if (on === "group" && key === "$extends" && isReference(value)) {
-    return `"${at}" inherits from another group, which this site cannot follow yet, so nothing it would bring in was imported.`;
+    return `"${at}" inherits from another group, which this site cannot follow yet, so nothing it would bring in was read.`;
   }
   if (key === "$deprecated") return deprecationUnread(value, at);
   return `"${at}" is a design-token field this site does not read, so it was skipped.`;
@@ -1166,7 +1175,7 @@ function storedValuesUnread(own: unknown, name: string): string | undefined {
 function darkUnread(dark: unknown, name: string): string | undefined {
   return dark === undefined || typeof dark === "string"
     ? undefined
-    : `"${name}.$extensions.${NEXTLY_EXTENSION}.css.dark" is not a string, so the token arrived with its light value only.`;
+    : `"${name}.$extensions.${NEXTLY_EXTENSION}.css.dark" is not a string, so only its light value was read.`;
 }
 
 /**
@@ -1174,7 +1183,16 @@ function darkUnread(dark: unknown, name: string): string | undefined {
  * value names no group, so there is no inheritance to have lost.
  */
 function isReference(value: unknown): boolean {
-  return typeof value === "string" && value !== "";
+  if (typeof value !== "string") return false;
+  if (!value.startsWith("{") || !value.endsWith("}")) return false;
+  // A path of one or more names, each non-empty and free of what a name may
+  // not contain: `{}`, `{ }`, `{a..b}` and `{a.}` name no group.
+  return value
+    .slice(1, -1)
+    .split(".")
+    .every(
+      segment => segment.trim() !== "" && !DTCG_NAME_FORBIDDEN.test(segment)
+    );
 }
 
 /**
@@ -1194,7 +1212,7 @@ function typeOverriddenBy(
 ): string | undefined {
   const stated = statedType(node) ?? inherited;
   if (stated === undefined || stated === DTCG_TYPE[kind]) return undefined;
-  return `"${name}" was imported as the kind "${kind}" this system stored, and the type "${stated}" the file gives it was not used.`;
+  return `"${name}" is read as the kind "${kind}" this system stored, so the type "${stated}" the file gives it is not used.`;
 }
 
 /** One token, preferring this vendor's exact CSS over a conversion. */
@@ -1214,7 +1232,7 @@ function readToken(
   // spelled `"color.primary"` is malformed — joined into the dot path it is
   // indistinguishable from the nested `color` -> `primary` it would collide
   // with, and the next export would rewrite it into exactly those groups.
-  const malformed = path.find(segment => /[.{}]/.test(segment));
+  const malformed = path.find(segment => DTCG_NAME_FORBIDDEN.test(segment));
   if (malformed !== undefined) {
     issues.push(
       issue(
@@ -1515,7 +1533,7 @@ function reportOverridden(
   if (meansTheSame(stated, taken, kind)) return;
   issues.push(
     issue(
-      `"${name}" was imported as "${taken}", the value this system stored, and the "${stated}" its "$value" states was not used.`
+      `"${name}" was read as "${taken}", the value this system stored, and the "${stated}" its "$value" states was not used.`
     )
   );
 }
