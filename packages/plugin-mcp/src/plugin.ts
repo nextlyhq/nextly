@@ -20,7 +20,11 @@
  */
 import { createRequire } from "node:module";
 
-import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  routePathIsLiteral,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 
 import { resolveAllowedHosts } from "./transport/allowed-hosts";
 import { mcpEndpointRoutes } from "./transport/endpoint";
@@ -93,17 +97,17 @@ export interface McpPluginOptions {
  * catch is the class it can decide, at config time rather than as a 404 an
  * operator has to explain.
  *
- * A capture is a SEGMENT that begins with `:`, which is the whole of the
- * matcher's grammar and therefore the whole of the rule here. Refusing the
- * character wherever it appears is a stricter grammar than the one that will
- * route the request, and a validation stricter than its matcher refuses paths
- * that would have worked: `/mcp:v1` addresses exactly one URL.
+ * Whether a path names one address or a family of them is the MATCHER's
+ * question, and `routePathIsLiteral` is the matcher answering it. Deciding it
+ * here instead was a second grammar: the first attempt refused every `:`, which
+ * is stricter than the rule that routes, so `/mcp:v1` was rejected although it
+ * addresses exactly one URL. Agreeing with the matcher today is not the
+ * property worth having, since two predicates that agree are still two.
  */
 function endpointPathOrRefuse(path: string): string {
-  const capture = path.split("/").some(segment => segment.startsWith(":"));
   const problem = !path.startsWith("/")
     ? "must start with `/`"
-    : capture
+    : !routePathIsLiteral(path)
       ? "must name one address, not a `:param` pattern"
       : path.length > 1 && path.endsWith("/")
         ? "must not end with `/`"
@@ -141,10 +145,17 @@ export function mcpPlugin(options: McpPluginOptions = {}): PluginDefinition {
     enabled,
     name: "@nextlyhq/plugin-mcp",
     version: PLUGIN_VERSION,
-    // Core-compat floor is the version exporting everything this imports. It is
-    // the plugin contract alone today; it rises when the transport reaches for
-    // a newer core export, and stating a wider range would advertise a
-    // compatibility whose ESM import fails at module load.
+    // Core-compat floor, and it names a RELEASED version rather than the one
+    // this change will ship in: core validates the range against its own
+    // version at boot, so a floor naming an unreleased version refuses the
+    // plugin inside this repository and in CI.
+    //
+    // What makes the lower bound sufficient is the release train rather than
+    // the number. Every published package versions in lockstep, so the core an
+    // install receives alongside this plugin is always the one built from the
+    // same commit, and `routePathIsLiteral` cannot be missing from it. The
+    // range is honest about the only case it can express and would be wrong
+    // only for an install that pinned core BELOW its plugins deliberately.
     nextly: ">=0.0.2-alpha.65",
     author: "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)",
     homepage: "https://nextlyhq.com",

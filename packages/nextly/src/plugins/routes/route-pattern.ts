@@ -28,6 +28,26 @@ function isCapture(segment: string): boolean {
   return segment.startsWith(":");
 }
 
+/**
+ * @public Whether a route path names exactly ONE address.
+ *
+ * True for a path of literals, false as soon as any segment is a capture, which
+ * matches a whole family of addresses rather than one. Published because the
+ * question is asked outside the matcher: a plugin taking a path from an
+ * operator has to refuse a pattern at the moment it is written rather than as a
+ * request that arrives somewhere unexpected, and answering it there means
+ * restating this grammar beside the matcher that will actually route.
+ *
+ * Derived from the same `isCapture` the matcher applies, so a change to what a
+ * capture looks like reaches every caller rather than the ones somebody
+ * remembered. The predicate itself stays private: a caller given `isCapture`
+ * has to know that the rule is per SEGMENT, and one that split on the wrong
+ * thing is exactly the divergence this exists to prevent.
+ */
+export function routePathIsLiteral(path: string): boolean {
+  return !splitPath(path).some(isCapture);
+}
+
 /** How many segments are literal. The matcher's specificity, and its tie-break. */
 export function literalCount(segments: readonly string[]): number {
   return segments.filter(seg => !isCapture(seg)).length;

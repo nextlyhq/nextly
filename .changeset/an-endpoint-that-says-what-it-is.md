@@ -35,8 +35,16 @@ as a placeholder serving no endpoint, which is what a reader discovering it
 through the registry or through an indexed README was told. Both now say what it
 is.
 
-`path` refuses a value that cannot address a single endpoint — a missing leading
-slash, a trailing one, a `:param` pattern, or the mount itself — at the moment it
+The route matcher's grammar is published. `routePathIsLiteral` answers whether a
+path names exactly one address or a family of them, and `@nextlyhq/plugin-sdk`
+re-exports it, so a plugin taking a path from an operator can refuse a pattern
+while the config is being written without restating the rule beside the matcher
+that will actually route. A restatement stricter than the matcher refuses paths
+that would have worked, which is what happened here: a check that refused every
+`:` rejected `/mcp:v1`, a literal addressing exactly one URL.
+
+`path` refuses a value that cannot address a single endpoint (a missing leading
+slash, a trailing one, a `:param` pattern, or the mount itself) at the moment it
 is written rather than as a 404 to explain later. Its documentation also now
 says what it cannot promise: a path Nextly itself serves will not reach the
 endpoint, because core answers first, and that precedence is deliberate.
