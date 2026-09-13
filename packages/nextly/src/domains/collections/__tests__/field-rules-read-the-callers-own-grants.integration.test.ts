@@ -18,6 +18,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -44,10 +45,13 @@ async function boot(): Promise<CollectionsHandler> {
           text({
             name: "secret",
             access: {
+              // The spelling a rule actually sees. `ruleFacingPermissions`
+              // projects a key's grant ROWS to `resource:action`, so a rule
+              // written against the stored slug would never match a real key.
               update: ({ permissions }) =>
-                (permissions as string[]).includes("write-secret"),
+                (permissions as string[]).includes("secret:write"),
               create: ({ permissions }) =>
-                (permissions as string[]).includes("write-secret"),
+                (permissions as string[]).includes("secret:write"),
             },
           }),
         ],
@@ -66,14 +70,24 @@ async function read(id: string): Promise<Record<string, unknown>> {
   return doc ?? {};
 }
 
-const KEY_WITH_GRANT = {
-  actorType: "apiKey" as const,
-  permissions: [`update-${SLUG}`, `create-${SLUG}`, "write-secret"],
-};
-const KEY_WITHOUT_GRANT = {
-  actorType: "apiKey" as const,
-  permissions: [`update-${SLUG}`, `create-${SLUG}`],
-};
+/**
+ * Built by the production constructor, not by hand.
+ *
+ * `apiKeyScope` is the one place a key's scope is made, and it carries the
+ * grant ROWS beside the slugs. A hand-written `{actorType, permissions}` has no
+ * rows, so `ruleFacingPermissions` falls back to the stored slug and a rule
+ * sees `write-secret` where a real key would present `secret:write`: the test
+ * would pass against a shape this system never builds.
+ */
+const KEY_WITH_GRANT = apiKeyScope([
+  { slug: `update-${SLUG}`, action: "update", resource: SLUG },
+  { slug: `create-${SLUG}`, action: "create", resource: SLUG },
+  { slug: "write-secret", action: "write", resource: "secret" },
+]);
+const KEY_WITHOUT_GRANT = apiKeyScope([
+  { slug: `update-${SLUG}`, action: "update", resource: SLUG },
+  { slug: `create-${SLUG}`, action: "create", resource: SLUG },
+]);
 
 describe("a collection field rule reads the caller's own grants", () => {
   it("lets an API key write a field its own scope grants", async () => {
