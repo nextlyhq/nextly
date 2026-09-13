@@ -545,7 +545,7 @@
     ]
   },
   "packages/nextly/src/domains/collections/services/collection-query-service.ts": {
-    "count": 22,
+    "count": 23,
     "digests": [
       "13831d4dec7eab02",
       "28f392c8dea7766d",
@@ -556,6 +556,7 @@
       "7e979ca7f5d94b0b",
       "8623ab6ac27f4a80",
       "b233f10203ab0427",
+      "bc34f887455ae217",
       "cef2412cad43178c",
       "cef2412cad43178c",
       "cef2412cad43178c",

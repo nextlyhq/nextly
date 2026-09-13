@@ -217,10 +217,10 @@ describe("the allowlist", () => {
   // already contained is by definition pre-existing. It has widened in two directions. The
   // checker's own source came out of EXCLUDED_FILES and brought 12 recorded offences with it; and
   // the roadmap-milestone pattern, added over prose that predated it, brought 148 across 35 new
-  // entries without removing or lowering any. A raise for any other reason is the silencing this
-  // guards against.
+  // entries without removing or lowering any, and one more when it learned the bracketed form. A
+  // raise for any other reason is the silencing this guards against.
   const EXPECTED_ENTRIES = 244;
-  const EXPECTED_TOTAL = 550;
+  const EXPECTED_TOTAL = 551;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -538,6 +538,9 @@ describe("localization roadmap milestones", () => {
     "/** Whether the source moved after this one was written (i18n B2). */",
     "// forwarded so localized fields resolve (see i18n M4c)",
     "/* i18n M5b keeps the draft companion */",
+    // The bracket may sit between the word and the code, with or without a space before it.
+    "// i18n (M4) — companion-aware read helpers",
+    "// i18n(M6) per-locale status",
   ])("rejects %j", text => {
     const found = offencesIn(text);
     // The WHY is asserted, not just a non-empty result, so a different pattern firing on the same
@@ -554,6 +557,9 @@ describe("localization roadmap milestones", () => {
     "// compatible with i18next v2 and i18n v3 message formats",
     // A capital-plus-digit token WITHOUT the word is a heading, a service or a key.
     "// render the title as an H1 and store the asset in S3",
+    // A bracket after the word that opens lowercase prose is an aside, not a label.
+    "/** Request locale for i18n (e.g., 'en', 'es', 'fr') */",
+    "// resolved through i18n (see the locale table)",
   ])("accepts %j", text => {
     expect(offencesIn(text)).toEqual([]);
   });

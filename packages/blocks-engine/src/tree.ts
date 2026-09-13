@@ -1098,7 +1098,39 @@ export type DomIdPolicy =
        * knows, which is why it records it.
        */
       readonly restore: ReadonlyMap<string, string>;
+    }
+  | {
+      /**
+       * The source name for one node's DOM id, asked PER NODE — or nothing, to
+       * keep the id it carries.
+       *
+       * For a copy whose nodes answer to different records, where one map for
+       * the forest has room for one answer per id and a copy holding two nodes
+       * that share an id has to put one back and leave the other. The copier
+       * asks with the ORIGINAL node:
+       *
+       * - for the id a node RENDERS, and moves that id to the answer;
+       * - for an id a node REFERENCES, only when the copy does not settle it. A
+       *   reference follows its target: where the copied forest renders the id
+       *   and every node rendering it ends up with one id, the reference takes
+       *   that id, so a link and its target are never stored apart. Where
+       *   nothing renders it, or its renderers end up with different ids, the
+       *   node holding the reference decides.
+       *
+       * Gating is not consulted, for the reason `restore` gives: putting an id
+       * back asks nothing about the page.
+       */
+      readonly restoreEach: (
+        node: BlockNode,
+        value: string
+      ) => string | undefined;
     };
+
+/** Every policy but the per-node restore, which has a copier of its own. */
+type SharedDomIdPolicy = Exclude<
+  DomIdPolicy,
+  { readonly restoreEach: unknown }
+>;
 
 /** A re-identified FOREST, and the two maps describing what moved. */
 export interface ReidentifiedForest {
@@ -1178,8 +1210,12 @@ const EMPTY_NODE_SET: ReadonlySet<BlockNode> = new Set<BlockNode>();
 
 export function reidForestWithMap(
   nodes: BlockNode[],
-  domIdPolicy: DomIdPolicy = "remint"
+  policy: DomIdPolicy = "remint"
 ): ReidentifiedForest {
+  if (typeof policy === "object" && "restoreEach" in policy) {
+    return reidForestRestoringEach(nodes, policy.restoreEach);
+  }
+  const domIdPolicy: SharedDomIdPolicy = policy;
   const nodeIds = new Map<string, string>();
   const domIds = new Map<string, string>();
   const restoring = typeof domIdPolicy === "object" && "restore" in domIdPolicy;
@@ -1231,7 +1267,7 @@ export function reidForestWithMap(
  */
 function relinkOne(
   copy: BlockNode,
-  domIds: ReadonlyMap<string, string>
+  domIds: Pick<ReadonlyMap<string, string>, "get" | "size">
 ): BlockNode {
   // `isPlainRecord`, not `!== undefined`. A persisted `attributes: null` is
   // content the first pass deliberately carries through untouched, and handing
@@ -1340,7 +1376,7 @@ export function referencedDomIds(
 function replacementFor(
   value: string,
   nodeId: string,
-  policy: DomIdPolicy
+  policy: SharedDomIdPolicy
 ): string {
   if (typeof policy === "object" && "restore" in policy) {
     return policy.restore.get(value) ?? mintDomId(value, nodeId);
@@ -1362,7 +1398,7 @@ function replacementFor(
 function movesUnder(
   value: string,
   rendered: string | undefined,
-  policy: DomIdPolicy
+  policy: SharedDomIdPolicy
 ): boolean {
   if (value !== rendered) return false;
   if (policy === "remint") return true;
@@ -1375,12 +1411,10 @@ function reidOneKeepingReferences(
   node: BlockNode,
   nodeIds: Map<string, string>,
   domIds: Map<string, string>,
-  domIdPolicy: DomIdPolicy,
+  domIdPolicy: SharedDomIdPolicy,
   hidden: ReadonlySet<BlockNode>
 ): BlockNode {
-  const { slots, ...own } = node;
-  const copy: BlockNode = { ...structuredClone(own), id: newId() };
-  if (typeof node.id === "string") nodeIds.set(node.id, copy.id);
+  const { copy, slots } = identifiedCopy(node, nodeIds);
 
   // `mintDomId` is asked once per distinct ORIGINAL id, so a subtree whose two
   // nodes carry the same DOM id maps both to one replacement. That preserves
@@ -1411,6 +1445,40 @@ function reidOneKeepingReferences(
   const moves = (value: string): boolean =>
     movesUnder(value, rendered, domIdPolicy);
 
+  moveOwnIds(copy, moves, remap);
+
+  if (slots !== undefined) copy.slots = slots;
+  return copy;
+}
+
+/**
+ * One node's own fields, freshly identified, with its slots handed back.
+ *
+ * Clone only this node's own fields; descendants are cloned as the rebuild
+ * reaches them, so cloning `slots` here too would deep-copy them twice.
+ */
+function identifiedCopy(
+  node: BlockNode,
+  nodeIds: Map<string, string>
+): { copy: BlockNode; slots: BlockNode["slots"] } {
+  const { slots, ...own } = node;
+  const copy: BlockNode = { ...structuredClone(own), id: newId() };
+  if (typeof node.id === "string") nodeIds.set(node.id, copy.id);
+  return { copy, slots };
+}
+
+/**
+ * Rewrite a copy's own DOM id spellings, in place, where one moves.
+ *
+ * Both spellings — the dedicated `cssId` and an `id` in the attribute bag,
+ * matched case-insensitively — so a node spelling one id through both still
+ * spells a single id afterwards.
+ */
+function moveOwnIds(
+  copy: BlockNode,
+  moves: (value: string) => boolean,
+  remap: (value: string) => string
+): void {
   if (
     typeof copy.cssId === "string" &&
     copy.cssId !== "" &&
@@ -1430,9 +1498,145 @@ function reidOneKeepingReferences(
       )
     );
   }
+}
 
+/** Asks the per-node restore about one node's id. */
+type RestoreEach = (node: BlockNode, value: string) => string | undefined;
+
+/** What the per-node copier carries from node to node. */
+interface EachCopy {
+  readonly nodeIds: Map<string, string>;
+  /** Each rendered id → every id the nodes rendering it ended up with. */
+  readonly outcomes: Map<string, Set<string>>;
+  /** Each copy's id → the original it was made from, for the reference pass. */
+  readonly holders: Map<string, BlockNode>;
+  readonly restoreEach: RestoreEach;
+}
+
+/**
+ * The forest copy under {@link DomIdPolicy} `restoreEach`.
+ *
+ * Two passes, as every policy takes. The first moves the id each node renders
+ * to that node's own answer and notes, per id, every id its renderers ended up
+ * with. The second rewrites references: a reference to an id those notes
+ * settle takes the settled id, so it follows its target; any other reference is
+ * decided by the node holding it.
+ *
+ * No hidden-subtree set, and no shared memo of replacements. Putting an id back
+ * asks nothing about the page, so gating is irrelevant; and two nodes spelling
+ * one id may now answer differently, which a memo keyed by the id alone would
+ * collapse into one answer for both.
+ *
+ * `domIds` reports a rendered id only where every node rendering it moved to
+ * the same id — the one reading of "what this copy moved" that stays true when
+ * renderers disagree.
+ */
+function reidForestRestoringEach(
+  nodes: BlockNode[],
+  restoreEach: RestoreEach
+): ReidentifiedForest {
+  const each: EachCopy = {
+    nodeIds: new Map(),
+    outcomes: new Map(),
+    holders: new Map(),
+    restoreEach,
+  };
+  const rebuilt = mapForest(nodes, original =>
+    reidOneRestoringEach(original, each)
+  );
+  // By the copy's id rather than its object: the rebuild assembles slots into
+  // a new object, so the node the first pass returned is not the one this pass
+  // is handed.
+  const linked = mapForest(rebuilt, copy =>
+    relinkOne(copy, referenceAnswers(each.holders.get(copy.id), each))
+  );
+  return {
+    nodes: linked,
+    nodeIds: each.nodeIds,
+    domIds: settledMoves(each.outcomes),
+  };
+}
+
+function reidOneRestoringEach(node: BlockNode, each: EachCopy): BlockNode {
+  const { copy, slots } = identifiedCopy(node, each.nodeIds);
+  each.holders.set(copy.id, node);
+  // Only the id this node RENDERS, for the reason every policy gives: the
+  // shadowed spelling reaches no page, and moving it rewrites references to an
+  // id nothing renders.
+  const rendered = renderedDomId(node);
+  if (rendered !== undefined) {
+    const answer = each.restoreEach(node, rendered);
+    noteOutcome(each.outcomes, rendered, answer ?? rendered);
+    if (answer !== undefined) {
+      moveOwnIds(
+        copy,
+        value => value === rendered,
+        () => answer
+      );
+    }
+  }
   if (slots !== undefined) copy.slots = slots;
   return copy;
+}
+
+function noteOutcome(
+  outcomes: Map<string, Set<string>>,
+  value: string,
+  became: string
+): void {
+  const found = outcomes.get(value);
+  if (found === undefined) outcomes.set(value, new Set([became]));
+  else found.add(became);
+}
+
+/** The one id every renderer of an id ended up with, or nothing. */
+function soleOutcome(
+  became: ReadonlySet<string> | undefined
+): string | undefined {
+  if (became === undefined || became.size !== 1) return undefined;
+  const [only] = became;
+  return only;
+}
+
+/** Each rendered id that moved, to the one id all of its renderers became. */
+function settledMoves(
+  outcomes: ReadonlyMap<string, ReadonlySet<string>>
+): Map<string, string> {
+  const moved = new Map<string, string>();
+  for (const [value, became] of outcomes) {
+    const only = soleOutcome(became);
+    if (only !== undefined && only !== value) moved.set(value, only);
+  }
+  return moved;
+}
+
+/**
+ * What each id one node references should now be.
+ *
+ * Settled by the copy where it can be: an id the forest renders, whose
+ * renderers all ended up with one id, is that id — kept or moved — whatever the
+ * holder would have said. Otherwise the holder decides.
+ *
+ * A lookup rather than a map, because the answer depends on the holder and
+ * building a whole map per node would put every id the records name into the
+ * cost of every node. `size` is never zero: whether a reference moves is only
+ * known per id, so the rewriters must always look.
+ */
+function referenceAnswers(
+  holder: BlockNode | undefined,
+  each: EachCopy
+): Pick<ReadonlyMap<string, string>, "get" | "size"> {
+  return {
+    size: 1,
+    get(value: string): string | undefined {
+      const became = each.outcomes.get(value);
+      if (became !== undefined && became.size === 1) {
+        const settled = soleOutcome(became);
+        return settled === value ? undefined : settled;
+      }
+      return holder === undefined ? undefined : each.restoreEach(holder, value);
+    },
+  };
 }
 
 /**
@@ -1509,7 +1713,7 @@ export function idReferenceTokens(value: string): string[] {
  */
 export function remapIdReferences(
   attributes: Record<string, string>,
-  domIds: ReadonlyMap<string, string>
+  domIds: Pick<ReadonlyMap<string, string>, "get" | "size">
 ): Record<string, string> {
   if (domIds.size === 0) return attributes;
   let changed = false;

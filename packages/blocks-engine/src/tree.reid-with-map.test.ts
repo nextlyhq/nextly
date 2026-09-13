@@ -824,6 +824,171 @@ describe('the "restore" DOM id policy', () => {
   });
 });
 
+describe('the "restoreEach" DOM id policy', () => {
+  /*
+   * The arm a save uses when the ids to put back differ by node. It is asked
+   * with the ORIGINAL node and the id in question, and answers the source name
+   * or nothing. Rendered ids are decided per node; a reference follows its
+   * target where the forest renders one, and otherwise its holder decides.
+   */
+  const answers =
+    (table: Record<string, Record<string, string>>) =>
+    (held: BlockNode, value: string): string | undefined =>
+      table[held.id]?.[value];
+
+  it("decides a rendered id per node, where a flat map moves every carrier", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("governed", { cssId: "hero-7f3" }),
+        node("namesake", { cssId: "hero-7f3" }),
+      ],
+      { restoreEach: answers({ governed: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[1].cssId).toBe("hero-7f3");
+  });
+
+  it("asks about the node it was given, not the copy", () => {
+    const originals = [node("a", { cssId: "hero-7f3" }), node("b")];
+    const asked = new Set<BlockNode>();
+    reidForestWithMap(originals, {
+      restoreEach: (held, value) => {
+        asked.add(held);
+        return value === "hero-7f3" ? "hero" : undefined;
+      },
+    });
+
+    expect(asked.has(originals[0]!)).toBe(true);
+  });
+
+  it("moves a reference with the one target the forest renders", () => {
+    // The holder answers nothing of its own, so only following the target can
+    // put this reference back.
+    const { nodes } = reidForestWithMap(
+      [
+        node("target", { cssId: "hero-7f3" }),
+        node("holder", {
+          attributes: { "aria-describedby": "hero-7f3" },
+          props: { href: "#hero-7f3" },
+        }),
+      ],
+      { restoreEach: answers({ target: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("hero");
+    expect((nodes[1].props as { href: string }).href).toBe("#hero");
+  });
+
+  it("keeps a reference whose one target keeps its id", () => {
+    // The holder alone would put the source name back, which would store a
+    // link naming an id its target no longer carries.
+    const { nodes } = reidForestWithMap(
+      [
+        node("target", { cssId: "hero-7f3" }),
+        node("holder", { attributes: { "aria-describedby": "hero-7f3" } }),
+      ],
+      { restoreEach: answers({ holder: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero-7f3");
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("hero-7f3");
+  });
+
+  it("lets each holder decide a reference nothing in the forest renders", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("governed", { attributes: { "aria-describedby": "shared-1" } }),
+        node("other", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ governed: { "shared-1": "alpha" } }) }
+    );
+
+    expect(nodes[0].attributes?.["aria-describedby"]).toBe("alpha");
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("shared-1");
+  });
+
+  it("lets the holder decide when two targets of one id become different ids", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("listed", { cssId: "hero-7f3" }),
+        node("namesake", { cssId: "hero-7f3" }),
+        node("holder", { attributes: { "aria-describedby": "hero-7f3" } }),
+        node("stranger", { attributes: { "aria-describedby": "hero-7f3" } }),
+      ],
+      {
+        restoreEach: answers({
+          listed: { "hero-7f3": "hero" },
+          holder: { "hero-7f3": "hero" },
+        }),
+      }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[1].cssId).toBe("hero-7f3");
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe("hero");
+    expect(nodes[3].attributes?.["aria-describedby"]).toBe("hero-7f3");
+  });
+
+  it("moves both spellings of one node's id together", () => {
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "hero-7f3", attributes: { id: "hero-7f3" } })],
+      { restoreEach: answers({ a: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[0].attributes?.id).toBe("hero");
+  });
+
+  it("moves the rendered id and leaves a shadowed attribute id alone", () => {
+    // The callback has an answer for BOTH spellings, so this fails if either the
+    // rendered id stays put or the shadowed one moves with it.
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "actual", attributes: { id: "hero-7f3" } })],
+      {
+        restoreEach: answers({ a: { actual: "real", "hero-7f3": "hero" } }),
+      }
+    );
+
+    expect(nodes[0].cssId).toBe("real");
+    expect(nodes[0].attributes?.id).toBe("hero-7f3");
+  });
+
+  it("puts back an id on a gated node", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("gated", {
+          cssId: "hero-7f3",
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        }),
+      ],
+      { restoreEach: answers({ gated: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+  });
+
+  it("records a rendered id that moved to one answer, and nothing else", () => {
+    const { domIds } = reidForestWithMap(
+      [
+        node("a", { cssId: "hero-7f3" }),
+        node("b", { cssId: "aside" }),
+        node("p", { attributes: { "aria-describedby": "gone-1" } }),
+      ],
+      {
+        restoreEach: answers({
+          a: { "hero-7f3": "hero" },
+          p: { "gone-1": "gone" },
+        }),
+      }
+    );
+
+    expect([...domIds.entries()]).toEqual([["hero-7f3", "hero"]]);
+  });
+});
+
 describe("only the id a node RENDERS may be reminted", () => {
   it("leaves a shadowed attribute id alone, and the references to it", () => {
     // The node renders `actual`; its `attributes.id: "hero"` is overwritten and
