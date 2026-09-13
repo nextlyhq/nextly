@@ -27,19 +27,27 @@
  * "these bucket counts are floors". A bounded scan produces the second, and
  * saying the first would be a different claim. Until the grouped shape can
  * express a bounded grouping, this source supports the op it can answer
- * truthfully.
+ * truthfully -- and `where` on `issue` gives a card the same per-issue number
+ * without needing one.
  *
  * @module widget-source
  */
 
 import {
   callerReadOptions,
+  NextlyError,
+  type FieldConfig,
   type PluginSourceResolver,
   type PluginWidgetSource,
 } from "@nextlyhq/plugin-sdk";
 
+import type { CollectionReads } from "./collection-reads";
+
 /** The source id, in the `plugin:` namespace every contributed source must use. */
 export const SEO_ISSUES_SOURCE_ID = "plugin:seo/issues";
+
+/** The one field this source publishes, and the only thing a query may name. */
+export const ISSUE_FIELD = "issue";
 
 /**
  * How many published rows one answer may read before it reports a floor.
@@ -54,22 +62,71 @@ export const SEO_ISSUES_SOURCE_ID = "plugin:seo/issues";
  */
 export const ISSUE_SCAN_ROW_BUDGET = 2000;
 
-/** Rows per page while scanning. Trades round trips against peak memory. */
+/**
+ * Rows per page while scanning.
+ *
+ * 🔴 FIXED, never narrowed to fit the remaining budget. The managed service
+ * derives its offset as `(page - 1) * limit`, so shrinking the limit on a later
+ * page moves that page's window backwards -- page 10 at a limit of 150 starts at
+ * row 1350 rather than 1800, re-reading rows already counted and skipping the
+ * ones that follow. The budget is enforced on rows CONSUMED instead, which
+ * leaves the paging arithmetic alone.
+ */
 const PAGE_SIZE = 200;
 
+/** Only what the scan reads: the SEO group, and the id the sort orders by. */
+const SCAN_SELECT = { id: true, seo: true } as const;
+
 /**
- * What each issue is called.
+ * The field whose presence means "kept out of search deliberately", rather than
+ * a field somebody failed to fill in.
+ */
+const NOINDEX_FIELD = "noindex";
+
+/**
+ * A field left empty, and what to call that.
  *
  * The reader's words, not the field's: a card that reads "Missing meta title"
  * says what to fix, where "metaTitle: null" says what is stored.
  */
-const ISSUE = {
-  noindex: "Hidden from search engines",
-  title: "Missing meta title",
-  canonical: "Missing canonical URL",
-  description: "Missing meta description",
-  image: "Missing social image",
-} as const;
+const MISSING_FIELD_ISSUES = [
+  { field: "metaTitle", label: "Missing meta title" },
+  { field: "canonical", label: "Missing canonical URL" },
+  { field: "metaDescription", label: "Missing meta description" },
+  { field: "ogImage", label: "Missing social image" },
+] as const;
+
+/** What a document being hidden from search is called. */
+const NOINDEX_ISSUE = "Hidden from search engines";
+
+/**
+ * Which checks apply, given the fields actually installed.
+ *
+ * 🔴 Derived from the configured set, never from the defaults.
+ * `seoPlugin({ fields })` REPLACES the default group, so a project that
+ * configures `[focusKeyword]` has no `metaTitle` on any document -- and a check
+ * that ran regardless would report every document in the site as missing four
+ * things it was never asked to store.
+ */
+export interface IssueChecks {
+  /** Whether the installed set can express "kept out of search". */
+  noindex: boolean;
+  /** The installed fields whose emptiness is worth reporting. */
+  missing: readonly { field: string; label: string }[];
+}
+
+/** The checks the installed `seo` fields support. */
+export function checksFor(installed: readonly FieldConfig[]): IssueChecks {
+  const names = new Set(
+    installed
+      .map(field => (field as { name?: unknown }).name)
+      .filter((name): name is string => typeof name === "string")
+  );
+  return {
+    noindex: names.has(NOINDEX_FIELD),
+    missing: MISSING_FIELD_ISSUES.filter(check => names.has(check.field)),
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -95,43 +152,82 @@ function isBlank(value: unknown): boolean {
  * removes a page from search with nothing on the page to show it, which is why
  * Screaming Frog, Search Console and Lighthouse all surface it.
  */
-export function issuesFor(entry: unknown): string[] {
+export function issuesFor(entry: unknown, checks: IssueChecks): string[] {
   const seo = isRecord(entry) && isRecord(entry.seo) ? entry.seo : undefined;
-  if (seo?.noindex === true) return [ISSUE.noindex];
+  if (checks.noindex && seo?.[NOINDEX_FIELD] === true) return [NOINDEX_ISSUE];
 
-  const found: string[] = [];
-  if (isBlank(seo?.metaTitle)) found.push(ISSUE.title);
-  if (isBlank(seo?.canonical)) found.push(ISSUE.canonical);
-  if (isBlank(seo?.metaDescription)) found.push(ISSUE.description);
-  if (isBlank(seo?.ogImage)) found.push(ISSUE.image);
-  return found;
+  return checks.missing
+    .filter(check => isBlank(seo?.[check.field]))
+    .map(check => check.label);
+}
+
+/** Operators that mean something about a value drawn from a closed set. */
+const SUPPORTED_OPERATORS = ["equals", "not_equals", "in", "not_in"] as const;
+
+function asList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(entry => String(entry)) : [];
 }
 
 /**
- * The services this resolver calls, as a structural slice.
+ * One operator's test, or a refusal.
  *
- * Declared rather than `Pick<PluginCollectionService, ...>` for the reason
- * `sitemap.ts` declares its own: a test satisfies this with a plain object,
- * while the real, richer service stays assignable to it.
+ * 🔴 Refusing is the point. The source PUBLISHES `issue`, so validation admits a
+ * `where` naming it -- and a resolver that accepted the query and then counted
+ * every issue anyway would answer a narrower question with a wider number, which
+ * nothing downstream could detect. An operator this source cannot honour is
+ * named in the refusal rather than ignored.
+ *
+ * Ordering and substring operators are absent deliberately: `issue` is a closed
+ * set of labels, so "greater than" and "contains" have no meaning over it.
  */
-interface SeoIssueServices {
-  collections: {
-    getCollection(
-      slug: string,
-      context: Record<string, never>
-    ): Promise<unknown>;
-    listEntries(
-      slug: string,
-      query: {
-        where?: Record<string, unknown>;
-        depth?: number;
-        sort?: { field: string; direction: "asc" | "desc" };
-        pagination?: { limit?: number; page?: number };
-      },
-      opts: ReturnType<typeof callerReadOptions>
-    ): Promise<{ data: unknown[]; pagination: { hasMore: boolean } }>;
-  };
+function operatorTest(
+  operator: string,
+  operand: unknown
+): (label: string) => boolean {
+  switch (operator) {
+    case "equals":
+      return label => label === String(operand);
+    case "not_equals":
+      return label => label !== String(operand);
+    case "in":
+      return label => asList(operand).includes(label);
+    case "not_in":
+      return label => !asList(operand).includes(label);
+    default:
+      throw new NextlyError({
+        code: "VALIDATION_ERROR",
+        publicMessage: `This widget cannot filter issues with "${operator}"`,
+        logMessage:
+          `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" supports ` +
+          `${SUPPORTED_OPERATORS.join(", ")} on "${ISSUE_FIELD}", not "${operator}"`,
+      });
+  }
 }
+
+/**
+ * The predicate a query's `where` puts on each issue label.
+ *
+ * Several operators on one field are ANDed, matching how the collection query
+ * compiler reads the same shape.
+ */
+export function issueFilter(where: unknown): (label: string) => boolean {
+  if (!isRecord(where)) return () => true;
+  const clause = where[ISSUE_FIELD];
+  if (!isRecord(clause)) return () => true;
+
+  const tests = Object.entries(clause).map(([operator, operand]) =>
+    operatorTest(operator, operand)
+  );
+  return label => tests.every(test => test(label));
+}
+
+/**
+ * What this resolver reads, scoped to whoever asked.
+ *
+ * The same shape the sitemap reads through, under a different identity: see
+ * `CollectionReads`.
+ */
+type SeoIssueServices = CollectionReads<ReturnType<typeof callerReadOptions>>;
 
 /** What one collection's scan contributed. */
 interface ScanTally {
@@ -159,19 +255,27 @@ async function publishedOnly(
     : undefined;
 }
 
+/** How this scan counts one page's rows, and what it is allowed to read. */
+interface ScanRules {
+  checks: IssueChecks;
+  keep: (label: string) => boolean;
+  readOptions: ReturnType<typeof callerReadOptions>;
+}
+
 /**
- * Page through one collection, reading at most `budget` rows.
+ * Page through one collection, consuming at most `budget` rows.
  *
  * Paged by 1-indexed `page`, because that is what the managed service reads --
  * advancing an offset it ignores would re-read the first page forever while
  * `hasMore` stayed true. The sort is unique and stable so consecutive pages
- * neither repeat nor skip rows.
+ * neither repeat nor skip rows, and the page WIDTH never changes: see
+ * {@link PAGE_SIZE}.
  */
 async function scanCollection(
   services: SeoIssueServices,
   slug: string,
   where: Record<string, unknown> | undefined,
-  readOptions: ReturnType<typeof callerReadOptions>,
+  rules: ScanRules,
   budget: number,
   abandoned: () => boolean
 ): Promise<ScanTally> {
@@ -179,8 +283,7 @@ async function scanCollection(
   let issues = 0;
 
   for (let page = 1; ; page += 1) {
-    const remaining = budget - rowsRead;
-    if (remaining <= 0) return { rowsRead, issues, bounded: true };
+    if (rowsRead >= budget) return { rowsRead, issues, bounded: true };
     if (abandoned()) return { rowsRead, issues, bounded: false };
 
     const result = await services.collections.listEntries(
@@ -188,19 +291,42 @@ async function scanCollection(
       {
         ...(where === undefined ? {} : { where }),
         depth: 0,
+        // Only the SEO group and the id the sort reads. Without it every page
+        // carries each document whole -- rich text, blocks, every JSON payload
+        // -- so the row cap would bound the row COUNT while the bytes behind it
+        // stayed unbounded.
+        select: { ...SCAN_SELECT },
         sort: { field: "id", direction: "asc" as const },
-        pagination: { limit: Math.min(PAGE_SIZE, remaining), page },
+        pagination: { limit: PAGE_SIZE, page },
       },
-      readOptions
+      rules.readOptions
     );
 
+    // The budget is enforced HERE, on rows consumed, rather than by narrowing
+    // the page. A page may arrive wider than the budget allows; the surplus is
+    // simply not counted, and the answer says it is a floor.
     for (const row of result.data) {
+      if (rowsRead >= budget) return { rowsRead, issues, bounded: true };
       rowsRead += 1;
-      issues += issuesFor(row).length;
+      issues += issuesFor(row, rules.checks).filter(rules.keep).length;
     }
 
     if (!result.pagination.hasMore) return { rowsRead, issues, bounded: false };
   }
+}
+
+/**
+ * Whether this failure means "you may not read that", rather than "that broke".
+ *
+ * 🔴 The distinction decides whether the card shows a number or an error, and
+ * only one of them may be swallowed. A denial is an ordinary fact about the
+ * reader and the collection contributes zero. A database outage, a failing hook
+ * or a malformed query is not: folding those into a successful partial count
+ * shows a figure that is quietly too small, with nothing anywhere to say the
+ * scan did not finish.
+ */
+function isDenial(error: unknown): boolean {
+  return NextlyError.isCode(error, "FORBIDDEN");
 }
 
 /**
@@ -210,20 +336,18 @@ async function scanCollection(
  * number describes what THEY can see. A count assembled as `system` would be the
  * same figure for everyone and would tell an author how much content exists that
  * they cannot read.
- *
- * A collection the caller may not read contributes zero rather than failing the
- * card: the managed service THROWS on a full denial rather than returning an
- * empty page, so a caught refusal here is the difference between a dashboard
- * that degrades and one that goes blank. Core's own recent-activity source
- * handles denial the same way.
  */
 async function countIssues(
   services: SeoIssueServices,
   caller: Parameters<PluginSourceResolver>[1],
   collections: readonly string[],
+  rules: Omit<ScanRules, "readOptions">,
   signal: AbortSignal | undefined
 ): Promise<{ total: number; atLeast: boolean }> {
-  const readOptions = callerReadOptions(caller);
+  const scanRules: ScanRules = {
+    ...rules,
+    readOptions: callerReadOptions(caller),
+  };
   // Read through a call rather than inline: the value changes between awaits,
   // and an inline check narrows it for the rest of the block, so the second
   // look would be compiled away as unreachable.
@@ -247,16 +371,16 @@ async function countIssues(
         services,
         slug,
         await publishedOnly(services, slug),
-        readOptions,
+        scanRules,
         ISSUE_SCAN_ROW_BUDGET - rowsRead,
         abandoned
       );
       rowsRead += tally.rowsRead;
       total += tally.issues;
       if (tally.bounded) bounded = true;
-    } catch {
-      // Denied, or unreadable for any other reason: contributes zero.
-      continue;
+    } catch (error) {
+      if (!isDenial(error)) throw error;
+      // Denied: this collection contributes zero rather than failing the card.
     }
   }
 
@@ -266,21 +390,27 @@ async function countIssues(
 /**
  * The source a plugin publishes, and the function that answers it.
  *
+ * `installed` is the `seo` field set this project actually configured, because
+ * `seoPlugin({ fields })` replaces the defaults -- see {@link checksFor}.
+ *
  * `count` alone: see the module docblock for why a grouped answer cannot be
- * reported honestly under a bound. `fields` names the one dimension a future
- * grouped query would use, so the declared shape does not have to change when it
- * can be answered.
+ * reported honestly under a bound. `issue` is published so a card can ask for
+ * one kind of issue by name, which is the per-issue number a chart would
+ * otherwise be needed for.
  */
 export function seoIssuesWidgetSource(
-  collections: readonly string[]
+  collections: readonly string[],
+  installed: readonly FieldConfig[]
 ): PluginWidgetSource {
   const source: PluginWidgetSource["source"] = {
     id: SEO_ISSUES_SOURCE_ID,
     label: "SEO issues",
     kind: "plugin",
     supports: ["count"],
-    fields: [{ name: "issue", type: "string" }],
+    fields: [{ name: ISSUE_FIELD, type: "string" }],
   };
+
+  const checks = checksFor(installed);
 
   const resolve: PluginSourceResolver = async (query, caller, ctx, opts) => {
     if (query.op !== "count") {
@@ -293,6 +423,7 @@ export function seoIssuesWidgetSource(
       ctx.services,
       caller,
       collections,
+      { checks, keep: issueFilter(query.where) },
       opts?.signal
     );
 

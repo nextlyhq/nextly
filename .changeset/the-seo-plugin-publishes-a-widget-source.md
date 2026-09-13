@@ -44,3 +44,16 @@ answer reports a floor rather than a figure that is quietly too small — the
 fields live in a JSON column that a database-side `count` cannot filter on, so
 the rows are read and inspected. It also honours the resolver cancellation
 signal, stopping between pages once the dashboard has given up waiting.
+
+The checks follow the fields a project actually configured: `seoPlugin({ fields })`
+replaces the default group, so a project storing a `focusKeyword` and nothing else
+is not told every document is missing four things it never asked to store.
+
+A card can also ask for one kind of issue by name — `where: { issue: { equals:
+"Missing meta title" } }` — which gives a per-issue number without needing a
+chart. An operator the source cannot honour is refused rather than answered with
+the unfiltered total.
+
+A collection the reader may not see contributes zero; anything else that fails —
+a database outage, a failing hook — reaches the card as an error rather than
+being folded into a count that is quietly too small.

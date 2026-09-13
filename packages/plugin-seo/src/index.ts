@@ -22,6 +22,15 @@ export type {
 export {
   seoIssuesWidgetSource,
   issuesFor,
+  checksFor,
+  issueFilter,
   SEO_ISSUES_SOURCE_ID,
+  ISSUE_FIELD,
   ISSUE_SCAN_ROW_BUDGET,
 } from "./widget-source";
+export type { IssueChecks } from "./widget-source";
+export type {
+  CollectionReads,
+  EntriesPage,
+  EntriesQuery,
+} from "./collection-reads";

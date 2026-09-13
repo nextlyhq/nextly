@@ -18,6 +18,7 @@ import { defineCollection, listSources, text } from "nextly";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { defaultSeoFields } from "../fields";
 import { seoPlugin } from "../plugin";
 import { SEO_ISSUES_SOURCE_ID, seoIssuesWidgetSource } from "../widget-source";
 
@@ -53,7 +54,10 @@ function probePlugin(collections: string[]): unknown {
           path: "/count",
           public: true,
           handler: async (_req, ctx) => {
-            const { resolve } = seoIssuesWidgetSource(collections);
+            const { resolve } = seoIssuesWidgetSource(
+              collections,
+              defaultSeoFields()
+            );
             const result = await resolve(
               { source: SEO_ISSUES_SOURCE_ID, op: "count" },
               reader,

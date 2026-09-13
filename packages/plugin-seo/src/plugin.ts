@@ -114,10 +114,11 @@ export interface SeoPluginOptions {
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
+  const seoFields = options.fields ?? defaultSeoFields();
   const seoGroup = group({
     name: "seo",
     label: "SEO",
-    fields: options.fields ?? defaultSeoFields(),
+    fields: seoFields,
   });
 
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
@@ -163,7 +164,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Bound to `targets` rather than to every collection: a collection this
     // plugin never extended has no `seo` group, so every one of its documents
     // would report the full set of missing fields and drown the real answer.
-    widgetSources: [seoIssuesWidgetSource(targets)],
+    widgetSources: [seoIssuesWidgetSource(targets, seoFields)],
   };
 
   if (sitemapEnabled) {
