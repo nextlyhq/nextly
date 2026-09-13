@@ -280,6 +280,16 @@ const gatedPlacement = (id: string) => ({
   visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
 });
 
+/**
+ * How long a test that spends a save's whole composition allowance may take.
+ *
+ * These compose about as much as one save is allowed to, on purpose: a few
+ * hundred milliseconds on an idle machine and several seconds on a busy one.
+ * The default of five seconds would fail such a test for how loaded the machine
+ * is rather than for anything the guard does.
+ */
+const SPENDS_THE_ALLOWANCE = 30_000;
+
 describe("saving a component that would reference itself", () => {
   it("registers on beforeChange, for the components collection only", () => {
     // Named rather than the wildcard: a wildcard registration would walk the
@@ -1252,77 +1262,81 @@ describe("saving a component that would reference itself", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("refuses a component whose selections cost more than one save composes", async () => {
-    /*
-     * Every selection composes the component's whole forest, so what one save
-     * affords is the work of all of them together. A big forest affords few
-     * selections and a small one affords many, which is the honest shape of the
-     * cost rather than a count of variants.
-     *
-     * Refusing is the same posture the read budget takes: a prefix of the
-     * selections that found no loop is exactly what a component with no loop
-     * looks like.
-     */
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({ stored: { b: [] } });
-    const wide = (count: number) => {
-      const variants: Record<
-        string,
-        { label: string; overrides: Record<string, unknown> }
-      > = {};
-      for (let i = 0; i < count; i += 1) {
-        variants[`v${String(i)}`] = {
-          label: "V",
-          overrides: { swap: `t${String(i)}` },
+  it(
+    "refuses a component whose selections cost more than one save composes",
+    async () => {
+      /*
+       * Every selection composes the component's whole forest, so what one save
+       * affords is the work of all of them together. A big forest affords few
+       * selections and a small one affords many, which is the honest shape of the
+       * cost rather than a count of variants.
+       *
+       * Refusing is the same posture the read budget takes: a prefix of the
+       * selections that found no loop is exactly what a component with no loop
+       * looks like.
+       */
+      const c = context();
+      register(c.ctx);
+      const { nextly } = api({ stored: { b: [] } });
+      const wide = (count: number) => {
+        const variants: Record<
+          string,
+          { label: string; overrides: Record<string, unknown> }
+        > = {};
+        for (let i = 0; i < count; i += 1) {
+          variants[`v${String(i)}`] = {
+            label: "V",
+            overrides: { swap: `t${String(i)}` },
+          };
+        }
+        return {
+          ...places("b"),
+          nodes: [
+            ...places("b").nodes,
+            ...Array.from({ length: 4000 }, (_, i) => ({
+              id: `f${String(i)}`,
+              type: "core/text",
+              version: 1,
+              props: {},
+            })),
+          ],
+          exposed: [
+            {
+              id: "swap",
+              label: "Which",
+              nodeId: "n0",
+              propPath: "componentId",
+              type: "select",
+            },
+          ],
+          variants,
         };
-      }
-      return {
-        ...places("b"),
-        nodes: [
-          ...places("b").nodes,
-          ...Array.from({ length: 4000 }, (_, i) => ({
-            id: `f${String(i)}`,
-            type: "core/text",
-            version: 1,
-            props: {},
-          })),
-        ],
-        exposed: [
-          {
-            id: "swap",
-            label: "Which",
-            nodeId: "n0",
-            propPath: "componentId",
-            type: "select",
-          },
-        ],
-        variants,
       };
-    };
 
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: { [FIELD]: wide(65) },
-        req: { nextly },
-      })
-    ).rejects.toThrow(/more work than one save allows/);
+      await expect(
+        c.run({
+          collection: COMPONENTS,
+          operation: "update",
+          originalData: { id: "a" },
+          data: { [FIELD]: wide(65) },
+          req: { nextly },
+        })
+      ).rejects.toThrow(/more work than one save allows/);
 
-    // CONTROL: the SAME forest with few variants is affordable and saves, so the
-    // refusal is the work of every selection rather than the document's size.
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: { [FIELD]: wide(2) },
-        req: { nextly },
-      })
-    ).resolves.toBeUndefined();
-  });
+      // CONTROL: the SAME forest with few variants is affordable and saves, so the
+      // refusal is the work of every selection rather than the document's size.
+      await expect(
+        c.run({
+          collection: COMPONENTS,
+          operation: "update",
+          originalData: { id: "a" },
+          data: { [FIELD]: wide(2) },
+          req: { nextly },
+        })
+      ).resolves.toBeUndefined();
+    },
+    SPENDS_THE_ALLOWANCE
+  );
 
   it("allows a self-placement the renderer never expands", async () => {
     /*
@@ -1629,34 +1643,38 @@ describe("saving a component that would reference itself", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("refuses a one-node component whose variants each compose a large definition it places", async () => {
-    /*
-     * The component's own forest is one node, and that is not the work. Each
-     * selection composes the definition it places as well, so sixty variants
-     * over a definition near the node cap do far more than one save allows —
-     * and the refusal names what the author can change.
-     */
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({ documents: { b: oversized(4_900) } });
-    const many: Record<
-      string,
-      { label: string; overrides: Record<string, unknown> }
-    > = {};
-    for (let i = 0; i < 60; i += 1) {
-      many[`v${String(i)}`] = { label: "V", overrides: {} };
-    }
+  it(
+    "refuses a one-node component whose variants each compose a large definition it places",
+    async () => {
+      /*
+       * The component's own forest is one node, and that is not the work. Each
+       * selection composes the definition it places as well, so sixty variants
+       * over a definition near the node cap do far more than one save allows —
+       * and the refusal names what the author can change.
+       */
+      const c = context();
+      register(c.ctx);
+      const { nextly } = api({ documents: { b: oversized(4_900) } });
+      const many: Record<
+        string,
+        { label: string; overrides: Record<string, unknown> }
+      > = {};
+      for (let i = 0; i < 60; i += 1) {
+        many[`v${String(i)}`] = { label: "V", overrides: {} };
+      }
 
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: { [FIELD]: { ...places("b"), variants: many } },
-        req: { nextly },
-      })
-    ).rejects.toThrow(/more work than one save allows/);
-  });
+      await expect(
+        c.run({
+          collection: COMPONENTS,
+          operation: "update",
+          originalData: { id: "a" },
+          data: { [FIELD]: { ...places("b"), variants: many } },
+          req: { nextly },
+        })
+      ).rejects.toThrow(/more work than one save allows/);
+    },
+    SPENDS_THE_ALLOWANCE
+  );
 
   it("refuses a variant that REVEALS a gated self-placement, with no Direct API", async () => {
     /*
@@ -1816,140 +1834,152 @@ describe("saving a component that would reference itself", () => {
     ).rejects.toThrow(/a → a/);
   });
 
-  it("refuses a self-naming component it cannot compose under every variant, with no Direct API", async () => {
-    /*
-     * The self-placement is condition-gated, so no selection composed closes a
-     * loop — but the component is large and offers many variants, and the
-     * save's allowance runs out before the last of them is composed. A
-     * selection nobody composed has not been shown to resolve, and on this path
-     * there is no walk behind the check to decide instead.
-     */
-    const c = context();
-    register(c.ctx);
-    const large = oversized(4_000);
-    const many: Record<
-      string,
-      { label: string; overrides: Record<string, unknown> }
-    > = {};
-    for (let i = 0; i < 70; i += 1) {
-      many[`v${String(i)}`] = { label: "V", overrides: {} };
-    }
+  it(
+    "refuses a self-naming component it cannot compose under every variant, with no Direct API",
+    async () => {
+      /*
+       * The self-placement is condition-gated, so no selection composed closes a
+       * loop — but the component is large and offers many variants, and the
+       * save's allowance runs out before the last of them is composed. A
+       * selection nobody composed has not been shown to resolve, and on this path
+       * there is no walk behind the check to decide instead.
+       */
+      const c = context();
+      register(c.ctx);
+      const large = oversized(4_000);
+      const many: Record<
+        string,
+        { label: string; overrides: Record<string, unknown> }
+      > = {};
+      for (let i = 0; i < 70; i += 1) {
+        many[`v${String(i)}`] = { label: "V", overrides: {} };
+      }
 
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: {
-          [FIELD]: {
-            ...large,
-            nodes: [...large.nodes, gatedPlacement("a")],
-            variants: many,
+      await expect(
+        c.run({
+          collection: COMPONENTS,
+          operation: "update",
+          originalData: { id: "a" },
+          data: {
+            [FIELD]: {
+              ...large,
+              nodes: [...large.nodes, gatedPlacement("a")],
+              variants: many,
+            },
           },
-        },
-        req: {},
-      })
-    ).rejects.toThrow(/more work than one save allows/);
-  });
+          req: {},
+        })
+      ).rejects.toThrow(/more work than one save allows/);
+    },
+    SPENDS_THE_ALLOWANCE
+  );
 
-  it("charges the self check and the walk against ONE allowance for the save", async () => {
-    /*
-     * Each check alone fits: eighty selections of a two-thousand-node component
-     * is well inside the allowance. Together they are not, and the bound is on
-     * the save — an allowance per check would let every check that composes add
-     * another save's worth of work.
-     */
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({ stored: {} });
-    const large = oversized(2_000);
-    const many: Record<
-      string,
-      { label: string; overrides: Record<string, unknown> }
-    > = {};
-    for (let i = 0; i < 79; i += 1) {
-      many[`v${String(i)}`] = { label: "V", overrides: {} };
-    }
+  it(
+    "charges the self check and the walk against ONE allowance for the save",
+    async () => {
+      /*
+       * Each check alone fits: eighty selections of a two-thousand-node component
+       * is well inside the allowance. Together they are not, and the bound is on
+       * the save — an allowance per check would let every check that composes add
+       * another save's worth of work.
+       */
+      const c = context();
+      register(c.ctx);
+      const { nextly } = api({ stored: {} });
+      const large = oversized(2_000);
+      const many: Record<
+        string,
+        { label: string; overrides: Record<string, unknown> }
+      > = {};
+      for (let i = 0; i < 79; i += 1) {
+        many[`v${String(i)}`] = { label: "V", overrides: {} };
+      }
 
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: {
-          [FIELD]: {
-            ...large,
-            nodes: [...large.nodes, gatedPlacement("a")],
-            variants: many,
+      await expect(
+        c.run({
+          collection: COMPONENTS,
+          operation: "update",
+          originalData: { id: "a" },
+          data: {
+            [FIELD]: {
+              ...large,
+              nodes: [...large.nodes, gatedPlacement("a")],
+              variants: many,
+            },
           },
-        },
-        req: { nextly },
-      })
-    ).rejects.toThrow(/more work than one save allows/);
-  });
+          req: { nextly },
+        })
+      ).rejects.toThrow(/more work than one save allows/);
+    },
+    SPENDS_THE_ALLOWANCE
+  );
 
-  it("names the loop it found even when the allowance runs out later in that composition", async () => {
-    /*
-     * The loop closes on the component's first node under the variant composed
-     * last, when the allowance has almost gone, so that composition runs out on
-     * a later sibling and the resolver abandons the expansion that found it. The
-     * save is refused either way; what matters is that it says why. Telling the
-     * author to offer fewer variants would send them to fix the wrong thing and
-     * only then meet the loop.
-     */
-    const c = context();
-    register(c.ctx);
-    const large = oversized(3_000);
-    const many: Record<
-      string,
-      { label: string; overrides: Record<string, unknown> }
-    > = {};
-    for (let i = 0; i < 82; i += 1) {
-      many[`v${String(i)}`] = { label: "V", overrides: {} };
-    }
-    many.loop = { label: "Loop", overrides: { swap: "a" } };
+  it(
+    "names the loop it found even when the allowance runs out later in that composition",
+    async () => {
+      /*
+       * The loop closes on the component's first node under the variant composed
+       * last, when the allowance has almost gone, so that composition runs out on
+       * a later sibling and the resolver abandons the expansion that found it. The
+       * save is refused either way; what matters is that it says why. Telling the
+       * author to offer fewer variants would send them to fix the wrong thing and
+       * only then meet the loop.
+       */
+      const c = context();
+      register(c.ctx);
+      const large = oversized(3_000);
+      const many: Record<
+        string,
+        { label: string; overrides: Record<string, unknown> }
+      > = {};
+      for (let i = 0; i < 82; i += 1) {
+        many[`v${String(i)}`] = { label: "V", overrides: {} };
+      }
+      many.loop = { label: "Loop", overrides: { swap: "a" } };
 
-    const error = await c
-      .run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: {
-          [FIELD]: {
-            ...large,
-            nodes: [
-              {
-                id: "n0",
-                type: COMPONENT_INSTANCE_TYPE,
-                version: 1,
-                props: { componentId: "b" },
-              },
-              ...large.nodes,
-            ],
-            exposed: [
-              {
-                id: "swap",
-                label: "Which",
-                nodeId: "n0",
-                propPath: "componentId",
-                type: "select",
-              },
-            ],
-            variants: many,
+      const error = await c
+        .run({
+          collection: COMPONENTS,
+          operation: "update",
+          originalData: { id: "a" },
+          data: {
+            [FIELD]: {
+              ...large,
+              nodes: [
+                {
+                  id: "n0",
+                  type: COMPONENT_INSTANCE_TYPE,
+                  version: 1,
+                  props: { componentId: "b" },
+                },
+                ...large.nodes,
+              ],
+              exposed: [
+                {
+                  id: "swap",
+                  label: "Which",
+                  nodeId: "n0",
+                  propPath: "componentId",
+                  type: "select",
+                },
+              ],
+              variants: many,
+            },
           },
-        },
-        req: {},
-      })
-      .then(
-        () => null,
-        (reason: unknown) => reason
-      );
+          req: {},
+        })
+        .then(
+          () => null,
+          (reason: unknown) => reason
+        );
 
-    expect(error).toBeInstanceOf(Error);
-    const message = (error as Error).message;
-    expect(message).toMatch(/would reference itself: a → a/);
-    expect(message).not.toMatch(/more work than one save allows/);
-  });
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toMatch(/would reference itself: a → a/);
+      expect(message).not.toMatch(/more work than one save allows/);
+    },
+    SPENDS_THE_ALLOWANCE
+  );
 
   it("refuses one its own VARIANT installs, still with no Direct API", async () => {
     // The same question, through the other way a document can name itself: the

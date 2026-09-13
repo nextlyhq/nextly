@@ -279,12 +279,13 @@ export interface ResolvedComposition {
   /**
    * Every component a reference loop closed on, in the order the loops closed.
    *
-   * Kept whole when an expansion is refused and rolled back, which `unresolved`
+   * Kept when an expansion stopped by a limit is rolled back, which `unresolved`
    * is not. `unresolved` describes the tree this returns, so a refusal made
    * inside a subtree nobody receives is dropped from it; a loop is a property of
    * the definitions, and it exists whether or not the expansion that found it
-   * had room to finish. A caller asking whether the definitions loop at all
-   * reads this.
+   * had room to finish. A loop inside an expansion refused as `unreadable` is
+   * dropped as well, because that instance is drawn as a placeholder with no
+   * loop in it. A caller asking whether the definitions loop at all reads this.
    */
   loopsClosed: readonly string[];
 }
@@ -1035,10 +1036,12 @@ interface ResolveRun {
   referencedSeen: Set<string>;
   unresolved: UnresolvedInstance[];
   /**
-   * Every component a loop closed on, kept outside the savepoint.
+   * Every component a loop closed on.
    *
-   * A rollback trims `unresolved` to what the returned tree holds; a loop found
-   * inside an abandoned expansion is still a loop in the definitions.
+   * Not trimmed by `rollback`, which trims `unresolved` to what the returned
+   * tree holds: a loop found inside an expansion a limit stopped is still a
+   * loop in the definitions. Only an expansion that could not be READ gives its
+   * loops back, since the renderer draws it as a placeholder with no loop in it.
    */
   loopsClosed: string[];
   /**
@@ -1646,6 +1649,13 @@ function expandInstance(
   }
   const definition = found;
 
+  // Nothing is prepared for an expansion the caller's allowance can no longer
+  // pay for. Picking slot content and planning an instance's edits walk the
+  // definition's envelope, which the allowance does not charge, so an allowance
+  // spent on an earlier sibling would otherwise let every later instance repeat
+  // that preparation before its first entry was refused.
+  if (workSpent(run)) return [refuse(run, instance, componentId, "budget")];
+
   // Taken before ANY speculative work, `suppliedSlots` included. Resolving an
   // instance's slot content spends budget and mints ids, and a refusal below
   // discards that content — `refuse` returns the instance with its STORED
@@ -1675,6 +1685,10 @@ function expandInstance(
     // publishes for a supplied document it cannot read.
     run.abort = undefined;
     rollback(run, mark);
+    // A loop closed inside it goes back as well. The renderer draws this
+    // instance as an unreadable placeholder, so no reader receives the loop;
+    // an expansion stopped by a limit would have drawn it, given room.
+    run.loopsClosed.length = mark.loopsClosed;
     return [refuse(run, instance, componentId, "unreadable")];
   }
   if (inlined === null) {
@@ -1984,6 +1998,7 @@ interface Savepoint {
   unresolved: number;
   minted: number;
   mintedDomIds: number;
+  loopsClosed: number;
 }
 
 /** Where the run stood before an instance was attempted. */
@@ -1993,6 +2008,7 @@ function savepoint(run: ResolveRun): Savepoint {
     unresolved: run.unresolved.length,
     minted: run.minted.length,
     mintedDomIds: run.mintedDomIds.length,
+    loopsClosed: run.loopsClosed.length,
   };
 }
 
@@ -2008,9 +2024,14 @@ function savepoint(run: ResolveRun): Savepoint {
 function spendWork(run: ResolveRun): boolean {
   const work = run.work;
   if (work === undefined) return true;
-  if (work.left <= 0) return false;
+  if (workSpent(run)) return false;
   work.left -= 1;
   return true;
+}
+
+/** Whether the caller supplied a work allowance and it has run out. */
+function workSpent(run: ResolveRun): boolean {
+  return run.work !== undefined && run.work.left <= 0;
 }
 
 /**

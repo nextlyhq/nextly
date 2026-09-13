@@ -4252,6 +4252,33 @@ describe("resolveComponentInstances under a caller's work allowance", () => {
       })
     ).toThrow(RangeError);
   });
+
+  it("prepares nothing for an instance once the allowance is spent", () => {
+    // The first instance spends the allowance on its only entry. Planning the
+    // second would read its overrides before the clone refused it, and that
+    // preparation is work the allowance never charges.
+    let overridesRead = 0;
+    const second = instance("i2", "hero");
+    Object.defineProperty(second.props, "overrides", {
+      enumerable: true,
+      get() {
+        overridesRead += 1;
+        return {};
+      },
+    });
+    const work = { left: 1 };
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero"), second]),
+      defs({ hero: component([node("d1")]) }),
+      { work }
+    );
+
+    expect(result.unresolved).toEqual([
+      { instanceId: "i2", componentId: "hero", reason: "budget" },
+    ]);
+    expect(overridesRead).toBe(0);
+  });
 });
 
 describe("resolveComponentInstances and the loops it closes", () => {
@@ -4287,5 +4314,27 @@ describe("resolveComponentInstances and the loops it closes", () => {
 
     expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
     expect(result.loopsClosed).toEqual(["hero"]);
+  });
+
+  it("forgets a loop closed inside an expansion it could not read", () => {
+    // The loop closes on the definition's first entry, and the second throws
+    // when the clone reads it. The whole expansion is refused as unreadable and
+    // drawn as a placeholder, so no reader receives the loop and it is not
+    // reported as one.
+    const hostile = node("x1");
+    Object.defineProperty(hostile, "props", {
+      enumerable: true,
+      get() {
+        throw new Error("a field that cannot be read");
+      },
+    });
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: component([instance("c1", "hero"), hostile]) })
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
+    expect(result.loopsClosed).toEqual([]);
   });
 });
