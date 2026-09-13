@@ -217,10 +217,11 @@ describe("the allowlist", () => {
   // already contained is by definition pre-existing. It has widened in two directions. The
   // checker's own source came out of EXCLUDED_FILES and brought 12 recorded offences with it; and
   // the roadmap-milestone pattern, added over prose that predated it, brought 148 across 35 new
-  // entries without removing or lowering any, and one more when it learned the bracketed form. A
-  // raise for any other reason is the silencing this guards against.
+  // entries without removing or lowering any, one more when it learned the bracketed form, and one
+  // more when patterns began reading normalised text and a label wrapped across lines became
+  // visible. A raise for any other reason is the silencing this guards against.
   const EXPECTED_ENTRIES = 244;
-  const EXPECTED_TOTAL = 551;
+  const EXPECTED_TOTAL = 552;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -292,6 +293,17 @@ describe("normalised comment text", () => {
   it("does not eat a closing delimiter", () => {
     // The decoration strip must not consume `*/`, which would merge the comment with what follows.
     expect(normaliseComment("/* a\n */")).toBe("/* a */");
+  });
+
+  it.each([
+    // Each fixture splits a forbidden shape across a block-comment wrap, where the continuation
+    // line's decoration sits between its parts in the raw text. Two different patterns, so the
+    // property is shown for the READER rather than for one expression.
+    ["a bracketed milestone closed on the next line", "/** stored per locale since i18n (M7\n * ) */", "names a roadmap milestone rather than the code"],
+    ["a milestone code wrapped away from its word", "/** reachable since i18n\n   * M7; withdrawing them had no equivalent */", "names a roadmap milestone rather than the code"],
+    ["a task label whose colon wrapped", "/** Task 17\n * : migrate the records */", "names a task or plan rather than the code"],
+  ])("reports %s, as it would on one line", (_name, text, why) => {
+    expect(offencesIn(text).map(one => one.why)).toContain(why);
   });
 });
 

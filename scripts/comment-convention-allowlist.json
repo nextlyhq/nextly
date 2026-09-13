@@ -522,7 +522,7 @@
     "digests": ["d5997ab8d4023315"]
   },
   "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
-    "count": 18,
+    "count": 19,
     "digests": [
       "03f5b83d5dd2242f",
       "0524236cf96cf39b",
@@ -539,6 +539,7 @@
       "ae0e8c63b61d167c",
       "b67d14159302a0e8",
       "b82bd8ca2524f55c",
+      "c06043526a782eeb",
       "cb715ac79bb0afd0",
       "d6e13c0d15edf168",
       "e08787490dbf8ff1"

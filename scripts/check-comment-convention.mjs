@@ -849,8 +849,14 @@ export function offencesIn(source, options) {
     : FORBIDDEN;
   const found = [];
   for (const comment of commentText(source, options)) {
+    // Patterns read the NORMALISED text - the same text the allowlist digests - rather than the
+    // raw comment. A block comment wraps with a `*` at the start of every continuation line, so a
+    // label split across a wrap reads as broken by that decoration in the raw text and passes
+    // every pattern, while the identical label on one line is reported. What a comment says must
+    // not depend on where a formatter broke its lines.
+    const text = normaliseComment(comment);
     for (const { pattern, why } of patterns) {
-      if (pattern.test(comment)) {
+      if (pattern.test(text)) {
         // Whole. Truncating here would cap what every caller sees, including the digest, so a long
       // comment could be rewritten past the cut and keep its identity. Shortening is the print
       // sites' job.
