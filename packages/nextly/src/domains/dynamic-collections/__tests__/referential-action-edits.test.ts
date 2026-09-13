@@ -635,7 +635,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         "dc_posts",
         [optional],
         [required],
-        options as never
+        options
       );
 
     it("refuses before a single statement is written", () => {
@@ -681,7 +681,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           "dc_posts",
           [required],
           [{ ...required, index: true } as FieldDefinition],
-          { columnsContainingNull: new Set(["author"]) } as never
+          { columnsContainingNull: new Set(["author"]) }
         )
       ).not.toThrow();
     });
@@ -847,7 +847,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           "dc_posts",
           [before],
           [afterRenamed],
-          { columnsContainingNull: new Set(["author"]) } as never
+          { columnsContainingNull: new Set(["author"]) }
         );
         throw new Error("expected a refusal");
       } catch (error) {
@@ -865,7 +865,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           "dc_posts",
           [before],
           [afterRenamed],
-          { columnsContainingNull: new Set(["writer"]) } as never
+          { columnsContainingNull: new Set(["writer"]) }
         )
       ).not.toThrow();
     });
@@ -876,7 +876,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           "dc_posts",
           [before],
           [afterRenamed],
-          { columnsContainingNull: new Set<string>() } as never
+          { columnsContainingNull: new Set<string>() }
         )
       ).not.toThrow();
     });
@@ -896,7 +896,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         "dc_posts",
         [optional],
         [required],
-        options as never
+        options
       );
 
     it("refuses when the column is not applied yet and the table has entries", () => {
@@ -911,6 +911,58 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
           columnsAbsentFromTable: new Set(["author"]),
           tableHasRows: true,
         });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        expect(NextlyError.is(error)).toBe(true);
+        expect(JSON.stringify(error)).toContain(
+          "REQUIRED_COLUMN_NOT_YET_APPLIED"
+        );
+      }
+    });
+
+    it("allows it when the queued ADD carries a default to backfill with", () => {
+      // The refusal is about rows that would be left EMPTY. A queued ADD for a
+      // field that declares a default populates every existing row as it
+      // applies, so the tightening after it is valid — refusing there would
+      // block a save that works.
+      const withDefault = {
+        name: "headline",
+        type: "text",
+        default: "untitled",
+      } as unknown as FieldDefinition;
+      expect(() =>
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [withDefault],
+          [{ ...withDefault, required: true } as FieldDefinition],
+          {
+            columnsContainingNull: new Set<string>(),
+            columnsAbsentFromTable: new Set(["headline"]),
+            tableHasRows: true,
+          }
+        )
+      ).not.toThrow();
+    });
+
+    it("still refuses when the queued ADD has no default to give", () => {
+      // The control for the case above: without a declared default the ADD
+      // emits no DEFAULT clause, so every existing row starts out NULL and the
+      // tightening that follows fails.
+      const noDefault = {
+        name: "headline",
+        type: "text",
+      } as unknown as FieldDefinition;
+      try {
+        service(dialect).generateAlterTableMigration(
+          "dc_posts",
+          [noDefault],
+          [{ ...noDefault, required: true } as FieldDefinition],
+          {
+            columnsContainingNull: new Set<string>(),
+            columnsAbsentFromTable: new Set(["headline"]),
+            tableHasRows: true,
+          }
+        );
         throw new Error("expected a refusal");
       } catch (error) {
         expect(NextlyError.is(error)).toBe(true);

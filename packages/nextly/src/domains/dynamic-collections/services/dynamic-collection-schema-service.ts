@@ -259,9 +259,10 @@ export class DynamicCollectionSchemaService {
    * @throws NextlyError (validation, `REQUIRED_COLUMN_HAS_NULLS`)
    */
   private refuseTighteningOverNulls(
-    oldFields: FieldDefinition[],
     newFields: FieldDefinition[],
-    rename: { from: FieldDefinition; to: FieldDefinition } | null,
+    previousDefinitionOf: (
+      field: FieldDefinition
+    ) => FieldDefinition | undefined,
     options?: {
       columnsContainingNull?: ReadonlySet<string>;
       columnsAbsentFromTable?: ReadonlySet<string>;
@@ -280,26 +281,27 @@ export class DynamicCollectionSchemaService {
         ? options.columnsAbsentFromTable
         : undefined;
     if (holdingNull === undefined && pendingOverRows === undefined) return;
-    const oldByName = new Map(oldFields.map(f => [f.name, f]));
     for (const field of newFields) {
       if (field.required !== true) continue;
       if (!fieldProducesColumn(field)) continue;
-      // The save's OWN rename pair, not a lookup by the new name. A field
-      // renamed and made required in one save is the same field, and matching
-      // by name finds no previous definition for it — so the transition read
-      // as "newly added", skipped this refusal, and the rename-aware column
-      // pass below then emitted the tightening anyway.
-      const previous =
-        rename !== null && field.name === rename.to.name
-          ? rename.from
-          : oldByName.get(field.name);
+      // The save's own pairing, asked of the one resolver every pass uses.
+      const previous = previousDefinitionOf(field);
       if (!previous || previous.required === true) continue;
       // Keyed on the column as the LIVE table has it, which is the name before
       // this save: the nulls were counted against that column, and the rename
       // has not happened yet when they were.
       const column = toSnakeCase(previous.name);
       const holdsNull = holdingNull?.has(column) === true;
-      const notYetApplied = pendingOverRows?.has(column) === true;
+      // A queued ADD that carries a DEFAULT populates every existing row, so
+      // the tightening that follows it is valid and must not be refused. The
+      // ADD path emits one only when the field is required or declares a
+      // default — and this field is the OPTIONAL side of the transition, so
+      // only a declared, non-NULL default reaches the rows.
+      const queuedAddBackfills =
+        previous.default !== undefined &&
+        this.requiredColumnBackfill(previous) !== null;
+      const notYetApplied =
+        pendingOverRows?.has(column) === true && !queuedAddBackfills;
       if (!holdsNull && !notYetApplied) continue;
       // Two causes, two remedies: fill the empty entries in, or deploy the
       // migration that adds the column before the one that tightens it. One
@@ -1034,6 +1036,17 @@ ${allColumnDefs.join(",\n")}
        */
       columnsContainingNull?: ReadonlySet<string>;
       /**
+       * The columns this save names that the live table does NOT have, read from the catalog by
+       * `readColumnNullState`.
+       *
+       * Its own answer rather than a clean one. Such a column holds no nulls today because its
+       * `ADD` has not been applied; applying it over a table that already has rows creates it
+       * holding NULL in every one of them, so a tightening in the same deployment fails. Consulted
+       * with `tableHasRows`, and only where the queued `ADD` carries no default to backfill with.
+       * Undefined means the caller did not look.
+       */
+      columnsAbsentFromTable?: ReadonlySet<string>;
+      /**
        * The index names the table carries, read from the live table by `readIndexNames`.
        *
        * Consulted before dropping one. Which columns are indexed is not derivable from the
@@ -1080,8 +1093,6 @@ ${allColumnDefs.join(",\n")}
     // to that question is what this whole pass keeps being bitten by. One call,
     // so an ambiguous-rename refusal is also raised once.
     const rename = this.detectFieldRename(oldFields, newFields);
-
-    this.refuseTighteningOverNulls(oldFields, newFields, rename, options);
 
     const statements: string[] = [`-- Update dynamic collection: ${tableName}`];
 
@@ -1149,6 +1160,34 @@ ${allColumnDefs.join(",\n")}
     // ideally splits combined edits into two saves.
     let renamedFromName = rename?.from.name ?? null;
     let renamedToName = rename?.to.name ?? null;
+
+    // What this save says a field WAS, by identity rather than by spelling,
+    // asked in ONE place by everything that needs it.
+    //
+    // A renamed field is the same field under a new name, so an exact-name
+    // lookup finds nothing for it and any pass keyed on one silently treats
+    // the rename as carrying no other edit. That has now been the cause three
+    // times — the action pass, the column pass, and the tightening
+    // precondition — each resolving it separately and disagreeing with its
+    // neighbour. A second implementation is what lets them diverge again.
+    //
+    // The names are read at CALL time, so a field-group association rename
+    // reassigning them below is seen by the passes that run after it. The
+    // precondition runs before that and is unaffected either way: a field
+    // group produces no parent column, so it is never a column tightening.
+    const previousDefinitionOf = (
+      field: FieldDefinition
+    ): FieldDefinition | undefined =>
+      renamedToName !== null &&
+      renamedFromName !== null &&
+      field.name === renamedToName
+        ? oldFieldMap.get(renamedFromName)
+        : oldFieldMap.get(field.name);
+
+    // Refuses before this method returns any SQL, which is what makes it a
+    // precondition: the caller applies nothing it has not been handed.
+    this.refuseTighteningOverNulls(newFields, previousDefinitionOf, options);
+
     if (rename) {
       const fromCol = toSnakeCase(rename.from.name);
       const toCol = toSnakeCase(rename.to.name);
@@ -1496,24 +1535,6 @@ ${allColumnDefs.join(",\n")}
         }
       }
     }
-
-    // What this save says a field WAS, by identity rather than by spelling.
-    //
-    // A renamed field is the same field under a new name, so an exact-name
-    // lookup finds nothing for it and every pass keyed on one silently treats
-    // the rename as having no other edit in it. Both passes below ask this,
-    // because they were answering it separately and disagreeing: the action
-    // pass carried a renamed field's edit while the column pass skipped the
-    // same field, so a link renamed and turned optional in one save had its
-    // key moved to `SET NULL` and its column left `NOT NULL`.
-    const previousDefinitionOf = (
-      field: FieldDefinition
-    ): FieldDefinition | undefined =>
-      renamedToName !== null &&
-      renamedFromName !== null &&
-      field.name === renamedToName
-        ? oldFieldMap.get(renamedFromName)
-        : oldFieldMap.get(field.name);
 
     // Find modified fields
     // What a relationship does when the row it points at is deleted, or its
