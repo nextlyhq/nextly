@@ -377,6 +377,73 @@ describe("a collection publish re-judges the draft it promotes", () => {
     expect(await pendingDrafts(t, id)).toHaveLength(1);
   });
 
+  it("publishes a date the CALLER supplies alongside the status", async () => {
+    // The shaping pass coerces a caller's date to a `Date` before the resolver
+    // sees it, and a `Date` is an object with no enumerable keys: a rebuild
+    // that treats every object as a container returns `{}` and the driver then
+    // refuses the write outright. Measured before the fix: the publish failed
+    // with "value.getTime is not a function" and nothing went live.
+    const slug = "dated";
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "body" }),
+            date({ name: "goesLive" }),
+            // One denied field, so the resolver runs at all.
+            text({
+              name: "guarded",
+              access: { update: ({ req }) => req.user?.email === BOSS.email },
+            }),
+          ],
+        }),
+      ],
+    });
+    const h = handlerOf(current);
+
+    const created = await h.createEntry(
+      { collectionName: slug, overrideAccess: true },
+      {
+        body: "live",
+        goesLive: "2026-01-02T03:04:05.000Z",
+        guarded: "live-value",
+        status: "published",
+      }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    const published = await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published", goesLive: "2026-09-09T09:09:09.000Z" }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const doc = (await current.nextly.findByID({
+      collection: slug as never,
+      id,
+      overrideAccess: true,
+      status: "all",
+    } as never)) as Record<string, unknown> | null;
+    expect(new Date(doc?.goesLive as string).toISOString()).toBe(
+      "2026-09-09T09:09:09.000Z"
+    );
+    expect(doc?.guarded).toBe("live-value");
+  });
+
   it("still promotes the change for a publisher who MAY write it", async () => {
     const t = await boot();
     const h = handlerOf(t);

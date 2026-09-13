@@ -184,14 +184,20 @@ function restoreDenied(
 
   for (const key of Object.keys(before)) {
     if (!hasOwn(permitted, key)) {
-      if (liveRecord && hasOwn(liveRecord, key)) out[key] = liveRecord[key];
+      if (liveRecord && hasOwn(liveRecord, key)) {
+        assign(out, key, liveRecord[key]);
+      }
       continue;
     }
-    out[key] = restoreDenied(
-      before[key],
-      permitted[key],
-      liveRecord?.[key],
-      permittedLiveRecord?.[key]
+    assign(
+      out,
+      key,
+      restoreDenied(
+        before[key],
+        permitted[key],
+        liveRecord?.[key],
+        permittedLiveRecord?.[key]
+      )
     );
   }
 
@@ -203,7 +209,7 @@ function restoreDenied(
     for (const key of Object.keys(liveRecord)) {
       if (hasOwn(before, key)) continue;
       if (permittedLiveRecord && hasOwn(permittedLiveRecord, key)) continue;
-      out[key] = liveRecord[key];
+      assign(out, key, liveRecord[key]);
     }
   }
 
@@ -314,7 +320,9 @@ function asComparable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(asComparable);
   if (isRecord(value)) {
     const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value)) out[key] = asComparable(value[key]);
+    for (const key of Object.keys(value)) {
+      assign(out, key, asComparable(value[key]));
+    }
     return out;
   }
   return value;
@@ -364,6 +372,42 @@ function hasOwn(record: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
+/**
+ * A PLAIN record, and the distinction is load-bearing.
+ *
+ * A `Date` is an object with no enumerable keys of its own, so a walk that
+ * treats every object as a container rebuilds one as `{}` and the driver then
+ * refuses it: measured, a caller who supplied a date with the publish got
+ * `value.getTime is not a function` and no publish at all. The same is true of
+ * anything else the store round-trips as a value rather than a shape, a
+ * `Buffer` or a `RegExp` among them. Only an object made from `{}` or from a
+ * null prototype carries children worth descending into.
+ */
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value) as object | null;
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Assign a key that may be `__proto__`.
+ *
+ * A plain `out[key] = value` for an own `"__proto__"` key calls the inherited
+ * prototype setter instead of creating a property: the authored key is lost
+ * from the JSON that gets stored, and the object it names becomes the
+ * accumulator's prototype. `canonical-json.ts` documents the same hazard.
+ */
+function assign(
+  out: Record<string, unknown>,
+  key: string,
+  value: unknown
+): void {
+  Object.defineProperty(out, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
 }

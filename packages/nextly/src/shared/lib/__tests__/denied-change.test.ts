@@ -1,0 +1,181 @@
+/**
+ * The promotion resolver, exercised directly.
+ *
+ * It is a pure function answering an intricate question over four documents,
+ * and the integration suites reach it only through a whole publish, one shape
+ * per test at considerable cost. Every defect it has had so far was a shape
+ * question the caller could not see: a `Date` rebuilt as `{}`, a container
+ * exempted because the caller supplied one field of it, a property deleted on
+ * the live side that no traversal enumerated. Those belong here, where a shape
+ * costs three lines.
+ *
+ * @module shared/lib/__tests__/denied-change.test
+ */
+import { describe, expect, it } from "vitest";
+
+import { resolvePromotedDocument } from "../denied-change";
+
+/** Removes the named top-level or nested paths, as the field rules would. */
+function denies(...paths: string[]) {
+  return (document: Record<string, unknown>): Promise<void> => {
+    for (const path of paths) {
+      const segments = path.split(".");
+      let cursor: Record<string, unknown> | undefined = document;
+      for (const segment of segments.slice(0, -1)) {
+        const next: unknown = cursor?.[segment];
+        cursor =
+          typeof next === "object" && next !== null
+            ? (next as Record<string, unknown>)
+            : undefined;
+      }
+      const last = segments[segments.length - 1];
+      if (cursor && last) delete cursor[last];
+    }
+    return Promise.resolve();
+  };
+}
+
+const allow = (): Promise<void> => Promise.resolve();
+
+function resolve(
+  input: Partial<Parameters<typeof resolvePromotedDocument>[0]> & {
+    before: Record<string, unknown>;
+    live: Record<string, unknown>;
+  }
+) {
+  return resolvePromotedDocument({
+    applyRules: allow,
+    slug: "posts",
+    ...input,
+  });
+}
+
+describe("resolvePromotedDocument", () => {
+  it("returns the promotion unchanged when nothing is denied", async () => {
+    const out = await resolve({
+      before: { title: "new", body: "new body" },
+      live: { title: "old", body: "old body" },
+    });
+    expect(out).toEqual({ title: "new", body: "new body" });
+  });
+
+  it("holds a denied field at its live value rather than dropping it", async () => {
+    const out = await resolve({
+      before: { title: "new", guarded: "live" },
+      live: { title: "old", guarded: "live" },
+      applyRules: denies("guarded"),
+    });
+    // Present, and at what the row already holds. Dropped instead, the write
+    // clears a column nobody asked it to.
+    expect(out).toEqual({ title: "new", guarded: "live" });
+  });
+
+  it("refuses when the promotion CHANGES a denied field", async () => {
+    await expect(
+      resolve({
+        before: { guarded: "edited" },
+        live: { guarded: "live" },
+        applyRules: denies("guarded"),
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("keeps a denied child inside an allowed container", async () => {
+    const out = await resolve({
+      before: { seo: { title: "new", secret: "live" } },
+      live: { seo: { title: "old", secret: "live" } },
+      applyRules: denies("seo.secret"),
+    });
+    expect(out).toEqual({ seo: { title: "new", secret: "live" } });
+  });
+
+  it("treats a Date as a value, not a container to rebuild", async () => {
+    const when = new Date("2026-09-09T09:09:09.000Z");
+    const out = await resolve({
+      before: { goesLive: when, guarded: "live" },
+      live: { goesLive: new Date("2026-01-01T00:00:00.000Z"), guarded: "live" },
+      applyRules: denies("guarded"),
+    });
+    // Rebuilt as an object it becomes `{}`, and the driver refuses the write
+    // with "value.getTime is not a function".
+    expect(out.goesLive).toBeInstanceOf(Date);
+    expect((out.goesLive as Date).toISOString()).toBe(
+      "2026-09-09T09:09:09.000Z"
+    );
+  });
+
+  it("does not read a Date as an edit when both sides mean the same instant", async () => {
+    // A pending change is JSON, so it carries the ISO string; the row comes
+    // back from the driver as a Date.
+    const out = await resolve({
+      before: { guarded: "2026-01-02T03:04:05.000Z" },
+      live: { guarded: new Date("2026-01-02T03:04:05.000Z") },
+      applyRules: denies("guarded"),
+    });
+    expect(out).toBeDefined();
+  });
+
+  it("drops the CALLER's own denied edit back to live instead of refusing", async () => {
+    const out = await resolve({
+      before: { guarded: "caller wrote this" },
+      live: { guarded: "live" },
+      callerSupplied: { guarded: "caller wrote this" },
+      applyRules: denies("guarded"),
+    });
+    expect(out).toEqual({ guarded: "live" });
+  });
+
+  it("still refuses a sibling the caller did NOT supply, inside the same container", async () => {
+    // The removal is reported at the container, and its contents have two
+    // authors: exempting the whole subtree loses the pending change's sibling.
+    await expect(
+      resolve({
+        before: { promo: { label: "caller", tagline: "draft" } },
+        live: { promo: { label: "live", tagline: "live tagline" } },
+        callerSupplied: { promo: { label: "caller" } },
+        applyRules: denies("promo"),
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "promo.tagline" }] },
+    });
+  });
+
+  it("refuses a denied property the promotion DELETES", async () => {
+    // Absent from the promotion, so the rules never judged it there: it is the
+    // live-side pass that puts it in the denied set at all.
+    await expect(
+      resolve({
+        before: { seo: { title: "new" } },
+        live: { seo: { title: "old", secret: "live" } },
+        applyRules: denies("seo.secret"),
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "seo.secret" }] },
+    });
+  });
+
+  it("keeps an own __proto__ key instead of invoking the prototype setter", async () => {
+    const before: Record<string, unknown> = { guarded: "live" };
+    Object.defineProperty(before, "__proto__", {
+      value: { evil: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    const out = await resolve({
+      before,
+      live: { guarded: "live" },
+      applyRules: denies("guarded"),
+    });
+    expect(Object.prototype.hasOwnProperty.call(out, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+  });
+
+  it("leaves an allowed deletion deleted", async () => {
+    const out = await resolve({
+      before: { title: "new" },
+      live: { title: "old", subtitle: "going away" },
+    });
+    expect(Object.prototype.hasOwnProperty.call(out, "subtitle")).toBe(false);
+  });
+});
