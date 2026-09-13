@@ -1,4 +1,4 @@
-// i18n M7: entryApi.update forwards the content locale as `?locale=` so an edit in the admin's
+// entryApi.update forwards the content locale as `?locale=` so an edit in the admin's
 // active language updates only that language's translatable values.
 
 import { describe, expect, it, vi, beforeEach } from "vitest";

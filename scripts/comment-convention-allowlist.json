@@ -48,58 +48,8 @@
     "digests": ["7aab1e73e1bbee0b", "abe25d9f5bce2423"]
   },
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
-    "count": 6,
-    "digests": [
-      "69eafeb47e136856",
-      "84c6c4503b030591",
-      "92043ca6e49d929a",
-      "c241dea5ce74802b",
-      "dbad46c19341d374",
-      "ed68433afdb290fb"
-    ]
-  },
-  "packages/admin/src/components/features/entries/EntryForm/EntrySystemHeader.tsx": {
     "count": 2,
-    "digests": ["31c0dbc5a73f2f32", "b20daba174f00fb4"]
-  },
-  "packages/admin/src/components/features/entries/EntryForm/panels/DocumentPanel.tsx": {
-    "count": 2,
-    "digests": ["0e6b69b936976bd1", "20e66693738878fd"]
-  },
-  "packages/admin/src/components/features/entries/EntryForm/useEntryForm.ts": {
-    "count": 2,
-    "digests": ["4091740f744d084b", "62900b6b68a6dd1e"]
-  },
-  "packages/admin/src/components/features/entries/EntryList/EntryList.tsx": {
-    "count": 3,
-    "digests": ["07b50f8ef72af6e4", "08502d0355b88d7f", "53e6cf413ffaa13b"]
-  },
-  "packages/admin/src/components/features/entries/EntryList/EntryTable.tsx": {
-    "count": 3,
-    "digests": ["53aa06c451dd1650", "7aa8fa319361cb5c", "e9b33564abf4dfd4"]
-  },
-  "packages/admin/src/components/features/entries/EntryList/EntryTableColumns.tsx": {
-    "count": 2,
-    "digests": ["494cc3a0b4ab7863", "93b2ea2f6d21d940"]
-  },
-  "packages/admin/src/components/features/entries/EntryList/entryFilters.ts": {
-    "count": 3,
-    "digests": ["074e73481450e0e1", "0a0d4ec4b243f827", "3066a5892050fb99"]
-  },
-  "packages/admin/src/components/features/entries/EntryLocaleContext.tsx": {
-    "count": 1,
-    "digests": ["e2136f445a430323"]
-  },
-  "packages/admin/src/components/features/entries/fields/FieldWrapper.tsx": {
-    "count": 6,
-    "digests": [
-      "0aa1dee2e72aba16",
-      "29783006e7510563",
-      "357ed975f27a0137",
-      "3aeea86265048488",
-      "9d3568e0a2f2e4eb",
-      "b67e4b69819c221d"
-    ]
+    "digests": ["69eafeb47e136856", "92043ca6e49d929a"]
   },
   "packages/admin/src/components/features/entries/fields/structured/__tests__/RepeaterRowLabel.test.tsx": {
     "count": 1,
@@ -193,10 +143,6 @@
     "count": 1,
     "digests": ["845ab2f96f9874fe"]
   },
-  "packages/admin/src/hooks/queries/useEntry.ts": {
-    "count": 2,
-    "digests": ["47bbb0db67df4d10", "ecbf333852332f0e"]
-  },
   "packages/admin/src/hooks/queries/useJournal.ts": {
     "count": 1,
     "digests": ["df5c00e784446f44"]
@@ -204,18 +150,6 @@
   "packages/admin/src/hooks/queries/usePublishAllLocales.ts": {
     "count": 1,
     "digests": ["0674b55cfffb8080"]
-  },
-  "packages/admin/src/hooks/queries/useUpdateEntry.ts": {
-    "count": 1,
-    "digests": ["56ed557b34310085"]
-  },
-  "packages/admin/src/hooks/useLocalization.ts": {
-    "count": 1,
-    "digests": ["c9c781d7749f00ef"]
-  },
-  "packages/admin/src/lib/builder/__tests__/localized-serialization.test.ts": {
-    "count": 1,
-    "digests": ["ffee7d80eca79e86"]
   },
   "packages/admin/src/lib/builder/to-manifest-entity.test.ts": {
     "count": 1,
@@ -228,26 +162,6 @@
   "packages/admin/src/lib/builder/ui-schema-mode.ts": {
     "count": 1,
     "digests": ["ef94d21f7c9d8bbb"]
-  },
-  "packages/admin/src/pages/dashboard/entries/[slug]/[id]/index.tsx": {
-    "count": 3,
-    "digests": ["672bc79f8687b82f", "76ce1544e2f304c5", "df133d4f639f527b"]
-  },
-  "packages/admin/src/services/__tests__/entryApi.update-locale.test.ts": {
-    "count": 1,
-    "digests": ["ec980e43c41a14e0"]
-  },
-  "packages/admin/src/services/entryApi.ts": {
-    "count": 7,
-    "digests": [
-      "0c199b05752e8fbd",
-      "3a389f309f1cea3b",
-      "8b35620e4434c128",
-      "9711018c1f9046f3",
-      "9eb8a49dfc0c0b2a",
-      "9eb8a49dfc0c0b2a",
-      "f2d364bfa6739d08"
-    ]
   },
   "packages/admin/src/services/journalApi.ts": {
     "count": 1,

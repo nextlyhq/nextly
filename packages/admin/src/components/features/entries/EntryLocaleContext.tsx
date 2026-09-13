@@ -1,6 +1,6 @@
 /**
  * EntryLocaleContext — carries the entry editor's active content language down to field
- * components (i18n M7), so a field can render its input in the language's writing direction
+ * components, so a field can render its input in the language's writing direction
  * without threading the locale through every prop.
  *
  * Default is a non-localized editor (`rtl: false`), so components using fields outside a
