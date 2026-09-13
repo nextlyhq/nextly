@@ -29,6 +29,7 @@ import {
   componentUsageIn,
   composedRootTypes,
   variantNamesIn,
+  variantReferencesIn,
   instanceExposure,
   readableDefinition,
   resolveComponentInstances,
@@ -2491,6 +2492,64 @@ describe("componentUsageIn", () => {
         ids: componentUsageIn(nodes, budget).ids,
       });
     }
+  });
+});
+
+describe("variantReferencesIn", () => {
+  /** One node placing `c`, exposing its componentId and its text separately. */
+  const doc = (variants: Record<string, Variant>) =>
+    component([instance("n1", "c")], {
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "n1",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+      variants,
+    });
+
+  it("reports what each variant installs, and omits the ones installing nothing", () => {
+    const out = variantReferencesIn(
+      doc({
+        toA: { label: "A", overrides: { swap: "a" } },
+        toB: { label: "B", overrides: { swap: "b" } },
+        untouched: { label: "None", overrides: {} },
+      })
+    );
+
+    expect(out.complete).toBe(true);
+    expect([...out.byVariant]).toEqual([
+      ["toA", ["a"]],
+      ["toB", ["b"]],
+    ]);
+    // ORACLE: the union the other reader gives is these, plus the stored id.
+    expect(
+      componentReferencesIn(
+        doc({ toA: { label: "A", overrides: { swap: "a" } } })
+      ).ids
+    ).toEqual(["c", "a"]);
+  });
+
+  it("answers NULL where the variants cannot be enumerated", () => {
+    const many: Record<string, Variant> = {};
+    for (let i = 0; i <= MAX_ENVELOPE_ENTRIES; i += 1) {
+      many[`v${String(i)}`] = { label: "V", overrides: {} };
+    }
+    const out = variantReferencesIn(doc(many));
+
+    expect(out.complete).toBe(false);
+    expect(out.byVariant.size).toBe(0);
+  });
+
+  it("is EMPTY for a document offering no variants or no exposures", () => {
+    expect(variantReferencesIn(doc({})).byVariant.size).toBe(0);
+    expect(
+      variantReferencesIn(component([instance("n1", "c")])).byVariant.size
+    ).toBe(0);
+    expect(variantReferencesIn(null).complete).toBe(true);
   });
 });
 

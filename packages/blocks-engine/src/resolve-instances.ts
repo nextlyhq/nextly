@@ -458,30 +458,72 @@ function withVariantReferences(
   document: Record<string, unknown>,
   direct: ComponentUsage
 ): ComponentUsage {
-  const variants = document.variants;
-  if (!isPlainRecord(variants)) return direct;
-  const names = boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES);
-  // More variants than the envelope admits. Reported as unread rather than
-  // scanned to the bound: a prefix of the variants is a prefix of the answer.
-  if (names === null) return { ids: direct.ids, complete: false };
-  // No exposure means no override can reach a node, whatever the variants say.
-  const declared = usableExposures(document.exposed);
-  if (names.length === 0 || declared.length === 0) return direct;
+  // DERIVED from the per-variant answer rather than computed beside it: the
+  // union is a view of the same walk, and two walks over one forest agree on the
+  // day they are written.
+  const perVariant = variantReferencesIn(document);
+  if (!perVariant.complete) return { ids: direct.ids, complete: false };
 
-  // Indexed ONCE for every variant: the index is a property of the forest, and
-  // rebuilding it per variant is what makes a document with many of them
-  // quadratic in its own size.
-  const nodes = nodeIndex(document.nodes as readonly BlockNode[]);
   const ids = [...direct.ids];
   const seen = new Set(ids);
-  for (const name of names) {
-    for (const id of installedBy(document, name, declared, nodes)) {
+  for (const installed of perVariant.byVariant.values()) {
+    for (const id of installed) {
       if (seen.has(id)) continue;
       seen.add(id);
       ids.push(id);
     }
   }
   return { ids, complete: true };
+}
+
+/** What each variant installs, and whether the variants could all be read. */
+export interface VariantReferences {
+  /** Variant name to the component ids its overrides install, in declared order. */
+  readonly byVariant: ReadonlyMap<string, readonly string[]>;
+  /** `false` where the variants could not be enumerated within the envelope bound. */
+  readonly complete: boolean;
+}
+
+/**
+ * The component ids EACH variant installs, from ONE index of the forest.
+ *
+ * {@link componentReferencesIn} unions these, which answers "what could this
+ * document reach" and not "what does this selection reach". A caller that
+ * composes selections separately — a write guard confirming a refusal — needs
+ * them apart, and needs them without paying for the forest again per variant:
+ * the index is a property of the forest, and rebuilding it per variant is what
+ * makes a document offering many of them quadratic in its own size.
+ *
+ * A variant absent from the map installs nothing. That is the useful half for a
+ * caller deciding which selections are worth composing, because a variant that
+ * installs no component id cannot add a reference — one that changes text or a
+ * link does not reach the graph at all, and one that HIDES a node only removes
+ * references the default selection was already judged on.
+ */
+export function variantReferencesIn(document: unknown): VariantReferences {
+  const empty = new Map<string, readonly string[]>();
+  if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
+    return { byVariant: empty, complete: true };
+  }
+  const variants = document.variants;
+  if (!isPlainRecord(variants)) return { byVariant: empty, complete: true };
+  const names = boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES);
+  // More variants than the envelope admits. Reported as unread rather than
+  // scanned to the bound: a prefix of the variants is a prefix of the answer.
+  if (names === null) return { byVariant: empty, complete: false };
+  // No exposure means no override can reach a node, whatever the variants say.
+  const declared = usableExposures(document.exposed);
+  if (names.length === 0 || declared.length === 0) {
+    return { byVariant: empty, complete: true };
+  }
+
+  const nodes = nodeIndex(document.nodes as readonly BlockNode[]);
+  const byVariant = new Map<string, readonly string[]>();
+  for (const name of names) {
+    const installed = installedBy(document, name, declared, nodes);
+    if (installed.length > 0) byVariant.set(name, installed);
+  }
+  return { byVariant, complete: true };
 }
 
 /**

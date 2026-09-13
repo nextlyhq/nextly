@@ -73,9 +73,11 @@ import {
   DOCUMENT_FORMAT_VERSION,
   componentReach,
   componentReachIn,
+  componentIdsIn,
   componentReferencesFrom,
   resolveComponentInstances,
   variantNamesIn,
+  variantReferencesIn,
   type ComponentReach,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
@@ -198,6 +200,10 @@ async function refuseACycle(
     );
   }
 
+  // Decided from the document in hand, so it is decided BEFORE the declines
+  // below. Those exist for the graph READS, and this question needs none.
+  refuseASelfReference(submitted, self, options);
+
   const nextly = directApiOf(context);
   // No Direct API to ask with. A guard that refused every write it could not
   // evaluate would make the collection unwritable on any path that shapes its
@@ -217,6 +223,31 @@ async function refuseACycle(
     document: held.document,
     forms: formsChangedBy(next),
   });
+}
+
+/**
+ * Refuse a submitted document that closes a loop on the subject by itself.
+ *
+ * Separate from the walk because it needs no library at all, which is what lets
+ * it run ahead of every decline the graph reads require. A write on a path that
+ * shapes its context differently — an early-runtime write, an internal one with
+ * no Direct API bound — could otherwise persist the one loop that takes no
+ * library to see, with the guard registered and reporting nothing.
+ *
+ * The chain is the subject twice over, so there is nothing to redact: both ids
+ * are the one the author is saving.
+ */
+function refuseASelfReference(
+  submitted: { readonly document: unknown } | "absent",
+  self: string,
+  options: CycleGuardOptions
+): void {
+  if (submitted === "absent") return;
+  if (!namesItself(submitted.document, self, options)) return;
+  throw refusal(
+    `This component cannot be saved because it would reference itself: ` +
+      `${self} → ${self}. Remove that placement and save again.`
+  );
 }
 
 /**
@@ -319,7 +350,7 @@ function indeterminateRefusal(walked: WalkOutcome, self: string): Error {
   if (walked.reach.kind !== "cycle") return refusal(UNESTABLISHED);
   return refusal(
     `${UNESTABLISHED} Its stored placements do lead back to it — ` +
-      `${namedPath(walked.reach.path, walked.places, self)} — so start there.`
+      `${namedPath(walked.reach.path, walked.own, self)} — so start there.`
   );
 }
 
@@ -336,7 +367,7 @@ function cycleRefusal(walked: WalkOutcome, self: string): Error {
   if (walked.reach.kind === "cycle") {
     return refusal(
       `This component cannot be saved because it would reference itself: ` +
-        `${namedPath(walked.reach.path, walked.places, self)}. Remove that ` +
+        `${namedPath(walked.reach.path, walked.own, self)}. Remove that ` +
         `placement and save again.`
     );
   }
@@ -350,7 +381,39 @@ function cycleRefusal(walked: WalkOutcome, self: string): Error {
 /** The walk's verdict, with the ids used to decide which of them to name. */
 interface WalkOutcome {
   readonly reach: ComponentReach;
-  readonly places: readonly string[] | undefined;
+  /**
+   * The ids the SUBMITTED document names, and only those.
+   *
+   * The redaction allowlist, so it must not be the walk's enriched reach. That
+   * list grows by reading other definitions with `overrideAccess: true` — a
+   * placement's selected variant can install an id that lives in a definition
+   * this author cannot open — and naming such an id in a refusal hands out an
+   * identifier the author could not otherwise obtain. What the author already
+   * holds is what their own document says, their own variants included.
+   */
+  readonly own: readonly string[];
+}
+
+/** Whether a surveyed document names the subject, decided without any read. */
+function selfNamedIn(
+  survey: { readonly ids: readonly string[]; readonly complete: boolean },
+  self: string
+): boolean {
+  return survey.complete && survey.ids.includes(self);
+}
+
+/**
+ * Whether the submitted document closes a loop on the subject by itself.
+ *
+ * Answerable with no library at all, which is why it is asked before the guard
+ * declines a write it cannot read the graph for.
+ */
+function namesItself(
+  document: unknown,
+  self: string,
+  options: CycleGuardOptions
+): boolean {
+  return selfNamedIn(componentReachIn(document, options.limits.maxNodes), self);
 }
 
 /**
@@ -370,15 +433,16 @@ async function walkFrom(
   read: DocumentReader
 ): Promise<WalkOutcome> {
   const survey = componentReachIn(document, options.limits.maxNodes);
-  if (survey.complete && survey.ids.includes(self)) {
-    return { reach: { kind: "cycle", path: [self, self] }, places: survey.ids };
+  const own = survey.ids;
+  if (selfNamedIn(survey, self)) {
+    return { reach: { kind: "cycle", path: [self, self] }, own };
   }
 
   const places = await reachableFrom(document, options, read);
   const graph = await placementsReachedFrom(places, options, read);
   return {
     reach: componentReach({ places, self, placedBy: id => graph.get(id) }),
-    places,
+    own,
   };
 }
 
@@ -417,10 +481,10 @@ async function composesACycle(
   options: CycleGuardOptions,
   read: DocumentReader
 ): Promise<CompositionVerdict> {
-  const named = variantNamesIn(document);
-  // More variants than the envelope admits, so which ones a reader can select
-  // cannot be established. Not an answer either way.
-  if (named === null) return "indeterminate";
+  const selections = selectionsWorthComposing(document, options);
+  // The variants could not be enumerated, or more of them install a reference
+  // than this will compose. Not an answer either way.
+  if (selections === null) return "indeterminate";
 
   // The subject under its own id, so a chain leading back to it meets the
   // document being SAVED rather than the copy the store still holds. Shared
@@ -433,12 +497,84 @@ async function composesACycle(
   };
 
   let indeterminate = false;
-  for (const variant of [undefined, ...named]) {
+  for (const variant of selections) {
     const one = await composesUnder(variant, self, options, read, library);
     if (one === "cycle") return "cycle";
     if (one === "indeterminate") indeterminate = true;
   }
   return indeterminate ? "indeterminate" : "none";
+}
+
+/**
+ * How many SELECTIONS one save will compose before giving up.
+ *
+ * Each composition walks up to the document's whole node budget, and a component
+ * may legally declare a thousand variants — so composing every selection
+ * multiplies one bound by the other and makes an ordinary save do millions of
+ * node visits synchronously. Most of that is avoidable rather than necessary:
+ * only a variant that INSTALLS a component id can compose differently, and the
+ * skip below removes the rest.
+ *
+ * What remains is a component that genuinely offers more id-installing variants
+ * than this. Refusing there is the same posture as the read budget: the
+ * expensive direction of the fail-closed choice, and the other one admits the
+ * loop this exists to stop.
+ */
+const MOST_SELECTIONS_COMPOSED = 64;
+
+/**
+ * The selections whose composition can differ from the default one.
+ *
+ * A variant reaches the component graph only through an override that installs a
+ * component id. One that changes text, a link or a colour does not touch the
+ * graph at all; one that HIDES a node only removes references the default
+ * selection was already judged on, and removing references cannot close a loop.
+ * So a definition offering a thousand variants that install nothing costs ONE
+ * composition rather than a thousand and one.
+ *
+ * Asked with one index of the forest rather than one per variant, because
+ * rebuilding it per variant is the same quadratic this exists to remove.
+ */
+function selectionsWorthComposing(
+  document: unknown,
+  options: CycleGuardOptions
+): readonly (string | undefined)[] | null {
+  const named = variantNamesIn(document);
+  if (named === null) return null;
+  if (named.length === 0) return [undefined];
+
+  const installing = variantReferencesIn(document);
+  if (!installing.complete) return null;
+
+  // What the DEFAULT selection already reaches, from the ids the nodes CARRY.
+  // Not `componentReachIn`, which unions the variants in — measuring against
+  // that would find every variant already accounted for and compose none.
+  // `componentIdsIn` reads a FOREST, not a document — the same narrowing this
+  // module already does to reach a submitted document's nodes.
+  const nodes = (document as { nodes?: unknown }).nodes;
+  const already = new Set(
+    Array.isArray(nodes) ? componentIdsIn(nodes, options.limits.maxNodes) : []
+  );
+
+  // A variant is worth composing only where it installs an id the default does
+  // not already reach. `installedOn` reports the componentId of every node an
+  // override WROTE to, so a variant merely setting a caption on an instance node
+  // reports that node's unchanged id — and those are most of the variants a real
+  // component declares. Comparing against the default is what tells an override
+  // that moves a reference from one that only passes beside it.
+  //
+  // Sound for this question because reachability is a SET: a variant whose ids
+  // the default already reaches composes over the same reachable set, so it can
+  // close no loop the default does not. One that hides a node reaches fewer, and
+  // removing references closes nothing either.
+  const worth = [...installing.byVariant]
+    .filter(([, ids]) => ids.some(id => !already.has(id)))
+    .map(([variant]) => variant);
+  if (worth.length > MOST_SELECTIONS_COMPOSED) return null;
+
+  // The default selection first, so an ordinary save reaches its answer before
+  // paying for any variant at all.
+  return [undefined, ...worth];
 }
 
 /** What the walk and the composition have read so far, shared across selections. */
