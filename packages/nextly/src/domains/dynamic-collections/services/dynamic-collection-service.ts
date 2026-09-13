@@ -259,8 +259,12 @@ export class DynamicCollectionService extends BaseService {
         // which the create artefact handles, not this diff.
         columnsContainingNull: new Set<string>(),
         columnsAbsentFromTable: new Set<string>(),
-        // No table, so no column has a type to restate.
-        liveColumnTypes: new Map<string, string>(),
+        // The types the create artefact WILL write, for the same reason the attachments below are
+        // predicted rather than read: the two artefacts replay in order, so an edit made in this
+        // window is generated against the table the create is about to build. Reporting none sends
+        // MySQL's restate to the legacy renderer, which would `MODIFY` a float the create had just
+        // made `double` down to `decimal(10,2)`.
+        liveColumnTypes: this.schemaService.plannedColumnTypes(pendingFields),
         ...this.schemaService.plannedAttachments(tableName, pendingFields),
       };
     }
