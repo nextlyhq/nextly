@@ -259,6 +259,49 @@ describe("useSeedStatus", () => {
     await waitFor(() => expect(readLayout).toHaveBeenCalledTimes(2));
   });
 
+  it("reports a seed another instance started, and will not start a second", async () => {
+    // Two instances over ONE client, as the empty dashboard and its remount
+    // are: the first starts a seed and unmounts, the way entering edit mode
+    // unmounts the empty dashboard, and the second must still see the run.
+    vi.mocked(seedApi.probe).mockResolvedValue({
+      available: true,
+      template: { slug: "blog", label: "Blog" },
+    });
+    vi.mocked(seedApi.getStatus).mockResolvedValue({
+      completedAt: null,
+      skippedAt: null,
+    });
+    vi.mocked(seedApi.runSeed).mockImplementation(() => new Promise(() => {}));
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const first = renderHook(() => useSeedStatus(), { wrapper: shared });
+    await waitFor(() => expect(first.result.current.status.kind).toBe("idle"));
+    act(() => first.result.current.startSeed());
+    first.unmount();
+
+    const second = renderHook(() => useSeedStatus(), { wrapper: shared });
+    await waitFor(() =>
+      expect(second.result.current.status.kind).toBe("seeding")
+    );
+    // Awaited with a task's grace: mutate() reaches the request only after
+    // several asynchronous steps, so a second run the guard failed to refuse
+    // would not have started yet when a synchronous count was read.
+    await act(async () => {
+      second.result.current.startSeed();
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+
+    expect(seedApi.runSeed).toHaveBeenCalledTimes(1);
+  });
+
   it("skip writes skippedAt and transitions to hidden", async () => {
     vi.mocked(seedApi.probe).mockResolvedValue({
       available: true,

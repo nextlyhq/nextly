@@ -17,7 +17,12 @@
  * @module hooks/queries/useSeedStatus
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useState } from "react";
 
 import {
@@ -64,6 +69,14 @@ interface UseSeedStatusReturn {
 const QK_PROBE = ["seed", "probe"] as const;
 const QK_STATUS = ["seed", "status"] as const;
 
+/**
+ * The key a seed run is recorded under in the mutation cache.
+ *
+ * Shared by every instance of this hook, so a run started by one that has since
+ * unmounted is still visible to the next.
+ */
+const SEED_RUN_KEY = ["seed", "run"] as const;
+
 export function useSeedStatus(): UseSeedStatusReturn {
   const qc = useQueryClient();
 
@@ -90,6 +103,7 @@ export function useSeedStatus(): UseSeedStatusReturn {
   });
 
   const seedMut = useMutation<SeedResult, Error, void>({
+    mutationKey: SEED_RUN_KEY,
     mutationFn: seedApi.runSeed,
     onMutate: () => {
       setOverlay({ kind: "seeding" });
@@ -129,8 +143,17 @@ export function useSeedStatus(): UseSeedStatusReturn {
     },
   });
 
+  // 🔴 A run started by ANOTHER instance of this hook -- or by this one before it
+  // unmounted -- is still running on the server, and the local overlay knows
+  // nothing about it. The empty dashboard unmounts whenever the reader enters
+  // edit mode, so a seed started there and returned to after editing read as
+  // never started: the offer drawn again, and a second POST racing the first.
+  // The mutation cache outlives every component, so it is what answers.
+  const seedsInFlight = useIsMutating({ mutationKey: SEED_RUN_KEY });
+
   const status: SeedStatus = (() => {
     if (overlay) return overlay;
+    if (seedsInFlight > 0) return { kind: "seeding" };
 
     if (probeQ.isLoading) return { kind: "loading" };
     const probe = probeQ.data;
@@ -145,7 +168,12 @@ export function useSeedStatus(): UseSeedStatusReturn {
 
   return {
     status,
-    startSeed: () => seedMut.mutate(),
+    // Refused while any run is in flight, wherever it was started: two runs of
+    // one seed write the same demo content twice.
+    startSeed: () => {
+      if (seedsInFlight > 0) return;
+      seedMut.mutate();
+    },
     skip: () => skipMut.mutate(),
   };
 }

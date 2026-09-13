@@ -1497,6 +1497,31 @@ describe("a reader the host says can see no content", () => {
     expect(await screen.findByTestId("widget-cell-core/a")).toBeInTheDocument();
   });
 
+  it("keeps a running seed through a trip into edit mode, and never starts a second", async () => {
+    // Editing draws the cards, which unmounts the empty dashboard mid-seed.
+    // Cancelling brings it back while the first request is still running, and
+    // it must say so rather than offer the seed for a second press.
+    const settle = seedWillSettle();
+    const user = userEvent.setup();
+    renderGrid();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Seed demo content/ })
+    );
+    await beginEditing();
+    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+
+    expect(
+      await screen.findByRole("button", { name: /Seeding/ })
+    ).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: /Seed demo content/ })
+    ).toBeNull();
+    expect(seedApi.runSeed).toHaveBeenCalledTimes(1);
+
+    await settle(seedResult());
+  });
+
   it("says a seed's progress through the grid's one live region", async () => {
     const settle = seedWillSettle();
     const user = userEvent.setup();
