@@ -711,15 +711,19 @@ function usablePageSize(pageSize: number | undefined): number {
  * index answers an inherited property for some of them, `__proto__` among them,
  * and the row would then compare an edit against that object rather than a
  * name, sending a name typed away and back as a rename.
+ *
+ * `null` is taken as no record, as an omitted one is. The prop's type excludes
+ * it, but a host written in JavaScript can still pass it, and `Object.hasOwn`
+ * throws on it where an optional index would have answered nothing.
  */
 function pendingSlugFor(
-  pendingSlugs: Readonly<Record<string, string>> | undefined,
+  pendingSlugs: Readonly<Record<string, string>> | null | undefined,
   classId: string
 ): string | undefined {
-  if (pendingSlugs === undefined || !Object.hasOwn(pendingSlugs, classId)) {
-    return undefined;
-  }
-  return pendingSlugs[classId];
+  if (pendingSlugs === undefined || pendingSlugs === null) return undefined;
+  return Object.hasOwn(pendingSlugs, classId)
+    ? pendingSlugs[classId]
+    : undefined;
 }
 
 function ClassList({
