@@ -36,7 +36,10 @@ import { registerCoreWidgetComponents } from "./core-components";
 import { AddWidgetPicker } from "./edit/AddWidgetPicker";
 import { ArrangedColumns } from "./edit/ArrangedColumns";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
-import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
+import {
+  useAnnouncerRelay,
+  useGridFocus,
+} from "./edit/useArrangementAnnouncer";
 import {
   useDashboardArrangement,
   type ArrangedWidget,
@@ -218,7 +221,14 @@ export function WidgetGrid() {
   // through the arrangement, because it is the one gesture whose outcome is not
   // known until the server answers -- and `undefined` until an arrangement has
   // been read, which is what withholds the control itself.
-  const dismiss = useDismissPlacement(layout, editor, announce.hidden);
+  // Where focus lands when a dismissed card takes the focused button with it.
+  const focus = useGridFocus();
+  const dismiss = useDismissPlacement(
+    layout,
+    editor,
+    announce.hidden,
+    focus.restore
+  );
 
   const byId = useMemo(
     () => new Map(declared.map(widget => [widget.id, widget])),
@@ -270,15 +280,9 @@ export function WidgetGrid() {
         editor={editor}
         writeError={layout.writeError}
         hasArrangement={hasArrangement}
-        // 🔴 A stored row exists whenever the VERSION is non-zero, which is not
-        // the same as `source === "own"`. A row the service could not decode is
-        // reported as `source: "default"` — the dashboard falls back to the
-        // registry's order — while keeping its real, non-zero version. Gating
-        // Reset on the source therefore hid the one control that could clear
-        // the bad row, and with an untouched draft Save is disabled too, so the
-        // reader had no way out and every read went on logging the same decode
-        // failure. The version is what says a row is there.
-        canReset={(layout.layout?.version ?? 0) > 0}
+        // The read's own answer. The rule is subtler than it looks and it
+        // belongs with the data it is about; `hasStoredRow` carries it.
+        canReset={layout.hasStoredRow}
         columnCount={columnCount}
         onColumnCount={editor.setColumnCount}
       />
@@ -311,6 +315,8 @@ export function WidgetGrid() {
           onMoveColumn={moveColumn}
           onToggleHidden={toggleHidden}
           onDismiss={dismiss}
+          isDismissing={layout.dismiss.isPending}
+          sectionRef={focus.ref}
           onRemove={remove}
           onSaveSettings={editor.setConfig}
         />

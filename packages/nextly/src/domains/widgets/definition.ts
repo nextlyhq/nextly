@@ -545,6 +545,20 @@ export function widgetValueProblem(
     return "chrome, when given, must be a string";
   }
 
+  // A BOOLEAN in every version -- unlike `chrome`, there is no vocabulary here
+  // that a newer core could extend, so anything else is a mistake rather than
+  // version skew. It decides whether the admin draws a control that HIDES a
+  // card, and the admin copies a registration's fields verbatim, so a truthy
+  // non-boolean such as `dismissible: "false"` would draw the control on a card
+  // whose author declared the opposite. Refusing the declaration is the only
+  // place that mistake is visible to the person who made it.
+  if (
+    widget.dismissible !== undefined &&
+    typeof widget.dismissible !== "boolean"
+  ) {
+    return "dismissible, when given, must be a boolean";
+  }
+
   const geometry = geometryShapeProblem(widget);
   if (geometry !== undefined) return geometry;
 

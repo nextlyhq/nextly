@@ -107,7 +107,8 @@ function hiddenFlipped(
 export function useDismissPlacement(
   layout: UseDashboardLayoutResult,
   editor: LayoutEditor,
-  announceHidden: (title: string, hidden: boolean) => void
+  announceHidden: (title: string, hidden: boolean) => void,
+  onDismissed: () => void
 ): DismissPlacement | undefined {
   const dismiss = useCallback(
     (placementId: string, title: string) => {
@@ -133,11 +134,23 @@ export function useDismissPlacement(
       // without one, so reaching here means the read was lost between the
       // render and the click.
       if (!stored) return;
-      layout.save.mutate(hiddenFlipped(stored, placementId), {
-        // Announced on SUCCESS, not on click. The card stays on screen until
-        // the write lands, so speaking first would describe an arrangement the
-        // server may still refuse.
-        onSuccess: () => announceHidden(title, becomesHidden),
+      // 🔴 Cleared before the attempt. A failed dismissal leaves the error on
+      // the mutation, and a successful retry only invalidates the query -- so
+      // anything reading that error would go on reporting a failure the reader
+      // has already recovered from.
+      layout.dismiss.reset();
+      layout.dismiss.mutate(hiddenFlipped(stored, placementId), {
+        onSuccess: () => {
+          // Announced on SUCCESS, not on click. The card stays on screen until
+          // the write lands, so speaking first would describe an arrangement
+          // the server may still refuse.
+          announceHidden(title, becomesHidden);
+          // 🔴 And focus is moved, because the element that had it is about to
+          // be unmounted with its card. Left alone, the browser drops focus to
+          // `body` and the reader's next Tab restarts at the top of the page --
+          // a whole-page relocation reported as one card being hidden.
+          onDismissed();
+        },
         // A toast rather than the chrome's own `writeError`, which
         // `DashboardEditChrome` renders and a reader who never entered edit
         // mode is not looking at. A dismiss that failed in silence leaves the
@@ -147,7 +160,7 @@ export function useDismissPlacement(
           toast.error(`Could not dismiss ${title}: ${error.message}`),
       });
     },
-    [editor, layout, announceHidden]
+    [editor, layout, announceHidden, onDismissed]
   );
 
   return layout.layout ? dismiss : undefined;

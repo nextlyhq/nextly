@@ -9,6 +9,8 @@
  *
  * @module components/features/widgets/edit/ArrangedColumns
  */
+import type { RefObject } from "react";
+
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
 import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
@@ -33,6 +35,16 @@ export interface ArrangedColumnsProps {
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   announcement: string;
+  /** Whether a dismissal is in flight anywhere on this dashboard. */
+  isDismissing: boolean;
+  /**
+   * Where focus goes when a card is dismissed out from under it.
+   *
+   * The landmark rather than a neighbouring card: a card can be the last one,
+   * and a reader who has just been told what happened is better served landing
+   * on the region that holds the rest than on an arbitrary sibling.
+   */
+  sectionRef?: RefObject<HTMLElement | null>;
   /** Move one card one step within the column it is drawn in. */
   onMove: (placementId: string, neighbourId: string, side: DropSide) => void;
   onMoveColumn: (placementId: string, targetColumn: number) => void;
@@ -94,6 +106,8 @@ export function ArrangedColumns({
   updatedAt,
   fetchingPlacementIds,
   announcement,
+  isDismissing,
+  sectionRef,
   onMove,
   onMoveColumn,
   onToggleHidden,
@@ -103,7 +117,14 @@ export function ArrangedColumns({
 }: ArrangedColumnsProps) {
   return (
     <section
+      ref={sectionRef}
       aria-label="Dashboard widgets"
+      // Focusable only PROGRAMMATICALLY. A dismissed card takes the focused
+      // button away with it, and without somewhere to put focus the browser
+      // drops it on `body` -- so the reader's next Tab restarts at the top of
+      // the page, which is a whole-page relocation reported as one card being
+      // hidden. `-1` keeps it out of the tab sequence.
+      tabIndex={-1}
       // One track per column, each an independent vertical list. Nothing
       // spans tracks, so a card's width never depends on its neighbours --
       // which is the property the previous twelve-column grid lacked and
@@ -132,6 +153,7 @@ export function ArrangedColumns({
               key={row.placementId}
               row={row}
               isEditing={isEditing}
+              isDismissing={isDismissing}
               at={{
                 // 🔴 The SAME list the click resolves against. Derived from
                 // the global sequence instead, the first card of column 2 gets

@@ -61,7 +61,9 @@ const api = vi.mocked(protectedApi);
  * Two cards, only the first of which its author said may be sent away.
  *
  * Both drawn by a component, so neither issues a query and the grid's batch
- * stays out of what is being measured.
+ * stays out of what is being measured. Both UNFRAMED, matching
+ * `core/onboarding-checklist` -- the card this feature exists for draws its own
+ * surface, which is the arm with no header to put a control in.
  */
 function branding(
   patch: Record<string, Record<string, unknown>> = {}
@@ -73,6 +75,7 @@ function branding(
         title: "Set up your project",
         archetype: "custom",
         defaultSize: "full",
+        chrome: "none",
         component: "core#Whatever",
         dismissible: true,
         ...patch["core/onboarding"],
@@ -82,6 +85,7 @@ function branding(
         title: "Collections",
         archetype: "custom",
         defaultSize: "full",
+        chrome: "none",
         component: "core#Whatever",
         ...patch["core/permanent"],
       },
@@ -179,24 +183,62 @@ describe("the control a card carries itself", () => {
 
   it("does not leave a blank row when the widget itself draws nothing", async () => {
     renderGrid();
-    const dismiss = await screen.findByTestId("widget-dismiss");
+    await screen.findByTestId("widget-dismiss");
+    const cell = screen.getByTestId("widget-cell-core/onboarding");
 
     /*
      * The two halves of one mechanism, asserted rather than observed: jsdom
      * evaluates no CSS, so the collapse itself cannot be seen here.
      *
-     * The cell collapses on `:empty`, and this control is an element child
-     * drawn from the DECLARATION rather than from anything the body produced
-     * -- so a card whose component returns null (which core's conditional
-     * sections do) stops being empty the moment the control exists, and holds
-     * a full-width row with a stray button in it. The cell's companion rule
-     * hides a cell whose only child is this control, and it matches on the
-     * attribute below. Renaming either half alone reinstates the blank row.
+     * The cell collapses on `:empty`, and the floated control is an element
+     * child drawn from the DECLARATION rather than from anything the body
+     * produced -- so a card whose component returns null (which core's
+     * conditional sections do) stops being empty the moment the control
+     * exists, and holds a full-width row with a stray button in it. The cell's
+     * companion rule asks the BODY SLOT instead, and it matches the attribute
+     * below. Renaming either half alone reinstates the blank row.
+     *
+     * 🔴 `:empty` on the body, not `:only-child` on the control. `:only-child`
+     * counts element siblings and ignores TEXT, so an unframed component
+     * returning a bare string left the control as the only element and hid the
+     * whole cell over real content.
      */
-    expect(dismiss).toHaveAttribute("data-widget-chrome");
-    expect(screen.getByTestId("widget-cell-core/onboarding")).toHaveClass(
-      "has-[>[data-widget-chrome]:only-child]:hidden"
+    expect(cell.querySelector("[data-widget-body]")).not.toBeNull();
+    expect(cell).toHaveClass("has-[>[data-widget-body]:empty]:hidden");
+  });
+
+  it("keeps the restoration path in reach of the control that hides", async () => {
+    renderGrid();
+
+    // Editing is the only route to un-hiding, and `DashboardEditBar` offers it
+    // from `md` up. Below that, a reader could hide a card permanently and
+    // never reach the control that brings it back -- so the two share a
+    // breakpoint. jsdom evaluates no CSS, so the class is the assertion.
+    expect(await screen.findByTestId("widget-dismiss")).toHaveClass(
+      "hidden",
+      "md:inline-flex"
     );
+  });
+
+  it("puts the control in the header of a card the host frames", async () => {
+    // An unframed card has no header, so the cell floats the control in the
+    // corner. A FRAMED one already draws the declared icon in that same corner
+    // and reserves no space beside it, so a floated control would sit on top of
+    // the icon -- and on whatever an unframed plugin component drew there.
+    mockBranding = branding({
+      "core/onboarding": { chrome: "card", icon: "Rocket" },
+    });
+    renderGrid();
+
+    const dismiss = await screen.findByTestId("widget-dismiss");
+    // Not floated: the header is a flex row that reserves space for it, so it
+    // takes its place beside the icon rather than on top of it.
+    expect(dismiss).not.toHaveClass("absolute");
+    // A SIBLING of the card's title, which is what puts it in the header row.
+    // Asserting the absence of `absolute` alone would also pass for a control
+    // that was never rendered at all.
+    const header = dismiss.closest("div")?.parentElement;
+    expect(header?.textContent).toContain("Set up your project");
   });
 
   it("gives way to the toolbar while editing", async () => {
@@ -349,6 +391,110 @@ describe("what a reader is told", () => {
     expect(screen.getByTestId("widget-grid-live")).toHaveTextContent(
       "Set up your project removed from the dashboard."
     );
+  });
+});
+
+describe("a dismissal reports itself, and nothing else does", () => {
+  it("leaves the editor's chrome alone when the write is refused", async () => {
+    const user = userEvent.setup();
+    const conflict = Object.assign(new Error("someone else saved first"), {
+      status: 409,
+    });
+    api.put.mockRejectedValue(conflict);
+    renderGrid();
+    await user.click(await screen.findByTestId("widget-dismiss"));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    // 🔴 The editor's alert says the dashboard changed "while you were
+    // editing" and warns that unsaved changes will be lost. A reader who
+    // dismissed a card from the dashboard was never editing and has no draft,
+    // so sharing the editor's mutation told them they were about to lose work
+    // that does not exist.
+    expect(screen.queryByTestId("dashboard-edit-conflict")).toBeNull();
+    expect(screen.queryByTestId("dashboard-edit-error")).toBeNull();
+  });
+
+  it("still reports an editor save failure through the editor's chrome", async () => {
+    // The control for the case above: routing dismissal elsewhere must not
+    // stop the editor reporting its OWN failures, which is the regression the
+    // previous version of this hook was written to close.
+    api.put.mockRejectedValue(new Error("network down"));
+    renderGrid();
+    const user = await beginEditing();
+    await user.click(screen.getAllByTestId("widget-toggle-hidden")[0]);
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-edit-error")).toBeInTheDocument()
+    );
+  });
+
+  it("refuses a second dismissal while the first is in flight", async () => {
+    const user = userEvent.setup();
+    // A write that never settles, so the pending state is observable.
+    api.put.mockImplementation(() => new Promise(() => {}));
+    renderGrid();
+    const dismiss = await screen.findByTestId("widget-dismiss");
+    await user.click(dismiss);
+
+    // 🔴 Every dismissal builds a whole-layout snapshot against ONE cached
+    // version, so a second in flight carries the same guard: the server can
+    // honour only one, and the reader is told their own second click was a
+    // conflict somebody else caused.
+    await waitFor(() => expect(dismiss).toBeDisabled());
+    await user.click(dismiss);
+    expect(api.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves focus into the dashboard when the card that held it goes", async () => {
+    const user = userEvent.setup();
+    renderGrid();
+    await user.click(await screen.findByTestId("widget-dismiss"));
+
+    // The focused button is unmounted with its card. Left alone the browser
+    // drops focus to `body`, so the reader's next Tab restarts at the top of
+    // the page -- a whole-page relocation reported as one card being hidden.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Dashboard widgets")
+      )
+    );
+  });
+});
+
+describe("a declaration that is not a boolean", () => {
+  it("draws no control for a truthy non-boolean", async () => {
+    // `validateWidgetDefinition` refuses this at boot, but a registration
+    // arrives over the wire from a server that may be a different version and
+    // the admin copies the field verbatim -- so the reading here has to be the
+    // declaration's own answer rather than whether it happens to be truthy.
+    mockBranding = branding({
+      "core/onboarding": { dismissible: "false" },
+    });
+    renderGrid();
+
+    // 🔴 Waits for the EDIT BUTTON, which is rendered only once an arrangement
+    // has been read. The cell exists before then too -- the grid draws the
+    // declarations while the layout request is in flight -- so waiting on the
+    // cell is satisfied by the state in which no control is drawn for ANY
+    // card, and the assertion below would pass without reading the field at
+    // all.
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.queryByTestId("widget-dismiss")).toBeNull();
+    // The control that makes that absence mean something: the same fixture
+    // with a real `true` DOES draw one.
+    expect(screen.getAllByTestId("widget-cell-core/onboarding")).toHaveLength(
+      1
+    );
+  });
+
+  it("draws the control when the declaration really says true", async () => {
+    // The positive half of the case above, on the same path: without it, a
+    // resolver that dropped the field entirely would satisfy the refusal.
+    renderGrid();
+
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.getByTestId("widget-dismiss")).toBeInTheDocument();
   });
 });
 

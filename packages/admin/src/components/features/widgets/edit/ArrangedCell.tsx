@@ -13,10 +13,13 @@
  */
 
 import { resolveWidgetSettings } from "nextly/config";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
-import type { WidgetSlot } from "@admin/types/dashboard/widgets";
+import type {
+  DashboardWidget,
+  WidgetSlot,
+} from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
 import { moveAffordance, columnAffordance } from "../layout-editor";
@@ -32,6 +35,15 @@ import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
 export interface ArrangedCellProps {
   row: ArrangedWidget;
   isEditing: boolean;
+  /**
+   * Whether a dismissal is in flight anywhere on this dashboard.
+   *
+   * Dashboard-wide rather than per-card, because the write is a whole-layout
+   * snapshot guarded by one cached version: two in flight at once carry the
+   * same guard, so the server honours one and refuses the other as a conflict
+   * the reader never caused.
+   */
+  isDismissing: boolean;
   /**
    * Where this card sits, and among how many.
    *
@@ -95,9 +107,55 @@ export interface ArrangedCellProps {
   };
 }
 
+/**
+ * This card's dismiss control, and where it is drawn.
+ *
+ * Two answers rather than one because the placement is not the cell's to pick
+ * freely: a FRAMED card has a header that reserves space beside the declared
+ * icon, and an UNFRAMED one has no header at all, so the cell floats the
+ * control in the corner the drag handle leaves free while not editing. Both
+ * are `undefined` for a card whose author offered no dismiss.
+ *
+ * 🔴 `=== true`, not truthiness. `widgetValueProblem` refuses a non-boolean at
+ * boot, but a registration arrives over the wire from a server that may be a
+ * different version and the admin copies the field verbatim -- so a malformed
+ * `dismissible: "false"` would otherwise DRAW the control, which is the one
+ * reading the declaration cannot have meant.
+ *
+ * Its own function because the cell had grown past what a reader can hold, and
+ * this is one decision with one subject: whether this card can be sent away,
+ * and by which route.
+ */
+function dismissAffordance(
+  card: {
+    widget: DashboardWidget;
+    placementId: string;
+    isEditing: boolean;
+    isDismissing: boolean;
+  },
+  dismiss: ((placementId: string, title: string) => void) | undefined
+): { floating?: ReactNode; header?: ReactNode } {
+  const { widget, placementId, isEditing, isDismissing } = card;
+  if (!dismiss || isEditing || widget.dismissible !== true) return {};
+  // Absent while a dismissal is in flight is NOT the rule: the button stays and
+  // disables, so the card does not move under a reader mid-click.
+  const button = (floating: boolean) => (
+    <DismissWidgetButton
+      title={widget.title}
+      isDismissing={isDismissing}
+      floating={floating}
+      onDismiss={() => dismiss(placementId, widget.title)}
+    />
+  );
+  return widget.chrome === "none"
+    ? { floating: button(true) }
+    : { header: button(false) };
+}
+
 export function ArrangedCell({
   row,
   isEditing,
+  isDismissing,
   at,
   data,
   on,
@@ -137,10 +195,12 @@ export function ArrangedCell({
   const moveLeft = () => on.moveColumn(row.placementId, column - 1);
   const moveRight = () => on.moveColumn(row.placementId, column + 1);
   const toggleHidden = () => on.toggleHidden(row.placementId);
-  const onDismiss = on.dismiss;
-  const dismiss = onDismiss
-    ? () => onDismiss(row.placementId, widget.title)
-    : undefined;
+  const { floating: floatingControl, header: headerControl } =
+    dismissAffordance(
+      { widget, placementId: row.placementId, isEditing, isDismissing },
+      on.dismiss
+    );
+  const floatsDismiss = floatingControl !== undefined;
   const remove = () => on.remove(row.placementId);
   const openSettings = () => setSettingsOpen(true);
   const { canMoveUp, canMoveDown } = moveAffordance(index, count);
@@ -176,14 +236,20 @@ export function ArrangedCell({
         // either side, which is the empty-slot bug rather than the hiding those
         // components have always performed.
         "empty:hidden",
-        // The same collapse, for a cell whose only child is the dismiss
-        // control. That control is drawn from the DECLARATION rather than from
-        // anything the body produced, so it is present even when the widget
-        // renders nothing -- and an element child stops `:empty` matching, so
-        // without this a card that drew nothing would hold a blank row with a
-        // stray button in it. Reads as what it is: a cell carrying only its own
-        // chrome is still empty.
-        "has-[>[data-widget-chrome]:only-child]:hidden",
+        // The same collapse, asked of the BODY, for a cell that also carries a
+        // floated dismiss control. That control comes from the DECLARATION
+        // rather than from anything the body produced, so it is present even
+        // when the widget renders nothing -- and an element child stops
+        // `:empty` matching on the cell, so without this a card that drew
+        // nothing would hold a blank row with a stray button in it.
+        //
+        // 🔴 `:empty` on a body slot, not `:only-child` on the control.
+        // `:only-child` counts ELEMENT siblings and ignores text, so an
+        // unframed component returning a bare string left the control as the
+        // only element and the whole cell was hidden over real content.
+        // `:empty` counts text nodes, which is exactly the question being
+        // asked: did this widget draw anything at all.
+        "has-[>[data-widget-body]:empty]:hidden",
         // An unframed widget is a SECTION, and sections on this page have
         // always been 48px apart -- the `space-y-12` the dashboard used before
         // these became widgets. The grid's own `gap-6` is a card rhythm and
@@ -235,14 +301,11 @@ export function ArrangedCell({
           }}
         />
       ) : null}
-      {/* Drawn only where the widget DECLARED that its reader may send it away,
-          and only outside edit mode -- the toolbar above already offers hide
-          and show, and two controls doing one thing in one cell is a reader
-          choosing between synonyms. The corner is free by construction: the
-          drag handle takes the left and renders only while editing. */}
-      {!isEditing && widget.dismissible && dismiss ? (
-        <DismissWidgetButton title={widget.title} onDismiss={dismiss} />
-      ) : null}
+      {/* Floated only for an UNFRAMED card, which draws no header to put a
+          control in. A framed one receives the same control through
+          `headerAction` below, where `WidgetCard` reserves space for it beside
+          the declared icon. */}
+      {floatingControl}
       {/* Mounted whenever the widget offers settings, not only while editing.
           A closed `Sheet` renders nothing, so this costs a card nothing — and
           it is what lets the panel outlive edit mode rather than being torn
@@ -267,6 +330,18 @@ export function ArrangedCell({
         <div className="opacity-50">
           <WidgetRenderer definition={widget} placement={placement} {...data} />
         </div>
+      ) : floatsDismiss ? (
+        // The body's own slot, so the cell can ask whether the widget drew
+        // anything. Present only where a floated control shares the cell with
+        // it: every other cell keeps the DOM it has, and its own `:empty`.
+        <div data-widget-body>
+          <WidgetRenderer
+            definition={widget}
+            placement={placement}
+            headerAction={headerControl}
+            {...data}
+          />
+        </div>
       ) : (
         // 🔴 A DIRECT child when nothing is dimmed, because the cell's
         // `empty:hidden` reads `:empty` -- which counts element children, not
@@ -275,7 +350,12 @@ export function ArrangedCell({
         // blank slot with its margins. Nothing is lost by branching: a hidden
         // card is only ever drawn while editing, where the controls above are
         // themselves a child and the cell can never be empty anyway.
-        <WidgetRenderer definition={widget} placement={placement} {...data} />
+        <WidgetRenderer
+          definition={widget}
+          placement={placement}
+          headerAction={headerControl}
+          {...data}
+        />
       )}
     </SortableWidgetCell>
   );

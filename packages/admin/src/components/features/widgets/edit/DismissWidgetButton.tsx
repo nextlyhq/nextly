@@ -25,21 +25,50 @@
  * and absent for anyone who does not think to point at the card — and this one
  * is the only route out of the card for a reader not in edit mode.
  *
+ * ## Offered only where the way back is
+ *
+ * 🔴 `md` and up, the SAME breakpoint `DashboardEditBar` uses for the control
+ * that begins editing. Editing is the only route to un-hiding a card, so on a
+ * narrower screen this button's own promise — bring it back by editing the
+ * dashboard — is one the product cannot keep, and a reader would be left
+ * having permanently hidden a card with no way to reach it. A control that can
+ * act but cannot be undone is worse than no control.
+ *
  * @module components/features/widgets/edit/DismissWidgetButton
  */
 
 import { Button } from "@nextlyhq/ui";
 
 import * as Icons from "@admin/components/icons";
+import { cn } from "@admin/lib/utils";
 
 export interface DismissWidgetButtonProps {
   /** What the reader calls this card, which the label names. */
   title: string;
+  /**
+   * Whether a dismissal is already in flight — on THIS card or any other.
+   *
+   * 🔴 Shared rather than per-card, because the write is a whole-layout
+   * snapshot taken against one cached version. Two dismissals in flight carry
+   * the same guard, so the server can honour only one and the other comes back
+   * as a conflict the reader never caused.
+   */
+  isDismissing: boolean;
+  /**
+   * Whether the cell positions this control itself.
+   *
+   * A framed card places it in its own header, where space is reserved. An
+   * unframed one has no header to place it in, so the cell floats it in the
+   * corner the drag handle leaves free while not editing.
+   */
+  floating?: boolean;
   onDismiss: () => void;
 }
 
 export function DismissWidgetButton({
   title,
+  isDismissing,
+  floating = false,
   onDismiss,
 }: DismissWidgetButtonProps) {
   return (
@@ -47,9 +76,19 @@ export function DismissWidgetButton({
       type="button"
       variant="ghost"
       size="icon"
-      // Top RIGHT is free here by construction: the drag handle takes the left
-      // and renders only while editing, which is exactly when this does not.
-      className="absolute right-2 top-2 z-10 size-7 text-muted-foreground hover:text-foreground"
+      className={cn(
+        "size-7 text-muted-foreground hover:text-foreground",
+        // Hidden below `md`, where nothing can bring the card back. `hidden`
+        // rather than `disabled`: a control that is present and refuses says
+        // the capability exists and is unavailable, and here it simply does
+        // not apply at that width.
+        "hidden md:inline-flex",
+        // Floated only where no header reserved space for it. Top RIGHT is
+        // free by construction while not editing: the drag handle takes the
+        // left and renders only while editing.
+        floating && "absolute right-2 top-2 z-10"
+      )}
+      disabled={isDismissing}
       onClick={onDismiss}
       // Names the CARD and what dismissing costs. Several cards can carry this
       // control, so "Dismiss" alone is the same label repeated down a column --

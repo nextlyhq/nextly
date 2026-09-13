@@ -15,7 +15,7 @@
  * @module components/features/widgets/edit/useArrangementAnnouncer
  */
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, type RefObject } from "react";
 
 import type { GridAnnouncer } from "../useGridAnnouncer";
 
@@ -36,6 +36,30 @@ export interface ArrangementAnnouncer {
   ) => void;
   hidden: (title: string, hidden: boolean) => void;
   removed: (title: string) => void;
+}
+
+export interface GridFocus {
+  /** Attached to the region that holds the cards. */
+  ref: RefObject<HTMLElement | null>;
+  /** Put focus there, for use when the element holding it is about to go. */
+  restore: () => void;
+}
+
+/**
+ * Where focus lands when a card is taken out from under it.
+ *
+ * The LANDMARK rather than a neighbouring card: a dismissed card can be the
+ * last one, and a reader who has just been told what happened is better served
+ * landing on the region that holds the rest than on an arbitrary sibling.
+ *
+ * Its own hook for the same reason the relay is: it pairs a ref with the one
+ * thing done to it, and the component that owns both ends should not have to
+ * hold that pairing open in its body.
+ */
+export function useGridFocus(): GridFocus {
+  const ref = useRef<HTMLElement>(null);
+  const restore = useCallback(() => ref.current?.focus(), []);
+  return { ref, restore };
 }
 
 export interface AnnouncerRelay {

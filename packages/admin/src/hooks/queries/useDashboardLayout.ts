@@ -80,6 +80,15 @@ export interface UseDashboardLayoutResult {
   save: UseMutationResult<unknown, Error, SaveLayoutInput>;
   reset: UseMutationResult<unknown, Error, void>;
   /**
+   * The write a standing dismiss performs, separate from the editor's save.
+   *
+   * Separate because its FAILURES are: the editor's chrome describes editing,
+   * and a reader who dismissed a card from the dashboard is not editing. Its
+   * pending state is also what stops two dismissals racing the same version
+   * guard.
+   */
+  dismiss: UseMutationResult<unknown, Error, SaveLayoutInput>;
+  /**
    * Whether the last write lost a race — on EITHER guard.
    *
    * One flag for two causes because the recovery is one action. The server
@@ -96,6 +105,22 @@ export interface UseDashboardLayoutResult {
    * nothing said, believing their arrangement had been stored.
    */
   writeError: Error | null;
+  /**
+   * Whether a row exists for this reader to reset.
+   *
+   * 🔴 A non-zero VERSION, which is not the same as `source === "own"`. A row
+   * the service could not decode is reported as `source: "default"` — the
+   * dashboard falls back to the registry's order — while keeping its real,
+   * non-zero version. Asked of the source instead, the one control that could
+   * clear the bad row was hidden, and with an untouched draft Save is disabled
+   * too, so the reader had no way out and every read went on logging the same
+   * decode failure.
+   *
+   * Answered HERE rather than by each caller, because it is a fact about what
+   * the read found and the subtlety above is one nobody should have to
+   * re-derive.
+   */
+  hasStoredRow: boolean;
   reload: () => Promise<unknown>;
 }
 
@@ -174,18 +199,43 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     }
   }, [audience, readAt, queryClient]);
 
-  const save = useMutation({
+  /*
+   * One definition, because the two channels below send the same request to the
+   * same endpoint under the same guards. Written once so they cannot drift into
+   * disagreeing about the retry policy, which is the half that is subtle.
+   *
+   * 🔴 No retries, against the provider's default of two. A version-guarded
+   * write is not idempotent under an AMBIGUOUS failure: if the server commits
+   * and the response is lost, the retry sends the same now-stale version, the
+   * server refuses it, and the reader is told another editor changed their
+   * dashboard — when in fact their own save had already succeeded. The retry
+   * manufactures the exact conflict the guard exists to report truthfully.
+   */
+  const writeLayout = {
     mutationFn: (input: SaveLayoutInput) =>
       protectedApi.put<unknown>(LAYOUT_PATH, input),
-    // 🔴 No retries, against the provider's default of two. A version-guarded
-    // write is not idempotent under an AMBIGUOUS failure: if the server commits
-    // and the response is lost, the retry sends the same now-stale version, the
-    // server refuses it, and the reader is told another editor changed their
-    // dashboard — when in fact their own save had already succeeded. The retry
-    // manufactures the exact conflict the guard exists to report truthfully.
-    retry: false,
+    retry: false as const,
     onSuccess: invalidate,
-  });
+  };
+
+  const save = useMutation(writeLayout);
+
+  /*
+   * The SAME request, on its own channel, and the separation is the point.
+   *
+   * 🔴 A dismissal is performed by a reader who is not editing, and
+   * `isConflict` and `writeError` below are rendered by `DashboardEditChrome`
+   * whatever the mode. Sharing `save` therefore answered a failed dismiss with
+   * the editor's own alert — telling somebody who never opened the editor that
+   * their dashboard changed "while you were editing" and that unsaved changes
+   * would be lost, when there is no draft at all.
+   *
+   * Its own mutation also gives the control a pending state to disable itself
+   * with. Every dismissal builds a whole-layout snapshot from the cached
+   * version, so two in flight at once carry the same guard and the server can
+   * only honour one.
+   */
+  const dismiss = useMutation(writeLayout);
 
   const reset = useMutation({
     mutationFn: () => protectedApi.delete<unknown>(LAYOUT_PATH),
@@ -204,10 +254,15 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     isUnavailable: query.isError && query.data === undefined,
     save,
     reset,
+    dismiss,
+    // 🔴 `save` and `reset` only. A dismissal reports itself, on the card that
+    // performed it; folding it in here would put the editor's chrome on screen
+    // for a reader who is not editing.
     isConflict:
       isConflictError(save.error ?? null) ||
       isConflictError(reset.error ?? null),
     writeError: nonConflictError(save.error ?? null, reset.error ?? null),
+    hasStoredRow: (query.data?.version ?? 0) > 0,
     reload: invalidate,
   };
 }
