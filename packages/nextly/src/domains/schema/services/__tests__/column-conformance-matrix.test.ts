@@ -372,18 +372,50 @@ const ACCEPTED = byAspect([
 
   // --- 🔴 Many values in one column ----------------------------------------
   // A field that holds MANY values stores them as a JSON array, and the descriptor says so for
-  // every one of them. The FIELD-GROUP generator does not ask the question: it routes these
-  // through the same scalar mapping a single-valued field of that type gets, so the column holds
-  // one value while the runtime binds an array to it. `dbType` does not rescue the number case —
-  // the descriptor ignores it once `hasMany` is set, and the field-group generator still emits
-  // DECIMAL. The collection generator now reads the descriptor for every column it creates, so it
-  // no longer appears here.
+  // every one of them. Neither generator asks the question: both route these through the same
+  // scalar mapping a single-valued field of that type gets, so the column holds one value while
+  // the runtime binds an array to it. `dbType` does not rescue the number case — the descriptor
+  // ignores it once `hasMany` is set, and the field-group generator still emits DECIMAL.
+  //
+  // 🔴 These stay recorded even though the collection generator now reads the descriptor for the
+  // columns it creates, because this disagreement changes the column's STORAGE CLASS rather than
+  // its spelling, and the type is not the only thing that would have to move. The index loop
+  // decides indexability from the legacy rendering, the relationship block attaches a scalar
+  // foreign key, the CHECK builder compares the column against `validation.min`, and the required
+  // backfill derives a scalar default from the declared type. Taking the descriptor's answer for
+  // the type alone emits `CREATE INDEX` on a JSON column, a foreign key from an array to a scalar
+  // id, a JSONB-versus-integer comparison, and `json NOT NULL DEFAULT 0`. Converging it means
+  // moving those four consumers in the same change.
   ...everywhere(
     ["number"],
     ["hasMany", "hasMany decimal"],
     "type",
-    "field-group generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON",
-    { origins: ["fieldGroup"] }
+    "generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON"
+  ),
+  // SQLite is absent from the two below on purpose: it stores JSON as text, so the two sides land
+  // on the same column there and there is nothing to accept.
+  ...everywhere(
+    ["upload"],
+    ["hasMany"],
+    "type",
+    "collection generator emits a single FK column for a hasMany upload; descriptor stores the ids as JSON",
+    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
+  ),
+  ...everywhere(
+    ["relationship"],
+    ["hasMany", "polymorphic"],
+    "type",
+    "collection generator emits a single FK column for a multi-reference relationship; descriptor stores the ids as JSON",
+    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
+  ),
+  // Repeater and group hold structured data. The collection generator stores them as text while
+  // the descriptor names the dialect's JSON type — the same storage-class hold as above.
+  ...everywhere(
+    ["repeater", "group"],
+    ["plain"],
+    "type",
+    "collection generator stores structured values as text; descriptor names the JSON type",
+    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
   ),
   // --- 🔴 A select that holds several choices -------------------------------
   // The field-group generator switches a hasMany select to a JSON column; the descriptor does not

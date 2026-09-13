@@ -241,16 +241,37 @@ export class DynamicCollectionSchemaService {
    * other column; only `slug` failed loudly enough to get fixed.
    */
   private newColumnType(field: FieldDefinition): string {
-    return (
-      getColumnDescriptor(field, this.dialect, "collection")?.dialectType ??
-      this.mapFieldTypeToSQL(
-        field.type,
-        field.length,
-        field.options,
-        field.validation,
-        field
-      )
+    const legacy = this.mapFieldTypeToSQL(
+      field.type,
+      field.length,
+      field.options,
+      field.validation,
+      field
     );
+    const described = getColumnDescriptor(field, this.dialect, "collection");
+    if (described === undefined || described === null) return legacy;
+
+    // 🔴 The descriptor disagrees in two different ways, and only one of them is this change's to
+    // take. A SPELLING or PRECISION disagreement — `int4` for `integer`, `float8` for
+    // `decimal(10,2)`, `varchar(120)` for unbounded `text` — leaves the column holding the same
+    // shape of value, so adopting it is safe on its own.
+    //
+    // A STORAGE-CLASS disagreement does not. The descriptor stores a `hasMany` field and a
+    // repeater or group as a JSON array where this generator emits a scalar, and the column type
+    // is not the only thing that has to move with it: the index loop decides whether a column can
+    // be indexed from the legacy rendering, the relationship block attaches a scalar foreign key,
+    // the CHECK builder emits `>= min` against the column, and `requiredColumnBackfill` derives a
+    // scalar default from the declared type. Changing the type alone would leave four consumers
+    // describing a column that no longer exists — a `CREATE INDEX` on a JSON column that MySQL
+    // rejects after the table DDL has committed, a foreign key from an array to a scalar id, a
+    // JSONB-versus-integer comparison PostgreSQL cannot resolve, and `json NOT NULL DEFAULT 0`.
+    //
+    // So the storage class is held and the disagreement stays recorded in the conformance matrix.
+    // Converging it is a change that has to move those consumers in the same commit.
+    if (described.kind === "json" && legacy !== described.dialectType) {
+      return legacy;
+    }
+    return described.dialectType;
   }
 
   private canonicalSlugType(field: FieldDefinition): string | null {

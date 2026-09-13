@@ -57,11 +57,17 @@ table that already existed:
 Both happened because the ADD COLUMN path rendered a column from the field's
 type and length alone and never saw its options or validation.
 
-New columns also now agree with the runtime where they did not before: a field
-holding MANY values (`hasMany` numbers, uploads and relationships) is JSON
-rather than a single scalar or foreign-key column, and a repeater or group is
-the dialect's JSON type rather than text. The runtime already bound JSON to
-those columns.
+One family of disagreements is deliberately NOT converged here. The descriptor
+stores a field holding many values (`hasMany` numbers, uploads, relationships)
+and a repeater or group as a JSON array where these generators emit a scalar.
+That changes the column's storage class rather than its spelling, and the type
+is not the only thing that would have to move with it: indexability is decided
+from the old rendering, a relationship attaches a scalar foreign key, validation
+bounds are emitted as a comparison against the column, and a required column's
+backfill derives a scalar default from the declared type. Taking the
+descriptor's type alone would emit `CREATE INDEX` on a JSON column, a foreign
+key from an array to a scalar id, and `json NOT NULL DEFAULT 0`. Those stay
+recorded as known disagreements until the consumers move in one change.
 
 Some column types are spelled differently as a result — `int4` for `integer`
 and `bool` for `boolean` on PostgreSQL, `tinyint(1)` for `boolean` on MySQL.
@@ -76,7 +82,7 @@ this way. Whether the descriptor should instead move to `text` for these types
 is a separate open question.
 
 The conformance matrix that pins these three implementations against each other
-lost 55 accepted disagreements, all of them on the collection generator's
+lost 23 accepted disagreements, all of them on the collection generator's
 create and add-column paths. Its ratchet is checked in both directions, so an
 entry describing a disagreement that no longer happens fails the suite — the
 list could not have been left stale.
