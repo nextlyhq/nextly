@@ -294,9 +294,11 @@ describe("a rename refused after the panel is gone", () => {
   function Manager({
     open,
     onRename,
+    currentRenameAttempt = () => 1,
   }: {
     open: boolean;
-    onRename: () => Promise<{ ok: false; reason: string }>;
+    onRename: (classId: string, slug: string) => unknown;
+    currentRenameAttempt?: (classId: string) => number;
   }): React.ReactElement {
     const notices = useNoticeQueue();
     return (
@@ -311,6 +313,7 @@ describe("a rename refused after the panel is gone", () => {
               documentClassIds={[]}
               library={LIBRARY}
               onRename={onRename}
+              currentRenameAttempt={currentRenameAttempt}
               usage={{}}
             />
           ) : null}
@@ -341,6 +344,79 @@ describe("a rename refused after the panel is gone", () => {
     });
 
     expect(screen.getByText("The site style is locked.")).toBeTruthy();
+  });
+
+  it("does not raise a refusal the author has already renamed past", async () => {
+    /*
+     * The panel switch is what makes this reachable, and it is also what used to
+     * hide it. A rename identity kept inside the field is destroyed by the
+     * unmount, so on the way back the counter starts again at zero and the
+     * FIRST attempt's number matches the second's — its refusal then passes as
+     * current and is raised from the shell, naming a rename the author has
+     * already replaced.
+     *
+     * Asserted through the notice region because that is where a refusal goes
+     * once the row that would have shown it is gone. Asserting on the row alone
+     * cannot see this: the unmounted field's own `setRefused` reaches nothing
+     * either way, so both the defect and the fix look identical there.
+     */
+    let settleFirst: ((v: { ok: false; reason: string }) => void) | undefined;
+    const first = new Promise<{ ok: false; reason: string }>(resolve => {
+      settleFirst = resolve;
+    });
+    const answers = vi
+      .fn()
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ ok: true as const });
+    const attempts = new Map<string, number>();
+    const onRename = vi.fn((classId: string, slug: string) => {
+      attempts.set(classId, (attempts.get(classId) ?? 0) + 1);
+      return answers(classId, slug);
+    });
+    const currentRenameAttempt = (classId: string): number =>
+      attempts.get(classId) ?? 0;
+
+    const view = render(
+      <Manager
+        currentRenameAttempt={currentRenameAttempt}
+        onRename={onRename}
+        open
+      />
+    );
+    fireEvent.change(screen.getByLabelText("Name of hero"), {
+      target: { value: "promo" },
+    });
+    fireEvent.blur(screen.getByLabelText("Name of hero"));
+
+    // Away and back: the field is destroyed and built again.
+    view.rerender(
+      <Manager
+        currentRenameAttempt={currentRenameAttempt}
+        onRename={onRename}
+        open={false}
+      />
+    );
+    view.rerender(
+      <Manager
+        currentRenameAttempt={currentRenameAttempt}
+        onRename={onRename}
+        open
+      />
+    );
+
+    // A second rename, which is the one the author is now waiting on.
+    fireEvent.change(screen.getByLabelText("Name of hero"), {
+      target: { value: "banner" },
+    });
+    fireEvent.blur(screen.getByLabelText("Name of hero"));
+    await vi.waitFor(() => expect(onRename).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      settleFirst?.({ ok: false, reason: "The first one was refused." });
+      await first.catch(() => undefined);
+    });
+
+    expect(screen.queryByText("The first one was refused.")).toBeNull();
   });
 
   it("stays inline while the panel is still open", async () => {

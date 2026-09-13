@@ -1160,18 +1160,47 @@ function useClassSurface(
    * from it, so a change has to reach the screen.
    */
   const [pendingSlugs, setPendingSlugs] = useState<Record<string, string>>({});
-  const markPending = useCallback(
-    (classId: string, slug: string | undefined) => {
-      setPendingSlugs(current => {
-        if (slug === undefined) {
-          if (!(classId in current)) return current;
-          const { [classId]: _gone, ...rest } = current;
-          return rest;
-        }
-        if (current[classId] === slug) return current;
-        return { ...current, [classId]: slug };
-      });
-    },
+  /*
+   * Which rename attempt is the live one for each class.
+   *
+   * A REF, and held beside the pending names rather than inside the panel,
+   * because two decisions depend on the same identity and one of them outlives
+   * the panel. The rail unmounts the manager on every switch, so a counter kept
+   * per field starts again at zero and an older answer then passes for the
+   * current one.
+   *
+   * A ref rather than state because both readers need the value SYNCHRONOUSLY —
+   * the panel reads it in the same event that started the attempt, and a state
+   * update is not visible until the render after.
+   */
+  const renameAttempts = useRef<Record<string, number>>({});
+  const beginRename = useCallback((classId: string, slug: string): number => {
+    const mine = (renameAttempts.current[classId] ?? 0) + 1;
+    renameAttempts.current[classId] = mine;
+    setPendingSlugs(current =>
+      current[classId] === slug ? current : { ...current, [classId]: slug }
+    );
+    return mine;
+  }, []);
+  const endRename = useCallback((classId: string, mine: number) => {
+    /*
+     * Only the attempt that is still the live one clears the entry. Clearing
+     * unconditionally let a FIRST rename's cleanup delete a second one's
+     * pending name while that second write was still on the network — and the
+     * panel then compares an edit against the rendered slug, so reverting to it
+     * reads as a no-op while the queued rename goes on to persist a different
+     * name.
+     */
+    if (renameAttempts.current[classId] !== mine) return;
+    setPendingSlugs(current => {
+      if (!(classId in current)) return current;
+      const { [classId]: _gone, ...rest } = current;
+      return rest;
+    });
+  }, []);
+  /** The live attempt for a class, for a caller deciding whether it is current. */
+  const currentRenameAttempt = useCallback(
+    (classId: string): number => renameAttempts.current[classId] ?? 0,
     []
   );
   return {
@@ -1192,11 +1221,17 @@ function useClassSurface(
     /** Which classes are mid-rename, for the manager's no-op check. */
     pendingSlugs,
     /*
+     * The identity BOTH supersession decisions derive from — this hook's own
+     * cleanup, and the panel's judgement of whether an answer still describes
+     * the rename being attempted.
+     */
+    currentRenameAttempt,
+    /*
      * Withheld the same way and for the same reason: renaming against a
      * library missing everything stored would save that partial list, which
      * deletes the classes it could not see rather than renaming one.
      */
-    rename: useRenameClass(writes, configured, markPending),
+    rename: useRenameClass(writes, configured, beginRename, endRename),
   };
 }
 
@@ -1282,7 +1317,7 @@ function useRenameClass(
   writes: ClassWrites,
   configured: readonly NamedClass[] | undefined,
   /**
-   * Record which name a class is heading for while its write is in flight.
+   * Take the next attempt for this class and record the name it heads for.
    *
    * Held by the CALLER rather than by the panel, because a rename outlives the
    * panel: switching rail panels unmounts the manager, and a field remembering
@@ -1290,12 +1325,14 @@ function useRenameClass(
    * long enough to matter. Without it, an author who reverts a rename after
    * coming back has the revert read as a no-op while the first write lands.
    */
-  markPending: (classId: string, slug: string | undefined) => void
+  beginRename: (classId: string, slug: string) => number,
+  /** Release the pending name, but only if this attempt is still the live one. */
+  endRename: (classId: string, attempt: number) => void
 ) {
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
     async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
-      markPending(classId, slug);
+      const mine = beginRename(classId, slug);
       try {
         return await writes.run<ClassRenameOutcome>(async existing => {
           if (existing === undefined) {
@@ -1333,11 +1370,15 @@ function useRenameClass(
          * leaves the class with the name it had; a successful one is followed
          * by a read carrying the new one. Either way the stored slug is the
          * answer again.
+         *
+         * Cleared only where THIS attempt is still the live one, which is the
+         * whole reason the identity exists: a superseded attempt finishing late
+         * would otherwise release a name a newer write is still heading for.
          */
-        markPending(classId, undefined);
+        endRename(classId, mine);
       }
     },
-    [writes, configured, saveSection, markPending]
+    [writes, configured, saveSection, beginRename, endRename]
   );
 }
 
@@ -3324,6 +3365,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 documentScan={documentClasses.complete ? "complete" : "partial"}
                 library={classes.library}
                 onRename={classes.rename}
+                currentRenameAttempt={classes.currentRenameAttempt}
                 /*
                   No `usage`, and no `onDelete`. The usage index is a
                   collection and this surface has no read for one, so the panel
