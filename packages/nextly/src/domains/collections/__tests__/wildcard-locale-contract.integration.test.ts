@@ -460,7 +460,7 @@ describe.each(getConfiguredTestDialects())(
       expect(afterRow?.first_published_at ?? null).toBeNull();
     });
 
-    it("REFUSES rather than decide the fate of unreleased work (collection)", async () => {
+    it("publishes the unreleased work of every language (collection)", async () => {
       const t = await boot(dialect);
       const created = await handlerOf(t).createEntry(
         { collectionName: DRAFTS_SLUG, overrideAccess: true },
@@ -497,7 +497,7 @@ describe.each(getConfiguredTestDialects())(
       };
       expect(await liveTitle("de")).toBe("DE v1");
 
-      const refused = await handlerOf(t).updateEntry(
+      const published = await handlerOf(t).updateEntry(
         {
           collectionName: DRAFTS_SLUG,
           entryId: id,
@@ -507,10 +507,8 @@ describe.each(getConfiguredTestDialects())(
         { status: "published" }
       );
 
-      expect(refused.success).toBe(false);
-      expect(refused.statusCode).toBe(409);
-      expect(refused.message).toContain("de");
-      expect(await liveTitle("de")).toBe("DE v1");
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      expect(await liveTitle("de")).toBe("DE v2");
     });
 
     it("REFUSES the wildcard on a Single with no lifecycle to move", async () => {
@@ -721,10 +719,23 @@ describe.each(getConfiguredTestDialects())(
         { status: "draft" }
       );
 
-      // It runs. A configured language holding work still blocks — that case is
-      // covered by the refusal test above, which is what keeps this from
-      // passing on a guard that stopped blocking entirely.
+      // It runs, and the work held for the removed language is neither
+      // published nor deleted: nothing can read or write that language, and
+      // the row is the only record that the work existed.
       expect(result.success).toBe(true);
+      const held = await t.adapter.select<{
+        entryId?: unknown;
+        locale?: unknown;
+        versionNo?: unknown;
+      }>("nextly_versions", {});
+      expect(
+        held.some(
+          r =>
+            String(r.entryId) === id &&
+            r.locale === "fr" &&
+            r.versionNo === null
+        )
+      ).toBe(true);
     });
 
     it("refuses a lifecycle-less wildcard BEFORE any hook runs", async () => {
