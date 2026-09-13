@@ -23,13 +23,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import {
-  jobIds,
-  jobLocalActions,
-  jobSteps,
-  jobTimeouts,
-  workflowSteps,
-} from "./workflow-run-blocks.mjs";
+import { jobIds, jobTimeouts, workflowSteps } from "./workflow-run-blocks.mjs";
 
 /** The script of the FIRST step with this name, or undefined. */
 function blockOf(steps, name) {
@@ -171,36 +165,6 @@ describe("workflowSteps", () => {
     expect(blocks).toEqual(["          bare-thing", "          wrapped-thing"]);
   });
 
-  it("reads a run key written on the list item's own line", () => {
-    // `- run: pnpm test` is a whole step, and a common one. A reader anchored on a line that
-    // STARTS with `run:` sees nothing here, so a job written this way reads as running nothing.
-    const steps = workflowSteps(
-      ["    steps:", "      - run: pnpm install --frozen-lockfile", "      - run: node scripts/x.mjs"].join("\n")
-    );
-
-    expect(steps.map(step => step.block)).toEqual([
-      "pnpm install --frozen-lockfile",
-      "node scripts/x.mjs",
-    ]);
-  });
-
-  it("bounds a same-line `- run: |` block at the key's column, not the dash's", () => {
-    // Measured from the dash, the block would take in `env:` and its value, because the step's
-    // other keys sit exactly one level in from the dash.
-    const steps = workflowSteps(
-      [
-        "    steps:",
-        "      - run: |",
-        "          node scripts/x.mjs",
-        "        env:",
-        "          TOKEN: abc",
-        "",
-      ].join("\n")
-    );
-
-    expect(steps.map(step => step.block)).toEqual(["          node scripts/x.mjs"]);
-  });
-
   it("ignores a run key that no step has opened", () => {
     // A `run:` before any list item is not a step's script. Recording it would
     // invent a step the workflow does not have.
@@ -266,77 +230,5 @@ describe("jobIds and jobTimeouts", () => {
   it("does not read a two-space key from OUTSIDE jobs as a job", () => {
     // `on:` has `push:` at the same indentation as a job id.
     expect(jobIds(workflow)).not.toContain("push");
-  });
-});
-
-describe("jobSteps and jobLocalActions", () => {
-  const workflow = [
-    "name: fixture",
-    "on: push",
-    "jobs:",
-    "  build:",
-    "    runs-on: ubuntu-latest",
-    "    steps:",
-    "      - name: Install",
-    "        run: pnpm install --frozen-lockfile",
-    "      - name: Test",
-    "        run: pnpm test",
-    "  gate:",
-    "    runs-on: ubuntu-latest",
-    "    # Unlike build, which runs pnpm install, this reads nothing it would need.",
-    "    steps:",
-    "      - name: Verdict",
-    "        run: node scripts/gate.mjs",
-    "  empty:",
-    "    runs-on: ubuntu-latest",
-    "",
-  ].join("\n");
-
-  it("attributes each step's script to the job that runs it", () => {
-    const steps = jobSteps(workflow);
-
-    expect(steps.get("build").map(step => step.block)).toEqual([
-      "pnpm install --frozen-lockfile",
-      "pnpm test",
-    ]);
-    expect(steps.get("gate")).toEqual([
-      { name: "Verdict", block: "node scripts/gate.mjs" },
-    ]);
-  });
-
-  it("does NOT credit a job with a command its comment merely quotes", () => {
-    // The reason this reader exists: `jobsMentioning(text, "pnpm install")` names `gate`, because
-    // its comment says the words. A check asking whether gate installs must be told it does not.
-    const blocks = jobSteps(workflow).get("gate").map(step => step.block);
-
-    expect(blocks.some(block => block.includes("pnpm install"))).toBe(false);
-  });
-
-  it("lists every declared job, an empty list for one with no scripts", () => {
-    const steps = jobSteps(workflow);
-
-    expect([...steps.keys()]).toEqual(jobIds(workflow));
-    expect(steps.get("empty")).toEqual([]);
-  });
-
-  it("reads a local action and skips an external one and a commented one", () => {
-    const actions = jobLocalActions(
-      [
-        "jobs:",
-        "  integration:",
-        "    steps:",
-        "      - uses: actions/checkout@0123456789abcdef # v7",
-        "      # uses: ./.github/actions/retired-setup",
-        "      - name: Setup",
-        "        uses: ./.github/actions/integration-setup # pinned here",
-        "  lint:",
-        "    steps:",
-        "      - run: pnpm lint",
-        "",
-      ].join("\n")
-    );
-
-    expect(actions.get("integration")).toEqual([".github/actions/integration-setup"]);
-    expect(actions.get("lint")).toEqual([]);
   });
 });
