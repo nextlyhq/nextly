@@ -37,6 +37,14 @@ function denies(...paths: string[]) {
 
 const allow = (): Promise<void> => Promise.resolve();
 
+/** Denies `guarded` while `kind` is private: a rule that reads a sibling. */
+function deniesGuardedWhilePrivate(
+  document: Record<string, unknown>
+): Promise<void> {
+  if (document.kind === "private") delete document.guarded;
+  return Promise.resolve();
+}
+
 function resolve(
   input: Partial<Parameters<typeof resolvePromotedDocument>[0]> & {
     before: Record<string, unknown>;
@@ -162,17 +170,32 @@ describe("resolvePromotedDocument", () => {
     // repeater rows shifted, so this refuses. It fails closed: nothing is lost,
     // the publish is refused and the pending change is kept. Judging rows by
     // identity and siblings on the final document is what would allow it.
-    const rulesByKind = (document: Record<string, unknown>): Promise<void> => {
-      if (document.kind === "private") delete document.guarded;
-      return Promise.resolve();
-    };
     await expect(
       resolve({
         before: { kind: "public", guarded: "edited" },
         live: { kind: "private", guarded: "live" },
-        applyRules: rulesByKind,
+        applyRules: deniesGuardedWhilePrivate,
       })
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("refuses deleting a field the final document's siblings would allow", async () => {
+    // A KNOWN over-refusal, pinned so it cannot change unnoticed: the same rule,
+    // with the pending change deleting `guarded` rather than editing it. A
+    // deleted field is absent from the promotion, so the live row's verdict is
+    // the only one that names it, and that verdict reads the live siblings. It
+    // fails closed: the publish is refused and the pending change is kept.
+    // Judging a deleted field against the promoted siblings is what would allow
+    // it.
+    await expect(
+      resolve({
+        before: { kind: "public" },
+        live: { kind: "private", guarded: "live" },
+        applyRules: deniesGuardedWhilePrivate,
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "guarded" }] },
+    });
   });
 
   it("refuses a deleted child even when the live rule denies its whole container", async () => {
