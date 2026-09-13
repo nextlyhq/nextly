@@ -154,6 +154,23 @@ describe("resolvePromotedDocument", () => {
     });
   });
 
+  it("does not import a stale live verdict for a field the promotion still holds", async () => {
+    // A rule reads its siblings. Live says `kind: "private"`, which denies
+    // `guarded`; the pending change sets `kind` to `public` and edits `guarded`
+    // legitimately. The promoted document is the one that has the right of it,
+    // so taking live's verdict too would refuse a valid publish.
+    const rulesByKind = (document: Record<string, unknown>): Promise<void> => {
+      if (document.kind === "private") delete document.guarded;
+      return Promise.resolve();
+    };
+    const out = await resolve({
+      before: { kind: "public", guarded: "edited" },
+      live: { kind: "private", guarded: "live" },
+      applyRules: rulesByKind,
+    });
+    expect(out).toEqual({ kind: "public", guarded: "edited" });
+  });
+
   it("keeps an own __proto__ key instead of invoking the prototype setter", async () => {
     const before: Record<string, unknown> = { guarded: "live" };
     Object.defineProperty(before, "__proto__", {
