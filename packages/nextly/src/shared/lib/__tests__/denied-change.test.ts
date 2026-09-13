@@ -154,41 +154,81 @@ describe("resolvePromotedDocument", () => {
     });
   });
 
-  it("does not import a stale live verdict for a field the promotion still holds", async () => {
-    // A rule reads its siblings. Live says `kind: "private"`, which denies
-    // `guarded`; the pending change sets `kind` to `public` and edits `guarded`
-    // legitimately. The promoted document is the one that has the right of it,
-    // so taking live's verdict too would refuse a valid publish.
+  it("refuses when a stale live verdict denies a field the final document allows", async () => {
+    // A KNOWN over-refusal, pinned so it cannot change unnoticed. Live says
+    // `kind: "private"`, which denies `guarded`; the pending change sets `kind`
+    // to `public` and edits `guarded`, which the final document would allow.
+    // The live verdict is kept whole because filtering it by path lost data when
+    // repeater rows shifted, so this refuses. It fails closed: nothing is lost,
+    // the publish is refused and the pending change is kept. Judging rows by
+    // identity and siblings on the final document is what would allow it.
     const rulesByKind = (document: Record<string, unknown>): Promise<void> => {
       if (document.kind === "private") delete document.guarded;
       return Promise.resolve();
     };
-    const out = await resolve({
-      before: { kind: "public", guarded: "edited" },
-      live: { kind: "private", guarded: "live" },
-      applyRules: rulesByKind,
-    });
-    expect(out).toEqual({ kind: "public", guarded: "edited" });
+    await expect(
+      resolve({
+        before: { kind: "public", guarded: "edited" },
+        live: { kind: "private", guarded: "live" },
+        applyRules: rulesByKind,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("refuses a deleted child even when the live rule denies its whole container", async () => {
-    // The live rule removes `seo` entirely, so the live-side denial names the
-    // container. The promotion keeps `seo` and drops `secret` from inside it,
-    // so a filter applied at the container asks the wrong question and the
-    // deletion goes through unjudged.
+    // The live rule removes `seo` entirely, so the live denial names the
+    // container while the promotion keeps `seo` and drops `secret` from it. The
+    // dropped child must be judged. Its sibling `title` is refused as well, since
+    // the whole-container verdict is not narrowed by what the final document
+    // would allow, which fails closed; this asserts the child it exists for.
     const rulesByKind = (document: Record<string, unknown>): Promise<void> => {
       if (document.kind === "private") delete document.seo;
       return Promise.resolve();
     };
+    let paths: string[] = [];
+    await resolve({
+      before: { kind: "public", seo: { title: "new" } },
+      live: { kind: "private", seo: { title: "old", secret: "live" } },
+      applyRules: rulesByKind,
+    }).catch((error: { publicData?: { errors?: Array<{ path: string }> } }) => {
+      paths = (error.publicData?.errors ?? []).map(issue => issue.path);
+    });
+    expect(paths).toContain("seo.secret");
+  });
+
+  it("refuses deleting a protected repeater row when a later row takes its index", async () => {
+    // Paths are positions. The pending change deletes live row 0, which is
+    // private and so denies `secret`, and the public row shifts into index 0. A
+    // check that asked whether `rows[0].secret` still exists in the promotion
+    // answered yes, and the protected row was deleted without refusal. Measured
+    // before this was fixed: resolved, with only the public row left.
+    const rowRule = (document: Record<string, unknown>): Promise<void> => {
+      const rows = document.rows;
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          if (
+            row &&
+            typeof row === "object" &&
+            (row as Record<string, unknown>).kind === "private"
+          ) {
+            delete (row as Record<string, unknown>).secret;
+          }
+        }
+      }
+      return Promise.resolve();
+    };
     await expect(
       resolve({
-        before: { kind: "public", seo: { title: "new" } },
-        live: { kind: "private", seo: { title: "old", secret: "live" } },
-        applyRules: rulesByKind,
+        before: { rows: [{ kind: "public", secret: "s1" }] },
+        live: {
+          rows: [
+            { kind: "private", secret: "s0" },
+            { kind: "public", secret: "s1" },
+          ],
+        },
+        applyRules: rowRule,
       })
-    ).rejects.toMatchObject({
-      publicData: { errors: [{ path: "seo.secret" }] },
-    });
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("keeps an own __proto__ key instead of invoking the prototype setter", async () => {

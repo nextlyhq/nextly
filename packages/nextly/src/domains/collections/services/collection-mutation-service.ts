@@ -5543,12 +5543,6 @@ export class CollectionMutationService extends BaseService {
     // unlocalized write (`locale: undefined`): the main row's `status` moves and
     // is NOT stripped the way a non-default locale's write strips it. The only
     // thing the wildcard adds is the companion sweep at the write itself.
-    // What the caller SENT, taken before anything can change it. Hooks may
-    // rewrite the payload, and the field gate deletes the caller's denied keys in
-    // place, from `body` itself whenever no hook returned a fresh object: by the
-    // time a promotion asks whether the caller supplied a value, `body` has
-    // already lost the answer. Deep, because that gate walks nested containers.
-    const callerSentBody = detachData(body);
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
     const params = sweepAllLocales
       ? { ...rawParams, locale: undefined }
@@ -6811,13 +6805,28 @@ export class CollectionMutationService extends BaseService {
                 ),
                 fields
               );
-              // What the caller SENT, as the provenance the resolver reads. It
-              // asks only whether a path is present, so the raw payload is the
-              // answer as it stands. Shaping it first is what lost the answer:
-              // `shapeWriteParts` encodes a group to its column string, and a
-              // string has no children, so a protected value the caller sent
-              // inside a group looked unsent and was refused as a deletion.
-              const callerContribution = callerSentBody;
+              // The caller's own contribution, from the payload the field gate
+              // has ALREADY filtered, so it holds only what this publisher was
+              // allowed to send. Read from the raw request instead, it credited
+              // the publisher with the pending change's edit whenever they echoed
+              // the same path: the gate stripped their value, the merged document
+              // still held the draft's, the resolver treated that edit as theirs
+              // and restored live, and the publish consumed the draft. Filtered,
+              // an echoed protected value is simply absent, so the draft's edit
+              // is refused rather than lost. Logical, through the same conversion
+              // as the document it is compared against.
+              const callerContribution = this.deserializeJsonFieldsForSnapshot(
+                this.assemblePromotedDocument(
+                  {},
+                  finalData,
+                  componentFieldData,
+                  manyToManyData,
+                  fields,
+                  manyToManyFields,
+                  splitComponentSchemas
+                ),
+                fields
+              );
               // One call decides the refusal AND returns what to write, so the
               // document that was judged is the document that lands. A denied
               // field comes back at its LIVE value rather than removed: taking

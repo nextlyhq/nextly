@@ -145,33 +145,29 @@ export async function resolvePromotedDocument(
 }
 
 /**
- * Every path the rules deny: the promoted document's own verdict, plus from the
- * live row ONLY the fields the promotion no longer carries.
+ * Every path the rules deny, on the promoted document AND on the live row,
+ * both kept whole.
  *
- * Live is consulted for one reason: a rule is never asked about a key that is
- * absent, so a field the pending change removes outright is judged nowhere.
- * Taking live's verdict for a field the promotion still holds would import a
- * stale answer instead, because a rule reads its siblings: where live says
- * `kind: "private"` denies `guarded`, and the pending change sets `kind` to
- * `public` and edits `guarded` legitimately, the promoted document is the one
- * that has the right of it.
+ * The live row is consulted because a rule is never asked about a key that is
+ * absent, so a field the pending change removes outright is judged nowhere else.
+ * An earlier revision filtered the live verdict down to the paths the promotion
+ * no longer carries, and that filter made the check unsafe: a path is a
+ * position, so when a pending change deletes a repeater row the row after it
+ * takes its index, the protected row's path still exists, and the deletion went
+ * through unjudged. Kept whole, a stale live verdict can refuse a publish the
+ * final document would allow, which fails closed; filtered, it failed open and
+ * lost data. Judging rows by identity rather than position is what would make
+ * this precise in both directions.
  */
 function collectDenied(
   input: PromotionAccessInput,
   permittedBefore: Record<string, unknown>,
   permittedLive: Record<string, unknown>
 ): Set<string> {
-  const denied = new Set(deniedPaths(input.before, permittedBefore, ""));
-  for (const path of deniedPaths(input.live, permittedLive, "")) {
-    // Expanded to leaves BEFORE the filter, because a rule denies a container
-    // whole. Filtering at the container asks "does the promotion still carry
-    // `seo`", which is yes even when it has dropped `seo.secret` from inside
-    // it, and the dropped child is what the live side was consulted for.
-    for (const leaf of leafPaths(valueAt(input.live, path), path)) {
-      if (!pathExists(input.before, leaf)) denied.add(leaf);
-    }
-  }
-  return denied;
+  return new Set([
+    ...deniedPaths(input.before, permittedBefore, ""),
+    ...deniedPaths(input.live, permittedLive, ""),
+  ]);
 }
 
 /**

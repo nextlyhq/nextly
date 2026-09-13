@@ -500,13 +500,16 @@ describe("a collection publish re-judges the draft it promotes", () => {
     expect(doc?.ops).toEqual({ note: "published-note" });
   });
 
-  it("publishes a caller's allowed edit beside a protected value they also sent", async () => {
-    // The ordinary field gate removes the protected value from the caller's
-    // payload before the promotion runs. Judged from that filtered payload, the
-    // caller looks as though they never sent it, the live row still holds it,
-    // and the missing leaf reads as a deletion: the publish is refused over a
-    // value the caller supplied unchanged. What the caller sent is the fact
-    // that decides, so it is read before any gate touches it.
+  it("refuses, and keeps the draft, when a group the caller sends drops a protected child", async () => {
+    // A KNOWN over-refusal, pinned so it cannot change unnoticed. A group the
+    // caller sends replaces the pending change's group whole, and the field gate
+    // has already stripped the protected child the caller included, so the
+    // promoted group lacks it and it reads as a deletion. Crediting the caller
+    // from their raw request would allow it, but that same reading lost a
+    // pending edit outright when a caller echoed a protected path, so this
+    // refuses instead. It fails closed: the publish is refused and the pending
+    // change is kept. Judging each leaf by the source that won the merge is what
+    // would allow it.
     const slug = "provenance";
     current = await createTestNextly({
       collections: [
@@ -566,15 +569,64 @@ describe("a collection publish re-judges the draft it promotes", () => {
       }
     );
 
-    expect(published.success, JSON.stringify(published)).toBe(true);
+    expect(published.success).toBe(false);
+    const issues = (
+      published as {
+        publicData?: { errors?: Array<{ path: string; code: string }> };
+      }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+    expect(issues?.[0]?.code).toBe("FORBIDDEN");
+    // Nothing published, and the pending change is still there.
     const doc = (await current.nextly.findByID({
       collection: slug as never,
       id,
       overrideAccess: true,
       status: "all",
     } as never)) as Record<string, unknown> | null;
-    expect(doc?.body).toBe("edited");
-    expect(doc?.ops).toEqual({ note: "clerk-note", runbook: "live-runbook" });
+    expect(doc?.body).toBe("live");
+    expect(doc?.ops).toEqual({ note: "live-note", runbook: "live-runbook" });
+    expect(await pendingDrafts(current, id)).toHaveLength(1);
+  });
+
+  it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
+    // A full form resubmits every field, so a publisher routinely sends a
+    // protected value back unchanged. The field gate strips it, which leaves the
+    // pending change's edit in the promoted document. Credited to the publisher
+    // because the path appeared in their request, that edit was restored to live
+    // and the successful publish deleted the draft: measured before this was
+    // fixed, success with no pending change left and the author's edit gone.
+    const t = await boot();
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: SLUG, overrideAccess: true },
+      { body: "live", guarded: "live-value", status: "published" }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
+      { guarded: "boss-secret" }
+    );
+    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
+
+    const published = await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published", guarded: "live-value" }
+    );
+
+    expect(published.success).toBe(false);
+    const issues = (
+      published as {
+        publicData?: { errors?: Array<{ path: string; code: string }> };
+      }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
+    expect(issues?.[0]?.code).toBe("FORBIDDEN");
+    const live = await liveDoc(t, id);
+    expect(live.guarded).toBe("live-value");
+    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
   });
 
   it("still promotes the change for a publisher who MAY write it", async () => {
