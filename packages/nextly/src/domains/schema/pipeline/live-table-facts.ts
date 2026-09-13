@@ -22,6 +22,12 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import {
+  identifierCaseRules,
+  indexCatalog,
+  resolveCatalogName,
+} from "../utils/resolve-catalog-name";
+
 import { queryLiveColumnTypes } from "./live-column-types";
 
 interface PgForeignKeyRow {
@@ -158,9 +164,40 @@ export async function readColumnNullState(
   // to enumerate every reason a column might be absent, and the next reason is
   // the one nobody listed. The catalog answers the question directly, so the
   // caller's list is free to be a rough over-estimate.
-  const live = (await queryLiveColumnTypes(db, dialect, [tableName])).get(
+  const catalog = await queryLiveColumnTypes(db, dialect, [tableName]);
+  // Keyed by the spelling the CATALOG returned, which is not always the one
+  // asked for: MySQL under `lower_case_table_names=1` answers a query for
+  // `Dc_Posts` with `dc_posts`, so an exact `.get` misses the very table it
+  // just described. That miss is not a harmless one — it lands on the branch
+  // below that reports neither nulls nor absences, which is indistinguishable
+  // from a clean table and silently withdraws the refusal this function exists
+  // to supply.
+  //
+  // Resolved the way `pushschema-pipeline` resolves the same question, and the
+  // folding setting is GIVEN rather than queried, which is sound here for a
+  // narrower reason than a blanket listing would allow: the catalog read is
+  // filtered on this one name, so every key it can return is a row the SERVER
+  // itself matched against the name asked for. Folding among those cannot reach
+  // a table the server did not already offer as the answer, while an exact
+  // match discards the answer it did offer. Reading the live
+  // `lower_case_table_names` instead would cost a round trip on every save and
+  // a failure mode when the server declines to report it.
+  //
+  // Only the TABLE lookup is resolved this way. A column the catalog spells
+  // differently falls into `absent`, which refuses — the safe direction for a
+  // precondition — so folding it too would trade a false positive for a false
+  // negative with no defect reported against it.
+  const catalogName = resolveCatalogName(
+    indexCatalog(
+      [...catalog.keys()],
+      (dialect === "mysql"
+        ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+        : identifierCaseRules({ dialect })
+      ).tables
+    ),
     tableName
   );
+  const live = catalogName === undefined ? undefined : catalog.get(catalogName);
   // No such table: nothing exists to hold a null and nothing can be tightened
   // against it either, so neither set gains a member.
   if (live === undefined) return { holdingNull, absent };

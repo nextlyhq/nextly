@@ -161,6 +161,18 @@ newly added, skipped the refusal, and had the tightening emitted anyway; the
 nulls are recorded against the column the live table still has, so that is the
 name the check reads.
 
+The live column read is resolved to the catalog's own spelling of the table.
+MySQL under `lower_case_table_names=1` answers a query for a mixed-case table
+by reporting the name it folded, so the map came back keyed as `dc_posts` for a
+table asked about as `Dc_Posts` and an exact lookup missed the very table it had
+just described. That miss reported no nulls and no absent columns, which is
+indistinguishable from a clean table, so the refusal above withdrew itself on
+exactly the server whose DDL auto-commits. The folding rule is given rather than
+queried, for the reason the apply pipeline already records: the only name being
+matched is the one this read just asked the server to describe, so a
+case-insensitive match cannot select a different object. PostgreSQL is left
+case-sensitive, where the two spellings are two different tables.
+
 Singles ask the same question of their own table. The precondition is keyed
 entirely on facts the caller supplies, so a caller that reads none does not get
 a weaker check — it gets no check: the refusal returns at its first guard. The

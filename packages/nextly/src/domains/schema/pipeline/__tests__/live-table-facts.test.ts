@@ -224,6 +224,92 @@ describe("readColumnNullState", () => {
     return { execute, probedFor };
   };
 
+  /**
+   * MySQL, in the driver's `[rows, fields]` tuple, answering for a table whose
+   * name the server folded. `lower_case_table_names=1` matches a query for
+   * `Dc_Posts` and reports the row as `dc_posts`.
+   */
+  const foldedMysqlServer = (
+    catalogTable: string,
+    liveColumns: string[],
+    nullColumns: string[] = []
+  ) => {
+    let call = 0;
+    const execute = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return [
+          liveColumns.map(name => ({
+            TABLE_NAME: catalogTable,
+            COLUMN_NAME: name,
+            COLUMN_TYPE: "varchar(255)",
+          })),
+          [],
+        ];
+      }
+      return [nullColumns.length > 0 ? [{ one: 1 }] : [], []];
+    });
+    return { execute };
+  };
+
+  it("finds the table when MySQL reports the name it folded, not the one asked for", async () => {
+    // The lookup key is whatever the catalog returned. An exact match misses the
+    // very table just described, and the miss is silent: it reports no nulls and
+    // nothing absent, which reads exactly like a clean table and withdraws the
+    // refusal. `holdingNull` is the discriminator — an exact-only lookup returns
+    // before any probe is issued, so it comes back empty.
+    const { execute } = foldedMysqlServer("dc_posts", ["author"], ["author"]);
+
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "mysql",
+      "Dc_Posts",
+      ["author"]
+    );
+
+    expect([...holdingNull]).toEqual(["author"]);
+    expect([...absent]).toEqual([]);
+  });
+
+  it("still reports a genuinely missing column under a folded table name", async () => {
+    // The other half: resolving the TABLE must not make every column present.
+    const { execute } = foldedMysqlServer("dc_posts", ["author"]);
+
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "mysql",
+      "Dc_Posts",
+      ["headline"]
+    );
+
+    expect([...absent]).toEqual(["headline"]);
+    expect([...holdingNull]).toEqual([]);
+  });
+
+  it("does not fold on PostgreSQL, where the two spellings are two tables", async () => {
+    // The control against over-correcting. Postgres stores exactly what it was
+    // given, so `Dc_Posts` and `dc_posts` are different objects and matching
+    // them would report one table's columns as another's.
+    const execute = vi.fn(async () => ({
+      rows: [
+        { table_name: "dc_posts", column_name: "author", udt_name: "text" },
+      ],
+    }));
+
+    const { holdingNull, absent } = await readColumnNullState(
+      { execute },
+      "postgresql",
+      "Dc_Posts",
+      ["author"]
+    );
+
+    expect([...holdingNull]).toEqual([]);
+    expect([...absent]).toEqual([]);
+    // One call: the catalog read. No probe was issued against a table that, on
+    // this server, is not the one asked for.
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("probes each live column it was given, by name", async () => {
     const { execute, probedFor } = server(["author", "editor"]);
     const { holdingNull, absent } = await readColumnNullState(
