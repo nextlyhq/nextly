@@ -69,6 +69,16 @@ descriptor's type alone would emit `CREATE INDEX` on a JSON column, a foreign
 key from an array to a scalar id, and `json NOT NULL DEFAULT 0`. Those stay
 recorded as known disagreements until the consumers move in one change.
 
+A MySQL `MODIFY` issued only to change a column's nullability now restates the
+column's LIVE type, read from the catalog, rather than a rendered one. MySQL
+restates the whole definition on every `MODIFY`, so such an edit has to name a
+type — and once new columns come from the descriptor, no renderer is right for
+both: rendering the old mapping narrows a float created as `double` to
+`decimal(10,2)`, and rendering the descriptor narrows a `select` created as
+unbounded `text` to `varchar(255)`. Both truncate, for an edit that asked for
+nothing but a required flag. The database knows which it is, so it is asked. A
+caller that does not read the live table keeps the previous behaviour.
+
 Some column types are spelled differently as a result — `int4` for `integer`
 and `bool` for `boolean` on PostgreSQL, `tinyint(1)` for `boolean` on MySQL.
 These are the same types under the names the descriptor and the database's own

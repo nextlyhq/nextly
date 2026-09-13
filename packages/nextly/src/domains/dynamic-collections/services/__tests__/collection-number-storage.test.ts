@@ -243,6 +243,56 @@ describe("changing a number's storage on an existing table", () => {
   const whole = (name: string): FieldDefinition =>
     ({ name, type: "number" }) as unknown as FieldDefinition;
 
+  // MySQL restates the whole column definition on every `MODIFY`, including one issued only to
+  // change nullability. Which type it restates cannot be RENDERED: a column built before the create
+  // path read the canonical descriptor carries the legacy type, one built after carries the
+  // descriptor's, and either renderer is a narrowing for the other's columns. So the live type is
+  // read and restated verbatim.
+  it("restates the column's live type on a requiredness-only change — mysql", () => {
+    const before = {
+      name: "rating",
+      type: "number",
+      options: { format: "float" },
+      required: false,
+    } as unknown as FieldDefinition;
+    const after = { ...before, required: true } as FieldDefinition;
+
+    const sql = new DynamicCollectionSchemaService(
+      undefined,
+      "mysql"
+    ).generateAlterTableMigration(TABLE, [before], [after], {
+      tableHasRows: false,
+      // What a column created by the current create path actually is.
+      liveColumnTypes: new Map([["rating", "double"]]),
+    });
+
+    expect(sql).toMatch(/MODIFY COLUMN `rating` double NOT NULL/i);
+    // The narrowing this exists to prevent: the legacy renderer's answer for the same field.
+    expect(sql).not.toMatch(/decimal\(10,\s*2\)/i);
+  });
+
+  it("falls back to the rendered type when the caller supplied none — mysql", () => {
+    // Not an endorsement of the fallback, a statement of it: a caller that does not read the live
+    // table keeps exactly the behaviour this had before the two renderers could disagree.
+    const before = {
+      name: "rating",
+      type: "number",
+      options: { format: "float" },
+      required: false,
+    } as unknown as FieldDefinition;
+    const after = { ...before, required: true } as FieldDefinition;
+
+    const sql = new DynamicCollectionSchemaService(
+      undefined,
+      "mysql"
+    ).generateAlterTableMigration(TABLE, [before], [after], {
+      tableHasRows: false,
+    });
+
+    expect(sql).toMatch(/MODIFY COLUMN `rating`/i);
+    expect(sql).toMatch(/decimal\(10,\s*2\)/i);
+  });
+
   const float = (name: string): FieldDefinition =>
     ({
       name,

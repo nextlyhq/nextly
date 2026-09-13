@@ -862,6 +862,7 @@ export class SingleMetadataService {
           indexNames: liveFacts.indexNames,
           columnsContainingNull: liveFacts.columnsContainingNull,
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
+          liveColumnTypes: liveFacts.liveColumnTypes,
           ...groupMigration,
         }
       ),
@@ -1017,6 +1018,7 @@ export class SingleMetadataService {
     indexNames: ReadonlySet<string>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
+    liveColumnTypes: ReadonlyMap<string, string>;
   }> {
     const {
       readColumnNullState,
@@ -1024,6 +1026,9 @@ export class SingleMetadataService {
       readIndexNames,
       tableHasRows,
     } = await import("../../schema/pipeline/live-table-facts");
+    const { queryLiveColumnTypes } = await import(
+      "../../schema/pipeline/live-column-types"
+    );
     const { columnsThatMayHoldNull } = await import(
       "../../schema/services/field-column-descriptor"
     );
@@ -1035,18 +1040,24 @@ export class SingleMetadataService {
     // probes anything, so a column this list names and the table lacks comes
     // back as absent rather than as an error.
     const mayHoldNull = columnsThatMayHoldNull(previousAlterFields);
-    const [hasRows, foreignKeys, indexes, nullState] = await Promise.all([
-      tableHasRows(db, dialect, tableName),
-      readForeignKeyColumns(db, dialect, tableName),
-      readIndexNames(db, dialect, tableName),
-      readColumnNullState(db, dialect, tableName, mayHoldNull),
-    ]);
+    const [hasRows, foreignKeys, indexes, nullState, liveTypes] =
+      await Promise.all([
+        tableHasRows(db, dialect, tableName),
+        readForeignKeyColumns(db, dialect, tableName),
+        readIndexNames(db, dialect, tableName),
+        readColumnNullState(db, dialect, tableName, mayHoldNull),
+        // What each column IS, for MySQL's `MODIFY`, which has to restate a column it is not
+        // otherwise changing. Rendering that type asks which renderer built the column, and that
+        // has no static answer once the create path reads the canonical descriptor.
+        queryLiveColumnTypes(db, dialect, [tableName]),
+      ]);
     return {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
       columnsContainingNull: nullState.holdingNull,
       columnsAbsentFromTable: nullState.absent,
+      liveColumnTypes: liveTypes.get(tableName) ?? new Map<string, string>(),
     };
   }
 

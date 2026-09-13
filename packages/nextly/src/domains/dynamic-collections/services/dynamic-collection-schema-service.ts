@@ -1085,6 +1085,19 @@ ${allColumnDefs.join(",\n")}
        */
       foreignKeysByColumn?: ReadonlyMap<string, readonly string[]>;
       /**
+       * The type each column currently has, as the catalog reports it, read by
+       * `queryLiveColumnTypes`.
+       *
+       * Only MySQL's `MODIFY` consults it, and only to restate a column it is not otherwise
+       * changing. MySQL restates the whole definition on every `MODIFY`, so a requiredness toggle
+       * has to name a type; naming a RENDERED one asks which renderer built this column, and after
+       * the create path moved to the descriptor there is no static answer — a column built by an
+       * older version carries the legacy type and a new one carries the descriptor's. The catalog
+       * knows, so it is asked rather than predicted. Undefined means the caller did not look, and
+       * the legacy rendering is used, which is the behaviour this had before the question arose.
+       */
+      liveColumnTypes?: ReadonlyMap<string, string>;
+      /**
        * The columns that currently hold at least one NULL, read from the live table by
        * `readColumnNullState`.
        *
@@ -1722,21 +1735,32 @@ ${allColumnDefs.join(",\n")}
               // wrong rewrites a column nobody asked to change.
               //
               // Changing the storage means asking for the descriptor's answer. Changing only the
-              // nullability means preserving what the column already is — and what it already is,
-              // for a table this service built, is what THIS generator renders. Restating the
-              // descriptor's answer instead would move a `select` created as unbounded `text` to
-              // `varchar(255)` and truncate stored values, for an edit that touched nothing but a
-              // required flag. MySQL leaves no third option: the type has to be restated or the
-              // column definition is lost.
+              // nullability means preserving what the column already IS, and MySQL leaves no third
+              // option: the type has to be restated or the column definition is lost.
+              //
+              // 🔴 "What it already is" cannot be rendered. It used to be safe to render it — a
+              // table this service built carried what this generator emitted — but the create path
+              // now reads the canonical descriptor, so a column built by an older version carries
+              // the legacy type while a new one carries the descriptor's, and no single renderer
+              // is right for both. Rendering the legacy answer narrows a float created as `double`
+              // to `decimal(10,2)`; rendering the descriptor's narrows a `select` created as
+              // unbounded `text` to `varchar(255)`. Both truncate, for an edit that touched nothing
+              // but a required flag.
+              //
+              // So the column's own type is read from the catalog and restated verbatim. A caller
+              // that did not look falls back to the legacy rendering, which is what this did before
+              // the two renderers could disagree about an existing column.
+              const liveType = options?.liveColumnTypes?.get(alterCol);
               const restated = columnChanged
                 ? type
-                : this.mapFieldTypeToSQL(
+                : (liveType ??
+                  this.mapFieldTypeToSQL(
                     field.type,
                     field.length,
                     field.options,
                     field.validation,
                     field
-                  );
+                  ));
               statements.push(
                 this.modifyColumnSql(tableName, alterCol, field, restated)
               );
