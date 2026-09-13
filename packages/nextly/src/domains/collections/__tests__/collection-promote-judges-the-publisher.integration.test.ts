@@ -444,6 +444,139 @@ describe("a collection publish re-judges the draft it promotes", () => {
     expect(doc?.guarded).toBe("live-value");
   });
 
+  it("publishes a group edit sent with the status while a change is pending", async () => {
+    // No field rules at all, so nothing here is about access. The ordinary
+    // write encodes a group to its column string before the promotion runs, and
+    // the check that validates the promoted document read that string where it
+    // expects an object: a publish that also edited any group, repeater or JSON
+    // field was refused as "ops must be an object" whenever a pending change
+    // existed, which is the ordinary shape of an editor publishing their edit.
+    const slug = "grouppublish";
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "body" }),
+            group({ name: "ops", fields: [text({ name: "note" })] }),
+          ],
+        }),
+      ],
+    });
+    const h = handlerOf(current);
+
+    const created = await h.createEntry(
+      { collectionName: slug, overrideAccess: true },
+      { body: "live", ops: { note: "live-note" }, status: "published" }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    const published = await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published", ops: { note: "published-note" } }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const doc = (await current.nextly.findByID({
+      collection: slug as never,
+      id,
+      overrideAccess: true,
+      status: "all",
+    } as never)) as Record<string, unknown> | null;
+    expect(doc?.body).toBe("edited");
+    expect(doc?.ops).toEqual({ note: "published-note" });
+  });
+
+  it("publishes a caller's allowed edit beside a protected value they also sent", async () => {
+    // The ordinary field gate removes the protected value from the caller's
+    // payload before the promotion runs. Judged from that filtered payload, the
+    // caller looks as though they never sent it, the live row still holds it,
+    // and the missing leaf reads as a deletion: the publish is refused over a
+    // value the caller supplied unchanged. What the caller sent is the fact
+    // that decides, so it is read before any gate touches it.
+    const slug = "provenance";
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "body" }),
+            group({
+              name: "ops",
+              fields: [
+                text({ name: "note" }),
+                text({
+                  name: "runbook",
+                  access: {
+                    update: ({ req }) => req.user?.email === BOSS.email,
+                  },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const h = handlerOf(current);
+
+    const created = await h.createEntry(
+      { collectionName: slug, overrideAccess: true },
+      {
+        body: "live",
+        ops: { note: "live-note", runbook: "live-runbook" },
+        status: "published",
+      }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    // A pending change exists, so the publish below promotes one.
+    await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    // CLERK sends the whole group: an allowed edit to `note`, and `runbook` at
+    // the value it already holds, which the gate will strip from their payload.
+    const published = await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      {
+        status: "published",
+        ops: { note: "clerk-note", runbook: "live-runbook" },
+      }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const doc = (await current.nextly.findByID({
+      collection: slug as never,
+      id,
+      overrideAccess: true,
+      status: "all",
+    } as never)) as Record<string, unknown> | null;
+    expect(doc?.body).toBe("edited");
+    expect(doc?.ops).toEqual({ note: "clerk-note", runbook: "live-runbook" });
+  });
+
   it("still promotes the change for a publisher who MAY write it", async () => {
     const t = await boot();
     const h = handlerOf(t);

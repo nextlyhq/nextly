@@ -5543,6 +5543,12 @@ export class CollectionMutationService extends BaseService {
     // unlocalized write (`locale: undefined`): the main row's `status` moves and
     // is NOT stripped the way a non-default locale's write strips it. The only
     // thing the wildcard adds is the companion sweep at the write itself.
+    // What the caller SENT, taken before anything can change it. Hooks may
+    // rewrite the payload, and the field gate deletes the caller's denied keys in
+    // place, from `body` itself whenever no hook returned a fresh object: by the
+    // time a promotion asks whether the caller supplied a value, `body` has
+    // already lost the answer. Deep, because that gate walks nested containers.
+    const callerSentBody = detachData(body);
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
     const params = sweepAllLocales
       ? { ...rawParams, locale: undefined }
@@ -6276,14 +6282,24 @@ export class CollectionMutationService extends BaseService {
           // group/repeater/component) and covers component and m2m fields, not only
           // columns. The authoritative pass runs again on the locked draft in the
           // transaction (see the promote block).
-          const merged = this.assemblePromotedDocument(
-            draftInput,
-            finalData,
-            componentFieldData,
-            manyToManyData,
-            fields,
-            manyToManyFields,
-            splitComponentSchemas
+          // In the LOGICAL shape the validator reads. `finalData` has already
+          // been through `shapeWriteParts`, which encodes every JSON-backed field
+          // to its column string, so a group the caller sent with the publish
+          // arrives here as text and is refused as "must be an object": a
+          // publish carrying any group, repeater or JSON value failed whenever a
+          // pending change existed. Parsed by the same function that builds the
+          // live row, so the two sides are one representation.
+          const merged = this.deserializeJsonFieldsForSnapshot(
+            this.assemblePromotedDocument(
+              draftInput,
+              finalData,
+              componentFieldData,
+              manyToManyData,
+              fields,
+              manyToManyFields,
+              splitComponentSchemas
+            ),
+            fields
           );
           // Validated as ASSEMBLED, with nothing removed. A field this
           // publisher may not write is not a schema violation, and the gate
@@ -6778,29 +6794,30 @@ export class CollectionMutationService extends BaseService {
               // Re-extracting the write parts from the FILTERED document keeps a
               // denied component/m2m value out of the persisted parts, which the
               // earlier after-access merge would have restored.
-              const mergedPromoteData = this.assemblePromotedDocument(
-                draftInput,
-                finalData,
-                componentFieldData,
-                manyToManyData,
-                fields,
-                manyToManyFields,
-                splitComponentSchemas
+              // Logical, for the same reason as the check before the
+              // transaction: `finalData` is already column-encoded, and a group
+              // left as its string is one leaf to the resolver, so a denied field
+              // inside it is never found and an untouched group compares unequal
+              // to the parsed live row. The write below encodes it again, once.
+              const mergedPromoteData = this.deserializeJsonFieldsForSnapshot(
+                this.assemblePromotedDocument(
+                  draftInput,
+                  finalData,
+                  componentFieldData,
+                  manyToManyData,
+                  fields,
+                  manyToManyFields,
+                  splitComponentSchemas
+                ),
+                fields
               );
-              // The caller's own contribution, assembled by the SAME function
-              // with no draft behind it, so it lands in the same shape as the
-              // document it is compared against. A denied value of theirs is
-              // dropped back to live as on any other write; only the pending
-              // change's own values are worth refusing over.
-              const callerContribution = this.assemblePromotedDocument(
-                {},
-                finalData,
-                componentFieldData,
-                manyToManyData,
-                fields,
-                manyToManyFields,
-                splitComponentSchemas
-              );
+              // What the caller SENT, as the provenance the resolver reads. It
+              // asks only whether a path is present, so the raw payload is the
+              // answer as it stands. Shaping it first is what lost the answer:
+              // `shapeWriteParts` encodes a group to its column string, and a
+              // string has no children, so a protected value the caller sent
+              // inside a group looked unsent and was refused as a deletion.
+              const callerContribution = callerSentBody;
               // One call decides the refusal AND returns what to write, so the
               // document that was judged is the document that lands. A denied
               // field comes back at its LIVE value rather than removed: taking
