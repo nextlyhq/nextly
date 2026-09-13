@@ -20,6 +20,7 @@ import { isMissingNamedColumnError } from "../../database/missing-column";
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
+import type { TranslationFilterState } from "./translation-filter-states";
 
 /**
  * A quoted table or alias reference, as `sql.identifier` produces one.
@@ -424,27 +425,13 @@ export function buildCompanionExists(args: {
   )`;
 }
 
-/** The translation states the list "language filter" can filter on (i18n M7). */
-/**
- * Every translation state a filter may name, and the source the type is built
- * from.
- *
- * A tuple rather than a union so there is something to READ at runtime. The
- * query service and the worklist endpoint both have to decide whether an
- * incoming string is a state, and while the union existed they each declared
- * their own list of the same four words — so adding or renaming one could make
- * the endpoint accept a value the query layer silently drops, or refuse one it
- * supports.
- */
-export const TRANSLATION_FILTER_STATES = [
-  "missing",
-  "translated",
-  "draft",
-  "published",
-  "stale",
-] as const;
-
-export type TranslationFilterState = (typeof TRANSLATION_FILTER_STATES)[number];
+// Declared in a module of its own, which imports nothing, so a browser can read
+// the list without the SQL this file builds. Re-exported so every server
+// caller keeps importing it from here.
+export {
+  TRANSLATION_FILTER_STATES,
+  type TranslationFilterState,
+} from "./translation-filter-states";
 
 export interface TranslationStatusFilter {
   /** Target locale code. */
