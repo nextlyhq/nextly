@@ -101,6 +101,7 @@ async function countFor(
     signal?: AbortSignal;
     where?: Record<string, unknown>;
     installed?: readonly FieldConfig[];
+    status?: "all";
   } = {}
 ) {
   const { resolve } = seoIssuesWidgetSource(
@@ -111,6 +112,7 @@ async function countFor(
     {
       ...countQuery,
       ...(extra.where === undefined ? {} : { where: extra.where }),
+      ...(extra.status === undefined ? {} : { status: extra.status }),
     },
     caller,
     { services } as never,
@@ -570,5 +572,50 @@ describe("a field the caller may not read", () => {
         installed: [text({ name: "metaTitle" }), text({ name: "canonical" })],
       })
     ).toEqual({ op: "count", total: 2 });
+  });
+});
+
+describe("the status a query asks for", () => {
+  it("counts published documents alone by default", async () => {
+    // A draft's SEO is not what search engines see, so a missing title on one
+    // is not yet a problem the site has.
+    const services = servicesWith(
+      { pages: [{ seo: {} }] },
+      { lifecycle: true }
+    );
+    await countFor(services, ["pages"]);
+
+    expect(services.collections.listEntries.mock.calls[0]?.[1]).toMatchObject({
+      where: { status: { equals: "published" } },
+    });
+  });
+
+  it("drops the published filter when the query asks for all", async () => {
+    // 🔴 `assertValidStatus` admits `status: "all"` for a source with no
+    // lifecycle of its own, so it reaches this resolver -- and ignoring it
+    // answered a published-only question for a caller who explicitly asked
+    // about every document. "Where is metadata missing anywhere" is a different
+    // and legitimate question.
+    const services = servicesWith(
+      { pages: [{ seo: {} }] },
+      { lifecycle: true }
+    );
+    await countFor(services, ["pages"], { status: "all" });
+
+    expect(
+      services.collections.listEntries.mock.calls[0]?.[1]
+    ).not.toHaveProperty("where");
+  });
+
+  it("does not read the collection's lifecycle when asked for all", async () => {
+    // Skipping the filter skips the metadata read it was for: one fewer service
+    // call per collection on a query that cannot use the answer.
+    const services = servicesWith(
+      { pages: [{ seo: {} }] },
+      { lifecycle: true }
+    );
+    await countFor(services, ["pages"], { status: "all" });
+
+    expect(services.collections.getCollection).not.toHaveBeenCalled();
   });
 });

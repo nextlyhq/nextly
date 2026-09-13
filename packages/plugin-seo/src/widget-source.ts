@@ -348,14 +348,26 @@ interface ScanTally {
  * The filter that leaves only what search engines see.
  *
  * A draft's SEO is not live yet, so a missing title on one is not a problem the
- * site has. A collection without the built-in lifecycle has no `status` column
- * to filter on -- and may define an ordinary field by that name -- so it is
- * scanned whole.
+ * site has -- which is why published-only is the DEFAULT rather than the only
+ * answer. A query naming `status: "all"` is asking a different and legitimate
+ * question, "where is metadata missing anywhere", and gets it.
+ *
+ * 🔴 `all` is the one selector that can reach here. `assertValidStatus` refuses
+ * `draft` and `published` for a source that does not declare a lifecycle, and
+ * this source does not -- it spans several collections, which need not agree on
+ * having one. Honouring `all` rather than ignoring it is what keeps the answer
+ * the question that was asked.
+ *
+ * A collection without the built-in lifecycle has no `status` column to filter
+ * on -- and may define an ordinary field by that name -- so it is scanned whole
+ * either way.
  */
 async function publishedOnly(
   services: SeoIssueServices,
-  slug: string
+  slug: string,
+  includeDrafts: boolean
 ): Promise<Record<string, unknown> | undefined> {
+  if (includeDrafts) return undefined;
   const meta = await services.collections.getCollection(slug, {});
   return isRecord(meta) && meta.status === true
     ? { status: { equals: "published" } }
@@ -450,6 +462,7 @@ async function countIssues(
   caller: Parameters<PluginSourceResolver>[1],
   collections: readonly string[],
   rules: Omit<ScanRules, "readOptions">,
+  includeDrafts: boolean,
   signal: AbortSignal | undefined
 ): Promise<{ total: number; atLeast: boolean }> {
   const scanRules: ScanRules = {
@@ -478,7 +491,7 @@ async function countIssues(
       const tally = await scanCollection(
         services,
         slug,
-        await publishedOnly(services, slug),
+        await publishedOnly(services, slug, includeDrafts),
         scanRules,
         PAGE_BUDGET - pagesUsed,
         abandoned
@@ -532,6 +545,7 @@ export function seoIssuesWidgetSource(
       caller,
       collections,
       { checks, keep: issueFilter(query.where) },
+      query.status === "all",
       opts?.signal
     );
 
