@@ -369,6 +369,7 @@ export type {
   ResolvedComposition,
   ResolvedDocument,
   UnresolvedInstance,
+  WorkAllowance,
 } from "./resolve-instances";
 // The nesting rule and the types it answers in. Exported together: a caller
 // that can ask the question must be able to name the verdict it gets back, and

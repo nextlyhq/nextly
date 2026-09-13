@@ -4104,3 +4104,237 @@ describe("composedRootTypes", () => {
     expect(walks).toBe(1);
   });
 });
+
+describe("resolveComponentInstances under a caller's work allowance", () => {
+  it("charges every definition entry it clones", () => {
+    const work = { left: 100 };
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: component([node("d1"), node("d2"), node("d3")]) }),
+      { work }
+    );
+
+    expect(result.unresolved).toEqual([]);
+    expect(work.left).toBe(97);
+  });
+
+  it("keeps the charge for an expansion the node budget rolls back", () => {
+    // A definition that fits neither instance. Each attempt clones up to the
+    // node budget and is rolled back, which returns the budget, so the second
+    // instance attempts it all again. The composed document holds none of that
+    // work; the allowance holds all of it.
+    const work = { left: 100 };
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero"), instance("i2", "hero")]),
+      defs({
+        hero: component([node("d1"), node("d2"), node("d3"), node("d4")]),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 3 }, work }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget", "budget"]);
+    expect(idsOf(result.document)).toEqual(["i1", "i2"]);
+    // Three nodes less the two instances leaves one; each attempt is credited
+    // the instance it replaces, clones two entries and stops at the third.
+    expect(work.left).toBe(96);
+  });
+
+  it("charges a node an override hides, which the node budget gives back", () => {
+    const work = { left: 100 };
+
+    const result = resolveComponentInstances(
+      page([
+        node("keep"),
+        instance("i1", "hero", { overrides: { gone: false } }),
+      ]),
+      defs({
+        hero: component([node("d1"), node("d2")], {
+          exposed: [
+            {
+              id: "gone",
+              label: "G",
+              nodeId: "d1",
+              propPath: "x",
+              type: "visibility",
+            },
+          ],
+        }),
+      }),
+      { limits: { ...DEFAULT_LIMITS, maxNodes: 2 }, work }
+    );
+
+    // The hidden node costs the composed document nothing, so the page still
+    // fits its cap — and looking at it was still work.
+    expect(result.unresolved).toEqual([]);
+    expect(flatten(result.document.nodes)).toHaveLength(2);
+    expect(work.left).toBe(98);
+  });
+
+  it("charges the slot prepass as well as the clone", () => {
+    // The same instance twice, once supplying slot content and once not.
+    // Supplying content runs a prepass over the definition's five entries
+    // before the clone walks them, and that pass is charged as well.
+    const definition = component(
+      [node("a"), node("b"), node("c"), node("d"), box("target", [])],
+      { slots: { tail: { label: "Tail", nodeId: "target", slot: "children" } } }
+    );
+    const bare = { left: 100 };
+    const supplied = { left: 100 };
+
+    resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: definition }),
+      { work: bare }
+    );
+    resolveComponentInstances(
+      page([instance("i1", "hero", {}, { slots: { tail: [node("s1")] } })]),
+      defs({ hero: definition }),
+      { work: supplied }
+    );
+
+    expect(100 - bare.left).toBe(5);
+    expect(bare.left - supplied.left).toBeGreaterThanOrEqual(5);
+  });
+
+  it("refuses for `budget` once the allowance is spent, rather than drawing half", () => {
+    const work = { left: 3 };
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero"), instance("i2", "hero")]),
+      defs({ hero: component([node("d1"), node("d2")]) }),
+      { work }
+    );
+
+    // The first instance takes two entries; the second gets one of its two
+    // before the allowance is gone, and is refused rather than half drawn.
+    expect(result.unresolved).toEqual([
+      { instanceId: "i2", componentId: "hero", reason: "budget" },
+    ]);
+    expect(byInstanceOf(result.document, "i1")).toHaveLength(2);
+    expect(work.left).toBe(0);
+  });
+
+  it("composes exactly as it would without one while the allowance lasts", () => {
+    const doc = page([
+      node("keep"),
+      instance("i1", "hero"),
+      instance("i2", "gone"),
+    ]);
+    const definitions = defs({
+      hero: component([node("d1"), box("d2", [node("d3")])]),
+    });
+
+    const plain = resolveComponentInstances(doc, definitions);
+    const allowed = resolveComponentInstances(doc, definitions, {
+      work: { left: Number.POSITIVE_INFINITY },
+    });
+
+    expect(allowed.document).toEqual(plain.document);
+    expect(allowed.unresolved).toEqual(plain.unresolved);
+    expect(allowed.referenced).toEqual(plain.referenced);
+  });
+
+  it("refuses an allowance that would remove the bound rather than set one", () => {
+    const doc = page([instance("i1", "hero")]);
+    const definitions = defs({ hero: component([node("d1")]) });
+
+    // `left <= 0` is false for both, so either would spend without ever stopping.
+    expect(() =>
+      resolveComponentInstances(doc, definitions, {
+        work: { left: Number.NaN },
+      })
+    ).toThrow(RangeError);
+    expect(() =>
+      resolveComponentInstances(doc, definitions, {
+        work: { left: "many" as unknown as number },
+      })
+    ).toThrow(RangeError);
+  });
+
+  it("prepares nothing for an instance once the allowance is spent", () => {
+    // The first instance spends the allowance on its only entry. Planning the
+    // second would read its overrides before the clone refused it, and that
+    // preparation is work the allowance never charges.
+    let overridesRead = 0;
+    const second = instance("i2", "hero");
+    Object.defineProperty(second.props, "overrides", {
+      enumerable: true,
+      get() {
+        overridesRead += 1;
+        return {};
+      },
+    });
+    const work = { left: 1 };
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero"), second]),
+      defs({ hero: component([node("d1")]) }),
+      { work }
+    );
+
+    expect(result.unresolved).toEqual([
+      { instanceId: "i2", componentId: "hero", reason: "budget" },
+    ]);
+    expect(overridesRead).toBe(0);
+  });
+});
+
+describe("resolveComponentInstances and the loops it closes", () => {
+  it("reports every loop it closes, and none where there is none", () => {
+    const looping = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: component([instance("c1", "hero")]) })
+    );
+    const clean = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: component([node("d1")]) })
+    );
+
+    expect(looping.unresolved.map(e => e.reason)).toEqual(["cycle"]);
+    expect(looping.loopsClosed).toEqual(["hero"]);
+    expect(clean.loopsClosed).toEqual([]);
+  });
+
+  it("keeps a loop it closed inside an expansion it then abandons", () => {
+    // The loop closes on the definition's first entry and the allowance runs
+    // out two entries later. Abandoning the expansion rolls its refusals out of
+    // `unresolved`, since no reader receives that subtree; the loop is a fact
+    // about the definitions and stays reported.
+    const work = { left: 2 };
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({
+        hero: component([instance("c1", "hero"), node("x1"), node("x2")]),
+      }),
+      { work }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+    expect(result.loopsClosed).toEqual(["hero"]);
+  });
+
+  it("forgets a loop closed inside an expansion it could not read", () => {
+    // The loop closes on the definition's first entry, and the second throws
+    // when the clone reads it. The whole expansion is refused as unreadable and
+    // drawn as a placeholder, so no reader receives the loop and it is not
+    // reported as one.
+    const hostile = node("x1");
+    Object.defineProperty(hostile, "props", {
+      enumerable: true,
+      get() {
+        throw new Error("a field that cannot be read");
+      },
+    });
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: component([instance("c1", "hero"), hostile]) })
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["unreadable"]);
+    expect(result.loopsClosed).toEqual([]);
+  });
+});
