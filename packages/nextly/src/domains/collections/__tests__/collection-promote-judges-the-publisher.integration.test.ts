@@ -228,9 +228,8 @@ describe("a collection publish re-judges the draft it promotes", () => {
     // it was serialised to while the live row comes back from the driver as a
     // `Date`. Compared as they arrive, a date-bearing field the publisher may
     // not write reads as an edit and refuses a publish that touches nothing.
-    // Every type is covered rather than the one that broke: measured, text,
-    // number, boolean, JSON and group agreed and only the date did not, and a
-    // suite that checked one of them would not have said so.
+    // Every type is covered: only the date arrives in two representations, and
+    // a suite that checked one type would not show which.
     const onlyBoss = {
       update: ({ req }: { req?: { user?: { email?: string } } }) =>
         req?.user?.email === BOSS.email,
@@ -339,12 +338,11 @@ describe("a collection publish re-judges the draft it promotes", () => {
   });
 
   it("refuses a pending change that CLEARS a field it may not write", async () => {
-    // A GUARD, not a demonstration: this passes against the previous revision
-    // too. Clearing a field sends `null`, which is a present key and so is
-    // judged like any other value. The case the live-side pass exists for is a
-    // key ABSENT from the promoted document entirely, which no route through
-    // the public API was found to produce, since a collection snapshot is a
-    // full copy of the row. That half stays defensive.
+    // A GUARD, not a demonstration. Clearing a field sends `null`, which is a
+    // present key and so is judged like any other value. The case the live-side
+    // pass exists for is a key ABSENT from the promoted document entirely, which
+    // no known route through the public API produces, since a collection
+    // snapshot is a full copy of the row, so that half is guarded defensively.
     const t = await boot();
     const h = handlerOf(t);
 
@@ -381,8 +379,8 @@ describe("a collection publish re-judges the draft it promotes", () => {
     // The shaping pass coerces a caller's date to a `Date` before the resolver
     // sees it, and a `Date` is an object with no enumerable keys: a rebuild
     // that treats every object as a container returns `{}` and the driver then
-    // refuses the write outright. Measured before the fix: the publish failed
-    // with "value.getTime is not a function" and nothing went live.
+    // refuses that write with "value.getTime is not a function", so nothing
+    // goes live.
     const slug = "dated";
     current = await createTestNextly({
       collections: [
@@ -446,11 +444,11 @@ describe("a collection publish re-judges the draft it promotes", () => {
 
   it("publishes a group edit sent with the status while a change is pending", async () => {
     // No field rules at all, so nothing here is about access. The ordinary
-    // write encodes a group to its column string before the promotion runs, and
-    // the check that validates the promoted document read that string where it
-    // expects an object: a publish that also edited any group, repeater or JSON
-    // field was refused as "ops must be an object" whenever a pending change
-    // existed, which is the ordinary shape of an editor publishing their edit.
+    // write encodes a group to its column string before the promotion runs, so
+    // the promoted document has to be validated in its logical shape: read as
+    // the column string, any group, repeater or JSON field is refused as "ops
+    // must be an object", and publishing alongside an edit to one is the
+    // ordinary shape of an editor publishing their work.
     const slug = "grouppublish";
     current = await createTestNextly({
       collections: [
@@ -505,11 +503,10 @@ describe("a collection publish re-judges the draft it promotes", () => {
     // caller sends replaces the pending change's group whole, and the field gate
     // has already stripped the protected child the caller included, so the
     // promoted group lacks it and it reads as a deletion. Crediting the caller
-    // from their raw request would allow it, but that same reading lost a
-    // pending edit outright when a caller echoed a protected path, so this
-    // refuses instead. It fails closed: the publish is refused and the pending
-    // change is kept. Judging each leaf by the source that won the merge is what
-    // would allow it.
+    // from their raw request would allow it, and would also credit a caller who
+    // echoes a protected path with the pending change's edit, so this refuses.
+    // It fails closed: the publish is refused and the pending change is kept.
+    // Judging each leaf by the source that won the merge is what would allow it.
     const slug = "provenance";
     current = await createTestNextly({
       collections: [
@@ -593,9 +590,9 @@ describe("a collection publish re-judges the draft it promotes", () => {
     // A full form resubmits every field, so a publisher routinely sends a
     // protected value back unchanged. The field gate strips it, which leaves the
     // pending change's edit in the promoted document. Credited to the publisher
-    // because the path appeared in their request, that edit was restored to live
-    // and the successful publish deleted the draft: measured before this was
-    // fixed, success with no pending change left and the author's edit gone.
+    // because the path appears in their request, that edit would be restored to
+    // live while the successful publish deletes the draft, so the author's edit
+    // would be gone with success reported.
     const t = await boot();
     const h = handlerOf(t);
 

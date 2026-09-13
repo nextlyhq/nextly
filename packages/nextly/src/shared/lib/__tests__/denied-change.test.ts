@@ -3,11 +3,10 @@
  *
  * It is a pure function answering an intricate question over four documents,
  * and the integration suites reach it only through a whole publish, one shape
- * per test at considerable cost. Every defect it has had so far was a shape
- * question the caller could not see: a `Date` rebuilt as `{}`, a container
- * exempted because the caller supplied one field of it, a property deleted on
- * the live side that no traversal enumerated. Those belong here, where a shape
- * costs three lines.
+ * per test at considerable cost. The hard cases are shapes a caller cannot
+ * see: a `Date` that must not be rebuilt as `{}`, a container whose contents
+ * have two authors, a property present only on the live side. Those belong
+ * here, where a shape costs three lines.
  *
  * @module shared/lib/__tests__/denied-change.test
  */
@@ -166,10 +165,10 @@ describe("resolvePromotedDocument", () => {
     // A KNOWN over-refusal, pinned so it cannot change unnoticed. Live says
     // `kind: "private"`, which denies `guarded`; the pending change sets `kind`
     // to `public` and edits `guarded`, which the final document would allow.
-    // The live verdict is kept whole because filtering it by path lost data when
-    // repeater rows shifted, so this refuses. It fails closed: nothing is lost,
-    // the publish is refused and the pending change is kept. Judging rows by
-    // identity and siblings on the final document is what would allow it.
+    // The live verdict is kept whole because a path is a position, so this
+    // refuses. It fails closed: nothing is lost, the publish is refused and the
+    // pending change is kept. Judging rows by identity and siblings on the final
+    // document is what would allow it.
     await expect(
       resolve({
         before: { kind: "public", guarded: "edited" },
@@ -221,10 +220,10 @@ describe("resolvePromotedDocument", () => {
 
   it("refuses deleting a protected repeater row when a later row takes its index", async () => {
     // Paths are positions. The pending change deletes live row 0, which is
-    // private and so denies `secret`, and the public row shifts into index 0. A
-    // check that asked whether `rows[0].secret` still exists in the promotion
-    // answered yes, and the protected row was deleted without refusal. Measured
-    // before this was fixed: resolved, with only the public row left.
+    // private and so denies `secret`, and the public row shifts into index 0.
+    // `rows[0].secret` still exists in the promotion, so a check asking only
+    // whether a denied path survived would let the protected row's deletion
+    // through; the refusal comes from the live verdict kept whole.
     const rowRule = (document: Record<string, unknown>): Promise<void> => {
       const rows = document.rows;
       if (Array.isArray(rows)) {

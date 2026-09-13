@@ -9,16 +9,15 @@
  * question and deserves one answer.
  *
  * ONE function answers it AND returns the document to write, rather than a
- * caller applying the rules and interpreting the result for itself. Splitting
- * those apart is what went wrong in an earlier revision: the rules DELETE a
- * denied value, the refusal was judged from that deletion, and the same
- * stripped document was then handed to the write, so a protected value nobody
- * had touched was cleared by an unrelated publish.
+ * caller applying the rules and interpreting the result for itself. The rules
+ * DELETE a denied value, so a caller that judged the refusal from that deletion
+ * and then wrote the same stripped document would clear a protected value
+ * nobody touched; returning the document from the judgment keeps the two from
+ * disagreeing.
  *
- * A denied field keeps its LIVE value. That is what an update means, the caller
- * may not write the field so the field does not change, and it is the answer
- * Payload gives to the same question. Removing it instead writes an absence
- * nobody asked for.
+ * A denied field keeps its LIVE value. That is what an update means: the caller
+ * may not write the field, so the field does not change. Removing it instead
+ * writes an absence nobody asked for.
  *
  * A refusal is reserved for a change the PENDING CHANGE makes. A denied value
  * the caller sent with the publish is their own input, and dropping it back to
@@ -150,14 +149,13 @@ export async function resolvePromotedDocument(
  *
  * The live row is consulted because a rule is never asked about a key that is
  * absent, so a field the pending change removes outright is judged nowhere else.
- * An earlier revision filtered the live verdict down to the paths the promotion
- * no longer carries, and that filter made the check unsafe: a path is a
- * position, so when a pending change deletes a repeater row the row after it
- * takes its index, the protected row's path still exists, and the deletion went
- * through unjudged. Kept whole, a stale live verdict can refuse a publish the
- * final document would allow, which fails closed; filtered, it failed open and
- * lost data. Judging rows by identity rather than position is what would make
- * this precise in both directions.
+ * Both verdicts stay whole because a path is a position: when a pending change
+ * deletes a repeater row, the row after it takes its index, so the protected
+ * row's path still exists in the promotion and a verdict narrowed to missing
+ * paths would let the deletion through unjudged. Kept whole, a stale live
+ * verdict can refuse a publish the final document would allow, which fails
+ * closed. Judging rows by identity rather than position is what would make this
+ * precise in both directions.
  */
 function collectDenied(
   input: PromotionAccessInput,
@@ -417,8 +415,8 @@ function leafPaths(value: unknown, prefix: string): string[] {
  * A pending change is JSON, so a timestamp reaches here as the ISO string it
  * was serialised to, while the live row comes back from the driver as a `Date`.
  * Compared as they are, every date-bearing field the publisher may not write
- * reads as an edit and refuses a publish that touches nothing. Measured: of
- * text, number, boolean, JSON, group and date, only the date diverged.
+ * reads as an edit and refuses a publish that touches nothing. Of text, number,
+ * boolean, JSON, group and date, only the date arrives in two representations.
  */
 function sameStoredValue(a: unknown, b: unknown): boolean {
   return isDeepStrictEqual(asComparable(a), asComparable(b));
@@ -486,12 +484,12 @@ function hasOwn(record: object, key: string): boolean {
  * A PLAIN record, and the distinction is load-bearing.
  *
  * A `Date` is an object with no enumerable keys of its own, so a walk that
- * treats every object as a container rebuilds one as `{}` and the driver then
- * refuses it: measured, a caller who supplied a date with the publish got
- * `value.getTime is not a function` and no publish at all. The same is true of
- * anything else the store round-trips as a value rather than a shape, a
- * `Buffer` or a `RegExp` among them. Only an object made from `{}` or from a
- * null prototype carries children worth descending into.
+ * treats every object as a container rebuilds one as `{}`, and the driver
+ * refuses that with `value.getTime is not a function`: a publish carrying a
+ * date would fail outright. The same is true of anything else the store
+ * round-trips as a value rather than a shape, a `Buffer` or a `RegExp` among
+ * them. Only an object made from `{}` or from a null prototype carries
+ * children worth descending into.
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

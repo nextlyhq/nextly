@@ -6207,8 +6207,8 @@ export class CollectionMutationService extends BaseService {
       // alone, so a collection whose registered functions are validators,
       // defaults, hooks or READ rules never reaches a lookup. Without this
       // every publish, unpublish and republish on a draft-enabled collection
-      // paid for the roles and permissions queries to answer a question
-      // nothing would ask. Both tests are map reads.
+      // would pay for the roles and permissions queries to answer a question
+      // nothing asks. Both tests are map reads.
       const promoteRulesCouldRun =
         promotePossible &&
         params.overrideAccess !== true &&
@@ -6279,10 +6279,9 @@ export class CollectionMutationService extends BaseService {
           // In the LOGICAL shape the validator reads. `finalData` has already
           // been through `shapeWriteParts`, which encodes every JSON-backed field
           // to its column string, so a group the caller sent with the publish
-          // arrives here as text and is refused as "must be an object": a
-          // publish carrying any group, repeater or JSON value failed whenever a
-          // pending change existed. Parsed by the same function that builds the
-          // live row, so the two sides are one representation.
+          // arrives here as text, and validated as text it is refused as "must
+          // be an object". Parsed by the same function that builds the live row,
+          // so the two sides are one representation.
           const merged = this.deserializeJsonFieldsForSnapshot(
             this.assemblePromotedDocument(
               draftInput,
@@ -6296,12 +6295,11 @@ export class CollectionMutationService extends BaseService {
             fields
           );
           // Validated as ASSEMBLED, with nothing removed. A field this
-          // publisher may not write is not a schema violation, and the gate
-          // that judges permission now refuses the promotion outright rather
-          // than dropping the value, under the row lock where it can compare
-          // against what is live. Filtering here would validate a document
-          // that is never written either way, and report a denied required
-          // field as missing rather than as forbidden.
+          // publisher may not write is not a schema violation: the gate that
+          // judges permission refuses a promotion that changes one, under the
+          // row lock where it can compare against what is live. Filtering here
+          // would validate a document that is never written either way, and
+          // report a denied required field as missing rather than as forbidden.
           const localeCtx = await this.localizedRequiredContext(
             params.collectionName,
             params.locale
@@ -6780,14 +6778,13 @@ export class CollectionMutationService extends BaseService {
               // Assemble the full document the promotion persists (the locked
               // draft, the caller's scalars overlaid, the caller's single-component
               // patches merged onto the draft's components, and the caller's m2m),
-              // then filter it through the current field-level write access. A rule
+              // then judge it against the current field-level write access. A rule
               // that depends on a sibling the publish patch supplies (e.g. a field
               // writable only when `approved` is true, where the publish sets it
-              // false) is judged on the real final values, and a denied value is
-              // dropped at any depth for column, component, and m2m fields alike.
-              // Re-extracting the write parts from the FILTERED document keeps a
-              // denied component/m2m value out of the persisted parts, which the
-              // earlier after-access merge would have restored.
+              // false) is judged on the real final values, at any depth, for column,
+              // component, and m2m fields alike. The write parts are re-extracted
+              // from the RESOLVED document, so a denied component or m2m value is
+              // written at what the row already holds.
               // Logical, for the same reason as the check before the
               // transaction: `finalData` is already column-encoded, and a group
               // left as its string is one leaf to the resolver, so a denied field
@@ -6807,14 +6804,14 @@ export class CollectionMutationService extends BaseService {
               );
               // The caller's own contribution, from the payload the field gate
               // has ALREADY filtered, so it holds only what this publisher was
-              // allowed to send. Read from the raw request instead, it credited
-              // the publisher with the pending change's edit whenever they echoed
-              // the same path: the gate stripped their value, the merged document
-              // still held the draft's, the resolver treated that edit as theirs
-              // and restored live, and the publish consumed the draft. Filtered,
-              // an echoed protected value is simply absent, so the draft's edit
-              // is refused rather than lost. Logical, through the same conversion
-              // as the document it is compared against.
+              // allowed to send. Read from the raw request, it would credit the
+              // publisher with the pending change's edit whenever they echo the
+              // same path: the gate strips their value, the merged document still
+              // holds the draft's, the resolver treats that edit as theirs and
+              // restores live, and the publish consumes the draft. Filtered, an
+              // echoed protected value is simply absent, so the draft's edit is
+              // refused rather than lost. Logical, through the same conversion as
+              // the document it is compared against.
               const callerContribution = this.deserializeJsonFieldsForSnapshot(
                 this.assemblePromotedDocument(
                   {},
