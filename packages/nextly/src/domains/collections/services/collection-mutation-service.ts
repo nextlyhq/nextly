@@ -5851,6 +5851,7 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "update",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
         id: params.entryId,
       });
@@ -6258,6 +6259,7 @@ export class CollectionMutationService extends BaseService {
             data: merged,
             operation: "update",
             user: params.user,
+            authenticatedScope: params.authenticatedScope,
             overrideAccess: params.overrideAccess,
             id: params.entryId,
           });
@@ -6762,6 +6764,7 @@ export class CollectionMutationService extends BaseService {
                 data: mergedPromoteData,
                 operation: "update",
                 user: params.user,
+                authenticatedScope: params.authenticatedScope,
                 overrideAccess: params.overrideAccess,
                 id: params.entryId,
               });
@@ -8546,6 +8549,7 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "create",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
       });
 
@@ -9070,6 +9074,7 @@ export class CollectionMutationService extends BaseService {
         data: finalData,
         operation: "update",
         user: params.user,
+        authenticatedScope: params.authenticatedScope,
         overrideAccess: params.overrideAccess,
         id: entryId,
       });
