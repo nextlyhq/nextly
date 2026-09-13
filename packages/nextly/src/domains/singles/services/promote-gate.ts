@@ -216,6 +216,12 @@ async function refuseADeniedChange(
     before: promoted,
     permitted,
     live,
+    // The caller's own payload, so a denied value of theirs is stripped as it
+    // is on any other write rather than refusing the publish. Only the pending
+    // change's values are worth refusing over, since those belong to whoever
+    // saved them and a successful publish deletes the draft. The collection
+    // path draws the same line, which is the point of one judge.
+    callerSupplied: ctx.callerData,
     slug: ctx.slug,
     locale,
   });
