@@ -699,14 +699,15 @@ function composeSubject(
   options: CycleGuardOptions,
   work: WorkAllowance
 ): ComposedOnce {
-  const { unresolved } = resolveComponentInstances(
+  const { unresolved, loopsClosed } = resolveComponentInstances(
     hostPlacing(self, variant) as never,
     lookup as never,
     { limits: options.limits, work }
   );
-  if (unresolved.some(one => one.reason === "cycle")) {
-    return { reached: "cycle", unresolved };
-  }
+  // Read from the loops the resolver closed rather than from what it left
+  // standing: an expansion abandoned when the allowance runs out takes its
+  // refusals with it, and a loop found before that point still decides.
+  if (loopsClosed.length > 0) return { reached: "cycle", unresolved };
   if (unresolved.some(one => STOPPED_SHORT.includes(one.reason))) {
     return { reached: "stopped", unresolved };
   }

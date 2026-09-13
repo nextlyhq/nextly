@@ -276,6 +276,17 @@ export interface ResolvedComposition {
    * instances returns — the two say the same thing to every reader.
    */
   renamedDomIds: ReadonlyMap<string, string>;
+  /**
+   * Every component a reference loop closed on, in the order the loops closed.
+   *
+   * Kept whole when an expansion is refused and rolled back, which `unresolved`
+   * is not. `unresolved` describes the tree this returns, so a refusal made
+   * inside a subtree nobody receives is dropped from it; a loop is a property of
+   * the definitions, and it exists whether or not the expansion that found it
+   * had room to finish. A caller asking whether the definitions loop at all
+   * reads this.
+   */
+  loopsClosed: readonly string[];
 }
 
 /**
@@ -846,6 +857,7 @@ export function resolveComponentInstances(
     referenced: [],
     unresolved: [],
     renamedDomIds: new Map<string, string>(),
+    loopsClosed: [],
   };
   if (!isPlainRecord(document) || !Array.isArray(document.nodes)) {
     return unchanged;
@@ -931,6 +943,7 @@ export function resolveComponentInstances(
     referenced: [],
     referencedSeen: new Set<string>(),
     unresolved: [],
+    loopsClosed: [],
     definitionsRead: new Map<
       string,
       ComponentDocument | ComponentUnresolvedReason
@@ -942,6 +955,7 @@ export function resolveComponentInstances(
     referenced: run.referenced,
     unresolved: run.unresolved,
     renamedDomIds: run.renamedDomIds,
+    loopsClosed: run.loopsClosed,
   };
 }
 
@@ -1020,6 +1034,13 @@ interface ResolveRun {
   referenced: string[];
   referencedSeen: Set<string>;
   unresolved: UnresolvedInstance[];
+  /**
+   * Every component a loop closed on, kept outside the savepoint.
+   *
+   * A rollback trims `unresolved` to what the returned tree holds; a loop found
+   * inside an abandoned expansion is still a loop in the definitions.
+   */
+  loopsClosed: string[];
   /**
    * What the lookup answered for each component this run has asked about.
    *
@@ -2187,6 +2208,9 @@ function refuse(
   reason: ComponentUnresolvedReason
 ): ResolvedBlockNode {
   run.unresolved.push({ instanceId: instance.id, componentId, reason });
+  if (reason === "cycle" && !run.loopsClosed.includes(componentId)) {
+    run.loopsClosed.push(componentId);
+  }
   return { ...instance, unresolvedComponent: reason };
 }
 

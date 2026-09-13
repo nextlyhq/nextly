@@ -1888,6 +1888,69 @@ describe("saving a component that would reference itself", () => {
     ).rejects.toThrow(/more work than one save allows/);
   });
 
+  it("names the loop it found even when the allowance runs out later in that composition", async () => {
+    /*
+     * The loop closes on the component's first node under the variant composed
+     * last, when the allowance has almost gone, so that composition runs out on
+     * a later sibling and the resolver abandons the expansion that found it. The
+     * save is refused either way; what matters is that it says why. Telling the
+     * author to offer fewer variants would send them to fix the wrong thing and
+     * only then meet the loop.
+     */
+    const c = context();
+    register(c.ctx);
+    const large = oversized(3_000);
+    const many: Record<
+      string,
+      { label: string; overrides: Record<string, unknown> }
+    > = {};
+    for (let i = 0; i < 82; i += 1) {
+      many[`v${String(i)}`] = { label: "V", overrides: {} };
+    }
+    many.loop = { label: "Loop", overrides: { swap: "a" } };
+
+    const error = await c
+      .run({
+        collection: COMPONENTS,
+        operation: "update",
+        originalData: { id: "a" },
+        data: {
+          [FIELD]: {
+            ...large,
+            nodes: [
+              {
+                id: "n0",
+                type: COMPONENT_INSTANCE_TYPE,
+                version: 1,
+                props: { componentId: "b" },
+              },
+              ...large.nodes,
+            ],
+            exposed: [
+              {
+                id: "swap",
+                label: "Which",
+                nodeId: "n0",
+                propPath: "componentId",
+                type: "select",
+              },
+            ],
+            variants: many,
+          },
+        },
+        req: {},
+      })
+      .then(
+        () => null,
+        (reason: unknown) => reason
+      );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toMatch(/would reference itself: a → a/);
+    expect(message).not.toMatch(/more work than one save allows/);
+  });
+
   it("refuses one its own VARIANT installs, still with no Direct API", async () => {
     // The same question, through the other way a document can name itself: the
     // stored id is harmless and the variant's preset is what closes the loop.

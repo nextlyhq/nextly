@@ -4253,3 +4253,39 @@ describe("resolveComponentInstances under a caller's work allowance", () => {
     ).toThrow(RangeError);
   });
 });
+
+describe("resolveComponentInstances and the loops it closes", () => {
+  it("reports every loop it closes, and none where there is none", () => {
+    const looping = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: component([instance("c1", "hero")]) })
+    );
+    const clean = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({ hero: component([node("d1")]) })
+    );
+
+    expect(looping.unresolved.map(e => e.reason)).toEqual(["cycle"]);
+    expect(looping.loopsClosed).toEqual(["hero"]);
+    expect(clean.loopsClosed).toEqual([]);
+  });
+
+  it("keeps a loop it closed inside an expansion it then abandons", () => {
+    // The loop closes on the definition's first entry and the allowance runs
+    // out two entries later. Abandoning the expansion rolls its refusals out of
+    // `unresolved`, since no reader receives that subtree; the loop is a fact
+    // about the definitions and stays reported.
+    const work = { left: 2 };
+
+    const result = resolveComponentInstances(
+      page([instance("i1", "hero")]),
+      defs({
+        hero: component([instance("c1", "hero"), node("x1"), node("x2")]),
+      }),
+      { work }
+    );
+
+    expect(result.unresolved.map(e => e.reason)).toEqual(["budget"]);
+    expect(result.loopsClosed).toEqual(["hero"]);
+  });
+});

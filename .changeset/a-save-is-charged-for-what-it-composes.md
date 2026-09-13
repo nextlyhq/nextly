@@ -38,4 +38,6 @@ Each composition is now charged, by the composer itself, for every entry it
 examines, including expansions it abandons and nodes an override hides, against
 one allowance per save. A save that spends it is refused, and the message says
 what the author can change. `resolveComponentInstances` takes that allowance as
-the `work` option.
+the `work` option, and reports `loopsClosed`, every component a reference loop
+closed on, so a loop found just before the allowance ran out is still named as a
+loop rather than as spent work.
