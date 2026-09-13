@@ -15,8 +15,13 @@ import {
   createMcpHandler,
   type McpHttpHandler,
 } from "@modelcontextprotocol/server";
-import type { PluginRoute, RouteMethod } from "@nextlyhq/plugin-sdk";
+import type {
+  PluginRoute,
+  PluginRouteContext,
+  RouteMethod,
+} from "@nextlyhq/plugin-sdk";
 
+import { callerNow, whileServing } from "./caller";
 import { refuseUnlessAddressedHere } from "./guard";
 
 /**
@@ -49,8 +54,21 @@ const SERVER_NAME = "nextly";
  * exposing nothing. A client that connects sees a server with no capabilities,
  * which is an honest description of an install that has published nothing to
  * it.
+ *
+ * The caller is resolved HERE, before anything is constructed, so a request
+ * whose caller cannot be established is refused rather than served a server
+ * built for nobody. Nothing reads the value yet, which is exactly why the
+ * refusal is worth having now: the first tool to read it will find the
+ * guarantee already in place rather than have to establish it while also
+ * being the first thing to depend on it.
+ *
+ * Exported for its own test rather than only through a request, because a
+ * precondition whose rejection branch nothing reaches is a guard nobody has
+ * seen work. Not part of the package's public surface: `index.ts` does not
+ * re-export it.
  */
-function buildServer(options: EndpointOptions): McpServer {
+export function buildServer(options: EndpointOptions): McpServer {
+  callerNow();
   return new McpServer({ name: SERVER_NAME, version: options.version });
 }
 
@@ -100,14 +118,20 @@ const ENDPOINT_METHODS: readonly RouteMethod[] = ["POST", "GET", "DELETE"];
 export function mcpEndpointRoutes(options: EndpointOptions): PluginRoute[] {
   let handler: McpHttpHandler | undefined;
 
-  const serve = async (request: Request): Promise<Response> => {
+  const serve = async (
+    request: Request,
+    ctx: PluginRouteContext
+  ): Promise<Response> => {
     // Before anything parses the body. A refused request must not reach the
     // protocol at all, or the check is an audit trail rather than a gate.
     const refused = refuseUnlessAddressedHere(request, options.allowedHosts);
     if (refused) return refused;
 
-    handler ??= createMcpHandler(() => buildServer(options));
-    return handler.fetch(request);
+    const serving = (handler ??= createMcpHandler(() => buildServer(options)));
+    // The context reaches the protocol layer as itself. Declaring only
+    // `request` was enough while the endpoint exposed nothing, and it discards
+    // the services facade and the user that every tool will read.
+    return whileServing(ctx, () => serving.fetch(request));
   };
 
   return ENDPOINT_METHODS.map(method => ({
