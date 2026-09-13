@@ -78,7 +78,10 @@ import {
   rehydrateSystemTimestamps,
   SYSTEM_TIMESTAMP_KEYS,
 } from "../../../shared/lib/case-conversion";
-import { resolvePromotedDocument } from "../../../shared/lib/denied-change";
+import {
+  declaredFieldNames,
+  resolvePromotedDocument,
+} from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
@@ -6821,11 +6824,7 @@ export class CollectionMutationService extends BaseService {
                   }),
                 // What the schema declares, so a field named like one of the
                 // store's own columns is still judged as the content it is.
-                authoredFieldNames: new Set(
-                  addressableFields(fields, { descendInto: () => true })
-                    .map(entry => entry.name)
-                    .filter((name): name is string => typeof name === "string")
-                ),
+                authoredFieldNames: declaredFieldNames(fields),
                 slug: params.collectionName,
                 locale: draftLocaleKey ?? params.locale ?? null,
               });

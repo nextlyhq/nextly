@@ -30,3 +30,5 @@
 A publish is no longer refused over a field whose rule the pending change itself satisfies.
 
 The gate consults the live row as well as the promoted document, because a rule is never asked about a key that is absent and a field the pending change removes outright would otherwise be judged nowhere. It took the live row's verdict for every field, though, and a rule reads its siblings: where the live row says `kind: "private"`, which denies `guarded`, and the pending change sets `kind` to `public` and edits `guarded` legitimately, the stale verdict refused a publish that is perfectly valid. The live row now speaks only for the fields the promotion no longer carries.
+
+A field declared inside a group or a repeater counts as content too. The names the promotion gate defers to were collected with `addressableFields`, which pushes a named field and stops, so the set held the top level and nothing else and a nested field named like one of the store's own columns was still skipped. The walk that collects them descends every container now, and a Single's publish hands its declared names over as a collection's does.

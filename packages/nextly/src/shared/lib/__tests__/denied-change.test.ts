@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resolvePromotedDocument } from "../denied-change";
+import { declaredFieldNames, resolvePromotedDocument } from "../denied-change";
 
 /** Removes the named top-level or nested paths, as the field rules would. */
 function denies(...paths: string[]) {
@@ -216,6 +216,29 @@ describe("resolvePromotedDocument", () => {
       applyRules: denies("promo"),
     });
     expect(out).toBeDefined();
+  });
+
+  it("collects a name declared inside a NAMED container", async () => {
+    // `addressableFields` pushes a named field and stops, so a set built from
+    // it holds the top level only, and the nested name the metadata list is
+    // meant to defer to is exactly the one it misses.
+    const names = declaredFieldNames([
+      { name: "title", type: "text" },
+      { name: "meta", type: "group", fields: [{ name: "id", type: "text" }] },
+      {
+        type: "row",
+        fields: [
+          {
+            name: "rows",
+            type: "repeater",
+            fields: [{ name: "updatedAt", type: "text" }],
+          },
+        ],
+      },
+    ]);
+    expect(names.has("meta")).toBe(true);
+    expect(names.has("id")).toBe(true);
+    expect(names.has("updatedAt")).toBe(true);
   });
 
   it("leaves an allowed deletion deleted", async () => {

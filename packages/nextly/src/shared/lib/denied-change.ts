@@ -37,6 +37,34 @@ import { NextlyError } from "../../errors";
 
 import { detachData } from "./detach";
 
+/**
+ * Every field name a schema declares, at any depth.
+ *
+ * Its own walk rather than `addressableFields`, which pushes a NAMED field and
+ * stops: `descendInto` reaches the children of unnamed containers only, so a
+ * set built from it holds the top level and nothing else, and the nested name
+ * this exists to protect is exactly the one it would miss.
+ *
+ * Names, not paths, because the caller compares the last segment of a path: a
+ * field is content wherever it is declared, and the store's own columns are
+ * what the name list is for.
+ */
+export function declaredFieldNames(fields: unknown): Set<string> {
+  const names = new Set<string>();
+  const seen = new WeakSet<object>();
+  const pending: unknown[] = Array.isArray(fields) ? [...fields] : [];
+  while (pending.length > 0) {
+    const field = pending.pop();
+    if (typeof field !== "object" || field === null) continue;
+    if (seen.has(field)) continue;
+    seen.add(field);
+    const record = field as { name?: unknown; fields?: unknown };
+    if (typeof record.name === "string") names.add(record.name);
+    if (Array.isArray(record.fields)) pending.push(...record.fields);
+  }
+  return names;
+}
+
 /** What deciding one promotion needs from the service performing it. */
 export interface PromotionAccessInput {
   /** The document the write would persist, before any rule has run. */
