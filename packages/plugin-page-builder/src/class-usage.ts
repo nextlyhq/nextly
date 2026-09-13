@@ -35,11 +35,13 @@
  * writes rules for — omitting a class the stylesheet applies, which is the
  * absence a safe-delete check cannot afford.
  *
- * The bounds are on WORK, never on the answer. Nothing reachable is dropped, so
- * an id missing from the result means the document does not reference it. That
- * is what lets a caller treat this as authoritative for its own question; a
- * bound that silently truncated the result would make every absence ambiguous,
- * and absence is what a safe-delete check reads.
+ * The bounds are on WORK, and a bound that ends the walk says so. An id missing
+ * from a result whose `complete` is true means the document does not reference
+ * it; when `complete` is false the list is a prefix, and an absence proves
+ * nothing. That flag is what lets a caller treat a complete result as
+ * authoritative for its own question: a bound that silently truncated the
+ * result would make every absence ambiguous, and absence is what a safe-delete
+ * check reads.
  *
  * ## Authored reference, not rendered reference
  *
@@ -51,8 +53,14 @@
  * draw nothing and subtrees replaced by a placeholder. None of those run here,
  * and neither does the engine's `hiddenSubtreeNodes`, which names the same
  * gated subtrees. `selectNodes` deliberately leaves gating to its reader, and
- * this reader does not ask. A class that appears only on a pruned node still
- * counts, because the author put it there.
+ * the walk here does not ask. A class that appears only on a pruned node of
+ * the walked document still counts, because the author put it there.
+ *
+ * One place gating IS asked, and only when `definitions` is passed: the
+ * resolver leaves a condition-gated instance standing rather than inlining its
+ * definition, so a class that exists only inside that definition is not in the
+ * result. The record passes no `definitions` and is unaffected — a class inside
+ * a definition belongs to that component's own record either way.
  *
  * That over-count is the direction to fail in. It warns about a delete that was
  * safe. Pruning would under-count instead, and an absent class may be deleted
@@ -149,7 +157,9 @@ export interface ClassUsage {
  *
  * Neither form runs the renderer's visibility prune, so either may name a class
  * on a node the served page omits. The module docblock says why that over-count
- * is the safe direction.
+ * is the safe direction. The composed form has one exception in the other
+ * direction: a condition-gated instance is not inlined, so the classes only its
+ * definition applies are absent even when `complete` is true.
  */
 export function classUsageOf(
   stored: unknown,
@@ -162,7 +172,8 @@ export function classUsageOf(
   // WHICH nodes are read is the engine's, shared with the style compiler rather
   // than reproduced here. The selection is the compiler's, so a reader that
   // stopped anywhere else would miss nodes the stylesheet has rules for. It is
-  // not the served page's: no visibility prune runs, gated nodes included.
+  // not the served page's: no visibility prune runs, gated nodes included —
+  // though the resolver leaves a gated instance standing, uninlined.
   //
   // Sharing the walk rather than the numbers is the part that matters. Both
   // sides once stopped at `MAX_NODES` by different routes — depth-first here,
