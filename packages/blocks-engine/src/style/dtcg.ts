@@ -1094,7 +1094,7 @@ function unreadReservedField(
   if (on === "group" && key === "$root" && isTokenNode(value)) {
     return `"${at}" is a group's own token, which this site cannot read yet, so it was skipped.`;
   }
-  if (on === "group" && key === "$extends") {
+  if (on === "group" && key === "$extends" && isReference(value)) {
     return `"${at}" inherits from another group, which this site cannot follow yet, so nothing it would bring in was imported.`;
   }
   if (key === "$deprecated") return deprecationUnread(value, at);
@@ -1167,6 +1167,34 @@ function darkUnread(dark: unknown, name: string): string | undefined {
   return dark === undefined || typeof dark === "string"
     ? undefined
     : `"${name}.$extensions.${NEXTLY_EXTENSION}.css.dark" is not a string, so the token arrived with its light value only.`;
+}
+
+/**
+ * Whether an `$extends` value references anything: a non-empty string. Any other
+ * value names no group, so there is no inheritance to have lost.
+ */
+function isReference(value: unknown): boolean {
+  return typeof value === "string" && value !== "";
+}
+
+/**
+ * Why the type a file gives a token was not used, or `undefined` when it was.
+ *
+ * Asked where this system's stored kind is chosen over the file's type. The
+ * next export writes the token's type from that kind, so a file stating a
+ * different one — on the token or on a group around it — loses it silently
+ * unless it is said here. Silent when the two agree, which every file this
+ * system writes does.
+ */
+function typeOverriddenBy(
+  kind: TokenKind,
+  node: DtcgNode,
+  name: string,
+  inherited: string | undefined
+): string | undefined {
+  const stated = statedType(node) ?? inherited;
+  if (stated === undefined || stated === DTCG_TYPE[kind]) return undefined;
+  return `"${name}" was imported as the kind "${kind}" this system stored, and the type "${stated}" the file gives it was not used.`;
 }
 
 /** One token, preferring this vendor's exact CSS over a conversion. */
@@ -1325,7 +1353,10 @@ function readToken(
       // is the only place that knows both what the file stated and what was
       // taken instead, so anywhere else would be guessing at that decision.
       reportOverridden(node.$value, css.light, kind, name, issues);
-      return assemble(kind, values, undefined, [darkUnread(dark, name)]);
+      return assemble(kind, values, undefined, [
+        typeOverriddenBy(kind, node, name, inherited),
+        darkUnread(dark, name),
+      ]);
     }
   }
 

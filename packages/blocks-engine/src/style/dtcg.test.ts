@@ -1560,6 +1560,65 @@ describe("what the reader reports it did not keep", () => {
     expect(said(extensions)).toContain('"foo.$extensions" is not an object');
   });
 
+  describe("a type the stored kind overrode", () => {
+    const storedNumber = {
+      "com.nextlyhq.nextly": { css: { light: "5" }, kind: "number" },
+    };
+
+    it("names a token's own type that disagrees with the stored kind", () => {
+      // The stored kind wins, and the next export writes the token's type from
+      // it — so a file stating another type loses that type without a word.
+      const document = {
+        t: { $type: "color", $value: 1, $extensions: storedNumber },
+      };
+      expect(dtcgToTokens(document).tokens[0]?.kind).toBe("number");
+      expect(said(document)).toContain('"t" was imported as the kind "number"');
+      expect(said(document)).toContain('the type "color"');
+    });
+
+    it("names an inherited or unmapped type that disagrees", () => {
+      const inherited = {
+        g: { $type: "color", t: { $value: 1, $extensions: storedNumber } },
+      };
+      expect(said(inherited)).toContain(
+        '"g.t" was imported as the kind "number"'
+      );
+      const unmapped = {
+        t: { $type: "gradient", $value: 1, $extensions: storedNumber },
+      };
+      expect(said(unmapped)).toContain('the type "gradient"');
+    });
+
+    it("says nothing when the stated type is the stored kind's type", () => {
+      // The control: every file this system writes carries both, agreeing.
+      const agreeing = {
+        t: { $type: "number", $value: 5, $extensions: storedNumber },
+      };
+      expect(dtcgToTokens(agreeing).issues).toEqual([]);
+      const noType = { t: { $value: 5, $extensions: storedNumber } };
+      expect(dtcgToTokens(noType).issues).toEqual([]);
+    });
+  });
+
+  it("calls $extends an inheritance only when it names something", () => {
+    // `$extends` is a reference to another group. A value that is not a
+    // non-empty string references nothing, so there is no inheritance to have
+    // lost — only a malformed field.
+    for (const stated of [42, null, "", [], { group: "base" }]) {
+      const document = {
+        g: { $extends: stated, t: { $type: "number", $value: 1 } },
+      };
+      expect(said(document)).toContain(
+        '"g.$extends" is a design-token field this site does not read'
+      );
+      expect(said(document)).not.toContain("inherits from another group");
+    }
+    const referencing = { g: { $extends: "{base}", t: { $value: 1 } } };
+    expect(said(referencing)).toContain(
+      '"g.$extends" inherits from another group'
+    );
+  });
+
   it("calls a group's $root a token only when it has a token's shape", () => {
     // `$root` names a group's own token, and a token is an object carrying
     // `$value`. Anything else under that key is malformed input, and naming it
