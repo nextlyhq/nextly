@@ -29,6 +29,8 @@
 
 import { useId, type ReactNode } from "react";
 
+import { CountValue } from "./count-value";
+
 /**
  * One row behind a chart: its identity, its label, and its number.
  *
@@ -75,6 +77,14 @@ export interface ChartFrameProps {
   /** Said above the table when the series is not the whole answer. */
   note?: string;
   /**
+   * Whether every count in `rows` is a FLOOR rather than a whole figure.
+   *
+   * Written in the table through the one floor-aware count renderer, so the
+   * numbers a reader navigates cell by cell make the same claim as the ones
+   * drawn beside the graphic.
+   */
+  atLeast?: boolean;
+  /**
    * The graphic, handed the ids it must reference AND the strings they hold.
    *
    * The text comes back through this callback rather than being composed again
@@ -97,6 +107,7 @@ export function ChartFrame({
   labelHeading,
   rows,
   note,
+  atLeast,
   children,
 }: ChartFrameProps) {
   const base = useId();
@@ -185,7 +196,7 @@ export function ChartFrame({
                     )}
                   </th>
                   <td className="py-1 text-right tabular-nums text-foreground">
-                    {row.count.toLocaleString()}
+                    <CountValue total={row.count} atLeast={atLeast} />
                   </td>
                 </tr>
               ))}

@@ -5,7 +5,7 @@
  * bar's rendered width is not observable and `chart-scale.test.ts` asks that
  * question of the arithmetic directly. What IS observable, and what these cover,
  * is everything a chart can get wrong without being visibly broken: refusing the
- * wrong payload, naming a null bucket, disclosing a cap, and carrying a text
+ * wrong payload, naming a null bucket, disclosing a cap or a floor, and carrying a text
  * alternative and a real table.
  */
 import { render, screen, within } from "@testing-library/react";
@@ -29,11 +29,12 @@ const widget = (): DashboardWidget =>
 
 const grouped = (
   buckets: { value: string | null; count: number }[],
-  truncated?: boolean
+  flags: { truncated?: boolean; atLeast?: boolean } = {}
 ): WidgetResult => ({
   op: "groupBy",
   buckets,
-  ...(truncated && { truncated }),
+  ...(flags.truncated && { truncated: true }),
+  ...(flags.atLeast && { atLeast: true }),
 });
 
 function draw(result: WidgetResult, definition = widget()) {
@@ -178,7 +179,7 @@ describe("the bars archetype", () => {
   });
 
   it("discloses a cap rather than quietly showing a partial picture", () => {
-    draw(grouped([{ value: "Published", count: 9 }], true));
+    draw(grouped([{ value: "Published", count: 9 }], { truncated: true }));
     expect(screen.getByText(/some are not listed/i)).toBeInTheDocument();
   });
 
@@ -186,5 +187,60 @@ describe("the bars archetype", () => {
     draw(grouped([]));
     expect(screen.getByText(/no rows matched/i)).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("says a floor in the table and the text alternative, not only beside the bars", () => {
+    // A bounded grouping holds every bucket and a short count in each. Written
+    // as a whole number anywhere a reader can reach, it states a figure the
+    // source declined to vouch for.
+    draw(
+      grouped(
+        [
+          { value: "Published", count: 2000 },
+          { value: "Draft", count: 57 },
+        ],
+        { atLeast: true }
+      )
+    );
+
+    expect(screen.getByRole("img")).toHaveAccessibleDescription(
+      /Largest: Published, 2,000 or more\./
+    );
+    // Matched whole, with the separator optional: this name computation joins
+    // the count and the hidden phrase without the phrase's leading space. What
+    // is asserted is that the floor wording follows the count and nothing else.
+    const table = screen.getByRole("table");
+    expect(
+      within(table).getByRole("row", { name: /^Draft 57\s?or more$/ })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/each count is a floor/i)).toBeInTheDocument();
+  });
+
+  it("says a whole grouping plainly", () => {
+    // The control: a renderer that marked every count as a floor would satisfy
+    // the case above.
+    draw(grouped([{ value: "Published", count: 2000 }]));
+
+    expect(screen.getByRole("img")).toHaveAccessibleDescription(
+      /Largest: Published, 2,000\.$/
+    );
+    expect(screen.queryByText(/or more/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/each count is a floor/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("says both when the groups are capped AND their counts are floors", () => {
+    // Two claims about two different things -- which groups are here, and how
+    // much is in each -- so neither may stand in for the other.
+    draw(
+      grouped([{ value: "Published", count: 9 }], {
+        truncated: true,
+        atLeast: true,
+      })
+    );
+
+    const note = screen.getByText(/some are not listed/i);
+    expect(note).toHaveTextContent(/each count is a floor/i);
   });
 });

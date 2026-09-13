@@ -9,8 +9,16 @@
  * exactly that — whoever adds the next archetype copies the neighbouring file
  * and its coverage, or does not. A table over the renderers makes the omission
  * a failing test rather than a missing one.
+ *
+ * A GROUPED result's counts are drawn by `bars`, and are held to the same two
+ * readings in their own section below: the fixture differs, the claim does not.
  */
-import { render, screen, type RenderResult } from "@testing-library/react";
+import {
+  render,
+  screen,
+  within,
+  type RenderResult,
+} from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -18,6 +26,7 @@ import type {
   WidgetResult,
 } from "@admin/types/dashboard/widgets";
 
+import { barsBody } from "../bars";
 import { metricBody } from "../metric";
 import { statsBody } from "../stats";
 
@@ -130,5 +139,60 @@ describe("a stats cell that links", () => {
     expect(
       screen.getByRole("link", { name: "2,000, Draft posts" })
     ).toBeInTheDocument();
+  });
+});
+
+describe("a grouped count drawn by bars", () => {
+  const barsWidget = {
+    id: "acme/issues",
+    title: "Issues by kind",
+    archetype: "bars",
+    size: "md",
+    query: { source: "s", op: "groupBy", groupBy: "kind" },
+  } as unknown as DashboardWidget;
+
+  const drawGrouped = (atLeast?: boolean): RenderResult => {
+    const outcome = barsBody(
+      {
+        op: "groupBy",
+        buckets: [{ value: "Missing title", count: 2000 }],
+        ...(atLeast === undefined ? {} : { atLeast }),
+      },
+      barsWidget
+    );
+    if (!outcome.ok) throw new Error(`refused: ${outcome.message}`);
+    return render(<>{outcome.node}</>);
+  };
+
+  it("marks every bucket's FLOOR for both readers, in their own notation", () => {
+    drawGrouped(true);
+
+    // Scoped to the drawn graphic: a chart also carries a hidden title and a
+    // disclosure marker, so the first hidden node on the page is not the count's.
+    const graphic = screen.getByRole("img");
+    expect(graphic.textContent).toContain("2,000");
+    expect(
+      [...graphic.querySelectorAll('[aria-hidden="true"]')].map(
+        node => node.textContent
+      )
+    ).toContain("+");
+    expect(
+      [...graphic.querySelectorAll(".sr-only")].map(node => node.textContent)
+    ).toContain(" or more");
+    // And the table a reader navigates cell by cell makes the same claim. Matched
+    // whole with the separator optional: this name computation joins the count
+    // and the hidden phrase without the phrase's leading space.
+    expect(
+      within(screen.getByRole("table")).getByRole("row", {
+        name: /^Missing title 2,000\s?or more$/,
+      })
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing extra when every count IS whole", () => {
+    const { container } = drawGrouped();
+
+    expect(container.textContent).toContain("2,000");
+    expect(container.textContent).not.toContain("or more");
   });
 });

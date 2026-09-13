@@ -21,6 +21,7 @@
 
 import { ChartFrame, type ChartRow } from "./chart-frame";
 import { barFractions } from "./chart-scale";
+import { CountValue, countLabel } from "./count-value";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /**
@@ -59,6 +60,28 @@ function bucketRow(value: string | null, count: number): ChartRow {
   return { key: `v${value}`, label: value, count };
 }
 
+/**
+ * What the chart says about an answer that is not the whole picture, if any.
+ *
+ * Two different claims, and one result can make both: `truncated` is about the
+ * SET of groups, some of which were left out, and `atLeast` is about the counts
+ * inside the groups shown, each of which is a floor.
+ */
+function partialNote(result: {
+  truncated?: boolean;
+  atLeast?: boolean;
+}): string | undefined {
+  const said = [
+    result.truncated
+      ? "Showing the largest groups only; some are not listed."
+      : undefined,
+    result.atLeast
+      ? "Each count is a floor; a group may hold more than shown."
+      : undefined,
+  ].filter((sentence): sentence is string => sentence !== undefined);
+  return said.length > 0 ? said.join(" ") : undefined;
+}
+
 export const barsAccepts: ArchetypeAccepts = definition => {
   if (definition.query) return undefined;
   const name = definition.title ?? "This bars widget";
@@ -94,7 +117,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
   // the two drifted immediately: one pluralised "category" for a single bucket
   // and the other did not, so the table's caption and the chart's own
   // description disagreed about the same data.
-  const description = `${rows.length} ${rows.length === 1 ? "category" : "categories"}. Largest: ${largest.label}, ${largest.count.toLocaleString()}.`;
+  const description = `${rows.length} ${rows.length === 1 ? "category" : "categories"}. Largest: ${largest.label}, ${countLabel(largest.count, result.atLeast)}.`;
 
   return {
     ok: true,
@@ -106,11 +129,8 @@ export const barsBody: ArchetypeBody = (result, definition) => {
         description={description}
         labelHeading="Value"
         rows={rows}
-        note={
-          result.truncated
-            ? "Showing the largest groups only; some are not listed."
-            : undefined
-        }
+        note={partialNote(result)}
+        atLeast={result.atLeast}
       >
         {({ titleId, descId, title, description: text }) => (
           // A list rather than a bare stack of divs: the bars ARE a list of
@@ -146,7 +166,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
                     {row.label}
                   </span>
                   <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                    {row.count.toLocaleString()}
+                    <CountValue total={row.count} atLeast={result.atLeast} />
                   </span>
                 </div>
                 {/* The track is always full width, so the bars share one
