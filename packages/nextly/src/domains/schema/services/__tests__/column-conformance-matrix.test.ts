@@ -370,85 +370,21 @@ const ACCEPTED = byAspect([
     { origins: ["fieldGroup"], dialects: ["postgresql"] }
   ),
 
-  // --- Foreign keys on MySQL: type -----------------------------------------
-  ...everywhere(
-    ["upload"],
-    ["optional", "required"],
-    "type",
-    "collection generator emits text for an upload FK; descriptor bounds it at varchar(36)",
-    { origins: ["collection"], dialects: ["mysql"] }
-  ),
-
   // --- 🔴 Many values in one column ----------------------------------------
   // A field that holds MANY values stores them as a JSON array, and the descriptor says so for
-  // every one of them. Neither generator asks the question: both route these through the same
-  // scalar mapping a single-valued field of that type gets, so the column holds one value while
-  // the runtime binds an array to it. `dbType` does not rescue the number case — the descriptor
-  // ignores it once `hasMany` is set, and the field-group generator still emits DECIMAL.
+  // every one of them. The FIELD-GROUP generator does not ask the question: it routes these
+  // through the same scalar mapping a single-valued field of that type gets, so the column holds
+  // one value while the runtime binds an array to it. `dbType` does not rescue the number case —
+  // the descriptor ignores it once `hasMany` is set, and the field-group generator still emits
+  // DECIMAL. The collection generator now reads the descriptor for every column it creates, so it
+  // no longer appears here.
   ...everywhere(
     ["number"],
     ["hasMany", "hasMany decimal"],
     "type",
-    "generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON"
+    "field-group generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON",
+    { origins: ["fieldGroup"] }
   ),
-  // SQLite is absent from the two below on purpose: it stores JSON as text, so the two sides land
-  // on the same column there and there is nothing to accept.
-  ...everywhere(
-    ["upload"],
-    ["hasMany"],
-    "type",
-    "collection generator emits a single FK column for a hasMany upload; descriptor stores the ids as JSON",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
-  ...everywhere(
-    ["relationship"],
-    ["hasMany", "polymorphic"],
-    "type",
-    "collection generator emits a single FK column for a multi-reference relationship; descriptor stores the ids as JSON",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
-
-  // --- 🔴 A number that wants fractions -------------------------------------
-  // Two ways to ask, and neither generator gives the descriptor's answer. `options.format` is how a
-  // Builder-created number asks; the create path answers with an EXACT decimal where the descriptor
-  // wants approximate floating point, and the ALTER path answers with a whole number because it
-  // never sees the options at all.
-  ...everywhere(
-    ["number"],
-    ["float"],
-    "type",
-    "collection generator emits an exact decimal for a float field; descriptor says floating point",
-    {
-      origins: ["collection"],
-      paths: ["create"],
-      dialects: ["postgresql", "mysql"],
-    }
-  ),
-
-  // --- 🔴 What the ADD COLUMN path never sees -------------------------------
-  // A column added to an existing table is rendered from the field's TYPE and LENGTH only, so
-  // everything else a field says is dropped on the way: the short-text variant, the width behind
-  // it, and `options.format`. The same field creates one column with its table and a different one
-  // when added later, and the diff then proposes that difference on every run afterwards.
-  ...everywhere(
-    ["text"],
-    ["short variant"],
-    "type",
-    "ADD COLUMN drops the field's options and validation, so a bounded text field is added unbounded",
-    {
-      origins: ["collection"],
-      paths: ["alter"],
-      dialects: ["postgresql", "mysql"],
-    }
-  ),
-  ...everywhere(
-    ["number"],
-    ["float"],
-    "type",
-    "ADD COLUMN drops the field's options, so a float field is added as a whole number",
-    { origins: ["collection"], paths: ["alter"] }
-  ),
-
   // --- 🔴 A select that holds several choices -------------------------------
   // The field-group generator switches a hasMany select to a JSON column; the descriptor does not
   // look at `hasMany` for a select at all and keeps describing a single string. Recorded against the
@@ -461,38 +397,18 @@ const ACCEPTED = byAspect([
     { origins: ["fieldGroup"], dialects: ["postgresql", "mysql"] }
   ),
 
-  // --- Structured values ---------------------------------------------------
-  // Repeater and group hold structured data. The collection generator stores them as text while the
-  // descriptor names the dialect's JSON type, so the ORM binds a JSON column over a text one.
-  // SQLite is absent on purpose: it stores JSON as text, so there is nothing to disagree about.
-  ...everywhere(
-    ["repeater", "group"],
-    ["plain"],
-    "type",
-    "collection generator stores structured values as text; descriptor names the JSON type",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
-
   // --- Bounded strings: the two directions ---------------------------------
   // 🔴 These do NOT resolve the same way, which is why each is written down separately rather than
-  // as one rule. On MySQL the generator emits `text` (65 535 characters) and the descriptor
-  // `varchar(255)`, so taking the descriptor's answer would truncate content that already exists and
-  // the DESCRIPTOR has to move. On PostgreSQL it is the reverse: the generator bounds at 255 and the
-  // descriptor leaves it unbounded, so the generator can move safely because widening loses nothing.
-  ...everywhere(
-    ["select"],
-    ["plain", "hasMany", "camelCase name"],
-    "type",
-    "generator emits text, descriptor emits varchar(255); narrowing would truncate, so the descriptor moves",
-    { origins: ["collection"], dialects: ["mysql"] }
-  ),
-  ...everywhere(
-    ["radio"],
-    ["plain"],
-    "type",
-    "generator emits text, descriptor emits varchar(255); narrowing would truncate, so the descriptor moves",
-    { origins: ["collection"], dialects: ["mysql"] }
-  ),
+  // as one rule. On MySQL a generator emits `text` (65 535 characters) and the descriptor
+  // `varchar(255)`; on PostgreSQL it is the reverse, the generator bounds at 255 and the descriptor
+  // leaves it unbounded, where the generator can move safely because widening loses nothing.
+  //
+  // 🔴 The collection generator's MySQL rows are no longer here, and NOT because that direction was
+  // judged safe. New columns now read the descriptor, so a select or radio created from today on is
+  // `varchar(255)` where it used to be `text` — a bound on values that could previously be longer.
+  // Nothing existing was touched and nothing can be truncated, because only columns that do not yet
+  // exist are rendered this way. Whether the DESCRIPTOR should move to `text` for these types is
+  // still open, and is tracked as its own question rather than settled by this file.
   ...everywhere(
     ["select"],
     ["plain", "camelCase name"],
@@ -511,8 +427,8 @@ const ACCEPTED = byAspect([
     ["email", "password"],
     ["plain"],
     "type",
-    "generator bounds the column at varchar(255); descriptor leaves it unbounded text",
-    { dialects: ["postgresql"] }
+    "field-group generator bounds the column at varchar(255); descriptor leaves it unbounded text",
+    { origins: ["fieldGroup"], dialects: ["postgresql"] }
   ),
 
   // --- Timestamps on MySQL --------------------------------------------------

@@ -222,6 +222,37 @@ export class DynamicCollectionSchemaService {
    * creation. The two mappings still disagree elsewhere — see the note on
    * `mapFieldTypeToSQL`.
    */
+  /**
+   * The type for a column this migration is about to CREATE.
+   *
+   * Read from the canonical descriptor — the same answer the runtime Drizzle table selects through
+   * and the schema diff compares against — so a column is born as the type the rest of the system
+   * already believes it has. `mapFieldTypeToSQL` stays as the fallback for a field the descriptor
+   * declines to describe.
+   *
+   * Scoped to columns that do not exist yet, and that scope is the whole safety argument. Asking
+   * the descriptor about an EXISTING column would restate it under a mapping it was not built with,
+   * which on MySQL is a narrowing `MODIFY` that truncates stored values for an edit that touched
+   * nothing but a flag. The paths that alter a live column therefore do not call this, and say so
+   * where they render their own type.
+   *
+   * This generalises `canonicalSlugType`, which reached for the descriptor for exactly one column
+   * because MySQL cannot index an unbounded `TEXT`. The same disagreement was present for every
+   * other column; only `slug` failed loudly enough to get fixed.
+   */
+  private newColumnType(field: FieldDefinition): string {
+    return (
+      getColumnDescriptor(field, this.dialect, "collection")?.dialectType ??
+      this.mapFieldTypeToSQL(
+        field.type,
+        field.length,
+        field.options,
+        field.validation,
+        field
+      )
+    );
+  }
+
   private canonicalSlugType(field: FieldDefinition): string | null {
     if (toSnakeCase(field.name) !== "slug") return null;
     // Asked as the builder this service IS. The descriptor bounds a slug column for every builder,
@@ -703,9 +734,7 @@ export class DynamicCollectionSchemaService {
           return null;
         }
 
-        const type =
-          this.canonicalSlugType(f) ??
-          this.mapFieldTypeToSQL(f.type, f.length, f.options, f.validation, f);
+        const type = this.newColumnType(f);
         const nullable = f.required ? "NOT NULL" : "";
 
         // A one-to-one keeps its inline `UNIQUE`, and ONLY a one-to-one.
@@ -1266,13 +1295,7 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
-        const type = this.mapFieldTypeToSQL(
-          field.type,
-          field.length,
-          undefined,
-          undefined,
-          field
-        );
+        const type = this.newColumnType(field);
         const nullable = field.required ? "NOT NULL" : "";
         const addColName = toSnakeCase(field.name);
 
@@ -1407,8 +1430,8 @@ ${allColumnDefs.join(",\n")}
             this.mapFieldTypeToSQL(
               field.type,
               field.length,
-              undefined,
-              undefined,
+              field.options,
+              field.validation,
               field
             )
           );

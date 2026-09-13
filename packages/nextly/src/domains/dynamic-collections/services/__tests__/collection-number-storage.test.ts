@@ -91,9 +91,54 @@ describe("a number field's storage", () => {
       type: "number",
     } as unknown as FieldDefinition;
 
-    expect(createdColumn("postgresql", field)).toContain("integer");
+    // `int4` is PostgreSQL's own name for a 4-byte integer and the spelling the descriptor uses,
+    // which is what a new column is now rendered from. The same type as `integer`, which is what
+    // this generator used to spell it; the pairing with `numeric` below is what carries the claim.
+    expect(createdColumn("postgresql", field)).toContain("int4");
     expect(createdColumn("postgresql", field)).not.toContain("numeric");
   });
+
+  // The two paths, compared to EACH OTHER rather than to a literal.
+  //
+  // Every assertion above names an expected type, so all of them could pass while create and add
+  // disagreed — each would simply be checked against its own expectation. The defect this guards
+  // was exactly that shape: a float field reached `decimal`/`double`/`real` when its table was
+  // created and a whole-number column when it was added to a table that already existed, so the
+  // fraction was discarded for one arrival order and kept for the other. Asking whether the two
+  // agree is the only question a per-path literal cannot answer.
+  it.each([["postgresql"], ["mysql"], ["sqlite"]] as const)(
+    "gives a float the same column whether it is created or added — %s",
+    dialect => {
+      const field = {
+        name: "score",
+        type: "number",
+        options: { format: "float" },
+      } as unknown as FieldDefinition;
+
+      const created = createdColumn(dialect, field);
+      const added = addedColumn(dialect, field);
+
+      // Both non-empty first: an unrendered column would make the comparison below vacuously true.
+      expect(created).not.toBe("");
+      expect(added).not.toBe("");
+
+      // Anchored on the column NAME rather than on either statement's prefix: the create path
+      // yields a bare column clause and the add path a whole `ALTER TABLE ... ADD COLUMN`
+      // statement, and a helper that assumed one shape silently compared a statement against a
+      // type and failed on correct code.
+      const typeOf = (line: string) => {
+        const match = line
+          .toLowerCase()
+          .match(/[`"]score[`"]\s+(.+?)[,;]?\s*$/);
+        expect(match).not.toBeNull();
+        return (match?.[1] ?? "").trim();
+      };
+
+      expect(typeOf(added)).toBe(typeOf(created));
+      // And a whole-number column is specifically not the answer either side reaches.
+      expect(typeOf(created)).not.toMatch(/^int(eger|4)?$/);
+    }
+  );
 
   // `precision` and `scale` are what let the column hold the values the field promises, so a default
   // that silently ignored them would pass every assertion above that names no dimensions.
@@ -350,8 +395,10 @@ describe("an ALTER changes only what actually changed", () => {
       "postgresql"
     ).generateMigrationSQL(TABLE, [plugin], {});
 
-    // Reaching the number branch at all is the precondition: an unresolved type would be `text`.
-    expect(sql.toLowerCase()).toContain("integer");
+    // Reaching the number branch at all is the precondition: an unresolved type would be `text`,
+    // which `int4` still distinguishes from — the assertion keeps its discriminating power under
+    // the descriptor's spelling.
+    expect(sql.toLowerCase()).toContain("int4");
     expect(sql.toLowerCase()).not.toContain("numeric(12, 4)");
   });
 
