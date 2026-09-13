@@ -240,8 +240,7 @@ interface PluginAdminWidgetBase {
    * The same two fields the registration channel takes, validated by the same
    * shared rule — a contribution declaring a lifecycle the host cannot answer
    * is refused here rather than published and quietly treated as permanent.
-   * `pin` and `dismissible` are deliberately absent from both channels until
-   * something reads them.
+   * `pin` is deliberately absent from both channels until something reads it.
    *
    * The types are IMPORTED rather than spelled out. A literal union here would
    * be a second copy of a vocabulary `lifecycle.ts` owns, and the drift is
@@ -251,6 +250,15 @@ interface PluginAdminWidgetBase {
    */
   lifecycle?: WidgetLifecycle;
   visibleWhen?: WidgetCondition | readonly WidgetCondition[];
+  /**
+   * Whether a reader may send this card away themselves.
+   *
+   * Independent of the lifecycle beside it: a conditional card goes when the
+   * install says its condition has lapsed, and a dismissible one goes when the
+   * READER says so, while the condition still holds. `WidgetDefinition` carries
+   * the reasoning and the fact that dismissal is recorded as hiding.
+   */
+  dismissible?: boolean;
   /**
    * What a reader may change about this card, drawn by the settings panel.
    *

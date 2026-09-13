@@ -89,6 +89,8 @@ export interface CanonicalWidget {
    */
   lifecycle?: string;
   visibleWhen?: string | readonly string[];
+  /** Whether the reader may send this card away; see `WidgetDefinition`. */
+  dismissible?: boolean;
   /**
    * The gates INSIDE the declaration: one per action of an `actions` widget,
    * verbatim, `undefined` where the action declares none.
@@ -144,6 +146,9 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ...(definition.visibleWhen === undefined
       ? {}
       : { visibleWhen: definition.visibleWhen }),
+    ...(definition.dismissible === undefined
+      ? {}
+      : { dismissible: definition.dismissible }),
   };
 }
 

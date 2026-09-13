@@ -587,6 +587,10 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     ...(typeof declaration.visibleWhen === "string"
       ? { visibleWhen: declaration.visibleWhen }
       : {}),
+    // Boolean rather than truthy: a contribution carrying `dismissible: "yes"`
+    // is a declaration mistake, and publishing it as `true` would honour a
+    // value the author never wrote.
+    ...(declaration.dismissible === true ? { dismissible: true } : {}),
   };
 }
 
