@@ -557,9 +557,9 @@ describe("what goes in", () => {
   });
 
   it("names an entry that is neither a token nor a group", () => {
-    // The engine's walk descends into every non-`$` child and simply continues
-    // when it is not an object — nothing reported. Part of the source file is
-    // gone, from a feature whose whole purpose is naming what was lost.
+    // The engine's walk descends into every non-`$` child, and one that is not
+    // an object is neither a group to descend into nor a token to read. Part of
+    // the source file is gone, so the import has to say so.
     const document = JSON.parse(exported(SITE)) as Record<string, unknown>;
     document["lost"] = 42;
     (document["nested"] as unknown) = { deeper: "also lost" };
@@ -634,10 +634,9 @@ describe("what goes in", () => {
      */
     { timeout: 60_000 },
     () => {
-      // A shallow file with enough top-level entries: `push(...frontier)` passes
-      // every entry as an ARGUMENT and exceeds the engine's limit. Making the
-      // walk iterative to escape recursion depth and then spreading its frontier
-      // trades one stack overflow for another.
+      // A shallow file with enough top-level entries that any step passing them
+      // as function ARGUMENTS — a spread into `push`, say — exceeds the
+      // engine's limit and throws.
       // Asserted as a SUCCESS rather than as "does not throw". The boundary now
       // catches a `RangeError` and answers with a refusal, so not-throwing holds
       // whether the walk works or blows up and is caught — measured: with the
@@ -732,10 +731,16 @@ describe("what goes in", () => {
     // Asserted against the engine's OWN output rather than against a shape:
     // `Array.isArray(skipped)` holds on every return path, so it passes whether
     // or not a reason survives — a test that cannot fail.
+    //
+    // EQUAL rather than contained. The import adds nothing of its own about what
+    // the file held — every such line is the reader's — so a second account of
+    // the reader's losses written here would show up as extra entries and fail.
     const file = JSON.parse(exported(SITE)) as Record<string, unknown>;
     file["motion"] = {
       ease: { $type: "cubicBezier", $value: [0.4, 0, 0.2, 1] },
     };
+    file["lost"] = 42;
+    (file["color"] as Record<string, unknown>)["$description"] = "Palette";
     const document = JSON.stringify(file);
 
     const mine = importDtcg(document, { tokens: [] });
@@ -745,8 +750,8 @@ describe("what goes in", () => {
     const theirs = dtcgToTokens(JSON.parse(document)).issues.map(
       issue => issue.message
     );
-    expect(theirs.length).toBeGreaterThan(0);
-    for (const said of theirs) expect(mine.skipped).toContain(said);
+    expect(theirs.length).toBeGreaterThan(2);
+    expect(mine.skipped).toEqual(theirs);
   });
 });
 
@@ -1378,14 +1383,9 @@ describe("a document nested past what the reader can name", () => {
   it("says it once for the whole subtree, not once per entry", () => {
     /*
      * Past the segment limit the engine refuses the branch WHOLE and says so in
-     * one line. This traversal used to walk on into it and add its own findings
-     * about entries nothing was ever going to read — so the author got a second
-     * account of a region already condemned, and paid a full traversal for it.
-     *
-     * Asserted on the OUTPUT rather than on a clock, because the clock cannot
-     * separate this: the cost was carried by rebuilding the path per node, and
-     * fixing that alone took a 15000-deep file from seconds to 16ms. The bound
-     * takes it to 8ms, and what it really buys is this one message.
+     * one line, without walking on into it. Anything that reported entries
+     * inside that branch would give the author a second account of a region
+     * already condemned, about entries nothing was ever going to read.
      */
     const result = importDtcg(deep(70), { tokens: [] });
     expect(result.ok).toBe(false);

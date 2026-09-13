@@ -922,10 +922,23 @@ function read(
   const groupType = typeof node.$type === "string" ? node.$type : inherited;
 
   for (const [key, child] of Object.entries(node)) {
-    // `$`-prefixed keys are the format's own; a name may not begin with one.
-    if (key.startsWith("$")) continue;
-    if (!isPlainObject(child)) continue;
     const here = [...path, key];
+    // `$`-prefixed keys are the format's own; a name may not begin with one.
+    // Each is either a field a group is read for or said to be skipped, here,
+    // where the decision to pass over it is made.
+    if (key.startsWith("$")) {
+      const unread = unreadGroupField(key, child, here.join("."));
+      if (unread !== undefined) issues.push(issue(unread));
+      continue;
+    }
+    if (!isPlainObject(child)) {
+      issues.push(
+        issue(
+          `"${here.join(".")}" is neither a token nor a group of them, so it was skipped.`
+        )
+      );
+      continue;
+    }
 
     if ("$value" in child) {
       const token = readToken(child, here, groupType, issues);
@@ -950,6 +963,128 @@ function read(
   }
 }
 
+/**
+ * Why one of a GROUP's own `$` fields is not kept, or `undefined` when it is.
+ *
+ * An ALLOWLIST, for this function and {@link unreadTokenField} alike: each
+ * branch names a field the reader takes, in the shape it takes it, and every
+ * other `$` key is reported. The opposite question — which fields are lost —
+ * cannot be finished, because the format keeps adding fields and each one this
+ * reader has not learned would be dropped without a word. Asked this way, a
+ * field the reader does take but nobody listed costs a visible line instead.
+ *
+ * A group is read for its `$type` alone, which its tokens inherit. Its own
+ * description and extensions have nowhere to go: this site keeps tokens.
+ */
+function unreadGroupField(
+  key: string,
+  value: unknown,
+  at: string
+): string | undefined {
+  if (key === "$type") {
+    return typeof value === "string" ? undefined : unusableType(at);
+  }
+  if (key === "$description" || key === "$extensions") {
+    return `"${at}" belongs to a group rather than to a token, and this site keeps only tokens, so it was skipped.`;
+  }
+  return unreadReservedField(key, at);
+}
+
+/**
+ * What a TOKEN holds that the reader will not keep, one line per part.
+ *
+ * Its named children as well as its fields: the reader stops at a token and
+ * moves to the next sibling, so a token written inside another is never
+ * reached — the loss least visible from outside, because the child looks
+ * perfectly importable.
+ */
+function unreadTokenParts(node: DtcgNode, at: string): string[] {
+  const unread: string[] = [];
+  for (const [key, value] of Object.entries(node)) {
+    const said = key.startsWith("$")
+      ? unreadTokenField(key, value, `${at}.${key}`)
+      : `"${at}.${key}" is written inside a token, where this site's reader does not look, so it was skipped.`;
+    if (said !== undefined) unread.push(said);
+  }
+  return unread;
+}
+
+/**
+ * Why one of a token's own `$` fields is not kept, or `undefined` when it is.
+ *
+ * The shapes named here are the ones {@link readToken} takes — a string type
+ * and description, an object of extensions — so a field in any other shape is
+ * one the token arrives without, looking entirely successful.
+ */
+function unreadTokenField(
+  key: string,
+  value: unknown,
+  at: string
+): string | undefined {
+  if (key === "$value") return undefined;
+  if (key === "$type") {
+    return typeof value === "string" ? undefined : unusableType(at);
+  }
+  if (key === "$description") {
+    return typeof value === "string"
+      ? undefined
+      : `"${at}" is not a string, so it was skipped and the token arrived without it.`;
+  }
+  if (key === "$extensions") {
+    return isPlainObject(value)
+      ? undefined
+      : `"${at}" is not an object, so it was skipped and the token arrived without it.`;
+  }
+  return unreadReservedField(key, at);
+}
+
+/**
+ * The line for a `$` key no node is read for.
+ *
+ * The format's own fields are named for what they meant, because "a field this
+ * site does not read" undersells two of them. `$extends` brings in another
+ * group's tokens, so skipping it loses tokens rather than a note; `$root` is
+ * not a field at all but a group's own token under a reserved name.
+ */
+function unreadReservedField(key: string, at: string): string {
+  if (key === "$root") {
+    return `"${at}" is a group's own token, which this site cannot read yet, so it was skipped.`;
+  }
+  if (key === "$extends") {
+    return `"${at}" inherits from another group, which this site cannot follow yet, so nothing it would bring in was imported.`;
+  }
+  if (key === "$deprecated") {
+    return `"${at}" marks it deprecated, which this site does not record, so the mark was skipped.`;
+  }
+  return `"${at}" is a design-token field this site does not read, so it was skipped.`;
+}
+
+/** The line for a `$type` that is not a name, which the reader passes over. */
+function unusableType(at: string): string {
+  return `"${at}" is not a usable type — a type is written as a name, such as "color" — so it was ignored and the type was taken from the group around it instead.`;
+}
+
+/**
+ * Why this system's own stored values were passed over for `$value`, or
+ * `undefined` when the extension states none.
+ *
+ * Asked only on the `$value` path, which is reached exactly when the stored
+ * CSS was not taken. An extension carrying neither `css` nor `kind` states no
+ * values — an id alone is what a rename travels as — so nothing was lost.
+ */
+function storedValuesUnread(own: unknown, name: string): string | undefined {
+  if (!isPlainObject(own)) return undefined;
+  if (own.css === undefined && own.kind === undefined) return undefined;
+  return `"${name}.$extensions.${NEXTLY_EXTENSION}" does not state values this site can read — a light value as a string, and a kind the format has a type for — so its own values were skipped and the token was read from "$value" instead.`;
+}
+
+/** Why a stored dark value was not taken, or `undefined` when it was. */
+function darkUnread(dark: unknown, name: string): string | undefined {
+  return dark === undefined || typeof dark === "string"
+    ? undefined
+    : `"${name}.$extensions.${NEXTLY_EXTENSION}.css.dark" is not a string, so the token arrived with its light value only.`;
+}
+
 /** One token, preferring this vendor's exact CSS over a conversion. */
 function readToken(
   node: DtcgNode,
@@ -957,6 +1092,12 @@ function readToken(
   inherited: string | undefined,
   issues: ValidationIssue[]
 ): SiteToken | undefined {
+  // Said before anything decides whether the token is kept, because none of it
+  // turns on that: a field in a shape the reader cannot take is lost either way.
+  for (const unread of unreadTokenParts(node, path.join("."))) {
+    issues.push(issue(unread));
+  }
+
   // Each segment on its own first. The format forbids `.` in a name, so a key
   // spelled `"color.primary"` is malformed — joined into the dot path it is
   // indistinguishable from the nested `color` -> `primary` it would collide
@@ -986,6 +1127,15 @@ function readToken(
     ? { ...node.$extensions }
     : {};
   const own = extensions[NEXTLY_EXTENSION];
+  if (own !== undefined && !isPlainObject(own)) {
+    // Deleted below with nothing read from it, so what it held is gone and the
+    // next export writes a generated object in its place.
+    issues.push(
+      issue(
+        `"${name}.$extensions.${NEXTLY_EXTENSION}" is not an object, so this site could not read it and did not keep it.`
+      )
+    );
+  }
   // Carried, not consumed: everything except this vendor's own key goes back
   // out with the token, which is what the format requires of any tool.
   delete extensions[NEXTLY_EXTENSION];
@@ -1047,12 +1197,16 @@ function readToken(
   // is the only one anyone sees.
   const assemble = (
     kind: TokenKind,
-    values: { light: string; dark?: string }
+    values: { light: string; dark?: string },
+    decided?: string
   ): SiteToken | undefined => {
     // The guard lives here rather than at each call, so the shorter extension
     // path cannot be the one that skips it: its CSS is arbitrary JSON from a
     // file exactly as `$value` is, and is trusted no further.
     if (!isWritableValue(values, name, issues)) return undefined;
+    // A loss belonging to the path taken is said only once that path has made
+    // a token, so a token refused afterwards never reports how it was read.
+    if (decided !== undefined) issues.push(issue(decided));
     return {
       ...(id !== undefined ? { id } : {}),
       name,
@@ -1080,7 +1234,7 @@ function readToken(
       // is the only place that knows both what the file stated and what was
       // taken instead, so anywhere else would be guessing at that decision.
       reportOverridden(node.$value, css.light, kind, name, issues);
-      return assemble(kind, values);
+      return assemble(kind, values, darkUnread(dark, name));
     }
   }
 
@@ -1103,7 +1257,7 @@ function readToken(
     return undefined;
   }
 
-  return assemble(kind, { light });
+  return assemble(kind, { light }, storedValuesUnread(own, name));
 }
 
 /**

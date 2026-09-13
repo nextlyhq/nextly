@@ -1444,3 +1444,185 @@ describe("a var() substitution CSS will actually make", () => {
     expect(readFamilyList("var(--ok), var (--also-ok)").kind).toBe("invalid");
   });
 });
+
+describe("what the reader reports it did not keep", () => {
+  const said = (input: unknown): string =>
+    dtcgToTokens(input)
+      .issues.map(issue => issue.message)
+      .join("\n");
+  const names = (input: unknown): string[] =>
+    dtcgToTokens(input).tokens.map(token => token.name);
+
+  it("says nothing about a file this system wrote", () => {
+    // The control for everything below: a reader that reported every field
+    // would satisfy each loss test without distinguishing anything.
+    const { document } = tokensToDtcg(
+      tokens([
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+          description: "Body text",
+          extensions: { "com.figma": { id: 1 } },
+        },
+        { name: "space.4", kind: "dimension", values: { light: "16px" } },
+      ])
+    );
+    const read = dtcgToTokens(document);
+    expect(read.tokens).toHaveLength(2);
+    expect(read.issues).toEqual([]);
+  });
+
+  it("names an entry that is neither a token nor a group", () => {
+    const document = {
+      good: { $type: "number", $value: 1 },
+      lost: 42,
+      nested: { deeper: "also lost" },
+    };
+    expect(names(document)).toEqual(["good"]);
+    expect(said(document)).toContain('"lost" is neither a token nor a group');
+    expect(said(document)).toContain(
+      '"nested.deeper" is neither a token nor a group'
+    );
+  });
+
+  it("names a token written inside another token", () => {
+    // The reader stops at a token, so a valid child inside one is never read.
+    const document = {
+      parent: { $type: "number", $value: 1, child: { $value: 2 } },
+    };
+    expect(names(document)).toEqual(["parent"]);
+    expect(said(document)).toContain(
+      '"parent.child" is written inside a token'
+    );
+  });
+
+  it("names a group's own $root token", () => {
+    const document = {
+      size: { $type: "number", $root: { $value: 1 }, small: { $value: 2 } },
+    };
+    expect(names(document)).toEqual(["size.small"]);
+    expect(said(document)).toContain('"size.$root" is a group\'s own token');
+  });
+
+  it("names a $type that is not a name, on a token and on a group", () => {
+    // On a token the group's type is used instead, so the token still arrives.
+    const onToken = {
+      group: { $type: "number", foo: { $type: 42, $value: 1 } },
+    };
+    expect(dtcgToTokens(onToken).tokens.map(token => token.kind)).toEqual([
+      "number",
+    ]);
+    expect(said(onToken)).toContain('"group.foo.$type" is not a usable type');
+    // On a group its children inherit nothing from it.
+    const onGroup = { group: { $type: 42, foo: { $value: 1 } } };
+    expect(said(onGroup)).toContain('"group.$type" is not a usable type');
+  });
+
+  it("names a reserved field it does not read, wherever it sits", () => {
+    const document = {
+      $themes: [],
+      foo: { $type: "number", $value: 1, $deprecated: true },
+      palette: { $extends: "{base}" },
+    };
+    expect(names(document)).toEqual(["foo"]);
+    expect(said(document)).toContain(
+      '"$themes" is a design-token field this site does not read'
+    );
+    // The format's own fields are named for what was lost, not as unknowns.
+    expect(said(document)).toContain('"foo.$deprecated" marks it deprecated');
+    expect(said(document)).toContain(
+      '"palette.$extends" inherits from another group'
+    );
+  });
+
+  it("names a group's description and extensions", () => {
+    const document = {
+      color: {
+        $description: "The brand palette",
+        $extensions: { "com.figma": { collection: "Brand" } },
+        ink: { $type: "number", $value: 1 },
+      },
+    };
+    expect(said(document)).toContain('"color.$description" belongs to a group');
+    expect(said(document)).toContain('"color.$extensions" belongs to a group');
+  });
+
+  it("names a token's description or extensions in a shape it cannot keep", () => {
+    const description = {
+      foo: { $type: "number", $value: 1, $description: 42 },
+    };
+    expect(names(description)).toEqual(["foo"]);
+    expect(said(description)).toContain('"foo.$description" is not a string');
+    const extensions = {
+      foo: { $type: "number", $value: 1, $extensions: "x" },
+    };
+    expect(said(extensions)).toContain('"foo.$extensions" is not an object');
+  });
+
+  it("says nothing about metadata a token keeps", () => {
+    const document = {
+      foo: {
+        $type: "number",
+        $value: 1,
+        $description: "fine",
+        $extensions: { "com.figma": { id: 1 } },
+      },
+    };
+    expect(dtcgToTokens(document).issues).toEqual([]);
+  });
+
+  describe("this system's own extension", () => {
+    const withOwn = (own: unknown, type = "number"): unknown => ({
+      thing: {
+        $type: type,
+        $value: 1,
+        $extensions: { "com.nextlyhq.nextly": own },
+      },
+    });
+
+    it("names the key when it is not an object", () => {
+      expect(names(withOwn("future"))).toEqual(["thing"]);
+      expect(said(withOwn("future"))).toContain(
+        '"thing.$extensions.com.nextlyhq.nextly" is not an object'
+      );
+    });
+
+    it("names stored values it passed over for $value", () => {
+      const own = { css: { light: "99" }, kind: "bogus" };
+      expect(dtcgToTokens(withOwn(own)).tokens[0]?.values.light).toBe("1");
+      expect(said(withOwn(own))).toContain(
+        "does not state values this site can read"
+      );
+    });
+
+    it("names a stored dark value it could not take", () => {
+      const own = { css: { light: "5", dark: 42 }, kind: "number" };
+      expect(dtcgToTokens(withOwn(own)).tokens[0]?.values).toEqual({
+        light: "5",
+      });
+      expect(said(withOwn(own))).toContain('css.dark" is not a string');
+    });
+
+    it("says nothing about an extension carrying only an identity", () => {
+      expect(dtcgToTokens(withOwn({ id: "kept.identity" })).issues).toEqual([]);
+    });
+
+    it("does not claim $value was used for a token it refused", () => {
+      /*
+       * Reported where the reader CHOOSES $value, and only once that token is
+       * imported. Judged from the file's shape alone, this said "read from
+       * $value instead" beside the line saying the token was skipped.
+       */
+      const document = withOwn(
+        { css: { light: "99" }, kind: "bogus" },
+        "gradient"
+      );
+      expect(names(document)).toEqual([]);
+      expect(said(document)).toContain("no token kind for");
+      expect(said(document)).not.toContain(
+        "does not state values this site can read"
+      );
+    });
+  });
+});
