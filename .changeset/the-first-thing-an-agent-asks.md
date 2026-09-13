@@ -49,6 +49,11 @@ instructions are a constant, and the schema travels beside them as structured
 content, so a collection an attacker can name cannot reach the sentence that
 tells the agent how to behave.
 
+The package's own descriptions say what it now does. The npm description, the
+root catalogue entry, the README and the admin panel all stated that the plugin
+exposed no tools, which is what somebody evaluating the release would have been
+told about a release that exposes one.
+
 `readableContent` is published from core and re-exported by
 `@nextlyhq/plugin-sdk`, because a plugin that describes an install needs the
 coarse readable set and composing it from the registry, the caller conversion

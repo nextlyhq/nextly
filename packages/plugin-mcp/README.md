@@ -3,11 +3,14 @@
 **Experimental.** This is the package that exposes a Nextly install to AI agents
 over the [Model Context Protocol](https://modelcontextprotocol.io), read-only.
 
-This release adds the transport: an endpoint that speaks the protocol and
-exposes **nothing** through it. No tool, resource or prompt is registered yet,
-so a client that connects finds a server with no capabilities. The surface lands
-in small reviewable pieces, and this is the one an operator can point a client
-at.
+This release adds the endpoint and its first tool. A client that connects finds
+a server advertising `tools` and nothing else: no resource and no prompt, and no
+tool that writes. The one tool is `get_initial_context`, which answers what the
+connecting credential may read and how this CMS expects to be asked.
+
+The surface lands in small reviewable pieces. Reads of actual documents are the
+next one; until they arrive an agent can learn the shape of an install and not
+its contents.
 
 ## Install
 

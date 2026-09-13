@@ -268,6 +268,30 @@ describe("get_initial_context answers for the caller who asked", () => {
     expect(body.result?.structuredContent?.complete).toBe(true);
   });
 
+  it("tells the agent what an ABSENT entity means, both ways", async () => {
+    // The signal is only worth carrying if the prose does not contradict it.
+    // These instructions once said an entity missing from the list is one you
+    // cannot read, full stop, which is true only while `complete` holds: a
+    // registry that could not be enumerated omits entities the caller may read
+    // perfectly well, and an agent following the flat version would report the
+    // install as smaller than it is and stop asking.
+    const handlers = await boot([posts]);
+    const key = await keyGranting(current!, "absence", ["posts"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await payloadOf(
+      await handlers.POST(callInitialContext(auth), params("mcp"))
+    );
+    const prose = (body.result?.content ?? []).map(c => c.text).join("\n");
+
+    // Named, so the agent can find the field rather than infer the rule.
+    expect(prose).toContain("`complete`");
+    // Both readings present. Either alone is the flat claim in one direction.
+    expect(prose).toMatch(/whole answer/i);
+    expect(prose).toMatch(/may not have been seen|not have been seen/i);
+  });
+
   it("keeps a hostile entity name out of the instructions", async () => {
     // The security property. The instructions are a constant, so a slug an
     // attacker chose can only ever arrive as DATA. This is what fails the
