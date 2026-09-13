@@ -500,16 +500,15 @@ describe("columnsThatMayHoldNull", () => {
     ).toEqual([]);
   });
 
-  it("skips a column that lives in the companion table", () => {
-    // A localized collection keeps its translatable columns elsewhere, so
-    // probing the main table for one asks for a column it does not have — and
-    // that error arrives before any migration is generated, failing the save.
-    expect(
-      columnsThatMayHoldNull(
-        [plain("headline"), plain("body")],
-        new Set(["body"])
-      )
-    ).toEqual(["headline"]);
+  it("does not claim the columns it names exist", () => {
+    // This is a narrowing, not a guarantee. A localized collection keeps its
+    // translatable columns in a companion and an unapplied migration leaves a
+    // field with no column yet, so a name here can still be absent from the
+    // table — which is why `readColumnsContainingNull` reads the catalog
+    // before probing. That guarantee is tested there, under "never probes a
+    // column the live table does not have"; predicting it from definitions was
+    // wrong twice and is deliberately not attempted here.
+    expect(columnsThatMayHoldNull([plain("body")])).toEqual(["body"]);
   });
 
   it("skips a field that occupies no column of its own", () => {

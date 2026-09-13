@@ -22,6 +22,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { queryLiveColumnTypes } from "./live-column-types";
+
 interface PgForeignKeyRow {
   column_name: string;
   constraint_name: string;
@@ -116,7 +118,25 @@ export async function readColumnsContainingNull(
   columns: readonly string[]
 ): Promise<Set<string>> {
   const holding = new Set<string>();
-  for (const column of columns) {
+  if (columns.length === 0) return holding;
+
+  // Narrowed to the columns the table ACTUALLY has, read from the catalog,
+  // before a single probe is issued. A caller cannot know this from the field
+  // definitions and twice did not: a localized collection keeps its
+  // translatable columns in a companion, and a deployment holding an unapplied
+  // migration has a field whose column does not exist yet. Both produced a
+  // probe for a missing column, which errors and takes the whole save with it.
+  //
+  // A boundary rather than another prediction — a filter over definitions has
+  // to enumerate every reason a column might be absent, and the next reason is
+  // the one nobody listed. The catalog answers the question directly, so the
+  // caller's list is free to be a rough over-estimate.
+  const live = (await queryLiveColumnTypes(db, dialect, [tableName])).get(
+    tableName
+  );
+  if (live === undefined) return holding;
+
+  for (const column of columns.filter(name => live.has(name))) {
     const probe = sql`SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${sql.identifier(column)} IS NULL LIMIT 1`;
     if (dialect === "postgresql") {
       const result = (await (db as PgMysqlExecute).execute(probe)) as {
