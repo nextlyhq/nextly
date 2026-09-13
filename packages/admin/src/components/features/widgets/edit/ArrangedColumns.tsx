@@ -5,7 +5,8 @@
  * Lifted out of `WidgetGrid` so that the grid reads as what it orchestrates --
  * permissions, the arrangement, the batch, the drag context -- rather than as
  * those plus a nested render. The tracks, the live region and the per-card
- * wiring are one concern and they live together here.
+ * wiring are one concern and they live together here -- as does what stands in
+ * for the tracks while the reader can see no content yet.
  *
  * @module components/features/widgets/edit/ArrangedColumns
  */
@@ -35,13 +36,15 @@ export interface ArrangedColumnsProps {
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   announcement: string;
+  /** Whether the empty state is drawn in place of the columns. */
+  showEmpty: boolean;
   /**
-   * Drawn in place of the columns when given: the dashboard of a reader who can
-   * see no content yet. Inside the section rather than instead of it, so the
-   * live region and the focus target stay mounted as the page swaps between
-   * the two.
+   * The dashboard of a reader who can see no content yet, drawn in place of the
+   * columns while `showEmpty` holds. Inside the section rather than instead of
+   * it, so the live region and the focus target stay mounted as the page swaps
+   * between the two.
    */
-  emptyState?: ReactNode;
+  emptyState: ReactNode;
   /** Whether a dismissal is in flight anywhere on this dashboard. */
   isDismissing: boolean;
   /**
@@ -52,21 +55,27 @@ export interface ArrangedColumnsProps {
    * on the region that holds the rest than on an arbitrary sibling.
    */
   sectionRef?: RefObject<HTMLElement | null>;
-  /** Move one card one step within the column it is drawn in. */
-  onMove: (placementId: string, neighbourId: string, side: DropSide) => void;
-  onMoveColumn: (placementId: string, targetColumn: number) => void;
-  onToggleHidden: (placementId: string) => void;
   /**
-   * Put one card away from the card itself, or nothing where no arrangement
-   * has been read yet and there is no placement to hide.
+   * What a reader can do to a card, grouped the way `ArrangedCell` takes it and
+   * resolved here against the column each card is drawn in.
    */
-  onDismiss?: (placementId: string, title: string) => void;
-  onRemove: (placementId: string) => void;
-  /** Records what a reader chose for one card's settings. */
-  onSaveSettings: (
-    placementId: string,
-    config: Record<string, unknown>
-  ) => void;
+  on: {
+    /** Move one card one step within the column it is drawn in. */
+    move: (placementId: string, neighbourId: string, side: DropSide) => void;
+    moveColumn: (placementId: string, targetColumn: number) => void;
+    toggleHidden: (placementId: string) => void;
+    /**
+     * Put one card away from the card itself, or nothing where no arrangement
+     * has been read yet and there is no placement to hide.
+     */
+    dismiss?: (placementId: string, title: string) => void;
+    remove: (placementId: string) => void;
+    /** Records what a reader chose for one card's settings. */
+    saveSettings: (
+      placementId: string,
+      config: Record<string, unknown>
+    ) => void;
+  };
 }
 
 function EmptyArrangement({
@@ -113,15 +122,11 @@ export function ArrangedColumns({
   updatedAt,
   fetchingPlacementIds,
   announcement,
+  showEmpty,
   emptyState,
   isDismissing,
   sectionRef,
-  onMove,
-  onMoveColumn,
-  onToggleHidden,
-  onDismiss,
-  onRemove,
-  onSaveSettings,
+  on,
 }: ArrangedColumnsProps) {
   return (
     <section
@@ -147,7 +152,9 @@ export function ArrangedColumns({
       >
         {announcement}
       </span>
-      {emptyState ?? (
+      {showEmpty ? (
+        emptyState
+      ) : (
         <>
           <EmptyArrangement count={visible.length} isEditing={isEditing} />
           {columns.map((rowsInColumn, columnIndex) => (
@@ -210,19 +217,19 @@ export function ArrangedColumns({
                       // Up is above it, down is below -- and below is the side
                       // that makes the bottom of a column reachable at all.
                       if (neighbour) {
-                        onMove(
+                        on.move(
                           row.placementId,
                           neighbour.placementId,
                           delta < 0 ? "before" : "after"
                         );
                       }
                     },
-                    moveColumn: onMoveColumn,
-                    toggleHidden: onToggleHidden,
-                    dismiss: onDismiss,
-                    remove: onRemove,
+                    moveColumn: on.moveColumn,
+                    toggleHidden: on.toggleHidden,
+                    dismiss: on.dismiss,
+                    remove: on.remove,
                     saveSettings: config =>
-                      onSaveSettings(row.placementId, config),
+                      on.saveSettings(row.placementId, config),
                   }}
                 />
               ))}
