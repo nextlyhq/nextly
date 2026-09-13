@@ -46,9 +46,3 @@ deployment had just built.
 The planned types are predicted by the same class that emits the CREATE, beside
 the planned indexes and keys, so a prediction and the statement it predicts
 cannot describe different columns.
-
-The index prediction in that same place was still asking the legacy renderer
-too. It now judges what the create emits, which matters on MySQL where a
-`select` is created as `varchar(...)` and indexable while the legacy answer is
-unbounded `text` and is not: the index was installed and not predicted, so a
-later edit did not know to drop it.
