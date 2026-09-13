@@ -1010,7 +1010,7 @@ function unreadGroupField(
   if (key === "$description" || key === "$extensions") {
     return `"${at}" belongs to a group rather than to a token, and this site keeps only tokens, so it was skipped.`;
   }
-  return unreadReservedField(key, at, "group");
+  return unreadReservedField(key, node[key], at, "group");
 }
 
 /**
@@ -1035,30 +1035,31 @@ function unreadTokenParts(node: DtcgNode, at: string): string[] {
 /**
  * Why one of a token's own `$` fields is not kept, or `undefined` when it is.
  *
- * Asked through the same accessors {@link readToken} reads with, so a field in a
- * shape the reader does not take is exactly one the token arrives without —
- * looking entirely successful.
+ * Asked through the same accessors {@link readToken} reads with, and said before
+ * the token is judged, so each line states only what is true whatever becomes
+ * of the token: the field was ignored. Whether the token then arrived is the
+ * refusal's or the import's to say.
+ *
+ * `$type` is the exception, answered by {@link typeUnread} where the kind is
+ * chosen, because what stood in for an unusable type depends on that choice.
  */
 function unreadTokenField(
   key: string,
   node: DtcgNode,
   at: string
 ): string | undefined {
-  if (key === "$value") return undefined;
-  if (key === "$type") {
-    return statedType(node) === undefined ? unusableType(at) : undefined;
-  }
+  if (key === "$value" || key === "$type") return undefined;
   if (key === "$description") {
     return statedDescription(node) === undefined
-      ? `"${at}" is not a string, so it was skipped and the token arrived without it.`
+      ? `"${at}" is not a string, so it was ignored.`
       : undefined;
   }
   if (key === "$extensions") {
     return statedExtensions(node) === undefined
-      ? `"${at}" is not an object, so it was skipped and the token arrived without it.`
+      ? `"${at}" is not an object, so it was ignored.`
       : undefined;
   }
-  return unreadReservedField(key, at, "token");
+  return unreadReservedField(key, node[key], at, "token");
 }
 
 /**
@@ -1075,6 +1076,7 @@ function unreadTokenField(
  */
 function unreadReservedField(
   key: string,
+  value: unknown,
   at: string,
   on: "group" | "token"
 ): string {
@@ -1084,15 +1086,55 @@ function unreadReservedField(
   if (on === "group" && key === "$extends") {
     return `"${at}" inherits from another group, which this site cannot follow yet, so nothing it would bring in was imported.`;
   }
-  if (key === "$deprecated") {
-    return `"${at}" marks it deprecated, which this site does not record, so the mark was skipped.`;
-  }
+  if (key === "$deprecated") return deprecationUnread(value, at);
   return `"${at}" is a design-token field this site does not read, so it was skipped.`;
 }
 
-/** The line for a `$type` that is not a name, which the reader passes over. */
-function unusableType(at: string): string {
-  return `"${at}" is not a usable type — a type is written as a name, such as "color" — so it was ignored and the type was taken from the group around it instead.`;
+/**
+ * The line for a `$type` that is not a name, naming the group type that stood in
+ * for it only when one did.
+ */
+function unusableType(at: string, groupType?: string): string {
+  const ignored = `"${at}" is not a usable type — a type is written as a name, such as "color" — so it was ignored`;
+  return groupType === undefined
+    ? `${ignored}.`
+    : `${ignored} and the group's type "${groupType}" was used instead.`;
+}
+
+/**
+ * The line for a token's own `$type` the reader could not use, or `undefined`.
+ *
+ * Asked where the kind is chosen, with the group type ONLY when that choice
+ * fell back to it. This system's stored kind makes the type irrelevant, and a
+ * token at the root has no group to fall back to, so crediting the group there
+ * would describe a substitution that never happened.
+ */
+function typeUnread(
+  node: DtcgNode,
+  name: string,
+  groupType?: string
+): string | undefined {
+  if (node.$type === undefined || statedType(node) !== undefined) {
+    return undefined;
+  }
+  return unusableType(`${name}.$type`, groupType);
+}
+
+/**
+ * The line for `$deprecated`, worded by what the value states.
+ *
+ * `true` or a reason marks the node deprecated; `false` explicitly clears a
+ * deprecation it would inherit. Reporting either as the other tells an author
+ * the opposite of what the file says.
+ */
+function deprecationUnread(value: unknown, at: string): string {
+  if (value === true || typeof value === "string") {
+    return `"${at}" marks it deprecated, which this site does not record, so the mark was skipped.`;
+  }
+  if (value === false) {
+    return `"${at}" clears a deprecation, which this site does not record, so it was ignored.`;
+  }
+  return `"${at}" is not a usable deprecation — it is written as true, false or a reason — so it was ignored.`;
 }
 
 /**
@@ -1227,7 +1269,7 @@ function readToken(
   const assemble = (
     kind: TokenKind,
     values: { light: string; dark?: string },
-    decided?: string
+    decided: readonly (string | undefined)[]
   ): SiteToken | undefined => {
     // The guard lives here rather than at each call, so the shorter extension
     // path cannot be the one that skips it: its CSS is arbitrary JSON from a
@@ -1235,7 +1277,8 @@ function readToken(
     if (!isWritableValue(values, name, issues)) return undefined;
     // A loss belonging to the path taken is said only once that path has made
     // a token, so a token refused afterwards never reports how it was read.
-    if (decided !== undefined) issues.push(issue(decided));
+    for (const line of decided)
+      if (line !== undefined) issues.push(issue(line));
     return {
       ...(id !== undefined ? { id } : {}),
       name,
@@ -1263,13 +1306,20 @@ function readToken(
       // is the only place that knows both what the file stated and what was
       // taken instead, so anywhere else would be guessing at that decision.
       reportOverridden(node.$value, css.light, kind, name, issues);
-      return assemble(kind, values, darkUnread(dark, name));
+      return assemble(kind, values, [
+        typeUnread(node, name),
+        darkUnread(dark, name),
+      ]);
     }
   }
 
   const type = statedType(node) ?? inherited;
   const kind = type === undefined ? undefined : KIND_BY_TYPE.get(type);
   if (kind === undefined) {
+    // No group type stood in, or the one that did has no kind: the field is
+    // named without crediting anything, before the refusal that follows.
+    const ignored = typeUnread(node, name);
+    if (ignored !== undefined) issues.push(issue(ignored));
     issues.push(
       issue(
         `"${name}" has the type "${type ?? "none"}", which this site has no token kind for, so it was skipped.`
@@ -1280,13 +1330,22 @@ function readToken(
 
   const light = fromDtcgValue(node.$value, kind);
   if (light === undefined) {
+    const ignored = typeUnread(node, name);
+    if (ignored !== undefined) issues.push(issue(ignored));
     issues.push(
       issue(`"${name}" has a value that could not be read, so it was skipped.`)
     );
     return undefined;
   }
 
-  return assemble(kind, { light }, storedValuesUnread(own, name));
+  return assemble(kind, { light }, [
+    typeUnread(
+      node,
+      name,
+      statedType(node) === undefined ? inherited : undefined
+    ),
+    storedValuesUnread(own, name),
+  ]);
 }
 
 /**

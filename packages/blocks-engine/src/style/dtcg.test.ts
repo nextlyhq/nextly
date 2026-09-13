@@ -1560,6 +1560,92 @@ describe("what the reader reports it did not keep", () => {
     expect(said(extensions)).toContain('"foo.$extensions" is not an object');
   });
 
+  describe("a type the reader could not use", () => {
+    const stored = {
+      "com.nextlyhq.nextly": { css: { light: "5" }, kind: "number" },
+    };
+
+    it("says the group's type stood in only when it did", () => {
+      const fellBack = { g: { $type: "number", t: { $type: 42, $value: 1 } } };
+      expect(dtcgToTokens(fellBack).tokens[0]?.kind).toBe("number");
+      expect(said(fellBack)).toContain('"g.t.$type" is not a usable type');
+      expect(said(fellBack)).toContain('the group\'s type "number" was used');
+      // One line for one field: naming it structurally AND where the kind is
+      // chosen would tell the author twice.
+      const lines = dtcgToTokens(fellBack).issues.filter(item =>
+        item.message.includes('"g.t.$type"')
+      );
+      expect(lines).toHaveLength(1);
+    });
+
+    it("does not credit the group when this system's stored kind was used", () => {
+      const document = {
+        g: {
+          $type: "dimension",
+          t: { $type: 42, $value: 1, $extensions: stored },
+        },
+      };
+      expect(dtcgToTokens(document).tokens[0]?.kind).toBe("number");
+      expect(said(document)).toContain('"g.t.$type" is not a usable type');
+      expect(said(document)).not.toContain("group's type");
+    });
+
+    it("does not credit a group a root token does not have", () => {
+      const kept = { t: { $type: 42, $value: 1, $extensions: stored } };
+      expect(names(kept)).toEqual(["t"]);
+      expect(said(kept)).not.toContain("group's type");
+      // Refused for want of any type: the field is still named, with no group.
+      const refused = { t: { $type: 42, $value: 1 } };
+      expect(names(refused)).toEqual([]);
+      expect(said(refused)).toContain('"t.$type" is not a usable type');
+      expect(said(refused)).not.toContain("group's type");
+    });
+  });
+
+  it("does not say a refused token arrived without its metadata", () => {
+    // A field in a shape the reader cannot take is ignored whatever becomes of
+    // the token, so the line says only that; the refusal says the rest.
+    const document = {
+      t: { $type: "gradient", $value: 1, $description: 42, $extensions: "x" },
+    };
+    expect(names(document)).toEqual([]);
+    expect(said(document)).toContain('"t.$description" is not a string');
+    expect(said(document)).toContain('"t.$extensions" is not an object');
+    expect(said(document)).toContain("no token kind for");
+    expect(said(document)).not.toContain("arrived");
+  });
+
+  describe("a deprecation says what the file says", () => {
+    const rows = [
+      { label: "true", stated: true, says: "marks it deprecated" },
+      { label: "a reason", stated: "Use ink", says: "marks it deprecated" },
+      { label: "false", stated: false, says: "clears a deprecation" },
+      { label: "a number", stated: 42, says: "is not a usable deprecation" },
+      { label: "null", stated: null, says: "is not a usable deprecation" },
+    ];
+
+    for (const { label, stated, says } of rows) {
+      it(`on a token given ${label}`, () => {
+        const document = {
+          foo: { $type: "number", $value: 1, $deprecated: stated },
+        };
+        expect(names(document)).toEqual(["foo"]);
+        expect(said(document)).toContain(`"foo.$deprecated" ${says}`);
+        if (says !== "marks it deprecated") {
+          expect(said(document)).not.toContain("marks it deprecated");
+        }
+      });
+    }
+
+    it("on a group that clears it", () => {
+      const document = {
+        g: { $deprecated: false, t: { $type: "number", $value: 1 } },
+      };
+      expect(said(document)).toContain('"g.$deprecated" clears a deprecation');
+      expect(said(document)).not.toContain("marks it deprecated");
+    });
+  });
+
   it("gives a group-only field on a token the plain unread line", () => {
     // `$extends` and `$root` mean something only on a group. On a token there
     // is nothing to inherit and no group token to hold, so calling either a
