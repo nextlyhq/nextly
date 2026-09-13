@@ -4868,8 +4868,8 @@ describe("a rename record names the nodes it renamed", () => {
 
   it("restores a pattern's link inside a gated container beside a visible namesake", () => {
     // The container holding the renamed node and its link is gated, and an
-    // unrelated visible node carries the minted id. Whenever the link renders,
-    // its own target renders with it, so the visible namesake must not decide.
+    // unrelated visible node carries the minted id. The link's own record knows
+    // where it pointed, so the visible namesake must not decide.
     const doc = insertedPage();
     const renamed = marked([...doc.nodes], "renamed");
     const wrap = marked([...doc.nodes], "wrap");
@@ -4904,11 +4904,12 @@ describe("a rename record names the nodes it renamed", () => {
     ).toBe("pricing");
   });
 
-  it("keeps a governed link pointing at a target that keeps its id", () => {
+  it("restores a governed link from its own record past a namesake that keeps its id", () => {
     // The listed node stays on the page but outside the selection, so the
-    // record is live and the link's own record would put the source name back.
-    // The link's target in the saved forest is an unlisted namesake, which
-    // keeps the minted id — so the link follows it and keeps the id too.
+    // record is live and says what the link pointed at. The saved forest holds
+    // an unlisted namesake that keeps the minted id; the link's own record
+    // decides, so it goes back to the source name rather than following the
+    // namesake — as a link saved without its target already does.
     const doc = insertedPage();
     const renamed = marked([...doc.nodes], "renamed");
     const mid = marked([...doc.nodes], "mid");
@@ -4939,7 +4940,7 @@ describe("a rename record names the nodes it renamed", () => {
     expect(marked([...saved.nodes], "namesake").cssId).toBe(renamed.cssId);
     expect(
       marked([...saved.nodes], "link").attributes?.["aria-describedby"]
-    ).toBe(renamed.cssId);
+    ).toBe("pricing");
   });
 
   it("restores nothing when the recorded node id occurs twice", () => {
