@@ -38,6 +38,20 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
   return { ...actual, callerHoldsPermission };
 });
 
+// The condition pass is WRAPPED, not replaced: every test runs the real one
+// unless it states what the reader's content is, because this harness has no
+// database for the real count to reach.
+const conditions = vi.hoisted(() => {
+  const real: { current?: RealLayoutConditions } = {};
+  return { layoutConditions: vi.fn(), real };
+});
+vi.mock("../domains/widgets/conditions", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../domains/widgets/conditions")>();
+  conditions.real.current = actual.layoutConditions;
+  return { ...actual, layoutConditions: conditions.layoutConditions };
+});
+
 import { requireAuthentication } from "../auth/middleware";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
@@ -63,6 +77,9 @@ import {
 } from "./widget-layout";
 
 const reqAuth = vi.mocked(requireAuthentication);
+
+type RealLayoutConditions =
+  (typeof import("../domains/widgets/conditions"))["layoutConditions"];
 
 /** A stand-in for the row, so a test can state what is stored and read it back. */
 let stored: { layout: string; version: number } | undefined;
@@ -176,6 +193,7 @@ interface LayoutPayload {
   source?: string;
   scope?: string;
   columnCount?: number;
+  contentEmpty?: boolean;
 }
 
 /** A GET answers with the object itself. */
@@ -220,6 +238,11 @@ beforeEach(() => {
     if (name === "widgetLayoutService") return fakeService;
     throw new Error(`unexpected container.get("${name}") in this test`);
   });
+  // Back to the real pass, so an answer one test stated cannot reach the next.
+  const real = conditions.real.current;
+  if (!real)
+    throw new Error("the conditions mock never loaded the real module");
+  conditions.layoutConditions.mockImplementation(real);
 });
 
 describe("GET /api/dashboard/layout", () => {
@@ -1850,5 +1873,70 @@ describe("a stored row describes itself", () => {
 
     expect(res.status).toBe(200);
     expect((await itemOf(res)).columnCount).toBe(DEFAULT_COLUMN_COUNT);
+  });
+});
+
+/** States what the condition pass answers about the reader's content. */
+function contentIs(empty: boolean): void {
+  conditions.layoutConditions.mockImplementation(
+    async (widgets: readonly unknown[]) => ({
+      widgets: [...widgets],
+      contentEmpty: empty,
+    })
+  );
+}
+
+describe("whether the reader has any content", () => {
+  it("is reported on the read, from the condition pass", async () => {
+    registerWidget(widget({ id: "core/a" }));
+
+    contentIs(true);
+    const empty = await bodyOf(await getWidgetLayout(getReq()));
+    contentIs(false);
+    const full = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(empty.contentEmpty).toBe(true);
+    expect(full.contentEmpty).toBe(false);
+  });
+
+  it("does not move the scope token a save is checked against", async () => {
+    // Content arriving changes how the dashboard is drawn, not which cards a
+    // write may name. Folded into the token, a reader's first entry would turn
+    // their next save into a conflict they did nothing to cause.
+    registerWidget(widget({ id: "core/a" }));
+
+    contentIs(true);
+    const empty = await bodyOf(await getWidgetLayout(getReq()));
+    contentIs(false);
+    const full = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(empty.scope).toBe(full.scope);
+    expect(full.scope).toBe(scopeFor(["core/a"]));
+  });
+
+  it("is echoed by a save, from the evaluation the save was checked against", async () => {
+    registerWidget(widget({ id: "core/a" }));
+    contentIs(true);
+
+    const item = await itemOf(
+      await putWidgetLayout(
+        putReq({
+          placements: [
+            {
+              id: "p1",
+              widgetId: "core/a",
+              column: 0,
+              order: 0,
+              hidden: false,
+            },
+          ],
+          version: 0,
+          scope: scopeFor(),
+        })
+      )
+    );
+
+    expect(item.contentEmpty).toBe(true);
+    expect(conditions.layoutConditions).toHaveBeenCalledTimes(1);
   });
 });
