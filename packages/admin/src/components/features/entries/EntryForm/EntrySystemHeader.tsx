@@ -96,9 +96,9 @@ export interface EntrySystemHeaderProps {
   entry?: EntryData | null;
   /** Collection slug for the Show JSON dialog. */
   collectionSlug: string;
-  /** Active content locale (i18n M7). Shown/selected in the language switcher. */
+  /** Active content locale. Shown/selected in the language switcher. */
   locale?: string;
-  /** Called when the user switches the active content language (i18n M7). When omitted, the
+  /** Called when the user switches the active content language. When omitted, the
    *  language switcher is not rendered. */
   /** Whether the entity is localized. Forwarded to the version-history panel as
    *  the authoritative signal for its locale filter (shared writes can produce

@@ -65,7 +65,7 @@ export interface FindParams {
   /** Fallback locale when translation is missing */
   fallbackLocale?: string;
   /**
-   * i18n M7: request the per-locale `_translations` overview map on each row (which languages
+   * Request the per-locale `_translations` overview map on each row (which languages
    * are translated + each one's draft/published status). Sent as `?translation-status=1`.
    */
   translationStatus?: boolean;
@@ -78,7 +78,7 @@ export interface CountParams {
   /** Query filters using Nextly where syntax */
   where?: Record<string, unknown>;
   /**
-   * Content locale (i18n M4). Keeps the count in parity with a locale-scoped list — a
+   * Content locale. Keeps the count in parity with a locale-scoped list — a
    * localized where/search filters within this language, so the total must match the rows.
    */
   locale?: string;
@@ -338,7 +338,7 @@ export const buildFindQuery = (params: FindParams): string => {
     // fall back to the default language.
     query.set("fallback-locale", params.fallbackLocale);
   }
-  // i18n M7: opt into the per-locale translation-status overview map.
+  // Opt into the per-locale translation-status overview map.
   if (params.translationStatus) {
     query.set("translation-status", "1");
   }
@@ -505,7 +505,7 @@ export const entryApi = {
     if (options?.fallbackLocale)
       query.set("fallback-locale", options.fallbackLocale);
     if (options?.draft !== undefined) query.set("draft", String(options.draft));
-    // i18n M7: opt into the per-locale translation-status overview map.
+    // Opt into the per-locale translation-status overview map.
     if (options?.translationStatus) query.set("translation-status", "1");
     // Why: admin context is trusted (the route is gated by
     // requireCollectionAccess). Pass `status=all` so the server's default
@@ -566,7 +566,7 @@ export const entryApi = {
     if (params.where && Object.keys(params.where).length > 0) {
       query.set("where", JSON.stringify(params.where));
     }
-    // i18n M4: forward the content locale so a locale-scoped count matches the list.
+    // Forward the content locale so a locale-scoped count matches the list.
     if (params.locale) {
       query.set("locale", params.locale);
     }
@@ -640,7 +640,7 @@ export const entryApi = {
     data: UpdateEntryPayload,
     options?: Pick<FindParams, "locale" | "fallbackLocale">
   ): Promise<MutationResult<Entry>> => {
-    // i18n M7: `?locale=de` updates only the German translatable values for this entry.
+    // `?locale=de` updates only the German translatable values for this entry.
     const query = new URLSearchParams();
     if (options?.locale) query.set("locale", options.locale);
     if (options?.fallbackLocale)
@@ -814,7 +814,7 @@ export const entryApi = {
   },
 
   /**
-   * i18n M7: publish every language of an entry at once (spec §10).
+   * Publish every language of an entry at once.
    * Hits `POST /api/collections/{slug}/entries/{id}/publish-all`.
    */
   publishAllLocales: async (
