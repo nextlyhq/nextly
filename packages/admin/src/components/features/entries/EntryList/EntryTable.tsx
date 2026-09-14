@@ -128,9 +128,9 @@ export interface EntryTableProps {
   status?: string;
   /** Callback when status filter changes */
   onStatusChange?: (status: string) => void;
-  /** i18n M7: active language filter (locale + translation state), or null. */
+  /** Active language filter (locale + translation state), or null. */
   translationFilter?: TranslationListFilter | null;
-  /** i18n M7: callback when the language filter changes. */
+  /** Callback when the language filter changes. */
   onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
@@ -336,7 +336,7 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
       !!onUpdatedFromChange ||
       !!onUpdatedToChange;
 
-    // i18n M7: the language filter is available on a localized collection when the app has
+    // The language filter is available on a localized collection when the app has
     // localization configured (more than one language).
     const {
       enabled: localizationEnabled,

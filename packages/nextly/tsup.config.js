@@ -116,6 +116,11 @@ const clientEntries = [
   // the importing code. The repository stays out — it takes an adapter and
   // belongs to the server; a client reaches locks through the route.
   "src/domains/document-lock/contract.ts",
+  // The translation states a filter may name, as their own entry. The admin
+  // puts them on the wire and offers a tab for each, and the module the server
+  // uses them from builds SQL — so a client reaching the list through it would
+  // reach the ORM, and one writing its own copy would drift from the server.
+  "src/domains/i18n/translation-filter-states.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.

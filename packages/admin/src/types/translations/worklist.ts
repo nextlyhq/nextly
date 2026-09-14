@@ -1,7 +1,9 @@
 import {
-  LANGUAGE_STATE_LABEL,
-  type LanguageState,
-} from "@admin/components/features/entries/translation-meta";
+  TRANSLATION_FILTER_STATES,
+  type TranslationFilterState,
+} from "nextly/translation-filter-states";
+
+import { LANGUAGE_STATE_LABEL } from "@admin/components/features/entries/translation-meta";
 import type {
   ListResponse,
   PaginationMeta,
@@ -10,101 +12,99 @@ import type {
 /**
  * The translation worklist's wire shape.
  *
- * Mirrors what `GET /api/translations` returns. Kept as a type rather than
- * imported from core because `packages/admin` reads resolved DATA across that
- * boundary and nothing else — the same rule that keeps it independent of
- * `blocks-engine` and `plugin-page-builder`.
+ * The ROWS mirror what `GET /api/translations` returns and are typed here. The
+ * VOCABULARY the page asks with is not: which states `?state=` accepts is the
+ * server's to declare, so it is imported from `nextly/translation-filter-states`
+ * and every tab below is built from that one list. A copy written here agreed
+ * with the server only on the day it was written — a state the server stopped
+ * accepting would stay on offer and answer with an empty worklist.
  *
  * @module types/translations/worklist
  */
 
 /**
- * The states this page can be asked for, in the order a translator wants them.
+ * A state the worklist may ASK FOR, which is exactly a state the server accepts.
  *
- * DERIVED from `LANGUAGE_STATES` rather than restated. That catalog already
- * answers "what states can a language be in" for the header control, the
- * editor's language panel, its menu and the list's per-language dots, and its
- * own note says a second spelling would let two surfaces describe the same
- * document differently. A worklist is a fifth surface, not a new vocabulary.
- *
- * Only the ORDER is this page's own, and it is a narrower view of the same
- * list rather than a second list: `missing` leads because it is the question
- * the page exists to answer, where the language panel reads best-to-worst.
- * `WORKLIST_ORDER` names the four exactly once, and the type below is derived
- * from the canonical catalog, so dropping or renaming a state there stops this
- * compiling instead of silently leaving a tab behind.
- *
- * The LABEL comes from `LANGUAGE_STATE_LABEL` for the same reason, title-cased
- * because these are buttons rather than prose.
+ * This is the value that goes on the wire — `useTranslationWorklist` puts it in
+ * `/translations?state=` — so it IS the server's type rather than a restatement
+ * of it.
  */
-const WORKLIST_ORDER = [
-  "missing",
-  "draft",
-  "translated",
-  "published",
-] as const satisfies readonly LanguageState[];
+export type WorklistState = TranslationFilterState;
 
 /**
- * The one worklist state that is NOT a language state: "changed since translated".
+ * Where each state's tab sits, in the order a translator wants them.
  *
- * 🔴 Deliberately not added to `LANGUAGE_STATES`, and this is the load-bearing decision of the
- * staleness vocabulary. `languageState()` is a mutually exclusive classifier — missing, then published, then
- * draft, then translated, first match wins — and staleness is ORTHOGONAL to every one of them: a
- * stale translation is still translated, and still published if it was published. A fifth member
- * would make the classifier return "stale" INSTEAD of "published", so the entry list's dots and
- * the editor's language panel would stop reporting a live translation as live.
- *
- * The admin already ruled on this exact shape once, for `pendingChange`, and said why: "the
- * language IS still published, and saying only 'unpublished changes' would suggest nothing of it
- * is live. Both facts matter and they are different facts." Staleness is the same kind of fact,
- * so it takes the same treatment — an orthogonal flag, appended to the state rather than
- * replacing it.
- *
- * A FILTER, though, is a question rather than a classification, and "which documents need review"
- * is as legitimate a question as "which are drafts". So {@link WorklistState} carries a member
- * the language-state catalog does not, and {@link WORKLIST_STATES} offers a tab for each of the
- * four states alone.
+ * Only the ORDER is this page's own: `missing` leads because it is the question
+ * the page exists to answer, where the language panel reads best-to-worst.
+ * Keyed by every state the server accepts, so a state added there is a compile
+ * error here until it has a place, rather than a filter this page never offers.
  */
+const TAB_POSITION: Record<WorklistState, number> = {
+  missing: 0,
+  draft: 1,
+  translated: 2,
+  published: 3,
+  stale: 4,
+};
 
 /** Sentence wording into a button label: "not translated" -> "Not translated". */
 function asTabLabel(label: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-export const WORKLIST_STATES: readonly {
-  value: WorklistState;
-  label: string;
-}[] = [
-  ...WORKLIST_ORDER.map(value => ({
-    value,
-    label: asTabLabel(LANGUAGE_STATE_LABEL[value]),
-  })),
+/**
+ * Each state's tab label, keyed by every state the server accepts.
+ *
+ * The four language states take `LANGUAGE_STATE_LABEL`'s wording, title-cased
+ * because these are buttons rather than prose. That catalog already answers
+ * "what is this state called" for the header control, the editor's language
+ * panel, its menu and the list's per-language dots, and a worklist with a
+ * vocabulary of its own would describe the same document differently depending
+ * on which screen asked.
+ *
+ * 🔴 `stale` is the one state that is NOT a language state, and it is
+ * deliberately not added to `LANGUAGE_STATES`: that is the load-bearing decision
+ * of the staleness vocabulary. `languageState()` is a mutually exclusive
+ * classifier — missing, then published, then draft, then translated, first
+ * match wins — and staleness is ORTHOGONAL to every one of them: a stale
+ * translation is still translated, and still published if it was published. A
+ * fifth member would make the classifier return "stale" INSTEAD of "published",
+ * so the entry list's dots and the editor's language panel would stop reporting
+ * a live translation as live. A FILTER, though, is a question rather than a
+ * classification, and "which documents need review" is as legitimate a question
+ * as "which are drafts" — so the worklist offers it where the catalog does not.
+ */
+const TAB_LABEL: Record<WorklistState, string> = {
+  missing: asTabLabel(LANGUAGE_STATE_LABEL.missing),
+  draft: asTabLabel(LANGUAGE_STATE_LABEL.draft),
+  translated: asTabLabel(LANGUAGE_STATE_LABEL.translated),
+  published: asTabLabel(LANGUAGE_STATE_LABEL.published),
   // 🔴 "Needs review", not "Stale" or "Outdated", and the wording is the decision. The wire value
   // says what the system MEASURED — a source written after its translation — while the label says
   // what a person should DO about it. A translation whose source moved may well still be correct,
   // so naming the state after the measurement would tell an author their work is wrong when all
   // that is known is that it is worth a look.
   //
-  // Offered now because the server can answer it honestly per collection: a translations table
-  // that physically records when each language was written participates, and one that does not is
+  // Offered because the server can answer it honestly per collection: a translations table that
+  // physically records when each language was written participates, and one that does not is
   // excluded AND NAMED in `unanswerable`. An always-empty tab would read as "this site has no
   // stale translations", which is a claim and the wrong one — the naming is what stops the empty
   // case making it.
-  { value: "stale", label: "Needs review" },
-];
+  stale: "Needs review",
+};
 
 /**
- * A state the worklist may ASK FOR: any language state, plus staleness.
+ * The tabs this page offers: one per state the server accepts, in page order.
  *
- * This is the value that goes on the wire — `useTranslationWorklist` puts it in
- * `/translations?state=` — so it mirrors the set the server accepts, which carries `stale`
- * alongside the four language states. The tab strip offers a subset of it, not the whole of it,
- * and that is the direction the two differ in.
- *
- * The language half is an ALIAS rather than a restatement, so a state added or removed there is a
- * compile error here rather than a tab that quietly stops matching.
+ * Built from the server's list at runtime rather than written out, so the set
+ * of tabs cannot differ from the set of states the endpoint answers for.
  */
-export type WorklistState = LanguageState | "stale";
+export const WORKLIST_STATES: readonly {
+  value: WorklistState;
+  label: string;
+}[] = [...TRANSLATION_FILTER_STATES]
+  .sort((a, b) => TAB_POSITION[a] - TAB_POSITION[b])
+  .map(value => ({ value, label: TAB_LABEL[value] }));
 
 /** The state a URL asked for, or the question this page exists for. */
 export function worklistStateFrom(raw: string | undefined): WorklistState {
