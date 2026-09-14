@@ -142,7 +142,7 @@ export interface UseEntryFormOptions {
   onDelete?: () => void;
   /** Callback when form is cancelled */
   onCancel?: () => void;
-  /** Active content locale (i18n M7) — the update targets this language's values. */
+  /** Active content locale — the update targets this language's values. */
   locale?: string;
   /**
    * Whether the entry was READ with the working-draft overlay (`draft`), so the
@@ -459,7 +459,7 @@ export function useEntryForm({
     entryId: entry?.id ?? "",
     showToast: true,
     setError: form.setError,
-    // i18n M7: route the save to the active content language.
+    // Route the save to the active content language.
     locale,
     // Match the editor's read mode so the optimistic update, rollback, and
     // cancelQueries key onto the same cached document the form is showing. The

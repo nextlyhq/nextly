@@ -121,7 +121,7 @@ export function DocumentPanel({
     hasWorkingDraft
   );
 
-  // i18n M7: per-language translation-status pills (spec §10). Present only when the entry was
+  // Per-language translation-status pills. Present only when the entry was
   // fetched with `?translation-status=1` on a localized collection; inert otherwise.
   const translations = entry?._translations as
     | Record<string, { translated: boolean; status?: string }>
@@ -150,7 +150,7 @@ export function DocumentPanel({
 }
 
 /**
- * Per-language translation-status pills row (i18n M7). Renders nothing when localization is off
+ * Per-language translation-status pills row. Renders nothing when localization is off
  * or the entry has no `_translations` map, so non-localized documents are unchanged.
  */
 function TranslationsRow({

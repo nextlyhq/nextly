@@ -927,11 +927,33 @@ function statedType(node: DtcgNode): string | undefined {
 /**
  * What a DTCG name may not contain: "the following characters MUST NOT be used
  * anywhere in a token or group name: `{`, `}`, `.`".
- *
- * One rule for both places a name is read — a token's own path and a reference
- * to a group — so the two cannot disagree about what counts as a name.
  */
 const DTCG_NAME_FORBIDDEN = /[.{}]/;
+
+/**
+ * Whether a key is one of the format's own rather than a name. The format
+ * reserves the `$` prefix for its fields and for `$root`, so the walk reads no
+ * such key as a token or a group.
+ */
+function isReservedKey(key: string): boolean {
+  return key.startsWith("$");
+}
+
+/**
+ * Whether a string names a token or a group: not blank, not reserved, and free
+ * of what a name may not contain.
+ *
+ * Built from the two rules the walk holds a key to — the reserved prefix and the
+ * forbidden characters — so a reference cannot accept a segment the walk would
+ * never have read as a group.
+ */
+function isDtcgName(segment: string): boolean {
+  return (
+    segment.trim() !== "" &&
+    !isReservedKey(segment) &&
+    !DTCG_NAME_FORBIDDEN.test(segment)
+  );
+}
 
 /**
  * Whether a node is a token: an object carrying `$value`.
@@ -966,10 +988,10 @@ function read(
 
   for (const [key, child] of Object.entries(node)) {
     const here = [...path, key];
-    // `$`-prefixed keys are the format's own; a name may not begin with one.
-    // Each is either a field a group is read for or said to be skipped, here,
-    // where the decision to pass over it is made.
-    if (key.startsWith("$")) {
+    // A reserved key is the format's own, never a name. Each is either a field
+    // a group is read for or said to be skipped, here, where the decision to
+    // pass over it is made.
+    if (isReservedKey(key)) {
       const unread = unreadGroupField(key, node, here.join("."));
       if (unread !== undefined) issues.push(issue(unread));
       continue;
@@ -1044,7 +1066,7 @@ function unreadGroupField(
 function unreadTokenParts(node: DtcgNode, at: string): string[] {
   const unread: string[] = [];
   for (const key of Object.keys(node)) {
-    const said = key.startsWith("$")
+    const said = isReservedKey(key)
       ? unreadTokenField(key, node, `${at}.${key}`)
       : `"${at}.${key}" is written inside a token, where this site's reader does not look, so it was skipped.`;
     if (said !== undefined) unread.push(said);
@@ -1179,20 +1201,16 @@ function darkUnread(dark: unknown, name: string): string | undefined {
 }
 
 /**
- * Whether an `$extends` value references anything: a non-empty string. Any other
- * value names no group, so there is no inheritance to have lost.
+ * Whether an `$extends` value references a group: `{group.path}`, a path of one
+ * or more names. Any other value names no group, so there is no inheritance to
+ * have lost.
  */
 function isReference(value: unknown): boolean {
   if (typeof value !== "string") return false;
   if (!value.startsWith("{") || !value.endsWith("}")) return false;
-  // A path of one or more names, each non-empty and free of what a name may
-  // not contain: `{}`, `{ }`, `{a..b}` and `{a.}` name no group.
-  return value
-    .slice(1, -1)
-    .split(".")
-    .every(
-      segment => segment.trim() !== "" && !DTCG_NAME_FORBIDDEN.test(segment)
-    );
+  // Each segment is held to the rule the walk reads a group's name by, so
+  // `{}`, `{a..b}` and `{base.$private}` name nothing it could have read.
+  return value.slice(1, -1).split(".").every(isDtcgName);
 }
 
 /**
@@ -1222,11 +1240,21 @@ function readToken(
   inherited: string | undefined,
   issues: ValidationIssue[]
 ): SiteToken | undefined {
+  const name = path.join(".");
   // Said before anything decides whether the token is kept, because none of it
   // turns on that: a field in a shape the reader cannot take is lost either way.
-  for (const unread of unreadTokenParts(node, path.join("."))) {
+  for (const unread of unreadTokenParts(node, name)) {
     issues.push(issue(unread));
   }
+  // Every refusal below goes through here. An unusable `$type` is ignored
+  // whatever else refuses the token, so it is named first, crediting no group;
+  // a refusal with an exit of its own would leave that second problem unsaid.
+  const refuse = (...reasons: ValidationIssue[]): undefined => {
+    const ignored = typeUnread(node, name);
+    if (ignored !== undefined) issues.push(issue(ignored));
+    issues.push(...reasons);
+    return undefined;
+  };
 
   // Each segment on its own first. The format forbids `.` in a name, so a key
   // spelled `"color.primary"` is malformed — joined into the dot path it is
@@ -1234,23 +1262,20 @@ function readToken(
   // with, and the next export would rewrite it into exactly those groups.
   const malformed = path.find(segment => DTCG_NAME_FORBIDDEN.test(segment));
   if (malformed !== undefined) {
-    issues.push(
+    return refuse(
       issue(
         `"${malformed}" is not a usable name in a design-token file: a name may not contain ".", "{" or "}". It was skipped.`
       )
     );
-    return undefined;
   }
-  const name = path.join(".");
   // The grammar only, here. Whether this name is also the string the token is
   // WRITTEN under depends on the id below, which has not been read yet — and a
   // file may legitimately carry a long label for a token whose stated id is
   // short. The cap is applied once the identity is known.
   if (!isAuthorableTokenName(name)) {
-    issues.push(
+    return refuse(
       issue(`"${name}" is not a usable token name, so it was skipped.`)
     );
-    return undefined;
   }
 
   const declared = statedExtensions(node);
@@ -1287,12 +1312,11 @@ function readToken(
     stated !== undefined &&
     !(typeof stated === "string" && isAuthorableTokenName(stated))
   ) {
-    issues.push(
+    return refuse(
       issue(
         `"${name}" carries an id that is not a usable token name, so it was skipped. Importing it without the id would give it a different identity from the one the file states, and every reference written against that identity would stop resolving.`
       )
     );
-    return undefined;
   }
   // A stated id equal to the name says exactly what an absent one says, so it
   // is normalised away — `id === undefined` then means one thing everywhere in
@@ -1305,7 +1329,7 @@ function readToken(
   // one with no id is capped by that label because the label IS the identity.
   const naming = tokenNamingProblem({ name, id });
   if (naming !== undefined) {
-    issues.push(
+    return refuse(
       issue(
         naming.reason === "depth"
           ? `"${name}" is nested too deeply, so it was skipped. A token name holds at most ${MAX_TOKEN_NAME_SEGMENTS} dot-separated parts.`
@@ -1314,7 +1338,6 @@ function readToken(
             : `"${name}" has a ${naming.field} that is not a usable token name, so it was skipped.`
       )
     );
-    return undefined;
   }
 
   // Both value paths below finish identically — same identity, same label, same
@@ -1332,14 +1355,8 @@ function readToken(
     // The guard lives here rather than at each call, so the shorter extension
     // path cannot be the one that skips it: its CSS is arbitrary JSON from a
     // file exactly as `$value` is, and is trusted no further.
-    const before = issues.length;
-    if (!isWritableValue(values, name, issues)) {
-      // The type was ignored whatever the value held, so a refused token still
-      // names it, ahead of the refusal and crediting no group: nothing landed.
-      const ignored = typeUnread(node, name);
-      if (ignored !== undefined) issues.splice(before, 0, issue(ignored));
-      return undefined;
-    }
+    const refusals: ValidationIssue[] = [];
+    if (!isWritableValue(values, name, refusals)) return refuse(...refusals);
     // A loss belonging to the path taken is said only once that path has made
     // a token, so a token refused afterwards never reports how it was read.
     for (const line of [typeUnread(node, name, groupType), ...decided])
@@ -1381,26 +1398,18 @@ function readToken(
   const type = statedType(node) ?? inherited;
   const kind = type === undefined ? undefined : KIND_BY_TYPE.get(type);
   if (kind === undefined) {
-    // No group type stood in, or the one that did has no kind: the field is
-    // named without crediting anything, before the refusal that follows.
-    const ignored = typeUnread(node, name);
-    if (ignored !== undefined) issues.push(issue(ignored));
-    issues.push(
+    return refuse(
       issue(
         `"${name}" has the type "${type ?? "none"}", which this site has no token kind for, so it was skipped.`
       )
     );
-    return undefined;
   }
 
   const light = fromDtcgValue(node.$value, kind);
   if (light === undefined) {
-    const ignored = typeUnread(node, name);
-    if (ignored !== undefined) issues.push(issue(ignored));
-    issues.push(
+    return refuse(
       issue(`"${name}" has a value that could not be read, so it was skipped.`)
     );
-    return undefined;
   }
 
   return assemble(kind, { light }, inherited, [storedValuesUnread(own, name)]);
