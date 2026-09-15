@@ -9,6 +9,16 @@
  * owned by a super-admin gets no bypass. Each is pinned cell by cell, so a
  * change to any one fails a named test.
  *
+ * 🔴 The key cases come in two halves, and only together do they say what their
+ * names claim. A key WITHOUT `read-<target>` cannot separate the rule deciding
+ * from the grant deciding: an implementation refusing on the missing grant,
+ * before it evaluates `access.read` or reaches the super-admin carve-out,
+ * answers every one of them correctly for the wrong reason. The cases holding
+ * the grant leave the rule as the only thing left to decide, and one of them
+ * requires the target to be POPULATED — so an implementation that withholds
+ * every target from every key, which every without-grant case accepts, fails
+ * there and only there.
+ *
  * Not pinned here: expansion with no RBAC service registered. Every instance
  * `createTestNextly` builds registers one.
  */
@@ -115,6 +125,75 @@ describe("relationship expansion — a scoped API key without read-<target>", ()
       await populates(handler, refId, {
         user: { id: "root-owner", roles: ["super-admin"] },
         authenticatedScope: keyWithoutTargetGrant,
+      })
+    ).toBe(false);
+  });
+});
+
+/**
+ * A scoped key holding `read-pages` as well as `read-refs`.
+ *
+ * 🔴 The control the cases above cannot supply for themselves. Both of them use
+ * a scope WITHOUT the target grant, so an implementation that refuses on the
+ * missing grant — before it evaluates `access.read` or reaches the
+ * scoped-key/super-admin carve-out — answers both correctly without ever
+ * reaching the behaviour their names claim. Holding the grant leaves the
+ * target's own rule as the only thing left to decide, so these cases separate
+ * the two.
+ *
+ * Roles are passed as an EXPLICIT empty list rather than omitted. `apiKeyScope`
+ * leaves `roles` off the scope when given nothing, and the key decision reads
+ * `scope.roles ?? user.roles`, so an omitted list lets the owner's roles stand
+ * in for the key's — which is the very substitution the super-admin case below
+ * exists to rule out.
+ */
+const keyWithTargetGrant = apiKeyScope(
+  [
+    { slug: "read-refs", action: "read", resource: "refs" },
+    { slug: "read-pages", action: "read", resource: "pages" },
+  ],
+  []
+);
+
+describe("relationship expansion — a scoped API key WITH read-<target>", () => {
+  it("populates a target whose rule admits", async () => {
+    // The must-move control for this whole file. Every other key case asserts
+    // a target is WITHHELD, and an implementation that withholds every target
+    // from every key satisfies all of them. This one must come back populated,
+    // so that implementation fails here.
+    const { handler, refId } = await boot(() => true);
+
+    expect(
+      await populates(handler, refId, {
+        user: { id: "key-owner", roles: [] as string[] },
+        authenticatedScope: keyWithTargetGrant,
+      })
+    ).toBe(true);
+  });
+
+  it("withholds a target whose rule refuses", async () => {
+    // With the grant held, the refusal can only have come from the target's
+    // rule. The same assertion on a key without the grant cannot say that.
+    const { handler, refId } = await boot(() => false);
+
+    expect(
+      await populates(handler, refId, {
+        user: { id: "key-owner", roles: [] as string[] },
+        authenticatedScope: keyWithTargetGrant,
+      })
+    ).toBe(false);
+  });
+
+  it("gives a key owned by a super-admin no bypass, grant or no grant", async () => {
+    // The owner carries the role and the key does not, so a decision reading
+    // the owner's roles admits this caller. Pinned with the grant held so the
+    // refusal is the carve-out at work rather than the missing grant.
+    const { handler, refId } = await boot(() => false);
+
+    expect(
+      await populates(handler, refId, {
+        user: { id: "root-owner", roles: ["super-admin"] },
+        authenticatedScope: keyWithTargetGrant,
       })
     ).toBe(false);
   });
