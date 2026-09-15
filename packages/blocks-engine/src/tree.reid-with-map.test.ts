@@ -824,6 +824,318 @@ describe('the "restore" DOM id policy', () => {
   });
 });
 
+describe('the "restoreEach" DOM id policy', () => {
+  /*
+   * The arm a save uses when the ids to put back differ by node. It is asked
+   * with the ORIGINAL node and the id in question, and answers the source name
+   * or nothing. Rendered ids are decided per node; a reference follows its
+   * target where the forest renders one, and otherwise its holder decides.
+   */
+  const answers =
+    (table: Record<string, Record<string, string>>) =>
+    (held: BlockNode, value: string): string | undefined =>
+      table[held.id]?.[value];
+
+  it("decides a rendered id per node, where a flat map moves every carrier", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("governed", { cssId: "hero-7f3" }),
+        node("namesake", { cssId: "hero-7f3" }),
+      ],
+      { restoreEach: answers({ governed: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[1].cssId).toBe("hero-7f3");
+  });
+
+  it("asks about the node it was given, not the copy", () => {
+    const originals = [node("a", { cssId: "hero-7f3" }), node("b")];
+    const asked = new Set<BlockNode>();
+    reidForestWithMap(originals, {
+      restoreEach: (held, value) => {
+        asked.add(held);
+        return value === "hero-7f3" ? "hero" : undefined;
+      },
+    });
+
+    expect(asked.has(originals[0]!)).toBe(true);
+  });
+
+  it("moves a reference with the one target the forest renders", () => {
+    // The holder answers nothing of its own, so only following the target can
+    // put this reference back.
+    const { nodes } = reidForestWithMap(
+      [
+        node("target", { cssId: "hero-7f3" }),
+        node("holder", {
+          attributes: { "aria-describedby": "hero-7f3" },
+          props: { href: "#hero-7f3" },
+        }),
+      ],
+      { restoreEach: answers({ target: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("hero");
+    expect((nodes[1].props as { href: string }).href).toBe("#hero");
+  });
+
+  it("restores a reference from its holder's answer even when its target keeps its id", () => {
+    // The holder knows where its reference pointed, so its answer decides; the
+    // target is followed only for a reference the holder has no answer for.
+    const { nodes } = reidForestWithMap(
+      [
+        node("target", { cssId: "hero-7f3" }),
+        node("holder", { attributes: { "aria-describedby": "hero-7f3" } }),
+      ],
+      { restoreEach: answers({ holder: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero-7f3");
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("hero");
+  });
+
+  it("follows a target placed both open and gated as an open one", () => {
+    // One node object sits in an open slot and inside a gated container. It
+    // renders wherever its open placement does, so an unrelated reference
+    // follows it past a gated namesake — reading it as gated made the two look
+    // like competing gated targets and left the reference behind.
+    const sharedTarget = node("shared", { cssId: "shared-1" });
+    const { nodes } = reidForestWithMap(
+      [
+        sharedTarget,
+        node("wrapper", { visibility: gate }, [sharedTarget]),
+        node("namesake", { cssId: "shared-1", visibility: gate }),
+        node("holder", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ shared: { "shared-1": "shared" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("shared");
+    expect(nodes[3].attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("lets each holder decide a reference nothing in the forest renders", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("governed", { attributes: { "aria-describedby": "shared-1" } }),
+        node("other", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ governed: { "shared-1": "alpha" } }) }
+    );
+
+    expect(nodes[0].attributes?.["aria-describedby"]).toBe("alpha");
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("shared-1");
+  });
+
+  it("lets the holder decide when two targets of one id become different ids", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("listed", { cssId: "hero-7f3" }),
+        node("namesake", { cssId: "hero-7f3" }),
+        node("holder", { attributes: { "aria-describedby": "hero-7f3" } }),
+        node("stranger", { attributes: { "aria-describedby": "hero-7f3" } }),
+      ],
+      {
+        restoreEach: answers({
+          listed: { "hero-7f3": "hero" },
+          holder: { "hero-7f3": "hero" },
+        }),
+      }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[1].cssId).toBe("hero-7f3");
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe("hero");
+    expect(nodes[3].attributes?.["aria-describedby"]).toBe("hero-7f3");
+  });
+
+  it("moves both spellings of one node's id together", () => {
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "hero-7f3", attributes: { id: "hero-7f3" } })],
+      { restoreEach: answers({ a: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+    expect(nodes[0].attributes?.id).toBe("hero");
+  });
+
+  it("moves the rendered id and leaves a shadowed attribute id alone", () => {
+    // The callback has an answer for BOTH spellings, so this fails if either the
+    // rendered id stays put or the shadowed one moves with it.
+    const { nodes } = reidForestWithMap(
+      [node("a", { cssId: "actual", attributes: { id: "hero-7f3" } })],
+      {
+        restoreEach: answers({ a: { actual: "real", "hero-7f3": "hero" } }),
+      }
+    );
+
+    expect(nodes[0].cssId).toBe("real");
+    expect(nodes[0].attributes?.id).toBe("hero-7f3");
+  });
+
+  it("puts back an id on a gated node", () => {
+    const { nodes } = reidForestWithMap(
+      [
+        node("gated", {
+          cssId: "hero-7f3",
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        }),
+      ],
+      { restoreEach: answers({ gated: { "hero-7f3": "hero" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("hero");
+  });
+
+  it("records a rendered id that moved to one answer, and nothing else", () => {
+    const { domIds } = reidForestWithMap(
+      [
+        node("a", { cssId: "hero-7f3" }),
+        node("b", { cssId: "aside" }),
+        node("p", { attributes: { "aria-describedby": "gone-1" } }),
+      ],
+      {
+        restoreEach: answers({
+          a: { "hero-7f3": "hero" },
+          p: { "gone-1": "gone" },
+        }),
+      }
+    );
+
+    expect([...domIds.entries()]).toEqual([["hero-7f3", "hero"]]);
+  });
+  /** A condition gate the renderer prunes for a viewer who does not match. */
+  const gate = {
+    conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+  } as BlockNode["visibility"];
+
+  it("follows the visible target past a gated namesake", () => {
+    // The gated namesake renders nothing, so the reference resolves to the
+    // visible node on the page. Counting both as targets made the id look
+    // contested and left the reference on an id nothing renders.
+    const { nodes } = reidForestWithMap(
+      [
+        node("visible", { cssId: "shared-1" }),
+        node("hidden", { cssId: "shared-1", visibility: gate }),
+        node("holder", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ visible: { "shared-1": "shared" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("shared");
+    expect(nodes[1].cssId).toBe("shared-1");
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("follows a gated target when nothing visible carries the id", () => {
+    // Excluding gated nodes outright would hand this reference to its holder,
+    // which answers nothing — storing a link to an id its target no longer
+    // carries once the gate opens.
+    const { nodes } = reidForestWithMap(
+      [
+        node("hidden", { cssId: "shared-1", visibility: gate }),
+        node("holder", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ hidden: { "shared-1": "shared" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("shared");
+    expect(nodes[1].attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("treats a node inside a gated subtree as gated", () => {
+    // Gating is inherited: the renderer prunes the whole subtree, so a
+    // namesake under a gated parent renders nothing either.
+    const { nodes } = reidForestWithMap(
+      [
+        node("visible", { cssId: "shared-1" }),
+        node("wrapper", { visibility: gate }, [
+          node("nested", { cssId: "shared-1" }),
+        ]),
+        node("holder", { attributes: { "aria-describedby": "shared-1" } }),
+      ],
+      { restoreEach: answers({ visible: { "shared-1": "shared" } }) }
+    );
+
+    expect(nodes[0].cssId).toBe("shared");
+    expect(nodes[2].attributes?.["aria-describedby"]).toBe("shared");
+  });
+  it("restores a link inside a gated subtree from its own answer past a visible namesake", () => {
+    // The link's holder has an answer, so it decides: the link must not be
+    // handed to an unrelated visible namesake just because that one always
+    // renders.
+    const { nodes } = reidForestWithMap(
+      [
+        node("unrelated", { cssId: "shared-1" }),
+        node("wrapper", { visibility: gate }, [
+          node("target", { cssId: "shared-1" }),
+          node("link", { attributes: { "aria-describedby": "shared-1" } }),
+        ]),
+      ],
+      {
+        restoreEach: answers({
+          target: { "shared-1": "shared" },
+          link: { "shared-1": "shared" },
+        }),
+      }
+    );
+    const inside = nodes[1].slots?.children ?? [];
+
+    expect(nodes[0].cssId).toBe("shared-1");
+    expect(inside[0]?.cssId).toBe("shared");
+    expect(inside[1]?.attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("restores a gated link from its own answer beside a namesake that keeps its id", () => {
+    // The only node rendering the id inside the gate keeps it, and nothing
+    // visible carries it. The link's holder knows where it pointed, so its
+    // answer decides rather than whichever node happens to share the id.
+    const { nodes } = reidForestWithMap(
+      [
+        node("wrapper", { visibility: gate }, [
+          node("namesake", { cssId: "shared-1" }),
+          node("link", { attributes: { "aria-describedby": "shared-1" } }),
+        ]),
+      ],
+      { restoreEach: answers({ link: { "shared-1": "shared" } }) }
+    );
+    const inside = nodes[0].slots?.children ?? [];
+
+    expect(inside[0]?.cssId).toBe("shared-1");
+    expect(inside[1]?.attributes?.["aria-describedby"]).toBe("shared");
+  });
+
+  it("restores a link under nested gates from its own answer past a visible namesake", () => {
+    // However many gates sit above the link, its holder's answer decides; a
+    // visible namesake that always renders does not.
+    const { nodes } = reidForestWithMap(
+      [
+        node("unrelated", { cssId: "shared-1" }),
+        node("outer", { visibility: gate }, [
+          node("target", { cssId: "shared-1" }),
+          node("inner", { visibility: gate }, [
+            node("link", { attributes: { "aria-describedby": "shared-1" } }),
+          ]),
+        ]),
+      ],
+      {
+        restoreEach: answers({
+          target: { "shared-1": "shared" },
+          link: { "shared-1": "shared" },
+        }),
+      }
+    );
+    const outer = nodes[1].slots?.children ?? [];
+    const inner = outer[1]?.slots?.children ?? [];
+
+    expect(outer[0]?.cssId).toBe("shared");
+    expect(inner[0]?.attributes?.["aria-describedby"]).toBe("shared");
+  });
+});
+
 describe("only the id a node RENDERS may be reminted", () => {
   it("leaves a shadowed attribute id alone, and the references to it", () => {
     // The node renders `actual`; its `attributes.id: "hero"` is overwritten and

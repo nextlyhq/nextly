@@ -535,6 +535,23 @@ const MUST_AGREE: Array<{
     },
   },
   {
+    // It decides whether the admin draws a control that HIDES a card, and the
+    // admin copies a registration's fields verbatim -- so a truthy non-boolean
+    // such as "false" would draw the control on a card whose author declared
+    // the opposite. Unlike `chrome` there is no vocabulary a newer core could
+    // extend here, so anything but a boolean is a mistake rather than skew.
+    case: "a dismissible that is not a boolean",
+    expect: /dismissible, when given, must be a boolean/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      dismissible: "false",
+    },
+  },
+  {
     case: "a chrome that is not a string",
     expect: /chrome, when given, must be a string/,
     widget: {

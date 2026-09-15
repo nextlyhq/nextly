@@ -147,6 +147,10 @@
     "count": 1,
     "digests": ["df5c00e784446f44"]
   },
+  "packages/admin/src/hooks/queries/usePublishAllLocales.ts": {
+    "count": 1,
+    "digests": ["0674b55cfffb8080"]
+  },
   "packages/admin/src/lib/builder/to-manifest-entity.test.ts": {
     "count": 1,
     "digests": ["84404c4f29f8bc78"]
@@ -303,6 +307,10 @@
     "count": 3,
     "digests": ["202fb776bc7235ef", "51498eb452728c01", "d1a527e93e649033"]
   },
+  "packages/nextly/src/di/__tests__/load-dynamic-tables.test.ts": {
+    "count": 1,
+    "digests": ["736602a7e7e37941"]
+  },
   "packages/nextly/src/di/register.ts": {
     "count": 6,
     "digests": [
@@ -313,6 +321,10 @@
       "c4704b07cd3f3890",
       "ee95597826b5b80e"
     ]
+  },
+  "packages/nextly/src/di/registrations/register-collections.ts": {
+    "count": 3,
+    "digests": ["09db9bb23ff09965", "6e9fd7109cc9fc33", "94ff8525e044b8a0"]
   },
   "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
     "count": 10,
@@ -339,6 +351,10 @@
       "dcf49dbd7b270e57"
     ]
   },
+  "packages/nextly/src/direct-api/namespaces/collections.ts": {
+    "count": 3,
+    "digests": ["37a0e2ec25ee2cc0", "59a770bb977ad083", "59a770bb977ad083"]
+  },
   "packages/nextly/src/direct-api/namespaces/rbac.ts": {
     "count": 11,
     "digests": [
@@ -353,6 +369,19 @@
       "ae2c9e4eb26e99c9",
       "b609cab752ed8624",
       "c024ed5dea05081d"
+    ]
+  },
+  "packages/nextly/src/dispatcher/handlers/collection-dispatcher.ts": {
+    "count": 8,
+    "digests": [
+      "1e8a73b1b250c068",
+      "34be3f05d319e7dd",
+      "34be3f05d319e7dd",
+      "56303ebc13cade9c",
+      "75f892f575725597",
+      "9c894904db58afcf",
+      "d8196efde331f07e",
+      "ec5df2b847c937f8"
     ]
   },
   "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
@@ -407,8 +436,56 @@
     "digests": ["d5997ab8d4023315"]
   },
   "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
-    "count": 3,
-    "digests": ["09e9b38cef55f0e2", "cb715ac79bb0afd0", "d6e13c0d15edf168"]
+    "count": 19,
+    "digests": [
+      "03f5b83d5dd2242f",
+      "0524236cf96cf39b",
+      "09e9b38cef55f0e2",
+      "0cf6c1f6791c6d67",
+      "21185c2d7cba5586",
+      "3334c2660c4178e0",
+      "4cc0a776deb9205d",
+      "606368adea554209",
+      "6b8890b87c096b79",
+      "6e6b410ca569dace",
+      "782632344c273aa0",
+      "7a25779e8c95e2a4",
+      "ae0e8c63b61d167c",
+      "b67d14159302a0e8",
+      "b82bd8ca2524f55c",
+      "c06043526a782eeb",
+      "cb715ac79bb0afd0",
+      "d6e13c0d15edf168",
+      "e08787490dbf8ff1"
+    ]
+  },
+  "packages/nextly/src/domains/collections/services/collection-query-service.ts": {
+    "count": 23,
+    "digests": [
+      "13831d4dec7eab02",
+      "28f392c8dea7766d",
+      "374fbd2500c1f21d",
+      "401670576a557b49",
+      "542449bc209a7f75",
+      "6ab3ed7302fb99c6",
+      "7e979ca7f5d94b0b",
+      "8623ab6ac27f4a80",
+      "b233f10203ab0427",
+      "bc34f887455ae217",
+      "cef2412cad43178c",
+      "cef2412cad43178c",
+      "cef2412cad43178c",
+      "cef2412cad43178c",
+      "cef2412cad43178c",
+      "cef2412cad43178c",
+      "d24956f183fae02f",
+      "d268ba7d4939e20e",
+      "d2bf74438e37e4a6",
+      "d6d984c369b0071a",
+      "e0fa793c61a3a767",
+      "e472fc3e4568c53a",
+      "fb53c28b1b38a335"
+    ]
   },
   "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
     "count": 1,
@@ -434,9 +511,44 @@
     "count": 1,
     "digests": ["3aeb04f7ce6d720e"]
   },
+  "packages/nextly/src/domains/i18n/companion-join.ts": {
+    "count": 10,
+    "digests": [
+      "0d4b21019308f77a",
+      "4350e6b19094d805",
+      "6d5c98fd3fc0f4f0",
+      "805793fb95b222ad",
+      "8070b982b5e044ec",
+      "86574fc7cdfc7c6b",
+      "88293b7c069e8708",
+      "c1601a9cf27e02b6",
+      "ccac34e6d47b2674",
+      "d4f9d337768fb5fd"
+    ]
+  },
   "packages/nextly/src/domains/i18n/migration/__tests__/companion-lifecycle.integration.test.ts": {
     "count": 1,
     "digests": ["1ecb7b4926538ca9"]
+  },
+  "packages/nextly/src/domains/i18n/migration/derive-companion-spec.ts": {
+    "count": 1,
+    "digests": ["13e6da5cf7566898"]
+  },
+  "packages/nextly/src/domains/i18n/migration/generate-up.ts": {
+    "count": 1,
+    "digests": ["d2871b448cfdc106"]
+  },
+  "packages/nextly/src/domains/i18n/migration/types.ts": {
+    "count": 1,
+    "digests": ["3245b796218ba69a"]
+  },
+  "packages/nextly/src/domains/i18n/runtime/companion-registration.ts": {
+    "count": 3,
+    "digests": ["34a024ed393bf8ac", "b60f81ab679d3afa", "f362a957b47c363c"]
+  },
+  "packages/nextly/src/domains/i18n/translation-status.integration.test.ts": {
+    "count": 1,
+    "digests": ["3271b1d5acb3fb1f"]
   },
   "packages/nextly/src/domains/media/services/media-service.ts": {
     "count": 1,
@@ -492,12 +604,14 @@
     "digests": ["e8838f11906c806e"]
   },
   "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
-    "count": 4,
+    "count": 6,
     "digests": [
       "17f0655986bf0777",
       "22bdeef8b108fa89",
       "40a73a66250cbdba",
-      "90205d6af96dc8ee"
+      "8d2acdfed739f0c7",
+      "90205d6af96dc8ee",
+      "9d1d040c27e42ac0"
     ]
   },
   "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
@@ -809,6 +923,10 @@
     "count": 1,
     "digests": ["a65bf2b9922315d5"]
   },
+  "packages/nextly/src/domains/singles/services/single-publish-all.ts": {
+    "count": 1,
+    "digests": ["37ff48abbbad425d"]
+  },
   "packages/nextly/src/domains/singles/services/single-registry-service.ts": {
     "count": 1,
     "digests": ["b7985ff3fa413e68"]
@@ -896,12 +1014,14 @@
     "digests": ["c29530eb35de7967"]
   },
   "packages/nextly/src/init/reload-config.ts": {
-    "count": 5,
+    "count": 7,
     "digests": [
       "16e40f5c4402dae9",
       "2b5865a0badfa47a",
       "2feaf3d7c6dcf306",
+      "36795f20f86afa58",
       "6c86503df244a581",
+      "a1cf46f0af9a979f",
       "e1c0ea5953e19fa4"
     ]
   },
@@ -918,8 +1038,13 @@
     "digests": ["75133300085c5b1d"]
   },
   "packages/nextly/src/route-handler/route-parser.ts": {
-    "count": 2,
-    "digests": ["618413b00a8fa802", "d1938ae75e12cb5f"]
+    "count": 4,
+    "digests": [
+      "618413b00a8fa802",
+      "acaed4e94a6b99c0",
+      "d1938ae75e12cb5f",
+      "f5ffbbe2b158e4dd"
+    ]
   },
   "packages/nextly/src/routeHandler.ts": {
     "count": 3,
@@ -989,6 +1114,42 @@
     "count": 1,
     "digests": ["f5f700e664b1c588"]
   },
+  "packages/nextly/src/services/collection-file-manager.ts": {
+    "count": 3,
+    "digests": ["00bbf87050b2aa4e", "9780f092f71bb287", "b64ae3ab9c465ebb"]
+  },
+  "packages/nextly/src/services/collections-handler.ts": {
+    "count": 10,
+    "digests": [
+      "452725d4fc8fc3c7",
+      "7e24d0d33b9cfad2",
+      "8efa878f3f94f2c2",
+      "943a6aa9cb1cd7bd",
+      "9d2d27923a2a7341",
+      "c0d7765e95047d06",
+      "c0d7765e95047d06",
+      "c0d7765e95047d06",
+      "cb1163bc36e62e1c",
+      "fadd6f5d56f12a1d"
+    ]
+  },
+  "packages/nextly/src/services/collections/collection-entry-service.ts": {
+    "count": 8,
+    "digests": [
+      "2f095e3a68a58ceb",
+      "371447533163ac46",
+      "452725d4fc8fc3c7",
+      "7e24d0d33b9cfad2",
+      "c0d7765e95047d06",
+      "c0d7765e95047d06",
+      "c0d7765e95047d06",
+      "d1c61cf331ff0345"
+    ]
+  },
+  "packages/nextly/src/services/collections/drizzle-condition.ts": {
+    "count": 3,
+    "digests": ["1e8a1cc94d7a0bea", "2004519873cde6d3", "2ebdf4fbddc28680"]
+  },
   "packages/nextly/src/services/dashboard/activity-log-service.ts": {
     "count": 2,
     "digests": ["3dbce00600c3785d", "c643dd986b9518e4"]
@@ -1011,6 +1172,14 @@
   "packages/nextly/src/shared/base-registry-service.ts": {
     "count": 2,
     "digests": ["607d53b54502eea9", "dea34fdfb21a1851"]
+  },
+  "packages/nextly/src/shared/lib/__tests__/entry-validation.test.ts": {
+    "count": 1,
+    "digests": ["a5018ae0a71d742a"]
+  },
+  "packages/nextly/src/shared/lib/entry-validation.ts": {
+    "count": 1,
+    "digests": ["e1a209bef64068f6"]
   },
   "packages/nextly/src/shared/types/config.ts": {
     "count": 3,

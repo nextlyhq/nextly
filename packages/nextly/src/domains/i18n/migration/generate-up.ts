@@ -72,7 +72,7 @@ function buildCompanionCreateStatement(
   const statusDef = spec.status
     ? `  ${q(COMPANION_STATUS_COLUMN, dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
     : "";
-  // i18n B2: when this locale was last written. Unconditional — every companion
+  // `_updated_at`: when this locale was last written. Unconditional — every companion
   // gets it, unlike `_status` — and deliberately nullable with no DEFAULT: a
   // freshly created companion has no rows to mis-seed, and keeping the shape
   // identical to the one `reconcileCompanionColumns` ADDs to an existing table

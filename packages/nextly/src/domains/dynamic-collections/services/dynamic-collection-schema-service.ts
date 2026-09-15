@@ -2368,17 +2368,8 @@ ${allColumnDefs.join(",\n")}
       // drop an index that was never installed, which on MySQL aborts the whole migration.
       if (
         this.columnIsIndexed(field) &&
-        this.createIndexSql(
-          tableName,
-          column,
-          this.mapFieldTypeToSQL(
-            field.type,
-            field.length,
-            field.options,
-            field.validation,
-            field
-          )
-        ) !== null
+        this.createIndexSql(tableName, column, this.newColumnType(field)) !==
+          null
       ) {
         indexNames.add(indexNameForColumn(tableName, column));
       }
@@ -2391,6 +2382,32 @@ ${allColumnDefs.join(",\n")}
       }
     }
     return { indexNames, foreignKeysByColumn };
+  }
+
+  /**
+   * The type each column WILL have once this table's creation migration has run.
+   *
+   * The companion to `plannedAttachments`, and it exists for the same reason: a collection saved
+   * but not yet deployed has a registry record and no table, and the two artefacts replay in
+   * order. An edit made in that window is generated against a table the create is about to build,
+   * so what it believes about the columns has to be what the create will write.
+   *
+   * Only MySQL's `MODIFY` consults it, and only to restate a column it is not otherwise changing.
+   * Reporting nothing here sends that restate to the legacy renderer, which now disagrees with the
+   * create: a float field is created `double` and the follow-up migration would `MODIFY` it to
+   * `decimal(10,2)`, narrowing and rounding a column the deployment had just built — from two
+   * artefacts that are individually correct and wrong in sequence.
+   *
+   * Answered by the class that emits the CREATE, so a prediction and the statement it predicts
+   * cannot describe different columns.
+   */
+  plannedColumnTypes(fields: FieldDefinition[]): Map<string, string> {
+    const types = new Map<string, string>();
+    for (const field of fields) {
+      if (!fieldProducesColumn(field)) continue;
+      types.set(toSnakeCase(field.name), this.newColumnType(field));
+    }
+    return types;
   }
 
   generateDropTableMigration(

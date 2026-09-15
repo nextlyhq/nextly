@@ -45,7 +45,7 @@ export interface UseEntryOptions<T = Entry> {
   /** Fallback locale when translation is missing */
   fallbackLocale?: string;
   /**
-   * i18n M7: request the per-locale `_translations` overview map (which languages are translated
+   * Request the per-locale `_translations` overview map (which languages are translated
    * + each one's draft/published status) for the per-language status pills.
    */
   translationStatus?: boolean;
@@ -168,7 +168,7 @@ export function useEntry<T = Entry>({
   queryOptions,
 }: UseEntryOptions<T>) {
   return useQuery<T, Error>({
-    // i18n M7: locale is part of the cache identity — switching languages must refetch the
+    // Locale is part of the cache identity — switching languages must refetch the
     // entry (the localized field values differ per locale), not serve the previous language.
     // The cache identity is built through the shared `detailScoped` helper so the
     // mutation hook's optimistic-update key stays in lockstep with this read key.

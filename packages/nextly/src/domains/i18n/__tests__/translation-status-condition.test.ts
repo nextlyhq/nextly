@@ -123,7 +123,7 @@ describe("buildTranslationStatusCondition", () => {
   });
 
   /**
-   * i18n B2 — "translated, but the source moved since".
+   * Staleness — "translated, but the source moved since".
    *
    * 🔴 `stale` is NOT a sibling of the four states above, and the assertions
    * below are written to hold that line. The others are mutually exclusive
@@ -238,7 +238,7 @@ describe("buildTranslationStatusCondition", () => {
       await seed("e8", "fr", "Bonjour", 1000);
 
       // 🔴 The most dangerous branch in this arm, because its wrong answer is
-      // the confident one. A companion predating B2 cannot answer the question
+      // the confident one. A companion predating `_updated_at` cannot answer the question
       // — and the `undefined` that the `draft`/`published` arms return for an
       // unanswerable filter means "no restriction", which here would put EVERY
       // document of that collection under "Needs review" with nothing on screen

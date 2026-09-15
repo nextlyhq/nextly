@@ -1,5 +1,5 @@
 /**
- * A Drizzle handle for the companion's `_updated_at` column alone (i18n B2).
+ * A Drizzle handle for the companion's `_updated_at` column alone.
  *
  * The column is deliberately absent from the companion's main runtime table: that table is
  * registered for every localized entity including Schema Builder collections held in the registry,

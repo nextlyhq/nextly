@@ -57,6 +57,15 @@ export interface LayoutEditor {
   hasUnsavedChanges: boolean;
   isSaving: boolean;
   /**
+   * Whether any write against this layout is in flight, including one this
+   * editor did not start.
+   *
+   * What the controls are DISABLED on. `isSaving` stays what the Save button
+   * READS, because a dismissal settling is not this reader's arrangement being
+   * saved and saying so would be untrue.
+   */
+  isWriting: boolean;
+  /**
    * Whether the last commit lost a race, on either guard.
    *
    * The recovery is one action for both causes, so this is one flag: re-read,
@@ -248,6 +257,7 @@ export function useLayoutEditor(
         draft.columnCount
       ),
     isSaving: layout.save.isPending || layout.reset.isPending,
+    isWriting: layout.isWriting,
     isConflict: layout.isConflict,
     begin,
     cancel,

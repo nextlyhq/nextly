@@ -17,6 +17,7 @@
  *
  * @module admin/BlocksField.policy.test
  */
+import { BASE_BREAKPOINT } from "@nextlyhq/blocks-engine";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
@@ -234,6 +235,16 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // resolves the shell at import time, and a specifier already bound to the real
 // module cannot be replaced afterwards.
 const { BlocksField } = await import("./BlocksField");
+
+/*
+ * The REAL class manager, which the shell mock above replaces with a recorder.
+ * A case about what the manager tells an author renders this with the props the
+ * editor actually handed the recorder, so the assertion reads the summary the
+ * author sees rather than which arguments were passed.
+ */
+const { ClassManagerPanel: RealClassManagerPanel } = await vi.importActual<
+  typeof import("@nextlyhq/builder/shell")
+>("@nextlyhq/builder/shell");
 
 /** A form around the field, since it reads its value through a form control. */
 function Host(): React.JSX.Element {
@@ -968,5 +979,105 @@ describe("what the inspector is told about provenance", () => {
 
     expect(seen.classes?.documentClassIds).toEqual(["hero", "own"]);
     expect(seen.classes?.documentScan).toBe("complete");
+  });
+});
+
+describe("what the classes manager says a class writes", () => {
+  const TRACKER = "https://tracker.example/p.png";
+
+  /** One class in the site config, holding `values` at the base breakpoint. */
+  function siteWithClass(
+    base: Record<string, unknown>,
+    extra: Record<string, Record<string, unknown>> = {},
+    breakpoints?: unknown
+  ): Record<string, unknown> {
+    return {
+      classes: [
+        {
+          id: "c-hero",
+          slug: "hero",
+          orderIndex: 0,
+          styles: { base: { [BASE_BREAKPOINT]: base, ...extra } },
+        },
+      ],
+      ...(breakpoints === undefined ? {} : { breakpoints }),
+    };
+  }
+
+  /**
+   * Open the editor on the classes panel, then draw the real manager with the
+   * props the editor gave it and return the declaration summary's text.
+   */
+  function summaryAsDrawn(): string {
+    shownPanel = "classes";
+    openEditor();
+    const props = seen.classes as
+      | React.ComponentProps<typeof RealClassManagerPanel>
+      | undefined;
+    expect(props).toBeDefined();
+    cleanup();
+    if (props === undefined) return "";
+    render(<RealClassManagerPanel {...props} />);
+    return document.querySelector(".nx-classman__declares")?.textContent ?? "";
+  }
+
+  it("does not list a declaration the site's host policy drops", () => {
+    /*
+     * The page compile refuses a URL naming a host the site does not load
+     * from, so the class writes no `background-image` on the page. A summary
+     * compiled without the policy listed it anyway.
+     */
+    const site = siteWithClass({
+      color: "#112233",
+      background: { url: TRACKER },
+    });
+
+    clientConfig = {
+      remotePatterns: [{ hostname: "cdn.example" }],
+      siteStyle: site,
+    };
+    const refused = summaryAsDrawn();
+    // Must-be-found: the summary was drawn, so its silence below means
+    // something.
+    expect(refused).toContain("color");
+    expect(refused).not.toContain("background-image");
+    cleanup();
+
+    // Controls: a site allowing the host, and a site stating no policy at all,
+    // both keep it. So the case above turns on the policy's verdict, not on the
+    // fixture or on a policy merely being present.
+    clientConfig = {
+      remotePatterns: [{ hostname: "tracker.example" }],
+      siteStyle: site,
+    };
+    expect(summaryAsDrawn()).toContain("background-image");
+    cleanup();
+
+    clientConfig = { siteStyle: site };
+    expect(summaryAsDrawn()).toContain("background-image");
+  });
+
+  it("counts styles held under a breakpoint the site defines", () => {
+    /*
+     * With no breakpoints to compile against, only the base context is
+     * emitted, so a class's styles under a site-defined tier went uncounted
+     * and the "more elsewhere" caveat was never shown.
+     */
+    const extra = { kiosk: { color: "#445566" } };
+    clientConfig = {
+      siteStyle: siteWithClass({ color: "#112233" }, extra, {
+        viewport: [{ id: "kiosk", label: "Kiosk", maxWidth: 1200 }],
+        container: [],
+      }),
+    };
+    expect(summaryAsDrawn()).toContain("1 more elsewhere");
+    cleanup();
+
+    // Control: the same class on a site that does not define that tier writes
+    // no rule for it, so nothing is counted — the output from before.
+    clientConfig = { siteStyle: siteWithClass({ color: "#112233" }, extra) };
+    const undefinedTier = summaryAsDrawn();
+    expect(undefinedTier).toContain("color");
+    expect(undefinedTier).not.toContain("elsewhere");
   });
 });

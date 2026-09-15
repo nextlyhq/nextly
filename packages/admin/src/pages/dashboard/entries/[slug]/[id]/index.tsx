@@ -228,7 +228,7 @@ export default function EditEntryPage({
   const slug = params?.slug;
   const id = params?.id;
 
-  // i18n M7: active content language for this editor. `undefined` = the app's default locale
+  // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
   // routes saves to the chosen language (EntryForm → useUpdateEntry).
   const { locale, changeLocale, resetLocale, seedFromLocale, clearSeed } =
@@ -247,7 +247,7 @@ export default function EditEntryPage({
 
   // Fetch entry data with relationship expansion
   // depth: 2 ensures relationship fields include display labels (title, name, etc.)
-  // i18n M7: on a localized app, request the per-locale translation-status overview so the editor
+  // On a localized app, request the per-locale translation-status overview so the editor
   // can show per-language status pills. Inert (param omitted) for non-localized apps.
   const { defaultLocale, enabled: localizationEnabled } = useLocalization();
 
@@ -273,7 +273,7 @@ export default function EditEntryPage({
     translationStatus: localizationEnabled,
   });
 
-  // i18n M7: while translating a non-default language, also load the default-language entry so
+  // While translating a non-default language, also load the default-language entry so
   // the editor can show the source text inline on each translatable field (spec §10). Gated so
   // it only fires when actually translating another language; editing the default language reuses
   // the primary fetch above (same cache key) and needs no source copy.

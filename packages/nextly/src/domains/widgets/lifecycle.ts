@@ -23,13 +23,16 @@
  * declaration that always hides the widget, which reads to the author as a
  * broken card rather than as a missing feature.
  *
- * `pin` and `dismissible` are deliberately NOT here yet. The design calls for
- * both, and nothing reads either one: pinning is a property of how the grid
- * materialises an arrangement, and dismissal needs somewhere per-reader to
- * record it. Accepting them now would publish two options that look like they
- * work — an author would declare `pin: "top"`, watch the card sit wherever it
- * was dragged, and have nothing to tell them the field was never read. They
- * arrive with the code that honours them.
+ * `dismissible` is here because the code that honours it is: a dismissal is
+ * recorded as the reader HIDING that placement, which the layout row already
+ * carries per reader, so the field reads an existing mechanism rather than
+ * asking for a new one.
+ *
+ * `pin` is deliberately NOT here yet. Nothing reads it — pinning is a property
+ * of how the grid materialises an arrangement, and accepting it now would
+ * publish an option that looks like it works: an author would declare
+ * `pin: "top"`, watch the card sit wherever it was dragged, and have nothing to
+ * tell them the field was never read. It arrives with the code that honours it.
  *
  * @module domains/widgets/lifecycle
  */

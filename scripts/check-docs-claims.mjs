@@ -31,6 +31,11 @@ import { basename, dirname, extname, join, relative, sep } from "node:path";
 import { compile } from "@mdx-js/mdx";
 
 import { splitFrontmatter } from "./check-docs-compile.mjs";
+import {
+  RETIRED_CATEGORY,
+  RETIRED_CATEGORY_TAG,
+  namesRetiredCategory,
+} from "./retired-category.mjs";
 
 /**
  * Files come from git's index, not from a directory walk.
@@ -232,41 +237,12 @@ export function context7Findings(config, coreDescription) {
 }
 
 /**
- * The category the project moved away from.
+ * The retired-category patterns and their classifier, defined in `retired-category.mjs`.
  *
- * A hyphen or whitespace between the words, because the repository has spelled
- * it both ways and a reader sees no difference, and an optional plural, because
- * "one of several app frameworks" is the same claim about the same category.
+ * Re-exported so an importer of this module keeps a path to them, while a job that cannot install
+ * packages imports the dependency-free module directly instead of this one.
  */
-export const RETIRED_CATEGORY = /\bapp(?:-|\s+)frameworks?\b/i;
-
-/**
- * The same category, as a whole tag rather than a phrase in prose.
- *
- * npm keywords and GitHub topics are both single tokens on a surface people search, and both
- * were left carrying `framework` after the prose was cleared. The word is the one the whole
- * repositioning turned on: it could mean an application framework, a UI framework or a backend
- * framework, which made it the least informative word available.
- *
- * `RETIRED_CATEGORY` cannot serve here — it requires the `app` prefix, so a bare `framework`
- * tag would pass. Anchored rather than substring-matched: `page-builder` and `nextly-plugin`
- * are tags this must never touch.
- */
-export const RETIRED_CATEGORY_TAG = /^(?:app-)?frameworks?$/i;
-
-/**
- * The single answer to "does this tag name the retired category", for every tag surface.
- *
- * A tag can carry the category two ways, and one pattern cannot see both: as the whole tag
- * (`framework`), or with the phrase embedded in a longer one (`nextjs-app-framework`). Two
- * checks used to answer this for npm keywords — the prose check matched the phrase, the
- * keyword check matched the whole tag — so a keyword like `app-framework` was reported twice
- * under two names, and their patterns were free to drift apart. This is now the only answer,
- * shared by npm keywords and GitHub topics.
- */
-export function namesRetiredCategory(tag) {
-  return typeof tag === "string" && (RETIRED_CATEGORY_TAG.test(tag) || RETIRED_CATEGORY.test(tag));
-}
+export { RETIRED_CATEGORY, RETIRED_CATEGORY_TAG, namesRetiredCategory };
 
 /**
  * The keywords npm derives from a manifest, which is not always the keywords it was given.

@@ -25,7 +25,11 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { WidgetPlacement } from "../../../domains/widgets/layout";
+import {
+  DEFAULT_COLUMN_COUNT,
+  layoutIsArranged,
+  type WidgetPlacement,
+} from "../../../domains/widgets/layout";
 import { NextlyError } from "../../../errors/nextly-error";
 import { layoutRowId } from "../../../schemas/widget-layout";
 import { WidgetLayoutService } from "../widget-layout-service";
@@ -86,6 +90,40 @@ function layoutSuite(
       expect(read.unreadable).toBe(false);
       expect(read.version).toBe(1);
       expect(read.layout?.placements).toEqual(placements);
+    });
+
+    it("keeps whether a row was arranged through a real write", async () => {
+      // The flag lives inside the JSON payload rather than in a column, so no
+      // dialect has a migration to get wrong -- which is exactly why it needs a
+      // real round trip: nothing else proves the key survives a driver's text
+      // handling on all three.
+      const scope = `u-arranged-${label}`;
+      await service.saveLayout(
+        "user",
+        scope,
+        [placement({ hidden: true })],
+        0,
+        DEFAULT_COLUMN_COUNT,
+        false
+      );
+      const dismissed = await service.getLayout("user", scope);
+      // `&&` so an absent row fails the assertion rather than satisfying it.
+      expect(dismissed.layout && layoutIsArranged(dismissed.layout)).toBe(
+        false
+      );
+
+      // And an arranged write afterwards clears it: the way out of following
+      // the defaults has to survive storage too.
+      await service.saveLayout(
+        "user",
+        scope,
+        [placement()],
+        dismissed.version,
+        DEFAULT_COLUMN_COUNT,
+        true
+      );
+      const arranged = await service.getLayout("user", scope);
+      expect(arranged.layout && layoutIsArranged(arranged.layout)).toBe(true);
     });
 
     it("reports no row before anything is written", async () => {

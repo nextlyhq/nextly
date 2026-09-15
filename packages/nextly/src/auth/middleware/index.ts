@@ -1,14 +1,13 @@
 import { container } from "@nextly/di/container";
 import type { NextlyServiceConfig } from "@nextly/di/register";
-import type {
-  AccessControlContext,
-  CollectionAccessControl,
-  SingleAccessControl,
-} from "@nextly/domains/auth/services/access-control-types";
 import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 import { permissionSlug } from "@nextly/schemas/_zod/rbac";
+import {
+  ACCESS_OPERATIONS,
+  type AccessOperation,
+} from "@nextly/services/access/types";
 import {
   hasPermission,
   hasAnyPermission,
@@ -18,8 +17,8 @@ import {
 // to the new jose-based session/get-session.ts module internally.
 import {
   apiKeyScopeFrom,
+  apiKeyWriteAllowed,
   type GrantedPermission,
-  ruleFacingPermissions,
 } from "../authenticated-scope";
 import { getSession } from "../session";
 
@@ -462,6 +461,15 @@ export async function requirePermission(
         `You do not have permission to ${action} ${resource}`
       );
     }
+    // The grant is necessary, not sufficient. Plugin routes declare entity
+    // grants here, and a key the entity's own `access` rule refuses is refused
+    // on this gate exactly as `requireCollectionAccess` refuses it.
+    const ruleRefusal = await apiKeyEntityRuleRefusal(
+      action,
+      resource,
+      authResult
+    );
+    if (ruleRefusal) return ruleRefusal;
     return authResult;
   }
 
@@ -563,19 +571,12 @@ export async function requireCollectionAccess(
 
     // Permission slug matched — also check code-defined access functions
     // (e.g. defineCollection({ access: { create: ({ roles }) => ... } }))
-    const rbac = getRBACService();
-    if (rbac) {
-      const codeAccess = rbac.getRegisteredAccess(collectionSlug);
-      if (codeAccess) {
-        const denied = await evaluateCodeAccess(
-          codeAccess,
-          action as "create" | "read" | "update" | "delete",
-          collectionSlug,
-          authResult
-        );
-        if (denied) return denied;
-      }
-    }
+    const ruleRefusal = await apiKeyEntityRuleRefusal(
+      action,
+      collectionSlug,
+      authResult
+    );
+    if (ruleRefusal) return ruleRefusal;
 
     return authResult;
   }
@@ -602,76 +603,43 @@ export async function requireCollectionAccess(
 }
 
 /**
- * Evaluate a code-defined access function for an API key request.
+ * Whether an entity's code-defined rule refuses a scoped API key an operation
+ * its grant already admitted.
  *
- * Builds an `AccessControlContext` using the API key's pre-resolved
- * permissions and roles (NOT the creator's full database permissions),
- * then evaluates the operation-specific access rule.
- *
- * Returns an `ErrorResponse` if access is denied, or `null` if allowed
- * (or if no rule is defined for the operation).
+ * Both API-key branches ask this, and it asks `apiKeyWriteAllowed`, the
+ * decision the service gates use for a scoped key — so a route and a service
+ * read cannot answer differently, including for a rule that returns something
+ * other than `true`, which that decision refuses. A grant says the key may
+ * attempt the operation; the entity's own `access` rule still decides, as it
+ * does for every other caller. Only operations a rule can name are judged:
+ * `export-submissions` or `manage-settings` name no rule, so they stay decided
+ * by the grant alone. With no RBAC service registered, no rule is judged.
  */
-async function evaluateCodeAccess(
-  codeAccess: CollectionAccessControl | SingleAccessControl,
-  operation: "create" | "read" | "update" | "delete",
+async function apiKeyEntityRuleRefusal(
+  action: string,
   resource: string,
   authResult: AuthContext
 ): Promise<ErrorResponse | null> {
-  const operationAccess =
-    codeAccess[
-      operation as keyof (CollectionAccessControl | SingleAccessControl)
-    ];
+  if (!isAccessOperation(action)) return null;
+  const allowed = await apiKeyWriteAllowed(
+    apiKeyScopeFrom(authResult),
+    action,
+    resource,
+    { id: authResult.userId },
+    getRBACService()
+  );
+  return allowed === false
+    ? createErrorResponse(
+        403,
+        "Forbidden",
+        `You do not have permission to ${action} ${resource}`
+      )
+    : null;
+}
 
-  if (operationAccess === undefined) {
-    return null; // No code-defined rule — permission slug check already passed
-  }
-
-  if (typeof operationAccess === "boolean") {
-    return operationAccess
-      ? null
-      : createErrorResponse(
-          403,
-          "Forbidden",
-          `You do not have permission to ${operation} ${resource}`
-        );
-  }
-
-  // Function — build context with the API key's resolved roles/permissions.
-  //
-  // In the RULE spelling. `authResult.permissions` holds the stored slugs
-  // (`read-notes`), and `AccessControlContext.permissions` is documented as
-  // `resource:action` — which `listEffectivePermissions` produces for the
-  // session branch below. Handing a rule the stored form denied every key on
-  // exactly the predicate the documentation shows.
-  const scope = apiKeyScopeFrom(authResult);
-  const ctx: AccessControlContext = {
-    user: { id: authResult.userId },
-    roles: [...(scope.roles ?? [])],
-    permissions: ruleFacingPermissions(scope),
-    operation,
-    collection: resource,
-  };
-
-  try {
-    const allowed = await operationAccess(ctx);
-    return allowed
-      ? null
-      : createErrorResponse(
-          403,
-          "Forbidden",
-          `You do not have permission to ${operation} ${resource}`
-        );
-  } catch (error) {
-    console.error(
-      `[auth] Code access function for ${operation}:${resource} threw:`,
-      error
-    );
-    return createErrorResponse(
-      403,
-      "Forbidden",
-      `You do not have permission to ${operation} ${resource}`
-    );
-  }
+/** Whether an action names an operation an entity access rule can declare. */
+function isAccessOperation(action: string): action is AccessOperation {
+  return ACCESS_OPERATIONS.some(operation => operation === action);
 }
 
 /**

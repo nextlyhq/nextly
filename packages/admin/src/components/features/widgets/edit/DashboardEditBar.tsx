@@ -27,6 +27,13 @@ export interface DashboardEditBarProps {
   isEditing: boolean;
   hasUnsavedChanges: boolean;
   isSaving: boolean;
+  /**
+   * Whether any layout write is in flight, including one begun outside this
+   * bar. Every control here is disabled on it: each of them starts a
+   * whole-layout write against one cached version, so a second in flight is a
+   * conflict the reader caused themselves.
+   */
+  isWriting: boolean;
   /** Whether the reader has an arrangement of their own to reset. */
   canReset: boolean;
   /** How many columns the dashboard is currently drawn in. */
@@ -44,6 +51,7 @@ export function DashboardEditBar({
   isEditing,
   hasUnsavedChanges,
   isSaving,
+  isWriting,
   canReset,
   columnCount,
   columnChoices,
@@ -69,6 +77,13 @@ export function DashboardEditBar({
           variant="outline"
           size="sm"
           onClick={onBegin}
+          // 🔴 Beginning an edit is not itself a write, and it still has to
+          // wait for one. The draft is seeded from the arrangement in hand,
+          // including the VERSION it will later be saved against -- so a draft
+          // opened while a dismissal is settling carries a guard that is about
+          // to go stale, and the reader's own Save comes back as a conflict
+          // somebody else caused.
+          disabled={isWriting}
           data-testid="dashboard-edit-begin"
         >
           <Icons.Pencil aria-hidden className="mr-2 size-4" />
@@ -108,7 +123,7 @@ export function DashboardEditBar({
           aria-labelledby="dashboard-columns-label"
           value={String(columnCount)}
           onValueChange={value => onColumnCount(Number(value))}
-          disabled={isSaving}
+          disabled={isWriting}
           className="flex items-center gap-1"
           data-testid="dashboard-column-picker"
         >
@@ -141,7 +156,7 @@ export function DashboardEditBar({
           variant="ghost"
           size="sm"
           onClick={onReset}
-          disabled={isSaving}
+          disabled={isWriting}
           className="text-muted-foreground"
           data-testid="dashboard-edit-reset"
         >
@@ -154,7 +169,7 @@ export function DashboardEditBar({
         variant="ghost"
         size="sm"
         onClick={onCancel}
-        disabled={isSaving}
+        disabled={isWriting}
         data-testid="dashboard-edit-cancel"
       >
         Cancel
@@ -166,7 +181,7 @@ export function DashboardEditBar({
         // Disabled with nothing to save, so pressing it cannot spend a write —
         // and a write is not free here: it is guarded, so a pointless one can
         // still come back a conflict and send the reader to reload for nothing.
-        disabled={isSaving || !hasUnsavedChanges}
+        disabled={isWriting || !hasUnsavedChanges}
         data-testid="dashboard-edit-save"
       >
         {isSaving ? "Saving…" : "Save"}

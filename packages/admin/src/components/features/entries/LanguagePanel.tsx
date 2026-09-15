@@ -520,7 +520,7 @@ function LanguageRow({
   state: LanguageState;
   /** Whether this language holds a saved change nobody has published. */
   pendingChange?: boolean;
-  /** i18n B2: the source language moved after this one was written. */
+  /** Stale: the source language moved after this one was written. */
   stale?: boolean;
   isActive: boolean;
   canSeed: boolean;

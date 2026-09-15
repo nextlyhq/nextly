@@ -163,7 +163,7 @@ function toCollectionForColumns(
     // Forward the Draft / Published flag so the bulk-action bar can
     // surface Publish / Unpublish only for collections that opted in.
     status: collection.status === true,
-    // i18n M7: forward the localization flag so the table can render a
+    // Forward the localization flag so the table can render a
     // per-row translation-completeness column.
     localized: collection.localized === true,
     admin: {
@@ -251,7 +251,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const [createdTo, setCreatedTo] = useState("");
   const [updatedFrom, setUpdatedFrom] = useState("");
   const [updatedTo, setUpdatedTo] = useState("");
-  // i18n M7: the active language filter (locale + translation state), or null.
+  // The active language filter (locale + translation state), or null.
   const [translationFilter, setTranslationFilter] =
     useState<TranslationListFilter | null>(null);
 
@@ -298,7 +298,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   );
   usePluginAutoRegistration(collectionsForRegistration);
 
-  // i18n M7: request the per-locale translation-status overview only for localized collections
+  // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
   const { enabled: localizationEnabled } = useLocalization();
   const wantsTranslationStatus =

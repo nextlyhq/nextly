@@ -57,7 +57,7 @@ export interface ReconcileCompanionArgs {
    */
   companionHasStatus?: boolean;
   /**
-   * Whether the EXISTING companion physically has the `_updated_at` column (i18n B2). Only
+   * Whether the EXISTING companion physically has the `_updated_at` column. Only
    * meaningful when `companionExists`.
    *
    * Three-valued on purpose. `false` means introspection looked and the column is not there, so
@@ -69,10 +69,10 @@ export interface ReconcileCompanionArgs {
   companionHasUpdatedAt?: boolean;
   /**
    * Which version scope this entity's history is recorded under, enabling the `_updated_at`
-   * back-fill (i18n B2). Omit to ADD the column without seeding it.
+   * back-fill. Omit to ADD the column without seeding it.
    *
    * Omission is the honest default rather than a shortcut: a FIELD GROUP has no version scope, so
-   * there is no per-locale history to read and NULL — UNKNOWN — is the true answer for it. B2
+   * there is no per-locale history to read and NULL — UNKNOWN — is the true answer for it. Staleness
    * covers collections only: nothing surfaces the signal for a Single, so seeding one would
    * populate a column no screen reads. Extending it is this argument gaining one more caller.
    */
@@ -114,7 +114,7 @@ export function buildCompanionReconcileSql(
  * column default or comment would otherwise fragment a statement). Empty when nothing to do.
  */
 /**
- * Seed `_updated_at` on an existing companion from version history (i18n B2).
+ * Seed `_updated_at` on an existing companion from version history.
  *
  * Returns nothing without a `versionScope`, and that is how "collections only" is expressed:
  * `nextly_versions` records `collection`, `single` and `page`, but a FIELD GROUP has no version
@@ -262,7 +262,7 @@ export function buildCompanionReconcileStatements(
     }
   }
 
-  // i18n B2: add `_updated_at` to a companion that predates it, and seed it from version history.
+  // Add `_updated_at` to a companion that predates it, and seed it from version history.
   //
   // Only acts when the caller told us what the live table has. `undefined` means "not
   // introspected", which is not the same as "absent" — emitting an unconditional ADD for a caller

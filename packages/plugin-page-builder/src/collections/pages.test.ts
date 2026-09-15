@@ -41,6 +41,27 @@ describe("pages carries no custom CSS surface", () => {
 });
 
 /**
+ * Saving and publishing are two acts on a page, as they are on the components
+ * and Layouts a page is built from.
+ *
+ * `status: true` alone resolves to a history-only collection, where a save to a
+ * published page goes live at once. A page embedding a header would then
+ * publish two different ways on one screen: its own edits on save, and the
+ * header's only when the header is published.
+ */
+describe("pages separates saving from publishing", () => {
+  it("keeps a working draft beside the published row", () => {
+    const collection = pagesCollection() as {
+      status?: boolean;
+      versions?: { drafts?: boolean };
+    };
+
+    expect(collection.status).toBe(true);
+    expect(collection.versions?.drafts).toBe(true);
+  });
+});
+
+/**
  * How an entry is edited is decided by the FIELD, not per entry.
  *
  * Asserted on the collection rather than through the admin, because what this

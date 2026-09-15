@@ -530,6 +530,38 @@ function contributedSize(
     : undefined;
 }
 
+/**
+ * How long a contributed card stays, and who may send it away.
+ *
+ * Its own function rather than three more spreads inline: `toSummary` already
+ * answers several unrelated questions -- identity, gates, size, order -- and
+ * the lifecycle trio is one of them, with reasoning long enough that keeping it
+ * in the body pushed the whole function past the complexity gate.
+ *
+ * Carried so a contributed card can be transient too. Dropped here, the layout
+ * server reads no lifecycle and treats the card as PERMANENT -- silently,
+ * because a widget that never lapses looks exactly like one declared permanent.
+ * `widgetValueProblem` has already refused an unknown condition, or a lifecycle
+ * and condition that do not agree, so what reaches here is a pair this host can
+ * act on.
+ */
+function lifecycleOf(
+  declaration: Record<string, unknown>
+): Partial<CanonicalWidget> {
+  return {
+    ...(typeof declaration.lifecycle === "string"
+      ? { lifecycle: declaration.lifecycle }
+      : {}),
+    ...(typeof declaration.visibleWhen === "string"
+      ? { visibleWhen: declaration.visibleWhen }
+      : {}),
+    // Boolean rather than truthy: a contribution carrying `dismissible: "yes"`
+    // is a declaration mistake, and publishing it as `true` would honour a
+    // value the author never wrote.
+    ...(declaration.dismissible === true ? { dismissible: true } : {}),
+  };
+}
+
 function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
   const declaration = widget as unknown as Record<string, unknown>;
   const id = contributedText(declaration, "id");
@@ -573,20 +605,7 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     ...(typeof defaultOrder === "number" && Number.isFinite(defaultOrder)
       ? { defaultOrder }
       : {}),
-    /*
-     * Carried so a contributed card can be transient too. Dropped here, the
-     * layout server reads no lifecycle and treats the card as PERMANENT --
-     * silently, because a widget that never lapses looks exactly like one that
-     * was declared permanent. `widgetValueProblem` has already refused an
-     * unknown condition or a lifecycle these two do not agree on, so what
-     * reaches here is a pair this host can act on.
-     */
-    ...(typeof declaration.lifecycle === "string"
-      ? { lifecycle: declaration.lifecycle }
-      : {}),
-    ...(typeof declaration.visibleWhen === "string"
-      ? { visibleWhen: declaration.visibleWhen }
-      : {}),
+    ...lifecycleOf(declaration),
   };
 }
 

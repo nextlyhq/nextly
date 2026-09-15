@@ -59,7 +59,7 @@ export function resolveEffectiveLocaleStatus(args: {
 export const COMPANION_STATUS_COLUMN = "_status";
 
 /**
- * When THIS locale was last written (i18n B2 — "changed since translated").
+ * When THIS locale was last written ("changed since translated").
  *
  * Nullable with NO default, and both halves are load-bearing. A translation that has gone stale
  * looks exactly like a finished one, so the feature is a comparison between this column on the

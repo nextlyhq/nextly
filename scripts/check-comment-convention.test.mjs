@@ -213,12 +213,15 @@ describe("the allowlist", () => {
   // the comment it exempts, which turns the allowlist into a way of silencing the check rather
   // than a record of what predates it. Lower these as entries are removed.
   //
-  // Raising them is legitimate in exactly one case, which is why these numbers moved once: when
-  // the scan WIDENS to files it previously skipped, whatever those files already contained is by
-  // definition pre-existing. The checker's own source came out of EXCLUDED_FILES and brought 12
-  // recorded offences with it. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 209;
-  const EXPECTED_TOTAL = 402;
+  // Raising them is legitimate in exactly one case: when the scan WIDENS, whatever the repository
+  // already contained is by definition pre-existing. It has widened in two directions. The
+  // checker's own source came out of EXCLUDED_FILES and brought 12 recorded offences with it; and
+  // the roadmap-milestone pattern, added over prose that predated it, brought 148 across 35 new
+  // entries without removing or lowering any, one more when it learned the bracketed form, and one
+  // more when patterns began reading normalised text and a label wrapped across lines became
+  // visible. A raise for any other reason is the silencing this guards against.
+  const EXPECTED_ENTRIES = 228;
+  const EXPECTED_TOTAL = 507;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -290,6 +293,17 @@ describe("normalised comment text", () => {
   it("does not eat a closing delimiter", () => {
     // The decoration strip must not consume `*/`, which would merge the comment with what follows.
     expect(normaliseComment("/* a\n */")).toBe("/* a */");
+  });
+
+  it.each([
+    // Each fixture splits a forbidden shape across a block-comment wrap, where the continuation
+    // line's decoration sits between its parts in the raw text. Two different patterns, so the
+    // property is shown for the READER rather than for one expression.
+    ["a bracketed milestone closed on the next line", "/** stored per locale since i18n (M7\n * ) */", "names a roadmap milestone rather than the code"],
+    ["a milestone code wrapped away from its word", "/** reachable since i18n\n   * M7; withdrawing them had no equivalent */", "names a roadmap milestone rather than the code"],
+    ["a task label whose colon wrapped", "/** Task 17\n * : migrate the records */", "names a task or plan rather than the code"],
+  ])("reports %s, as it would on one line", (_name, text, why) => {
+    expect(offencesIn(text).map(one => one.why)).toContain(why);
   });
 });
 
@@ -525,6 +539,60 @@ describe("numbered task and plan labels", () => {
   it("does not match ordinary prose about a task", () => {
     // The negative control the widening must not break: "task" is an ordinary word.
     expect(offencesIn("// the task queue drains oldest first")).toEqual([]);
+  });
+});
+
+describe("localization roadmap milestones", () => {
+  // The fixtures carry the literal shapes; these comments describe them instead, because the
+  // extractor reads comment text and this pattern applies to the checker's own files too.
+  it.each([
+    "// i18n M7: render the field right-to-left",
+    "/** Whether the source moved after this one was written (i18n B2). */",
+    "// forwarded so localized fields resolve (see i18n M4c)",
+    "/* i18n M5b keeps the draft companion */",
+    // The bracket may sit between the word and the code, with or without spaces around the code.
+    "// i18n (M4) — companion-aware read helpers",
+    "// i18n(M6) per-locale status",
+    "// i18n ( M7 ) translation-status overview",
+  ])("rejects %j", text => {
+    const found = offencesIn(text);
+    // The WHY is asserted, not just a non-empty result, so a different pattern firing on the same
+    // fixture cannot satisfy this test while the milestone pattern matches nothing.
+    expect(found.map(one => one.why)).toContain("names a roadmap milestone rather than the code");
+  });
+
+  it.each([
+    // The word alone, and the word next to ordinary technical tokens.
+    "// i18n keys are loaded lazily per locale",
+    "// the i18n layer reads the default locale first",
+    "// i18n: fall back to the default locale when the row is missing",
+    // A lowercase version token is prose about a library, not a milestone.
+    "// compatible with i18next v2 and i18n v3 message formats",
+    // A capital-plus-digit token WITHOUT the word is a heading, a service or a key.
+    "// render the title as an H1 and store the asset in S3",
+    // A bracket after the word that goes on into prose is an aside, not a label - including when
+    // that prose opens with an ordinary capital-plus-digit token, which only a closing bracket
+    // straight after the code can tell apart from a milestone.
+    "/** Request locale for i18n (e.g., 'en', 'es', 'fr') */",
+    "// resolved through i18n (see the locale table)",
+    "// i18n (S3 storage keeps translated media beside the source)",
+    "// i18n (H1 headings require translated names)",
+  ])("accepts %j", text => {
+    expect(offencesIn(text)).toEqual([]);
+  });
+
+  it("does not match a bare milestone code, and says so rather than approximating it", () => {
+    // The stated limit: without the anchoring word nothing separates a code from prose.
+    expect(offencesIn("// translated, but the source moved since (M7)")).toEqual([]);
+  });
+
+  it("applies inside the checker's own files, where review vocabulary is exempt", () => {
+    // A roadmap milestone is not domain vocabulary anywhere, so the review-tooling exemption must
+    // not reach it.
+    expect(
+      offencesIn("// i18n M6 added this", readOptionsFor("scripts/check-comment-convention.mjs"))
+        .length
+    ).toBeGreaterThan(0);
   });
 });
 
