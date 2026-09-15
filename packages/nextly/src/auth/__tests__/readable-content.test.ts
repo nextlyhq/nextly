@@ -191,6 +191,34 @@ describe("whether one named entity is in reach", () => {
     expect(absent).toEqual({ readable: false, known: true });
   });
 
+  it("reads a rejected decision as denied, keeping the registry kind", async () => {
+    // A permission store that cannot answer must not make existence
+    // measurable. Letting the rejection propagate answers a REGISTERED slug
+    // with an internal error while an unregistered one still gets the uniform
+    // refusal, so the two are told apart from outside by how the failure is
+    // spelled rather than by what the caller may read.
+    registry([["posts", "collection"]]);
+    checkAccessSpy.mockRejectedValue(new Error("permission store unavailable"));
+
+    expect(await contentReadability("posts", session)).toEqual({
+      kind: "collection",
+      readable: false,
+      known: true,
+    });
+    expect(await canReadContent("posts", session)).toBe(false);
+
+    // The control, and the reason the assertion above is evidence: with the
+    // same fixture answering normally the slug IS readable, so the refusal
+    // comes from the rejected decision rather than from a gate that withholds
+    // everything.
+    checkAccessSpy.mockResolvedValue(true);
+    expect(await contentReadability("posts", session)).toEqual({
+      kind: "collection",
+      readable: true,
+      known: true,
+    });
+  });
+
   it("agrees with the set, entity for entity", async () => {
     // The property the module exists for. Whatever the list contains, the
     // single answer admits; whatever it omits, the single answer refuses.

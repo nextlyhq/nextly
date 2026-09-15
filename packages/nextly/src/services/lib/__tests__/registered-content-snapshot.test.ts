@@ -30,8 +30,8 @@ import {
   registeredContentSnapshot,
 } from "../registered-content-slugs";
 
-const collections = { getAllSlugs: vi.fn(), getCollectionBySlug: vi.fn() };
-const singles = { getAllSlugs: vi.fn(), getSingleBySlug: vi.fn() };
+const collections = { getAllSlugs: vi.fn(), hasSlug: vi.fn() };
+const singles = { getAllSlugs: vi.fn(), hasSlug: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -40,8 +40,8 @@ beforeEach(() => {
   // Absence is the default, so each case below opts INTO the state it is
   // about. A default of `present` would let a case pass while exercising
   // the wrong branch.
-  collections.getCollectionBySlug.mockResolvedValue(null);
-  singles.getSingleBySlug.mockResolvedValue(null);
+  collections.hasSlug.mockResolvedValue(false);
+  singles.hasSlug.mockResolvedValue(false);
   containerHas.mockReturnValue(true);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") return collections;
@@ -115,7 +115,7 @@ describe("enumerating the content registries", () => {
  */
 describe("asking the registries about ONE slug", () => {
   it("names the registry that holds it", async () => {
-    collections.getCollectionBySlug.mockResolvedValue({ slug: "posts" });
+    collections.hasSlug.mockResolvedValue(true);
 
     expect(await registeredContentKindOf("posts")).toEqual({
       kind: "collection",
@@ -124,7 +124,7 @@ describe("asking the registries about ONE slug", () => {
   });
 
   it("finds a single when no collection claims the slug", async () => {
-    singles.getSingleBySlug.mockResolvedValue({ slug: "site-settings" });
+    singles.hasSlug.mockResolvedValue(true);
 
     expect(await registeredContentKindOf("site-settings")).toEqual({
       kind: "single",
@@ -136,8 +136,8 @@ describe("asking the registries about ONE slug", () => {
     // The same precedence the snapshot gets by writing collections last. The
     // registries do not permit the overlap; pinning it keeps the two readings
     // from disagreeing if they ever do.
-    collections.getCollectionBySlug.mockResolvedValue({ slug: "both" });
-    singles.getSingleBySlug.mockResolvedValue({ slug: "both" });
+    collections.hasSlug.mockResolvedValue(true);
+    singles.hasSlug.mockResolvedValue(true);
 
     expect((await registeredContentKindOf("both")).kind).toBe("collection");
   });
@@ -152,9 +152,7 @@ describe("asking the registries about ONE slug", () => {
     // The case the third value exists for. A registry that threw has not said
     // the slug is missing, and a caller that reads it as missing publishes the
     // name of an entity it was refused, exactly while the install is degraded.
-    collections.getCollectionBySlug.mockRejectedValue(
-      new Error("pool timeout")
-    );
+    collections.hasSlug.mockRejectedValue(new Error("pool timeout"));
 
     const answer = await registeredContentKindOf("posts");
 

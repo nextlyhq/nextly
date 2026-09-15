@@ -158,9 +158,42 @@ export async function contentReadability(
   if (kind === undefined) return { readable: false, known };
   return {
     kind,
-    readable: await canReadEntity(slug, asReadAccess(caller)),
+    readable: await entityReadableOrDenied(slug, caller),
     known,
   };
+}
+
+/**
+ * The read decision for one entity, with a REJECTED decision read as denied.
+ *
+ * 🔴 The direction matters more than the failure. `canReadEntity` rejects when
+ * the permission store cannot answer — an unavailable database, a pool with no
+ * connection left — and letting that reject propagate makes the two ways of
+ * being unavailable distinguishable from OUTSIDE: a registered slug answers
+ * with an internal error while an unregistered one still gets the uniform
+ * refusal, so a caller learns an entity exists by watching how the failure is
+ * spelled. The whole point of collapsing both into `undefined` in
+ * {@link readableContentKind} is that it must not be learnable.
+ *
+ * The registry kind is kept, because it was established before the decision was
+ * asked and a disclosure caller still needs it: a target that is registered and
+ * unreadable is WITHHELD, and folding it into "not registered" would publish
+ * the slug this exists to hide.
+ *
+ * Denied rather than admitted is the same direction {@link readableEntities}
+ * takes for the set, where a rejected decision inside `Promise.allSettled`
+ * drops the slug: a check that threw has told us nothing, and nothing must not
+ * read as allowed.
+ */
+async function entityReadableOrDenied(
+  slug: string,
+  caller: ReadableContentCaller
+): Promise<boolean> {
+  try {
+    return await canReadEntity(slug, asReadAccess(caller));
+  } catch {
+    return false;
+  }
 }
 
 /**

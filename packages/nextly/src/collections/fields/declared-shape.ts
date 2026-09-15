@@ -153,6 +153,17 @@ export const SCHEMA_FIELD_KEYS: readonly string[] = [
   "allowCreate",
   "allowEdit",
 
+  // Declarations that exist ONLY in the code-first spelling, so neither the
+  // manifest schema nor the generator names them. A `json` field's `jsonSchema`
+  // carries the object's properties, required keys and constraints — without
+  // it the field publishes as a value of no particular shape, which is the one
+  // thing a caller asking about a JSON field needs. `features` says which marks
+  // a rich-text value may hold, and `virtual` says the value is computed rather
+  // than stored, so a writer told nothing would send a value that is discarded.
+  "jsonSchema",
+  "features",
+  "virtual",
+
   // Containment. Copied through {@link declaredShape} rather than by reference,
   // and only for the container types; see the guard in the projection.
   "fields",
@@ -169,6 +180,15 @@ export const SCHEMA_FIELD_KEYS: readonly string[] = [
  *   disclosure of its own, and neither survives storage as anything callable.
  * - `validate` is a function, and `custom` is an arbitrary bag a config may put
  *   anything in, including things it would not choose to publish.
+ * - `filterOptions` narrows which rows a relationship may point at. It is a
+ *   function on a select and a predicate object on a relationship, and the
+ *   callable form neither survives storage nor means anything to a reader; the
+ *   serialized spelling a stored declaration carries is `relationshipFilter`,
+ *   which IS published.
+ * - `dbName`, `enumName` and `interfaceName` name a table, a database enum and
+ *   a generated TypeScript interface. They decide what the install's internals
+ *   are CALLED rather than what a field's value is, so publishing them
+ *   describes the storage to a caller asking about the shape.
  *
  * Only `admin` and `pluginOptions` appear in the manifest schema; the rest are
  * code-first members it strips. They are named anyway, because an in-memory
@@ -181,6 +201,10 @@ export const WITHHELD_FIELD_KEYS: readonly string[] = [
   "hooks",
   "validate",
   "custom",
+  "filterOptions",
+  "dbName",
+  "enumName",
+  "interfaceName",
 ];
 
 const PUBLISHED = new Set(SCHEMA_FIELD_KEYS);

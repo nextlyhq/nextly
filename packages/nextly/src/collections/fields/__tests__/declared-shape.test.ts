@@ -11,7 +11,8 @@
  * commit that adds the key, which is the only place the question can be
  * answered by the person who knows the answer.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -74,6 +75,79 @@ function generatorConsumedKeys(): string[] {
   for (const m of src.matchAll(/\bfield\.([a-zA-Z_]+)\b/g)) keys.add(m[1]);
   return [...keys].sort();
 }
+
+/**
+ * The members a code-first field interface declares.
+ *
+ * A THIRD domain, and the one the other two cannot see past. A member that
+ * exists only in the code-first spelling is in neither: the manifest schema
+ * does not declare `jsonSchema`, and the generator never reads it, so a `json`
+ * field published as name/type/default alone satisfied both totality checks
+ * while omitting the object properties, required keys and constraints that are
+ * the whole of what its value is.
+ *
+ * Read from `collections/fields/types/*.ts` rather than re-listed, for the same
+ * reason the other two domains are read from their sources. Only members
+ * declared at one indent inside an exported `*FieldConfig` interface count, so
+ * a nested option bag's own keys do not masquerade as field members.
+ *
+ * Returns whatever it found. The caller asserts the population before judging
+ * it, because a directory that stopped being readable produces an empty scan
+ * and an empty scan satisfies the totality check perfectly.
+ */
+function codeFirstFieldKeys(): string[] {
+  const dir = fileURLToPath(new URL("../types", import.meta.url));
+  const keys = new Set<string>();
+  for (const entry of readdirSync(dir)) {
+    if (!entry.endsWith(".ts") || entry.includes(".test.")) continue;
+    const src = readFileSync(join(dir, entry), "utf8");
+    const interfaces = src.matchAll(
+      /export\s+interface\s+\w*FieldConfig\w*\s*(?:extends[^{]*)?\{([\s\S]*?)\n\}/g
+    );
+    for (const block of interfaces) {
+      for (const member of block[1].matchAll(
+        /^ {2}([a-zA-Z_][a-zA-Z0-9_]*)\??\s*:/gm
+      )) {
+        keys.add(member[1]);
+      }
+    }
+  }
+  return [...keys].sort();
+}
+
+describe("every member a CODE-FIRST field declares is classified", () => {
+  it("reaches the field type sources at all", () => {
+    // The control. An empty scan — a moved directory, a changed interface
+    // naming convention — satisfies the totality check below perfectly, so the
+    // instrument is checked against a member known to be there before it is
+    // read. `jsonSchema` is that member precisely because it is the one the
+    // other two domains cannot see.
+    const keys = codeFirstFieldKeys();
+
+    expect(
+      keys.length,
+      "the code-first field interfaces could not be scanned, so the check " +
+        "below proves nothing"
+    ).toBeGreaterThan(20);
+    expect(keys).toContain("jsonSchema");
+    expect(keys).toContain("relationTo");
+  });
+
+  it("classifies each one, so a code-first-only declaration is not dropped", () => {
+    const published = new Set(SCHEMA_FIELD_KEYS);
+    const withheld = new Set(WITHHELD_FIELD_KEYS);
+
+    const unclassified = codeFirstFieldKeys().filter(
+      key => !published.has(key) && !withheld.has(key)
+    );
+    expect(
+      unclassified,
+      "these members are declared on a code-first field and classified " +
+        "neither way. Publish the ones that describe the value; withhold the " +
+        "rest deliberately"
+    ).toEqual([]);
+  });
+});
 
 describe("every key the GENERATOR consumes is classified", () => {
   it("reaches the generator source at all", () => {

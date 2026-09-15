@@ -291,6 +291,34 @@ export abstract class BaseRegistryService<
   }
 
   /**
+   * Whether ONE named slug is registered, without reading its record.
+   *
+   * The point-lookup counterpart of {@link getAllSlugs}, and it exists for the
+   * same reason at a different scale: `getRecordBySlug` selects every column
+   * and ends in `deserializeRecord`, so asking merely whether a name is taken
+   * materialized that entity's whole declaration, fields JSON included.
+   *
+   * 🔴 That matters beyond cost, because an AUTHORIZATION decision asks this
+   * question before it knows whether the caller may see the answer. Reading the
+   * record first loads the declaration of an entity the caller is about to be
+   * refused, and makes the refusal's timing depend on how large that
+   * declaration is. The projection is the property here, not the verdict: both
+   * spellings return the same boolean.
+   */
+  async hasSlug(slug: string): Promise<boolean> {
+    try {
+      const rows = await this.adapter.select<{ slug: string }>(
+        await this.resolveRegistryTableName(),
+        { columns: ["slug"], where: this.whereEq("slug", slug), limit: 1 }
+      );
+      return rows.length > 0;
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /**
    * List records with pagination, search, and total count.
    */
   protected async listRecords(

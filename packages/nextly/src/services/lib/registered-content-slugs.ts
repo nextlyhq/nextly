@@ -75,12 +75,15 @@ interface SlugRegistry {
   getAllSlugs: () => Promise<string[]>;
 }
 
-/** A registry's point lookup, named as each registry spells it. */
-interface CollectionLookup {
-  getCollectionBySlug: (slug: string) => Promise<unknown>;
-}
-interface SingleLookup {
-  getSingleBySlug: (slug: string) => Promise<unknown>;
+/**
+ * The one method a registry needs to answer whether it holds a NAME.
+ *
+ * Both registries spell it the same, unlike their record reads
+ * (`getCollectionBySlug`, `getSingleBySlug`), because this asks about the slug
+ * column rather than about an entity of either kind.
+ */
+interface SlugPresence {
+  hasSlug: (slug: string) => Promise<boolean>;
 }
 
 /** What a point lookup could establish about one slug. */
@@ -103,14 +106,16 @@ type Presence = "present" | "absent" | "unknown";
  */
 async function registryHolds<T>(
   service: string,
-  read: (registry: T) => Promise<unknown>
+  read: (registry: T) => Promise<boolean>
 ): Promise<Presence> {
   // Absent: this install registers no content of that kind, so the answer is
   // no rather than a shortfall — the same reading `registryRead` takes.
   if (!container.has(service)) return "absent";
   try {
-    const row = await read(container.get<T>(service));
-    return row === null ? "absent" : "present";
+    // The read answers the presence question directly rather than handing back
+    // a record to test for null, so a registry that reports "no such slug"
+    // cannot be read as holding one.
+    return (await read(container.get<T>(service))) ? "present" : "absent";
   } catch {
     // Registered and unable to answer, a construction failure inside the
     // factory included. NOT absence: the row may well exist.
@@ -158,14 +163,14 @@ export async function registeredContentKindOf(
   slug: string
 ): Promise<RegistryPresence> {
   if (!slug) return { known: true };
-  const asCollection = await registryHolds<CollectionLookup>(
+  const asCollection = await registryHolds<SlugPresence>(
     "collectionRegistryService",
-    registry => registry.getCollectionBySlug(slug)
+    registry => registry.hasSlug(slug)
   );
   if (asCollection === "present") return { kind: "collection", known: true };
-  const asSingle = await registryHolds<SingleLookup>(
+  const asSingle = await registryHolds<SlugPresence>(
     "singleRegistryService",
-    registry => registry.getSingleBySlug(slug)
+    registry => registry.hasSlug(slug)
   );
   if (asSingle === "present") return { kind: "single", known: true };
   return { known: asCollection === "absent" && asSingle === "absent" };
