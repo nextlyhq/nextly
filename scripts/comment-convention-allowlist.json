@@ -436,16 +436,14 @@
     "digests": ["d5997ab8d4023315"]
   },
   "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
-    "count": 19,
+    "count": 17,
     "digests": [
       "03f5b83d5dd2242f",
-      "0524236cf96cf39b",
       "09e9b38cef55f0e2",
       "0cf6c1f6791c6d67",
       "21185c2d7cba5586",
       "3334c2660c4178e0",
       "4cc0a776deb9205d",
-      "606368adea554209",
       "6b8890b87c096b79",
       "6e6b410ca569dace",
       "782632344c273aa0",
