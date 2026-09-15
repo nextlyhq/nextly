@@ -1,25 +1,11 @@
 /**
- * Moving a document's whole lifecycle — every language at once.
+ * Moving a document's whole lifecycle: every language at once.
  *
- * ## Why a direction rather than a method per verb
- *
- * "Set this document's status across its locales" is ONE operation with a
- * parameter, not two operations that happen to look alike. The codebase reached
- * for the second shape first: `publishAllLocales` stated the access gate, the
- * row lock, the companion sweep, the version capture, the event fan-out and the
- * cache flush for publishing, and a withdrawal written beside it would have
- * stated all of them again — 745 of its 783 lines carry no direction at all.
- * A third lifecycle verb would have stated them a third time.
- *
- * So the direction is data. A verb picks a target status, an access action and
- * whether it establishes first publication, and inherits every guarantee the
- * other direction already proved.
- *
- * Prior art agrees. Strapi's document service exposes `publish`/`unpublish`
- * taking `locale: '*'` rather than four scope-specific methods; Payload's
- * per-locale status is a flag on one write path, not a parallel one. Directus
- * has no built-in per-language lifecycle at all, and its users hand-roll the
- * asymmetry this module exists to avoid.
+ * A direction names the status every language ends up in and what to report,
+ * and nothing more. The move itself is an ordinary update under the wildcard
+ * locale, so the lifecycle permission, hooks, field rules, validation, each
+ * language's pending change, the version and the events come from the one
+ * write path rather than from a second copy of it.
  *
  * @module domains/collections/services/all-locales-lifecycle
  */
@@ -33,22 +19,6 @@ import type { UserContext } from "./collection-types";
 export interface LifecycleDirection {
   /** The status every locale ends up in. */
   nextStatus: "published" | "draft";
-  /**
-   * The access rule kind this transition is judged against, checked ON TOP of
-   * `update`. Publishing and withdrawing are separate capabilities: someone
-   * trusted to put content live is not automatically trusted to take the whole
-   * site's translations of it down, and the reverse is likelier still.
-   */
-  accessAction: "publish" | "unpublish";
-  /**
-   * Whether this direction can ESTABLISH first publication.
-   *
-   * True for publishing only. `first_published_at` records when a document
-   * first became reachable, which withdrawing it does not change — re-dating or
-   * clearing it would make a later republish report a first publication that
-   * had already happened.
-   */
-  stampsFirstPublished: boolean;
   /**
    * What to say when the collection has no lifecycle at all, so there is
    * nothing for this transition to move.
@@ -71,8 +41,6 @@ export interface LifecycleDirection {
 /** Put every language of a document live. */
 export const PUBLISH_ALL_LOCALES: LifecycleDirection = {
   nextStatus: "published",
-  accessAction: "publish",
-  stampsFirstPublished: true,
   nothingToDoMessage: "Nothing to publish (collection has no status).",
   successMessage: "All languages published.",
 };
@@ -80,9 +48,6 @@ export const PUBLISH_ALL_LOCALES: LifecycleDirection = {
 /** Take every language of a document down. */
 export const WITHDRAW_ALL_LOCALES: LifecycleDirection = {
   nextStatus: "draft",
-  accessAction: "unpublish",
-  // A withdrawal never establishes first publication; see the field's note.
-  stampsFirstPublished: false,
   nothingToDoMessage: "Nothing to unpublish (collection has no status).",
   successMessage: "All languages unpublished.",
 };
@@ -107,4 +72,8 @@ export interface AllLocalesLifecycleParams {
   authenticatedScope?: AuthenticatedScope;
   /** Who performed the transition, recorded on the events and the trail. */
   actor?: RequestActor;
+  /** The request this operation's hooks are told about. */
+  request?: Request;
+  /** Values shared between this operation's hooks. */
+  context?: Record<string, unknown>;
 }

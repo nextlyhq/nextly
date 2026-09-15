@@ -38,8 +38,17 @@ export function usePublishAllLocales({
       });
       if (!silent) toast.success("All languages published.");
     },
-    onError: () => {
-      if (!silent) toast.error("Couldn't publish all languages.");
+    onError: (error: unknown) => {
+      // The server's own message, which is the only thing that says WHY. This
+      // call can refuse for reasons an editor can act on, and a fixed string
+      // turns every one of them into the same unexplained failure.
+      if (!silent) {
+        toast.error(
+          error instanceof Error && error.message
+            ? error.message
+            : "Couldn't publish all languages."
+        );
+      }
     },
   });
 }

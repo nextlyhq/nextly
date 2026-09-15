@@ -611,6 +611,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** API-key scope; gates the unconditional publish check. */
     authenticatedScope?: AuthenticatedScope;
+    /** The request this operation's hooks are told about. */
+    request?: Request;
   }) {
     const result = await this.mutationService.publishAllLocales(params);
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
@@ -648,6 +650,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** API-key scope; gates the unconditional unpublish check. */
     authenticatedScope?: AuthenticatedScope;
+    /** The request this operation's hooks are told about. */
+    request?: Request;
   }) {
     const result = await this.mutationService.unpublishAllLocales(params);
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
