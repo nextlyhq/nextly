@@ -3728,14 +3728,12 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(many).toBeLessThan(one * 10 + 200);
   });
 
-  it("leaves an id two records disagree about", () => {
+  it("restores each reference against its own record when two records disagree", () => {
     // Each record holds a reference to one current id and calls it something
-    // different. A single restore map has room for one answer, so applying
-    // either rewrites the other scope's reference to a name it never had —
-    // measured, both came back as `beta`.
-    //
-    // Nothing renders the id, so both references already point outside the
-    // saved forest; leaving them is the only answer that corrupts neither.
+    // different. Nothing in the saved forest renders the id, so there is no
+    // target for either reference to follow, and each is decided by the record
+    // over the node holding it. A single forest-wide answer put back one name
+    // for both — measured, both came back as `beta`.
     const doc = page([
       node(
         "outer",
@@ -3791,10 +3789,10 @@ describe("a saved DESCENDANT of an inserted root", () => {
 
     expect(
       marked([...saved.nodes], "refA").attributes?.["aria-describedby"]
-    ).toBe("shared-1");
+    ).toBe("alpha");
     expect(
       marked([...saved.nodes], "refB").attributes?.["aria-describedby"]
-    ).toBe("shared-1");
+    ).toBe("beta");
   });
 
   it("restores an id two records AGREE about", () => {
@@ -3894,12 +3892,11 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("hero");
   });
 
-  it("leaves an id an unrelated subtree also references", () => {
+  it("restores the governed reference and leaves an unrelated subtree's", () => {
     // One record governs a reference to it, and a subtree with provenance of
-    // its own authored a reference to the same id. The restore carries a single
-    // map for the whole forest, so putting the governed one back rewrites the
-    // unrelated author's reference too — one legitimate hit is not licence for
-    // that, so neither moves.
+    // its own authored a reference to the same id. Nothing renders the id, so
+    // each reference is decided by the node holding it: the governed one goes
+    // back to its source name, and the unrelated author's is left as written.
     const doc = page([
       node(
         "outer",
@@ -3944,7 +3941,7 @@ describe("a saved DESCENDANT of an inserted root", () => {
     ).toBe("pricing-1");
     expect(
       marked([...saved.nodes], "governed").attributes?.["aria-describedby"]
-    ).toBe("pricing-1");
+    ).toBe("pricing");
   });
 
   it("ignores a record storage would not keep", () => {
@@ -4010,11 +4007,11 @@ describe("a saved DESCENDANT of an inserted root", () => {
     expect(marked([...saved.nodes], "target").cssId).toBe("hero");
   });
 
-  it("counts a GATED node as a holder, whichever order it is walked in", () => {
+  it("decides a GATED holder by its own record, whichever order it is walked in", () => {
     // `duplicateDomIdRefusal` only refuses two nodes that RENDER one id, and a
     // condition-gated node renders nothing — so a second holder is permitted
-    // and the record has to account for it. Reading only the first made the
-    // saved content depend on walk order.
+    // and has to be decided on its own. Reading only the first made the saved
+    // content depend on walk order.
     const gated = (): BlockNode =>
       node("hid", {
         cssId: "pricing-1",
@@ -4060,9 +4057,10 @@ describe("a saved DESCENDANT of an inserted root", () => {
         )
       ).document;
 
-      // Neither moves: the two holders sit under different records and
-      // disagree, and the answer is the same whichever was reached first.
-      expect(marked([...saved.nodes], "vis").cssId).toBe("pricing-1");
+      // Each is decided by the record over it: the governed node goes back to
+      // its source name and the component's gated node keeps its id — the same
+      // answer whichever was reached first.
+      expect(marked([...saved.nodes], "vis").cssId).toBe("pricing");
       expect(marked([...saved.nodes], "hid").cssId).toBe("pricing-1");
     }
   });
@@ -4771,9 +4769,12 @@ describe("a rename record names the nodes it renamed", () => {
     }
   });
 
-  it("restores neither when the renamed node and a namesake are saved together", () => {
-    // A restore is one map for the forest, so it cannot put one back and leave
-    // the other. The namesake is gated so the page may hold the id twice.
+  it("restores the renamed node and keeps its namesake when saved together", () => {
+    // Each node rendering the id is decided by its own record: the listed one
+    // goes back to its source name, the namesake keeps what it carries. The
+    // namesake is gated so the page may hold the id twice. The pattern's own
+    // link now has two targets in the saved forest that became different ids,
+    // so there is no single target to follow and its own record decides.
     const doc = insertedPage();
     const renamed = marked([...doc.nodes], "renamed");
     const mid = marked([...doc.nodes], "mid");
@@ -4792,7 +4793,154 @@ describe("a rename record names the nodes it renamed", () => {
     ]).document;
 
     expect(stored(both, "wrap", "namesake").cssId).toBe(renamed.cssId);
-    expect(stored(both, "wrap", "renamed").cssId).toBe(renamed.cssId);
+    expect(stored(both, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(both, "wrap", "link").attributes?.["aria-describedby"]).toBe(
+      "pricing"
+    );
+  });
+
+  it("restores a link held by an unrelated node when its target is saved with it", () => {
+    // The link's own node carries provenance of its own and renamed nothing,
+    // so by itself it would keep the id. Its target is in the saved forest and
+    // goes back to its source name, so the link follows it: a link and its
+    // target must never be stored pointing at two different ids.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const mid = marked([...doc.nodes], "mid");
+    const withStranger = applyOps(doc, [
+      {
+        kind: "insert",
+        node: node("stranger", {
+          origin: { from: "component", id: "def-1" },
+          attributes: { "aria-describedby": renamed.cssId ?? "" },
+          props: { mark: "stranger" },
+        } as Partial<BlockNode>),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+    ]).document;
+
+    expect(stored(withStranger, "wrap", "renamed").cssId).toBe("pricing");
+    expect(
+      stored(withStranger, "wrap", "stranger").attributes?.["aria-describedby"]
+    ).toBe("pricing");
+  });
+
+  it("points an unrelated link at the visible renamed node past a gated namesake", () => {
+    // The namesake is gated, so the page renders only the renamed node. The
+    // link belongs to a component that renamed nothing; it has to follow the
+    // node that actually renders the id rather than keep one nothing renders.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const mid = marked([...doc.nodes], "mid");
+    const withGatedNamesake = applyOps(doc, [
+      {
+        kind: "insert",
+        node: node("namesake", {
+          cssId: renamed.cssId,
+          props: { mark: "namesake" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        }),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+      {
+        kind: "insert",
+        node: node("stranger", {
+          origin: { from: "component", id: "def-1" },
+          attributes: { "aria-describedby": renamed.cssId ?? "" },
+          props: { mark: "stranger" },
+        } as Partial<BlockNode>),
+        at: { parentId: mid.id, slot: "children", index: 0 },
+      },
+    ]).document;
+
+    expect(stored(withGatedNamesake, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(withGatedNamesake, "wrap", "namesake").cssId).toBe(
+      renamed.cssId
+    );
+    expect(
+      stored(withGatedNamesake, "wrap", "stranger").attributes?.[
+        "aria-describedby"
+      ]
+    ).toBe("pricing");
+  });
+
+  it("restores a pattern's link inside a gated container beside a visible namesake", () => {
+    // The container holding the renamed node and its link is gated, and an
+    // unrelated visible node carries the minted id. The link's own record knows
+    // where it pointed, so the visible namesake must not decide.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const wrap = marked([...doc.nodes], "wrap");
+    const mid = marked([...doc.nodes], "mid");
+    const gatedWithNamesake = applyOps(doc, [
+      {
+        kind: "update",
+        id: mid.id,
+        patch: {
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        },
+      },
+      {
+        kind: "insert",
+        node: node("unrelated", {
+          origin: { from: "component", id: "def-1" },
+          cssId: renamed.cssId,
+          props: { mark: "unrelated" },
+        } as Partial<BlockNode>),
+        at: { parentId: wrap.id, slot: "children", index: 1 },
+      },
+    ]).document;
+
+    expect(stored(gatedWithNamesake, "wrap", "renamed").cssId).toBe("pricing");
+    expect(stored(gatedWithNamesake, "wrap", "unrelated").cssId).toBe(
+      renamed.cssId
+    );
+    expect(
+      stored(gatedWithNamesake, "wrap", "link").attributes?.["aria-describedby"]
+    ).toBe("pricing");
+  });
+
+  it("restores a governed link from its own record past a namesake that keeps its id", () => {
+    // The listed node stays on the page but outside the selection, so the
+    // record is live and says what the link pointed at. The saved forest holds
+    // an unlisted namesake that keeps the minted id; the link's own record
+    // decides, so it goes back to the source name rather than following the
+    // namesake — as a link saved without its target already does.
+    const doc = insertedPage();
+    const renamed = marked([...doc.nodes], "renamed");
+    const mid = marked([...doc.nodes], "mid");
+    const withNamesakeBetween = applyOps(doc, [
+      {
+        kind: "insert",
+        node: node("namesake", {
+          cssId: renamed.cssId,
+          props: { mark: "namesake" },
+          visibility: {
+            conditions: [[{ field: "tier", op: "eq", value: "pro" }]],
+          },
+        }),
+        at: { parentId: mid.id, slot: "children", index: 1 },
+      },
+    ]).document;
+    const namesake = marked([...withNamesakeBetween.nodes], "namesake");
+    const link = marked([...withNamesakeBetween.nodes], "link");
+    const saved = created(
+      planSaveAsPattern(
+        withNamesakeBetween,
+        [namesake.id, link.id],
+        target,
+        anyParent
+      )
+    ).document;
+
+    expect(marked([...saved.nodes], "namesake").cssId).toBe(renamed.cssId);
+    expect(
+      marked([...saved.nodes], "link").attributes?.["aria-describedby"]
+    ).toBe("pricing");
   });
 
   it("restores nothing when the recorded node id occurs twice", () => {

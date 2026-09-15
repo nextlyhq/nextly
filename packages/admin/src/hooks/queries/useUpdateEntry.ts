@@ -90,7 +90,7 @@ export interface UseUpdateEntryOptions<
    * When provided, field-level errors from the server will be set on corresponding form fields.
    */
   setError?: UseFormSetError<TFieldValues>;
-  /** Content locale (i18n M7) — the update targets this language's translatable values. */
+  /** Content locale — the update targets this language's translatable values. */
   locale?: string;
   /** Fallback locale when a translation is missing. */
   fallbackLocale?: string;

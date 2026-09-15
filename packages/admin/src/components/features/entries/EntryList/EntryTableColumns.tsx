@@ -185,7 +185,7 @@ export function getAvailableColumns(
   // These columns are always available as built-ins
   const builtInColumns = ["id", "title", "slug", "createdAt", "updatedAt"];
 
-  // i18n M7: translation-completeness column, only for localized collections.
+  // Translation-completeness column, only for localized collections.
   if (collection.localized) {
     builtInColumns.push("translations");
   }
@@ -246,7 +246,7 @@ export function getDefaultVisibleColumns(
   orderedDataColumns.push("createdAt");
   orderedDataColumns.push("updatedAt");
 
-  // 5. i18n M7: translation-completeness column for localized collections.
+  // 5. Translation-completeness column for localized collections.
   if (collection.localized) {
     orderedDataColumns.push("translations");
   }

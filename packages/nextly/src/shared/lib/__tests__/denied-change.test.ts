@@ -3,17 +3,16 @@
  *
  * It is a pure function answering an intricate question over four documents,
  * and the integration suites reach it only through a whole publish, one shape
- * per test at considerable cost. Every defect it has had so far was a shape
- * question the caller could not see: a `Date` rebuilt as `{}`, a container
- * exempted because the caller supplied one field of it, a property deleted on
- * the live side that no traversal enumerated. Those belong here, where a shape
- * costs three lines.
+ * per test at considerable cost. The hard cases are shapes a caller cannot
+ * see: a `Date` that must not be rebuilt as `{}`, a container whose contents
+ * have two authors, a property present only on the live side. Those belong
+ * here, where a shape costs three lines.
  *
  * @module shared/lib/__tests__/denied-change.test
  */
 import { describe, expect, it } from "vitest";
 
-import { resolvePromotedDocument } from "../denied-change";
+import { declaredFieldNames, resolvePromotedDocument } from "../denied-change";
 
 /** Removes the named top-level or nested paths, as the field rules would. */
 function denies(...paths: string[]) {
@@ -36,6 +35,14 @@ function denies(...paths: string[]) {
 }
 
 const allow = (): Promise<void> => Promise.resolve();
+
+/** Denies `guarded` while `kind` is private: a rule that reads a sibling. */
+function deniesGuardedWhilePrivate(
+  document: Record<string, unknown>
+): Promise<void> {
+  if (document.kind === "private") delete document.guarded;
+  return Promise.resolve();
+}
 
 function resolve(
   input: Partial<Parameters<typeof resolvePromotedDocument>[0]> & {
@@ -154,6 +161,98 @@ describe("resolvePromotedDocument", () => {
     });
   });
 
+  it("refuses when a stale live verdict denies a field the final document allows", async () => {
+    // A KNOWN over-refusal, pinned so it cannot change unnoticed. Live says
+    // `kind: "private"`, which denies `guarded`; the pending change sets `kind`
+    // to `public` and edits `guarded`, which the final document would allow.
+    // The live verdict is kept whole because a path is a position, so this
+    // refuses. It fails closed: nothing is lost, the publish is refused and the
+    // pending change is kept. Judging rows by identity and siblings on the final
+    // document is what would allow it.
+    await expect(
+      resolve({
+        before: { kind: "public", guarded: "edited" },
+        live: { kind: "private", guarded: "live" },
+        applyRules: deniesGuardedWhilePrivate,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("refuses deleting a field the final document's siblings would allow", async () => {
+    // A KNOWN over-refusal, pinned so it cannot change unnoticed: the same rule,
+    // with the pending change deleting `guarded` rather than editing it. A
+    // deleted field is absent from the promotion, so the live row's verdict is
+    // the only one that names it, and that verdict reads the live siblings. It
+    // fails closed: the publish is refused and the pending change is kept.
+    // Judging a deleted field against the promoted siblings is what would allow
+    // it.
+    await expect(
+      resolve({
+        before: { kind: "public" },
+        live: { kind: "private", guarded: "live" },
+        applyRules: deniesGuardedWhilePrivate,
+      })
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ path: "guarded" }] },
+    });
+  });
+
+  it("refuses a deleted child even when the live rule denies its whole container", async () => {
+    // The live rule removes `seo` entirely, so the live denial names the
+    // container while the promotion keeps `seo` and drops `secret` from it. The
+    // dropped child must be judged. Its sibling `title` is refused as well, since
+    // the whole-container verdict is not narrowed by what the final document
+    // would allow, which fails closed; this asserts the child it exists for.
+    const rulesByKind = (document: Record<string, unknown>): Promise<void> => {
+      if (document.kind === "private") delete document.seo;
+      return Promise.resolve();
+    };
+    let paths: string[] = [];
+    await resolve({
+      before: { kind: "public", seo: { title: "new" } },
+      live: { kind: "private", seo: { title: "old", secret: "live" } },
+      applyRules: rulesByKind,
+    }).catch((error: { publicData?: { errors?: Array<{ path: string }> } }) => {
+      paths = (error.publicData?.errors ?? []).map(issue => issue.path);
+    });
+    expect(paths).toContain("seo.secret");
+  });
+
+  it("refuses deleting a protected repeater row when a later row takes its index", async () => {
+    // Paths are positions. The pending change deletes live row 0, which is
+    // private and so denies `secret`, and the public row shifts into index 0.
+    // `rows[0].secret` still exists in the promotion, so a check asking only
+    // whether a denied path survived would let the protected row's deletion
+    // through; the refusal comes from the live verdict kept whole.
+    const rowRule = (document: Record<string, unknown>): Promise<void> => {
+      const rows = document.rows;
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          if (
+            row &&
+            typeof row === "object" &&
+            (row as Record<string, unknown>).kind === "private"
+          ) {
+            delete (row as Record<string, unknown>).secret;
+          }
+        }
+      }
+      return Promise.resolve();
+    };
+    await expect(
+      resolve({
+        before: { rows: [{ kind: "public", secret: "s1" }] },
+        live: {
+          rows: [
+            { kind: "private", secret: "s0" },
+            { kind: "public", secret: "s1" },
+          ],
+        },
+        applyRules: rowRule,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
   it("keeps an own __proto__ key instead of invoking the prototype setter", async () => {
     const before: Record<string, unknown> = { guarded: "live" };
     Object.defineProperty(before, "__proto__", {
@@ -199,6 +298,29 @@ describe("resolvePromotedDocument", () => {
       applyRules: denies("promo"),
     });
     expect(out).toBeDefined();
+  });
+
+  it("collects a name declared inside a NAMED container", async () => {
+    // `addressableFields` pushes a named field and stops, so a set built from
+    // it holds the top level only, and the nested name the metadata list is
+    // meant to defer to is exactly the one it misses.
+    const names = declaredFieldNames([
+      { name: "title", type: "text" },
+      { name: "meta", type: "group", fields: [{ name: "id", type: "text" }] },
+      {
+        type: "row",
+        fields: [
+          {
+            name: "rows",
+            type: "repeater",
+            fields: [{ name: "updatedAt", type: "text" }],
+          },
+        ],
+      },
+    ]);
+    expect(names.has("meta")).toBe(true);
+    expect(names.has("id")).toBe(true);
+    expect(names.has("updatedAt")).toBe(true);
   });
 
   it("leaves an allowed deletion deleted", async () => {

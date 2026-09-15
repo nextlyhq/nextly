@@ -228,9 +228,8 @@ describe("a collection publish re-judges the draft it promotes", () => {
     // it was serialised to while the live row comes back from the driver as a
     // `Date`. Compared as they arrive, a date-bearing field the publisher may
     // not write reads as an edit and refuses a publish that touches nothing.
-    // Every type is covered rather than the one that broke: measured, text,
-    // number, boolean, JSON and group agreed and only the date did not, and a
-    // suite that checked one of them would not have said so.
+    // Every type is covered: only the date arrives in two representations, and
+    // a suite that checked one type would not show which.
     const onlyBoss = {
       update: ({ req }: { req?: { user?: { email?: string } } }) =>
         req?.user?.email === BOSS.email,
@@ -339,12 +338,11 @@ describe("a collection publish re-judges the draft it promotes", () => {
   });
 
   it("refuses a pending change that CLEARS a field it may not write", async () => {
-    // A GUARD, not a demonstration: this passes against the previous revision
-    // too. Clearing a field sends `null`, which is a present key and so is
-    // judged like any other value. The case the live-side pass exists for is a
-    // key ABSENT from the promoted document entirely, which no route through
-    // the public API was found to produce, since a collection snapshot is a
-    // full copy of the row. That half stays defensive.
+    // A GUARD, not a demonstration. Clearing a field sends `null`, which is a
+    // present key and so is judged like any other value. The case the live-side
+    // pass exists for is a key ABSENT from the promoted document entirely, which
+    // no known route through the public API produces, since a collection
+    // snapshot is a full copy of the row, so that half is guarded defensively.
     const t = await boot();
     const h = handlerOf(t);
 
@@ -381,8 +379,8 @@ describe("a collection publish re-judges the draft it promotes", () => {
     // The shaping pass coerces a caller's date to a `Date` before the resolver
     // sees it, and a `Date` is an object with no enumerable keys: a rebuild
     // that treats every object as a container returns `{}` and the driver then
-    // refuses the write outright. Measured before the fix: the publish failed
-    // with "value.getTime is not a function" and nothing went live.
+    // refuses that write with "value.getTime is not a function", so nothing
+    // goes live.
     const slug = "dated";
     current = await createTestNextly({
       collections: [
@@ -442,6 +440,190 @@ describe("a collection publish re-judges the draft it promotes", () => {
       "2026-09-09T09:09:09.000Z"
     );
     expect(doc?.guarded).toBe("live-value");
+  });
+
+  it("publishes a group edit sent with the status while a change is pending", async () => {
+    // No field rules at all, so nothing here is about access. The ordinary
+    // write encodes a group to its column string before the promotion runs, so
+    // the promoted document has to be validated in its logical shape: read as
+    // the column string, any group, repeater or JSON field is refused as "ops
+    // must be an object", and publishing alongside an edit to one is the
+    // ordinary shape of an editor publishing their work.
+    const slug = "grouppublish";
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "body" }),
+            group({ name: "ops", fields: [text({ name: "note" })] }),
+          ],
+        }),
+      ],
+    });
+    const h = handlerOf(current);
+
+    const created = await h.createEntry(
+      { collectionName: slug, overrideAccess: true },
+      { body: "live", ops: { note: "live-note" }, status: "published" }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    const published = await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published", ops: { note: "published-note" } }
+    );
+
+    expect(published.success, JSON.stringify(published)).toBe(true);
+    const doc = (await current.nextly.findByID({
+      collection: slug as never,
+      id,
+      overrideAccess: true,
+      status: "all",
+    } as never)) as Record<string, unknown> | null;
+    expect(doc?.body).toBe("edited");
+    expect(doc?.ops).toEqual({ note: "published-note" });
+  });
+
+  it("refuses, and keeps the draft, when a group the caller sends drops a protected child", async () => {
+    // A KNOWN over-refusal, pinned so it cannot change unnoticed. A group the
+    // caller sends replaces the pending change's group whole, and the field gate
+    // has already stripped the protected child the caller included, so the
+    // promoted group lacks it and it reads as a deletion. Crediting the caller
+    // from their raw request would allow it, and would also credit a caller who
+    // echoes a protected path with the pending change's edit, so this refuses.
+    // It fails closed: the publish is refused and the pending change is kept.
+    // Judging each leaf by the source that won the merge is what would allow it.
+    const slug = "provenance";
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug,
+          status: true,
+          versions: { drafts: true },
+          access: {
+            read: () => true,
+            update: () => true,
+            publish: () => true,
+            unpublish: () => true,
+          },
+          fields: [
+            text({ name: "body" }),
+            group({
+              name: "ops",
+              fields: [
+                text({ name: "note" }),
+                text({
+                  name: "runbook",
+                  access: {
+                    update: ({ req }) => req.user?.email === BOSS.email,
+                  },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const h = handlerOf(current);
+
+    const created = await h.createEntry(
+      { collectionName: slug, overrideAccess: true },
+      {
+        body: "live",
+        ops: { note: "live-note", runbook: "live-runbook" },
+        status: "published",
+      }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    // A pending change exists, so the publish below promotes one.
+    await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      { body: "edited" }
+    );
+
+    // CLERK sends the whole group: an allowed edit to `note`, and `runbook` at
+    // the value it already holds, which the gate will strip from their payload.
+    const published = await h.updateEntry(
+      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
+      {
+        status: "published",
+        ops: { note: "clerk-note", runbook: "live-runbook" },
+      }
+    );
+
+    expect(published.success).toBe(false);
+    const issues = (
+      published as {
+        publicData?: { errors?: Array<{ path: string; code: string }> };
+      }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+    expect(issues?.[0]?.code).toBe("FORBIDDEN");
+    // Nothing published, and the pending change is still there.
+    const doc = (await current.nextly.findByID({
+      collection: slug as never,
+      id,
+      overrideAccess: true,
+      status: "all",
+    } as never)) as Record<string, unknown> | null;
+    expect(doc?.body).toBe("live");
+    expect(doc?.ops).toEqual({ note: "live-note", runbook: "live-runbook" });
+    expect(await pendingDrafts(current, id)).toHaveLength(1);
+  });
+
+  it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
+    // A full form resubmits every field, so a publisher routinely sends a
+    // protected value back unchanged. The field gate strips it, which leaves the
+    // pending change's edit in the promoted document. Credited to the publisher
+    // because the path appears in their request, that edit would be restored to
+    // live while the successful publish deletes the draft, so the author's edit
+    // would be gone with success reported.
+    const t = await boot();
+    const h = handlerOf(t);
+
+    const created = await h.createEntry(
+      { collectionName: SLUG, overrideAccess: true },
+      { body: "live", guarded: "live-value", status: "published" }
+    );
+    const id = (created.data as { id?: string }).id as string;
+
+    await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
+      { guarded: "boss-secret" }
+    );
+    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
+
+    const published = await h.updateEntry(
+      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
+      { status: "published", guarded: "live-value" }
+    );
+
+    expect(published.success).toBe(false);
+    const issues = (
+      published as {
+        publicData?: { errors?: Array<{ path: string; code: string }> };
+      }
+    ).publicData?.errors;
+    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
+    expect(issues?.[0]?.code).toBe("FORBIDDEN");
+    const live = await liveDoc(t, id);
+    expect(live.guarded).toBe("live-value");
+    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
   });
 
   it("still promotes the change for a publisher who MAY write it", async () => {

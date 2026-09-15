@@ -39,6 +39,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import {
   WORKLIST_STATES,
   resolveActiveTarget,
+  worklistStateFrom,
   type TranslationWorkRow,
   type WorklistState,
 } from "@admin/types/translations/worklist";
@@ -493,7 +494,9 @@ export function TranslationWorklist({
         legend="Showing"
         options={WORKLIST_STATES.map(t => ({ value: t.value, label: t.label }))}
         selected={state}
-        onSelect={next => onStateChange(next as WorklistState)}
+        // Resolved against the tabs rather than asserted: a value the tabs do not offer falls back to
+        // the page's leading question instead of reaching the server as a state it refuses.
+        onSelect={next => onStateChange(worklistStateFrom(next))}
       />
 
       <NotConsultedNotice collections={notConsulted} />

@@ -108,7 +108,7 @@ export interface EntryFormProps {
   onDelete?: () => void;
   /** Callback when form is cancelled */
   onCancel?: () => void;
-  /** Active content locale (i18n M7) — saves target this language. */
+  /** Active content locale — saves target this language. */
   locale?: string;
   /**
    * Whether the parent read this entry with the working-draft overlay (`draft`).
@@ -117,10 +117,10 @@ export interface EntryFormProps {
    * collection); an embedded editor reading the live row passes `false`.
    */
   readDraft?: boolean;
-  /** Called when the user switches the active content language (i18n M7). */
+  /** Called when the user switches the active content language. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
-   * Default-language field values (i18n M7). Provided while translating a non-default language
+   * Default-language field values. Provided while translating a non-default language
    * so each translatable field can show its source text inline. Keyed by field name (camelCase).
    */
   sourceValues?: Record<string, unknown>;
@@ -329,7 +329,7 @@ export function EntryForm({
     onCancel,
   });
 
-  // i18n M7: content-locale context for field components — the active locale's writing
+  // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
   // field can tell whether it is translatable), and whether the active language differs from
   // the app default (per-field affordances only apply while translating a non-default language).

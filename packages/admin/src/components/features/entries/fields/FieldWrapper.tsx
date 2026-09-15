@@ -207,7 +207,7 @@ export function FieldWrapper({
   horizontal = false,
   editorIsOpaque = false,
 }: FieldWrapperProps) {
-  // i18n M7: active content-language direction (RTL for Arabic/Hebrew/…).
+  // Active content-language direction (RTL for Arabic/Hebrew/…).
   const entryLocale = useEntryLocale();
   // Generate unique IDs for accessibility
   const generatedId = useId();
@@ -257,7 +257,7 @@ export function FieldWrapper({
       .filter(Boolean)
       .join(" ") || undefined;
 
-  // i18n M7: is this field translatable (a per-language value) or shared across all languages?
+  // Is this field translatable (a per-language value) or shared across all languages?
   // Uses the same classifier as storage generation (nextly/config) so the editor and the DB
   // agree. For non-localized collections this is always false and everything below is inert.
   const isLocalizedField = isFieldLocalized(
@@ -295,7 +295,7 @@ export function FieldWrapper({
       </span>
     ) : null;
 
-  // i18n M7: while translating a non-default language, show the default-language value inline on
+  // While translating a non-default language, show the default-language value inline on
   // a translatable field so the translator always has the source text (spec §10 — the validated,
   // cheap alternative to a full side-by-side editor). Only primitive (text/number) sources render;
   // structural values (relationships, richText objects) are skipped.
@@ -348,7 +348,7 @@ export function FieldWrapper({
         style={fieldWithCommonProps.admin?.style}
         data-field={fieldName}
         data-field-type={field.type}
-        // i18n M7: render the field right-to-left when a translatable field is edited in an RTL language.
+        // Render the field right-to-left when a translatable field is edited in an RTL language.
         {...(rtlField ? { dir: "rtl" as const } : {})}
       >
         <div className="pt-0.5">{children}</div>
@@ -413,7 +413,7 @@ export function FieldWrapper({
       style={fieldWithCommonProps.admin?.style}
       data-field={fieldName}
       data-field-type={field.type}
-      // i18n M7: render the field right-to-left when a translatable field is edited in an RTL
+      // Render the field right-to-left when a translatable field is edited in an RTL
       // language (Arabic, Hebrew, …). Shared / non-localized editors are unaffected.
       {...(rtlField ? { dir: "rtl" as const } : {})}
       // A field with no single focusable control is exposed as a named group.
@@ -473,7 +473,7 @@ export function FieldWrapper({
         </Label>
       )}
 
-      {/* i18n M7: the default language's value, shown while translating another
+      {/* The default language's value, shown while translating another
           language. It sits ABOVE the input because it is what the translator
           reads FROM: source first, then the box they type the translation into.
           Below the input it read as a footnote about the field rather than as

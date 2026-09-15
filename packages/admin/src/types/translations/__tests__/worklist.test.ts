@@ -1,6 +1,7 @@
 // A URL value is a request, not a fact. These pin the one it is dangerous to
 // believe: the SOURCE language, which the server accepts and answers nonsense
 // for, confidently and without a hint that the language was the problem.
+import { TRANSLATION_FILTER_STATES } from "nextly/translation-filter-states";
 import { describe, it, expect } from "vitest";
 
 import {
@@ -49,6 +50,22 @@ describe("worklistStateFrom", () => {
 });
 
 describe("WORKLIST_STATES", () => {
+  it("offers exactly one tab for every state the server accepts", () => {
+    // The page asks the server with these values, so the two sets must be the
+    // same set. A tab for a state the server refuses answers with an empty
+    // worklist; a state with no tab is a question the page can never ask.
+    // Compared sorted, because the ORDER is the page's own and the set is not.
+    const values = WORKLIST_STATES.map(s => s.value);
+    expect([...values].sort()).toEqual([...TRANSLATION_FILTER_STATES].sort());
+    expect(new Set(values).size).toBe(values.length);
+  });
+
+  it("resolves a saved link naming any state the server accepts", () => {
+    for (const state of TRANSLATION_FILTER_STATES) {
+      expect(worklistStateFrom(state)).toBe(state);
+    }
+  });
+
   it("offers a tab for every state a language can be in", () => {
     // Derived from the canonical catalog rather than restated. A state added or
     // removed there must not leave this page missing a tab a translator needs.

@@ -89,6 +89,7 @@ import {
   removeNode,
   walkNodes,
 } from "./tree";
+import type { DomIdPolicy } from "./tree";
 import { componentEnvelopeIssues } from "./validation";
 import type { ValidationIssue } from "./validation";
 import { isConditionGated } from "./visibility";
@@ -713,12 +714,9 @@ function savedPatternDocument(
   // go back to what the source calls them. The two are one policy rather than a
   // second pass, so node ids are minted once and the map this returns still
   // describes the document it comes with.
-  const restore = restoredDomIds(document, selected, limits);
+  const restore = restorePolicy(document, selected, limits);
   if ("problem" in restore) return restore;
-  const copied = reidForestWithMap(
-    [...selected],
-    restore.size === 0 ? "keep" : { restore }
-  );
+  const copied = reidForestWithMap([...selected], restore.policy);
   const stored: BlockDocument = {
     formatVersion: document.formatVersion,
     kind: "pattern",
@@ -3814,13 +3812,23 @@ function liveEntries(
 }
 
 /**
- * The DOM ids a saved run should be stored under, as it spells them → as its
- * source does.
+ * How a saved run's DOM ids are copied: kept, or put back per node to what the
+ * source calls them.
  *
- * Built from the roots' own provenance, so a run assembled from two different
- * inserts restores each half against the pattern it came from. A root with no
- * record contributes nothing and keeps every id it carries: nothing renamed it,
+ * Built from the provenance in scope for each node, so a run assembled from two
+ * different inserts restores each part against the pattern it came from, and a
+ * node with no record in reach keeps every id it carries: nothing renamed it,
  * so there is nothing to put back.
+ *
+ * Asked PER NODE through {@link DomIdPolicy} `restoreEach`, because one answer
+ * per id for the whole run is not enough. Two records can name one current id
+ * and disagree about its source name, a record's own node and an unlisted
+ * namesake can carry one id, and a reference the run's record governs can sit
+ * beside an unrelated author's reference to the same id — in each, the right
+ * outcome differs by node. The copier decides which question a node is asked:
+ * what the id it renders was, or what an id it references was. A reference takes
+ * its node's answer where there is one, and follows its target only where there
+ * is none.
  *
  * INVERTED from the record, which reads source → copy because that is the
  * direction an insert renames in.
@@ -3838,11 +3846,11 @@ function liveEntries(
  * record written before those lists existed is read by value, as it always
  * was, because it cannot say which node it meant.
  */
-function restoredDomIds(
+function restorePolicy(
   document: BlockDocument,
   selected: readonly BlockNode[],
   limits: DocumentLimits
-): ReadonlyMap<string, string> | PlanRefusal {
+): { readonly policy: DomIdPolicy } | PlanRefusal {
   const scopes = renameScopes(document.nodes, limits);
   // Refused for its SIZE, which is the one thing actually wrong with it and the
   // one thing an author can act on. Naming any other cause sends them to repair
@@ -3851,58 +3859,54 @@ function restoredDomIds(
   // cap, and a scope decided from a walk that stopped at the cap would be the
   // same mistake with a rename in place of a pointer.
   if (scopes === undefined) return { problem: "exceeds-limits" };
-  const survey = surveyedSelection(selected, scopes);
-  const carrying = carriersOf(survey, scopes);
+  // `keep` where nothing in the run has a rename in reach, which is the
+  // ordinary save: the copy is then exactly the one a run with no provenance
+  // gets, with nothing asked of any node.
+  if (!renameInReach(selected, scopes)) return { policy: "keep" };
+  return {
+    policy: {
+      restoreEach: (node, value) => restoredFor(scopes, node, value),
+    },
+  };
+}
 
-  const claims = new Map<string, Claim>();
-  for (const scope of survey.applicable) {
-    for (const [was, now] of scope.renames) {
-      if (governs(scope, now, carrying)) {
-        claim(claims, now, was);
-      }
-    }
-  }
-  return settled(claims);
+/** Whether any node of a run has a rename record in scope. */
+function renameInReach(
+  selected: readonly BlockNode[],
+  scopes: ReadonlyMap<BlockNode, RenameScope>
+): boolean {
+  let found = false;
+  walkNodes([...selected], node => {
+    if ((scopes.get(node)?.renames.size ?? 0) > 0) found = true;
+  });
+  return found;
 }
 
 /**
- * Every node CARRYING one of the ids a record names, and what its scope says.
+ * What one node's record says an id it carries used to be called, or nothing.
  *
- * Rendering an id and referencing one are the same question here, so they go
- * into one map: both are a node the restore would rewrite, and a record has to
- * govern every carrier before it may be applied. A carrier under no record
- * answers `undefined`, which is a disagreement rather than an absence.
- *
- * Its own function because it is the one place the two halves meet, and because
- * `restoredDomIds` reads better as the four questions it asks in order than as
- * those four with this one spelled out in the middle of them.
+ * The id a node RENDERS is its own to answer for only when its record lists it
+ * among the nodes it renamed; an id it merely references is answered by the
+ * record in scope.
  */
-function carriersOf(
-  survey: SelectionSurvey,
-  scopes: ReadonlyMap<BlockNode, RenameScope>
-): Map<string, Set<string | undefined>> {
-  // Every id any record names, asked of every node at once.
-  const named = new Map<string, string>();
-  for (const scope of survey.applicable) {
-    for (const now of scope.renames.values()) named.set(now, now);
-  }
-  const carrying = referencesByScope(survey.nodes, scopes, named);
-  for (const { node, domId } of survey.rendering) {
-    if (!named.has(domId)) continue;
-    const said = renderedAnswer(scopes.get(node), node, domId);
-    const holders = carrying.get(domId);
-    if (holders === undefined) carrying.set(domId, new Set([said]));
-    else holders.add(said);
-  }
-  return carrying;
+function restoredFor(
+  scopes: ReadonlyMap<BlockNode, RenameScope>,
+  node: BlockNode,
+  value: string
+): string | undefined {
+  const scope = scopes.get(node);
+  return renderedDomId(node) === value
+    ? renderedAnswer(scope, node, value)
+    : answerOf(scope, value);
 }
 
 /**
  * What a node's scope says the id it RENDERS used to be — and nothing when
  * the scope lists the nodes it renamed and this is not one of them.
  *
- * Only for the node carrying the id itself. A reference follows whatever that
- * id's target is, so it is answered by the scope alone.
+ * Only for the node carrying the id itself. A reference is answered by the
+ * scope alone, and that answer decides it; the copier falls back to the target
+ * only where the scope has none.
  */
 function renderedAnswer(
   scope: RenameScope | undefined,
@@ -3912,124 +3916,6 @@ function renderedAnswer(
   const said = answerOf(scope, now);
   if (said === undefined || scope?.carriers === undefined) return said;
   return scope.carriers.get(now)?.has(node.id) === true ? said : undefined;
-}
-
-/**
- * What the records in a selection say one current id used to be called.
- *
- * The spellings and not the records offering them, because agreement is what
- * decides: two records naming one id are a conflict only when they disagree.
- */
-interface Claim {
-  readonly was: Set<string>;
-}
-
-function claim(claims: Map<string, Claim>, now: string, was: string): void {
-  const found = claims.get(now);
-  if (found === undefined) claims.set(now, { was: new Set([was]) });
-  else found.was.add(was);
-}
-
-/**
- * The claims that are not contested, as the restore map.
- *
- * Two records can each hold a reference to one current id and disagree about
- * what it was called — measured, two patterns whose maps both name `shared-1`,
- * one from `alpha` and one from `beta`. A single restore map has room for one
- * answer, so applying either rewrites the other scope's reference to a name it
- * never had.
- *
- * Keeping the id is the honest outcome rather than a fallback: nothing in the
- * selection renders a contested one, so both references already point outside
- * the saved forest, and leaving them is the only answer that corrupts neither.
- * Restoring per scope needs a per-node policy, which is a change to
- * {@link DomIdPolicy} rather than to this reading of it.
- */
-function settled(claims: ReadonlyMap<string, Claim>): Map<string, string> {
-  const restore = new Map<string, string>();
-  for (const [now, entry] of claims) {
-    // DISAGREEING, not merely plural. One insert stamps its rename map onto
-    // every root that references the renamed id, so saving two of those roots
-    // brings two records that say the same thing — and discarding on the count
-    // alone would store the page-specific id for a run whose records agree
-    // about it perfectly.
-    if (entry.was.size !== 1) continue;
-    const [only] = entry.was;
-    if (only !== undefined) restore.set(now, only);
-  }
-  return restore;
-}
-
-/** What one pass over the selection tells the restore. */
-interface SelectionSurvey {
-  /** Every node in it, for the reference probe. */
-  readonly nodes: BlockNode[];
-  /** Every DISTINCT record in scope anywhere in it. */
-  readonly applicable: Set<RenameScope>;
-  /**
-   * Every node that RENDERS an id a record might name, with the id it renders.
-   *
-   * All of them, not the first. `duplicateDomIdRefusal` only refuses a save
-   * where two nodes render one id — a condition-gated node carrying the same
-   * id renders nothing and is permitted — so "the holder" is not a single node,
-   * and picking the first made the result depend on walk order.
-   */
-  readonly rendering: { node: BlockNode; domId: string }[];
-}
-
-function surveyedSelection(
-  selected: readonly BlockNode[],
-  scopes: ReadonlyMap<BlockNode, RenameScope>
-): SelectionSurvey {
-  const nodes: BlockNode[] = [];
-  // Collected by identity, so the whole of a large selection costs one entry
-  // per DISTINCT record rather than one per node: an inherited scope is the
-  // same object on every node that inherits it.
-  const applicable = new Set<RenameScope>();
-  const rendering: { node: BlockNode; domId: string }[] = [];
-  walkNodes([...selected], node => {
-    nodes.push(node);
-    const scope = scopes.get(node);
-    if (scope !== undefined) applicable.add(scope);
-    const rendered = renderedDomId(node);
-    if (rendered !== undefined) rendering.push({ node, domId: rendered });
-  });
-  return { nodes, applicable, rendering };
-}
-
-/**
- * Whether this record still applies to the id it renamed.
- *
- * The node HOLDING the id decides. A node moved out of the run that renamed it
- * is no longer governed by that record, and putting the id back would rewrite
- * one the author now owns — the record describes a rename that happened
- * somewhere this node no longer is. That also settles two records naming one
- * id, by construction rather than by iteration order.
- *
- * Where nothing in the selection RENDERS it, the record can only be about a
- * reference — a link saved without its target, whose href still has to come
- * back. Not a blanket case either: a node moved out keeps its reference too, so
- * the node holding THAT has to be one this record governs.
- */
-function governs(
-  scope: RenameScope,
-  now: string,
-  carrying: ReadonlyMap<string, Set<string | undefined>>
-): boolean {
-  // EVERY node carrying the id — rendering it or referencing it — has to give
-  // the SAME answer, and it has to be this record's. The restore is a single
-  // map for the whole forest, so an id another node also carries comes back
-  // rewritten there too: one governed carrier is not licence to rewrite an
-  // unrelated author's, and a carrier under no record answers `undefined`,
-  // which is a disagreement.
-  //
-  // Rendering and referencing are one question here for the same reason. A
-  // node moved out of the run that renamed it and a node that merely names the
-  // id both stop the record applying, and which of the two it is changes
-  // nothing about the answer.
-  const said = carrying.get(now);
-  if (said === undefined) return false;
-  return said.size === 1 && said.has(answerOf(scope, now));
 }
 
 /**
@@ -4058,67 +3944,6 @@ function answerOf(
     inverse = built;
   }
   return inverse.get(now);
-}
-
-/**
- * Which scopes hold a node that REFERENCES each of these ids.
- *
- * One traversal for every id and every node, rather than a scan per rename
- * entry: a stored pattern can carry thousands of entries whose targets were
- * removed, and asking about them one at a time rebuilds the whole region each
- * time — quadratic in entries times nodes, on a save that is perfectly valid.
- *
- * Attributed PER NODE, which is what makes it exact. Each node is probed with
- * its children removed, so a reference is credited to the node that actually
- * holds it and the walk cannot cross a scope boundary: a pattern nested inside
- * another has its own scope, and an authored reference of its own must not
- * admit the outer pattern's rename.
- *
- * `referencedDomIds` is still what reads them, so what counts as a reference
- * stays whatever the relink itself would follow rather than a second list of
- * attributes and props to keep in step.
- */
-function referencesByScope(
-  nodes: readonly BlockNode[],
-  scopes: ReadonlyMap<BlockNode, RenameScope>,
-  candidates: ReadonlyMap<string, string>
-): Map<string, Set<string | undefined>> {
-  const found = new Map<string, Set<string | undefined>>();
-  // What each scope says a current id USED to be, which is the inverse of the
-  // direction a record is written in. Built once per distinct record rather
-  // than searched per hit.
-
-  if (candidates.size === 0 || nodes.length === 0) return found;
-
-  // Childless copies, so each root the probe walks IS one node. `slots` is
-  // dropped rather than emptied because an empty record is still a container
-  // the copier rebuilds.
-  const alone = nodes.map(node => {
-    const { slots: _slots, ...rest } = node;
-    return rest;
-  });
-
-  referencedDomIds(alone, new Map(candidates)).forEach((hits, index) => {
-    const held = nodes[index];
-    if (held === undefined) return;
-    // A node under NO record is recorded too, as `undefined`. It is a holder
-    // whose reference no record governs, and the entry below has to know it is
-    // there: a restore is one map for the forest, so admitting an id this node
-    // also names rewrites its reference on the strength of somebody else's
-    // record.
-    const scope = scopes.get(held);
-    for (const domId of hits.keys()) {
-      // The ANSWER its scope gives, not the scope object. Two roots stamped
-      // with one record hold two equal maps rather than one — the record is
-      // copied onto each — so identity would read agreement as conflict. What
-      // decides is whether the holders say the same thing.
-      const said = answerOf(scope, domId);
-      const holders = found.get(domId);
-      if (holders === undefined) found.set(domId, new Set([said]));
-      else holders.add(said);
-    }
-  });
-  return found;
 }
 
 /**

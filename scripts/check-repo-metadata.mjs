@@ -23,7 +23,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { RETIRED_CATEGORY, namesRetiredCategory } from "./check-docs-claims.mjs";
+import { RETIRED_CATEGORY, namesRetiredCategory } from "./retired-category.mjs";
 
 const OWNER = "nextlyhq";
 const REPO = "nextly";

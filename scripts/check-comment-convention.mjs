@@ -122,19 +122,24 @@ export const FORBIDDEN = [
   },
   {
     // A localization ROADMAP milestone: the word "i18n" followed by a milestone code - one capital
-    // letter, digits, and an optional sub-letter. The code names a delivery phase, which a reader
-    // cannot look up and which says nothing about what the code does; the mechanism it stands for
-    // (a per-locale column, a fallback read, a staleness stamp) is what belongs in its place.
+    // letter, digits, and an optional sub-letter - either after whitespace, or ALONE inside a
+    // bracket that follows the word. The code names a delivery phase, which a reader cannot look
+    // up and which says nothing about what the code does; the mechanism it stands for (a
+    // per-locale column, a fallback read, a staleness stamp) is what belongs in its place.
     //
     // Anchored on the word AND the code shape together, because neither half alone is a label:
     // "i18n" is ordinary vocabulary here, and a capital-plus-digit token is a heading level, a
     // storage service or a key name. Case-sensitive for the same reason - a lowercase version
     // token after the word is prose about a library.
     //
+    // The bracketed form must CLOSE right after the code. A bracket after the word that goes on
+    // into a sentence is an aside, and that sentence may well start with one of those ordinary
+    // capital-plus-digit tokens; only a bracket holding nothing but the code is a label.
+    //
     // A code written WITHOUT the word - bracketed after a sentence, or leading a line with a
     // colon - is NOT matched, because nothing in that syntax separates it from the same tokens
     // used in prose. The convention still forbids it; nothing mechanical catches it.
-    pattern: /\bi18n\s+[A-Z]\d+[a-z]?\b/,
+    pattern: /\bi18n(?:\s+[A-Z]\d+[a-z]?\b|\s*\(\s*[A-Z]\d+[a-z]?\s*\))/,
     why: "names a roadmap milestone rather than the code",
   },
   {
@@ -844,8 +849,14 @@ export function offencesIn(source, options) {
     : FORBIDDEN;
   const found = [];
   for (const comment of commentText(source, options)) {
+    // Patterns read the NORMALISED text - the same text the allowlist digests - rather than the
+    // raw comment. A block comment wraps with a `*` at the start of every continuation line, so a
+    // label split across a wrap reads as broken by that decoration in the raw text and passes
+    // every pattern, while the identical label on one line is reported. What a comment says must
+    // not depend on where a formatter broke its lines.
+    const text = normaliseComment(comment);
     for (const { pattern, why } of patterns) {
-      if (pattern.test(comment)) {
+      if (pattern.test(text)) {
         // Whole. Truncating here would cap what every caller sees, including the digest, so a long
       // comment could be rewritten past the cut and keep its identity. Shortening is the print
       // sites' job.
