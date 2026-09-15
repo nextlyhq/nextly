@@ -669,11 +669,11 @@ describe("what a schema discloses about OTHER entities", () => {
     const registry = current!.getService(
       "collectionRegistryService"
     ) as unknown as {
-      getCollectionBySlug: (slug: string) => Promise<unknown>;
+      hasSlug: (slug: string) => Promise<boolean>;
     };
-    const real = registry.getCollectionBySlug.bind(registry);
+    const real = registry.hasSlug.bind(registry);
     const lookup = vi
-      .spyOn(registry, "getCollectionBySlug")
+      .spyOn(registry, "hasSlug")
       .mockImplementation((slug: string) =>
         slug === "posts"
           ? Promise.reject(new Error("registry unavailable"))
