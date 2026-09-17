@@ -1,5 +1,39 @@
 # @nextlyhq/admin
 
+## 0.0.2-alpha.67
+
+### Patch Changes
+
+- [#1874](https://github.com/nextlyhq/nextly/pull/1874) [`ce962c7`](https://github.com/nextlyhq/nextly/commit/ce962c7c0eda26659674261f544ea545e48afa2e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A class whose id was `__proto__` could not be renamed again after a refused
+  save. The class manager records which rename of each class is the live one, and
+  it kept that record on a plain object keyed by class id, where `__proto__` reads
+  back an inherited object and a write to it stores nothing. The refused rename
+  never released its pending name, so retrying the same name was taken as no
+  change at all.
+
+  The record is now a `Map`, and the pending names are read as the record's own
+  entries in both the editor and the class manager panel, so a class behaves the
+  same whatever id it carries.
+
+- [#1876](https://github.com/nextlyhq/nextly/pull/1876) [`14f98f7`](https://github.com/nextlyhq/nextly/commit/14f98f7c1d0444330509289895c22140b82a2425) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A link saved in a pattern now points at the element the page actually shows.
+  When a selection held a visible renamed element and a hidden copy with the
+  same id (hidden by a visibility condition), a link from an unrelated block could
+  keep the old id, which nothing renders once the hidden copy is left off the
+  page. The visible element now decides where such a link points. A hidden
+  element decides only when nothing visible carries that id, so a link and its
+  target stay together when the condition later shows it. Hidden elements still
+  get their own ids put back.
+
+- [#1888](https://github.com/nextlyhq/nextly/pull/1888) [`109ff0a`](https://github.com/nextlyhq/nextly/commit/109ff0ac4fe2f3b238c7afcf7e47068eb892f3bd) Thanks [@muzzamil-rx](https://github.com/muzzamil-rx)! - User emails are lowercased when an account is created, so an address typed
+  with any capital letter is now findable at sign-in instead of permanently
+  failing with "Invalid email or password". Creating an account whose email
+  matches an existing one is now rejected as a duplicate — including
+  repeating an address an earlier version stored with uppercase letters — and
+  findByEmail keeps finding those legacy accounts by their stored spelling.
+- Updated dependencies [[`ce962c7`](https://github.com/nextlyhq/nextly/commit/ce962c7c0eda26659674261f544ea545e48afa2e), [`14f98f7`](https://github.com/nextlyhq/nextly/commit/14f98f7c1d0444330509289895c22140b82a2425), [`109ff0a`](https://github.com/nextlyhq/nextly/commit/109ff0ac4fe2f3b238c7afcf7e47068eb892f3bd)]:
+  - nextly@0.0.2-alpha.67
+  - @nextlyhq/ui@0.0.2-alpha.67
+
 ## 0.0.2-alpha.66
 
 ### Patch Changes
