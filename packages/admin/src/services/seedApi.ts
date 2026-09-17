@@ -49,18 +49,18 @@ async function probe(): Promise<SeedProbeResult> {
   } catch {
     return { available: false };
   }
-  // 404 = no seed route in this project. 503 = Nextly init transient
-  // failure; treat as unavailable so the card doesn't render in a
-  // broken state.
-  if (res.status === 404 || res.status === 503) return { available: false };
-  // 200/401/403 — endpoint exists. Read template metadata from headers
-  // so the card can render the template label without hardcoding.
-  if (res.ok || res.status === 401 || res.status === 403) {
-    const slug = res.headers.get("x-nextly-seed-template") ?? "unknown";
-    const label = res.headers.get("x-nextly-seed-template-label") ?? "Template";
-    return { available: true, template: { slug, label } };
-  }
-  return { available: false };
+  // Offered only on a 2xx, because "available" means THIS reader may run the
+  // seed. The route answers the probe with the authorization its POST enforces
+  // -- 401 without a session, 403 for anyone who is not a super-admin -- and 404
+  // where the project ships no seed, 503 while it is still starting. Read as
+  // "the endpoint exists", a refusal drew a button whose every press fails, in
+  // place of an action the reader could take.
+  if (!res.ok) return { available: false };
+  // Template metadata from headers, so the offer names the template without
+  // hardcoding it.
+  const slug = res.headers.get("x-nextly-seed-template") ?? "unknown";
+  const label = res.headers.get("x-nextly-seed-template-label") ?? "Template";
+  return { available: true, template: { slug, label } };
 }
 
 async function runSeed(): Promise<SeedResult> {

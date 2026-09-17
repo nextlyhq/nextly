@@ -29,9 +29,6 @@ const stub = () => null;
 
 // Cut at the components, not at the registry: the registry is the thing under
 // test, and mocking it would leave this asserting its own mock.
-vi.mock("@admin/components/features/dashboard/SeedDemoContentCard", () => ({
-  SeedDemoContentCard: stub,
-}));
 vi.mock("@admin/components/features/dashboard/CollectionQuickLinks", () => ({
   CollectionQuickLinks: stub,
 }));
@@ -71,7 +68,6 @@ describe("core widget components register at runtime", () => {
     registerCoreWidgetComponents();
 
     for (const path of [
-      "core#SeedDemoContentCard",
       "core#CollectionQuickLinks",
       "core#SinglesQuickLinks",
       "core#QuickCreate",

@@ -77,39 +77,6 @@ export const CORE_WIDGET_COMPONENT_PREFIX = "core#";
  */
 export const CORE_WIDGETS: readonly WidgetDefinition[] = [
   {
-    id: "core/seed-demo-content",
-    title: "Get started",
-    description:
-      "Offers to seed demo content while there is nothing to look at yet.",
-    archetype: "custom",
-    chrome: "none",
-    defaultSize: "full",
-    defaultOrder: 0,
-    component: "core#SeedDemoContentCard",
-    /*
-     * Transient, and declared as such. The card used to hide ITSELF once
-     * seeding was done or declined -- it was placed in the grid, given an
-     * order, and then rendered nothing -- so the arrangement reserved a slot
-     * for a card drawing nothing and the reason lived in a component.
-     *
-     * 🔴 TWO conditions, and the pair is the point. This card asks something
-     * neither one answers alone: is there nothing to look at, AND is the offer
-     * of demo content still open. `content:empty` alone left a reader who
-     * DECLINED still holding the slot, because declining does not create
-     * content. Folding the decline into `content:empty` was refused instead:
-     * conditions are evaluated once per NAME and shared by every widget asking,
-     * so a plugin's card declaring `content:empty` would have vanished because
-     * someone dismissed a core offer.
-     *
-     * The two are scoped differently on purpose. `content:empty` is about this
-     * READER; `seed:unanswered` is about the INSTALL, since whether a project
-     * took the demo data is recorded once and a second admin should not be
-     * offered it again after the first declined.
-     */
-    lifecycle: "conditional",
-    visibleWhen: ["content:empty", "seed:unanswered"],
-  },
-  {
     id: "core/onboarding-checklist",
     title: "Set up your project",
     description:
@@ -117,9 +84,8 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
-    // Between the seed offer and the first content card. Both are transient and
-    // both address a reader who has just arrived, so they sit together rather
-    // than with the cards that stay.
+    // Ahead of the first content card: it addresses a reader who has just
+    // arrived, so it sits above the cards that stay rather than among them.
     defaultOrder: 5,
     component: "core#OnboardingChecklist",
     /*
