@@ -191,7 +191,7 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p) => {
+    execute: async (svc, p, _body, request) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
@@ -212,6 +212,8 @@ function allLocalesLifecycle(
         userRoles: readAuthenticatedRoles(p),
         routeAuthorized: true,
         authenticatedScope: readAuthenticatedScope(p),
+        // The request this operation's hooks are told about.
+        request,
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);

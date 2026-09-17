@@ -946,6 +946,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** The request this operation's hooks are told about. */
+    request?: Request;
   }) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
   }
@@ -986,6 +988,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** Acting identity from the transport, forwarded to the recorded event. */
     actor?: RequestActor;
+    /** The request this operation's hooks are told about. */
+    request?: Request;
   }) {
     return this.entryService.unpublishAllLocales(this.resolveUserParam(params));
   }
