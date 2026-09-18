@@ -106,6 +106,9 @@ importers:
       '@nextlyhq/eslint-plugin':
         specifier: workspace:*
         version: link:packages/eslint-plugin
+      '@nextlyhq/module-specifiers':
+        specifier: workspace:*
+        version: link:packages/module-specifiers
       '@testing-library/jest-dom':
         specifier: ^6.9.1
         version: 6.9.1
