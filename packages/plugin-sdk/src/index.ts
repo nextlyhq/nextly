@@ -370,7 +370,23 @@ export { routePathIsLiteral } from "nextly";
 // set, and deriving it from permission slugs is the second implementation that
 // disclosed a refused collection's contents on one surface while hiding a
 // code-authorized one on another.
-export { readableContent } from "nextly";
+export { canReadContent, readableContent, readableContentKind } from "nextly";
+
+// The three-way a description needs when it names one entity from INSIDE
+// another. A relationship's target is a collection slug, and readability alone
+// cannot tell a withheld collection from a target that is not registered
+// content at all, so redacting on it strips the media library and `users` from
+// every schema that references them.
+export { contentReadability } from "nextly";
+export type { ContentReadability } from "nextly";
+
+// What a field declaration says about its value, projected once. Published
+// because a plugin describing a collection reads the registry's own field
+// definitions, and a projection written per surface is a list somebody has to
+// remember to extend: three declaration keys went missing from one that way,
+// and a fourth was never noticed at all.
+export { declaredShape } from "nextly";
+export type { DeclaredField } from "nextly";
 export type {
   ReadableContent,
   ReadableContentCaller,
