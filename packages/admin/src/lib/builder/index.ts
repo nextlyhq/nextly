@@ -1,6 +1,7 @@
 export {
   generateFieldId,
   toSnakeName,
+  legacySnakeName,
   toKebabName,
   findFieldById,
   findParentContainerId,
