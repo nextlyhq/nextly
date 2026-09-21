@@ -52,6 +52,7 @@ const EVERY_KIND: ExtensionColumn[] = [
 
 const table: ExtensionTable = {
   name: "auth__identities",
+  authored: "identities",
   owner: { kind: "plugin", id: "auth" },
   columns: EVERY_KIND,
   indexes: [],

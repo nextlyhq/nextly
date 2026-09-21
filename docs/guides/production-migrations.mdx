@@ -514,3 +514,116 @@ previous one. Examples:
 - Need to drop a table you added in a recent migration -> write a new migration with `DROP TABLE`.
 
 The audit trail in `nextly_schema_events` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
+
+## Plugins with tables of their own
+
+### The phase order
+
+```text
+1. Core reconcile        — Nextly's own tables
+2. Plugin migrations     — each plugin's, in dependency order
+3. App migrations        — your own files
+```
+
+All three run under one lock, and **all three run before any plugin
+initialises**. That last point is load-bearing: a plugin's `init()` hook
+queries its tables, and it used to run first. On an upgraded database the
+tables were still on their old shape, and the plugin failed on a column that
+did not exist yet.
+
+Plugins go before the app because app migrations may index entity tables that
+plugins contribute, and an index on a table that does not exist is not a
+recoverable error.
+
+### Adoption: when the tables are already there
+
+A plugin you installed in development has its tables already — dev push
+created them. The first `nextly migrate` on a deployment finds them present,
+and that is the ordinary case rather than a failure.
+
+Each module is decided by comparing the live tables against its own two
+endpoints:
+
+| The database matches | What happens |
+| --- | --- |
+| the module's `before` | the UP runs |
+| the module's `snapshot` | recorded as applied; nothing runs |
+| neither | refused, with the difference named |
+
+The third row is why this is a comparison and not an existence check. A table
+created by push and then altered by hand matches neither, and running the UP
+against it would fail halfway — or succeed, against a shape nobody intended.
+
+### When something fails
+
+The first failure stops the whole run. Later plugins and the app phase do not
+execute, because migrations after a failed one assume a database state that
+was never reached.
+
+### Two checksums
+
+A plugin migration carries a checksum over its own SQL, and the ledger
+separately stores the sha256 of what actually ran.
+
+Neither covers the other. The first catches a module edited after generation —
+the SQL that will run is not the SQL that was reviewed. The second catches a
+module changed after it was applied, where the database no longer matches the
+file claiming to describe it. A regenerated module with a rewritten checksum
+passes the first and fails the second, which is exactly right.
+
+### Nothing drops a table it does not own
+
+A migration is scanned before its first statement runs and refused whole if it
+drops a table belonging to another owner. An app migration dropping
+`auth__identities` is refused; plugin-auth's own down migration dropping it is
+not.
+
+The scan happens before execution rather than filtering statements during it,
+because a file with some statements removed would still be recorded as
+applied — the ledger would claim a migration ran that partly did not.
+
+Development push never drops a plugin-migrated table at all, whatever your
+config says. A plugin removed from config is exactly when its data is most at
+risk, and that is a decision for `nextly plugin:uninstall` rather than a side
+effect of a reload.
+
+<Callout type="warn">
+`nextly migrate:fresh` drops everything. The guarantee above — that tables
+belonging to another owner are never touched — holds for push, reconcile and
+`migrate`, and not for `migrate:fresh`.
+</Callout>
+
+### Boot refusals you may meet
+
+| Code | Meaning |
+| --- | --- |
+| `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
+| `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled but is still in your config. Reinstall it or remove the line. |
+| `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
+| `MIGRATION_CHECKSUM_MISMATCH` | A migration changed after it was generated or applied. |
+| `DROP_OF_FOREIGN_TABLE` | A migration would drop another owner's table. Nothing was applied. |
+
+In development, `PLUGIN_SCHEMA_BEHIND` only logs: push reconciles from config
+on every reload, so it resolves itself moments later and refusing would make
+the edit loop impossible.
+
+### Ledger commands and plugin rows
+
+`migrate:down`, `migrate:status`, `migrate:check` and `migrate:resolve` ignore
+plugin rows by default, and take `--plugin <name>` to select one plugin's.
+
+The default matters: `migrate:down` picks the newest applied migration of any
+kind, so without the exclusion it would revert a plugin's migration while
+reporting an app rollback.
+
+### Uninstalling
+
+`nextly plugin:uninstall <name>` needs the plugin still in your config — its
+DOWN sections are its own code, so a plugin removed from config first cannot
+be uninstalled at all.
+
+It refuses while another enabled plugin depends on it, and refuses a full
+uninstall when any module has no DOWN: running the reversible ones and
+stopping would leave the tables partly existing with no module describing what
+is there. `--keep-data` leaves everything in place and marks the owner
+orphaned.

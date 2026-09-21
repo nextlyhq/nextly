@@ -13,6 +13,8 @@
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
 
+import { migrations } from "./migrations";
+
 /** Notes, with a unique title per author and a compound lookup index. */
 export const notes = defineTable(
   "notes",
@@ -52,10 +54,16 @@ export const schemaFixturePlugin = definePlugin({
   name: "schema-fixture",
   version: "0.0.0",
   nextly: "*",
+  // Declared, and matched by the newest migration below. A schemaVersion
+  // without migrations to apply it is refused at resolve time, because
+  // nothing could ever raise the applied version and the plugin would refuse
+  // to boot forever.
+  schemaVersion: 2,
   contributes: {
     schema: {
       prefix: "fx",
       tables: [notes, tags],
+      migrations,
       extend: [
         ({ schema }) => {
           // An index on a table this plugin does not own. Allowed for entity

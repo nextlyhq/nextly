@@ -40,4 +40,7 @@ export type {
   PluginMigration,
   PluginMigrationSnapshot,
 } from "./domains/schema/migrate/plugin/plugin-migration";
+// A value, not a type: a hand-written module computes its checksum rather
+// than pasting one, so it cannot drift into the state the checksum detects.
+export { migrationChecksum } from "./domains/schema/migrate/plugin/plugin-migration";
 export { isUniqueViolation } from "./database/errors";

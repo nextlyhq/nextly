@@ -11,9 +11,17 @@
  * stops being a hazard and becomes fatal: `init` and `onReady` would query
  * tables no migration has created.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
-import registerSource from "../register?raw";
+// Read with node rather than through a `?raw` import: that is a bundler
+// feature with no type, and `check-types` compiles this file with plain tsc.
+const registerSource = readFileSync(
+  fileURLToPath(new URL("../register.ts", import.meta.url)),
+  "utf8"
+);
 
 describe("the boot sequence in registerServices", () => {
   /**
