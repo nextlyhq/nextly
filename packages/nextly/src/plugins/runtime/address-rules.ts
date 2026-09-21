@@ -61,25 +61,115 @@ function ipv4Octets(address: string): number[] | null {
  * ordinary fetch. `169.254.169.254` is the one worth naming: on most cloud
  * providers it answers with the instance's own credentials.
  */
+/**
+ * The ranges a plugin may not reach, as data rather than a branch chain.
+ *
+ * A table because the list is the specification: each entry reads as the rule
+ * it encodes, and adding one is a line rather than another `if` in a function
+ * that already had a dozen. `169.254.169.254` falls under link-local, and is
+ * the one worth knowing about — on most cloud providers it answers with the
+ * instance's own credentials.
+ */
+const REFUSED_IPV4: ReadonlyArray<{
+  reason: AddressRefusal;
+  matches: (octets: number[]) => boolean;
+}> = [
+  { reason: "unspecified", matches: ([a]) => a === 0 },
+  { reason: "loopback", matches: ([a]) => a === 127 },
+  { reason: "private", matches: ([a]) => a === 10 },
+  { reason: "private", matches: ([a, b]) => a === 172 && b >= 16 && b <= 31 },
+  { reason: "private", matches: ([a, b]) => a === 192 && b === 168 },
+  { reason: "link-local", matches: ([a, b]) => a === 169 && b === 254 },
+  {
+    reason: "carrier-nat",
+    matches: ([a, b]) => a === 100 && b >= 64 && b <= 127,
+  },
+  {
+    reason: "reserved",
+    matches: ([a, b, c]) => a === 192 && b === 0 && c === 0,
+  },
+  {
+    reason: "benchmark",
+    matches: ([a, b]) => a === 198 && (b === 18 || b === 19),
+  },
+  { reason: "multicast", matches: ([a]) => a >= 224 && a <= 239 },
+  { reason: "broadcast", matches: o => o.every(part => part === 255) },
+  { reason: "reserved", matches: ([a]) => a >= 240 },
+];
+
+/** Whether an IPv4 address is one a plugin may reach. */
 export function judgeIpv4(address: string): AddressVerdict {
   const octets = ipv4Octets(address);
   if (!octets) return refuse("malformed");
-  const [a, b] = octets;
 
-  if (a === 0) return refuse("unspecified");
-  if (a === 127) return refuse("loopback");
-  if (a === 10) return refuse("private");
-  if (a === 172 && b >= 16 && b <= 31) return refuse("private");
-  if (a === 192 && b === 168) return refuse("private");
-  if (a === 169 && b === 254) return refuse("link-local");
-  if (a === 100 && b >= 64 && b <= 127) return refuse("carrier-nat");
-  if (a === 192 && b === 0 && octets[2] === 0) return refuse("reserved");
-  if (a === 198 && (b === 18 || b === 19)) return refuse("benchmark");
-  if (a >= 224 && a <= 239) return refuse("multicast");
-  if (octets.every(o => o === 255)) return refuse("broadcast");
-  if (a >= 240) return refuse("reserved");
+  const hit = REFUSED_IPV4.find(rule => rule.matches(octets));
+  return hit ? refuse(hit.reason) : ALLOWED;
+}
 
-  return ALLOWED;
+/** The two bytes of one hex group, or null when it is not one. */
+function hexGroupBytes(group: string): number[] | null {
+  if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+  const value = Number.parseInt(group, 16);
+  return [(value >> 8) & 0xff, value & 0xff];
+}
+
+/** Every byte of a colon-separated run, or null when any group is malformed. */
+function parseGroups(part: string): number[] | null {
+  if (part === "") return [];
+  const out: number[] = [];
+  for (const group of part.split(":")) {
+    const bytes = hexGroupBytes(group);
+    if (!bytes) return null;
+    out.push(...bytes);
+  }
+  return out;
+}
+
+/**
+ * Replace a trailing dotted-quad with a two-group placeholder.
+ *
+ * `::ffff:127.0.0.1` is one address, not an IPv6 address with a stray IPv4 on
+ * the end, so the quad is folded into the group count here and written back
+ * over the last four bytes afterwards.
+ */
+function splitEmbeddedIpv4(
+  text: string
+): { text: string; tail: number[] } | null {
+  const lastColon = text.lastIndexOf(":");
+  const candidate = text.slice(lastColon + 1);
+  if (!candidate.includes(".")) return { text, tail: [] };
+
+  const octets = ipv4Octets(candidate);
+  if (!octets) return null;
+  return { text: `${text.slice(0, lastColon + 1)}0:0`, tail: octets };
+}
+
+/**
+ * The sixteen bytes either side of a `::`, with the gap filled.
+ *
+ * The count must come out at exactly sixteen: a `::` standing for zero groups,
+ * or an address with too many, is malformed rather than something to pad or
+ * truncate into shape.
+ */
+function assembleBytes(text: string): number[] | null {
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+
+  const head = parseGroups(halves[0]);
+  const rest = halves.length === 2 ? parseGroups(halves[1]) : [];
+  if (head === null || rest === null) return null;
+
+  if (halves.length !== 2) {
+    return head.length + rest.length === 16 ? [...head, ...rest] : null;
+  }
+
+  // A trailing dotted-quad was replaced by a two-group placeholder before this
+  // point, so its four bytes are already counted in `rest`. Counting them
+  // again shifts everything left, which put the `ffff` of an IPv4-mapped
+  // address six bytes early and let `::ffff:127.0.0.1` through as public.
+  const fill = 16 - head.length - rest.length;
+  if (fill < 0) return null;
+  return [...head, ...Array<number>(fill).fill(0), ...rest];
 }
 
 /** Expand an IPv6 address to its sixteen bytes, or null when it is malformed. */
@@ -89,54 +179,15 @@ function ipv6Bytes(address: string): number[] | null {
   const zone = text.indexOf("%");
   if (zone !== -1) text = text.slice(0, zone);
 
-  // A trailing dotted-quad (`::ffff:127.0.0.1`) is part of the address, so it
-  // is folded into two groups rather than rejected as a stray IPv4.
-  let tail: number[] = [];
-  const lastColon = text.lastIndexOf(":");
-  const maybeV4 = text.slice(lastColon + 1);
-  if (maybeV4.includes(".")) {
-    const octets = ipv4Octets(maybeV4);
-    if (!octets) return null;
-    tail = octets;
-    text = text.slice(0, lastColon + 1) + "0:0";
-  }
+  const embedded = splitEmbeddedIpv4(text);
+  if (!embedded) return null;
+  const { tail } = embedded;
 
-  const halves = text.split("::");
-  if (halves.length > 2) return null;
+  const bytes = assembleBytes(embedded.text);
+  if (!bytes) return null;
 
-  const parse = (part: string): number[] | null => {
-    if (part === "") return [];
-    const groups = part.split(":");
-    const out: number[] = [];
-    for (const group of groups) {
-      if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
-      const value = Number.parseInt(group, 16);
-      out.push((value >> 8) & 0xff, value & 0xff);
-    }
-    return out;
-  };
-
-  const head = parse(halves[0]);
-  const rest = halves.length === 2 ? parse(halves[1]) : [];
-  if (head === null || rest === null) return null;
-
-  let bytes: number[];
-  if (halves.length === 2) {
-    // `tail` is NOT subtracted here: the dotted-quad was replaced above by a
-    // two-group placeholder, so its four bytes are already counted in `rest`.
-    // Subtracting them again shifts everything left, which put the `ffff` of
-    // an IPv4-mapped address six bytes early and let `::ffff:127.0.0.1`
-    // through as an ordinary public address.
-    const fill = 16 - head.length - rest.length;
-    if (fill < 0) return null;
-    bytes = [...head, ...Array<number>(fill).fill(0), ...rest];
-  } else {
-    bytes = [...head, ...rest];
-  }
-  if (bytes.length !== 16) return null;
   // The placeholder occupies the last four bytes; put the real address back.
-  if (tail.length > 0) bytes = [...bytes.slice(0, 12), ...tail];
-  return bytes.length === 16 ? bytes : null;
+  return tail.length > 0 ? [...bytes.slice(0, 12), ...tail] : bytes;
 }
 
 /**

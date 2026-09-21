@@ -61,6 +61,51 @@ function refuse(reason: string, context: Record<string, unknown>): never {
 }
 
 /**
+ * `https:` only, with one exception for a local development server.
+ *
+ * A fake identity provider in a test suite has no certificate, and requiring
+ * one would mean the only way to test a plugin is to turn this off entirely.
+ */
+function assertUsableScheme(
+  url: URL,
+  isLocalhost: boolean,
+  allowLoopback: boolean
+): void {
+  if (url.protocol === "https:") return;
+  if (url.protocol === "http:" && isLocalhost && allowLoopback) return;
+  refuse("scheme", { scheme: url.protocol, host: url.hostname });
+}
+
+/**
+ * Judge EVERY answer, not the one that will be used.
+ *
+ * A name answering with one public address and one internal address is a
+ * rebinding attempt whichever the transport happens to pick, so a single bad
+ * answer refuses the request.
+ */
+function assertAnswersUsable(
+  answers: readonly ResolvedAddress[],
+  url: URL,
+  isLocalhost: boolean,
+  allowLoopback: boolean
+): void {
+  for (const answer of answers) {
+    const verdict = judgeAddress(answer.address);
+    if (verdict.allowed) continue;
+
+    const loopbackInDev =
+      verdict.reason === "loopback" && isLocalhost && allowLoopback;
+    if (loopbackInDev) continue;
+
+    refuse("address-refused", {
+      host: url.hostname,
+      address: answer.address,
+      rule: verdict.reason,
+    });
+  }
+}
+
+/**
  * Check one URL, and return the address to send it to.
  *
  * Exported for the tests, because this is where every refusal is decided and
@@ -75,11 +120,7 @@ export async function vetUrl(
   // would mean the only way to test a plugin is to turn this off entirely.
   const isLocalhost =
     url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (url.protocol !== "https:") {
-    if (!(url.protocol === "http:" && isLocalhost && deps.allowLoopback)) {
-      refuse("scheme", { scheme: url.protocol, host: url.hostname });
-    }
-  }
+  assertUsableScheme(url, isLocalhost, deps.allowLoopback);
 
   if (!hostAllowed(url.hostname, deps.allowlist)) {
     refuse("host-not-declared", { host: url.hostname });
@@ -90,23 +131,7 @@ export async function vetUrl(
     refuse("unresolved", { host: url.hostname });
   }
 
-  // EVERY answer, not the one that will be used. A name answering with one
-  // public address and one internal address is a rebinding attempt whichever
-  // the transport happens to pick.
-  for (const answer of answers) {
-    const verdict = judgeAddress(answer.address);
-    if (!verdict.allowed) {
-      const loopbackInDev =
-        verdict.reason === "loopback" && isLocalhost && deps.allowLoopback;
-      if (!loopbackInDev) {
-        refuse("address-refused", {
-          host: url.hostname,
-          address: answer.address,
-          rule: verdict.reason,
-        });
-      }
-    }
-  }
+  assertAnswersUsable(answers, url, isLocalhost, deps.allowLoopback);
 
   return answers[0];
 }

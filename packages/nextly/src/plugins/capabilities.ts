@@ -46,81 +46,95 @@ function plugins(all: PluginDefinition[]): PluginDefinition[] {
  * Check every plugin's own manifest: the keys it declares, the hosts it names,
  * the secrets it lists, and its schema version.
  */
+/** Refuse a capability key the runtime does not implement. */
+function assertKnownCapabilities(plugin: PluginDefinition): void {
+  for (const key of Object.keys(plugin.capabilities ?? {})) {
+    if (
+      !KNOWN_CAPABILITIES.includes(key as (typeof KNOWN_CAPABILITIES)[number])
+    ) {
+      throw resolutionError(
+        "unknown-capability",
+        `Plugin "${plugin.name}" declares an unknown capability "${key}".`,
+        { plugin: plugin.name, capability: key }
+      );
+    }
+  }
+}
+
+/** Refuse an outbound entry that is not a hostname. */
+function assertOutboundHosts(plugin: PluginDefinition): void {
+  for (const host of plugin.capabilities?.net?.outbound ?? []) {
+    // An IP literal is a valid hostname as far as the pattern is concerned —
+    // every label is digits — so it is refused explicitly. An allowlist is a
+    // statement about WHO a plugin talks to, and an address is not who
+    // anybody is.
+    if (!OUTBOUND_HOST.test(host) || IP_LITERAL.test(host)) {
+      throw resolutionError(
+        "invalid-outbound-host",
+        `Plugin "${plugin.name}" declares an outbound host that is not a hostname: "${host}".`,
+        { plugin: plugin.name, host }
+      );
+    }
+  }
+}
+
+/** Refuse a secret path that is empty, repeated, or absent from the schema. */
+function assertSecretPaths(plugin: PluginDefinition): void {
+  const seen = new Set<string>();
+  for (const path of plugin.capabilities?.secrets ?? []) {
+    if (typeof path !== "string" || path.length === 0) {
+      throw resolutionError(
+        "invalid-secret-path",
+        `Plugin "${plugin.name}" declares an empty secret path.`,
+        { plugin: plugin.name }
+      );
+    }
+    if (seen.has(path)) {
+      throw resolutionError(
+        "invalid-secret-path",
+        `Plugin "${plugin.name}" declares the secret path "${path}" twice.`,
+        { plugin: plugin.name, path }
+      );
+    }
+    seen.add(path);
+
+    // A secret path the schema does not have is a credential stored in plain
+    // text, because nothing matches it on the way in and nothing redacts it
+    // on the way out — and it fails silently, which is the worst way for that
+    // to be wrong.
+    if (!schemaHasPath(plugin, path)) {
+      throw resolutionError(
+        "unknown-secret-path",
+        `Plugin "${plugin.name}" declares the secret path "${path}", which its settings schema does not contain.`,
+        { plugin: plugin.name, path }
+      );
+    }
+  }
+}
+
+/** Refuse a schema version that is not a positive integer. */
+function assertSchemaVersion(plugin: PluginDefinition): void {
+  const version = plugin.schemaVersion;
+  if (version === undefined) return;
+  if (!Number.isInteger(version) || version < 1) {
+    throw resolutionError(
+      "invalid-schema-version",
+      `Plugin "${plugin.name}" declares schemaVersion ${String(version)}; it must be a positive integer.`,
+      { plugin: plugin.name, schemaVersion: version }
+    );
+  }
+}
+
+/**
+ * Check every plugin's own manifest: the keys it declares, the hosts it names,
+ * the secrets it lists, and its schema version.
+ */
 export function validateCapabilities(all: PluginDefinition[]): void {
   for (const plugin of plugins(all)) {
-    const capabilities = plugin.capabilities;
-    if (capabilities) {
-      for (const key of Object.keys(capabilities)) {
-        if (
-          !KNOWN_CAPABILITIES.includes(
-            key as (typeof KNOWN_CAPABILITIES)[number]
-          )
-        ) {
-          throw resolutionError(
-            "unknown-capability",
-            `Plugin "${plugin.name}" declares an unknown capability "${key}".`,
-            { plugin: plugin.name, capability: key }
-          );
-        }
-      }
-
-      for (const host of capabilities.net?.outbound ?? []) {
-        // An IP literal is a valid hostname as far as the pattern is
-        // concerned — every label is digits — so it is refused explicitly.
-        // An allowlist is a statement about WHO a plugin talks to, and an
-        // address is not who anybody is.
-        if (!OUTBOUND_HOST.test(host) || IP_LITERAL.test(host)) {
-          throw resolutionError(
-            "invalid-outbound-host",
-            `Plugin "${plugin.name}" declares an outbound host that is not a hostname: "${host}".`,
-            { plugin: plugin.name, host }
-          );
-        }
-      }
-
-      const secrets = capabilities.secrets ?? [];
-      const seen = new Set<string>();
-      for (const path of secrets) {
-        if (typeof path !== "string" || path.length === 0) {
-          throw resolutionError(
-            "invalid-secret-path",
-            `Plugin "${plugin.name}" declares an empty secret path.`,
-            { plugin: plugin.name }
-          );
-        }
-        if (seen.has(path)) {
-          throw resolutionError(
-            "invalid-secret-path",
-            `Plugin "${plugin.name}" declares the secret path "${path}" twice.`,
-            { plugin: plugin.name, path }
-          );
-        }
-        seen.add(path);
-
-        // A secret path the schema does not have is a credential stored in
-        // plain text, because nothing matches it on the way in and nothing
-        // redacts it on the way out — and it fails silently, which is the
-        // worst way for that to be wrong.
-        if (!schemaHasPath(plugin, path)) {
-          throw resolutionError(
-            "unknown-secret-path",
-            `Plugin "${plugin.name}" declares the secret path "${path}", which its settings schema does not contain.`,
-            { plugin: plugin.name, path }
-          );
-        }
-      }
-    }
-
-    if (plugin.schemaVersion !== undefined) {
-      const version = plugin.schemaVersion;
-      if (!Number.isInteger(version) || version < 1) {
-        throw resolutionError(
-          "invalid-schema-version",
-          `Plugin "${plugin.name}" declares schemaVersion ${String(version)}; it must be a positive integer.`,
-          { plugin: plugin.name, schemaVersion: version }
-        );
-      }
-    }
+    assertKnownCapabilities(plugin);
+    assertOutboundHosts(plugin);
+    assertSecretPaths(plugin);
+    assertSchemaVersion(plugin);
   }
 }
 

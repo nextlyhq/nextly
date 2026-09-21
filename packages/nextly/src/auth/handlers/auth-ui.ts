@@ -52,6 +52,29 @@ export function isSameOriginPath(href: string): boolean {
   return true;
 }
 
+/**
+ * The providers whose buttons can safely be rendered.
+ *
+ * One with an unusable `href` is dropped rather than failing boot: a single bad
+ * button should not stop a site from starting, and a provider missing from the
+ * login page is a visible failure an operator can act on.
+ */
+function usableProviders(
+  pluginName: string,
+  providers: readonly AuthUiProvider[]
+): AuthUiProvider[] {
+  return providers.filter(provider => {
+    if (provider.href === undefined || isSameOriginPath(provider.href)) {
+      return true;
+    }
+    console.warn(
+      `[nextly] Ignoring provider "${provider.strategy}" from ${pluginName}: ` +
+        `href must be a same-origin path beginning with a single "/".`
+    );
+    return false;
+  });
+}
+
 /** Fold every plugin's `contributes.auth.ui` into one served {@link AuthUiMeta}. */
 export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
   const meta: AuthUiMeta = {
@@ -62,21 +85,7 @@ export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
   for (const plugin of plugins) {
     const ui = plugin.contributes?.auth?.ui;
     if (!ui) continue;
-    if (ui.providers) {
-      for (const provider of ui.providers) {
-        if (provider.href !== undefined && !isSameOriginPath(provider.href)) {
-          // Dropped rather than refused at boot: one bad button should not
-          // stop a site from starting, and a provider the login page never
-          // shows is a visible failure the operator can act on.
-          console.warn(
-            `[nextly] Ignoring provider "${provider.strategy}" from ${plugin.name}: ` +
-              `href must be a same-origin path beginning with a single "/".`
-          );
-          continue;
-        }
-        meta.providers.push(provider);
-      }
-    }
+    meta.providers.push(...usableProviders(plugin.name, ui.providers ?? []));
     if (ui.challengeViews)
       Object.assign(meta.challengeViews, ui.challengeViews);
     if (ui.slots?.beforeForm) meta.slots.beforeForm.push(ui.slots.beforeForm);
