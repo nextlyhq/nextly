@@ -600,7 +600,14 @@ function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" ? value : fallback;
 }
 
-function readAuthRateLimit(getService: (name: string) => unknown): {
+/**
+ * The configured per-IP auth limit.
+ *
+ * Exported so a plugin route opting into `rateLimit: "auth"` uses the same
+ * limit and window as core's, rather than a second set of numbers that can
+ * drift from it.
+ */
+export function readAuthRateLimit(getService: (name: string) => unknown): {
   requestsPerHour: number;
   windowMs: number;
   store?: RateLimitStore;

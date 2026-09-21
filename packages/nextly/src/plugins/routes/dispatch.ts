@@ -22,6 +22,12 @@ import type { PluginSelf } from "../self";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
 import { buildPluginRouteCaller } from "./route-caller";
+import {
+  checkRouteCsrf,
+  csrfApplies,
+  rateLimitKey,
+  shouldNotStore,
+} from "./route-options";
 import { resolveRoutePermission } from "./route-permission";
 import type { RouteMatch } from "./route-registry";
 import type {
@@ -238,6 +244,127 @@ export function pluginRouteAuthRequired(
 }
 
 /**
+ * Apply the route's rate limit, returning the refusal when it trips.
+ *
+ * The bucket is the plugin's own: sharing core's `/auth/*` bucket would let a
+ * plugin's traffic exhaust the budget that protects core's login, and the
+ * reverse.
+ */
+async function applyRouteRateLimit(
+  req: Request,
+  matched: RouteMatch
+): Promise<Response | null> {
+  if (matched.route.rateLimit !== "auth") return null;
+
+  const { authRateLimiter } = await import(
+    "../../auth/middleware/rate-limiter"
+  );
+  const { getTrustedClientIp } = await import(
+    "../../utils/get-trusted-client-ip"
+  );
+  const { readProxyTrustSettings } = await import("../../utils/proxy-trust");
+  const { getService } = await import("../../di/register");
+
+  const trust = readProxyTrustSettings(() => getService("config"));
+  const ip = getTrustedClientIp(req, trust) ?? "unknown";
+  const key = rateLimitKey(matched.route, matched.pluginName, ip);
+  if (!key) return null;
+
+  const { readAuthRateLimit } = await import("../../auth/handlers/deps-bridge");
+  const configured = readAuthRateLimit(getService as (n: string) => unknown);
+  // Same limit and window as core's auth routes, in this plugin's own bucket.
+  const limiter = authRateLimiter(configured.store);
+  const verdict = await limiter.check(
+    key,
+    configured.requestsPerHour,
+    configured.windowMs
+  );
+  if (verdict.allowed) return null;
+
+  const retryAfter = Math.max(
+    1,
+    Math.ceil((verdict.resetAt.getTime() - Date.now()) / 1000)
+  );
+
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: "RATE_LIMITED",
+        message: "Too many requests. Please try again later.",
+      },
+    }),
+    {
+      status: 429,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "Retry-After": String(retryAfter),
+      },
+    }
+  );
+}
+
+/** Check the route's CSRF requirement, returning the refusal when it fails. */
+async function applyRouteCsrf(
+  req: Request,
+  matched: RouteMatch
+): Promise<Response | null> {
+  if (!csrfApplies(matched.route, req)) return null;
+
+  // Read without consuming: the handler still needs the body. A clone is the
+  // only way to look at it twice.
+  let body: Record<string, unknown> | undefined;
+  try {
+    const parsed: unknown = await req.clone().json();
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      body = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // A body that is not JSON carries no token; the header is still checked.
+    body = undefined;
+  }
+
+  const { env } = await import("../../lib/env");
+  const result = checkRouteCsrf(
+    matched.route,
+    req,
+    body,
+    env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? []
+  );
+  if (result.valid) return null;
+
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: "CSRF_FAILED",
+        message: result.error ?? "CSRF check failed.",
+      },
+    }),
+    {
+      status: 403,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      },
+    }
+  );
+}
+
+/** Add `Cache-Control: no-store` when the route asked for it. */
+function withNoStore(response: Response, route: PluginRoute): Response {
+  if (!shouldNotStore(route) || response.headers.has("cache-control")) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error
@@ -262,6 +389,14 @@ export async function runPluginRoute(
     );
   }
 
+  // Before the handler: a rate limit that runs after the work it is limiting
+  // has already paid for the request it meant to refuse.
+  const limited = await applyRouteRateLimit(req, matched);
+  if (limited) return markPluginResponse(limited, matched.route);
+
+  const csrf = await applyRouteCsrf(req, matched);
+  if (csrf) return markPluginResponse(csrf, matched.route);
+
   const ctx: PluginRouteContext = {
     ...matched.baseCtx,
     user: auth.user,
@@ -282,10 +417,11 @@ export async function runPluginRoute(
     // existed composes `{ as: "user", user }` by hand: an opt-in field leaves
     // all of them authorizing the key as its owner, and leaves every read and
     // write they make looking like background work to a hook.
+    const response = await runWithRequestScope(req, () =>
+      runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+    );
     return markPluginResponse(
-      await runWithRequestScope(req, () =>
-        runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
-      ),
+      withNoStore(response, matched.route),
       matched.route
     );
   } catch (err) {
