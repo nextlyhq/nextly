@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../errors/nextly-error";
 import { definePlugin } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
@@ -125,8 +126,17 @@ describe("onReady", () => {
       },
     });
 
-    await expect(createTestNextly({ plugins: [boom] })).rejects.toThrow(
-      /@test\/boom.*onReady/
+    // The plugin's name is in the log context rather than the public message:
+    // a boot failure reaches an operator through the log, and NextlyError
+    // keeps the public text generic on purpose.
+    await expect(createTestNextly({ plugins: [boom] })).rejects.toSatisfy(
+      (err: unknown) => {
+        if (!NextlyError.is(err)) return false;
+        const ctx = err.logContext as { reason?: string; plugin?: string };
+        return (
+          ctx.reason === "plugin-onready-failed" && ctx.plugin === "@test/boom"
+        );
+      }
     );
   });
 
