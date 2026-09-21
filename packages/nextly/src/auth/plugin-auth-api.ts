@@ -17,11 +17,14 @@ import {
 } from "../domains/audit/audit-log-writer";
 import { auditReason } from "../domains/audit/audit-reasons";
 import { NextlyError } from "../errors/nextly-error";
+import { env } from "../lib/env";
 import type { PluginContext } from "../plugins/plugin-context";
 import type { AuthUser } from "../types/auth";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 import { setPendingCookie } from "./cookies/pending-cookie";
+import { readCsrfCookie, readCsrfFromRequest } from "./csrf/csrf-cookie";
+import { validateCsrf } from "./csrf/validate";
 import { mintSession, type IssueSessionDeps } from "./handlers/issue-session";
 import type { AuthHookRegistry } from "./pipeline/hooks";
 import {
@@ -73,6 +76,17 @@ export interface PluginAuthApi {
    * so the typed-token rules apply and no plugin parses the cookie itself.
    */
   currentUser(request: Request): Promise<{ id: string; email: string } | null>;
+  /**
+   * Check the double-submit CSRF token on a request.
+   *
+   * For a handler that needs the check CONDITIONALLY — a route serving both a
+   * browser form and an API key, say — where the route-level `csrf` option
+   * would apply it to both. Uses the same validation as core's own routes, so
+   * a plugin never writes a second implementation of it.
+   */
+  verifyCsrf(
+    request: Request
+  ): { valid: true } | { valid: false; reason: string };
 }
 
 /** Everything `completeLogin` needs, resolved lazily so services can initialise first. */
@@ -282,6 +296,18 @@ export function createPluginAuthApi(
         });
         return redirectWithCookies(SIGNIN_FAILED_PATH, extra);
       }
+    },
+
+    verifyCsrf(request) {
+      const result = validateCsrf(
+        request,
+        readCsrfCookie(request),
+        readCsrfFromRequest({}, request),
+        env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? []
+      );
+      return result.valid
+        ? { valid: true }
+        : { valid: false, reason: result.error ?? "csrf-failed" };
     },
 
     async currentUser(request) {

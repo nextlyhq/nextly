@@ -613,3 +613,11 @@ export {
   type PluginWidgetSource,
   type ReadCaller,
 } from "nextly";
+
+// Where a finished login may land. Re-exported so a plugin never keeps its own
+// copy of a rule that decides whether a redirect is an open one.
+export { sanitizeAdminPath, DEFAULT_ADMIN_PATH } from "nextly";
+
+// Reading what other plugins declared. P3 needs it to discover identity
+// providers, and a plugin may import only from the SDK.
+export { collectDeclarations, type PluginDeclaration } from "nextly";
