@@ -91,16 +91,6 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       return respondData({ hasPassword: result });
     },
   },
-  getAccounts: {
-    execute: async (svc, p) => {
-      const accounts = await svc.getAccounts(
-        requireParam(p, "userId", "UserId")
-      );
-      // Non-paginated list — use respondData with a named field rather
-      // than respondList (which would require synthetic pagination meta).
-      return respondData({ accounts });
-    },
-  },
   createLocalUser: {
     execute: async (svc, p, body) => {
       const b = requireBodyField<{ email: string; password?: unknown }>(
@@ -159,18 +149,6 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         throw new Error("UserId and passwordHash are required");
       await svc.updatePasswordHash(p.userId, b.passwordHash);
       return respondAction("Password hash updated.");
-    },
-  },
-  unlinkAccountForUser: {
-    execute: async (svc, p) => {
-      if (!p.userId || !p.provider || !p.providerAccountId) {
-        throw new Error("UserId, provider, and providerAccountId are required");
-      }
-      await svc.unlinkAccountForUser(p.userId, p.provider, p.providerAccountId);
-      return respondAction("Account unlinked.", {
-        provider: p.provider,
-        providerAccountId: p.providerAccountId,
-      });
     },
   },
   getUserPasswordHashById: {

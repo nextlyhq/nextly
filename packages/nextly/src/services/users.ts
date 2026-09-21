@@ -37,11 +37,7 @@ import type { UserConfig } from "../users/config/types";
 import { BaseService } from "./base-service";
 import type { EmailService } from "./email/email-service";
 import type { Logger } from "./shared";
-import {
-  UserAccountService,
-  type GetAccountsResponse,
-  type UnlinkAccountResult,
-} from "./users/user-account-service";
+import { UserAccountService } from "./users/user-account-service";
 import type { UserExtSchemaService } from "./users/user-ext-schema-service";
 import {
   UserMutationService,
@@ -292,47 +288,4 @@ export class UsersService extends BaseService {
   // ========================================
   // Account Operations (delegated to UserAccountService)
   // ========================================
-
-  /**
-   * Get all OAuth accounts linked to a user.
-   *
-   * PR 4: returns the array directly. Throws NextlyError on failure.
-   */
-  async getAccounts(userId: number | string): Promise<GetAccountsResponse> {
-    return this.accountService.getAccounts(userId);
-  }
-
-  /**
-   * Delete a specific OAuth account
-   */
-  async deleteUserAccount(
-    userId: number | string,
-    provider: string,
-    providerAccountId: string
-  ): Promise<number> {
-    return this.accountService.deleteUserAccount(
-      userId,
-      provider,
-      providerAccountId
-    );
-  }
-
-  /**
-   * Unlink an OAuth account from a user.
-   *
-   * Note: this method intentionally returns a discriminated union rather
-   * than throwing — callers branch on `.ok` (see UserAccountService for
-   * rationale). It does NOT follow the throw-based pattern.
-   */
-  async unlinkAccountForUser(
-    userId: number | string,
-    provider: string,
-    providerAccountId: string
-  ): Promise<UnlinkAccountResult> {
-    return this.accountService.unlinkAccountForUser(
-      userId,
-      provider,
-      providerAccountId
-    );
-  }
 }

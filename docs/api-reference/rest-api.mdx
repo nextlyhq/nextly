@@ -203,8 +203,6 @@ The catch-all dispatches every URL under `/api/` to one of these endpoint groups
 | `PATCH` | `/api/users/{id}` | Update user. | `update-users` |
 | `DELETE` | `/api/users/{id}` | Delete user. | `delete-users` |
 | `PATCH` | `/api/users/{id}/password` | Set password hash directly. | `update-users` |
-| `GET` | `/api/users/{id}/accounts` | List linked accounts. | `read-users` |
-| `DELETE` | `/api/users/{id}/accounts/{provider}/{providerAccountId}` | Unlink account. | `update-users` |
 | `GET` | `/api/users/{id}/roles` | List user roles. | `read-roles` |
 | `POST` | `/api/users/{id}/roles` | Assign role to user. | `update-users` |
 | `DELETE` | `/api/users/{id}/roles/{roleId}` | Unassign role. | `update-users` |

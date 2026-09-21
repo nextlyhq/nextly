@@ -242,36 +242,6 @@ function parseUserRoutes(
     };
   }
 
-  if (id && subresource === "accounts" && !subId && httpMethod === "GET") {
-    // GET /api/users/123/accounts → list user accounts
-    routeParams.userId = id;
-    return {
-      service: "users",
-      operation: "single",
-      method: "getAccounts",
-      routeParams,
-    };
-  }
-
-  if (
-    id &&
-    subresource === "accounts" &&
-    subId &&
-    additionalParams[0] &&
-    httpMethod === "DELETE"
-  ) {
-    // DELETE /api/users/123/accounts/github/123456 → unlink account
-    routeParams.userId = id;
-    routeParams.provider = subId;
-    routeParams.providerAccountId = additionalParams[0];
-    return {
-      service: "users",
-      operation: "update",
-      method: "unlinkAccountForUser",
-      routeParams,
-    };
-  }
-
   if (id && subresource === "roles" && !subId && httpMethod === "POST") {
     // POST /api/users/123/roles → assign role to user
     routeParams.userId = id;
