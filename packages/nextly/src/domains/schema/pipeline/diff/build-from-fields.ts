@@ -27,6 +27,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
@@ -38,11 +39,12 @@ import {
 import {
   columnTypeIsIndexable,
   indexNameForColumn,
+  indexNameForColumns,
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../services/index-name";
 
-import { indexKey } from "./index-util";
+import { indexKey, isManagedIndexName } from "./index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "./types";
 
 /**
@@ -93,6 +95,13 @@ export interface BuildDesiredTableOptions {
    * and the diff has to describe the column the way whatever built it did.
    */
   builtBy: ColumnOrigin;
+  /**
+   * Compound indexes the entity's config declared.
+   *
+   * Code-first entities only: registry rows (Builder-created entities) store
+   * no indexes, so a Builder collection cannot declare one in v1.
+   */
+  indexes?: readonly DeclaredIndex[];
 }
 
 /**
@@ -104,6 +113,20 @@ export interface BuildDesiredTableOptions {
  * runtime-schema-generator's behavior — the descriptor module owns that list.
  */
 /** Inputs the index rules need that only the caller can determine. */
+/**
+ * A compound index an entity declared in its config, or that a schema hook
+ * contributed to an entity table.
+ *
+ * Named separately from `IndexConfig` so the diff layer does not import the
+ * collections config surface: this is the shape, whoever supplied it.
+ */
+export interface DeclaredIndex {
+  /** FIELD names as authored. Order is significant. */
+  fields: string[];
+  unique?: boolean;
+  name?: string;
+}
+
 interface CollectionIndexContext<F> {
   hasSlugColumn: boolean;
   hasCreatedAtColumn: boolean;
@@ -119,6 +142,21 @@ interface CollectionIndexContext<F> {
    * change would otherwise produce indexes naming columns that do not exist.
    */
   columnNameFor: (field: F) => string | null;
+  /**
+   * Compound indexes the config declared, which nothing emitted before.
+   *
+   * `CollectionConfig.indexes` has been validated and then discarded since it
+   * was added, so an app that declared one has been running without it.
+   */
+  declaredIndexes?: readonly DeclaredIndex[];
+  /**
+   * The logical kind of the column a field materialises.
+   *
+   * Needed because a declared index is refused for ALL THREE dialects rather
+   * than the live one: an index that only works where its author develops is a
+   * deployment failure with no local reproduction.
+   */
+  columnKindFor?: (field: F) => string | null;
   /**
    * Whether an index on this column can exist at all, asked per column.
    *
@@ -228,7 +266,106 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       });
     }
   }
+  indexes.push(...declaredIndexSpecs(tableName, fields, context));
   return dedupeIndexes(indexes);
+}
+
+/** Kinds no dialect can key without a prefix length the model cannot express. */
+const UNKEYABLE_KINDS = new Set(["json", "longText"]);
+
+/**
+ * The specs for indexes the config DECLARED, as opposed to those derived from
+ * individual fields.
+ *
+ * Refused rather than skipped when a field cannot carry one. Skipping would
+ * mean an author writes a unique compound index, sees no error, and discovers
+ * on the first duplicate row that it was never created.
+ */
+function declaredIndexSpecs<F extends MinimalFieldDef>(
+  tableName: string,
+  fields: readonly F[],
+  context: CollectionIndexContext<F>
+): IndexSpec[] {
+  const declared = context.declaredIndexes ?? [];
+  if (declared.length === 0) return [];
+
+  return declared.map(entry => {
+    const path = `${tableName}.indexes`;
+    if (entry.fields.length === 0) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path,
+            code: "INVALID",
+            message: "An index must name at least one field.",
+          },
+        ],
+      });
+    }
+    if (entry.name !== undefined && !isManagedIndexName(entry.name)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path,
+            code: "INVALID",
+            message: `An explicit index name must start with "idx_" or "uq_"; "${entry.name}" would never be reconciled by the diff engine.`,
+          },
+        ],
+      });
+    }
+
+    const columns = entry.fields.map(fieldName =>
+      declaredIndexColumn(tableName, fieldName, fields, context)
+    );
+    return {
+      name:
+        entry.name ??
+        indexNameForColumns(tableName, columns, entry.unique === true),
+      columns,
+      unique: entry.unique === true,
+    };
+  });
+}
+
+/** The column one declared index field resolves to, or a refusal. */
+function declaredIndexColumn<F extends MinimalFieldDef>(
+  tableName: string,
+  fieldName: string,
+  fields: readonly F[],
+  context: CollectionIndexContext<F>
+): string {
+  const refuse = (message: string): never => {
+    throw NextlyError.validation({
+      errors: [{ path: `${tableName}.indexes`, code: "INVALID", message }],
+    });
+  };
+
+  const field = fields.find(f => f.name === fieldName);
+  if (!field) {
+    return refuse(
+      `Index names the field "${fieldName}", which this entity does not declare.`
+    );
+  }
+  // A localized field's column lives in the migration-owned `_locales` table,
+  // so an index on it here would name a column this table does not have.
+  if (context.localizedNames.has(fieldName)) {
+    return refuse(
+      `Index names the localized field "${fieldName}", whose column lives in the companion "_locales" table.`
+    );
+  }
+  const column = context.columnNameFor(field);
+  if (column === null) {
+    return refuse(
+      `Index names the field "${fieldName}", which materialises no column on this table.`
+    );
+  }
+  const kind = context.columnKindFor?.(field);
+  if (kind !== undefined && kind !== null && UNKEYABLE_KINDS.has(kind)) {
+    return refuse(
+      `Index names the field "${fieldName}", whose "${kind}" column cannot be keyed on every dialect. Use a bounded text field.`
+    );
+  }
+  return column;
 }
 
 export function buildDesiredTableFromFields(
@@ -333,6 +470,15 @@ export function buildDesiredTableFromFields(
         dialect,
         options.builtBy
       )?.name ?? null,
+    columnKindFor: field =>
+      getColumnDescriptor(
+        field as unknown as Parameters<typeof getColumnDescriptor>[0],
+        dialect,
+        options.builtBy
+      )?.kind ?? null,
+    ...(options.indexes !== undefined
+      ? { declaredIndexes: options.indexes }
+      : {}),
   });
 
   return { name: tableName, columns, indexes };

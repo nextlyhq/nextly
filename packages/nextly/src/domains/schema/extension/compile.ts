@@ -27,6 +27,7 @@ import { sqliteTable } from "drizzle-orm/sqlite-core";
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { currentTimestampSql } from "../../../lib/system-columns";
+import { isManagedIndexName } from "../pipeline/diff/index-util";
 import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
 import type { ColumnDescriptor } from "../services/field-column-descriptor";
 import { renderDialectType } from "../services/field-column-descriptor";
@@ -34,15 +35,6 @@ import { indexNameForColumns } from "../services/index-name";
 import { buildUserDrizzleColumn } from "../services/runtime-schema-generator";
 
 import type { ExtensionColumn, ExtensionIndex, ExtensionTable } from "./types";
-
-/**
- * The prefixes the diff engine will manage.
- *
- * `diffIndexes` only ever drops or re-creates a name matching one of these
- * (`isManagedIndexName`), so an index named anything else would be created once
- * and then never reconciled again — invisible to drift, undroppable.
- */
-const MANAGED_INDEX_PREFIXES = ["idx_", "uq_"] as const;
 
 function invalid(path: string, message: string): never {
   throw NextlyError.validation({
@@ -99,7 +91,10 @@ export function resolveIndexName(table: string, index: ExtensionIndex): string {
   if (index.name === undefined) {
     return indexNameForColumns(table, index.columns, index.unique);
   }
-  if (!MANAGED_INDEX_PREFIXES.some(prefix => index.name?.startsWith(prefix))) {
+  // Asked of the diff engine's own rule rather than restated: `diffIndexes`
+  // drops and re-creates exactly the names `isManagedIndexName` accepts, so a
+  // second list here could accept a name the diff would then ignore forever.
+  if (!isManagedIndexName(index.name)) {
     invalid(
       `${table}.indexes[${index.columns.join(",")}]`,
       `An explicit index name must start with "idx_" or "uq_"; "${index.name}" would never be reconciled by the diff engine.`

@@ -40,6 +40,7 @@ import { writeCompanionMigrationFile } from "../../i18n/migration/write-migratio
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
+  type DeclaredIndex,
 } from "../pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
@@ -95,6 +96,14 @@ export interface MinimalConfigEntity {
   slug: string;
   tableName: string;
   fields: MinimalConfigField[];
+  /**
+   * Compound indexes declared in the entity's config.
+   *
+   * Carried here because this mapper feeds BOTH `migrate:create` and
+   * `migrate:check`. Dropping it from one would make the generator write an
+   * index the checker then reports as drift, on every run.
+   */
+  indexes?: readonly DeclaredIndex[];
   /**
    * Whether the entity has Nextly's built-in Draft/Published lifecycle
    * enabled (`defineCollection({ status: true })` /
@@ -642,6 +651,7 @@ export function buildDesiredSnapshotFromConfig(
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
+          ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
         dialect
@@ -659,6 +669,7 @@ export function buildDesiredSnapshotFromConfig(
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
           localized: c.localized === true,
+          ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
         dialect
