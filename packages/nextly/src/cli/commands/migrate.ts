@@ -52,6 +52,7 @@ import {
   SchemaEventsRepository,
   truncateErrorMessage,
 } from "../../domains/schema/events/schema-events-repository";
+import { getActiveExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
@@ -529,6 +530,32 @@ export function installRegistryResolver(
 }
 
 /**
+ * Refuse to migrate while a plugin declares tables of its own.
+ *
+ * Plugin-owned tables reach a database through dev push today; the migrations
+ * that would carry them to production arrive with plugin migrations. Until
+ * then this fails LOUDLY, because the alternative is a migration run that
+ * reports success having created none of them — and the first sign of that is
+ * a query against a table nothing ever made.
+ */
+function assertNoPluginOwnedTables(dialect: SupportedDialect): void {
+  const owners = getActiveExtensionSchema(dialect)?.owners;
+  if (!owners) return;
+
+  const pluginTables = [...owners.entries()]
+    .filter(([, owner]) => owner.kind === "plugin")
+    .map(([name]) => name);
+  if (pluginTables.length === 0) return;
+
+  throw new NextlyError({
+    code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
+    publicMessage:
+      "Plugin-owned tables cannot be applied by migrations yet. They are created by development push; plugin migrations arrive in a later release.",
+    logContext: { tables: pluginTables },
+  });
+}
+
+/**
  * Say what Phase 3 did, and what it could not do.
  *
  * Extracted from the command body because the reporting is four independent
@@ -607,6 +634,13 @@ function reportMetadataOutcome(
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
+  // Refused HERE rather than in `runMigrate`, because this function is also
+  // reached from `runMigrationsOnBoot` and from boot-apply. A refusal in the
+  // command alone would let a production boot apply migrations that silently
+  // skip every plugin-owned table, and the first failure would be a query
+  // against a table nothing created.
+  assertNoPluginOwnedTables(deps.dialect);
+
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
   const reconcileMetadata =
