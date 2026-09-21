@@ -28,6 +28,8 @@ import type {
 } from "../../domains/i18n/config/types";
 import type { JobDefinition } from "../../domains/jobs/job-registry";
 import type { PreviewConfig } from "../../domains/preview/route-config";
+import type { DrizzleSchemaHook } from "../../domains/schema/extension/after-drizzle";
+import type { SchemaHook } from "../../domains/schema/extension/draft";
 import { resolveWebhookRetentionConfig } from "../../domains/webhooks/retention-config";
 import type {
   ResolvedWebhookRetentionConfig,
@@ -89,6 +91,20 @@ export interface TypeScriptConfig {
  * Controls where Drizzle schemas and migration files are generated.
  */
 export interface DatabaseConfig {
+  /**
+   * @experimental Tables, indexes and per-dialect shaping of your own.
+   *
+   * `extend` hooks run after every plugin's, so the app sees the whole schema
+   * and can react to it. `afterDrizzle` is the escape hatch for a column type
+   * the neutral model has no word for; anything it declares that migrations
+   * and drift detection cannot carry is refused at boot rather than lost
+   * silently.
+   */
+  schema?: {
+    extend?: SchemaHook[];
+    afterDrizzle?: DrizzleSchemaHook[];
+  };
+
   /**
    * Directory for generated Drizzle schema files.
    * Each collection generates a separate schema file.
@@ -856,6 +872,9 @@ export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
  * Default database configuration values.
  */
 export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
+  // An empty object rather than undefined, so a caller can read
+  // `db.schema.extend` without a guard and get an empty list.
+  schema: {},
   schemasDir: "./src/db/schemas/collections",
   migrationsDir: "./src/db/migrations",
   uiSchemaFile: "./ui-schema.json",
@@ -974,6 +993,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       declare: config.typescript?.declare ?? DEFAULT_TYPESCRIPT_CONFIG.declare,
     },
     db: {
+      schema: {
+        extend: config.db?.schema?.extend ?? [],
+        afterDrizzle: config.db?.schema?.afterDrizzle ?? [],
+      },
       schemasDir: config.db?.schemasDir ?? DEFAULT_DB_CONFIG.schemasDir,
       migrationsDir:
         config.db?.migrationsDir ?? DEFAULT_DB_CONFIG.migrationsDir,

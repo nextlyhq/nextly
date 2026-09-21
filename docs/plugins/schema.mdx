@@ -136,3 +136,144 @@ is why declaring everything through `contributes` (rather than hand-writing tabl
 > behind on uninstall — document it, or avoid it.
 
 See also: [Data access](/docs/plugins/services) · [Testing](/docs/plugins/testing).
+
+## Tables of your own
+
+A collection gives you REST routes, admin screens, validation and access
+control. Sometimes you want none of that — a join table, a cache, a log a user
+never sees — and a collection is the wrong shape for it.
+
+Declare a table instead:
+
+```ts
+import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
+
+const identities = defineTable(
+  "identities",
+  {
+    id: col.id(),
+    provider: col.shortText(),
+    providerAccountId: col.shortText(),
+    userId: col.ref("users"),
+    lastSeenAt: col.timestamp({ nullable: true }),
+    ...col.timestamps(),
+  },
+  {
+    indexes: [
+      { columns: ["provider", "providerAccountId"], unique: true },
+      { columns: ["userId"] },
+    ],
+  }
+);
+
+definePlugin({
+  name: "@acme/nextly-plugin-auth",
+  contributes: {
+    schema: { prefix: "auth", tables: [identities] },
+  },
+});
+```
+
+That table is created as `auth__identities`. The prefix is yours; declare it,
+or let it default to your plugin's admin slug.
+
+### The column kinds
+
+`text`, `shortText`, `longText`, `varchar(n)`, `boolean`, `integer`, `double`,
+`decimal(p, s)`, `timestamp`, `json<T>()`, plus two conveniences: `col.id()` (a
+`varchar(36)` filled with a UUIDv7) and `col.timestamps()` (`created_at` and
+`updated_at`, both maintained for you).
+
+The list is deliberately short. Every kind here renders on PostgreSQL, MySQL
+and SQLite, so a table you declare works on all three — what cannot be
+expressed cannot drift between them.
+
+## Reading and writing
+
+`ctx.db` is typed from your declaration. No codegen step, and a renamed column
+is a compile error rather than an `undefined` at runtime.
+
+```ts
+await ctx.db.insert(identities, {
+  provider: "github",
+  providerAccountId: "12345",
+  userId: user.id,
+});
+
+const existing = await ctx.db
+  .select(identities)
+  .where(eq(ctx.db.table(identities).provider, "github"))
+  .first();
+```
+
+`id` is filled when you omit it, and `updated_at` is refreshed on every
+update. Insert and read back in one step with `insertReturning`, which works
+the same on all three dialects — MySQL has no `RETURNING`, so the portable
+path is the only path.
+
+Use `isUniqueViolation(err)` to tell "this row already exists" from "the
+database is broken". Both arrive as the same thrown object.
+
+## Hooks, when a declaration is not enough
+
+`contributes.schema.extend` runs after every plugin before you in dependency
+order, so you can react to what they declared:
+
+```ts
+contributes: {
+  schema: {
+    extend: [
+      ({ schema }) => {
+        schema.extendTable("dc_posts", {
+          indexes: [{ columns: ["authorId", "publishedAt"] }],
+        });
+      },
+    ],
+  },
+}
+```
+
+The declarative `tables` form is sugar for a hook calling `addTable`. They
+produce identical output.
+
+## What you may change
+
+| Target | Columns | Indexes |
+| --- | --- | --- |
+| Your own tables | yes | yes |
+| A dependency's tables | no | no |
+| Entity tables (`dc_*`, `single_*`, `comp_*`) | no — use `contributes.extend` | yes |
+| Core tables (`nextly_*`, `users`, `media`) | no | no |
+
+Columns on an entity table are refused even to the app. Entity reads select
+the whole table, so a raw column would either leak into API responses or be
+proposed as a `DROP` by dev push. `contributes.extend` gives the same column
+REST, admin, validation and access control as well.
+
+## What is deliberately unsupported
+
+Foreign keys, check constraints, partial and expression indexes, views, and
+native enums. The diff engine cannot express any of them, so a constraint you
+declared would exist on your machine and on no deployment — which is worse
+than not having it. `col.ref()` records a reference for documentation and
+validation; it creates no database constraint.
+
+Drizzle relational queries (`db.query.x.findMany({ with })`) do not work over
+extension tables. Use joins through `select`.
+
+## Access rules
+
+You may reach your own tables and the tables of plugins you named in
+`dependsOn`. Nothing else. Core tables stay behind `ctx.services`, where access
+control, validation and hooks apply.
+
+`dependsOn` is what makes a cross-plugin read legitimate rather than
+incidental: it lets the resolver order the two plugins and refuse an
+incompatible version.
+
+## Production
+
+Plugin-owned tables are created by development push today. Running migrations
+while a plugin declares tables fails with `PLUGIN_MIGRATIONS_UNAVAILABLE`,
+deliberately and loudly — the alternative is a migration run that reports
+success having created none of them.

@@ -230,6 +230,10 @@
     "./api/jobs-list-types": {
       "types": "./dist/api/jobs-list-types.d.ts",
       "import": "./dist/api/jobs-list-types.mjs"
+    },
+    "./schema-extension": {
+      "types": "./dist/schema-extension.d.ts",
+      "import": "./dist/schema-extension.mjs"
     }
   },
   "files": [

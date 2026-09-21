@@ -90,6 +90,7 @@ const clientEntries = [
   // Re-exports of Drizzle's query operators, so a plugin uses CORE's instance
   // rather than a second copy whose internal symbols do not match.
   "src/db-operators.ts",
+  "src/schema-extension.ts",
   "src/next.ts",
   "src/field-group-type.ts",
   // Types only, consumed by the admin's reconcile surface. Contributes no runtime code.

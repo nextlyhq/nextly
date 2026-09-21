@@ -34,6 +34,7 @@ import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
+import { schemaFixturePlugin } from "./src/plugins/schema-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
@@ -100,6 +101,10 @@ export default defineConfig({
   // is a test double listed among real plugins, and it injects a showcase
   // section into the Posts collection list, both of which read as product.
   plugins: [
+    // The schema fixture creates real tables, so it is registered only when
+    // asked for. A contributor running the harness to look at something else
+    // should not find `fx__notes` in their database.
+    ...(process.env.NEXTLY_SCHEMA_FIXTURE === "1" ? [schemaFixturePlugin] : []),
     // The style defaults tier: the same object the public block routes hand to
     // `loadSiteStyle`, so the validator, the canvas and the published page all
     // read one statement of this site's breakpoints.

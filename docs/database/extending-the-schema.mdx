@@ -1,0 +1,147 @@
+---
+title: Extending the schema
+description: Add tables and indexes of your own with a dialect-neutral DSL, ordered hooks, and a per-dialect escape hatch that refuses what migrations cannot carry.
+---
+
+# Extending the schema
+
+Your collections and singles become tables automatically. This page is about
+the rest: a join table, a cache, an index the schema pipeline would not have
+thought to create.
+
+## Three ways in
+
+| You want | Use |
+| --- | --- |
+| A field on an existing entity, with REST, admin and validation | `contributes.extend` (plugins) or the collection's own `fields` |
+| A table of your own, portable across all three dialects | `db.schema.extend` with the DSL |
+| A column or type only one dialect has | `db.schema.afterDrizzle` |
+
+## A table of your own
+
+```ts
+import { col, defineTable } from "nextly/schema-extension";
+
+const auditTrail = defineTable(
+  "audit_trail",
+  {
+    id: col.id(),
+    actorId: col.ref("users"),
+    action: col.shortText(),
+    payload: col.json<{ before?: unknown; after?: unknown }>({
+      nullable: true,
+    }),
+    ...col.timestamps(),
+  },
+  { indexes: [{ columns: ["actorId", "createdAt"] }] }
+);
+
+export default defineConfig({
+  db: {
+    schema: {
+      extend: [
+        ({ schema }) => {
+          schema.addTable(auditTrail);
+        },
+      ],
+    },
+  },
+});
+```
+
+App tables carry no prefix, and they go into your migrations like any other
+table.
+
+## Indexes on your collections
+
+`indexes` on a collection config now reaches the database. If you declared one
+before and never saw it, the next dev push or `migrate:create` will add it.
+
+```ts
+defineCollection({
+  slug: "places",
+  fields: [text({ name: "country" }), text({ name: "city" })],
+  indexes: [{ fields: ["country", "city"], unique: true }],
+});
+```
+
+<Callout type="warn">
+A unique index over columns that already contain duplicate rows will fail to
+build. Find them first:
+
+```sql
+SELECT country, city, COUNT(*)
+FROM dc_places
+GROUP BY country, city
+HAVING COUNT(*) > 1;
+```
+</Callout>
+
+Column order matters. Only `(country, city)` serves a lookup on `country`
+alone.
+
+## The escape hatch
+
+When you need something the neutral model has no word for — a `bigint`, a
+`char(3)`, a type one dialect has and the others do not — reshape the Drizzle
+table directly:
+
+```ts
+db: {
+  schema: {
+    afterDrizzle: [
+      ({ dialect, tables }) => {
+        if (dialect !== "postgresql") return tables;
+        return {
+          ...tables,
+          app_ledger: pgTable("app_ledger", {
+            id: varchar("id", { length: 36 }).primaryKey(),
+            amountMinor: bigint("amount_minor", { mode: "bigint" }),
+          }),
+        };
+      },
+    ],
+  },
+}
+```
+
+This is the app's alone; plugins have no equivalent, because a per-dialect
+choice about your database is yours rather than a plugin's.
+
+Anything the schema model cannot carry into migrations and drift detection is
+**refused at boot**, naming the table and the construct: partial and
+expression indexes, check constraints, foreign keys, unique constraints,
+composite primary keys, generated and identity columns, and native enums.
+
+That refusal is the point. The alternative is a constraint that exists on your
+machine and on no deployment, with nothing reporting the difference.
+
+## Coming from Payload
+
+| Payload | Nextly |
+| --- | --- |
+| `beforeSchemaInit` | `db.schema.extend`, which also runs for plugins |
+| `afterSchemaInit` | `db.schema.afterDrizzle`, with loss checking |
+| `extendTable` | `schema.extendTable`, with ownership rules |
+| `rawTables` | `defineTable` + `col.*`, the primary path rather than an escape |
+| Collection `indexes` | Collection `indexes`, now actually emitted |
+
+Two differences worth knowing:
+
+Payload's hooks are app-only. Ours accept plugins too, in dependency order,
+with ownership recorded on every table and index — so two plugins cannot
+quietly fight over one table.
+
+Payload's `extendTable` reaches into Drizzle's internal symbols, and its hook
+tables lose their types. Ours build Drizzle objects from the neutral model and
+type them from the declaration, so `ctx.db` is checked without a codegen step.
+
+## What is not supported
+
+Foreign keys, check constraints, partial and expression indexes, views, and
+relational queries over extension tables. `col.ref()` records a reference for
+documentation and validation; no constraint reaches the database.
+
+Resizing a `varchar(n)` or `decimal(p, s)` produces no migration — the diff
+normalises type modifiers away, and collections behave the same. Add a new
+column and migrate the data across.

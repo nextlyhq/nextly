@@ -10,6 +10,8 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
 import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { SchemaHook } from "../domains/schema/extension/draft";
+import type { TableDefinition } from "../domains/schema/extension/dsl";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
@@ -471,6 +473,25 @@ export type PermissionSlug = GeneratedTypes extends { permissions: infer P }
  * admin → P5 (menu/pages/settings/views; widgets reserved for M8).
  */
 export interface PluginContributions {
+  /**
+   * @experimental Tables and indexes of the plugin's own.
+   *
+   * For storage a collection is the wrong shape for — a join table, a cache, a
+   * log no user sees. A collection brings REST routes, admin screens,
+   * validation and access control with it; this brings none of those, and is
+   * reached through `ctx.db` alone.
+   *
+   * `prefix` defaults to the plugin's admin slug, so the common case needs no
+   * decision. Every table is created as `<prefix>__<name>`.
+   */
+  schema?: {
+    /** Lower-case identifier, 2–31 characters. Defaults to the admin slug. */
+    prefix?: string;
+    /** Declared tables. Sugar for a hook calling `addTable` for each. */
+    tables?: TableDefinition[];
+    /** Hooks, run after every plugin this one depends on. */
+    extend?: SchemaHook[];
+  };
   /** @public New plugin-owned collections. Merged by the schema pipeline. */
   collections?: CollectionConfig[];
   /** @public New plugin-owned singles. */
