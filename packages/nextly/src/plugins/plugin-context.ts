@@ -20,7 +20,7 @@ import type { SingleRegistryService } from "../domains/singles/services/single-r
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
 import { getEventBus } from "../events/event-bus";
-import type { Action, Filter } from "../filters";
+import type { Action, Decision, Filter } from "../filters";
 import { getFilterRegistry } from "../filters";
 import type {
   BeforeOperationHandler,
@@ -196,6 +196,15 @@ export interface PluginFilterRegistry {
     value: V,
     context: C
   ): Promise<V>;
+  /**
+   * Run a VETO point, which fails closed.
+   *
+   * Filters are error-isolated, so a handler that vetoed by throwing would be
+   * skipped and the chain would answer allow. A decision is a value instead: a
+   * throwing handler denies, and a handler may only keep or downgrade the
+   * verdict, so load order cannot decide access.
+   */
+  decide(name: string, initial: Decision, context?: unknown): Promise<Decision>;
 }
 
 /**
@@ -1088,6 +1097,8 @@ export function createPluginContext(
     remove: (name, fn) => filterRegistry.removeFilter(name, fn),
     apply: (name, value, context) =>
       filterRegistry.applyFilters(name, value, context),
+    decide: (name, initial, context) =>
+      filterRegistry.applyDecision(name, initial, context),
   };
   const pluginActions: PluginActionRegistry = {
     add: (name, fn) => filterRegistry.addAction(name, fn),

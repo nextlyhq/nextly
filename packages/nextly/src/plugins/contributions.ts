@@ -1,4 +1,4 @@
-import type { ZodObject, ZodRawShape } from "zod";
+import type { ZodObject, ZodRawShape, ZodTypeAny } from "zod";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -627,4 +627,25 @@ export interface PluginContributions {
    * cannot write rows that read as another's.
    */
   audit?: { kinds: Array<{ kind: string; metadataKeys?: string[] }> };
+
+  /**
+   * @experimental Named seams this plugin publishes for others to extend.
+   *
+   * Declaring a point is what makes it discoverable and collision-checked. A
+   * seam that exists only as a string in one plugin's code cannot be found by
+   * the plugin that wants to extend it, and two plugins can pick the same name
+   * without either noticing.
+   *
+   * `kind` decides how it runs. A `filter` transforms a value and is
+   * error-isolated. An `action` is an ordered side effect. A `decision` is a
+   * VETO, and is the only one that fails closed — see `ctx.filters.decide`.
+   */
+  hookPoints?: Array<{
+    /** Must start with the plugin's own admin slug, and be unique across all plugins. */
+    name: string;
+    kind: "filter" | "action" | "decision";
+    /** In development, payloads are checked against this and a mismatch warns once. */
+    payload?: ZodTypeAny;
+    description?: string;
+  }>;
 }
