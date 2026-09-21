@@ -88,6 +88,13 @@ export function buildServiceConfig(
       serviceConfig.preview = nextlyConfig.preview;
     }
 
+    // Forwarded for the same reason, and needed now that `registerServices`
+    // runs pending migrations before plugins initialise: that phase reads the
+    // whole db block, not only the flag forwarded above.
+    if (nextlyConfig?.db) {
+      serviceConfig.db = nextlyConfig.db;
+    }
+
     // If storagePlugins not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.storagePlugins && nextlyConfig?.storage) {
       serviceConfig.storagePlugins = nextlyConfig.storage;

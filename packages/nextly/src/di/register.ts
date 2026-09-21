@@ -263,6 +263,22 @@ export interface NextlyServiceConfig {
   basePath?: string;
 
   /**
+   * The resolved database block.
+   *
+   * Forwarded because `registerServices` now runs pending migrations before
+   * plugins initialise, and `runProdMigrationsIfEnabled` reads this whole
+   * block rather than the single `runMigrationsOnBoot` flag beside it. The
+   * nested config is destructured away in `buildServiceConfig`, so anything
+   * not named again never reaches the container.
+   */
+  db?: {
+    runMigrationsOnBoot?: boolean;
+    migrationsDir: string;
+    migrateLockTtlSeconds?: number;
+    uiSchemaFile: string;
+  };
+
+  /**
    * Draft-preview wiring.
    *
    * Carried here so the minting endpoint can read where this application
@@ -1203,6 +1219,32 @@ export async function registerServices(
   // Layer 6: Sync Code-First Singles
   // ----------------------------------------
   await syncCodeFirstSingles(adapter, resolvedLogger, transformedConfig);
+
+  // ----------------------------------------
+  // Layer 6.5: Pending migrations, BEFORE any plugin initialises
+  // ----------------------------------------
+  // This phase used to run in `init.ts`, after `registerServices` had already
+  // awaited `initializePlugins` — so a plugin's `init()` hook ran against a
+  // database whose pending migrations had not been applied.
+  //
+  // `record-settings-activity.ts` documented that hazard for core columns: on
+  // an upgraded database `activity_log` was still on its old shape, and a
+  // plugin writing to it hit a column that did not exist. With plugin-owned
+  // tables it stops being a hazard and becomes fatal, because `init` and
+  // `onReady` would query tables no migration has created yet.
+  //
+  // Only the ordering moved. When `runMigrationsOnBoot` is off — the default —
+  // this is a no-op, and the CLI remains the recommended path.
+  const { runProdMigrationsIfEnabled } = await import(
+    "../init/prod-migrations"
+  );
+  if (config.db) {
+    await runProdMigrationsIfEnabled({
+      config: { db: config.db, collections: config.collections ?? [] },
+      adapter,
+      logger: resolvedLogger,
+    });
+  }
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins

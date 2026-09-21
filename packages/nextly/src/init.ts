@@ -376,22 +376,16 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // the direct API or the route-handler dispatcher path.
         await runBootTimeApplyIfDev({ caller: "init" });
 
-        // Production sibling of boot-apply: when `db.runMigrationsOnBoot` is on,
-        // apply committed migration files (prod only; no-op in dev). Wired at
-        // both init entry points.
+        // The production migration phase used to run HERE, and now runs inside
+        // `registerServices` before `initializePlugins`. It has to: a plugin's
+        // `init()` hook otherwise queries a database whose pending migrations
+        // have not been applied, and with plugin-owned tables that is a query
+        // against a table nothing has created.
         //
-        // NOT failure-safe, deliberately, and it used to say it was. Ordinary
-        // failures are still logged and swallowed, but a boot that could not
-        // establish whether migrations ran THROWS: serving a schema nobody
-        // verified is worse than not starting.
-        const { runProdMigrationsIfEnabled } = await import(
-          "./init/prod-migrations"
-        );
-        await runProdMigrationsIfEnabled({
-          config: options.config,
-          adapter: adapter,
-          logger: driftLogger,
-        });
+        // It is still NOT failure-safe, deliberately. Ordinary failures are
+        // logged and swallowed; a boot that could not establish whether
+        // migrations ran THROWS, because serving a schema nobody verified is
+        // worse than not starting.
 
         // Run post-initialisation tasks (template seeding, code-field sync,
         // permission seeding, etc.) in the background so that getNextly()
