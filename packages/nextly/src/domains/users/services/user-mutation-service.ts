@@ -44,6 +44,7 @@ import type {
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import { safeEmit } from "../../../events/domain-events";
 import {
   layoutRowId,
   widgetLayoutTables,
@@ -1135,7 +1136,12 @@ export class UserMutationService extends BaseService {
       await this.retentionRunner?.maybeRun(
         UserMutationService.WRITE_PATH_PRUNE_BATCHES
       );
-      if (userCreatedRecorded) this.fastDrainScheduler?.offer();
+      if (userCreatedRecorded) {
+        this.fastDrainScheduler?.offer();
+        // The in-process counterpart of the outbox row above, for the same
+        // reason as `user.deleted`.
+        safeEmit("user.created", { userId: newUserId });
+      }
 
       // Fetch created user
       const user = await this.db.query.users.findFirst({
@@ -1987,6 +1993,14 @@ export class UserMutationService extends BaseService {
       if (NextlyError.is(err)) throw err;
       // Normalise raw driver errors so fk/etc. produce the right NextlyError kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+
+    // After the transaction commits, and only for a delete that removed a row.
+    // In-process subscribers are how a plugin cleans up what it stored against
+    // this user; the webhook outbox event recorded above is durable but
+    // reaches nothing inside this process.
+    if (userDeletedRecorded) {
+      safeEmit("user.deleted", { userId: String(userId) });
     }
 
     // The detached files changed, so anything cached against them is stale —
