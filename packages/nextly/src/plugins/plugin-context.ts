@@ -40,6 +40,7 @@ import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
 import { getPluginAuthApi } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
+import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
@@ -387,6 +388,18 @@ export interface PluginContext {
    * encrypted at rest and never returned to the admin.
    */
   settings?: PluginSettingsApi;
+
+  /**
+   * @experimental Outbound HTTP, limited to the hosts this plugin declared in
+   * `capabilities.net.outbound`.
+   *
+   * Undefined for a plugin that declared none, so reaching the network is
+   * something a plugin has to have asked for where a reviewer sees it. Names
+   * are resolved here and every answer vetted, and the request is sent to the
+   * address that was vetted — so a name that resolves differently the second
+   * time cannot redirect it inward.
+   */
+  fetch?: (input: string | URL, init?: RequestInit) => Promise<Response>;
 }
 
 /** Reading and writing one plugin's settings. */
@@ -1042,6 +1055,10 @@ export function createPluginContext(
       })
     : rawBus;
 
+  // Built once per context rather than per call: it closes over the
+  // allowlist, and nothing about it changes between requests.
+  const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
+
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
   const pluginFilters: PluginFilterRegistry = {
@@ -1111,5 +1128,6 @@ export function createPluginContext(
     ...(plugin?.contributes?.settings
       ? { settings: createPluginSettings(plugin, db) }
       : {}),
+    ...(pluginFetch ? { fetch: pluginFetch } : {}),
   };
 }
