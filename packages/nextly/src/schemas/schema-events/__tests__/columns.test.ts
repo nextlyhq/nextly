@@ -35,6 +35,11 @@ const EXPECTED_COLUMNS = [
   "sha256",
   "scope_kind",
   "scope_slug",
+  // Owner attribution. Nullable and additive: a row written before plugins
+  // could own a migration has none, which reads as core or app — what it was.
+  "owner_kind",
+  "owner_id",
+  "owner_version",
   "started_at",
   "ended_at",
   "duration_ms",

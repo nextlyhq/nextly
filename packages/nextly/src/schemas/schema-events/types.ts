@@ -28,6 +28,7 @@ export type SchemaEventStatus =
 /** Which surface triggered the event. */
 export type SchemaEventSource =
   | "cli-migrate"
+  | "cli-plugin-migrate"
   | "dev-server"
   | "admin-ui"
   | "cli-sync"
@@ -35,6 +36,7 @@ export type SchemaEventSource =
 
 /** Scope the event touched. */
 export type SchemaEventScopeKind =
+  | "plugin"
   | "collection"
   | "single"
   | "component"

@@ -26,6 +26,12 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 TEXT,
           scope_kind TEXT,
           scope_slug TEXT,
+          -- Nullable and additive: an existing row has no owner, which reads
+          -- as core or app — what every row written before plugins could own
+          -- a migration actually was.
+          owner_kind TEXT,
+          owner_id TEXT,
+          owner_version TEXT,
           started_at TIMESTAMPTZ NOT NULL,
           ended_at TIMESTAMPTZ,
           duration_ms INTEGER,
@@ -60,6 +66,10 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 VARCHAR(64),
           scope_kind VARCHAR(32),
           scope_slug VARCHAR(255),
+          -- Nullable and additive; see the PostgreSQL block.
+          owner_kind VARCHAR(32),
+          owner_id VARCHAR(255),
+          owner_version VARCHAR(64),
           started_at DATETIME(3) NOT NULL,
           ended_at DATETIME(3),
           duration_ms INT,
@@ -92,6 +102,12 @@ export function getSchemaEventsDdl(dialect: Dialect): string[] {
           sha256 TEXT,
           scope_kind TEXT,
           scope_slug TEXT,
+          -- Nullable and additive: an existing row has no owner, which reads
+          -- as core or app — what every row written before plugins could own
+          -- a migration actually was.
+          owner_kind TEXT,
+          owner_id TEXT,
+          owner_version TEXT,
           started_at INTEGER NOT NULL,
           ended_at INTEGER,
           duration_ms INTEGER,

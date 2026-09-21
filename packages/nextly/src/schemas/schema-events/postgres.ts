@@ -43,6 +43,12 @@ export const nextlySchemaEventsPg = pgTable(
 
     scopeKind: text("scope_kind").$type<SchemaEventScopeKind>(),
     scopeSlug: text("scope_slug"),
+    // Nullable and additive. An existing row has no owner, which reads as
+    // core or app — exactly what every row written before plugins could own
+    // a migration actually was.
+    ownerKind: text("owner_kind"),
+    ownerId: text("owner_id"),
+    ownerVersion: text("owner_version"),
 
     startedAt: timestamp("started_at", { withTimezone: true })
       .$defaultFn(() => new Date())

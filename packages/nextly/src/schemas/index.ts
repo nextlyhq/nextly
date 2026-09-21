@@ -60,6 +60,7 @@ import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
 import { schemaEventsTables } from "./schema-events";
+import { SCHEMA_OWNERS_TABLE, schemaOwnersTables } from "./schema-owners";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
@@ -188,6 +189,10 @@ export function getCoreSchema(
     // same reason as its neighbours: a table outside this set is never created
     // on a real installation, however completely its own module declares it.
     ...Object.values(pluginSettingsTables(dialect)),
+    // `nextly_schema_owners` — which owner each table belongs to, and which
+    // migration stream carries it. A table with no row here is never dropped
+    // by any path, so absence is the safe answer rather than an invitation.
+    ...Object.values(schemaOwnersTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
     // `nextly_schema_events` (the migration ledger) is a first-class managed
     // table. It is still bootstrapped out-of-band via `getSchemaEventsDdl` so
@@ -308,6 +313,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_document_lock",
   RBAC_EPOCH_TABLE,
   PLUGIN_SETTINGS_TABLE,
+  SCHEMA_OWNERS_TABLE,
   "nextly_widget_layout",
   "dynamic_collections",
   "dynamic_singles",
