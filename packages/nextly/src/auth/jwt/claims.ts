@@ -1,4 +1,6 @@
-// Standard JWT claims that are excluded from session user data
+// Standard JWT claims that are excluded from session user data. `typ` is here
+// because a custom user field of that name would otherwise be spread into the
+// claims and read as a token kind.
 export const JWT_INTERNAL_CLAIMS = [
   "iat",
   "exp",
@@ -7,7 +9,16 @@ export const JWT_INTERNAL_CLAIMS = [
   "nbf",
   "aud",
   "iss",
+  "typ",
 ] as const;
+
+/**
+ * The `typ` CLAIM that marks a token as a single-purpose pending-auth token,
+ * as distinct from the JWS header `typ` in {@link TOKEN_TYP}. It lives here
+ * rather than beside the pending-token helpers so the verifier can refuse one
+ * without importing them, which would make the two modules import each other.
+ */
+export const PENDING_AUTH_TYP = "pending-auth";
 
 export interface NextlyJwtPayload {
   // Standard claims

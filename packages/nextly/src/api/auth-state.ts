@@ -73,6 +73,8 @@ export const GET = withErrorHandler(async (request: NextRequest) => {
     throw NextlyError.authRequired({ logContext: { reason: "no_token" } });
   }
 
+  // Session-typed: the verifier refuses a pending-auth token, so one presented
+  // in the session cookie cannot report an authenticated state here either.
   const verifyResult = await verifyAccessToken(token, secret);
   if (!verifyResult.valid) {
     throw NextlyError.authRequired({

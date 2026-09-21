@@ -1,12 +1,16 @@
+import { PENDING_AUTH_TYP } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
-import { verifyAccessToken } from "../jwt/verify";
+import { verifyToken } from "../jwt/verify";
 
 /**
  * The `typ` claim that marks a token as a single-purpose pending-auth token.
  * The access guard (`require-auth`) rejects any token carrying this, so a
  * pending token can NEVER be used to authenticate a normal request.
+ *
+ * Defined in `jwt/claims` and re-exported here, where its consumers look for
+ * it, so the verifier can refuse one without importing this module.
  */
-export const PENDING_AUTH_TYP = "pending-auth";
+export { PENDING_AUTH_TYP };
 
 /**
  * Sentinel `challengeId` for the forced first-sign-in password change. A user
@@ -40,7 +44,8 @@ export async function mintPendingToken(
       attempts: claims.attempts,
     },
     secret,
-    ttlSeconds
+    ttlSeconds,
+    "pending"
   );
 }
 
@@ -61,7 +66,7 @@ export async function verifyPendingToken(
   token: string,
   secret: string
 ): Promise<PendingClaims> {
-  const result = await verifyAccessToken(token, secret);
+  const result = await verifyToken(token, secret, "pending");
   if (!result.valid) throw new InvalidPendingTokenError(result.reason);
   if (result.payload.typ !== PENDING_AUTH_TYP) {
     throw new InvalidPendingTokenError("wrong-type");

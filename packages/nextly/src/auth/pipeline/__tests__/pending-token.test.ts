@@ -1,8 +1,10 @@
+import { SignJWT } from "jose";
 import { describe, it, expect } from "vitest";
 
 import {
   mintPendingToken,
   verifyPendingToken,
+  InvalidPendingTokenError,
   PENDING_AUTH_TYP,
 } from "../pending-token";
 
@@ -40,7 +42,9 @@ describe("pending-auth token", () => {
   });
 
   it("rejects a normal access token (wrong typ)", async () => {
-    // A token WITHOUT the pending typ must not pass verifyPendingToken.
+    // A token WITHOUT the pending typ must not pass verifyPendingToken. The
+    // session typ in its JWS header is what refuses it now, one step before
+    // the claim check that used to, hence the reason rather than "wrong-type".
     const { signAccessToken } = await import("../../jwt/sign");
     const access = await signAccessToken(
       { sub: "u1", email: "a@b.c" },
@@ -48,6 +52,19 @@ describe("pending-auth token", () => {
       300
     );
     await expect(verifyPendingToken(access, secret)).rejects.toThrow(
+      InvalidPendingTokenError
+    );
+  });
+
+  it("still rejects a claim-only pending impostor with no header typ", async () => {
+    // The claim check remains load-bearing: a token minted before the header
+    // existed carries no typ to refuse, so nothing else would catch this.
+    const untyped = await new SignJWT({ sub: "u1", email: "a@b.c" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(new TextEncoder().encode(secret));
+    await expect(verifyPendingToken(untyped, secret)).rejects.toThrow(
       /wrong-type/
     );
   });
