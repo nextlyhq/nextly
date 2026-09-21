@@ -46,11 +46,17 @@ describe("schemas public API", () => {
       });
     });
 
+    it("no longer names the retired auth tables", () => {
+      // `accounts` and `sessions` belonged to an auth model Nextly no longer
+      // uses. Out of this list, `reconcileCore` stops looking for them, which
+      // is what leaves an existing database's copies untouched.
+      expect(schemas.CORE_TABLE_NAMES).not.toContain("accounts");
+      expect(schemas.CORE_TABLE_NAMES).not.toContain("sessions");
+    });
+
     it("includes the canonical core tables", () => {
       const required = [
         "users",
-        "accounts",
-        "sessions",
         "password_reset_tokens",
         "email_verification_tokens",
         "refresh_tokens",
@@ -106,8 +112,6 @@ describe("schemas public API", () => {
       // We don't introspect Drizzle internals; presence is enough.
       const names = [
         "users",
-        "accounts",
-        "sessions",
         "roles",
         "permissions",
         "apiKeys",

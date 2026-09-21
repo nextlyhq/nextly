@@ -10,7 +10,7 @@
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/mysql.ts)
  */
 
-export { users, accounts, sessions } from "../users/mysql";
+export { users } from "../users/mysql";
 
 // The field-group storage migration's mutual-exclusion row. Present here, and not only in
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what

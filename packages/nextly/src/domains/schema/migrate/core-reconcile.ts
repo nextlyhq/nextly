@@ -43,6 +43,18 @@ export interface ReconcileCoreDeps {
   logger?: LoggerLike;
   /** NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 lets a destructive core change proceed. */
   allowDestructive?: boolean;
+  /**
+   * NEXTLY_DROP_NONEMPTY_RETIRED=1: also drop a retired table that still holds
+   * rows. Separate from `allowDestructive`, because losing rows is a different
+   * decision from accepting a schema change.
+   */
+  allowDropNonEmptyRetired?: boolean;
+  /** Whether a table is present. Supplied by the CLI; absent in tests that do not exercise the drop. */
+  tableExists?: (table: string) => Promise<boolean>;
+  /** Row count for a table, for deciding whether a retired one is empty. */
+  countRows?: (db: unknown, dialect: Dialect, table: string) => Promise<number>;
+  /** Executes one DDL statement. Only used for the retired-table drop. */
+  executeSql?: (sql: string) => Promise<unknown>;
   /** Classifier mode for the core diff. Default: "production-strict". */
   mode?: ClassifierMode;
   /**
@@ -162,6 +174,8 @@ export async function reconcileCore(
     }
   }
 
+  await dropRetiredAuthTablesIfAllowed(deps);
+
   const repo = new SchemaEventsRepository(db, dialect);
   try {
     // 1. Apply the core schema first (drizzle-kit pushSchema over
@@ -194,5 +208,53 @@ export async function reconcileCore(
       code: "NEXTLY_MIGRATION_APPLY_FAILED",
       publicMessage: `Core schema apply failed: ${message}`,
     });
+  }
+}
+
+/**
+ * Drop the retired auth tables, when the operator has asked for it.
+ *
+ * Separate from the diff above because these tables are no longer part of the
+ * core schema: `getCoreTableNames` does not name them, so the introspection
+ * never looks for them and the diff has nothing to say. Without this they
+ * would simply sit in an existing database forever, which is the right default
+ * but a poor only option.
+ */
+async function dropRetiredAuthTablesIfAllowed(
+  deps: ReconcileCoreDeps
+): Promise<void> {
+  if (!deps.allowDestructive || !deps.tableExists || !deps.countRows) return;
+
+  const {
+    findRetiredAuthTables,
+    planRetiredAuthTableDrop,
+    formatRetiredAuthDropRefusal,
+  } = await import("../../../init/retired-auth-tables");
+
+  const found = await findRetiredAuthTables(deps.db, deps.dialect, {
+    tableExists: deps.tableExists,
+    countRows: deps.countRows,
+  });
+  const plan = planRetiredAuthTableDrop(found, {
+    allowDestructive: true,
+    allowNonEmpty: deps.allowDropNonEmptyRetired === true,
+  });
+
+  if (plan.action === "keep") return;
+  if (plan.action === "refuse") {
+    throw new NextlyError({
+      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+      publicMessage: formatRetiredAuthDropRefusal(plan.nonEmpty),
+    });
+  }
+
+  const { quoteIdent } = await import(
+    "../pipeline/sql-templates/identifier-quoting"
+  );
+  for (const table of plan.tables) {
+    // Through the shared quoting helper rather than an interpolated name: the
+    // names are ours, but the quoting rules are the dialect's.
+    await deps.executeSql?.(`DROP TABLE ${quoteIdent(table, deps.dialect)}`);
+    deps.logger?.warn?.(`Dropped retired auth table ${table}.`);
   }
 }

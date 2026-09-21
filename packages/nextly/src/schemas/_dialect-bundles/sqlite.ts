@@ -10,7 +10,7 @@
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/sqlite.ts)
  */
 
-export { users, accounts, sessions } from "../users/sqlite";
+export { users } from "../users/sqlite";
 
 // The field-group storage migration's mutual-exclusion row. Present here, and not only in
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what

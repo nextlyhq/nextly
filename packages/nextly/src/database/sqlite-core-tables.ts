@@ -50,30 +50,6 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "users_created_at_idx"
       ON "users" ("created_at")`,
-    `CREATE TABLE IF NOT EXISTS "accounts" (
-      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
-      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-      "type" TEXT NOT NULL,
-      "provider" TEXT NOT NULL,
-      "provider_account_id" TEXT NOT NULL,
-      "refresh_token" TEXT,
-      "access_token" TEXT,
-      "expires_at" INTEGER,
-      "token_type" TEXT,
-      "scope" TEXT,
-      "id_token" TEXT,
-      "session_state" TEXT,
-      UNIQUE("provider", "provider_account_id")
-    )`,
-    `CREATE INDEX IF NOT EXISTS "accounts_user_id_idx"
-      ON "accounts" ("user_id")`,
-    `CREATE TABLE IF NOT EXISTS "sessions" (
-      "session_token" TEXT PRIMARY KEY,
-      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-      "expires" INTEGER NOT NULL
-    )`,
-    `CREATE INDEX IF NOT EXISTS "sessions_user_id_idx"
-      ON "sessions" ("user_id")`,
     `CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,

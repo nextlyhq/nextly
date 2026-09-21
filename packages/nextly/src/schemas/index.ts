@@ -279,8 +279,6 @@ export function getCoreSchema(
 /** Snake-case names of every core table the framework manages. */
 export const CORE_TABLE_NAMES: readonly string[] = [
   "users",
-  "accounts",
-  "sessions",
   "password_reset_tokens",
   "user_invite_tokens",
   "email_verification_tokens",
@@ -343,7 +341,7 @@ export * from "./_zod"; // Zod-only validators (user, rbac, validation)
 
 // Plan A Task 5 — user identity tables. PG re-exports here for direct-query
 // callers. Other dialects accessible via getCoreSchema(dialect).
-export { users, accounts, sessions } from "./users/postgres";
+export { users } from "./users/postgres";
 
 // Plan A Task 6 — auth-token tables. PG re-exports for direct-query callers.
 export {

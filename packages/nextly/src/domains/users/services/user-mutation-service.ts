@@ -1624,7 +1624,7 @@ export class UserMutationService extends BaseService {
   }
 
   /**
-   * Delete a user and all related data (roles, accounts).
+   * Delete a user and all related data (roles, media ownership).
    *
    * §13.8 + spec note: user existence is sensitive (account enumeration);
    * the public message stays generic. The id flows only through logContext.
@@ -1637,7 +1637,7 @@ export class UserMutationService extends BaseService {
     userId: number | string,
     actor?: RequestActor
   ): Promise<void> {
-    const { users, accounts, userRoles, media } = this.tables;
+    const { users, userRoles, media } = this.tables;
 
     // Asked once, before the transaction opens, because a failed statement
     // aborts an open Postgres transaction and there would be no way back.
@@ -1821,9 +1821,6 @@ export class UserMutationService extends BaseService {
 
         // Delete user roles
         await txDb.delete(userRoles).where(eq(userRoles.userId, userId));
-
-        // Delete user accounts
-        await txDb.delete(accounts).where(eq(accounts.userId, userId));
 
         // And the dashboard arrangement, addressed by the SAME derivation the
         // layout service writes with rather than by a second spelling of the

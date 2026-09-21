@@ -57,6 +57,9 @@ export const RESERVED_SLUGS = [
   "users",
   "roles",
   "permissions",
+  // Retired core tables. Still reserved, so a collection cannot take a name
+  // an existing database may still hold a table under.
+  "accounts",
   "sessions",
   // Pre-existing route/table reservations. Two of these (`webhooks`, `media`)
   // are also system resources, but they are reserved here for the independent
