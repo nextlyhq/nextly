@@ -1,0 +1,524 @@
+/**
+ * The authoring surface for an extension table, and the types it infers.
+ *
+ * Two things happen here and nowhere else: a column is described as plain data,
+ * and that description is given a TypeScript type. Both matter. The data is
+ * what every consumer downstream compiles — so the DSL holds no Drizzle import
+ * and no dialect branch — and the type is what lets `ctx.db` be checked without
+ * a codegen step, which is the part Payload's hook tables lose.
+ *
+ * The type carried alongside each column is PHANTOM: declared on the interface,
+ * never assigned at runtime. That is what keeps a definition JSON-serialisable
+ * while still being precise enough to infer a row from.
+ *
+ * @module domains/schema/extension/dsl
+ * @since 1.0.0
+ */
+import { NextlyError } from "../../../errors/nextly-error";
+import { toSnakeCase } from "../services/field-column-descriptor";
+
+import type {
+  DefaultToken,
+  ExtensionColumnKind,
+  ExtensionIndex,
+} from "./types";
+
+/** The current-timestamp token, as one value so it compares by identity too. */
+const NOW: DefaultToken = { token: "now" };
+
+function invalid(path: string, message: string): never {
+  throw NextlyError.validation({
+    errors: [{ path, code: "INVALID", message }],
+  });
+}
+
+/**
+ * One column, as data plus a phantom type.
+ *
+ * `TValue` is the value the column reads back as, `TNullable` whether it may be
+ * null, and `THasDefault` whether an insert may omit it. The last two are
+ * separate because they answer different questions: a nullable column widens
+ * the READ type, a defaulted one narrows what a WRITE must supply.
+ */
+export interface ColumnBuilder<
+  TValue = unknown,
+  TNullable extends boolean = boolean,
+  THasDefault extends boolean = boolean,
+> {
+  readonly kind: ExtensionColumnKind;
+  readonly nullable: TNullable;
+  readonly hasDefault: THasDefault;
+  readonly default?: string | number | boolean | DefaultToken;
+  readonly generated?: "uuidv7";
+  readonly onUpdate?: "now";
+  readonly length?: number;
+  readonly precision?: number;
+  readonly scale?: number;
+  readonly primaryKey?: boolean;
+  readonly references?: string;
+  /** Phantom. Never assigned, so it survives no JSON round trip — by design. */
+  readonly __value?: TValue;
+}
+
+/** Options every scalar builder accepts. */
+export interface ColOpts<TValue> {
+  nullable?: boolean;
+  default?: TValue extends string | number | boolean ? TValue : never;
+}
+
+type NullableOf<O> = O extends { nullable: true } ? true : false;
+type HasDefaultOf<O> = O extends { default: string | number | boolean }
+  ? true
+  : false;
+
+function build<TValue>(
+  kind: ExtensionColumnKind,
+  opts: ColOpts<TValue> | undefined,
+  extra: Partial<ColumnBuilder<TValue>> = {}
+): ColumnBuilder<TValue, boolean, boolean> {
+  const hasDefault = opts?.default !== undefined;
+  return {
+    kind,
+    nullable: opts?.nullable === true,
+    hasDefault,
+    ...(hasDefault ? { default: opts?.default } : {}),
+    ...extra,
+  };
+}
+
+/**
+ * `col.json`, as an overload set.
+ *
+ * Overloaded rather than inferred from the options, because supplying `T`
+ * explicitly switches TypeScript's inference off for every remaining type
+ * parameter — so one signature taking both would record `{ nullable: true }`
+ * without widening the type it produces.
+ */
+export interface JsonColumnBuilder {
+  <T = unknown>(opts: { nullable: true }): ColumnBuilder<T, true, false>;
+  <T = unknown>(opts?: { nullable?: false }): ColumnBuilder<T, false, false>;
+}
+
+/**
+ * The column builders.
+ *
+ * Each returns data, so a definition can be inspected, serialised and diffed
+ * without evaluating anything. The generic on each one exists to capture the
+ * OPTIONS object literally, which is what makes `{ nullable: true }` widen the
+ * inferred type rather than merely being recorded.
+ */
+export const col = {
+  /** PG `text`, MySQL `varchar(255)`, SQLite `text`. */
+  text<const O extends ColOpts<string>>(
+    opts?: O
+  ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
+    return build<string>("text", opts) as ColumnBuilder<
+      string,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /** An explicitly short text field: `varchar(255)` on PG and MySQL. */
+  shortText<const O extends ColOpts<string>>(
+    opts?: O
+  ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
+    return build<string>("shortText", opts) as ColumnBuilder<
+      string,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /** Unbounded text, for textarea and rich-text sized values. */
+  longText<const O extends ColOpts<string>>(
+    opts?: O
+  ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
+    return build<string>("longText", opts) as ColumnBuilder<
+      string,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /** `varchar(n)`. A bounded width is what makes a text column indexable on MySQL. */
+  varchar<const O extends ColOpts<string>>(
+    length: number,
+    opts?: O
+  ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
+    if (!Number.isInteger(length) || length < 1 || length > 65_535) {
+      invalid(
+        "varchar.length",
+        `A varchar length must be an integer between 1 and 65535; received ${String(length)}.`
+      );
+    }
+    return build<string>("varchar", opts, { length }) as ColumnBuilder<
+      string,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  boolean<const O extends ColOpts<boolean>>(
+    opts?: O
+  ): ColumnBuilder<boolean, NullableOf<O>, HasDefaultOf<O>> {
+    return build<boolean>("boolean", opts) as ColumnBuilder<
+      boolean,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  integer<const O extends ColOpts<number>>(
+    opts?: O
+  ): ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>> {
+    return build<number>("integer", opts) as ColumnBuilder<
+      number,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  double<const O extends ColOpts<number>>(
+    opts?: O
+  ): ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>> {
+    return build<number>("double", opts) as ColumnBuilder<
+      number,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /**
+   * Exact `DECIMAL(precision, scale)`.
+   *
+   * Reads back as a number, matching the runtime column builders, which use
+   * Drizzle's `mode: "number"`. Values beyond 2^53 lose precision, so money
+   * belongs in an `integer` column of minor units rather than here.
+   */
+  decimal<const O extends ColOpts<number>>(
+    precision: number,
+    scale: number,
+    opts?: O
+  ): ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>> {
+    if (!Number.isInteger(precision) || precision < 1 || precision > 65) {
+      invalid(
+        "decimal.precision",
+        `A decimal precision must be an integer between 1 and 65; received ${String(precision)}.`
+      );
+    }
+    if (!Number.isInteger(scale) || scale < 0) {
+      invalid(
+        "decimal.scale",
+        `A decimal scale must be a non-negative integer; received ${String(scale)}.`
+      );
+    }
+    // A scale wider than the precision describes no representable number: the
+    // scale counts digits that the precision has not allocated.
+    if (scale > precision) {
+      invalid(
+        "decimal.scale",
+        `A decimal scale (${String(scale)}) may not exceed its precision (${String(precision)}).`
+      );
+    }
+    return build<number>("decimal", opts, {
+      precision,
+      scale,
+    }) as ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>>;
+  },
+
+  timestamp<const O extends ColOpts<never>>(
+    opts?: O
+  ): ColumnBuilder<Date, NullableOf<O>, HasDefaultOf<O>> {
+    return build<Date>("timestamp", opts) as ColumnBuilder<
+      Date,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /**
+   * A JSON document, typed by its caller.
+   *
+   * Overloaded rather than inferred from the options, because supplying `T`
+   * explicitly switches TypeScript's inference off for every remaining type
+   * parameter — so a single signature would record `{ nullable: true }` without
+   * widening the type it produces.
+   */
+  json: ((opts?: { nullable?: boolean }) =>
+    build<unknown>("json", {
+      nullable: opts?.nullable === true,
+    })) as JsonColumnBuilder,
+
+  /**
+   * The conventional primary key: a `varchar(36)` filled with a UUIDv7.
+   *
+   * Bounded rather than `text` so it stays indexable and usable in a unique key
+   * on MySQL, where an unbounded text column is neither.
+   */
+  id(): ColumnBuilder<string, false, true> {
+    return {
+      kind: "varchar",
+      length: 36,
+      nullable: false,
+      hasDefault: true,
+      primaryKey: true,
+      generated: "uuidv7",
+    };
+  },
+
+  /**
+   * A reference to another table, recorded but not constrained.
+   *
+   * `references` is documentation and a validation target; no FK reaches the
+   * database in this part, because the diff engine cannot express one.
+   */
+  ref<const O extends ColOpts<string>>(
+    target: string,
+    opts?: O
+  ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
+    if (target.trim() === "") {
+      invalid("ref.target", "A reference must name a target table.");
+    }
+    return build<string>("shortText", opts, {
+      references: target,
+    }) as ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>>;
+  },
+
+  /** `created_at` and `updated_at`, both maintained by `ctx.db`. */
+  timestamps(): {
+    createdAt: ColumnBuilder<Date, false, true>;
+    updatedAt: ColumnBuilder<Date, false, true>;
+  } {
+    return {
+      createdAt: {
+        kind: "timestamp",
+        nullable: false,
+        hasDefault: true,
+        default: NOW,
+      },
+      updatedAt: {
+        kind: "timestamp",
+        nullable: false,
+        hasDefault: true,
+        default: NOW,
+        onUpdate: "now",
+      },
+    };
+  },
+};
+
+/** What an author writes as the index list on a table. */
+export interface TableIndexInput {
+  /** Column KEYS as authored; resolved to SQL names by `defineTable`. */
+  columns: string[];
+  unique?: boolean;
+  name?: string;
+}
+
+export interface TableDefinitionOptions {
+  indexes?: TableIndexInput[];
+}
+
+/** The output of `defineTable`: plain data, plus the column map as a phantom. */
+export interface TableDefinition<
+  TName extends string = string,
+  TColumns extends Record<string, ColumnBuilder> = Record<
+    string,
+    ColumnBuilder
+  >,
+> {
+  readonly name: TName;
+  readonly columns: readonly ResolvedColumn[];
+  readonly indexes: readonly ExtensionIndex[];
+  readonly __columns?: TColumns;
+}
+
+/** A column once its SQL name is known. Mirrors `ExtensionColumn` minus ownership. */
+export interface ResolvedColumn {
+  key: string;
+  name: string;
+  kind: ExtensionColumnKind;
+  nullable: boolean;
+  primaryKey?: boolean;
+  default?: string | number | boolean | DefaultToken;
+  generated?: "uuidv7";
+  onUpdate?: "now";
+  length?: number;
+  precision?: number;
+  scale?: number;
+  references?: string;
+}
+
+/**
+ * One column, once its SQL name is known.
+ *
+ * Every optional field is spread conditionally rather than written as
+ * `undefined`, because the definition is compared by value downstream and an
+ * explicit `undefined` is not the same shape as an absent key.
+ */
+function toResolvedColumn(
+  key: string,
+  sqlName: string,
+  builder: ColumnBuilder
+): ResolvedColumn {
+  return {
+    key,
+    name: sqlName,
+    kind: builder.kind,
+    nullable: builder.nullable,
+    ...(builder.primaryKey === true ? { primaryKey: true } : {}),
+    ...(builder.default !== undefined ? { default: builder.default } : {}),
+    ...(builder.generated !== undefined
+      ? { generated: builder.generated }
+      : {}),
+    ...(builder.onUpdate !== undefined ? { onUpdate: builder.onUpdate } : {}),
+    ...(builder.length !== undefined ? { length: builder.length } : {}),
+    ...(builder.precision !== undefined
+      ? { precision: builder.precision }
+      : {}),
+    ...(builder.scale !== undefined ? { scale: builder.scale } : {}),
+    ...(builder.references !== undefined
+      ? { references: builder.references }
+      : {}),
+  };
+}
+
+/** The resolved columns, and the key each SQL name came from. */
+function resolveColumns(
+  tableName: string,
+  columns: Record<string, ColumnBuilder>
+): { resolved: ResolvedColumn[]; byName: Map<string, string> } {
+  const resolved: ResolvedColumn[] = [];
+  const byName = new Map<string, string>();
+
+  for (const [key, builder] of Object.entries(columns)) {
+    const sqlName = toSnakeCase(key);
+    const clash = byName.get(sqlName);
+    // Two authored keys can snake-case to one column — `fooBar` and `foo_bar`
+    // are the obvious pair — and the table would then declare it twice.
+    if (clash !== undefined) {
+      invalid(
+        `${tableName}.${key}`,
+        `Columns "${clash}" and "${key}" both resolve to the SQL column "${sqlName}".`
+      );
+    }
+    byName.set(sqlName, key);
+    resolved.push(toResolvedColumn(key, sqlName, builder));
+  }
+
+  if (resolved.length === 0) {
+    invalid(tableName, "A table must declare at least one column.");
+  }
+  return { resolved, byName };
+}
+
+/** Index inputs with their column KEYS resolved to SQL names. */
+function resolveIndexes(
+  tableName: string,
+  byName: ReadonlyMap<string, string>,
+  inputs: readonly TableIndexInput[]
+): ExtensionIndex[] {
+  return inputs.map((index, position) => {
+    const path = `${tableName}.indexes[${String(position)}]`;
+    if (index.columns.length === 0) {
+      invalid(path, "An index must name at least one column.");
+    }
+    const columns = index.columns.map(columnKey => {
+      const sqlName = toSnakeCase(columnKey);
+      if (!byName.has(sqlName)) {
+        invalid(
+          path,
+          `Index names the column "${columnKey}", which the table does not declare.`
+        );
+      }
+      return sqlName;
+    });
+    return {
+      columns,
+      unique: index.unique === true,
+      ...(index.name !== undefined ? { name: index.name } : {}),
+    };
+  });
+}
+
+/**
+ * Describe a table.
+ *
+ * Validation happens here rather than at compile time because the failures that
+ * matter — two keys colliding once snake-cased, an index naming a column that
+ * is not there — are about the table as a WHOLE, and no per-column type can see
+ * its siblings.
+ */
+export function defineTable<
+  const TName extends string,
+  const TColumns extends Record<string, ColumnBuilder>,
+>(
+  name: TName,
+  columns: TColumns,
+  opts?: TableDefinitionOptions
+): TableDefinition<TName, TColumns> {
+  if (name.trim() === "") {
+    invalid("table.name", "A table must be named.");
+  }
+  const { resolved, byName } = resolveColumns(name, columns);
+  const indexes = resolveIndexes(name, byName, opts?.indexes ?? []);
+
+  return Object.freeze({
+    name,
+    columns: Object.freeze(resolved),
+    indexes: Object.freeze(indexes),
+  });
+}
+
+type ValueOf<B> =
+  B extends ColumnBuilder<infer TValue, infer TNullable, boolean>
+    ? TNullable extends true
+      ? TValue | null
+      : TValue
+    : never;
+
+type OptionalInsertKeys<TColumns> = {
+  [K in keyof TColumns]: TColumns[K] extends ColumnBuilder<
+    unknown,
+    infer TNullable,
+    infer THasDefault
+  >
+    ? TNullable extends true
+      ? K
+      : THasDefault extends true
+        ? K
+        : never
+    : never;
+}[keyof TColumns];
+
+/**
+ * The row a select returns.
+ *
+ * `-readonly` is load-bearing: `defineTable` captures its columns with a
+ * `const` type parameter, which marks every inferred property readonly. Left
+ * on, a caller could not assign to a row they had just read back.
+ */
+export type InferRow<TDefinition> =
+  TDefinition extends TableDefinition<string, infer TColumns>
+    ? { -readonly [K in keyof TColumns]: ValueOf<TColumns[K]> }
+    : never;
+
+/**
+ * What an insert must supply.
+ *
+ * Nullable and defaulted columns become optional, because both have an answer
+ * when the caller says nothing — which is exactly the distinction
+ * `THasDefault` exists to carry.
+ */
+export type InferInsert<TDefinition> =
+  TDefinition extends TableDefinition<string, infer TColumns>
+    ? {
+        -readonly [K in Exclude<
+          keyof TColumns,
+          OptionalInsertKeys<TColumns>
+        >]: ValueOf<TColumns[K]>;
+      } & {
+        -readonly [K in OptionalInsertKeys<TColumns>]?: ValueOf<TColumns[K]>;
+      }
+    : never;
