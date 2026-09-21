@@ -90,13 +90,37 @@ export interface IssueSessionOptions {
   strategy?: string;
 }
 
-export async function issueSession(
+/** A minted session: the cookies to set, and the body a login response returns. */
+export interface MintedSession {
+  cookies: string[];
+  body: {
+    user: {
+      id: string;
+      email: string;
+      name: string | null;
+      image: string | null;
+      roleIds: string[];
+    };
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: string;
+  };
+}
+
+/**
+ * Mint a session: run the account-state gate, build and sign the claims,
+ * rotate in a refresh token, run the post-login hooks and record the success.
+ *
+ * Separated from the response so the JSON reply and the redirect a plugin
+ * needs are two thin wrappers over ONE implementation, rather than two paths
+ * that agree until one of them is edited.
+ */
+export async function mintSession(
   user: AuthUser,
   deps: IssueSessionDeps,
   request: Request,
-  requestId: string,
   opts?: IssueSessionOptions
-): Promise<Response> {
+): Promise<MintedSession> {
   // Preconditions run first, before any token or refresh row exists. Every
   // strategy reaches a session through here, so this is the one place that can
   // refuse an account no matter which path authenticated it.
@@ -189,9 +213,9 @@ export async function issueSession(
     ),
   ];
 
-  return respondAction(
-    "Logged in.",
-    {
+  return {
+    cookies,
+    body: {
       user: {
         id: user.id,
         email: user.email,
@@ -205,11 +229,27 @@ export async function issueSession(
       // write above are awaited, and a plugin hook is arbitrary code.
       expiresAt: accessTokenExpiresAt.toISOString(),
     },
-    {
-      status: 200,
-      headers: buildCookieHeaders(cookies, { "x-request-id": requestId }),
-    }
-  );
+  };
+}
+
+/**
+ * Issue a session and answer the login request with it.
+ *
+ * The JSON half of {@link mintSession}: the canonical login body plus the
+ * HttpOnly cookies (spec §7.6).
+ */
+export async function issueSession(
+  user: AuthUser,
+  deps: IssueSessionDeps,
+  request: Request,
+  requestId: string,
+  opts?: IssueSessionOptions
+): Promise<Response> {
+  const minted = await mintSession(user, deps, request, opts);
+  return respondAction("Logged in.", minted.body, {
+    status: 200,
+    headers: buildCookieHeaders(minted.cookies, { "x-request-id": requestId }),
+  });
 }
 
 /**
