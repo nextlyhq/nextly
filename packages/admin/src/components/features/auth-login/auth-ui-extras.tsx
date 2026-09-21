@@ -106,27 +106,44 @@ export function AuthUiExtras({
   );
 }
 
+/** What a challenge component gets back from the host after it answers. */
+export interface ChallengeResolveResult {
+  ok: boolean;
+  /** A message to show when `ok` is false. Generic by design. */
+  error?: string;
+}
+
 /**
- * Render the challenge step (D71 multi-step) when a login returns
- * `{ status: "challenge" }`. Resolves `challengeViews[challengeType]` through the
- * component registry; the plugin component collects the factor, POSTs to
- * `/auth/challenge/resolve`, and calls `onResolved` on success.
+ * Render the challenge step (D71 multi-step) when a login is interrupted by a
+ * second factor. Resolves `challengeViews[challengeType]` through the component
+ * registry; the plugin component collects the factor and calls `resolve`.
+ *
+ * The HOST posts to `/auth/challenge/resolve`, not the plugin component. A
+ * login resumed from an external provider has no token in the browser at all —
+ * it is in an HttpOnly cookie — so a component that posted its own token could
+ * not complete that flow. `pendingToken` remains in the props for one minor,
+ * deprecated and undefined in resume mode.
  */
 export function AuthChallenge({
   authUi,
   challengeType,
   pendingToken,
+  resolve,
   onResolved,
 }: {
   authUi: AuthUiMeta;
   challengeType: string;
-  pendingToken: string;
-  onResolved: () => void;
+  /** @deprecated The host posts the answer; a resumed login has no token here. */
+  pendingToken?: string;
+  resolve: (
+    response: Record<string, unknown>
+  ) => Promise<ChallengeResolveResult>;
+  onResolved: (next: string | null) => void;
 }): ReactNode {
   return (
     <PluginSlot
       path={authUi.challengeViews[challengeType]}
-      props={{ challengeType, pendingToken, onResolved }}
+      props={{ challengeType, pendingToken, resolve, onResolved }}
       fallback={
         <p
           className="text-sm text-muted-foreground"

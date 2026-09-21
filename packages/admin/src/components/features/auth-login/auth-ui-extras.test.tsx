@@ -95,6 +95,7 @@ describe("AuthChallenge (D71)", () => {
         authUi={{ ...base, challengeViews: { totp: "@p/auth#Totp" } }}
         challengeType="totp"
         pendingToken="pt-123"
+        resolve={async () => ({ ok: true })}
         onResolved={() => {}}
       />
     );
@@ -107,9 +108,33 @@ describe("AuthChallenge (D71)", () => {
         authUi={base}
         challengeType="totp"
         pendingToken="pt-123"
+        resolve={async () => ({ ok: true })}
         onResolved={() => {}}
       />
     );
     expect(screen.getByTestId("challenge-fallback")).toBeInTheDocument();
+  });
+  it("renders a resumed challenge, which carries no token", () => {
+    // The resume path is the reason the host posts the answer: there is no
+    // token in the browser to hand a plugin component.
+    registerComponent(
+      "@p/auth#Resumed",
+      (p: { challengeType: string; pendingToken?: string }) => (
+        <div>
+          resumed {p.challengeType} token:{String(p.pendingToken)}
+        </div>
+      )
+    );
+    render(
+      <AuthChallenge
+        authUi={{ ...base, challengeViews: { totp: "@p/auth#Resumed" } }}
+        challengeType="totp"
+        resolve={async () => ({ ok: true })}
+        onResolved={() => {}}
+      />
+    );
+    expect(
+      screen.getByText(/resumed totp token:undefined/)
+    ).toBeInTheDocument();
   });
 });

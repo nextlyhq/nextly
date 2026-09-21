@@ -27,6 +27,7 @@ import type { ActionResponse } from "@admin/lib/api/response-types";
 
 import { AuthUiExtras, AuthChallenge, useAuthUi } from "./auth-ui-extras";
 import { SetInitialPassword } from "./set-initial-password";
+import { useChallengeFlow } from "./use-resume-login";
 
 const formSchema = z.object({
   email: z
@@ -50,16 +51,15 @@ export function Login() {
   const [resendingVerification, setResendingVerification] = useState(false);
   // Auth-page UI contributed by plugins (provider buttons, slots, 2FA views) — D57.
   const authUi = useAuthUi();
-  // Set when a login returns a multi-step challenge (D71); shows the challenge view.
-  const [challenge, setChallenge] = useState<{
-    challengeType: string;
-    pendingToken: string;
-  } | null>(null);
   // Set when login returns password_change_required (ASVS 6.4.1): the account
   // holds an admin-set password and must replace it before a session is issued.
   const [mustChangePassword, setMustChangePassword] = useState<{
     pendingToken: string;
   } | null>(null);
+
+  // The second-factor step, including a sign-in resumed from a provider.
+  // Its logic lives in the hook so this component only renders.
+  const challengeFlow = useChallengeFlow();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -109,9 +109,10 @@ export function Login() {
         result.challengeType &&
         result.pendingToken
       ) {
-        setChallenge({
+        challengeFlow.start({
           challengeType: result.challengeType,
           pendingToken: result.pendingToken,
+          next: null,
         });
         setIsLoading(false);
         return;
@@ -211,17 +212,28 @@ export function Login() {
             window.location.href = ROUTES.DASHBOARD;
           }}
         />
-      ) : challenge ? (
+      ) : challengeFlow.challenge ? (
         <AuthChallenge
           authUi={authUi}
-          challengeType={challenge.challengeType}
-          pendingToken={challenge.pendingToken}
-          onResolved={() => {
-            window.location.href = ROUTES.DASHBOARD;
+          challengeType={challengeFlow.challenge.challengeType}
+          pendingToken={challengeFlow.challenge.pendingToken}
+          resolve={challengeFlow.resolve}
+          onResolved={next => {
+            window.location.href = next ?? ROUTES.DASHBOARD;
           }}
         />
       ) : (
         <>
+          {challengeFlow.signInFailed && (
+            <div
+              className="flex items-start gap-3 rounded-lg border border-destructive bg-destructive/10 p-4 mb-6"
+              data-testid="signin-failed"
+            >
+              <p className="text-sm text-foreground">
+                Sign-in failed. Try again or use another method.
+              </p>
+            </div>
+          )}
           <FormProvider {...form}>
             <form
               onSubmit={e => {
