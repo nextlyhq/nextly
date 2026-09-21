@@ -19,17 +19,19 @@ import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
+import {
+  clearPendingCookie,
+  readPendingCookie,
+} from "../cookies/pending-cookie";
 import {
   MUST_CHANGE_PASSWORD_CHALLENGE,
   verifyPendingToken,
 } from "../pipeline/pending-token";
 
 import {
-  jsonResponse,
   stallResponse,
   buildAuthErrorResponse,
+  csrfRefusal,
 } from "./handler-utils";
 import { issueSession, type IssueSessionDeps } from "./issue-session";
 
@@ -69,25 +71,18 @@ export async function handleSetInitialPassword(
         ? (raw as Record<string, unknown>)
         : {};
 
-    const csrfCookie = readCsrfCookie(request);
-    const csrfToken = readCsrfFromRequest(body, request);
-    const csrfResult = validateCsrf(
-      request,
-      csrfCookie,
-      csrfToken,
-      deps.allowedOrigins
-    );
-    if (!csrfResult.valid) {
+    const refusal = csrfRefusal(request, body, deps, requestId);
+    if (refusal) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(
-        403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
-        { "x-request-id": requestId }
-      );
+      return refusal;
     }
 
+    // Body or cookie, for the same reason as the challenge path: an external
+    // login arrives here by redirect with its token in an HttpOnly cookie.
     const pendingTokenInput =
-      typeof body.pendingToken === "string" ? body.pendingToken : "";
+      typeof body.pendingToken === "string"
+        ? body.pendingToken
+        : (readPendingCookie(request) ?? "");
     const newPassword =
       typeof body.newPassword === "string" ? body.newPassword : "";
     if (!pendingTokenInput || !newPassword) {
@@ -179,7 +174,9 @@ export async function handleSetInitialPassword(
     // not the one that answered the challenge.
     const response = await issueSession(user, deps, request, requestId, {
       strategy: pending.strategy,
+      next: pending.next,
     });
+    response.headers.append("Set-Cookie", clearPendingCookie());
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

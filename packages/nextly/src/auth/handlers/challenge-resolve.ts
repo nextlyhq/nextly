@@ -5,8 +5,11 @@ import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
+import {
+  clearPendingCookie,
+  readPendingCookie,
+  setPendingCookie,
+} from "../cookies/pending-cookie";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import {
   mintPendingToken,
@@ -18,6 +21,7 @@ import {
   jsonResponse,
   stallResponse,
   buildAuthErrorResponse,
+  csrfRefusal,
 } from "./handler-utils";
 import { issueSession, type IssueSessionDeps } from "./issue-session";
 
@@ -41,6 +45,121 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
 }
 
 /**
+ * Hand a wrong answer back with a fresh token carrying the next attempt count.
+ *
+ * Where the token goes depends on how it arrived. A cookie-mode client never
+ * sees it — returning it in the body would put it somewhere script can reach —
+ * so the re-issued token replaces the cookie instead. Without that the next
+ * attempt would replay the old counter and the cap would never bite.
+ */
+function retryResponse(args: {
+  token: string;
+  challengeId: string;
+  usedCookie: boolean;
+  requestId: string;
+  challengeTokenTTL: number;
+  isProduction: boolean;
+}): Response {
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "x-request-id": args.requestId,
+  });
+  if (args.usedCookie) {
+    headers.append(
+      "Set-Cookie",
+      setPendingCookie(args.token, args.challengeTokenTTL, args.isProduction)
+    );
+  }
+  return new Response(
+    JSON.stringify({
+      status: "challenge",
+      challengeType: args.challengeId,
+      ...(args.usedCookie ? {} : { pendingToken: args.token }),
+      error: "Invalid code.",
+    }),
+    { status: 401, headers }
+  );
+}
+
+/**
+ * Hand back the token that lets a must-change account replace its password.
+ *
+ * A challenge cleared by an account still holding an admin-set password does
+ * not end in a session: it ends here, so the challenge path cannot be used to
+ * skip the gate the login path enforces.
+ */
+async function passwordChangeRequired(
+  deps: Pick<ChallengeResolveDeps, "secret" | "challengeTokenTTL">,
+  args: { userId: string; strategy?: string; requestId: string }
+): Promise<Response> {
+  const pendingToken = await mintPendingToken(
+    {
+      userId: args.userId,
+      challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
+      attempts: 0,
+      strategy: args.strategy,
+    },
+    deps.secret,
+    deps.challengeTokenTTL
+  );
+  return jsonResponse(
+    200,
+    { status: "password_change_required", pendingToken },
+    { "x-request-id": args.requestId }
+  );
+}
+
+/**
+ * Answer a wrong challenge response: one more attempt, or a final refusal.
+ *
+ * The attempt counter lives in the token rather than in a row, so advancing it
+ * means minting a new one — and the strategy has to be carried across, or a
+ * second attempt would record the session as coming from the password path
+ * whatever actually signed the person in.
+ */
+async function wrongAnswer(
+  deps: Pick<
+    ChallengeResolveDeps,
+    "secret" | "challengeTokenTTL" | "maxChallengeAttempts" | "isProduction"
+  >,
+  args: {
+    pending: {
+      userId: string;
+      challengeId: string;
+      attempts: number;
+      strategy?: string;
+    };
+    usedCookie: boolean;
+    requestId: string;
+  }
+): Promise<Response> {
+  const nextAttempts = args.pending.attempts + 1;
+  if (nextAttempts >= deps.maxChallengeAttempts) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-failed-final") },
+    });
+  }
+  const reissued = await mintPendingToken(
+    {
+      userId: args.pending.userId,
+      challengeId: args.pending.challengeId,
+      attempts: nextAttempts,
+      strategy: args.pending.strategy,
+    },
+    deps.secret,
+    deps.challengeTokenTTL
+  );
+  return retryResponse({
+    token: reissued,
+    challengeId: args.pending.challengeId,
+    usedCookie: args.usedCookie,
+    requestId: args.requestId,
+    challengeTokenTTL: deps.challengeTokenTTL,
+    isProduction: deps.isProduction,
+  });
+}
+
+/**
  * POST /auth/challenge/resolve — complete a multi-step auth challenge (D71).
  *
  * Validates the single-purpose pending-auth token, enforces the attempt cap,
@@ -60,25 +179,22 @@ export async function handleChallengeResolve(
   try {
     const body = (await request.json()) as Record<string, unknown>;
 
-    const csrfCookie = readCsrfCookie(request);
-    const csrfToken = readCsrfFromRequest(body, request);
-    const csrfResult = validateCsrf(
-      request,
-      csrfCookie,
-      csrfToken,
-      deps.allowedOrigins
-    );
-    if (!csrfResult.valid) {
+    const refusal = csrfRefusal(request, body, deps, requestId);
+    if (refusal) {
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(
-        403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
-        { "x-request-id": requestId }
-      );
+      return refusal;
     }
 
+    // Body or cookie. An external login redirected the browser here, so its
+    // pending token lives in an HttpOnly cookie rather than in a variable the
+    // page could have kept — see auth/cookies/pending-cookie.
+    const cookieToken = readPendingCookie(request);
+    const usedCookie =
+      typeof body.pendingToken !== "string" && cookieToken !== null;
     const pendingTokenInput =
-      typeof body.pendingToken === "string" ? body.pendingToken : "";
+      typeof body.pendingToken === "string"
+        ? body.pendingToken
+        : (cookieToken ?? "");
     const challengeResponse = (body.response ?? {}) as Record<string, unknown>;
 
     let pending;
@@ -103,42 +219,12 @@ export async function handleChallengeResolve(
     );
 
     if (!result.ok) {
-      const nextAttempts = pending.attempts + 1;
       await stallResponse(startTime, deps.loginStallTimeMs);
-      if (nextAttempts >= deps.maxChallengeAttempts) {
-        // Out of attempts — fail for good (generic 401).
-        throw NextlyError.invalidCredentials({
-          logContext: { reason: auditReason("challenge-failed-final") },
-        });
-      }
-      // Re-issue a fresh pending token carrying the incremented counter.
-      const reissued = await mintPendingToken(
-        {
-          userId: pending.userId,
-          challengeId: pending.challengeId,
-          attempts: nextAttempts,
-          // Carried across the re-issue, or a second attempt would record the
-          // session as coming from the password path whatever signed them in.
-          strategy: pending.strategy,
-        },
-        deps.secret,
-        deps.challengeTokenTTL
-      );
-      return new Response(
-        JSON.stringify({
-          status: "challenge",
-          challengeType: pending.challengeId,
-          pendingToken: reissued,
-          error: "Invalid code.",
-        }),
-        {
-          status: 401,
-          headers: {
-            "Content-Type": "application/json",
-            "x-request-id": requestId,
-          },
-        }
-      );
+      return wrongAnswer(deps, {
+        pending,
+        usedCookie,
+        requestId,
+      });
     }
 
     // Challenge resolved → load the candidate user and issue the real session.
@@ -157,22 +243,12 @@ export async function handleChallengeResolve(
     // still replace its admin-set password before any session is issued, or the
     // challenge path would bypass the gate the login path enforces.
     if (u.mustChangePassword) {
-      const pwPendingToken = await mintPendingToken(
-        {
-          userId: u.id,
-          challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
-          attempts: 0,
-          strategy: pending.strategy,
-        },
-        deps.secret,
-        deps.challengeTokenTTL
-      );
       await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(
-        200,
-        { status: "password_change_required", pendingToken: pwPendingToken },
-        { "x-request-id": requestId }
-      );
+      return passwordChangeRequired(deps, {
+        userId: u.id,
+        strategy: pending.strategy,
+        requestId,
+      });
     }
 
     const user: AuthUser = {
@@ -186,7 +262,13 @@ export async function handleChallengeResolve(
     // not the one that answered the challenge.
     const response = await issueSession(user, deps, request, requestId, {
       strategy: pending.strategy,
+      // Where the login was headed before the challenge interrupted it. It was
+      // sanitized before being signed into the token, so it is a safe path.
+      next: pending.next,
     });
+    // The challenge is settled either way, so the pending cookie has no reason
+    // to survive it; leaving it would let a stale token be replayed.
+    response.headers.append("Set-Cookie", clearPendingCookie());
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

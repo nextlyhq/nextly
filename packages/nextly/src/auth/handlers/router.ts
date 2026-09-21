@@ -16,6 +16,7 @@ import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
+import { handlePending } from "./pending";
 import { handleRefresh } from "./refresh";
 import { handleRegister } from "./register";
 import { handleResetPassword } from "./reset-password";
@@ -259,6 +260,11 @@ async function dispatchAuthRequest(
       case "ui":
         // Public (pre-auth): the login screen fetches the auth-page UI config.
         return handleAuthUi(request, deps);
+      case "pending":
+        // Public (pre-auth): the login page asks which challenge, if any, an
+        // interrupted login left outstanding. Answers from the HttpOnly
+        // cookie and never returns the token itself.
+        return handlePending(request, deps);
       default:
         return null;
     }

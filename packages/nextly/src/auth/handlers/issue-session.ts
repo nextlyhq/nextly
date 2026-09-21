@@ -13,6 +13,7 @@ import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import { sanitizeAdminPath } from "../redirect/sanitize-admin-path";
 import {
   assertAccountUsable,
   type AccountState,
@@ -88,6 +89,12 @@ export interface IssueSessionOptions {
    * Absent means the password path, which is the only one that predates this.
    */
   strategy?: string;
+  /**
+   * Where the client should land. Set when a login was interrupted by a
+   * challenge and is now resuming, so the answer returns the destination the
+   * login was originally headed for.
+   */
+  next?: string;
 }
 
 /** A minted session: the cookies to set, and the body a login response returns. */
@@ -246,7 +253,12 @@ export async function issueSession(
   opts?: IssueSessionOptions
 ): Promise<Response> {
   const minted = await mintSession(user, deps, request, opts);
-  return respondAction("Logged in.", minted.body, {
+  const body = opts?.next
+    ? // Re-sanitized on the way out as well as before it was signed: this
+      // value decides a navigation, and it costs nothing to check twice.
+      { ...minted.body, next: sanitizeAdminPath(opts.next) }
+    : minted.body;
+  return respondAction("Logged in.", body, {
     status: 200,
     headers: buildCookieHeaders(minted.cookies, { "x-request-id": requestId }),
   });

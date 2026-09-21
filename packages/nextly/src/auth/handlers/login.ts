@@ -3,9 +3,11 @@ import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
+import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
+import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   mintPendingToken,
   MUST_CHANGE_PASSWORD_CHALLENGE,
@@ -64,6 +66,105 @@ export interface LoginHandlerDeps extends IssueSessionDeps {
   resetFailedAttempts: (userId: string) => Promise<void>;
 }
 
+/**
+ * Pause a login and hand back the token that will resume it.
+ *
+ * Three paths stop a login short of a session — a strategy's own challenge, a
+ * second factor added by a hook, and a forced first-sign-in password change —
+ * and each needs a token carrying the same claims. Minting them in one place
+ * is what keeps the attempt counter and the strategy on all three.
+ */
+async function pauseWithPendingToken(
+  deps: Pick<LoginHandlerDeps, "secret" | "challengeTokenTTL">,
+  claims: { userId: string; challengeId: string; strategy?: string }
+): Promise<string> {
+  return mintPendingToken(
+    { ...claims, attempts: 0 },
+    deps.secret,
+    deps.challengeTokenTTL
+  );
+}
+
+/**
+ * Either the response that stops this login short of a session, or the user it
+ * should continue with. One shape or the other, so the caller cannot read a
+ * challenge as a signed-in user.
+ */
+type LoginContinuation = { interrupted: Response } | { user: AuthUser };
+
+/**
+ * Whatever stops an authenticated login short of a session, if anything.
+ *
+ * Two things can: a second factor added by an `afterAuthenticate` hook, and an
+ * account still holding a password an admin chose for it (ASVS 6.4.1). Both
+ * answer with a short-lived single-purpose token the access guard refuses for
+ * any ordinary request, so neither leaves a usable session behind.
+ */
+async function interruptedLogin(
+  deps: Pick<LoginHandlerDeps, "secret" | "challengeTokenTTL">,
+  args: {
+    afterAuth: Awaited<ReturnType<AuthHookRegistry["runAfterAuthenticate"]>>;
+    strategy?: string;
+    requestId: string;
+  }
+): Promise<LoginContinuation> {
+  const { afterAuth, strategy, requestId } = args;
+
+  if (afterAuth && typeof afterAuth === "object" && "challenge" in afterAuth) {
+    const ch = afterAuth.challenge;
+    const pendingToken = await pauseWithPendingToken(deps, {
+      userId: ch.userId,
+      challengeId: ch.id,
+      strategy,
+    });
+    return { interrupted: challengeResponse(ch, pendingToken, requestId) };
+  }
+
+  if (afterAuth.mustChangePassword) {
+    const pendingToken = await pauseWithPendingToken(deps, {
+      userId: afterAuth.id,
+      challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
+      strategy,
+    });
+    return {
+      interrupted: jsonResponse(
+        200,
+        { status: "password_change_required", pendingToken },
+        { "x-request-id": requestId }
+      ),
+    };
+  }
+
+  return { user: afterAuth };
+}
+
+/**
+ * The refusal when no strategy signed the request in.
+ *
+ * A strategy that explicitly failed is a fact this package states, so the
+ * recorded event keeps it. A strategy is application code and its own text is
+ * free-form, so that travels under a separate key which reaches the operator
+ * log and stops there, rather than displacing the one value the audit trail is
+ * allowed to retain.
+ */
+function noStrategyAccepted(
+  outcome: { type: "pass" } | { type: "fail"; reason?: string },
+  strategy?: string
+): NextlyError {
+  return NextlyError.invalidCredentials({
+    logContext: {
+      reason:
+        outcome.type === "fail"
+          ? auditReason("strategy-fail")
+          : auditReason("no-strategy-matched"),
+      ...(outcome.type === "fail" && outcome.reason !== undefined
+        ? { strategyReason: outcome.reason }
+        : {}),
+      ...(strategy ? { strategy } : {}),
+    },
+  });
+}
+
 export async function handleLogin(
   request: Request,
   deps: LoginHandlerDeps
@@ -119,36 +220,15 @@ export async function handleLogin(
     if (outcome.type === "pass" || outcome.type === "fail") {
       // No strategy claimed the request → unified invalid-credentials 401
       // (same wire shape + stall + audit as the legacy missing-credentials leg).
-      throw NextlyError.invalidCredentials({
-        logContext: {
-          // The reason a strategy explicitly failed is ours to state, so the
-          // recorded event keeps that fact. A strategy is application code and
-          // its own text is free-form, so it travels under a separate key that
-          // reaches the operator log and stops there rather than displacing
-          // the one value the audit trail is allowed to retain.
-          reason:
-            outcome.type === "fail"
-              ? auditReason("strategy-fail")
-              : auditReason("no-strategy-matched"),
-          ...(outcome.type === "fail" && outcome.reason !== undefined
-            ? { strategyReason: outcome.reason }
-            : {}),
-          ...(strategy ? { strategy } : {}),
-        },
-      });
+      throw noStrategyAccepted(outcome, strategy);
     }
 
     if (outcome.type === "challenge") {
-      const pendingToken = await mintPendingToken(
-        {
-          userId: outcome.challenge.userId,
-          challengeId: outcome.challenge.id,
-          attempts: 0,
-          strategy,
-        },
-        deps.secret,
-        deps.challengeTokenTTL
-      );
+      const pendingToken = await pauseWithPendingToken(deps, {
+        userId: outcome.challenge.userId,
+        challengeId: outcome.challenge.id,
+        strategy,
+      });
       await stallResponse(startTime, deps.loginStallTimeMs);
       return challengeResponse(outcome.challenge, pendingToken, requestId);
     }
@@ -158,48 +238,23 @@ export async function handleLogin(
       outcome.user,
       deps.pluginCtx
     );
-    if (
-      afterAuth &&
-      typeof afterAuth === "object" &&
-      "challenge" in afterAuth
-    ) {
-      const ch = afterAuth.challenge;
-      const pendingToken = await mintPendingToken(
-        { userId: ch.userId, challengeId: ch.id, attempts: 0, strategy },
-        deps.secret,
-        deps.challengeTokenTTL
-      );
-      await stallResponse(startTime, deps.loginStallTimeMs);
-      return challengeResponse(ch, pendingToken, requestId);
-    }
-
-    // Forced first-sign-in password change (ASVS 6.4.1). The account still
-    // holds a password an admin chose for it, so no session is issued: the
-    // client gets a short-lived, single-purpose pending token (which the access
-    // guard refuses for any normal request) and must set a new password via
-    // handleSetInitialPassword before a real session exists.
-    if (afterAuth.mustChangePassword) {
-      const pendingToken = await mintPendingToken(
-        {
-          userId: afterAuth.id,
-          challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
-          attempts: 0,
-          strategy,
-        },
-        deps.secret,
-        deps.challengeTokenTTL
-      );
-      await stallResponse(startTime, deps.loginStallTimeMs);
-      return jsonResponse(
-        200,
-        { status: "password_change_required", pendingToken },
-        { "x-request-id": requestId }
-      );
-    }
-
-    const response = await issueSession(afterAuth, deps, request, requestId, {
+    const continuation = await interruptedLogin(deps, {
+      afterAuth,
       strategy,
+      requestId,
     });
+    if ("interrupted" in continuation) {
+      await stallResponse(startTime, deps.loginStallTimeMs);
+      return continuation.interrupted;
+    }
+
+    const response = await issueSession(
+      continuation.user,
+      deps,
+      request,
+      requestId,
+      { strategy }
+    );
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

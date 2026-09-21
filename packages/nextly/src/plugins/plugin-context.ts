@@ -9,6 +9,7 @@
  * @since 1.0.0
  */
 
+import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
 import {
@@ -37,6 +38,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import { getPluginAuthApi } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
@@ -364,6 +366,17 @@ export interface PluginContext {
 
   /** @experimental Typed action registry. Ordered side-effects at named seams. */
   actions: PluginActionRegistry;
+
+  /**
+   * @experimental Finishing a login the plugin authenticated elsewhere, and
+   * reading who is signed in.
+   *
+   * The only supported way for a plugin to turn a verified external identity
+   * into a session: it applies the same account-state rules, hooks and audit
+   * trail as the password path, so a plugin cannot accidentally grant a
+   * session core would have refused.
+   */
+  auth: PluginAuthApi;
 }
 
 // ============================================================
@@ -996,5 +1009,9 @@ export function createPluginContext(
     hooks: pluginHooks,
     filters: pluginFilters,
     actions: pluginActions,
+    // A plain property rather than a getter: `runPluginRoute` spreads the base
+    // context on every request, which would evaluate a top-level getter each
+    // time. The instance itself resolves its dependencies lazily instead.
+    auth: getPluginAuthApi(),
   };
 }

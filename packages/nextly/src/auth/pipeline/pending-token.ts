@@ -31,6 +31,12 @@ export interface PendingClaims {
    * mints must record the method that actually signed the person in.
    */
   strategy?: string;
+  /**
+   * Where to land once the challenge is answered. Sanitized by the caller and
+   * signed in here, because the browser holding this token across the redirect
+   * must not be able to edit its own destination.
+   */
+  next?: string;
 }
 
 /**
@@ -50,6 +56,7 @@ export async function mintPendingToken(
       challengeId: claims.challengeId,
       attempts: claims.attempts,
       ...(claims.strategy ? { strategy: claims.strategy } : {}),
+      ...(claims.next ? { next: claims.next } : {}),
     },
     secret,
     ttlSeconds,
@@ -89,5 +96,7 @@ export async function verifyPendingToken(
       typeof result.payload.strategy === "string"
         ? result.payload.strategy
         : "password",
+    next:
+      typeof result.payload.next === "string" ? result.payload.next : undefined,
   };
 }

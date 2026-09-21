@@ -27,6 +27,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { dequal } from "dequal";
 
+import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -119,6 +120,7 @@ import {
   collectUnresolvedPermissionTargets,
   finalizePermissionTargets,
 } from "../plugins/permissions/collect-permissions";
+import { setPluginAuthDepsResolver } from "../plugins/plugin-auth-provider";
 import type {
   PluginContext,
   PluginDefinition,
@@ -2907,6 +2909,18 @@ async function initializePlugins(
   // EventBus + HookRegistry never accumulate duplicates across module
   // re-evaluation. Mirrors the route registry's clear-and-rebuild below. Core
   // (non-plugin) subscriptions are untracked and untouched.
+  // Teach `ctx.auth` how to reach the auth router, and drop any memo held from
+  // a previous registration. Registered rather than imported by the provider,
+  // because the auth bridge reaches back into the plugin context it would
+  // otherwise have to import. Lazy on purpose: the deps are built per call, so
+  // hooks added by a config reload apply without rebuilding the API.
+  setPluginAuthDepsResolver(() =>
+    // The container's own resolver, not the plugin-facing one: the auth
+    // bridge asks for services (the adapter, the config) that are
+    // deliberately outside what a plugin may name.
+    buildAuthRouterDeps(getService as (name: string) => unknown)
+  );
+
   clearPluginSubscriptions();
   // Re-register plugin services from scratch each boot (D64) — same
   // clear-and-rebuild posture as subscriptions/routes, so HMR never leaks stale
