@@ -3058,6 +3058,24 @@ async function initializePlugins(
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
   }
 
+  // PASS 3 — `onReady`, after every plugin's init AND after the route registry
+  // is rebuilt, so a plugin reading the assembled system sees all of it. In
+  // topological order like init, so a plugin still observes its dependencies
+  // before itself.
+  for (const { plugin, context } of teardown) {
+    if (!plugin.onReady) continue;
+    try {
+      await plugin.onReady(context);
+      logger.info?.(`Plugin "${plugin.name}" ready`);
+    } catch (error) {
+      // Same policy as init: a plugin that cannot finish starting has not
+      // started, and carrying on would run the system in a state it declared
+      // itself unfit for.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Plugin "${plugin.name}" onReady failed: ${message}`);
+    }
+  }
+
   return teardown;
 }
 

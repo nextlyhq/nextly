@@ -717,6 +717,43 @@ export interface PluginDefinition {
   init?: (context: PluginContext) => Promise<void> | void;
 
   /**
+   * @experimental Runs once per boot, after EVERY plugin's `init` and after
+   * routes are registered.
+   *
+   * `init` cannot see the finished system: plugins initialise in dependency
+   * order, so anything a plugin does there observes only the part of the boot
+   * that has already happened. A plugin that wants to read the assembled
+   * picture — every route, every contributed service — does it here.
+   *
+   * A throw fails boot, exactly as one from `init` does: a plugin that cannot
+   * finish starting has not started.
+   */
+  onReady?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @experimental Runs when the plugin is INSTALLED, after its migrations.
+   *
+   * Never called during an ordinary boot, so it is the right place for
+   * one-time setup — seeding a row, registering with an external service —
+   * that would otherwise run on every start. Must be idempotent regardless: an
+   * install can be retried after a failure part-way through.
+   */
+  onInstall?: (context: PluginContext) => Promise<void> | void;
+
+  /**
+   * @experimental Runs when the plugin is UNINSTALLED, before its down
+   * migrations, so its tables are still readable.
+   *
+   * `keepData` tells it which kind of uninstall this is: with data kept, the
+   * tables survive and an external deregistration may still be wanted; without
+   * it, this is the last moment anything can read them.
+   */
+  onUninstall?: (
+    context: PluginContext,
+    opts: { keepData: boolean }
+  ) => Promise<void> | void;
+
+  /**
    * @public Teardown on shutdown / HMR / test teardown.
    * Invocation is wired.
    */

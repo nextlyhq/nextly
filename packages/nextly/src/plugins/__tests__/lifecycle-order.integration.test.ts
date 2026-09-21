@@ -78,3 +78,78 @@ describe("plugin resolution wired into runtime boot", () => {
     ).toBe("missing-dependency");
   });
 });
+
+describe("onReady", () => {
+  it("runs after every plugin's init, and in dependency order itself", async () => {
+    // The property that makes onReady worth having: a plugin reading the
+    // assembled system must not see a half-initialised one.
+    const order: string[] = [];
+    const make = (name: string, dependsOn?: Record<string, string>) =>
+      definePlugin({
+        name,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        ...(dependsOn ? { dependsOn } : {}),
+        init() {
+          order.push(`init ${name}`);
+        },
+        onReady() {
+          order.push(`ready ${name}`);
+        },
+      });
+
+    current = await createTestNextly({
+      plugins: [
+        make("@test/c"),
+        make("@test/b", { "@test/a": ">=1.0.0" }),
+        make("@test/a"),
+      ],
+    });
+
+    const inits = order.filter(e => e.startsWith("init"));
+    const readies = order.filter(e => e.startsWith("ready"));
+    expect(order.slice(0, inits.length)).toEqual(inits);
+    expect(readies).toHaveLength(3);
+    expect(order.indexOf("ready @test/a")).toBeLessThan(
+      order.indexOf("ready @test/b")
+    );
+  });
+
+  it("fails boot with the plugin's name when onReady throws", async () => {
+    const boom = definePlugin({
+      name: "@test/boom",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      onReady() {
+        throw new Error("could not finish starting");
+      },
+    });
+
+    await expect(createTestNextly({ plugins: [boom] })).rejects.toThrow(
+      /@test\/boom.*onReady/
+    );
+  });
+
+  it("never calls onInstall or onUninstall during a boot", async () => {
+    // They belong to install and uninstall, which a boot is neither. Calling
+    // them here would re-run one-time setup on every start.
+    let installs = 0;
+    let uninstalls = 0;
+    const p = definePlugin({
+      name: "@test/lifecycle",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      onInstall() {
+        installs += 1;
+      },
+      onUninstall() {
+        uninstalls += 1;
+      },
+    });
+
+    current = await createTestNextly({ plugins: [p] });
+
+    expect(installs).toBe(0);
+    expect(uninstalls).toBe(0);
+  });
+});
