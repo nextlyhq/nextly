@@ -25,7 +25,12 @@ import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
 
-import { AuthUiExtras, AuthChallenge, useAuthUi } from "./auth-ui-extras";
+import {
+  AuthUiExtras,
+  AuthUiExtrasAfter,
+  AuthChallenge,
+  useAuthUi,
+} from "./auth-ui-extras";
 import { SetInitialPassword } from "./set-initial-password";
 import { useChallengeFlow } from "./use-resume-login";
 
@@ -234,6 +239,13 @@ export function Login() {
               </p>
             </div>
           )}
+          {(authUi.providers.length > 0 ||
+            authUi.slots.beforeForm.length > 0 ||
+            authUi.slots.branding.length > 0) && (
+            <div className="mb-6">
+              <AuthUiExtras authUi={authUi} />
+            </div>
+          )}
           <FormProvider {...form}>
             <form
               onSubmit={e => {
@@ -344,12 +356,9 @@ export function Login() {
               </Button>
             </form>
           </FormProvider>
-          {(authUi.providers.length > 0 ||
-            authUi.slots.beforeForm.length > 0 ||
-            authUi.slots.afterForm.length > 0 ||
-            authUi.slots.branding.length > 0) && (
+          {authUi.slots.afterForm.length > 0 && (
             <div className="mt-6">
-              <AuthUiExtras authUi={authUi} />
+              <AuthUiExtrasAfter authUi={authUi} />
             </div>
           )}
           <div className="mt-8 text-left">

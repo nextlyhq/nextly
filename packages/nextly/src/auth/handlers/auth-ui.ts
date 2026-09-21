@@ -9,6 +9,8 @@ export interface AuthUiProvider {
   label: string;
   icon?: string;
   component?: string;
+  /** A same-origin path the button navigates to, when it has no component. */
+  href?: string;
 }
 
 /**
@@ -30,6 +32,26 @@ export interface AuthUiMeta {
   };
 }
 
+/**
+ * Whether a value is a path this origin will serve, rather than somewhere else.
+ *
+ * A login button is the most valuable place on a site to plant an open
+ * redirect, so the check is by construction rather than by recognising hostile
+ * URLs: exactly one leading slash, and a second character that cannot begin an
+ * authority. That rejects `//evil`, `/\\evil`, every scheme, and the encodings
+ * of those, including ones not yet invented.
+ */
+export function isSameOriginPath(href: string): boolean {
+  if (typeof href !== "string" || !href.startsWith("/")) return false;
+  if (href.length > 1 && (href[1] === "/" || href[1] === "\\")) return false;
+  // A control character can split or truncate the attribute it lands in.
+  for (let i = 0; i < href.length; i++) {
+    const code = href.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return true;
+}
+
 /** Fold every plugin's `contributes.auth.ui` into one served {@link AuthUiMeta}. */
 export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
   const meta: AuthUiMeta = {
@@ -40,7 +62,21 @@ export function aggregateAuthUi(plugins: PluginDefinition[]): AuthUiMeta {
   for (const plugin of plugins) {
     const ui = plugin.contributes?.auth?.ui;
     if (!ui) continue;
-    if (ui.providers) meta.providers.push(...ui.providers);
+    if (ui.providers) {
+      for (const provider of ui.providers) {
+        if (provider.href !== undefined && !isSameOriginPath(provider.href)) {
+          // Dropped rather than refused at boot: one bad button should not
+          // stop a site from starting, and a provider the login page never
+          // shows is a visible failure the operator can act on.
+          console.warn(
+            `[nextly] Ignoring provider "${provider.strategy}" from ${plugin.name}: ` +
+              `href must be a same-origin path beginning with a single "/".`
+          );
+          continue;
+        }
+        meta.providers.push(provider);
+      }
+    }
     if (ui.challengeViews)
       Object.assign(meta.challengeViews, ui.challengeViews);
     if (ui.slots?.beforeForm) meta.slots.beforeForm.push(ui.slots.beforeForm);
