@@ -117,6 +117,11 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         {
           ...(b as Parameters<typeof svc.createLocalUser>[0]),
           mustChangePassword: adminSetPassword,
+          // After the spread, never from it: the body is client-supplied, and
+          // a caller that could name its own verification mode could vouch for
+          // an address it has not proved. The authenticated admin reaching
+          // this route is the voucher.
+          emailVerification: "admin-vouched",
         },
         // Attribute the account creation to the authenticated admin so the
         // emitted `user.created` event is not anonymous.

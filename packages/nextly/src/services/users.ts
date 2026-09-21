@@ -163,6 +163,12 @@ export class UsersService extends BaseService {
       password?: string | null;
       roles?: string[];
       isActive?: boolean;
+      /**
+       * Whether the caller has established that this address belongs to the
+       * person getting the account. Omitted means it has not, which is what
+       * an account created from an unproven claim should be.
+       */
+      emailVerification?: "admin-vouched" | "pending";
       [key: string]: unknown;
     },
     actor?: RequestActor

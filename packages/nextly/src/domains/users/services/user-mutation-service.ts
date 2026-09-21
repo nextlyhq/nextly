@@ -195,6 +195,20 @@ export interface CreateLocalUserData {
    * setup flow (where the person chooses their own password) never trip it.
    */
   mustChangePassword?: boolean;
+  /**
+   * Whether anything has established that this address belongs to whoever is
+   * getting the account.
+   *
+   * `"admin-vouched"` — an operator typed the password for someone else, so
+   * the address was established out of band and the account is verified at
+   * creation. `"pending"` — nobody has vouched, so the address stays unproven
+   * until a verification link is followed.
+   *
+   * Defaults to `"pending"`, because the caller that forgets to say is
+   * precisely the one whose claim should not be believed. Self-registration
+   * relies on that default being the safe one.
+   */
+  emailVerification?: "admin-vouched" | "pending";
   /** Custom field values from user_ext */
   [key: string]: unknown;
 }
@@ -792,6 +806,10 @@ export class UserMutationService extends BaseService {
       // and left to the caller, so nothing about creation depends on mail.
       const isInvite = passwordHash === null;
 
+      // Absent means "nobody vouched", so an un-updated caller outside this
+      // package gets the unproven account rather than the trusted one.
+      const adminVouched = userData.emailVerification === "admin-vouched";
+
       // Insert new user (and user_ext if custom fields are configured)
       const now = new Date();
       const newUserId = randomUUID();
@@ -804,7 +822,12 @@ export class UserMutationService extends BaseService {
         // invite (which requires receiving the link) sets emailVerified in the
         // same step. An admin-set password vouches for the account, so it is
         // verified at creation.
-        emailVerified: isInvite ? null : now,
+        //
+        // Having a password is NOT on its own evidence of anything: a person
+        // registering themselves also supplies one, and treating that as proof
+        // let anyone claim any address. Only a caller that explicitly vouches
+        // gets a verified account.
+        emailVerified: isInvite || !adminVouched ? null : now,
         image: userData.image ?? null,
         isActive: userData.isActive ?? false,
         // Only true when an admin typed the password for someone else; the

@@ -86,6 +86,12 @@ export interface CreateUserInput {
   image?: string | null;
   roles?: string[];
   isActive?: boolean;
+  /**
+   * Whether this address has been established out of band. This entry point is
+   * the trusted server-side one, so it vouches unless told otherwise; pass
+   * `"pending"` when the address came from whoever is getting the account.
+   */
+  emailVerification?: "admin-vouched" | "pending";
   /** Custom field values from user_ext */
   [key: string]: unknown;
 }
@@ -177,9 +183,19 @@ export class UserService {
       userId: context.user?.id,
     });
 
-    // Extract known fields, pass rest as custom field values
-    const { email, name, password, image, roles, isActive, ...customFields } =
-      input;
+    // Extract known fields, pass rest as custom field values. `emailVerification`
+    // is named here rather than left to the rest, or it would be offered to
+    // user_ext as though it were a custom field.
+    const {
+      email,
+      name,
+      password,
+      image,
+      roles,
+      isActive,
+      emailVerification,
+      ...customFields
+    } = input;
     // mutationService.createLocalUser now returns the created user directly
     // and throws NextlyError on validation/duplicate/DB failures. The façade
     // just logs around the call and lets the error propagate to callers.
@@ -192,6 +208,11 @@ export class UserService {
           image,
           roles,
           isActive,
+          // This entry point is the host app's own server-side code, which is
+          // in the same position as an admin typing the details: it has
+          // whatever established the address. A caller creating an account
+          // from a self-supplied address passes "pending".
+          emailVerification: emailVerification ?? "admin-vouched",
           ...customFields,
         },
         // Attribute the write to the authenticated caller so the emitted
