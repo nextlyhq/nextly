@@ -638,6 +638,41 @@ export interface PluginDefinition {
   enabled?: boolean;
 
   /**
+   * @experimental What this plugin may do beyond its own tables and routes.
+   *
+   * A reviewable contract rather than a sandbox: Nextly runs plugins as
+   * trusted code, and this makes their reach legible before installation. The
+   * runtime surfaces read it — `ctx.fetch` exists only for a plugin that
+   * declared the hosts it calls.
+   */
+  capabilities?: {
+    /**
+     * Hosts `ctx.fetch` may reach: an exact hostname or one leading `*.`
+     * wildcard. Absent means `ctx.fetch` is not available at all.
+     */
+    net?: { outbound: string[] };
+    /** Grants raw SQL access. Default false. */
+    db?: { rawSql?: boolean };
+    /**
+     * Settings key paths stored encrypted and redacted on read, dot-separated
+     * for nested values (`providers.google.clientSecret`).
+     */
+    secrets?: string[];
+  };
+
+  /** @experimental Capability names this plugin implements, e.g. "auth-provider". */
+  provides?: string[];
+
+  /**
+   * @experimental Capability → the semver range a providing plugin must
+   * satisfy, matched against THAT PLUGIN's version.
+   */
+  requires?: Record<string, string>;
+
+  /** @experimental Integer schema version, checked against applied migrations. */
+  schemaVersion?: number;
+
+  /**
    * @public Declarative contributions — introspectable without running
    * the plugin. Consumed incrementally by later phases. See {@link PluginContributions}.
    */

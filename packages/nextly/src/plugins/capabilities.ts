@@ -1,0 +1,159 @@
+/**
+ * What a plugin declares it may do, provides, and needs.
+ *
+ * Nextly runs plugins as trusted code in the host's own process; nothing here
+ * is a sandbox, and it is not trying to be one. A manifest is a REVIEWABLE
+ * CONTRACT: it makes the reach of a plugin legible before it is installed, and
+ * it is what the runtime surfaces enforce — `ctx.fetch` exists only for a
+ * plugin that declared the hosts it calls, and the settings store encrypts
+ * exactly the keys named as secrets.
+ *
+ * Every refusal here is a boot failure. A manifest that is wrong is wrong
+ * before anything runs, and starting anyway means discovering it later through
+ * a surface that quietly did not exist.
+ *
+ * @module plugins/capabilities
+ * @since 1.0.0
+ */
+import type { PluginDefinition } from "./plugin-context";
+import { resolutionError } from "./resolution-error";
+import { satisfiesRange } from "./semver-range";
+
+/** The capability keys a plugin may declare. Anything else is a typo. */
+const KNOWN_CAPABILITIES = ["net", "db", "secrets"] as const;
+
+/**
+ * A hostname, or one leading `*.` wildcard.
+ *
+ * IP literals are refused deliberately. An allowlist is a statement about WHO
+ * a plugin talks to, and an address is not who anybody is — it changes hands,
+ * and `ctx.fetch` resolves names to addresses itself precisely so the answer
+ * cannot be swapped underneath the check.
+ */
+const OUTBOUND_HOST =
+  /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+function plugins(all: PluginDefinition[]): PluginDefinition[] {
+  // A disabled plugin contributes nothing, so it neither provides a capability
+  // another plugin could require nor has a manifest worth enforcing.
+  return all.filter(plugin => plugin.enabled !== false);
+}
+
+/**
+ * Check every plugin's own manifest: the keys it declares, the hosts it names,
+ * the secrets it lists, and its schema version.
+ */
+export function validateCapabilities(all: PluginDefinition[]): void {
+  for (const plugin of plugins(all)) {
+    const capabilities = plugin.capabilities;
+    if (capabilities) {
+      for (const key of Object.keys(capabilities)) {
+        if (
+          !KNOWN_CAPABILITIES.includes(
+            key as (typeof KNOWN_CAPABILITIES)[number]
+          )
+        ) {
+          throw resolutionError(
+            "unknown-capability",
+            `Plugin "${plugin.name}" declares an unknown capability "${key}".`,
+            { plugin: plugin.name, capability: key }
+          );
+        }
+      }
+
+      for (const host of capabilities.net?.outbound ?? []) {
+        if (!OUTBOUND_HOST.test(host)) {
+          throw resolutionError(
+            "invalid-outbound-host",
+            `Plugin "${plugin.name}" declares an outbound host that is not a hostname: "${host}".`,
+            { plugin: plugin.name, host }
+          );
+        }
+      }
+
+      const secrets = capabilities.secrets ?? [];
+      const seen = new Set<string>();
+      for (const path of secrets) {
+        if (typeof path !== "string" || path.length === 0) {
+          throw resolutionError(
+            "invalid-secret-path",
+            `Plugin "${plugin.name}" declares an empty secret path.`,
+            { plugin: plugin.name }
+          );
+        }
+        if (seen.has(path)) {
+          throw resolutionError(
+            "invalid-secret-path",
+            `Plugin "${plugin.name}" declares the secret path "${path}" twice.`,
+            { plugin: plugin.name, path }
+          );
+        }
+        seen.add(path);
+      }
+    }
+
+    if (plugin.schemaVersion !== undefined) {
+      const version = plugin.schemaVersion;
+      if (!Number.isInteger(version) || version < 1) {
+        throw resolutionError(
+          "invalid-schema-version",
+          `Plugin "${plugin.name}" declares schemaVersion ${String(version)}; it must be a positive integer.`,
+          { plugin: plugin.name, schemaVersion: version }
+        );
+      }
+    }
+  }
+}
+
+/** Which plugin provides each capability name, and at what version. */
+export function resolveProvides(
+  all: PluginDefinition[]
+): Map<string, { plugin: string; version: string }> {
+  const provided = new Map<string, { plugin: string; version: string }>();
+  for (const plugin of plugins(all)) {
+    for (const capability of plugin.provides ?? []) {
+      provided.set(capability, {
+        plugin: plugin.name,
+        version: plugin.version,
+      });
+    }
+  }
+  return provided;
+}
+
+/**
+ * Check that everything a plugin requires is provided, at a compatible version.
+ *
+ * The range is matched against the PROVIDING PLUGIN's version, not against a
+ * version of the capability itself: a capability is a shape its provider
+ * publishes, so the provider's version is the only thing that can change it.
+ */
+export function validateRequires(all: PluginDefinition[]): void {
+  const provided = resolveProvides(all);
+
+  for (const plugin of plugins(all)) {
+    for (const [capability, range] of Object.entries(plugin.requires ?? {})) {
+      const provider = provided.get(capability);
+      if (!provider) {
+        throw resolutionError(
+          "missing-capability",
+          `Plugin "${plugin.name}" requires the capability "${capability}", which no enabled plugin provides.`,
+          { plugin: plugin.name, capability, range }
+        );
+      }
+      if (!satisfiesRange(provider.version, range)) {
+        throw resolutionError(
+          "capability-version-incompatible",
+          `Plugin "${plugin.name}" requires "${capability}" ${range}, but "${provider.plugin}" provides it at ${provider.version}.`,
+          {
+            plugin: plugin.name,
+            capability,
+            range,
+            provider: provider.plugin,
+            providerVersion: provider.version,
+          }
+        );
+      }
+    }
+  }
+}

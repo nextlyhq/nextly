@@ -1,3 +1,4 @@
+import { validateCapabilities, validateRequires } from "./capabilities";
 import type { PluginDefinition } from "./plugin-context";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
@@ -26,6 +27,12 @@ export function resolvePlugins(
   opts: ResolvePluginsOptions
 ): PluginDefinition[] {
   validatePluginVersions(plugins, opts.coreVersion);
+  // Before any surface reads the manifest. A capability that is misspelled or
+  // an outbound host that is not a hostname would otherwise be discovered as a
+  // runtime surface quietly not existing, which reads as a bug in the plugin's
+  // own code rather than in its declaration.
+  validateCapabilities(plugins);
+  validateRequires(plugins);
   // Before anything reads it. A `clientConfig` that cannot be delivered is a
   // configuration error like an incompatible version, so it belongs with the
   // other fail-fast checks rather than surfacing when the admin first asks for
