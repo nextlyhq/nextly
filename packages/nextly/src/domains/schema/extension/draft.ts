@@ -51,6 +51,8 @@ export interface DraftTableView {
 
 interface DraftTable {
   name: string;
+  /** The name before any prefix; equal to `name` for core and entity tables. */
+  authored: string;
   owner: DraftOwner;
   columns: ExtensionColumn[];
   indexes: ExtensionIndex[];
@@ -131,6 +133,7 @@ export class SchemaDraftStore {
     for (const name of input.coreTableNames) {
       this.tables.set(name, {
         name,
+        authored: name,
         owner: { kind: "core" },
         columns: [],
         indexes: [],
@@ -139,6 +142,7 @@ export class SchemaDraftStore {
     for (const entity of input.entities) {
       this.tables.set(entity.name, {
         name: entity.name,
+        authored: entity.name,
         owner: {
           kind: "entity",
           slug: entity.slug,
@@ -336,7 +340,7 @@ export function createOwnerDraft(
         assertIndexBuildable(index, columns, name);
       }
 
-      store.set({ name, owner, columns, indexes });
+      store.set({ name, authored: def.name, owner, columns, indexes });
     },
 
     extendTable(name, ext): void {

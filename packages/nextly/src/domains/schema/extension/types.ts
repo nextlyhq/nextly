@@ -86,6 +86,14 @@ export type SchemaOwner = { kind: "plugin"; id: string } | { kind: "app" };
 export interface ExtensionTable {
   /** Final SQL table name (prefix applied for plugins). */
   name: string;
+  /**
+   * The name as the author wrote it, before any prefix.
+   *
+   * Recorded rather than recovered by splitting the SQL name on the
+   * separator: that split is a PROXY for the naming rules, and a proxy that
+   * disagrees with them fails on exactly the tables it was written for.
+   */
+  authored: string;
   owner: SchemaOwner;
   columns: ExtensionColumn[];
   indexes: ExtensionIndex[];

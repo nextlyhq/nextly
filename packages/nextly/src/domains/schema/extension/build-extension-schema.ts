@@ -96,6 +96,7 @@ export async function buildExtensionSchema(
 
   const tables: ExtensionTable[] = store.extensionTables().map(table => ({
     name: table.name,
+    authored: table.authored,
     owner: table.owner as SchemaOwner,
     columns: table.columns,
     indexes: table.indexes,
