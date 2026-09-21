@@ -89,6 +89,18 @@ export function validateCapabilities(all: PluginDefinition[]): void {
           );
         }
         seen.add(path);
+
+        // A secret path the schema does not have is a credential stored in
+        // plain text, because nothing matches it on the way in and nothing
+        // redacts it on the way out — and it fails silently, which is the
+        // worst way for that to be wrong.
+        if (!schemaHasPath(plugin, path)) {
+          throw resolutionError(
+            "unknown-secret-path",
+            `Plugin "${plugin.name}" declares the secret path "${path}", which its settings schema does not contain.`,
+            { plugin: plugin.name, path }
+          );
+        }
       }
     }
 
@@ -103,6 +115,26 @@ export function validateCapabilities(all: PluginDefinition[]): void {
       }
     }
   }
+}
+
+/**
+ * Whether a plugin's declared settings schema contains a path.
+ *
+ * Only the FIRST segment is checked against the schema's shape. A `*` segment
+ * matches any key by design, and the values below a record are not enumerable
+ * from the schema, so requiring the whole path to resolve would refuse the
+ * nested declarations this feature exists for. The first segment is the part
+ * a typo actually lands in.
+ */
+function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
+  const schema = plugin.contributes?.settings;
+  // Nothing to check against: a plugin may declare secrets before it declares
+  // a schema, and resolution is not the place to demand an ordering.
+  if (!schema) return true;
+
+  const [head] = path.split(".");
+  const shape = (schema as { shape?: Record<string, unknown> }).shape;
+  return shape === undefined || Object.hasOwn(shape, head);
 }
 
 /** Which plugin provides each capability name, and at what version. */

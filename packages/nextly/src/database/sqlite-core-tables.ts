@@ -488,6 +488,18 @@ export function generateSqliteCoreTableStatements(): string[] {
     // `freshPushSchema` cannot run -- the non-TTY path -- and a table missing
     // from it is a table every read and write fails against, on exactly the
     // installs where nobody is watching the boot.
+    // Keyed by (owner, key) so a plugin cannot hold two values for one
+    // setting, and one plugin's settings can never be written under another's
+    // name.
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_settings" (
+      "owner" TEXT NOT NULL,
+      "key" TEXT NOT NULL,
+      "value" TEXT NOT NULL,
+      "is_secret" INTEGER NOT NULL DEFAULT 0,
+      "updated_at" INTEGER NOT NULL,
+      "updated_by" TEXT,
+      PRIMARY KEY ("owner", "key")
+    )`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,

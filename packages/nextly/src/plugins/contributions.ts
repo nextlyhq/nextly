@@ -1,3 +1,5 @@
+import type { ZodObject, ZodRawShape } from "zod";
+
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   FieldStoragePrimitive,
@@ -602,4 +604,14 @@ export interface PluginContributions {
    * `auth.strategies`), not here.
    */
   auth?: PluginAuthContributions;
+
+  /**
+   * @experimental The shape of this plugin's configuration, as a zod object.
+   *
+   * Declaring it is what creates `ctx.settings`: a plugin with no declared
+   * schema has nowhere to store settings, rather than an untyped bag. Keys
+   * listed in `capabilities.secrets` are encrypted at rest and never returned
+   * to the browser.
+   */
+  settings?: ZodObject<ZodRawShape>;
 }

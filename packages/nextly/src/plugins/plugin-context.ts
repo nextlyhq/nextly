@@ -40,6 +40,7 @@ import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
 import { getPluginAuthApi } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
+import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import type { PluginSelf } from "./self";
@@ -377,6 +378,25 @@ export interface PluginContext {
    * session core would have refused.
    */
   auth: PluginAuthApi;
+
+  /**
+   * @experimental This plugin's stored configuration.
+   *
+   * Present only when the plugin declares `contributes.settings`. Values are
+   * parsed with that schema, and the keys named in `capabilities.secrets` are
+   * encrypted at rest and never returned to the admin.
+   */
+  settings?: PluginSettingsApi;
+}
+
+/** Reading and writing one plugin's settings. */
+export interface PluginSettingsApi<
+  T extends Record<string, unknown> = Record<string, unknown>,
+> {
+  /** Parsed with the declared schema; missing keys take its defaults. */
+  get(): Promise<T>;
+  /** Validates the update against the whole schema, encrypts, and stores it. */
+  set(patch: Partial<T>, opts?: { actorUserId?: string }): Promise<void>;
 }
 
 // ============================================================
@@ -1085,5 +1105,11 @@ export function createPluginContext(
     // context on every request, which would evaluate a top-level getter each
     // time. The instance itself resolves its dependencies lazily instead.
     auth: getPluginAuthApi(),
+    // Present only when the plugin declared a settings schema: without one
+    // there is nothing to validate a write against, and an untyped bag is
+    // exactly what this store exists to replace.
+    ...(plugin?.contributes?.settings
+      ? { settings: createPluginSettings(plugin, db) }
+      : {}),
   };
 }

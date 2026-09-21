@@ -2686,6 +2686,28 @@ export function parseRestRoute(
     if (result) return result;
   }
 
+  // Plugin settings. One plugin per request, named in the path, so a caller
+  // cannot ask for every plugin's configuration in one go.
+  if (resource === "plugins-settings" && id) {
+    routeParams.plugin = id;
+    if (httpMethod === "GET") {
+      return {
+        service: "pluginSettings",
+        operation: "single",
+        method: "getPluginSettings",
+        routeParams,
+      };
+    }
+    if (httpMethod === "PATCH") {
+      return {
+        service: "pluginSettings",
+        operation: "update",
+        method: "updatePluginSettings",
+        routeParams,
+      };
+    }
+  }
+
   // Handle Roles endpoints
   if (resource === "roles") {
     const result = parseRoleRoutes(
