@@ -106,11 +106,15 @@ export async function handleLogin(
     // failure leg (locked / unverified / inactive / bad password) — caught
     // below, identical to the legacy path. With no extra strategies + no hooks,
     // this is byte-for-byte the previous behavior.
-    const outcome = await runStrategyChain(
+    const { outcome, strategyName } = await runStrategyChain(
       deps.authStrategies,
       { request, body },
       deps.pluginCtx
     );
+    // Whichever strategy decided, recorded on both the success and the failure
+    // row. A trail that says only "a login failed" cannot answer which method
+    // was tried, which is the question an operator has after a breach.
+    const strategy = strategyName ?? undefined;
 
     if (outcome.type === "pass" || outcome.type === "fail") {
       // No strategy claimed the request → unified invalid-credentials 401
@@ -129,6 +133,7 @@ export async function handleLogin(
           ...(outcome.type === "fail" && outcome.reason !== undefined
             ? { strategyReason: outcome.reason }
             : {}),
+          ...(strategy ? { strategy } : {}),
         },
       });
     }
@@ -139,6 +144,7 @@ export async function handleLogin(
           userId: outcome.challenge.userId,
           challengeId: outcome.challenge.id,
           attempts: 0,
+          strategy,
         },
         deps.secret,
         deps.challengeTokenTTL
@@ -159,7 +165,7 @@ export async function handleLogin(
     ) {
       const ch = afterAuth.challenge;
       const pendingToken = await mintPendingToken(
-        { userId: ch.userId, challengeId: ch.id, attempts: 0 },
+        { userId: ch.userId, challengeId: ch.id, attempts: 0, strategy },
         deps.secret,
         deps.challengeTokenTTL
       );
@@ -178,6 +184,7 @@ export async function handleLogin(
           userId: afterAuth.id,
           challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
           attempts: 0,
+          strategy,
         },
         deps.secret,
         deps.challengeTokenTTL
@@ -190,7 +197,9 @@ export async function handleLogin(
       );
     }
 
-    const response = await issueSession(afterAuth, deps, request, requestId);
+    const response = await issueSession(afterAuth, deps, request, requestId, {
+      strategy,
+    });
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

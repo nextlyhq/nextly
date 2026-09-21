@@ -117,6 +117,9 @@ export async function handleChallengeResolve(
           userId: pending.userId,
           challengeId: pending.challengeId,
           attempts: nextAttempts,
+          // Carried across the re-issue, or a second attempt would record the
+          // session as coming from the password path whatever signed them in.
+          strategy: pending.strategy,
         },
         deps.secret,
         deps.challengeTokenTTL
@@ -159,6 +162,7 @@ export async function handleChallengeResolve(
           userId: u.id,
           challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
           attempts: 0,
+          strategy: pending.strategy,
         },
         deps.secret,
         deps.challengeTokenTTL
@@ -177,7 +181,12 @@ export async function handleChallengeResolve(
       name: u.name,
       image: u.image,
     };
-    const response = await issueSession(user, deps, request, requestId);
+    // The strategy the pending token carries, not this handler's own: the
+    // method that signed the person in is the one that authenticated them,
+    // not the one that answered the challenge.
+    const response = await issueSession(user, deps, request, requestId, {
+      strategy: pending.strategy,
+    });
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {

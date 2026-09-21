@@ -21,23 +21,57 @@ const input: Omit<AuthInput, "strategyName"> = {
   body: {},
 };
 
+const fails = (name: string): AuthStrategy => ({
+  name,
+  authenticate: async () => ({ type: "fail", reason: `${name} said no` }),
+});
+
 describe("runStrategyChain", () => {
   it("skips pass strategies and returns the first non-pass outcome", async () => {
-    const out = await runStrategyChain(
+    const { outcome } = await runStrategyChain(
       [pass("a"), ok("b"), ok("c")],
       input,
       {} as never
     );
-    expect(out).toMatchObject({ type: "authenticated", user: { id: "b" } });
+    expect(outcome).toMatchObject({ type: "authenticated", user: { id: "b" } });
   });
 
   it("returns pass when all strategies pass", async () => {
-    const out = await runStrategyChain(
+    const { outcome } = await runStrategyChain(
       [pass("a"), pass("b")],
       input,
       {} as never
     );
-    expect(out.type).toBe("pass");
+    expect(outcome.type).toBe("pass");
+  });
+
+  it("names the strategy that decided, so the trail can record it", async () => {
+    const { strategyName } = await runStrategyChain(
+      [pass("a"), ok("b"), ok("c")],
+      input,
+      {} as never
+    );
+    expect(strategyName).toBe("b");
+  });
+
+  it("names the strategy that failed, not merely the one that succeeded", async () => {
+    const { outcome, strategyName } = await runStrategyChain(
+      [pass("a"), fails("b")],
+      input,
+      {} as never
+    );
+    expect(outcome.type).toBe("fail");
+    expect(strategyName).toBe("b");
+  });
+
+  it("names nobody when every strategy passed", async () => {
+    // Nothing decided, so there is no strategy to attribute the attempt to.
+    const { strategyName } = await runStrategyChain(
+      [pass("a"), pass("b")],
+      input,
+      {} as never
+    );
+    expect(strategyName).toBeNull();
   });
 
   it("passes each strategy its own strategyName", async () => {

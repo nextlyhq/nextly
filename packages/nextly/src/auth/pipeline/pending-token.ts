@@ -24,6 +24,13 @@ export interface PendingClaims {
   userId: string;
   challengeId: string;
   attempts: number;
+  /**
+   * The strategy that authenticated the login this challenge interrupted.
+   * Signed into the token so it survives the round trip: the browser holds the
+   * token between the challenge and its answer, and the session the answer
+   * mints must record the method that actually signed the person in.
+   */
+  strategy?: string;
 }
 
 /**
@@ -42,6 +49,7 @@ export async function mintPendingToken(
       sub: claims.userId,
       challengeId: claims.challengeId,
       attempts: claims.attempts,
+      ...(claims.strategy ? { strategy: claims.strategy } : {}),
     },
     secret,
     ttlSeconds,
@@ -75,5 +83,11 @@ export async function verifyPendingToken(
     userId: String(result.payload.sub),
     challengeId: String(result.payload.challengeId),
     attempts: Number(result.payload.attempts ?? 0),
+    // A token minted before the claim existed came from the password path,
+    // which was the only one that could reach a challenge.
+    strategy:
+      typeof result.payload.strategy === "string"
+        ? result.payload.strategy
+        : "password",
   };
 }

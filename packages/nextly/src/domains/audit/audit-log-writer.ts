@@ -83,7 +83,12 @@ export type AuditEventKind =
  * Default-deny, mirroring how webhook payloads are projected. The keys kept are
  * the ones that describe WHAT happened rather than TO WHOM.
  */
-const AUDIT_METADATA_KEYS = ["reason", "originalCode", "legacyCode"] as const;
+const AUDIT_METADATA_KEYS = [
+  "reason",
+  "originalCode",
+  "legacyCode",
+  "strategy",
+] as const;
 
 /**
  * Whether a retained value is one this package controls.
@@ -103,7 +108,20 @@ function isRetainableValue(
   value: unknown
 ): boolean {
   if (key === "reason") return isAuditReason(value);
+  // Strategy names come from application and plugin code, so there is no list
+  // to check against. The SHAPE is bounded instead: a short, lowercase
+  // identifier cannot carry an address, a message or anything else that would
+  // put a person on a row nothing can later find.
+  if (key === "strategy") return isStrategyName(value);
   return isCanonicalErrorCode(value);
+}
+
+/** The shape a strategy name must have to be retained on an audit row. */
+const STRATEGY_NAME_PATTERN = /^[a-z0-9][a-z0-9:_-]{0,63}$/;
+
+/** Whether a value is a strategy name rather than free text wearing the key. */
+export function isStrategyName(value: unknown): value is string {
+  return typeof value === "string" && STRATEGY_NAME_PATTERN.test(value);
 }
 
 /**

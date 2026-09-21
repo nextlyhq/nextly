@@ -1,5 +1,8 @@
 import { respondAction } from "../../api/response-shapes";
-import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import {
+  isStrategyName,
+  type AuditLogWriter,
+} from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
@@ -79,11 +82,20 @@ export interface IssueSessionDeps {
  * decides whether the trail can contradict itself, which is not something three
  * copies should each be trusted to get right.
  */
+export interface IssueSessionOptions {
+  /**
+   * The strategy that authenticated this login, recorded on the audit row.
+   * Absent means the password path, which is the only one that predates this.
+   */
+  strategy?: string;
+}
+
 export async function issueSession(
   user: AuthUser,
   deps: IssueSessionDeps,
   request: Request,
-  requestId: string
+  requestId: string,
+  opts?: IssueSessionOptions
 ): Promise<Response> {
   // Preconditions run first, before any token or refresh row exists. Every
   // strategy reaches a session through here, so this is the one place that can
@@ -96,7 +108,11 @@ export async function issueSession(
   }
   assertAccountUsable(state, {
     requireEmailVerification: deps.requireEmailVerification,
-    enforcePasswordLockout: true,
+    // The lockout guards the password strategy. A session finished by any
+    // other strategy must not be blockable by someone typing wrong passwords
+    // at an address they do not own.
+    enforcePasswordLockout:
+      opts?.strategy === undefined || opts.strategy === "password",
   });
 
   const [roleIds, customFields] = await Promise.all([
@@ -157,6 +173,11 @@ export async function issueSession(
       trustedProxyIps: deps.trustedProxyIps,
     }),
     userAgent: request.headers.get("user-agent"),
+    // Which method signed this person in. Success metadata is stored as given
+    // rather than projected, so the shape is checked here instead.
+    ...(isStrategyName(opts?.strategy)
+      ? { metadata: { strategy: opts.strategy } }
+      : {}),
   });
 
   const cookies = [

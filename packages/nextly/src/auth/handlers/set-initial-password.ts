@@ -174,7 +174,12 @@ export async function handleSetInitialPassword(
       userAgent: request.headers.get("user-agent"),
     });
 
-    const response = await issueSession(user, deps, request, requestId);
+    // The strategy the pending token carries, not this handler's own: the
+    // method that signed the person in is the one that authenticated them,
+    // not the one that answered the challenge.
+    const response = await issueSession(user, deps, request, requestId, {
+      strategy: pending.strategy,
+    });
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;
   } catch (err) {
