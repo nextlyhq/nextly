@@ -1,0 +1,161 @@
+/**
+ * The one path from a neutral table to the two shapes consumers need.
+ *
+ * A `TableSpec` is what the diff engine compares, and a Drizzle table is what
+ * the runtime registry queries through and what drizzle-kit pushes. Both are
+ * derived HERE, from the same column, so they cannot disagree — and neither
+ * re-renders a dialect type of its own: `renderDialectType` already answers
+ * that question for collection fields, and an extension column asks the same
+ * function rather than a second copy of it.
+ *
+ * ## Indexes live on the spec, never on the Drizzle table
+ *
+ * Verified against how the pipeline already works: `index-restore.ts` and
+ * `stripKitDropsOfDeclaredIndexes` both rely on the Drizzle tables handed to
+ * drizzle-kit carrying NO indexes, because `add_index` is replayed separately.
+ * Declaring indexes on the kit tables would make drizzle-kit emit its own
+ * `CREATE INDEX` as well, and MySQL has no `IF NOT EXISTS`, so the duplicate
+ * key name aborts the whole apply.
+ *
+ * @module domains/schema/extension/compile
+ * @since 1.0.0
+ */
+import { mysqlTable } from "drizzle-orm/mysql-core";
+import { pgTable } from "drizzle-orm/pg-core";
+import { sqliteTable } from "drizzle-orm/sqlite-core";
+
+import type { SupportedDialect } from "../../../database/schema-registry";
+import { NextlyError } from "../../../errors/nextly-error";
+import { currentTimestampSql } from "../../../lib/system-columns";
+import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
+import type { ColumnDescriptor } from "../services/field-column-descriptor";
+import { renderDialectType } from "../services/field-column-descriptor";
+import { indexNameForColumns } from "../services/index-name";
+import { buildUserDrizzleColumn } from "../services/runtime-schema-generator";
+
+import type { ExtensionColumn, ExtensionIndex, ExtensionTable } from "./types";
+
+/**
+ * The prefixes the diff engine will manage.
+ *
+ * `diffIndexes` only ever drops or re-creates a name matching one of these
+ * (`isManagedIndexName`), so an index named anything else would be created once
+ * and then never reconciled again — invisible to drift, undroppable.
+ */
+const MANAGED_INDEX_PREFIXES = ["idx_", "uq_"] as const;
+
+function invalid(path: string, message: string): never {
+  throw NextlyError.validation({
+    errors: [{ path, code: "INVALID", message }],
+  });
+}
+
+/** The descriptor an extension column becomes, so it renders like any other. */
+export function toColumnDescriptor(
+  column: ExtensionColumn,
+  dialect: SupportedDialect
+): ColumnDescriptor {
+  return {
+    name: column.name,
+    dialectType: renderDialectType(column.kind, dialect, {
+      ...(column.length !== undefined ? { length: column.length } : {}),
+      ...(column.precision !== undefined
+        ? { precision: column.precision }
+        : {}),
+      ...(column.scale !== undefined ? { scale: column.scale } : {}),
+    }),
+    nullable: column.nullable,
+    kind: column.kind,
+    ...(column.length !== undefined ? { length: column.length } : {}),
+    ...(column.precision !== undefined ? { precision: column.precision } : {}),
+    ...(column.scale !== undefined ? { scale: column.scale } : {}),
+  };
+}
+
+/**
+ * The DDL default for a column, or undefined.
+ *
+ * A token is rendered per dialect through the SAME helper the core system
+ * columns use, so `created_at` on a plugin table and `created_at` on a core
+ * table carry one spelling. Two spellings would read to the diff as a default
+ * change on every single apply.
+ */
+function defaultSql(
+  column: ExtensionColumn,
+  dialect: SupportedDialect
+): string | undefined {
+  const value = column.default;
+  if (value === undefined) return undefined;
+  // The tagged token, which is why it is tagged: a text column may hold the
+  // literal string "now", and that must render as a quoted value.
+  if (typeof value === "object") return currentTimestampSql(dialect);
+  if (typeof value === "string") return `'${value}'`;
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return String(value);
+}
+
+/** One index's name, derived rather than invented. */
+export function resolveIndexName(table: string, index: ExtensionIndex): string {
+  if (index.name === undefined) {
+    return indexNameForColumns(table, index.columns, index.unique);
+  }
+  if (!MANAGED_INDEX_PREFIXES.some(prefix => index.name?.startsWith(prefix))) {
+    invalid(
+      `${table}.indexes[${index.columns.join(",")}]`,
+      `An explicit index name must start with "idx_" or "uq_"; "${index.name}" would never be reconciled by the diff engine.`
+    );
+  }
+  return index.name;
+}
+
+/** The spec the diff engine compares against a live table. */
+export function toTableSpec(
+  table: ExtensionTable,
+  dialect: SupportedDialect
+): TableSpec {
+  const columns: ColumnSpec[] = table.columns.map(column => {
+    const descriptor = toColumnDescriptor(column, dialect);
+    const rendered = defaultSql(column, dialect);
+    return {
+      name: descriptor.name,
+      type: descriptor.dialectType,
+      nullable: descriptor.nullable,
+      ...(rendered !== undefined ? { default: rendered } : {}),
+      ...(column.primaryKey === true ? { primaryKey: true as const } : {}),
+    };
+  });
+
+  const indexes: IndexSpec[] = table.indexes.map(index => ({
+    name: resolveIndexName(table.name, index),
+    columns: [...index.columns],
+    unique: index.unique,
+  }));
+
+  return { name: table.name, columns, indexes };
+}
+
+/**
+ * The Drizzle table the runtime queries through.
+ *
+ * Columns only — see the module note on why indexes must not appear here.
+ */
+export function toDrizzleTable(
+  table: ExtensionTable,
+  dialect: SupportedDialect
+): unknown {
+  const columns: Record<string, unknown> = {};
+  for (const column of table.columns) {
+    columns[column.name] = buildUserDrizzleColumn(
+      toColumnDescriptor(column, dialect),
+      dialect
+    );
+  }
+
+  if (dialect === "postgresql") {
+    return pgTable(table.name, columns as never);
+  }
+  if (dialect === "mysql") {
+    return mysqlTable(table.name, columns as never);
+  }
+  return sqliteTable(table.name, columns as never);
+}

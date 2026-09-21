@@ -438,7 +438,7 @@ function buildSystemDrizzleColumn(
  * column builder. The descriptor's `kind` is the dispatch key —
  * the per-dialect Drizzle imports stay isolated to this function.
  */
-function buildUserDrizzleColumn(
+export function buildUserDrizzleColumn(
   desc: ColumnDescriptor,
   dialect: SupportedDialect
 ): unknown {
@@ -473,7 +473,7 @@ function decimalConfig(desc: ColumnDescriptor): {
   };
 }
 
-function buildPgColumnFromKind(
+export function buildPgColumnFromKind(
   kind: ColumnKind,
   name: string,
   nullable: boolean,
@@ -513,7 +513,7 @@ function buildPgColumnFromKind(
   }
 }
 
-function buildMysqlColumnFromKind(
+export function buildMysqlColumnFromKind(
   kind: ColumnKind,
   name: string,
   nullable: boolean,
@@ -550,7 +550,7 @@ function buildMysqlColumnFromKind(
   }
 }
 
-function buildSqliteColumnFromKind(
+export function buildSqliteColumnFromKind(
   kind: ColumnKind,
   name: string,
   nullable: boolean

@@ -11,6 +11,8 @@
 // single identifier — a collision no error reports. A collection name and a field name may each
 // be 50 characters, so the composed name reaches 105 and the bound is genuinely reachable.
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 /**
  * The index name for one column of one table, bounded so every dialect stores it whole.
  *
@@ -23,14 +25,69 @@ export function indexNameForColumn(tableName: string, column: string): string {
   const full = `idx_${tableName}_${column}`;
   if (full.length <= MAX_INDEX_NAME_LENGTH) return full;
 
-  // FNV-1a. Not for secrecy — only to tell apart two names a plain truncation would merge.
+  const suffix = fnv1a36(full);
+  return `${full.slice(0, MAX_INDEX_NAME_LENGTH - suffix.length - 1)}_${suffix}`;
+}
+
+/**
+ * A short, stable digest of a string.
+ *
+ * FNV-1a. Not for secrecy — only to tell apart two names a plain truncation
+ * would merge, and to disambiguate a compound index whose joined column list
+ * is not a unique description of it.
+ */
+function fnv1a36(text: string): string {
   let hash = 0x811c9dc5;
-  for (let i = 0; i < full.length; i++) {
-    hash ^= full.charCodeAt(i);
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
-  const suffix = hash.toString(36).padStart(7, "0");
-  return `${full.slice(0, MAX_INDEX_NAME_LENGTH - suffix.length - 1)}_${suffix}`;
+  return hash.toString(36).padStart(7, "0");
+}
+
+/**
+ * The index name for one or more columns.
+ *
+ * A single column delegates to the existing namers, so every index created
+ * before compound indexes existed keeps exactly the name it has.
+ *
+ * A compound index CANNOT use the joined column list alone: column names may
+ * contain underscores, so `["a", "b"]` and `["a_b"]` both render `idx_t_a_b`,
+ * and `["a","b"]` and `["b","a"]` are different indexes that must not share a
+ * name. The ordered list is therefore hashed with a separator no identifier
+ * can contain, and the digest is part of the name.
+ */
+export function indexNameForColumns(
+  tableName: string,
+  columns: readonly string[],
+  unique: boolean
+): string {
+  if (columns.length === 0) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `${tableName}.indexes`,
+          code: "INVALID",
+          message: "An index must name at least one column.",
+        },
+      ],
+    });
+  }
+  if (columns.length === 1) {
+    return unique
+      ? uniqueIndexNameForColumn(tableName, columns[0])
+      : indexNameForColumn(tableName, columns[0]);
+  }
+
+  const prefix = unique ? "uq_" : "idx_";
+  // NUL cannot appear in an identifier, so the digest distinguishes the
+  // ORDER and the BOUNDARIES of the column list, not merely its letters.
+  const digest = fnv1a36(columns.join("\u0000"));
+  const full = `${prefix}${tableName}_${columns.join("_")}_${digest}`;
+  if (full.length <= MAX_INDEX_NAME_LENGTH) return full;
+  return (
+    full.slice(0, MAX_INDEX_NAME_LENGTH - digest.length - 1) + `_${digest}`
+  );
 }
 
 /** PostgreSQL truncates at this length; MySQL refuses one character beyond it. */

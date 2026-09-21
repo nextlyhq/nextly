@@ -548,7 +548,7 @@ export function classifyFieldKind(
  * `length` is honored for varchar (MySQL); ignored for other kinds
  * since their dialect tokens don't carry length.
  */
-function renderDialectType(
+export function renderDialectType(
   kind: ColumnKind,
   dialect: SupportedDialect,
   opts: { length?: number; precision?: number; scale?: number }

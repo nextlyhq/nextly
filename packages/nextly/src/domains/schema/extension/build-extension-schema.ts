@@ -1,0 +1,183 @@
+/**
+ * The one compiler every consumer calls.
+ *
+ * "One" is the whole design. The diff engine, the runtime registry,
+ * `migrate:create`, `migrate:check` and preview all need to know what tables a
+ * plugin added, and each computing it from the config independently is how the
+ * dev-push cache ends up keyed on something the migration generator disagrees
+ * with. They read the result of this function instead.
+ *
+ * The fingerprint exists for the same reason: a cache keyed on the COMPILED
+ * output cannot be stale in a way the compiler cannot see, which a cache keyed
+ * on the config can.
+ *
+ * @module domains/schema/extension/build-extension-schema
+ * @since 1.0.0
+ */
+import { createHash } from "node:crypto";
+
+import type { SupportedDialect } from "../../../database/schema-registry";
+import type { TableSpec } from "../pipeline/diff/types";
+
+import { toDrizzleTable, toTableSpec } from "./compile";
+import { type SeedEntityTable, SchemaDraftStore } from "./draft";
+import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
+import type { ExtensionIndex, ExtensionTable, SchemaOwner } from "./types";
+
+export interface ExtensionSchemaInput {
+  dialect: SupportedDialect;
+  coreTableNames: readonly string[];
+  entities: readonly SeedEntityTable[];
+  /** Prefix per plugin id, validated at resolve time. */
+  pluginPrefixes: ReadonlyMap<string, string>;
+  /** Enabled plugins, already topologically sorted. */
+  plugins: readonly SchemaContribution[];
+  app?: SchemaContribution;
+}
+
+export interface ExtensionSchema {
+  /** Plugin and app tables. */
+  tables: ExtensionTable[];
+  /** Entity table name → indexes added to it. */
+  entityIndexes: Map<string, ExtensionIndex[]>;
+  /** Compiled, for the diff engine. */
+  specs: TableSpec[];
+  /** Compiled, sqlName → Drizzle table. */
+  drizzle: Record<string, unknown>;
+  /** Table name → owner. P2-B persists this. */
+  owners: Map<string, SchemaOwner>;
+  /** Stable hash of the compiled output, for caches. */
+  fingerprint: string;
+}
+
+/**
+ * A fingerprint of what was COMPILED, not of what was configured.
+ *
+ * Keyed on the specs and the entity indexes because those are what any
+ * consumer acts on. A hash of the config would move when a comment moved and
+ * stay still when a hook's output changed, which is the wrong answer in both
+ * directions.
+ */
+function fingerprintOf(
+  specs: readonly TableSpec[],
+  entityIndexes: ReadonlyMap<string, ExtensionIndex[]>
+): string {
+  // Sorted so the hash describes the CONTENT rather than the order the tables
+  // happened to be visited in; two runs that produce the same schema must
+  // agree even if a hook ran in a different position.
+  const tables = [...specs]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(spec => ({
+      name: spec.name,
+      columns: spec.columns,
+      indexes: spec.indexes ?? [],
+    }));
+  const entities = [...entityIndexes.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, indexes]) => [name, indexes] as const);
+
+  return createHash("sha256")
+    .update(JSON.stringify({ tables, entities }))
+    .digest("hex");
+}
+
+/** Build the extension schema: seed, run hooks in order, compile. */
+export async function buildExtensionSchema(
+  input: ExtensionSchemaInput
+): Promise<ExtensionSchema> {
+  const store = new SchemaDraftStore({
+    dialect: input.dialect,
+    coreTableNames: input.coreTableNames,
+    entities: input.entities,
+    pluginPrefixes: input.pluginPrefixes,
+  });
+
+  await runExtensionHooks(store, input.plugins, input.app);
+
+  const tables: ExtensionTable[] = store.extensionTables().map(table => ({
+    name: table.name,
+    owner: table.owner as SchemaOwner,
+    columns: table.columns,
+    indexes: table.indexes,
+  }));
+
+  // Indexes contributed to entity tables are carried separately: they belong
+  // to a table this module does not own and must not be emitted as one.
+  const entityIndexes = new Map<string, ExtensionIndex[]>();
+  for (const table of store.all()) {
+    if (table.owner.kind === "entity" && table.indexes.length > 0) {
+      entityIndexes.set(table.name, table.indexes);
+    }
+  }
+
+  const specs = tables.map(table => toTableSpec(table, input.dialect));
+  const drizzle: Record<string, unknown> = {};
+  const owners = new Map<string, SchemaOwner>();
+  for (const table of tables) {
+    drizzle[table.name] = toDrizzleTable(table, input.dialect);
+    owners.set(table.name, table.owner);
+  }
+
+  return {
+    tables,
+    entityIndexes,
+    specs,
+    drizzle,
+    owners,
+    fingerprint: fingerprintOf(specs, entityIndexes),
+  };
+}
+
+/**
+ * The process-level active schema.
+ *
+ * Set at boot and on HMR reload, read by every consumer. A module-level value
+ * rather than a DI registration because the CLI never boots a container and
+ * still has to reach the same answer; two paths to one fact is what this
+ * whole module exists to avoid.
+ */
+const active = new Map<SupportedDialect, ExtensionSchema>();
+
+export function setActiveExtensionSchema(
+  dialect: SupportedDialect,
+  schema: ExtensionSchema
+): void {
+  active.set(dialect, schema);
+}
+
+export function getActiveExtensionSchema(
+  dialect: SupportedDialect
+): ExtensionSchema | null {
+  return active.get(dialect) ?? null;
+}
+
+/** Forget the active schema. For tests and for a reload that failed. */
+export function clearActiveExtensionSchema(): void {
+  active.clear();
+}
+
+/**
+ * Warn once when a hook is not deterministic.
+ *
+ * A hook reading `Date.now()` into a column default produces a different
+ * schema on every build, so dev push proposes the same change forever and
+ * never converges. Detected by building twice and comparing fingerprints —
+ * which is why the fingerprint is of the compiled output.
+ */
+export async function assertDeterministic(
+  input: ExtensionSchemaInput,
+  first: ExtensionSchema,
+  warn: (message: string) => void
+): Promise<void> {
+  const second = await buildExtensionSchema(input);
+  if (second.fingerprint === first.fingerprint) return;
+
+  const changed = [...first.owners.entries()]
+    .filter(([name]) => !second.owners.has(name))
+    .map(([name]) => name);
+  warn(
+    `A schema hook is not deterministic: two builds of the same config produced different schemas${
+      changed.length > 0 ? ` (${changed.join(", ")})` : ""
+    }. Dev push will churn.`
+  );
+}
