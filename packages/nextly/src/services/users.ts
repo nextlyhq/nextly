@@ -45,6 +45,7 @@ import {
 import type { UserExtSchemaService } from "./users/user-ext-schema-service";
 import {
   UserMutationService,
+  type CreateExternalUserData,
   type UserMutationResponse,
 } from "./users/user-mutation-service";
 import {
@@ -174,6 +175,21 @@ export class UsersService extends BaseService {
     actor?: RequestActor
   ): Promise<UserMutationResponse> {
     return this.mutationService.createLocalUser(userData, actor);
+  }
+
+  /**
+   * Create an active, email-verified user with no password, for an identity a
+   * trusted provider has already verified.
+   *
+   * Refuses on an empty install and refuses the super-admin role: neither the
+   * first administrator nor the highest privilege should be reachable by
+   * arriving through a login provider.
+   */
+  async createExternalUser(
+    input: CreateExternalUserData,
+    actor?: RequestActor
+  ): Promise<UserMutationResponse> {
+    return this.mutationService.createExternalUser(input, actor);
   }
 
   /**

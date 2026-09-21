@@ -71,6 +71,9 @@ import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
+/** The one role an external identity may never be given. */
+const SUPER_ADMIN_ROLE_SLUG = "super-admin";
+
 // ============================================================
 // Drizzle Runtime Types
 // ============================================================
@@ -211,6 +214,22 @@ export interface CreateLocalUserData {
   emailVerification?: "admin-vouched" | "pending";
   /** Custom field values from user_ext */
   [key: string]: unknown;
+}
+
+/** An identity a trusted provider has already verified. */
+export interface CreateExternalUserData {
+  /** Normalized by the same schema as every other create. */
+  email: string;
+  name: string;
+  image?: string | null;
+  /**
+   * Roles to assign. Required and non-empty: an account created by a login
+   * provider must carry an explicit privilege decision rather than inheriting
+   * whatever "no roles" happens to mean.
+   */
+  roleIds: string[];
+  /** When the provider verified the address; stored as `emailVerified`. */
+  emailVerifiedAt: Date;
 }
 
 /**
@@ -651,6 +670,157 @@ export class UserMutationService extends BaseService {
   // gate is never held up by a large backlog; the scheduled drain owns bulk
   // pruning. Matches the collection/single write-path bound.
   private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+
+  /**
+   * Create an active, email-verified user with no password, for an identity a
+   * trusted provider has already verified.
+   *
+   * Distinct from a passwordless {@link createLocalUser}, which creates an
+   * INACTIVE invite carrying a set-password link — an external identity needs
+   * neither, and the account must be usable the moment the provider vouches
+   * for it.
+   *
+   * Two refusals are policy rather than validation. It will not create the
+   * FIRST account on an install, because that account decides who administers
+   * the site and a login provider must never be what mints it. And it will not
+   * assign the super-admin role, because the privileges of the highest role
+   * should never be reachable by arriving through a provider.
+   *
+   * Roles are validated and assigned INSIDE the insert's transaction, unlike
+   * `createLocalUser`, which assigns them afterwards and swallows failures —
+   * that would leave an active account with fewer privileges than it was
+   * created with, and nothing to say so.
+   */
+  async createExternalUser(
+    input: CreateExternalUserData,
+    _context?: RequestActor
+  ): Promise<UserMutationResponse> {
+    const validation = this.getCreateSchema().safeParse({
+      email: input.email,
+      name: input.name,
+      image: input.image ?? null,
+      isActive: true,
+    });
+    if (!validation.success) {
+      throw NextlyError.validation({
+        errors: validation.error.issues.map(i => ({
+          path: i.path.join(".") || "input",
+          code: i.code.toUpperCase(),
+          message: i.message,
+        })),
+        logContext: { entity: "user", email: input.email },
+      });
+    }
+    const email = validation.data.email;
+
+    if (input.roleIds.length === 0) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "roleIds",
+            code: "REQUIRED",
+            message: "At least one role is required.",
+          },
+        ],
+      });
+    }
+
+    const { users, roles, userRoles } = this.tables;
+
+    const existingUser = await this.db.query.users.findFirst({
+      columns: { id: true },
+    });
+    if (!existingUser) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "external-user-on-empty-install",
+          email,
+        },
+      });
+    }
+
+    const duplicate = await this.db.query.users.findFirst({
+      columns: { id: true },
+      where: { email: requireFilterValue(email, "email") },
+    });
+    if (duplicate) {
+      throw NextlyError.duplicate({
+        logContext: { entity: "user", email },
+      });
+    }
+
+    // Read rather than ensure: `ensureSuperAdminRole` CREATES the role, and a
+    // refusal must not bring into existence the thing it refuses.
+    const namedRoles = (await this.db
+      .select({ id: roles.id, slug: roles.slug })
+      .from(roles)
+      .where(inArray(roles.id, input.roleIds))) as Array<{
+      id: string;
+      slug: string;
+    }>;
+
+    if (namedRoles.length !== new Set(input.roleIds).size) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "roleIds",
+            code: "INVALID",
+            message: "One or more roles do not exist.",
+          },
+        ],
+        logContext: { entity: "user", email },
+      });
+    }
+    if (namedRoles.some(r => r.slug === SUPER_ADMIN_ROLE_SLUG)) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "external-user-super-admin-refused",
+          email,
+        },
+      });
+    }
+
+    const now = new Date();
+    const newUserId = randomUUID();
+
+    await this.withTransaction(async tx => {
+      const txDb = tx as DrizzleTransactionLike;
+      await txDb.insert(users).values({
+        id: newUserId,
+        email,
+        name: input.name,
+        passwordHash: null,
+        // The provider established the address, so it is verified at creation
+        // and the account is usable at once.
+        emailVerified: input.emailVerifiedAt,
+        image: input.image ?? null,
+        isActive: true,
+        mustChangePassword: false,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // In the same transaction as the account: an active user missing the
+      // roles it was created with is a worse outcome than no user at all.
+      for (const role of namedRoles) {
+        await txDb.insert(userRoles).values({
+          id: randomUUID(),
+          userId: newUserId,
+          roleId: role.id,
+          createdAt: now,
+        });
+      }
+    });
+
+    return {
+      id: newUserId,
+      email,
+      emailVerified: input.emailVerifiedAt,
+      name: input.name,
+      image: input.image ?? null,
+      roles: input.roleIds,
+    };
+  }
 
   /**
    * Create a new local user with password authentication.
