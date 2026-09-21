@@ -357,3 +357,81 @@ isSecret(v): boolean;
 ```
 
 See the [author guide](/docs/plugins/author-guide) for the full workflow and the [error reference](/docs/plugins/error-reference) for boot-error meanings.
+
+## Runtime surfaces added for stateful plugins
+
+Each is present only when the plugin declares the matching contribution, so a
+plugin that never asked for a surface does not have one.
+
+### `ctx.settings`
+
+Declare `contributes.settings` (a zod object) to get it.
+
+```ts
+const config = await ctx.settings.get();
+await ctx.settings.set({ apiKey: "..." }, { actorUserId: user.id });
+```
+
+Values are parsed by the declared schema, and the paths named in
+`capabilities.secrets` are encrypted at rest. See
+[security](/docs/plugins/security) for what is and is not returned to the admin.
+
+### `ctx.fetch`
+
+Declare `capabilities.net.outbound` to get it.
+
+```ts
+const res = await ctx.fetch("https://accounts.google.com/.well-known/openid-configuration");
+```
+
+Reaches only the declared hosts, and only addresses outside your own network.
+
+### `ctx.audit`
+
+Declare `contributes.audit` to get it.
+
+```ts
+await ctx.audit.write({
+  kind: "acme-auth.identity-linked",
+  actorUserId: user.id,
+  metadata: { provider: "google" },
+});
+```
+
+Kinds must start with the plugin's own admin slug. Undeclared kinds and keys
+are dropped rather than stored.
+
+### `ctx.auth`
+
+Always present.
+
+```ts
+return ctx.auth.completeLogin(user.id, {
+  request,
+  strategy: "oauth-google",
+  next: "/admin",
+});
+```
+
+Also `ctx.auth.currentUser(request)` and `ctx.auth.verifyCsrf(request)`.
+
+### `ctx.filters.decide`
+
+For a seam where handlers VETO rather than transform.
+
+```ts
+const verdict = await ctx.filters.decide(
+  "acme-auth.may-link",
+  { allow: true },
+  { userId }
+);
+```
+
+A handler that throws denies, and a handler may only keep or downgrade the
+verdict — so the order plugins load in cannot decide access.
+
+### Lifecycle
+
+`onReady` runs after every plugin has initialised and routes are registered.
+`onInstall` and `onUninstall` are invoked by the install commands, never by a
+boot.
