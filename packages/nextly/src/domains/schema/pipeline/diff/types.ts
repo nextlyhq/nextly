@@ -67,13 +67,73 @@ export interface ColumnSpec {
 
 export interface IndexSpec {
   name: string;
+  /** Empty when `expression` is set. Order is significant. */
   columns: string[];
   unique: boolean;
+  /**
+   * A partial-index predicate, stored per dialect in canonical form.
+   *
+   * PostgreSQL and SQLite only. MySQL has no partial indexes, so an index
+   * carrying this is REFUSED there rather than created without the predicate —
+   * a "unique" index over more rows than intended enforces a constraint
+   * nobody asked for, and silently.
+   */
+  where?: string;
+  /**
+   * An expression index, as per-dialect SQL.
+   *
+   * Carried separately from `columns` because the converter reports an
+   * expression index with an EMPTY column list: a comparison that counted
+   * indexes would find the right number and the wrong ones.
+   */
+  expression?: string;
+}
+
+/**
+ * A foreign key the database enforces.
+ *
+ * Distinct from `ExtensionColumn.references`, which records a target for
+ * documentation and validation and creates nothing. This is the constraint
+ * itself, and it is only representable now that the diff can see one.
+ */
+export interface ForeignKeySpec {
+  /** `fk_<table>_<cols>`, hashed past 63 exactly as index names are. */
+  name: string;
+  columns: string[];
+  referencesTable: string;
+  referencesColumns: string[];
+  onDelete: ReferentialAction;
+  onUpdate: ReferentialAction;
+}
+
+export type ReferentialAction =
+  | "cascade"
+  | "set null"
+  | "restrict"
+  | "no action"
+  | "set default";
+
+/** A check constraint, as SQL the dialect evaluates. */
+export interface CheckSpec {
+  name: string;
+  /** Per-dialect SQL, because the expression languages differ. */
+  sql: string;
 }
 
 export interface TableSpec {
   name: string;
   columns: ColumnSpec[];
+  /**
+   * Foreign keys, when the table's source tracked them.
+   *
+   * `undefined` means "not tracked", exactly as `indexes` does, so a snapshot
+   * written before this field existed skips the dimension rather than being
+   * read as "this table has none" — which would propose dropping every
+   * constraint on every existing database.
+   */
+  foreignKeys?: ForeignKeySpec[];
+  /** Check constraints, with the same `undefined` meaning as `foreignKeys`. */
+  checks?: CheckSpec[];
   // undefined = "no index data tracked" (pre-C1 snapshots) — the diff/drift
   // index dimension is SKIPPED for such tables. [] = tracked, none.
   indexes?: IndexSpec[];
