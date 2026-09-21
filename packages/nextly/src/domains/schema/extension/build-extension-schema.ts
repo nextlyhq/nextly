@@ -151,6 +151,29 @@ export function getActiveExtensionSchema(
   return active.get(dialect) ?? null;
 }
 
+/**
+ * Whether a table is one an enabled plugin or the app currently DECLARES.
+ *
+ * Asked of the compiled schema rather than of a prefix, deliberately. A prefix
+ * test answers "does this look like a plugin table", which stays true after
+ * the plugin is removed from config — and a table nothing declares any more
+ * must fall OUTSIDE the desired set, where `filterUnsafeStatements` already
+ * protects it from being dropped. Matching by name would mean a plugin
+ * uninstall silently taking its data with it.
+ *
+ * Lives here rather than in `managed-tables` because the answer comes from the
+ * active schema: putting it there made that module import this one, and this
+ * one already reaches it through the draft's naming rules — a cycle.
+ * `MANAGED_TABLE_PREFIXES` stays unchanged either way; extension tables are
+ * not part of the collection or component namespaces.
+ */
+export function isRegisteredExtensionTable(
+  name: string,
+  dialect: SupportedDialect
+): boolean {
+  return getActiveExtensionSchema(dialect)?.owners.has(name) === true;
+}
+
 /** Forget the active schema. For tests and for a reload that failed. */
 export function clearActiveExtensionSchema(): void {
   active.clear();

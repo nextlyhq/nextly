@@ -36,6 +36,7 @@ import { withMigrationExcluded } from "../domains/field-groups/migration/sync-gu
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
+import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -190,6 +191,15 @@ type ComponentDef = {
   description?: string;
   admin?: unknown;
 };
+
+/**
+ * Extension tables registered by the previous reload.
+ *
+ * Kept so a table the new config no longer declares can be RETRACTED. Without
+ * it a removed plugin's Drizzle object stays in the registry, and a query
+ * against it silently reaches a table nothing maintains any more.
+ */
+let previousExtensionTables = new Set<string>();
 
 /**
  * The slugs of one kind whose registry row may now say `applied`.
@@ -422,6 +432,8 @@ interface ComponentRegistrySurface {
 }
 interface SchemaRegistrySurface {
   registerDynamicSchema(tableName: string, table: unknown): void;
+  /** Removes a table the config no longer declares. */
+  retractDynamicSchema(tableName: string): void;
 }
 interface CollectionsHandlerSurface {
   refreshCollectionSchema(tableName: string, freshTable: unknown): void;
@@ -2774,6 +2786,27 @@ async function applyReload(opts?: {
       for (const [tableName, table] of companionFreshTables) {
         schemaReg.registerDynamicSchema(tableName, table);
       }
+      // Plugin and app extension tables. Registered here rather than at boot
+      // alone because a reload recompiles them, and a stale Drizzle object
+      // describes a table whose columns have since changed — the adapter
+      // would then write to a shape the database no longer has.
+      const extensionSchema = getActiveExtensionSchema(dialect);
+      for (const [tableName, table] of Object.entries(
+        extensionSchema?.drizzle ?? {}
+      )) {
+        schemaReg.registerDynamicSchema(tableName, table);
+      }
+      // A table the new config no longer declares is retracted, so a query
+      // against it fails loudly rather than reaching a table the pipeline has
+      // stopped maintaining.
+      for (const tableName of previousExtensionTables) {
+        if (extensionSchema?.owners.has(tableName) !== true) {
+          schemaReg.retractDynamicSchema(tableName);
+        }
+      }
+      previousExtensionTables = new Set(
+        Object.keys(extensionSchema?.drizzle ?? {})
+      );
     } catch {
       // Non-fatal: next request will still fail with stale schema, but
       // a server restart will recover. Log is intentionally omitted here

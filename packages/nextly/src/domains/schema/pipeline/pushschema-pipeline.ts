@@ -39,6 +39,7 @@ import {
   chooseTypeColumns,
   resolveRegistryNameFromCatalog,
 } from "../../field-groups/storage/resolve-storage-names";
+import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
@@ -534,6 +535,13 @@ export class PushSchemaPipeline {
     // inside either leaves the other on the raw fields, so a table would converge and then report a
     // type change against itself on every following diff.
     const desired = args.desired;
+    // Merged HERE rather than at each call site. `apply` has many callers —
+    // HMR, the collection/single/component dispatchers, the dev server, the
+    // DI registration — and adding extensions at each would miss some: a UI
+    // save of a Builder table would then plan a `drop_index` for a plugin's
+    // index on that table, because the desired state it built knew nothing
+    // about it.
+    const extensions = getActiveExtensionSchema(dialect);
     const scope = computeJournalScope(
       source,
       args.uiTargetSlug,
@@ -567,8 +575,16 @@ export class PushSchemaPipeline {
     //
     // Reference: Payload's pushDevSchema pattern in
     // packages/drizzle/src/utilities/pushDevSchema.ts.
+    // Keyed on the desired schema AND the compiled extension fingerprint.
+    // Without the fingerprint, editing only a schema hook leaves `desired`
+    // byte-identical and the push is skipped, so the hook's change never
+    // reaches the database and nothing reports that it did not.
+    const cacheKey = {
+      desired,
+      extensions: extensions?.fingerprint ?? null,
+    };
     const cachedSnapshot = getCachedSnapshot();
-    if (cachedSnapshot !== undefined && dequal(desired, cachedSnapshot)) {
+    if (cachedSnapshot !== undefined && dequal(cacheKey, cachedSnapshot)) {
       console.log(
         "[Nextly schema] No changes detected since last apply; skipping push (dequal cache hit)."
       );
@@ -605,6 +621,10 @@ export class PushSchemaPipeline {
         ...Object.values(desired.collections).map(c => c.tableName),
         ...Object.values(desired.singles).map(s => s.tableName),
         ...Object.values(desired.components).map(c => c.tableName),
+        // Without these the live snapshot omits extension tables, so the
+        // diff compares a declared table against nothing and proposes
+        // creating it on every single apply.
+        ...(extensions?.specs.map(spec => spec.name) ?? []),
       ];
 
       // Phase A: our diff. Reuse the cached live snapshot when the outer
@@ -688,6 +708,18 @@ export class PushSchemaPipeline {
                 builtBy: builtByFor("collection", c.builderOwned),
                 hasStatus: c.status === true,
                 localized: c.localized === true,
+                // Config-declared compound indexes, and any a schema hook
+                // contributed to this entity's table.
+                indexes: [
+                  ...(c.indexes ?? []),
+                  ...(extensions?.entityIndexes.get(c.tableName) ?? []).map(
+                    index => ({
+                      fields: index.columns,
+                      unique: index.unique,
+                      ...(index.name !== undefined ? { name: index.name } : {}),
+                    })
+                  ),
+                ],
               }
             )
           ),
@@ -719,6 +751,11 @@ export class PushSchemaPipeline {
               }
             )
           ),
+          // Already compiled, so they are appended rather than rebuilt: the
+          // spec the diff compares and the Drizzle table drizzle-kit pushes
+          // come from one compiler, and rebuilding either here would make
+          // them two.
+          ...(extensions?.specs ?? []),
         ],
       };
 
@@ -1306,7 +1343,7 @@ export class PushSchemaPipeline {
       // the top of this method. We only set the cache on the success
       // path — failed applies leave the cache untouched so the next
       // call retries the full pipeline.
-      setCachedSnapshot(desired);
+      setCachedSnapshot(cacheKey);
 
       await this.deps.migrationJournal.recordEnd(journalId, {
         success: true,
@@ -1508,6 +1545,18 @@ export class PushSchemaPipeline {
         }
       );
       out[c.tableName] = componentTable;
+    }
+
+    // The same resolution the desired snapshot above read. The comment on
+    // `apply` requires both builders to agree, and taking them from one
+    // compiled result is what makes that true rather than merely intended.
+    // These carry COLUMNS ONLY — indexes live on the spec, because
+    // drizzle-kit would otherwise emit its own CREATE INDEX beside the
+    // replayed one, and MySQL has no IF NOT EXISTS.
+    for (const [name, table] of Object.entries(
+      getActiveExtensionSchema(dialect)?.drizzle ?? {}
+    )) {
+      out[name] = table;
     }
     return out;
   }
