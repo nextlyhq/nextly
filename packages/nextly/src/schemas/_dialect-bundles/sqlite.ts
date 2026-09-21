@@ -18,6 +18,10 @@ export { users } from "../users/sqlite";
 export { nextlyFieldGroupLock } from "../field-group-lock/sqlite";
 export { nextlyDocumentLock } from "../document-lock/sqlite";
 export { nextlyRbacEpoch } from "../rbac-epoch/sqlite";
+// Where a plugin's configuration lives. In the bundle as well as in
+// CORE_TABLE_NAMES: the manifest decides what is EXPECTED, this decides what
+// is CREATED, and a table in one but not the other is never made.
+export { nextlyPluginSettings } from "../plugin-settings/sqlite";
 export { nextlyWidgetLayout } from "../widget-layout/sqlite";
 
 export {

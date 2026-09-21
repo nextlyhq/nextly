@@ -45,7 +45,9 @@ describe("user lifecycle events", () => {
   it("tells a subscriber when a user is created", async () => {
     const t = await boot();
     const seen: Array<{ userId: string }> = [];
-    t.events.on("user.created", p => seen.push(p as { userId: string }));
+    t.events.on("user.created", e => {
+      seen.push(e.payload as { userId: string });
+    });
 
     const userId = await makeUser(t, "created@example.com");
     await t.events.settle();
@@ -59,7 +61,9 @@ describe("user lifecycle events", () => {
     const userId = await makeUser(t, "deleted@example.com");
 
     const seen: Array<{ userId: string }> = [];
-    t.events.on("user.deleted", p => seen.push(p as { userId: string }));
+    t.events.on("user.deleted", e => {
+      seen.push(e.payload as { userId: string });
+    });
 
     await services(t).users.deleteUser(userId);
     await t.events.settle();
@@ -76,7 +80,9 @@ describe("user lifecycle events", () => {
     const userId = await makeUser(t, "once@example.com");
 
     const seen: unknown[] = [];
-    t.events.on("user.deleted", p => seen.push(p));
+    t.events.on("user.deleted", e => {
+      seen.push(e.payload);
+    });
 
     await services(t).users.deleteUser(userId);
     await services(t)
@@ -91,7 +97,9 @@ describe("user lifecycle events", () => {
     // The payload outlives the account in whatever a subscriber does with it.
     const t = await boot();
     const seen: Array<Record<string, unknown>> = [];
-    t.events.on("user.created", p => seen.push(p as Record<string, unknown>));
+    t.events.on("user.created", e => {
+      seen.push(e.payload as Record<string, unknown>);
+    });
 
     await makeUser(t, "private@example.com");
     await t.events.settle();

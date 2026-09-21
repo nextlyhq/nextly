@@ -30,6 +30,9 @@ const KNOWN_CAPABILITIES = ["net", "db", "secrets"] as const;
  * and `ctx.fetch` resolves names to addresses itself precisely so the answer
  * cannot be swapped underneath the check.
  */
+/** A dotted-quad, which the hostname pattern would otherwise accept. */
+const IP_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
+
 const OUTBOUND_HOST =
   /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 
@@ -62,7 +65,11 @@ export function validateCapabilities(all: PluginDefinition[]): void {
       }
 
       for (const host of capabilities.net?.outbound ?? []) {
-        if (!OUTBOUND_HOST.test(host)) {
+        // An IP literal is a valid hostname as far as the pattern is
+        // concerned — every label is digits — so it is refused explicitly.
+        // An allowlist is a statement about WHO a plugin talks to, and an
+        // address is not who anybody is.
+        if (!OUTBOUND_HOST.test(host) || IP_LITERAL.test(host)) {
           throw resolutionError(
             "invalid-outbound-host",
             `Plugin "${plugin.name}" declares an outbound host that is not a hostname: "${host}".`,

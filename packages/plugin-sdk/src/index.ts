@@ -619,5 +619,6 @@ export {
 export { sanitizeAdminPath, DEFAULT_ADMIN_PATH } from "nextly";
 
 // Reading what other plugins declared. P3 needs it to discover identity
-// providers, and a plugin may import only from the SDK.
-export { collectDeclarations, type PluginDeclaration } from "nextly";
+// providers, and a plugin may import only from the SDK. `PluginDeclaration`
+// is already exported above with the rest of the declaration types.
+export { collectDeclarations } from "nextly";

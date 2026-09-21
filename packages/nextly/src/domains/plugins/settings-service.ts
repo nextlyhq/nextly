@@ -80,7 +80,11 @@ export class PluginSettingsService {
    * and anything it receives can be read by anything else on the page.
    */
   async getRedacted(): Promise<unknown> {
-    return redactSecrets(await this.readStored(), this.deps.secretPaths);
+    // Parsed first, so the admin sees every declared key rather than only the
+    // ones written so far — a secret that has never been set still has to
+    // appear, as `{ set: false }`, or the form has nothing to render.
+    const parsed = this.deps.schema.parse(await this.readStored());
+    return redactSecrets(parsed, this.deps.secretPaths);
   }
 
   /**

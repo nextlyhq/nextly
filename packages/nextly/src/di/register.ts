@@ -3072,7 +3072,14 @@ async function initializePlugins(
       // started, and carrying on would run the system in a state it declared
       // itself unfit for.
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Plugin "${plugin.name}" onReady failed: ${message}`);
+      throw NextlyError.internal({
+        ...(error instanceof Error ? { cause: error } : {}),
+        logContext: {
+          reason: "plugin-onready-failed",
+          plugin: plugin.name,
+          message,
+        },
+      });
     }
   }
 
