@@ -427,6 +427,13 @@ export async function runMigrate(
  * tests.
  */
 export interface MigrateCoreDeps {
+  /**
+   * Plugin ids that ship migration modules.
+   *
+   * A plugin here is applied by the plugin phase; one declaring tables and
+   * absent from this set has no path to production and is refused.
+   */
+  pluginsWithMigrations?: ReadonlySet<string>;
   dialect: SupportedDialect;
   db: unknown;
   adapter: CLIDatabaseAdapter;
@@ -530,28 +537,36 @@ export function installRegistryResolver(
 }
 
 /**
- * Refuse to migrate while a plugin declares tables of its own.
+ * Refuse to migrate a plugin's tables when that plugin ships no migrations.
  *
- * Plugin-owned tables reach a database through dev push today; the migrations
- * that would carry them to production arrive with plugin migrations. Until
- * then this fails LOUDLY, because the alternative is a migration run that
- * reports success having created none of them — and the first sign of that is
- * a query against a table nothing ever made.
+ * A plugin that DOES ship migration modules is applied by the plugin phase.
+ * One that declares tables and ships nothing to create them has no path to
+ * production, and a run that proceeded would report success having created
+ * none of them — the first sign being a query against a table nothing made.
+ *
+ * Narrowed from refusing every plugin table: that was correct while no plugin
+ * could ship migrations at all, and became wrong the moment one could.
  */
-function assertNoPluginOwnedTables(dialect: SupportedDialect): void {
+function assertPluginTablesAreMigratable(
+  dialect: SupportedDialect,
+  pluginsWithMigrations: ReadonlySet<string>
+): void {
   const owners = getActiveExtensionSchema(dialect)?.owners;
   if (!owners) return;
 
-  const pluginTables = [...owners.entries()]
-    .filter(([, owner]) => owner.kind === "plugin")
+  const unmigratable = [...owners.entries()]
+    .filter(
+      ([, owner]) =>
+        owner.kind === "plugin" && !pluginsWithMigrations.has(owner.id)
+    )
     .map(([name]) => name);
-  if (pluginTables.length === 0) return;
+  if (unmigratable.length === 0) return;
 
   throw new NextlyError({
     code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
     publicMessage:
-      "Plugin-owned tables cannot be applied by migrations yet. They are created by development push; plugin migrations arrive in a later release.",
-    logContext: { tables: pluginTables },
+      "A plugin declares tables but ships no migrations to create them. They exist in development through push; generate the plugin's migrations before deploying.",
+    logContext: { tables: unmigratable },
   });
 }
 
@@ -639,7 +654,10 @@ export async function migrateCore(
   // command alone would let a production boot apply migrations that silently
   // skip every plugin-owned table, and the first failure would be a query
   // against a table nothing created.
-  assertNoPluginOwnedTables(deps.dialect);
+  assertPluginTablesAreMigratable(
+    deps.dialect,
+    new Set(deps.pluginsWithMigrations ?? [])
+  );
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;

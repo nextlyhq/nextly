@@ -12,6 +12,7 @@ import type { RegisteredEmailProvider } from "../domains/email/provider-definiti
 import type { JobDefinition } from "../domains/jobs/job-registry";
 import type { SchemaHook } from "../domains/schema/extension/draft";
 import type { TableDefinition } from "../domains/schema/extension/dsl";
+import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-migration";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
@@ -491,6 +492,16 @@ export interface PluginContributions {
     tables?: TableDefinition[];
     /** Hooks, run after every plugin this one depends on. */
     extend?: SchemaHook[];
+    /**
+     * Generated migration modules that carry this plugin's tables to
+     * production.
+     *
+     * Modules rather than loose `.sql` files, because a module import is
+     * always in a Next.js server bundle and files inside `node_modules` are
+     * not. A plugin declaring tables without these has no path to production
+     * and `migrate` refuses it.
+     */
+    migrations?: PluginMigration[];
   };
   /** @public New plugin-owned collections. Merged by the schema pipeline. */
   collections?: CollectionConfig[];

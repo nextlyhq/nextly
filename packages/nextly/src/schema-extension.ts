@@ -35,4 +35,9 @@ export type {
   PortableSelect,
   PortableWhere,
 } from "./plugins/database/plugin-database";
+export type {
+  DialectStatements,
+  PluginMigration,
+  PluginMigrationSnapshot,
+} from "./domains/schema/migrate/plugin/plugin-migration";
 export { isUniqueViolation } from "./database/errors";
