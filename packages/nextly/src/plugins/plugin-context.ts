@@ -38,6 +38,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
@@ -400,6 +401,27 @@ export interface PluginContext {
    * time cannot redirect it inward.
    */
   fetch?: (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+  /**
+   * @experimental Writing to the audit trail.
+   *
+   * Present only when the plugin declares `contributes.audit`. Never throws,
+   * like the core writer: an audit write is a side effect of whatever the
+   * plugin was really doing, and failing that because a row could not be
+   * stored would be the worse outcome.
+   */
+  audit?: PluginAuditApi;
+}
+
+/** Writing one plugin's declared audit events. */
+export interface PluginAuditApi {
+  write(event: {
+    kind: string;
+    actorUserId?: string | null;
+    targetUserId?: string | null;
+    request?: Request;
+    metadata?: Record<string, string | number | boolean>;
+  }): Promise<void>;
 }
 
 /** Reading and writing one plugin's settings. */
@@ -1129,5 +1151,6 @@ export function createPluginContext(
       ? { settings: createPluginSettings(plugin, db) }
       : {}),
     ...(pluginFetch ? { fetch: pluginFetch } : {}),
+    ...(plugin?.contributes?.audit ? { audit: createPluginAudit(plugin) } : {}),
   };
 }

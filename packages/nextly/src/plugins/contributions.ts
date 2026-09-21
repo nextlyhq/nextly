@@ -614,4 +614,17 @@ export interface PluginContributions {
    * to the browser.
    */
   settings?: ZodObject<ZodRawShape>;
+
+  /**
+   * @experimental The audit events this plugin writes, and the metadata keys
+   * each may carry.
+   *
+   * Declaring them is what allows them: `ctx.audit.write` drops a kind or a
+   * key that is not here. The trail retains rows and some of them name nobody,
+   * so what can enter it has to be bounded rather than left to each plugin.
+   *
+   * Every kind must begin with the plugin's own admin slug, so one plugin
+   * cannot write rows that read as another's.
+   */
+  audit?: { kinds: Array<{ kind: string; metadataKeys?: string[] }> };
 }
