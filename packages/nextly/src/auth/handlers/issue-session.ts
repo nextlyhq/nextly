@@ -1,5 +1,7 @@
 import { respondAction } from "../../api/response-shapes";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import { auditReason } from "../../domains/audit/audit-reasons";
+import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -8,6 +10,10 @@ import { setRefreshTokenCookie } from "../cookies/refresh-token-cookie";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import {
+  assertAccountUsable,
+  type AccountState,
+} from "../session/account-state";
 import {
   generateRefreshToken,
   hashRefreshToken,
@@ -28,6 +34,13 @@ export interface IssueSessionDeps {
   refreshTokenTTL: number;
   trustProxy: boolean;
   trustedProxyIps: string[];
+  /** Whether an unverified email blocks sign-in (mirrors the password path). */
+  requireEmailVerification: boolean;
+  /**
+   * Reads the account state the gate needs. Loaded here rather than trusted
+   * from the caller, because the caller may be any strategy or a plugin.
+   */
+  fetchAccountState: (userId: string) => Promise<AccountState | null>;
   fetchRoleIds: (userId: string) => Promise<string[]>;
   fetchCustomFields: (userId: string) => Promise<Record<string, unknown>>;
   storeRefreshToken: (record: {
@@ -72,6 +85,20 @@ export async function issueSession(
   request: Request,
   requestId: string
 ): Promise<Response> {
+  // Preconditions run first, before any token or refresh row exists. Every
+  // strategy reaches a session through here, so this is the one place that can
+  // refuse an account no matter which path authenticated it.
+  const state = await deps.fetchAccountState(user.id);
+  if (!state) {
+    throw NextlyError.invalidCredentials({
+      logContext: { userId: user.id, reason: auditReason("user-not-found") },
+    });
+  }
+  assertAccountUsable(state, {
+    requireEmailVerification: deps.requireEmailVerification,
+    enforcePasswordLockout: true,
+  });
+
   const [roleIds, customFields] = await Promise.all([
     deps.fetchRoleIds(user.id),
     deps.fetchCustomFields(user.id),

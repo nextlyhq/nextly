@@ -103,6 +103,27 @@ export function buildAuthRouterDeps(
       return result[0] || null;
     },
 
+    fetchAccountState: async (userId: string) => {
+      // Errors propagate, like findUserById above: a swallowed DB error
+      // returning null would be read as "account unusable" and tear down a
+      // healthy session on a transient hiccup.
+      const adapter = getService("adapter");
+      const db = adapter.getDrizzle();
+      const schema = getDialectTables();
+      const { eq } = await import("drizzle-orm");
+      const result = await db
+        .select({
+          userId: schema.users.id,
+          isActive: schema.users.isActive,
+          lockedUntil: schema.users.lockedUntil,
+          emailVerified: schema.users.emailVerified,
+        })
+        .from(schema.users)
+        .where(eq(schema.users.id, userId))
+        .limit(1);
+      return result[0] || null;
+    },
+
     incrementFailedAttempts: async (userId: string) => {
       const adapter = getService("adapter");
       const db = adapter.getDrizzle();

@@ -6,6 +6,7 @@ import { authRateLimiter } from "../middleware/rate-limiter";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
+import type { AccountState } from "../session/account-state";
 
 import { handleAcceptInvite } from "./accept-invite";
 import { handleAuthUi, type AuthUiMeta } from "./auth-ui";
@@ -144,6 +145,12 @@ export interface AuthRouterDeps {
     isActive: boolean;
     mustChangePassword: boolean | null;
   } | null>;
+  /**
+   * The account facts the shared session gate decides on, read fresh at the
+   * moment a session is issued rather than carried from whichever strategy
+   * authenticated the user.
+   */
+  fetchAccountState: (userId: string) => Promise<AccountState | null>;
 
   incrementFailedAttempts: (userId: string) => Promise<void>;
   lockAccount: (userId: string, lockedUntil: Date) => Promise<void>;

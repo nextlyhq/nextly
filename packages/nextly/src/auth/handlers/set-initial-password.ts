@@ -144,6 +144,9 @@ export async function handleSetInitialPassword(
       throw err;
     }
 
+    // Kept alongside the gate inside `issueSession` for the same reason as the
+    // challenge path: this refusal has its own audit reason and response
+    // timing, which the shared gate does not reproduce.
     const u = await deps.findUserById(pending.userId);
     if (!u || !u.isActive) {
       throw NextlyError.invalidCredentials({

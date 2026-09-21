@@ -139,6 +139,9 @@ export async function handleChallengeResolve(
     }
 
     // Challenge resolved → load the candidate user and issue the real session.
+    // This early check stays: `issueSession` runs the full account-state gate
+    // as well, but refusing here keeps this path's response timing and its
+    // own audit reason, which the generic gate does not carry.
     const u = await deps.findUserById(pending.userId);
     if (!u || !u.isActive) {
       throw NextlyError.invalidCredentials({

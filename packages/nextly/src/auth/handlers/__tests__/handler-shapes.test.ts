@@ -52,6 +52,21 @@ import { createPasswordStrategy } from "../../pipeline/password-strategy";
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
 /**
+ * The account-state gate every session-issuing path now runs. These fixtures
+ * assert response shapes rather than account state, so the gate is given a
+ * usable account and the shape under test is what decides the result.
+ */
+const usableAccountGate = {
+  requireEmailVerification: true,
+  fetchAccountState: async (userId: string) => ({
+    userId,
+    isActive: true,
+    lockedUntil: null,
+    emailVerified: new Date("2026-01-01T00:00:00Z"),
+  }),
+};
+
+/**
  * Build the auth-pipeline deps a login-path test needs: the built-in password
  * strategy (wrapping verifyCredentials with the given lockout deps, exactly as
  * deps-bridge does), an empty hook registry, and the challenge token TTL. With
@@ -144,6 +159,7 @@ describe("login handler: respondAction shape", () => {
     const resetFailedAttempts = vi.fn().mockResolvedValue(undefined);
 
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       isProduction: false,
       accessTokenTTL: 900,
@@ -226,6 +242,7 @@ describe("login handler: respondAction shape", () => {
       requireEmailVerification: true,
     });
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       accessTokenTTL: 900,
       refreshTokenTTL: 604800,
@@ -299,6 +316,7 @@ describe("login handler: respondAction shape", () => {
       },
     } as never);
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       accessTokenTTL: 900,
       refreshTokenTTL: 604800,
@@ -517,6 +535,7 @@ describe("refresh handler: respondData shape", () => {
   it("returns { user, accessToken, refreshToken, expiresAt } with no message", async () => {
     const tokenHash = hashRefreshToken("raw-refresh-token");
     const deps = {
+      ...usableAccountGate,
       secret: SECRET,
       isProduction: false,
       accessTokenTTL: 900,

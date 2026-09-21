@@ -199,6 +199,11 @@ export async function handleSetup(
     expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
   });
 
+  // The shared account-state gate does not run here, because this session is
+  // handed to the account setup just created: active, and verified by the
+  // operator who reached the setup route at all. There is no earlier state for
+  // the gate to refuse.
+  //
   // Setup issues a real session, so it is a completed login and belongs in the
   // trail like any other. It does not route through `issueSession` because it
   // is account creation rather than authentication — different status, message,

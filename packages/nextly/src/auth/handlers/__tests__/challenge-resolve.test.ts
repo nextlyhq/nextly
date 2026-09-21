@@ -39,6 +39,13 @@ function makeDeps() {
       image: null,
       isActive: true,
     }),
+    requireEmailVerification: true,
+    fetchAccountState: vi.fn().mockResolvedValue({
+      userId: "u1",
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: new Date("2026-01-01T00:00:00Z"),
+    }),
   };
 }
 
