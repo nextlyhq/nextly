@@ -7,7 +7,17 @@ import type { PluginDefinition } from "../plugin-context";
 
 function plugin(
   name: string,
-  points: Array<{ name: string; kind: "filter" | "action" | "decision" }>,
+  points: Array<{
+    name: string;
+    kind: "filter" | "action" | "decision";
+    /**
+     * Declared alongside the point, as the real contribution shape allows.
+     * Omitted here, an excess-property check refused every fixture that
+     * declares one — which is most of them, since the schema is the thing
+     * these tests are about.
+     */
+    payload?: { safeParse: (value: unknown) => { success: boolean } };
+  }>,
   over: Partial<PluginDefinition> = {}
 ): PluginDefinition {
   return {

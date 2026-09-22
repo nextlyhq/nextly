@@ -3,7 +3,10 @@ import { describe, it, expect, vi } from "vitest";
 import { ChallengeRegistry } from "../../pipeline/challenge";
 import { AuthHookRegistry } from "../../pipeline/hooks";
 import { mintPendingToken } from "../../pipeline/pending-token";
-import { handleChallengeResolve } from "../challenge-resolve";
+import {
+  handleChallengeResolve,
+  type ChallengeResolveDeps,
+} from "../challenge-resolve";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
@@ -46,6 +49,13 @@ function makeDeps() {
       lockedUntil: null,
       emailVerified: new Date("2026-01-01T00:00:00Z"),
     }),
+    // DECLARED here, though it starts undefined, so the cases that install a
+    // counter are assigning to a known property rather than widening the
+    // inferred literal — which is what left their callback parameters
+    // implicitly `any` and the assignment itself an error.
+    countChallengeAttempt: undefined as
+      | ChallengeResolveDeps["countChallengeAttempt"]
+      | undefined,
   };
 }
 
