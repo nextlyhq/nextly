@@ -300,6 +300,71 @@ every other. Prefer a branch commit to a stash when several sessions are live.
   a test is the right call — is the `testing-evidence` skill. Load it before
   adding, changing or judging a test.
 
+## How much of the machine a local gate may take
+
+`.husky/pre-push`, `pnpm verify:pr` and `pnpm verify:full` size themselves to
+the machine they run on. `pnpm local-limits` prints what this machine gets.
+
+The gates fan out two levels: turbo runs several package tasks at once, and
+each task running Vitest spawns several workers. **The product is what consumes
+the machine**, and both defaults are large — `turbo --concurrency` defaults to
+10, and Vitest's `maxWorkers` defaults to `os.availableParallelism()`. On an
+eight-core machine that reaches up to 80 Node processes, each with its own V8
+heap, which exhausts an ordinary development machine. The kernel's response to
+that is to kill processes, not to slow down.
+
+`scripts/local-limits.mjs` budgets the total number of heavy processes from
+total memory and core count, then splits it into the two knobs. Roughly:
+
+| Machine         | package tasks | workers each | peak processes |
+| --------------- | ------------- | ------------ | -------------- |
+| 4 GiB / 4 cpu   | 1             | 1            | 1              |
+| 8 GiB / 4 cpu   | 1             | 3            | 3              |
+| 16 GiB / 8 cpu  | 2             | 3            | 6              |
+| 64 GiB / 32 cpu | 4             | 4            | 16             |
+
+A FIXED number would be wrong for everyone: one that protects a small laptop
+makes a workstation crawl, and either way the gate gets bypassed. Deriving it
+is what lets the same command be correct on both.
+
+**Concurrency is not correctness.** The cap changes how many tasks run at once,
+never which ones, so a bounded gate asks exactly what an unbounded one asked.
+
+Override it for one command when you have headroom, or permanently in your
+shell profile when you do not:
+
+```sh
+NEXTLY_LOCAL_CONCURRENCY=6 NEXTLY_LOCAL_MAX_WORKERS=4 git push
+```
+
+A malformed override is ignored rather than honoured, because an empty
+`NEXTLY_LOCAL_CONCURRENCY=` in a profile would otherwise restore turbo's
+default of 10 — the failure the bound exists to prevent, arriving silently.
+
+### By operating system
+
+Everything above is platform-independent: `os.totalmem()` and
+`os.availableParallelism()` report correctly on all four. What differs is what
+else is competing for the machine.
+
+- **Linux** — nothing special. The budget reserves 30% for the OS and your
+  editor.
+- **macOS** — the same, though a machine with unified memory shares it with the
+  GPU; if you run a heavy simulator alongside, lower the override.
+- **Windows** — run hooks from Git Bash or another POSIX shell; husky hooks are
+  `sh` scripts. Defender's real-time scanning of `node_modules` costs more than
+  concurrency does, so exclude the repository directory from it before tuning
+  anything else.
+- **WSL2** — the VM's memory is what `os.totalmem()` reports, and it is set in
+  `.wslconfig` on the Windows side rather than by the distribution. That file is
+  per-machine and belongs on the machine, never in this repository. Keep the
+  repository on the Linux filesystem: a checkout under `/mnt/c` crosses the
+  9p filesystem boundary for every file operation and is far slower than any
+  concurrency setting can compensate for.
+
+Run one heavy phase at a time, and never a unit suite while an integration leg
+is in flight.
+
 ## Conventions (enforced; violations will be rejected in review)
 
 - Conventional Commits: commitlint (husky) checks the FORMAT; the PR-title

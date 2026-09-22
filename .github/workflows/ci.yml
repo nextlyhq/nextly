@@ -331,6 +331,16 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:agent-contract
 
+      # The local gates must say how much of a machine they may take.
+      # Unbounded, the pre-push hook meets turbo's default of 10 package tasks
+      # with Vitest's default of one worker per core in 23 uncapped packages,
+      # which exhausts the memory of an ordinary development machine. The bound
+      # is a comment in two files otherwise, and the next person to add a turbo
+      # invocation will not read it.
+      - name: Local gates declare their resource bound
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:local-gate-bounds
+
       # The pages under docs/ are compiled by nextlyhq.com, not here, so a page
       # that does not parse merges green and breaks the site's next deploy.
       # Compiled with the compiler the site's pipeline is built on.

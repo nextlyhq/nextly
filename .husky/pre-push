@@ -33,6 +33,42 @@ unset GIT_DIR GIT_WORK_TREE
 
 set -e
 
+# How much of this machine the gates below may take.
+#
+# The gates fan out two levels: turbo runs several package tasks at once, and
+# each task running Vitest spawns several workers. The PRODUCT is what consumes
+# the machine, and the defaults are large — turbo's `--concurrency` defaults to
+# 10, Vitest's `maxWorkers` to `os.availableParallelism()` — so an eight-core
+# machine can reach 80 Node processes, each with its own V8 heap. That exhausts
+# the memory of an ordinary development machine, and the kernel's response is to
+# kill processes rather than to slow down.
+#
+# The budget is DERIVED from this machine rather than fixed, because no single
+# number is right for a 8 GiB laptop and a 64 GiB workstation: one that protects
+# the laptop makes the workstation crawl, and either way the gate gets bypassed.
+# `scripts/local-limits.mjs` reads total memory and core count, which report
+# correctly on macOS, Linux, Windows and WSL2.
+#
+# Concurrency is not correctness. The cap changes how many tasks run at once,
+# never which ones, so every gate below still asks exactly what it asked before.
+# Raise it for one command on a machine with headroom:
+#   NEXTLY_LOCAL_CONCURRENCY=6 NEXTLY_LOCAL_MAX_WORKERS=4 git push
+#
+# TURBO_CONCURRENCY is turbo's own variable, so exporting it reaches
+# `pnpm run build` and every nested invocation without each call site having to
+# remember. Vitest reads no equivalent variable, so its cap is passed as a flag.
+TURBO_CONCURRENCY="$(node scripts/local-limits.mjs --concurrency)"
+export TURBO_CONCURRENCY
+VITEST_WORKERS="$(node scripts/local-limits.mjs --max-workers)"
+
+# A derived limit that silently came back empty would restore turbo's default of
+# 10, which is the failure this exists to prevent — and it would look identical
+# to a bounded run in every other respect.
+case "$TURBO_CONCURRENCY" in ''|*[!0-9]*) echo "pre-push: could not derive a concurrency limit; refusing." >&2; exit 1;; esac
+case "$VITEST_WORKERS" in ''|*[!0-9]*) echo "pre-push: could not derive a worker limit; refusing." >&2; exit 1;; esac
+
+echo "pre-push: $TURBO_CONCURRENCY package task(s) x $VITEST_WORKERS worker(s) on this machine"
+
 # What is uncommitted RIGHT NOW, recorded before anything below can change it.
 #
 # Every gate in this hook runs against the working tree, and Git then pushes
@@ -122,13 +158,13 @@ set -e
 
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
-  pnpm turbo test --continue
+  pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
 elif [ "$GATE_STATUS" -ne 0 ]; then
   echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
   exit "$GATE_STATUS"
 elif [ -n "$GATE_FILTERS" ]; then
   # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
-  pnpm turbo test --continue $GATE_FILTERS
+  pnpm turbo test --continue $GATE_FILTERS -- --maxWorkers="$VITEST_WORKERS"
 fi
 
 # The TYPES of the packages this push AFFECTS, blocking.
