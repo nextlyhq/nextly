@@ -122,9 +122,15 @@ export function codeSpans(text) {
         fence = { char, length };
         continue;
       }
-      // A closing fence uses the same character and is at least as long as the
-      // one that opened the block; anything else is content inside it.
-      if (char === fence.char && length >= fence.length) {
+      // A closing fence uses the same character, is at least as long as the
+      // one that opened the block, and carries NOTHING after the marker.
+      //
+      // 🔴 The info string is the part that was missing. A nested ```typescript
+      // inside a backtick block closed it, so every following line was read as
+      // prose and the commands and paths in the rest of the document went
+      // unchecked — the document still reported clean.
+      const after = line.replace(/^\s*(`{3,}|~{3,})/, "");
+      if (char === fence.char && length >= fence.length && after.trim() === "") {
         fence = null;
         continue;
       }
@@ -515,7 +521,11 @@ function main() {
   }
 
   if (asJson) {
+    // JSON mode emits the object and nothing else: the unverified entries are
+    // already inside it, and the human footer below would make `JSON.parse` on
+    // stdout fail for any consumer — while the command still exited 0.
     console.log(JSON.stringify({ files: files.length, findings, unverified }, null, 2));
+    process.exit(findings.length > 0 ? 1 : 0);
   } else if (findings.length > 0) {
     // The verdict first, because a refusal printed below a reader's `head` is
     // a refusal nobody saw — `derived-checks.md` on a gate's output.

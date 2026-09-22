@@ -246,6 +246,23 @@ describe("reading a tilde-fenced block", () => {
   it("requires a closing fence at least as long as the opening one", () => {
     expect(codeSpans("~~~~\n~~~\npnpm lint\n~~~~")).toEqual(["~~~", "pnpm lint"]);
   });
+
+  /*
+   * 🔴 A fence carrying an info string is CONTENT, not a close. A nested
+   * ```typescript inside a backtick block ended it, so every line after was
+   * read as prose and the rest of the document went unchecked — while still
+   * reporting clean.
+   */
+  it("does not let a fence with an info string close the block", () => {
+    expect(codeSpans("```\n```typescript\npnpm lint\n```")).toEqual([
+      "```typescript",
+      "pnpm lint",
+    ]);
+  });
+
+  it("closes on a bare marker with only trailing whitespace", () => {
+    expect(codeSpans("```\npnpm lint\n```   ")).toEqual(["pnpm lint"]);
+  });
 });
 
 describe("deciding whether a bare filename is a claim", () => {

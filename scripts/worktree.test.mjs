@@ -6,7 +6,7 @@
  * a suffix match looks like a match, a force flag looks like thoroughness, and
  * a catch that reports "container not running" looks like tolerance.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -179,6 +179,16 @@ describe("whether a slot claim may be taken over", () => {
   it("never takes over a slot whose databases were never dropped", () => {
     expect(isReclaimable({ slot: 1, path: "/gone", pendingCleanup: true }, () => false)).toBe(false);
   });
+
+  /*
+   * 🔴 An unreadable claim used to read as reclaimable, and that is the
+   * dangerous direction. A claim mid-write, or truncated by a crash, parses as
+   * null — so a concurrent run could unlink it and take a slot its owner
+   * believed it held. "I cannot tell who owns this" is not "nobody owns this".
+   */
+  it("keeps a slot whose claim cannot be read, rather than assuming it is free", () => {
+    expect(isReclaimable(null, () => false)).toBe(false);
+  });
 });
 
 describe("claiming a slot", () => {
@@ -254,10 +264,67 @@ describe("claiming a slot", () => {
     }).toThrow(/every slot below 3 is claimed/);
   });
 
-  it("ignores a claim file it cannot parse rather than crashing the command", () => {
+  /*
+   * 🔴 The claim used to be created EMPTY by `openSync(file, "wx")` and filled
+   * afterwards, so between those calls the file existed and parsed as nothing.
+   * A concurrent run reading it there saw an unowned slot and took it. The
+   * claim is written to a scratch file and LINKED into place now, so the name
+   * only ever appears already complete — this asserts the shape that made the
+   * race possible cannot occur.
+   */
+  it("never leaves a claim file that parses as nothing", () => {
+    claim("a");
+    for (const name of readdirSync(dir).filter(entry => entry.endsWith(".json"))) {
+      const body = readFileSync(join(dir, name), "utf8");
+      expect(body.length, `${name} is empty`).toBeGreaterThan(0);
+      expect(() => JSON.parse(body), `${name} is not valid JSON`).not.toThrow();
+    }
+  });
+
+  it("leaves no scratch files behind", () => {
+    claim("a");
+    claim("b");
+    expect(readdirSync(dir).filter(name => name.includes(".tmp"))).toEqual([]);
+  });
+
+  it("does not take over a slot whose claim it cannot read", () => {
     writeFileSync(join(dir, "0.json"), "{ not json");
-    // Unparseable reads as reclaimable, so the slot is taken over.
-    expect(claimSlot(dir, { path: "/a", branch: "a" })).toBe(0);
+    // Unreadable is treated as owned, so allocation moves past it.
+    expect(claimSlot(dir, { path: "/a", branch: "a" })).toBe(1);
+  });
+});
+
+describe("deciding whether teardown finished, given what was provisioned", () => {
+  const results = [
+    { container: "pg17", state: "dropped" },
+    { container: "mysql", state: "skipped" },
+  ];
+
+  /*
+   * A container that never received this slot's database has nothing to drop,
+   * so skipping it leaves nothing behind. Without this, every removal taken
+   * while the containers were down reserved its slot forever, and clearing it
+   * meant starting every container to drop databases that were never created.
+   */
+  it("does not hold a slot for a container that never held its database", () => {
+    expect(teardownIncomplete(results, ["pg17"])).toBe(false);
+  });
+
+  it("holds the slot when a container that DID hold it was skipped", () => {
+    expect(teardownIncomplete(results, ["pg17", "mysql"])).toBe(true);
+  });
+
+  /*
+   * A claim predating this record cannot say what it provisioned, and unknown
+   * is not empty — the conservative answer is to hold the slot.
+   */
+  it("holds the slot when nothing is recorded, because unknown is not empty", () => {
+    expect(teardownIncomplete(results, null)).toBe(true);
+  });
+
+  it("holds the slot on a failure whatever was provisioned", () => {
+    expect(teardownIncomplete([{ container: "pg17", state: "failed" }], ["pg17"])).toBe(true);
+    expect(teardownIncomplete([{ container: "pg17", state: "failed" }], [])).toBe(true);
   });
 });
 

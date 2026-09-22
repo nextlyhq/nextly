@@ -35,15 +35,13 @@
 
 import { execFileSync } from "node:child_process";
 import {
-  closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
-  openSync,
   readFileSync,
   readdirSync,
   unlinkSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,7 +192,13 @@ export function claimDir(commonDir) {
  * whole mechanism exists to prevent.
  */
 export function isReclaimable(claim, exists = existsSync) {
-  if (claim === null) return true;
+  // 🔴 An unreadable claim used to read as reclaimable, and that is the
+  // dangerous direction. A claim being written, or one truncated by a crash,
+  // parses as null — so a concurrent run could unlink it and take a slot its
+  // owner believed it held. "I cannot tell who owns this" is not "nobody owns
+  // this"; the ambiguous case keeps the slot, and `worktree sweep` is where a
+  // genuinely orphaned one is cleared deliberately.
+  if (claim === null) return false;
   if (claim.pendingCleanup) return false;
   return !exists(claim.path);
 }
@@ -227,23 +231,38 @@ export function claimSlot(dir, record, { maxSlots = MAX_SLOTS } = {}) {
   mkdirSync(dir, { recursive: true });
   for (let slot = 0; slot < maxSlots; slot += 1) {
     const file = join(dir, `${slot}.json`);
-    let fd;
+    const body = `${JSON.stringify({ slot, ...record, claimedAt: new Date().toISOString() }, null, 2)}\n`;
+
+    // 🔴 `openSync(file, "wx")` creates the claim EMPTY and fills it after, so
+    // between those two calls the file exists and parses as nothing. A
+    // concurrent run reading it there saw an unowned slot. Writing a scratch
+    // file first and LINKING it into place removes that window: `linkSync`
+    // fails with EEXIST when the name is taken, and the name only ever appears
+    // already complete.
+    const scratch = join(dir, `.${slot}.${process.pid}.tmp`);
+    writeFileSync(scratch, body);
     try {
-      fd = openSync(file, "wx");
+      linkSync(scratch, file);
+      return slot;
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
       if (isReclaimable(readClaim(file))) {
-        unlinkSync(file);
-        slot -= 1; // retry this slot, now free
+        // Another run may reclaim the same stale claim, so losing this race is
+        // ordinary rather than exceptional: the slot is simply taken now.
+        try {
+          unlinkSync(file);
+        } catch (unlinkError) {
+          if (unlinkError.code !== "ENOENT") throw unlinkError;
+        }
+        slot -= 1; // retry this slot, which is free unless someone beat us
       }
-      continue;
-    }
-    try {
-      writeSync(fd, `${JSON.stringify({ slot, ...record, claimedAt: new Date().toISOString() }, null, 2)}\n`);
     } finally {
-      closeSync(fd);
+      try {
+        unlinkSync(scratch);
+      } catch {
+        // Linked into place, or never created.
+      }
     }
-    return slot;
   }
   throw new Error(`worktree: every slot below ${maxSlots} is claimed`);
 }
@@ -377,8 +396,21 @@ export function dropDatabases(slot, { run = execFileSync } = {}) {
  * reserved in either case, so they answer the same question here even though
  * they print differently.
  */
-export function teardownIncomplete(results) {
-  return results.some(result => result.state === "failed" || result.state === "skipped");
+export function teardownIncomplete(results, provisioned = null) {
+  return results.some(result => {
+    if (result.state === "failed") return true;
+    if (result.state !== "skipped") return false;
+    // A container that never received this slot's database has nothing to
+    // drop, so skipping it leaves nothing behind. Without this every removal
+    // taken while the containers are down reserved its slot forever, and
+    // clearing it meant starting every container to drop databases that were
+    // never created — friction with no safety behind it.
+    //
+    // `null` means the claim predates this record, and then a skip is
+    // unaccounted for and the slot is held. Unknown is not empty.
+    if (provisioned === null) return true;
+    return provisioned.includes(result.container);
+  });
 }
 
 /** Merge the slot's env into a checkout's local settings, keeping the rest. */
@@ -405,14 +437,40 @@ function ensurePrimaryClaim(dir) {
   const file = join(dir, "0.json");
   if (existsSync(file)) return;
   mkdirSync(dir, { recursive: true });
+  // 🔴 git is asked BEFORE the claim exists. Creating the file first and then
+  // shelling out left an empty `0.json` whenever that call threw: `existsSync`
+  // short-circuits every later call, the empty file parses as nothing, and the
+  // next `worktree new` took slot 0 — the primary checkout's ports and its
+  // shared `nextly_test` database, which is the collision this module exists
+  // to prevent.
+  const primary = worktreeRecords(git(["worktree", "list", "--porcelain"]))[0];
+  const body = `${JSON.stringify({ slot: 0, path: primary?.path ?? root, branch: primary?.branch ?? null, primary: true }, null, 2)}\n`;
+  const scratch = join(dir, `.0.${process.pid}.primary.tmp`);
+  writeFileSync(scratch, body);
   try {
-    const fd = openSync(file, "wx");
-    const primary = worktreeRecords(git(["worktree", "list", "--porcelain"]))[0];
-    writeSync(fd, `${JSON.stringify({ slot: 0, path: primary?.path ?? root, branch: primary?.branch ?? null, primary: true }, null, 2)}\n`);
-    closeSync(fd);
+    linkSync(scratch, file);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
+  } finally {
+    try {
+      unlinkSync(scratch);
+    } catch {
+      // Linked into place, or never created.
+    }
   }
+}
+
+/** Merge the list of containers holding this slot's database into its claim. */
+export function recordProvisioned(dir, slot, containers) {
+  const file = join(dir, `${slot}.json`);
+  let claim;
+  try {
+    claim = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return; // No readable claim to annotate.
+  }
+  const merged = [...new Set([...(claim.provisioned ?? []), ...containers])];
+  writeFileSync(file, `${JSON.stringify({ ...claim, provisioned: merged }, null, 2)}\n`);
 }
 
 function report(results, indent = "    ") {
@@ -452,6 +510,14 @@ function commandNew(branch, from, worktreeRoot) {
   const settings = writeSettings(target, env);
   const provisioned = provisionDatabases(slot);
   const failed = provisioned.filter(result => result.state === "failed");
+
+  // Which containers actually hold this slot's database, so a later teardown
+  // knows what it must drop and what was never there.
+  recordProvisioned(
+    dir,
+    slot,
+    provisioned.filter(r => r.state === "created" || r.state === "present").map(r => r.container)
+  );
 
   console.log(`worktree: ${target}`);
   console.log(`  branch ${branch} from ${from}, slot ${slot}`);
@@ -493,25 +559,43 @@ function commandRemove(target, { keepBranch, force }) {
   const claim = claims.find(entry => resolve(entry.path) === resolve(match.path));
   const slot = claim?.slot ?? 0;
 
-  // Databases FIRST. Once the checkout is gone the slot looks free, and a
-  // later `new` could take it while the old databases still hold another run's
-  // system tables.
-  const dropped = dropDatabases(slot);
-  const incomplete = teardownIncomplete(dropped) && slot !== 0;
+  const file = claim ? join(dir, `${slot}.json`) : null;
+
+  // 🔴 The databases used to be dropped FIRST, so a checkout git then refused
+  // to remove — a dirty one, which is exactly the case the non-force default
+  // exists to protect — kept its files while every running container lost its
+  // database. A routine cleanup partially destroyed the environment it was
+  // meant to preserve.
+  //
+  // Git goes first now. The slot cannot be reissued in the meantime because
+  // the claim is marked BEFORE the checkout disappears: `isReclaimable`
+  // refuses a claim carrying `pendingCleanup`, so the window where the path is
+  // gone but the claim is not yet resolved is not a window anyone can take.
+  if (file) {
+    writeFileSync(file, `${JSON.stringify({ ...claim, pendingCleanup: true }, null, 2)}\n`);
+  }
 
   const removeArgs = ["worktree", "remove", match.path];
   if (force) removeArgs.splice(2, 0, "--force");
   try {
     git(removeArgs);
   } catch (error) {
-    // 🔴 `--force` used to be unconditional, which discards uncommitted work
-    // from a routine cleanup command. Refusing is the safe default; the
-    // message says exactly how to proceed once the work is dealt with.
+    // `--force` used to be unconditional, which discards uncommitted work from
+    // a routine cleanup command. Refusing is the safe default; the message
+    // says how to proceed once the work is dealt with. Nothing has been
+    // dropped at this point, so the checkout is exactly as it was.
+    if (file) {
+      writeFileSync(file, `${JSON.stringify(claim, null, 2)}\n`);
+    }
     console.error(`worktree: refusing to remove ${match.path}`);
     console.error(`  ${String(error.message ?? error).split("\n").filter(Boolean).slice(-1)[0]}`);
     console.error("  Commit or stash the work, or pass --force to discard it.");
+    console.error("  Its databases are untouched.");
     process.exit(1);
   }
+
+  const dropped = dropDatabases(slot);
+  const incomplete = teardownIncomplete(dropped, claim?.provisioned ?? null) && slot !== 0;
 
   let branchState = "kept";
   if (!keepBranch && match.branch) {
@@ -530,11 +614,10 @@ function commandRemove(target, { keepBranch, force }) {
   report(dropped);
   console.log(`  branch ${match.branch ?? "(detached)"}: ${branchState}`);
 
-  if (!claim) {
+  if (!file) {
     console.log(`  no slot claim recorded for this checkout; nothing to release`);
     return;
   }
-  const file = join(dir, `${slot}.json`);
   if (incomplete) {
     // Retain the reservation. Releasing a slot whose database still exists is
     // how the next checkout inherits another run's tables.
@@ -558,13 +641,23 @@ function commandProvision() {
     : {};
   const slot = Number(env.NEXTLY_WORKTREE_SLOT ?? 0);
   const results = provisionDatabases(slot);
+  recordProvisioned(
+    claimDir(commonDir()),
+    slot,
+    results.filter(r => r.state === "created" || r.state === "present").map(r => r.container)
+  );
   console.log(`worktree: provisioning slot ${slot} (${databaseFor(slot)})`);
   report(results, "  ");
   const failed = results.filter(result => result.state === "failed");
   const skipped = results.filter(result => result.state === "skipped");
   if (failed.length > 0) process.exit(1);
   if (skipped.length > 0) {
-    console.log("\n  Start the containers first: docker start nextly-postgres17-test nextly-mysql-test");
+    // Every container `provisionDatabases` checks, so following this and
+    // retrying actually clears the skip. Naming a subset left postgres15
+    // skipped and the retry exited 1 again with no new information.
+    console.log(
+      `\n  Start the containers first: docker start ${TEST_DATABASES.map(entry => entry.container).join(" ")}`
+    );
     process.exit(1);
   }
 }
@@ -582,7 +675,7 @@ function commandSweep() {
     const results = dropDatabases(claim.slot);
     console.log(`slot ${claim.slot} (${databaseFor(claim.slot)}):`);
     report(results, "  ");
-    if (teardownIncomplete(results)) {
+    if (teardownIncomplete(results, claim.provisioned ?? null)) {
       stuck += 1;
       console.log(`  still reserved`);
       continue;
