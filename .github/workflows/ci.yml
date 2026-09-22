@@ -318,6 +318,19 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:docs-claims
 
+      # Agent instructions name commands and files, and those rot silently as
+      # scripts are renamed and files move. Measured when this landed: the
+      # integration-test skill and rule both told the reader to start the test
+      # containers with `pnpm docker:test`, which AGENTS.md correctly documents
+      # as a probe of the DEV stack that starts nothing — and a skill pointed at
+      # a `pnpm generate:types` that is a CLI command, not a script. Advisory in
+      # polarity but blocking as a check: it reports only references it can
+      # resolve unambiguously, so a finding is a broken reference rather than a
+      # judgement call.
+      - name: Agent instructions resolve
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm check:agent-contract
+
       # The pages under docs/ are compiled by nextlyhq.com, not here, so a page
       # that does not parse merges green and breaks the site's next deploy.
       # Compiled with the compiler the site's pipeline is built on.

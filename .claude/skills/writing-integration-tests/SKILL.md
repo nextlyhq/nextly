@@ -18,8 +18,12 @@ description: Use when writing or debugging Nextly integration tests (*.integrati
    - `pnpm test:integration:postgres15` -> localhost:5434
    - `pnpm test:integration:mysql` -> localhost:3307
    - `pnpm test:integration:sqlite` -> no URL needed
-     Start the throwaway containers with `pnpm docker:test`. NEVER point a
-     TEST\_\* URL at a database you did not create for the run.
+     `pnpm docker:test` does NOT start them — it probes the DEV stack's
+     `postgres` service and exits 1 when that is down. Start them the way
+     AGENTS.md ("Build and test") documents: `docker start` by container name
+     when they already exist, `docker compose -f docker-compose.test.yml up -d`
+     on a fresh clone. NEVER point a TEST\_\* URL at a database you did not
+     create for the run.
 3. **Isolation is per-file prefixes, not parallelism.** Use the canonical
    helper (`packages/nextly/src/database/__tests__/integration/helpers/test-db.ts`)
    which generates a random per-file table/schema prefix. In packages/nextly
@@ -46,8 +50,9 @@ description: Use when writing or debugging Nextly integration tests (*.integrati
 
 - "Cannot resolve nextly/testing" or self-import errors -> unbuilt tree,
   build first.
-- Connection refused -> containers not up (`pnpm docker:test`), or wrong
-  port (see the mapping above).
+- Connection refused -> containers not up, or wrong port (see the mapping
+  above). `pnpm docker:test` will not fix this and does not report on these
+  containers at all; it probes the DEV database.
 - A suite passes alone but fails in the full run -> table-name collision;
   check the suite uses the prefix helper, and that it is not creating a
   fixed-name system table directly.

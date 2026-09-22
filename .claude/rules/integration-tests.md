@@ -18,7 +18,8 @@ Integration tests in this repo must:
   the sequential integration run (`fileParallelism: false`) for isolation,
   which is why parallelism must never be re-enabled.
 - Never target an existing database. Use the throwaway containers from
-  `pnpm docker:test` (Postgres 15 on 5434, Postgres 17 on 5435, MySQL on
-  3307; these are the matrix-tested versions).
+  `docker-compose.test.yml` (Postgres 15 on 5434, Postgres 17 on 5435, MySQL
+  on 3307; these are the matrix-tested versions). AGENTS.md has the start
+  commands; `pnpm docker:test` is not one of them.
 - Run from the repo root so turbo builds dependencies first; a direct
   package-level run on an unbuilt tree produces dozens of false failures.
