@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import type { SupportedDialect } from "../../../database/schema-registry";
 import type { TableSpec } from "../pipeline/diff/types";
 
+import { type DrizzleSchemaHook, runAfterDrizzle } from "./after-drizzle";
 import { toDrizzleTable, toTableSpec } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
 import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
@@ -38,6 +39,16 @@ export interface ExtensionSchemaInput {
   /** Enabled plugins, already topologically sorted. */
   plugins: readonly SchemaContribution[];
   app?: SchemaContribution;
+  /**
+   * The app's per-dialect escape hatch, run over the COMPILED tables.
+   *
+   * Taken here rather than applied by the caller because the check that makes
+   * it safe needs two things this function owns: the ownership map, so a hook
+   * cannot reshape a plugin's table, and the compiled output itself. A caller
+   * applying the hooks afterwards would hold neither, and the specs would
+   * already have been derived from the pre-hook tables.
+   */
+  afterDrizzle?: readonly DrizzleSchemaHook[];
 }
 
 export interface ExtensionSchema {
@@ -137,12 +148,30 @@ export async function buildExtensionSchema(
   }
 
   const specs = tables.map(table => toTableSpec(table, input.dialect));
-  const drizzle: Record<string, unknown> = {};
+  const compiled: Record<string, unknown> = {};
   const owners = new Map<string, SchemaOwner>();
   for (const table of tables) {
-    drizzle[table.name] = toDrizzleTable(table, input.dialect);
+    compiled[table.name] = toDrizzleTable(table, input.dialect);
     owners.set(table.name, table.owner);
   }
+
+  // Core and entity tables are Nextly's to maintain, so a hook may not return
+  // one. Built from the same two inputs the draft store seeds itself from,
+  // rather than from the compiled tables: `compiled` holds only extension
+  // tables, so deriving the protected set from it would be empty and the
+  // refusal would never fire.
+  const protectedTables = new Set<string>([
+    ...input.coreTableNames,
+    ...input.entities.map(entity => entity.name),
+  ]);
+
+  const drizzle = await runAfterDrizzle({
+    dialect: input.dialect,
+    tables: compiled,
+    hooks: input.afterDrizzle ?? [],
+    owners,
+    protectedTables,
+  });
 
   return {
     tables,

@@ -21,6 +21,7 @@ import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
 import { CORE_TABLE_NAMES } from "../../../schemas";
 
+import type { DrizzleSchemaHook } from "./after-drizzle";
 import {
   buildExtensionSchema,
   clearActiveExtensionSchema,
@@ -120,11 +121,22 @@ export async function compileAndPublishExtensionSchema(
   input: PublishInput
 ): Promise<void> {
   const plugins = contributionsOf(input.plugins);
-  const appHooks =
-    (input.config.db as { schema?: { extend?: unknown[] } } | undefined)?.schema
-      ?.extend ?? [];
+  const schemaConfig = (
+    input.config.db as
+      | { schema?: { extend?: unknown[]; afterDrizzle?: DrizzleSchemaHook[] } }
+      | undefined
+  )?.schema;
+  const appHooks = schemaConfig?.extend ?? [];
+  // Counted in the early return below: an app that declares ONLY afterDrizzle
+  // still has something to compile, and clearing the schema there would drop
+  // the tables its hook was written to reshape.
+  const afterDrizzle = schemaConfig?.afterDrizzle ?? [];
 
-  if (plugins.length === 0 && appHooks.length === 0) {
+  if (
+    plugins.length === 0 &&
+    appHooks.length === 0 &&
+    afterDrizzle.length === 0
+  ) {
     // Nothing declares a schema. Cleared rather than left alone, so a reload
     // that REMOVES the last plugin does not leave its tables in the desired
     // set — which would keep re-creating them.
@@ -152,6 +164,7 @@ export async function compileAndPublishExtensionSchema(
     entities,
     pluginPrefixes: resolvePrefixes(input.plugins),
     plugins,
+    afterDrizzle,
     ...(appHooks.length > 0
       ? {
           app: {
