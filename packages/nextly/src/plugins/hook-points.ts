@@ -61,6 +61,39 @@ export function getDeclaredHookPoints(): ReadonlyMap<
  * `acme-auth.profile` belongs to the plugin whose slug is `acme-auth`, and no
  * other plugin can publish under it.
  */
+/**
+ * Whether this plugin may declare this name at all.
+ *
+ * Both refusals, together, because they answer one question — who owns the
+ * name — and separating them from the loop leaves it reading as what it
+ * builds rather than as the rules it enforces on the way.
+ */
+function assertPointDeclarable(
+  points: ReadonlyMap<string, DeclaredHookPoint>,
+  name: string,
+  pluginName: string,
+  slug: string
+): void {
+  if (!name.startsWith(`${slug}.`)) {
+    throw resolutionError(
+      "hook-point-outside-prefix",
+      `Plugin "${pluginName}" declares the hook point "${name}", which must start with "${slug}.".`,
+      { plugin: pluginName, hookPoint: name, expectedPrefix: slug }
+    );
+  }
+
+  const existing = points.get(name);
+  if (existing) {
+    // Naming BOTH owners: with only one named, whoever reads the failure has
+    // to go looking for the other, and the other is half the problem.
+    throw resolutionError(
+      "hook-point-collision",
+      `Plugins "${existing.owner}" and "${pluginName}" both declare the hook point "${name}".`,
+      { hookPoint: name, owners: [existing.owner, pluginName] }
+    );
+  }
+}
+
 export function collectHookPoints(
   plugins: PluginDefinition[]
 ): Map<string, DeclaredHookPoint> {
@@ -71,27 +104,7 @@ export function collectHookPoints(
     const slug = pluginAdminSlug(plugin.name);
 
     for (const point of plugin.contributes?.hookPoints ?? []) {
-      if (!point.name.startsWith(`${slug}.`)) {
-        throw resolutionError(
-          "hook-point-outside-prefix",
-          `Plugin "${plugin.name}" declares the hook point "${point.name}", which must start with "${slug}.".`,
-          { plugin: plugin.name, hookPoint: point.name, expectedPrefix: slug }
-        );
-      }
-
-      const existing = points.get(point.name);
-      if (existing) {
-        // Naming BOTH owners: with only one named, whoever reads the failure
-        // has to go looking for the other, and the other is half the problem.
-        throw resolutionError(
-          "hook-point-collision",
-          `Plugins "${existing.owner}" and "${plugin.name}" both declare the hook point "${point.name}".`,
-          {
-            hookPoint: point.name,
-            owners: [existing.owner, plugin.name],
-          }
-        );
-      }
+      assertPointDeclarable(points, point.name, plugin.name, slug);
 
       points.set(point.name, {
         name: point.name,

@@ -1684,11 +1684,36 @@ export class UserMutationService extends BaseService {
    * @throws NextlyError(NOT_FOUND) when the user does not exist.
    * @throws NextlyError on DB errors via fromDatabaseError.
    */
+  /**
+   * Forget who edited a plugin's settings, without forgetting the settings.
+   *
+   * `updated_by` keeps the editing user's id and nothing else erases it, so a
+   * deleted account went on being identified by core-owned rows indefinitely.
+   * The row itself stays: it is the plugin's configuration rather than the
+   * user's data, and removing it would reconfigure the install.
+   *
+   * Its own step so the deletion transaction reads as the sequence it
+   * enforces rather than as the detail of each erasure.
+   */
+  private async scrubPluginSettingsActor(
+    txDb: DrizzleTransactionLike,
+    userId: string | number
+  ): Promise<void> {
+    const { nextlyPluginSettings } = this.tables;
+    if (!nextlyPluginSettings) return;
+    await txDb
+      .update(nextlyPluginSettings)
+      .set({ updatedBy: null })
+      .where(
+        eq((nextlyPluginSettings as { updatedBy: Column }).updatedBy, userId)
+      );
+  }
+
   async deleteUser(
     userId: number | string,
     actor?: RequestActor
   ): Promise<void> {
-    const { users, userRoles, media, nextlyPluginSettings } = this.tables;
+    const { users, userRoles, media } = this.tables;
 
     // Asked once, before the transaction opens, because a failed statement
     // aborts an open Postgres transaction and there would be no way back.
@@ -1941,25 +1966,7 @@ export class UserMutationService extends BaseService {
             ? await detachQuery
             : await detachQuery.for("update")) as unknown[] as MediaRow[];
 
-          // Plugin settings keep the editing user's id in `updated_by`, and
-          // nothing else erases it: the rows are core-owned and survive the
-          // account, so without this they go on identifying that person
-          // indefinitely. Scrubbed inside the deletion transaction, like every
-          // other retained attribution, so the erasure cannot half-apply.
-          //
-          // The row itself stays: it is the plugin's configuration, not the
-          // user's data, and deleting it would reconfigure the install.
-          if (nextlyPluginSettings) {
-            await txDb
-              .update(nextlyPluginSettings)
-              .set({ updatedBy: null })
-              .where(
-                eq(
-                  (nextlyPluginSettings as { updatedBy: Column }).updatedBy,
-                  userId
-                )
-              );
-          }
+          await this.scrubPluginSettingsActor(txDb, userId);
 
           if (detaching.length > 0) {
             const detachedAt = new Date();

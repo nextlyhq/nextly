@@ -271,12 +271,25 @@ async function dropRetiredAuthTablesIfAllowed(
     });
   }
 
+  await executeRetiredDrops(deps, plan.tables);
+}
+
+/**
+ * Execute the drops the plan settled on.
+ *
+ * Separate from deciding them, so the guards above read as the DECISION they
+ * make and this reads as what carries it out.
+ */
+async function executeRetiredDrops(
+  deps: ReconcileCoreDeps,
+  tables: readonly string[]
+): Promise<void> {
+  // Asked of the same generator the diff engine uses, rather than composed
+  // here. Each dialect already spells this differently — PostgreSQL appends
+  // CASCADE, MySQL and SQLite do not — and a second spelling in a domain
+  // service is a second thing to keep in step with the dialects.
   const { generateSQL } = await import("../pipeline/sql-templates");
-  for (const table of plan.tables) {
-    // Asked of the same generator the diff engine uses, rather than composed
-    // here. Each dialect already spells this differently — PostgreSQL appends
-    // CASCADE, MySQL and SQLite do not — and a second spelling in a domain
-    // service is a second thing to keep in step with the dialects.
+  for (const table of tables) {
     await deps.executeSql?.(
       generateSQL({ type: "drop_table", tableName: table }, deps.dialect)
     );
