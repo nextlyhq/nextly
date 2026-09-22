@@ -193,3 +193,61 @@ describe("handleChallengeResolve (D71)", () => {
     expect(body.status).not.toBe("challenge");
   });
 });
+
+/**
+ * Whose budget a wrong answer spends.
+ *
+ * `challengeId` names the challenge DEFINITION — "totp" — which every account
+ * using that factor shares. Keying the attempt counter on it alone pooled all
+ * of their wrong answers into one budget, so a handful of failures by any one
+ * account locked every other account out of that factor until the window
+ * expired. The key is the separating property: a count of calls looks
+ * identical either way.
+ */
+describe("the challenge attempt budget", () => {
+  /** Answer wrongly as `userId`, returning the key the counter was given. */
+  async function keyFor(userId: string): Promise<string> {
+    const deps = makeDeps();
+    const seen: string[] = [];
+    const withCounter = {
+      ...deps,
+      countChallengeAttempt: async (key: string) => {
+        seen.push(key);
+        return { allowed: true };
+      },
+    };
+    const pendingToken = await mintPendingToken(
+      { userId, challengeId: "totp", attempts: 0 },
+      SECRET,
+      300
+    );
+    await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      withCounter as never
+    );
+    // The population before the verdict: one wrong answer must have reached
+    // the counter exactly once, or the key below is not evidence of anything.
+    expect(seen).toHaveLength(1);
+    return seen[0];
+  }
+
+  it("gives two accounts on the same challenge separate budgets", async () => {
+    const first = await keyFor("u1");
+    const second = await keyFor("u2");
+
+    expect(first).not.toBe(second);
+    expect(first).toContain("u1");
+    expect(second).toContain("u2");
+    // Both still name the challenge, so a user answering TOTP wrongly does
+    // not spend the budget for a different factor they also hold.
+    expect(first).toContain("totp");
+    expect(second).toContain("totp");
+  });
+
+  it("gives one account the SAME budget across attempts", async () => {
+    // The control. A key carrying anything per-request — a nonce, a
+    // timestamp, the token itself — would separate the two users above while
+    // giving every attempt a fresh budget, so the cap would never bind.
+    expect(await keyFor("u1")).toBe(await keyFor("u1"));
+  });
+});

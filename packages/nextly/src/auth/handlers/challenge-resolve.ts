@@ -160,17 +160,17 @@ async function wrongAnswer(
   // progress, but it is not what enforces the cap.
   const count =
     deps.countChallengeAttempt ??
-    (async (challengeId: string, limit: number, windowMs: number) => {
+    (async (key: string, limit: number, windowMs: number) => {
       const { authRateLimiter } = await import("../middleware/rate-limiter");
-      return authRateLimiter().check(
-        `challenge-attempts:${challengeId}`,
-        limit,
-        windowMs
-      );
+      return authRateLimiter().check(key, limit, windowMs);
     });
 
+  // Keyed by USER and challenge. `challengeId` names the challenge DEFINITION
+  // — "totp" — so keying on it alone pooled every account's wrong answers into
+  // one budget: a handful of failures by anyone locked out every user of that
+  // challenge until the window expired.
   const verdict = await count(
-    args.pending.challengeId,
+    `${args.pending.userId}:${args.pending.challengeId}`,
     deps.maxChallengeAttempts,
     deps.challengeTokenTTL * 1000
   );

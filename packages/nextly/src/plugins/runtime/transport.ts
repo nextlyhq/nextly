@@ -112,7 +112,12 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
         // a reverse proxy there would route to a virtual host the manifest
         // never declared. DNS and TLS are still checked against the declared
         // name, so nothing else catches it.
-        headers: { ...toHeaders(init), ...bodyHeaders, host: url.host },
+        // `bodyHeaders` FIRST, so a caller's explicit content type wins over
+        // the one inferred from the body — spread after, a JSON string sent
+        // with `application/json` went out as `text/plain;charset=UTF-8` and
+        // providers rejected it. `host` stays last: that one is not the
+        // caller's to choose.
+        headers: { ...bodyHeaders, ...toHeaders(init), host: url.host },
         // The whole point: connect to the address already judged, and never
         // consult the resolver a second time.
         lookup: (_hostname, options, callback) => {

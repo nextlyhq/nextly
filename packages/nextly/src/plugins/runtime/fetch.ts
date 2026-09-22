@@ -56,6 +56,32 @@ export interface PluginFetchDeps {
   allowLoopback: boolean;
 }
 
+/**
+ * The request the NEXT hop should carry.
+ *
+ * What a redirect does to the method and body is not a detail: 301, 302 and
+ * 303 turn the follow-up into a bodyless GET, which is what keeps a credential
+ * posted to one host from being posted again to another. 307 and 308 preserve
+ * both by definition, which is what they are for.
+ */
+function nextHop(current: RequestInit, status: number, to: URL): RequestInit {
+  if (status === 307 || status === 308) {
+    // The body must be sent again, so it has to be replayable. A stream is
+    // consumed by the first hop and would arrive empty at the second —
+    // refused rather than silently truncated to nothing.
+    if (current.body instanceof ReadableStream) {
+      refuse("unreplayable-redirect-body", {
+        host: to.hostname,
+        status,
+      });
+    }
+    return current;
+  }
+
+  const { body: _dropped, ...rest } = current;
+  return { ...rest, method: "GET" };
+}
+
 function refuse(reason: string, context: Record<string, unknown>): never {
   throw NextlyError.forbidden({
     logContext: { reason: `outbound-${reason}`, ...context },
@@ -161,6 +187,11 @@ export function createPluginFetch(
     // each redirect would start a fresh thirty seconds and a chain of them
     // could hold a worker far past the bound this constant states.
     const deadlineAt = Date.now() + TIMEOUT_MS;
+    // The request as it stands for THIS hop. A redirect may change it: the
+    // original was replayed unchanged to every target, so an OAuth form or a
+    // binary credential posted to one allowed host was re-sent verbatim to
+    // whatever other allowed host it redirected to.
+    let hop: RequestInit = init;
     for (;;) {
       const address = await vetUrl(url, deps);
       const response = await deps.send({
@@ -168,7 +199,7 @@ export function createPluginFetch(
         address,
         // `manual`, so a redirect comes back here to be checked rather than
         // being followed by the transport without one.
-        init: { ...init, redirect: "manual" },
+        init: { ...hop, redirect: "manual" },
         deadlineAt,
         maxBodyBytes: MAX_BODY_BYTES,
       });
@@ -186,6 +217,7 @@ export function createPluginFetch(
       } catch {
         refuse("malformed-redirect", { location });
       }
+      hop = nextHop(hop, response.status, url);
     }
   };
 }

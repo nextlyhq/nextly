@@ -116,6 +116,40 @@ describe("request bodies", () => {
     expect(await response.json()).toEqual({ bytes: [1, 2, 250] });
   });
 
+  it("keeps the caller's explicit content type over the inferred one", async () => {
+    // The inferred header was spread AFTER the caller's, so a JSON string sent
+    // with `application/json` went out as `text/plain;charset=UTF-8` and
+    // providers rejected an otherwise valid request.
+    const url = await listen((req, res) => {
+      res.end(JSON.stringify({ type: req.headers["content-type"] }));
+    });
+
+    const response = await send(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ a: 1 }),
+    });
+
+    expect(await response.json()).toEqual({ type: "application/json" });
+  });
+
+  it("still infers a content type when the caller states none", async () => {
+    // The control: letting the caller always win would drop the inferred
+    // header entirely, and a form post would arrive undeclared.
+    const url = await listen((req, res) => {
+      res.end(JSON.stringify({ type: req.headers["content-type"] }));
+    });
+
+    const response = await send(url, {
+      method: "POST",
+      body: new URLSearchParams({ a: "1" }),
+    });
+
+    expect((await response.json()).type).toContain(
+      "application/x-www-form-urlencoded"
+    );
+  });
+
   it("still sends a string body", async () => {
     // The one shape that already worked: it must keep working, or the fix
     // traded one silently dropped body for another.

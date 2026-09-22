@@ -1943,6 +1943,13 @@ export class UserMutationService extends BaseService {
         // without resolver support the schema pipeline does not have yet.
         // Inside the transaction, so files are never detached from an account
         // whose removal then rolls back.
+        // OUTSIDE the media guard: a database with no media table still has
+        // plugin settings, and the scrub was skipped entirely on one — leaving
+        // the deleted user's id in `updated_by` on exactly the installs least
+        // likely to notice. The helper already handles the settings table
+        // being absent, so it needs no guard of its own.
+        await this.scrubPluginSettingsActor(txDb, userId);
+
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and
           // the ids cannot be recovered once the column naming them is null.
@@ -1965,8 +1972,6 @@ export class UserMutationService extends BaseService {
           const detaching = (this.dialect === "sqlite"
             ? await detachQuery
             : await detachQuery.for("update")) as unknown[] as MediaRow[];
-
-          await this.scrubPluginSettingsActor(txDb, userId);
 
           if (detaching.length > 0) {
             const detachedAt = new Date();

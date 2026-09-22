@@ -7,6 +7,7 @@ import {
   type PluginFetchDeps,
   type ResolvedAddress,
 } from "../fetch";
+import type { SendArgs } from "../transport";
 
 const PUBLIC: ResolvedAddress = { address: "93.184.216.34", family: 4 };
 
@@ -252,5 +253,77 @@ describe("ctx.fetch", () => {
     };
     expect(sent.init.method).toBe("POST");
     expect(sent.init.redirect).toBe("manual");
+  });
+});
+
+/**
+ * What a redirect hop carries forward.
+ *
+ * A redirect names a NEW destination, so replaying the original method and
+ * body hands the second host whatever the first was trusted with — an OAuth
+ * form, a bearer assertion, a signed payload. The status is what decides:
+ * 307 and 308 promise the request is unchanged, and every other 3xx becomes
+ * a bodyless GET.
+ */
+describe("a redirect hop", () => {
+  /** Redirect once, answer on the second, keeping every init handed over. */
+  function hopping(status: number) {
+    const seen: RequestInit[] = [];
+    const send = async (request: SendArgs): Promise<Response> => {
+      seen.push(request.init);
+      if (seen.length === 1) {
+        return new Response(null, {
+          status,
+          headers: { location: "https://a.provider.example/next" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    };
+    return { seen, d: deps({ send }) };
+  }
+
+  it("drops the body and becomes a GET on a 302", async () => {
+    const { seen, d } = hopping(302);
+    await createPluginFetch(d)("https://api.example.com/token", {
+      method: "POST",
+      body: new URLSearchParams({ client_secret: "shhh" }),
+    });
+
+    // The population first: two hops were made, so the second init exists to
+    // be judged. Asserting only the second would pass on a run that never
+    // redirected at all.
+    expect(seen).toHaveLength(2);
+    expect(seen[0].method).toBe("POST");
+    expect(seen[1].method).toBe("GET");
+    expect(seen[1].body).toBeUndefined();
+  });
+
+  it("keeps the method and body on a 307", async () => {
+    // The control. Dropping the body unconditionally would satisfy the test
+    // above while breaking the one redirect that promises replay.
+    const body = new URLSearchParams({ client_secret: "shhh" });
+    const { seen, d } = hopping(307);
+    await createPluginFetch(d)("https://api.example.com/token", {
+      method: "POST",
+      body,
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1].method).toBe("POST");
+    expect(seen[1].body).toBe(body);
+  });
+
+  it("refuses to replay a 307 body it cannot send twice", async () => {
+    // A stream is consumed by the first hop, so the second would arrive
+    // empty — which reads as the far end rejecting a valid request.
+    const { d } = hopping(307);
+    expect(
+      await refusalOf(() =>
+        createPluginFetch(d)("https://api.example.com/token", {
+          method: "POST",
+          body: new ReadableStream(),
+        })
+      )
+    ).toBe("outbound-unreplayable-redirect-body");
   });
 });
