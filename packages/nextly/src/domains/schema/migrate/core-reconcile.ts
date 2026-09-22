@@ -119,6 +119,12 @@ export async function reconcileCore(
   const ops = diffSnapshots(live, desired);
 
   if (ops.length === 0) {
+    // The retired tables are NOT part of the core schema, so the diff above
+    // can never mention them and "up to date" says nothing about them. Run
+    // the cleanup before returning, or the ordinary upgrade — a database
+    // already carrying the current core schema — is exactly the one where a
+    // requested drop silently does nothing.
+    await dropRetiredAuthTablesIfAllowed(deps);
     logger?.info?.("Core schema up to date.");
     return { changed: false };
   }
@@ -223,7 +229,24 @@ export async function reconcileCore(
 async function dropRetiredAuthTablesIfAllowed(
   deps: ReconcileCoreDeps
 ): Promise<void> {
-  if (!deps.allowDestructive || !deps.tableExists || !deps.countRows) return;
+  if (!deps.allowDestructive) return;
+
+  // `allowDestructive` is the GENERAL flag — it also authorises dropping an
+  // orphaned core column — so its being set does not mean retired-table work
+  // was asked for. A caller without these operations simply does not do that
+  // work, which is true of the in-process boot path, and refusing here would
+  // reject a destructive change that has nothing to do with these tables.
+  //
+  // Said rather than thrown, because what actually went wrong was that the
+  // CLI supplied none of them: the cleanup returned at this guard and the
+  // documented flow dropped nothing. That is now covered by asserting what
+  // the CLI passes, which is the thing that regressed.
+  if (!deps.tableExists || !deps.countRows || !deps.executeSql) {
+    deps.logger?.info?.(
+      "Retired-table cleanup skipped: this caller supplies no table-existence, row-count or statement operations."
+    );
+    return;
+  }
 
   const {
     findRetiredAuthTables,
@@ -248,13 +271,15 @@ async function dropRetiredAuthTablesIfAllowed(
     });
   }
 
-  const { quoteIdent } = await import(
-    "../pipeline/sql-templates/identifier-quoting"
-  );
+  const { generateSQL } = await import("../pipeline/sql-templates");
   for (const table of plan.tables) {
-    // Through the shared quoting helper rather than an interpolated name: the
-    // names are ours, but the quoting rules are the dialect's.
-    await deps.executeSql?.(`DROP TABLE ${quoteIdent(table, deps.dialect)}`);
+    // Asked of the same generator the diff engine uses, rather than composed
+    // here. Each dialect already spells this differently — PostgreSQL appends
+    // CASCADE, MySQL and SQLite do not — and a second spelling in a domain
+    // service is a second thing to keep in step with the dialects.
+    await deps.executeSql?.(
+      generateSQL({ type: "drop_table", tableName: table }, deps.dialect)
+    );
     deps.logger?.warn?.(`Dropped retired auth table ${table}.`);
   }
 }
