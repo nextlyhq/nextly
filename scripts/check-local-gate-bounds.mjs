@@ -59,7 +59,10 @@ export const BOUNDED_RUNNER = "scripts/verify.mjs";
  */
 export function runnerProblems(source, phases = null) {
   const problems = [];
-  if (!/TURBO_CONCURRENCY:/.test(source)) {
+  // Comments stripped first: this module's own header names the variable, and
+  // a guard that its subject's prose can satisfy is checking the wrong thing.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+  if (!/TURBO_CONCURRENCY:/.test(code)) {
     problems.push(
       `${BOUNDED_RUNNER}: does not set TURBO_CONCURRENCY on the commands it spawns`
     );
@@ -78,7 +81,12 @@ export function runnerProblems(source, phases = null) {
 
   for (const phase of phases) {
     const argv = phase.argv.join(" ");
-    if (!/\btest\b/.test(argv)) continue;
+    // 🔴 Matching a standalone `test` token alone skipped the phase that
+    // invokes vitest DIRECTLY — `exec vitest run --dir scripts` contains no
+    // such token, so the one phase whose cap is not carried by turbo was the
+    // one phase never checked. Verified: removing its cap reported zero
+    // problems. The runner is named as well as the task.
+    if (!/\btest\b/.test(argv) && !/\bvitest\b/.test(argv)) continue;
     if (!/--maxWorkers=/.test(argv)) {
       problems.push(
         `${BOUNDED_RUNNER}: phase '${phase.name}' runs tests without --maxWorkers — '${argv}'`

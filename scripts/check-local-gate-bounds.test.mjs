@@ -254,6 +254,31 @@ describe("validating the runner the root scripts delegate to", () => {
     ]);
   });
 
+  /*
+   * 🔴 Matching a standalone `test` token alone skipped the phase that invokes
+   * vitest DIRECTLY — `exec vitest run --dir scripts` contains no such token,
+   * so the one phase whose cap is not carried by turbo was the one phase never
+   * checked. Removing its cap reported zero problems.
+   */
+  it("checks a phase that names vitest directly, not only a test task", () => {
+    const phases = [
+      { name: "script tests", argv: ["exec", "vitest", "run", "--dir", "scripts"] },
+    ];
+    expect(runnerProblems(sound, phases)).toEqual([
+      expect.stringContaining("'script tests'"),
+    ]);
+  });
+
+  /*
+   * A guard its subject's PROSE can satisfy is checking the wrong thing: this
+   * module's own header names the variable, and so does the runner's.
+   */
+  it("does not accept a concurrency bound that exists only in a comment", () => {
+    expect(runnerProblems("// sets TURBO_CONCURRENCY: somewhere\nconst x = 1;", [])).toEqual([
+      expect.stringContaining("TURBO_CONCURRENCY"),
+    ]);
+  });
+
   it("is silent when every test phase carries a cap", () => {
     const phases = [
       { name: "unit tests", argv: ["turbo", "run", "test", "--", "--maxWorkers=2"] },
