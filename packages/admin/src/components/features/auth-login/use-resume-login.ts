@@ -106,6 +106,16 @@ export interface ChallengeFlow {
 export interface ChallengeAnswer {
   ok: boolean;
   error?: string;
+  /**
+   * The challenge was answered and STILL no session exists, because the
+   * account holds an admin-set password it must replace first.
+   *
+   * A distinct continuation rather than a success: treating it as one
+   * navigated to the dashboard with no session, so the user was bounced back
+   * to login and never saw the set-password view. Carries the token that view
+   * needs, exactly as the ordinary login path does.
+   */
+  passwordChangeRequired?: { pendingToken: string };
 }
 
 /**
@@ -133,16 +143,31 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
   ): Promise<ChallengeAnswer> {
     try {
       const csrfToken = await getCsrfToken();
-      const result = await publicApi.post<{ next?: string }>(
-        "/auth/challenge/resolve",
-        {
-          csrfToken,
-          response,
-          ...(challenge?.pendingToken
-            ? { pendingToken: challenge.pendingToken }
-            : {}),
-        }
-      );
+      const result = await publicApi.post<{
+        next?: string;
+        status?: string;
+        pendingToken?: string;
+      }>("/auth/challenge/resolve", {
+        csrfToken,
+        response,
+        ...(challenge?.pendingToken
+          ? { pendingToken: challenge.pendingToken }
+          : {}),
+      });
+
+      // A successful RESPONSE is not necessarily a session. The forced
+      // first-sign-in password change answers 200 with no cookies issued, so
+      // navigating here lands on a page that immediately redirects back.
+      if (
+        result?.status === "password_change_required" &&
+        result.pendingToken
+      ) {
+        return {
+          ok: true,
+          passwordChangeRequired: { pendingToken: result.pendingToken },
+        };
+      }
+
       window.location.href = result?.next ?? ROUTES.DASHBOARD;
       return { ok: true };
     } catch (error: unknown) {

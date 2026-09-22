@@ -222,7 +222,18 @@ export function Login() {
           authUi={authUi}
           challengeType={challengeFlow.challenge.challengeType}
           pendingToken={challengeFlow.challenge.pendingToken}
-          resolve={challengeFlow.resolve}
+          resolve={async response => {
+            const answer = await challengeFlow.resolve(response);
+            // Answered, and still no session: the account must replace its
+            // admin-set password first. Raised here so the set-password view
+            // renders, exactly as it does for a login that never had a second
+            // factor — without this the challenge succeeded and the user was
+            // sent to a dashboard that bounced them back to login.
+            if (answer.passwordChangeRequired) {
+              setMustChangePassword(answer.passwordChangeRequired);
+            }
+            return answer;
+          }}
           onResolved={next => {
             window.location.href = next ?? ROUTES.DASHBOARD;
           }}
