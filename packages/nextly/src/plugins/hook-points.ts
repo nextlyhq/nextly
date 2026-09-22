@@ -120,29 +120,51 @@ export function collectHookPoints(
 }
 
 /**
- * Check a payload against its declared schema, in development only.
+ * Check a call against what the point DECLARED — its payload and its kind.
  *
- * Warned once per POINT rather than per call: a mismatched payload is usually
+ * Both halves, because a declaration that constrains only the payload leaves
+ * the more consequential half unenforced: a point declared as a `decision`
+ * executed through `apply` has its veto error-isolated and skipped rather than
+ * failing closed, so the security semantics the declaration promises are not
+ * the ones the call gets. The kind is the whole reason a decision point is not
+ * an ordinary filter.
+ *
+ * Warned once per POINT AND ASPECT rather than per call: a mismatch is usually
  * every call at that seam, and a warning per call would bury the rest of the
- * log. Skipped entirely in production, where the cost is paid on every
- * invocation and the author is not there to read it.
+ * log. Keyed per aspect so a payload warning does not silence the kind one.
+ * Skipped entirely in production, where the cost is paid on every invocation
+ * and the author is not there to read it.
  */
 export function createPayloadChecker(
   points: ReadonlyMap<string, DeclaredHookPoint>,
   warn: (message: string) => void
-): (name: string, payload: unknown) => void {
+): (name: string, payload: unknown, via?: DeclaredHookPoint["kind"]) => void {
   const warned = new Set<string>();
 
-  return function check(name, payload) {
-    if (warned.has(name)) return;
-    const schema = points.get(name)?.payload;
+  return function check(name, payload, via) {
+    const point = points.get(name);
+    // Undeclared points are ordinary: a plugin may use a seam it never
+    // declared, and resolution is not the place to forbid that.
+    if (!point) return;
+
+    const kindKey = `${name}:kind`;
+    if (via !== undefined && point.kind !== via && !warned.has(kindKey)) {
+      warned.add(kindKey);
+      warn(
+        `[nextly] Hook point "${name}" (declared by ${point.owner}) is a ` +
+          `${point.kind}, but it was called as a ${via}.`
+      );
+    }
+
+    const payloadKey = `${name}:payload`;
+    if (warned.has(payloadKey)) return;
+    const schema = point.payload;
     if (!schema) return;
     if (schema.safeParse(payload).success) return;
 
-    warned.add(name);
-    const owner = points.get(name)?.owner ?? "unknown plugin";
+    warned.add(payloadKey);
     warn(
-      `[nextly] A payload at hook point "${name}" (declared by ${owner}) does not match its schema.`
+      `[nextly] A payload at hook point "${name}" (declared by ${point.owner}) does not match its schema.`
     );
   };
 }

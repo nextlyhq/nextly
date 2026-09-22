@@ -142,6 +142,43 @@ describe("validateCapabilities", () => {
     ).not.toThrow();
   });
 
+  it("checks the segments AFTER a wildcard over a record", () => {
+    // A record accepts any KEY, which says nothing about what is beneath it.
+    // Stopping at the `*` accepted this typo exactly as stopping at the head
+    // accepted `providers.google.clientSecrett` — and a secret path matching
+    // nothing is not inert: `mapSecrets` never finds the real credential, so
+    // it is stored in plain text and returned unredacted.
+    const settings = z.object({
+      providers: z.record(z.string(), z.object({ clientSecret: z.string() })),
+    });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["providers.*.clientSecrett"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("accepts the correct suffix through that same record", () => {
+    // The control. Refusing everything below a record would satisfy the test
+    // above while rejecting the per-tenant declarations this feature is for.
+    const settings = z.object({
+      providers: z.record(z.string(), z.object({ clientSecret: z.string() })),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["providers.*.clientSecret"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
   it("resolves through an optional object rather than stopping at it", () => {
     // `.optional()` wraps the object, so the shape is one level in. Reading
     // only the outer node would find no shape and accept anything below it.

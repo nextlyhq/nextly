@@ -31,6 +31,19 @@ const MAX_REDIRECTS = 3;
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 /** How long one request may take, redirects included. */
 const TIMEOUT_MS = 30_000;
+/**
+ * Request headers that do not survive a hop to another origin.
+ *
+ * Lower-case because that is how `Headers` reports names, and matching by a
+ * name the caller chose to spell differently is exactly the miss that would
+ * let a credential through.
+ */
+const CREDENTIAL_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "cookie2",
+]);
 
 /** One resolved address, as a DNS answer gives it. */
 export interface ResolvedAddress {
@@ -64,7 +77,22 @@ export interface PluginFetchDeps {
  * posted to one host from being posted again to another. 307 and 308 preserve
  * both by definition, which is what they are for.
  */
-function nextHop(current: RequestInit, status: number, to: URL): RequestInit {
+function nextHop(
+  current: RequestInit,
+  status: number,
+  from: URL,
+  to: URL
+): RequestInit {
+  // Same rule the platform applies: credentials are scoped to the origin they
+  // were issued for, so a hop that leaves it drops them. Without this, a
+  // compromised — or merely misconfigured — allowed host could redirect a
+  // plugin's bearer token or session cookie to any OTHER allowed host, which
+  // the allowlist does nothing to prevent because both ends are declared.
+  const headers =
+    from.origin === to.origin
+      ? current.headers
+      : stripCredentialHeaders(current.headers);
+
   if (status === 307 || status === 308) {
     // The body must be sent again, so it has to be replayable. A stream is
     // consumed by the first hop and would arrive empty at the second —
@@ -75,17 +103,76 @@ function nextHop(current: RequestInit, status: number, to: URL): RequestInit {
         status,
       });
     }
-    return current;
+    return { ...current, headers };
   }
 
   const { body: _dropped, ...rest } = current;
-  return { ...rest, method: "GET" };
+  return { ...rest, headers, method: "GET" };
+}
+
+/** The request headers a cross-origin hop may keep. */
+function stripCredentialHeaders(
+  headers: RequestInit["headers"]
+): Record<string, string> {
+  // Normalized through `Headers` so every accepted spelling — a record, an
+  // array of pairs, another `Headers` — is read the same way, and matching is
+  // case-insensitive without doing that by hand.
+  const kept: Record<string, string> = {};
+  const source = new Headers(headers ?? {});
+  source.forEach((value, name) => {
+    if (CREDENTIAL_HEADERS.has(name.toLowerCase())) return;
+    kept[name] = value;
+  });
+  return kept;
 }
 
 function refuse(reason: string, context: Record<string, unknown>): never {
   throw NextlyError.forbidden({
     logContext: { reason: `outbound-${reason}`, ...context },
   });
+}
+
+/**
+ * Hold `work` to what is left of the wall-clock budget.
+ *
+ * The transport bounds the socket, which leaves everything BEFORE the socket
+ * unbounded — name resolution most of all. A resolver that never answers held
+ * `ctx.fetch` open indefinitely without the request ever reaching the timer
+ * that was supposed to cap it, so the documented bound was one the caller
+ * could not rely on.
+ */
+async function withDeadline<T>(
+  work: Promise<T>,
+  deadlineAt: number,
+  url: URL
+): Promise<T> {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) {
+    refuse("deadline-exceeded", { host: url.hostname });
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            NextlyError.forbidden({
+              logContext: {
+                reason: "outbound-deadline-exceeded",
+                host: url.hostname,
+              },
+            })
+          );
+        }, remaining);
+      }),
+    ]);
+  } finally {
+    // Cleared on every exit, so a request that finished early does not hold
+    // the event loop open for the remainder of its budget.
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
@@ -193,7 +280,9 @@ export function createPluginFetch(
     // whatever other allowed host it redirected to.
     let hop: RequestInit = init;
     for (;;) {
-      const address = await vetUrl(url, deps);
+      // Inside the deadline, because the DNS lookup it performs is otherwise
+      // outside every timer this function sets.
+      const address = await withDeadline(vetUrl(url, deps), deadlineAt, url);
       const response = await deps.send({
         url,
         address,
@@ -212,12 +301,15 @@ export function createPluginFetch(
         refuse("too-many-redirects", { host: url.hostname });
       }
       remaining -= 1;
+      // Captured before `url` moves: whether this hop crosses an origin is
+      // what decides if the request's credentials may travel with it.
+      const from = url;
       try {
         url = new URL(location, url);
       } catch {
         refuse("malformed-redirect", { location });
       }
-      hop = nextHop(hop, response.status, url);
+      hop = nextHop(hop, response.status, from, url);
     }
   };
 }

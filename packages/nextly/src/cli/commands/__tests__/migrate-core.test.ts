@@ -213,4 +213,32 @@ describe("migrateCore", () => {
     });
     await expect(migrateCore(d as never)).rejects.toThrow(/apply failed/);
   });
+
+  it("omits them when the adapter cannot supply them", async () => {
+    // The dev-boot path wraps the Drizzle adapter in a small object carrying
+    // `executeQuery` and nothing else. Asserting the shape instead of
+    // detecting it produced a call on `undefined`, and the TypeError was
+    // caught by the boot handler — which silently skipped the WHOLE migration
+    // phase on every project with a migrations directory. Omitted, the
+    // cleanup reports itself as skipped instead.
+    const d = deps({ adapter: { executeQuery: vi.fn() } });
+
+    await expect(migrateCore(d as never)).resolves.toBeDefined();
+
+    const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(passed).toBeDefined();
+    expect(passed.tableExists).toBeUndefined();
+    expect(passed.executeSql).toBeUndefined();
+    expect(passed.countRows).toBeUndefined();
+  });
+
+  it("omits them for an adapter with neither operation", async () => {
+    const d = deps({ adapter: {} });
+    await expect(migrateCore(d as never)).resolves.toBeDefined();
+
+    const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(passed.tableExists).toBeUndefined();
+  });
 });

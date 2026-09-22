@@ -8,6 +8,15 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  endpointsPresent,
+  isWebhookAuditEnabled,
+  refreshEndpointPresence,
+  resetWebhookActivation,
+  setEndpointPresenceRefresher,
+  setWebhookAuditEnabled,
+} from "../../domains/webhooks/recording-activation";
+
 import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
 import { ServiceContainer } from "../../services/index";
 import { createTestNextly, type TestNextly } from "../test-nextly";
@@ -16,6 +25,9 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  // Module-level state, so a primed flag would otherwise leak into the next
+  // test and quietly change what it is measuring.
+  resetWebhookActivation();
 });
 
 async function boot(): Promise<TestNextly> {
@@ -24,6 +36,28 @@ async function boot(): Promise<TestNextly> {
     await current.adapter.executeQuery(statement);
   }
   return current;
+}
+
+/**
+ * Boot with recording OFF, which is what "no webhook endpoint" means here.
+ *
+ * `recordMutationEventInTx` returns false when the install has no enabled
+ * endpoint and webhook auditing is disabled — the common installation. That
+ * answer is about the OUTBOX, not about the account, so gating the in-process
+ * event on it suppressed `user.created` exactly where webhooks were never in
+ * use. The presence flag FAILS OPEN until primed, which is why it has to be
+ * primed here rather than left at its default.
+ */
+async function bootWithRecordingOff(): Promise<TestNextly> {
+  const t = await boot();
+  setWebhookAuditEnabled(false);
+  setEndpointPresenceRefresher(() => Promise.resolve(false));
+  await refreshEndpointPresence();
+  // The premise, asserted rather than assumed: unprimed this reads TRUE, and
+  // the test would then run against the same conditions as every other one.
+  expect(endpointsPresent()).toBe(false);
+  expect(isWebhookAuditEnabled()).toBe(false);
+  return t;
 }
 
 function services(t: TestNextly) {
@@ -106,5 +140,37 @@ describe("user lifecycle events", () => {
 
     expect(Object.keys(seen[0])).toEqual(["userId"]);
     expect(JSON.stringify(seen[0])).not.toContain("private@example.com");
+  });
+
+  it("tells a subscriber even when the webhook outbox took no row", async () => {
+    // The separating property. `recorded` answers whether the outbox accepted
+    // a row, not whether the account was created, so an install with no
+    // webhook endpoint never told its plugins a user existed.
+    const t = await bootWithRecordingOff();
+    const seen: Array<{ userId: string }> = [];
+    t.events.on("user.created", e => {
+      seen.push(e.payload as { userId: string });
+    });
+
+    const userId = await makeUser(t, "no-outbox@example.com");
+    await t.events.settle();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].userId).toBe(userId);
+  });
+
+  it("tells a subscriber about a DELETE without the outbox too", async () => {
+    const t = await bootWithRecordingOff();
+    const userId = await makeUser(t, "no-outbox-delete@example.com");
+    const seen: Array<{ userId: string }> = [];
+    t.events.on("user.deleted", e => {
+      seen.push(e.payload as { userId: string });
+    });
+
+    await services(t).users.deleteUser(userId);
+    await t.events.settle();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].userId).toBe(userId);
   });
 });

@@ -1145,12 +1145,14 @@ export function createPluginContext(
     add: (name, fn) => filterRegistry.addFilter(name, fn),
     remove: (name, fn) => filterRegistry.removeFilter(name, fn),
     apply: (name, value, context) => {
-      // The value handed to a filter IS the payload at this seam.
-      checkPayload(name, value);
+      // The value handed to a filter IS the payload at this seam. The kind
+      // names THIS registry API, so a point declared otherwise is reported —
+      // a decision run through here loses its fail-closed veto.
+      checkPayload(name, value, "filter");
       return filterRegistry.applyFilters(name, value, context);
     },
     decide: (name, initial, context) => {
-      checkPayload(name, initial);
+      checkPayload(name, initial, "decision");
       return filterRegistry.applyDecision(name, initial, context);
     },
   };
@@ -1158,7 +1160,7 @@ export function createPluginContext(
     add: (name, fn) => filterRegistry.addAction(name, fn),
     remove: (name, fn) => filterRegistry.removeAction(name, fn),
     run: (name, payload, context) => {
-      checkPayload(name, payload);
+      checkPayload(name, payload, "action");
       return filterRegistry.runActions(name, payload, context);
     },
   };

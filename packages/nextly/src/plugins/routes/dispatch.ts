@@ -319,6 +319,13 @@ async function applyRouteRateLimit(
       ? { limit: configured.requestsPerHour, windowMs: configured.windowMs }
       : await generalRouteBudget();
 
+  // A non-positive limit means DISABLED, exactly as it does for the core auth
+  // router (`checkAuthIpRateLimit`). Copying the number into a `check` instead
+  // made `requestsPerHour: 0` mean "refuse everything": no request can be
+  // within a limit of zero, so plugin auth routes answered 429 to everyone
+  // while the core routes the setting was written for ran unlimited.
+  if (budget.limit <= 0) return null;
+
   const limiter = authRateLimiter(configured.store);
   const verdict = await limiter.check(key, budget.limit, budget.windowMs);
   if (verdict.allowed) return null;
@@ -392,9 +399,18 @@ async function applyRouteCsrf(
   );
 }
 
-/** Add `Cache-Control: no-store` when the route asked for it. */
+/**
+ * Force `Cache-Control: no-store` when the route asked for it.
+ *
+ * REPLACES whatever the handler set, rather than deferring to it. Treating an
+ * existing header as authoritative meant a handler answering an auth route
+ * with `public, max-age=300` kept that value, and a public plugin route gets
+ * no later session-cache override — so a shared proxy was free to cache
+ * authentication responses and redirects that the route option promises are
+ * never cacheable. The option is a guarantee, so it is the one that wins.
+ */
 function withNoStore(response: Response, route: PluginRoute): Response {
-  if (!shouldNotStore(route) || response.headers.has("cache-control")) {
+  if (!shouldNotStore(route)) {
     return response;
   }
   const headers = new Headers(response.headers);

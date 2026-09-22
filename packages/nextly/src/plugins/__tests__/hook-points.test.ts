@@ -111,11 +111,51 @@ describe("payload checking in development", () => {
   });
 
   it("says nothing when the payload matches", () => {
+    // The point must be PRESENT for its silence to mean anything. An empty map
+    // returns at the first guard, so the checker was quiet because it had
+    // nothing to check rather than because the payload was valid — green under
+    // any implementation, including one that never compares at all.
     const warn = vi.fn();
-    const schemas = new Map([
-      ["acme-auth.profile", { safeParse: () => ({ success: true }) }],
+    const points = collectHookPoints([
+      plugin("@acme/auth", [
+        {
+          name: "acme-auth.profile",
+          kind: "filter",
+          payload: { safeParse: () => ({ success: true }) },
+        },
+      ]),
     ]);
-    createPayloadChecker(new Map(), schemas, warn)("acme-auth.profile", {});
+    expect(points.has("acme-auth.profile")).toBe(true);
+
+    createPayloadChecker(points, warn)("acme-auth.profile", {}, "filter");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reports a point executed through the wrong registry API", () => {
+    // A decision's veto fails CLOSED; run through `apply` the same throw is
+    // error-isolated and skipped, so the declaration stops describing what the
+    // call actually does.
+    const warn = vi.fn();
+    const points = collectHookPoints([
+      plugin("@acme/auth", [{ name: "acme-auth.gate", kind: "decision" }]),
+    ]);
+
+    createPayloadChecker(points, warn)("acme-auth.gate", {}, "filter");
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0][0]).toContain("acme-auth.gate");
+    expect(warn.mock.calls[0][0]).toContain("decision");
+  });
+
+  it("says nothing when the kind matches", () => {
+    // The control: warning on every call would satisfy the test above while
+    // reporting every correct use as a mismatch.
+    const warn = vi.fn();
+    const points = collectHookPoints([
+      plugin("@acme/auth", [{ name: "acme-auth.gate", kind: "decision" }]),
+    ]);
+
+    createPayloadChecker(points, warn)("acme-auth.gate", {}, "decision");
     expect(warn).not.toHaveBeenCalled();
   });
 });

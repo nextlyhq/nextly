@@ -732,10 +732,13 @@ export class UserMutationService extends BaseService {
   /**
    * The post-commit half, once the account and its outbox row are durable.
    *
-   * Retention runs whether or not an event was recorded — a
-   * user-management-only install relies on write-triggered maintenance — while
-   * the drain and the in-process emit happen only when a row was actually
-   * written.
+   * `recorded` answers whether the WEBHOOK OUTBOX accepted a row, which is a
+   * different question from whether the account was created. Gating the
+   * in-process event on it meant that an install with no enabled endpoint —
+   * the common one — emitted no `user.created` at all, so plugins never
+   * initialized per-user state unless unrelated webhook recording happened to
+   * be switched on. Only the drain, which exists to deliver that row, belongs
+   * behind it.
    */
   private async afterUserCreated(
     recorded: boolean,
@@ -744,8 +747,9 @@ export class UserMutationService extends BaseService {
     await this.retentionRunner?.maybeRun(
       UserMutationService.WRITE_PATH_PRUNE_BATCHES
     );
-    if (!recorded) return;
-    this.fastDrainScheduler?.offer();
+    // Only the delivery of the outbox row depends on there being one.
+    if (recorded) this.fastDrainScheduler?.offer();
+    // The account exists either way, so in-process subscribers are told.
     safeEmit("user.created", { userId });
   }
 
@@ -1840,6 +1844,8 @@ export class UserMutationService extends BaseService {
     // all three driver packages); the fluent query API is identical across
     // dialects.
     let userDeletedRecorded = false;
+    /** Whether THIS transaction removed the account, regardless of webhooks. */
+    let userWasDeleted = false;
     // Collected inside the transaction, used after it commits: the cache bust
     // must not run until the detach is durable, and the rows cannot be found
     // afterwards because the column that named them is exactly what changed.
@@ -2049,6 +2055,11 @@ export class UserMutationService extends BaseService {
         // loser would emit a duplicate event with a fresh id that downstream
         // idempotency cannot collapse. PII-safe identity only.
         if (affectedRowCount(deleteResult, this.dialect) > 0) {
+          // Two DIFFERENT facts, and conflating them suppressed the in-process
+          // event on every install without an enabled webhook endpoint: this
+          // one says the account is gone, the assignment below says the outbox
+          // accepted a row to deliver.
+          userWasDeleted = true;
           userDeletedRecorded = await recordMutationEventInTx(
             txDb,
             this.dialect,
@@ -2075,8 +2086,10 @@ export class UserMutationService extends BaseService {
     // After the transaction commits, and only for a delete that removed a row.
     // In-process subscribers are how a plugin cleans up what it stored against
     // this user; the webhook outbox event recorded above is durable but
-    // reaches nothing inside this process.
-    if (userDeletedRecorded) {
+    // reaches nothing inside this process — and whether that outbox accepted a
+    // row says nothing about whether the account is gone, so this asks the
+    // question it actually means.
+    if (userWasDeleted) {
       safeEmit("user.deleted", { userId: String(userId) });
     }
 

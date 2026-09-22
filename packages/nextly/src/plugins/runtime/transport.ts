@@ -22,6 +22,16 @@ import { NextlyError } from "../../errors/nextly-error";
 
 import type { ResolvedAddress } from "./fetch";
 
+/**
+ * Statuses whose responses may not carry a body.
+ *
+ * The platform `Response` constructor THROWS on a non-null body for these, so
+ * passing an empty buffer is not harmlessly equivalent to passing null: an
+ * ordinary provider `DELETE` answering 204 made `ctx.fetch` raise instead of
+ * returning the response the caller was waiting for.
+ */
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
 export interface SendArgs {
   url: URL;
   address: ResolvedAddress;
@@ -165,20 +175,24 @@ export async function sendVetted(args: SendArgs): Promise<Response> {
           chunks.push(chunk);
         });
         response.on("end", () => {
+          const status = response.statusCode ?? 502;
           resolve(
-            new Response(Buffer.concat(chunks), {
-              status: response.statusCode ?? 502,
-              headers: Object.entries(response.headers).flatMap(([k, v]) =>
-                v === undefined
-                  ? []
-                  : [
-                      [k, Array.isArray(v) ? v.join(", ") : v] as [
-                        string,
-                        string,
-                      ],
-                    ]
-              ),
-            })
+            new Response(
+              NULL_BODY_STATUSES.has(status) ? null : Buffer.concat(chunks),
+              {
+                status,
+                headers: Object.entries(response.headers).flatMap(([k, v]) =>
+                  v === undefined
+                    ? []
+                    : [
+                        [k, Array.isArray(v) ? v.join(", ") : v] as [
+                          string,
+                          string,
+                        ],
+                      ]
+                ),
+              }
+            )
           );
         });
         response.on("error", reject);

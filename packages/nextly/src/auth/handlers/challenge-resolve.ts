@@ -108,7 +108,12 @@ function retryResponse(args: {
  */
 async function passwordChangeRequired(
   deps: Pick<ChallengeResolveDeps, "secret" | "challengeTokenTTL">,
-  args: { userId: string; strategy?: string; requestId: string }
+  args: {
+    userId: string;
+    strategy?: string;
+    requestId: string;
+    next?: string;
+  }
 ): Promise<Response> {
   const pendingToken = await mintPendingToken(
     {
@@ -116,6 +121,12 @@ async function passwordChangeRequired(
       challengeId: MUST_CHANGE_PASSWORD_CHALLENGE,
       attempts: 0,
       strategy: args.strategy,
+      // Carried across. An external login signs its destination into the
+      // pending token, and dropping it here sent the account to the dashboard
+      // after setting a password instead of the page it asked for. Already
+      // sanitized when it was first signed, so it is not re-derived from the
+      // request.
+      ...(args.next ? { next: args.next } : {}),
     },
     deps.secret,
     deps.challengeTokenTTL
@@ -135,29 +146,27 @@ async function passwordChangeRequired(
  * second attempt would record the session as coming from the password path
  * whatever actually signed the person in.
  */
-async function wrongAnswer(
+/**
+ * Spend one attempt from this account's budget for this challenge.
+ *
+ * A PRECONDITION, so it runs before the answer is examined. Counting only
+ * wrong answers left the budget unspent by a correct one, and the pending
+ * token is a JWT that minting a replacement does not revoke — so replaying the
+ * original `attempts: 0` token kept guessing, and whichever guess happened to
+ * be right was accepted however many had come before it. Charging every
+ * attempt is what makes `maxChallengeAttempts` a cap rather than a display.
+ *
+ * The count is held server-side because the token's own number is attacker
+ * supplied. That number is still carried forward, for a client showing
+ * progress, but it is not what enforces anything.
+ */
+async function spendChallengeAttempt(
   deps: Pick<
     ChallengeResolveDeps,
-    | "secret"
-    | "challengeTokenTTL"
-    | "maxChallengeAttempts"
-    | "isProduction"
-    | "countChallengeAttempt"
+    "challengeTokenTTL" | "maxChallengeAttempts" | "countChallengeAttempt"
   >,
-  args: {
-    pending: {
-      userId: string;
-      challengeId: string;
-      attempts: number;
-      strategy?: string;
-    };
-    usedCookie: boolean;
-    requestId: string;
-  }
-): Promise<Response> {
-  // Counted against the challenge, not against the token that was presented.
-  // The token's own number is still carried forward so a client can show
-  // progress, but it is not what enforces the cap.
+  pending: { userId: string; challengeId: string }
+): Promise<void> {
   const count =
     deps.countChallengeAttempt ??
     (async (key: string, limit: number, windowMs: number) => {
@@ -170,12 +179,37 @@ async function wrongAnswer(
   // one budget: a handful of failures by anyone locked out every user of that
   // challenge until the window expired.
   const verdict = await count(
-    `${args.pending.userId}:${args.pending.challengeId}`,
+    `${pending.userId}:${pending.challengeId}`,
     deps.maxChallengeAttempts,
     deps.challengeTokenTTL * 1000
   );
+  if (!verdict.allowed) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-attempts-exhausted") },
+    });
+  }
+}
+
+async function wrongAnswer(
+  deps: Pick<
+    ChallengeResolveDeps,
+    "secret" | "challengeTokenTTL" | "maxChallengeAttempts" | "isProduction"
+  >,
+  args: {
+    pending: {
+      userId: string;
+      challengeId: string;
+      attempts: number;
+      strategy?: string;
+    };
+    usedCookie: boolean;
+    requestId: string;
+  }
+): Promise<Response> {
+  // The budget was already spent by `spendChallengeAttempt` before the answer
+  // was examined; this only decides whether to offer another round.
   const nextAttempts = args.pending.attempts + 1;
-  if (!verdict.allowed || nextAttempts >= deps.maxChallengeAttempts) {
+  if (nextAttempts >= deps.maxChallengeAttempts) {
     throw NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-failed-final") },
     });
@@ -253,6 +287,11 @@ export async function handleChallengeResolve(
       });
     }
 
+    // BEFORE the answer is examined. Spending the budget only on a wrong
+    // answer left a correct one free, and a replayed token could therefore
+    // keep guessing until one landed.
+    await spendChallengeAttempt(deps, pending);
+
     const result = await deps.challengeRegistry.resolve(
       pending.challengeId,
       { userId: pending.userId, response: challengeResponse },
@@ -289,6 +328,7 @@ export async function handleChallengeResolve(
         userId: u.id,
         strategy: pending.strategy,
         requestId,
+        next: pending.next,
       });
     }
 

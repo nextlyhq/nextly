@@ -57,6 +57,52 @@ export interface PluginSettingsServiceDeps {
 /** A marker only this module writes, so a decrypt is never attempted on plain JSON. */
 const SECRET_ENVELOPE = "enc:" as const;
 
+/**
+ * Keys that are never merged, because assigning them rewrites object
+ * behaviour rather than data. A settings patch arrives from a request body.
+ */
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * A value that merges key-by-key rather than replacing.
+ *
+ * Deliberately narrow: only a plain object. An array, a `Date` and a `null`
+ * all REPLACE, because a patch naming one of those means the new value — and
+ * merging arrays index-by-index would make removing an element impossible.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value) as unknown;
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Apply `patch` over `current`, descending into nested objects.
+ *
+ * A key the patch does not mention keeps the stored value at every depth,
+ * which is what lets a caller update one field of a group without resending
+ * the secret beside it — a value it cannot resend, because it is never given
+ * one to resend.
+ */
+function deepMergeSettings(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...current };
+  for (const key of Object.keys(patch)) {
+    if (UNSAFE_KEYS.has(key)) continue;
+    const incoming = patch[key];
+    const existing = out[key];
+    out[key] =
+      isPlainObject(existing) && isPlainObject(incoming)
+        ? deepMergeSettings(existing, incoming)
+        : incoming;
+  }
+  return out;
+}
+
 export class PluginSettingsService {
   constructor(private readonly deps: PluginSettingsServiceDeps) {}
 
@@ -99,7 +145,13 @@ export class PluginSettingsService {
     opts?: { actorUserId?: string }
   ): Promise<void> {
     const current = await this.readStored();
-    const merged = { ...current, ...patch };
+    // DEEP, because a shallow spread replaces a nested object wholesale. A
+    // group holding both a normal field and a secret — the ordinary shape for
+    // a provider's `clientId` and `clientSecret` — lost the secret whenever
+    // only the normal field was patched, and the admin cannot resend what it
+    // only ever received as `{ set: true }`: a required secret then failed
+    // validation, and a defaulted one was silently reset over its ciphertext.
+    const merged = deepMergeSettings(current, patch);
 
     const parsed = this.deps.schema.safeParse(merged);
     if (!parsed.success) {

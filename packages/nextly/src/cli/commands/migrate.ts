@@ -637,10 +637,20 @@ export async function migrateCore(
         dialect: deps.dialect,
         getDrizzle: <T>() => deps.db as T,
       });
+      // DETECTED rather than asserted. Not every caller builds a full adapter:
+      // the dev-boot path wraps the Drizzle adapter in a small object carrying
+      // `executeQuery` and nothing else, so a cast to a shape with
+      // `tableExists` produced a call on `undefined` — a TypeError the boot
+      // handler catches, which silently skipped the whole migration phase. The
+      // cleanup already reports itself as skipped when these are absent, so
+      // omitting them degrades to a note instead of a crash.
       const retiredOps = deps.adapter as unknown as {
-        tableExists: (table: string) => Promise<boolean>;
-        executeQuery: (sql: string) => Promise<unknown>;
+        tableExists?: (table: string) => Promise<boolean>;
+        executeQuery?: (sql: string) => Promise<unknown>;
       };
+      const canDropRetired =
+        typeof retiredOps.tableExists === "function" &&
+        typeof retiredOps.executeQuery === "function";
       const r = await reconcile({
         db: deps.db,
         dialect: deps.dialect,
@@ -656,18 +666,30 @@ export async function migrateCore(
         // The operations the retired-table drop needs. Without them the
         // cleanup returned at its first guard, so the documented
         // NEXTLY_ALLOW_CORE_DESTRUCTIVE flow dropped nothing and said nothing.
-        tableExists: (table: string) => retiredOps.tableExists(table),
-        countRows: async (
-          database: unknown,
-          d: SupportedDialect,
-          table: string
-        ) => {
-          const { countRows } = await import(
-            "../../domains/schema/pipeline/classifier/count-helpers"
-          );
-          return countRows(database, d, table);
-        },
-        executeSql: (sql: string) => retiredOps.executeQuery(sql),
+        // Passed as a group: half of them is not a usable cleanup, and the
+        // guard reads their absence as "this caller is not asking for it".
+        ...(canDropRetired
+          ? {
+              tableExists: (table: string) =>
+                (retiredOps.tableExists as (t: string) => Promise<boolean>)(
+                  table
+                ),
+              countRows: async (
+                database: unknown,
+                d: SupportedDialect,
+                table: string
+              ) => {
+                const { countRows } = await import(
+                  "../../domains/schema/pipeline/classifier/count-helpers"
+                );
+                return countRows(database, d, table);
+              },
+              executeSql: (sql: string) =>
+                (retiredOps.executeQuery as (s: string) => Promise<unknown>)(
+                  sql
+                ),
+            }
+          : {}),
         ensureLedger: deps.ensureLedger,
       });
       coreChanged = r.changed;

@@ -68,11 +68,27 @@ export function sanitizeAdminPath(next: string | null | undefined): string {
     if (second === "/" || second === "\\") return DEFAULT_ADMIN_PATH;
   }
 
-  // Inside the admin panel, judged on the path alone so a query or fragment
-  // cannot smuggle the decision. `/adminx` shares a prefix with `/admin` and
-  // is a different place entirely.
-  const pathEnd = candidate.search(/[?#]/);
-  const path = pathEnd === -1 ? candidate : candidate.slice(0, pathEnd);
+  // NORMALIZED before it is judged, by the same parser that will interpret it.
+  // One `decodeURIComponent` is not normalization: `/admin/%252e%252e/public`
+  // becomes `/admin/%2e%2e/public`, which passes a prefix test and is then
+  // resolved by the browser to `/public` — outside the admin panel this
+  // function exists to keep it inside. The URL parser resolves `.`, `..` and
+  // their percent-encoded spellings, so asking it removes the whole class
+  // rather than the one encoding that was noticed.
+  //
+  // The base is a placeholder: `candidate` is already known to be a rooted
+  // path and not authority-relative, so nothing here can reach another origin.
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate, "http://nextly.invalid");
+  } catch {
+    return DEFAULT_ADMIN_PATH;
+  }
+
+  // Judged on the path alone so a query or fragment cannot smuggle the
+  // decision. `/adminx` shares a prefix with `/admin` and is a different place
+  // entirely.
+  const path = parsed.pathname;
   if (
     path !== DEFAULT_ADMIN_PATH &&
     !path.startsWith(`${DEFAULT_ADMIN_PATH}/`)
@@ -80,5 +96,7 @@ export function sanitizeAdminPath(next: string | null | undefined): string {
     return DEFAULT_ADMIN_PATH;
   }
 
-  return candidate;
+  // The normalized form, not the input: returning the original would hand the
+  // browser a string it still has to resolve, which is where the gap was.
+  return `${path}${parsed.search}${parsed.hash}`;
 }

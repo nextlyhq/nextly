@@ -208,3 +208,55 @@ describe("PluginSettingsService", () => {
     expect(stored?.value).toContain("8443");
   });
 });
+
+/**
+ * A patch touching one field of a nested group keeps the rest of it.
+ *
+ * `{ ...current, ...patch }` replaces a nested object wholesale, so patching
+ * only `clientId` dropped the `clientSecret` beside it. The admin cannot
+ * resend that value — it only ever receives `{ set: true }` for a secret — so
+ * a required secret failed validation and a defaulted one was silently reset
+ * over its stored ciphertext.
+ */
+describe("patching one field of a nested group", () => {
+  it("keeps a sibling secret the patch did not mention", async () => {
+    const store = memoryStore();
+    const svc = service(store);
+
+    await svc.set({
+      providers: { google: { clientId: "id-1", clientSecret: SECRET_VALUE } },
+    });
+    // The premise: the secret is stored before the patch that must preserve it.
+    const before = (await svc.get()) as {
+      providers: Record<string, { clientId: string; clientSecret: string }>;
+    };
+    expect(before.providers.google.clientSecret).toBe(SECRET_VALUE);
+
+    await svc.set({ providers: { google: { clientId: "id-2" } } });
+
+    const after = (await svc.get()) as {
+      providers: Record<string, { clientId: string; clientSecret: string }>;
+    };
+    expect(after.providers.google.clientId).toBe("id-2");
+    expect(after.providers.google.clientSecret).toBe(SECRET_VALUE);
+  });
+
+  it("still REPLACES a value the patch does name", async () => {
+    // The control. A merge that preserved everything would satisfy the test
+    // above while making it impossible to change a secret at all.
+    const store = memoryStore();
+    const svc = service(store);
+
+    await svc.set({
+      providers: { google: { clientId: "id-1", clientSecret: SECRET_VALUE } },
+    });
+    await svc.set({
+      providers: { google: { clientSecret: "rotated-9d2b4f" } },
+    });
+
+    const after = (await svc.get()) as {
+      providers: Record<string, { clientSecret: string }>;
+    };
+    expect(after.providers.google.clientSecret).toBe("rotated-9d2b4f");
+  });
+});

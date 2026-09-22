@@ -169,6 +169,27 @@ function objectShape(node: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * The schema a record's VALUES carry, or null when this is not a record.
+ *
+ * Unwrapped the same way {@link objectShape} unwraps, because a record is just
+ * as likely to be optional or defaulted as an object is.
+ */
+function recordValueSchema(node: unknown): unknown {
+  let current = node;
+  for (let depth = 0; depth < 10; depth += 1) {
+    const def = (
+      current as {
+        _zod?: { def?: { innerType?: unknown; valueType?: unknown } };
+      }
+    )._zod?.def;
+    if (def?.valueType !== undefined) return def.valueType;
+    if (def?.innerType === undefined) return null;
+    current = def.innerType;
+  }
+  return null;
+}
+
+/**
  * Whether a plugin's declared settings schema contains a path.
  *
  * Every CONCRETE segment is resolved, not just the first. Checking only the
@@ -179,10 +200,15 @@ function objectShape(node: unknown): Record<string, unknown> | null {
  * `getRedacted()`. The silent failure this check exists to prevent is
  * precisely the one a head-only check waves through.
  *
- * Traversal stops where the schema stops being enumerable — at a `*`, which
- * matches any key by design, and at a record, whose values cannot be listed.
- * Accepting there is deliberate: refusing what cannot be resolved would reject
- * the nested declarations this feature exists for.
+ * A `*` and a record key both match any NAME, which says nothing about what
+ * lies beneath them: `providers.*.clientSecrett` is the same typo one level
+ * down, and stopping at the wildcard waved it through exactly as stopping at
+ * the head did. So a wildcard descends into the record's value schema and the
+ * remaining concrete segments are checked against it.
+ *
+ * Acceptance is reserved for what genuinely cannot be enumerated — a shape
+ * that is neither an object nor a record — because refusing there would
+ * reject declarations this feature exists to support.
  */
 function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
   const schema = plugin.contributes?.settings;
@@ -192,12 +218,21 @@ function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
 
   let current: unknown = schema;
   for (const segment of path.split(".")) {
-    if (segment === "*") return true;
     const shape = objectShape(current);
-    // Not enumerable from here down, so nothing below can be judged.
-    if (shape === null) return true;
-    if (!Object.hasOwn(shape, segment)) return false;
-    current = shape[segment];
+    if (shape !== null) {
+      // A `*` against an OBJECT matches whichever keys it has, so nothing
+      // below can be pinned to one of them.
+      if (segment === "*") return true;
+      if (!Object.hasOwn(shape, segment)) return false;
+      current = shape[segment];
+      continue;
+    }
+
+    // Any key is valid on a record — that is what a record means — so the
+    // segment itself is accepted and the suffix is judged against the values.
+    const valueSchema = recordValueSchema(current);
+    if (valueSchema === null) return true;
+    current = valueSchema;
   }
   return true;
 }

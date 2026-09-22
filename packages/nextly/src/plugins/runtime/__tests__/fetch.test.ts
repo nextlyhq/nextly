@@ -327,3 +327,67 @@ describe("a redirect hop", () => {
     ).toBe("outbound-unreplayable-redirect-body");
   });
 });
+
+/**
+ * Credentials do not follow a hop to another origin.
+ *
+ * The allowlist declares which hosts a plugin may reach; it says nothing about
+ * which of them may see a token issued for one of the others. A compromised —
+ * or merely misconfigured — allowed host could therefore redirect a bearer
+ * token or session cookie to any OTHER allowed host, and both ends being
+ * declared is exactly why the allowlist cannot catch it.
+ */
+describe("credentials across a redirect", () => {
+  /** Redirect once to `to`, keeping the headers each hop was handed. */
+  function hoppingTo(to: string) {
+    const seen: RequestInit[] = [];
+    const send = async (request: SendArgs): Promise<Response> => {
+      seen.push(request.init);
+      if (seen.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: to },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    };
+    return { seen, d: deps({ send }) };
+  }
+
+  /** Case-insensitive lookup, since a hop may respell what it forwards. */
+  function headerOf(init: RequestInit, name: string): string | null {
+    return new Headers(init.headers ?? {}).get(name);
+  }
+
+  it("drops Authorization and Cookie when the origin changes", async () => {
+    const { seen, d } = hoppingTo("https://a.provider.example/next");
+    await createPluginFetch(d)("https://api.example.com/token", {
+      headers: {
+        authorization: "Bearer secret-token",
+        cookie: "session=abc",
+        accept: "application/json",
+      },
+    });
+
+    expect(seen).toHaveLength(2);
+    // The first hop legitimately carries them — it is the origin they belong
+    // to — so their absence on the second is a change this code made.
+    expect(headerOf(seen[0], "authorization")).toBe("Bearer secret-token");
+    expect(headerOf(seen[1], "authorization")).toBeNull();
+    expect(headerOf(seen[1], "cookie")).toBeNull();
+    // Ordinary headers are not credentials and still travel.
+    expect(headerOf(seen[1], "accept")).toBe("application/json");
+  });
+
+  it("keeps them on a SAME-origin redirect", async () => {
+    // The control. Stripping unconditionally would satisfy the test above
+    // while breaking every ordinary authenticated redirect within one host.
+    const { seen, d } = hoppingTo("https://api.example.com/next");
+    await createPluginFetch(d)("https://api.example.com/token", {
+      headers: { authorization: "Bearer secret-token" },
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(headerOf(seen[1], "authorization")).toBe("Bearer secret-token");
+  });
+});

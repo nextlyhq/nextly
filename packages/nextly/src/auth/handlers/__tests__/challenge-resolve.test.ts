@@ -251,3 +251,61 @@ describe("the challenge attempt budget", () => {
     expect(await keyFor("u1")).toBe(await keyFor("u1"));
   });
 });
+
+/**
+ * The budget is a PRECONDITION, not a consolation for guessing wrong.
+ *
+ * Minting a replacement pending token does not revoke the one presented, so a
+ * caller can replay the original `attempts: 0` token indefinitely. Counting
+ * only wrong answers left the correct one free: every guess was rejected until
+ * the right one arrived, and that one was accepted however many had preceded
+ * it. Spending the budget before the answer is examined is what turns
+ * `maxChallengeAttempts` into a cap.
+ */
+describe("the challenge budget as a precondition", () => {
+  /** Run one resolve, reporting whether the counter was consulted. */
+  async function attempt(code: string, allowed: boolean) {
+    const deps = makeDeps();
+    const seen: string[] = [];
+    const withCounter = {
+      ...deps,
+      countChallengeAttempt: (key: string) => {
+        seen.push(key);
+        return Promise.resolve({ allowed });
+      },
+    };
+    const pendingToken = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0 },
+      SECRET,
+      300
+    );
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code } }),
+      withCounter as never
+    );
+    return { status: res.status, spent: seen.length };
+  }
+
+  it("spends the budget on a CORRECT answer too", async () => {
+    // The separating property. Counting inside the wrong-answer branch leaves
+    // this at zero, and a replayed token can then guess without limit.
+    const { status, spent } = await attempt("123456", true);
+    expect(status).toBe(200);
+    expect(spent).toBe(1);
+  });
+
+  it("refuses a correct answer once the budget is exhausted", async () => {
+    // The decisive half: exhaustion must bind regardless of the answer, or
+    // the cap only ever delays the successful guess.
+    const { status, spent } = await attempt("123456", false);
+    expect(spent).toBe(1);
+    expect(status).toBe(401);
+  });
+
+  it("still lets an ordinary correct answer through", async () => {
+    // The control. A precondition that refused everything would satisfy the
+    // test above while breaking every real second-factor sign-in.
+    const { status } = await attempt("123456", true);
+    expect(status).toBe(200);
+  });
+});

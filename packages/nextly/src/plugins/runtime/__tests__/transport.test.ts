@@ -197,3 +197,32 @@ describe("the deadline", () => {
     expect(await response.text()).toBe("in time");
   });
 });
+
+describe("bodyless response statuses", () => {
+  it("returns a 204 instead of throwing on it", async () => {
+    // The platform `Response` constructor REJECTS a non-null body for 204,
+    // 205 and 304, so handing it an empty buffer is not harmlessly equivalent
+    // to handing it null: an ordinary provider `DELETE` answering 204 made
+    // `ctx.fetch` raise rather than return the response it was waiting for.
+    const url = await listen((_req, res) => {
+      res.writeHead(204);
+      res.end();
+    });
+
+    const response = await send(url, { method: "DELETE" });
+    expect(response.status).toBe(204);
+    expect(response.body).toBeNull();
+  });
+
+  it("still returns a body on a status that permits one", async () => {
+    // The control: passing null for everything would satisfy the test above
+    // while emptying every ordinary response.
+    const url = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("payload");
+    });
+
+    const response = await send(url, {});
+    expect(await response.text()).toBe("payload");
+  });
+});
