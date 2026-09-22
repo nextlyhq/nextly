@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { NextlyError } from "../errors/nextly-error";
 
@@ -74,6 +75,90 @@ describe("validateCapabilities", () => {
       ).not.toThrow();
     }
   );
+
+  it("refuses a nested secret path whose LAST segment does not exist", () => {
+    // Checking only the head accepted this: `providers` exists, so the typo
+    // passed and `mapSecrets` then matched nothing — the real `clientSecret`
+    // stored in plain text and returned unredacted, which is the exact
+    // failure this validation exists to prevent.
+    const settings = z.object({
+      providers: z.object({ google: z.object({ clientSecret: z.string() }) }),
+    });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["providers.google.clientSecrett"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("accepts the same path spelled correctly", () => {
+    // The control. A check that refused every nested path would satisfy the
+    // test above while making the feature unusable.
+    const settings = z.object({
+      providers: z.object({ google: z.object({ clientSecret: z.string() }) }),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["providers.google.clientSecret"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
+  it("accepts a path below a record, whose keys cannot be enumerated", () => {
+    // Traversal has to stop where the schema stops being enumerable, or every
+    // legitimate per-tenant secret would be refused.
+    const settings = z.object({
+      tenants: z.record(z.string(), z.object({ apiKey: z.string() })),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["tenants.acme.apiKey"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
+  it("accepts a wildcard segment and everything under it", () => {
+    const settings = z.object({
+      providers: z.object({ google: z.object({ clientSecret: z.string() }) }),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["providers.*.clientSecret"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
+  it("resolves through an optional object rather than stopping at it", () => {
+    // `.optional()` wraps the object, so the shape is one level in. Reading
+    // only the outer node would find no shape and accept anything below it.
+    const settings = z.object({
+      smtp: z.object({ password: z.string() }).optional(),
+    });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["smtp.passwrod"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
 
   it("refuses a duplicated secret path", () => {
     expect(

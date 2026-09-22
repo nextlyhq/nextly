@@ -139,13 +139,44 @@ export function validateCapabilities(all: PluginDefinition[]): void {
 }
 
 /**
+ * The object shape a schema node exposes, or null when it has none.
+ *
+ * Optionals, nullables and defaults wrap the type they decorate, so the shape
+ * lives one or more levels in; a record has no enumerable keys at all and is
+ * reported as null rather than as an empty object, which would refuse every
+ * key under it.
+ */
+function objectShape(node: unknown): Record<string, unknown> | null {
+  let current = node;
+  // Bounded rather than `while (true)`: a malformed schema must not spin.
+  for (let depth = 0; depth < 10; depth += 1) {
+    const shape = (current as { shape?: unknown }).shape;
+    if (shape !== null && typeof shape === "object") {
+      return shape as Record<string, unknown>;
+    }
+    const def = (current as { _zod?: { def?: { innerType?: unknown } } })._zod
+      ?.def;
+    if (def?.innerType === undefined) return null;
+    current = def.innerType;
+  }
+  return null;
+}
+
+/**
  * Whether a plugin's declared settings schema contains a path.
  *
- * Only the FIRST segment is checked against the schema's shape. A `*` segment
- * matches any key by design, and the values below a record are not enumerable
- * from the schema, so requiring the whole path to resolve would refuse the
- * nested declarations this feature exists for. The first segment is the part
- * a typo actually lands in.
+ * Every CONCRETE segment is resolved, not just the first. Checking only the
+ * head accepted `providers.google.clientSecrett` on the strength of
+ * `providers` existing — and a secret path that matches nothing is not an
+ * inert typo: `mapSecrets` then never finds the real `clientSecret`, so that
+ * credential is stored in plain text and returned unredacted by
+ * `getRedacted()`. The silent failure this check exists to prevent is
+ * precisely the one a head-only check waves through.
+ *
+ * Traversal stops where the schema stops being enumerable — at a `*`, which
+ * matches any key by design, and at a record, whose values cannot be listed.
+ * Accepting there is deliberate: refusing what cannot be resolved would reject
+ * the nested declarations this feature exists for.
  */
 function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
   const schema = plugin.contributes?.settings;
@@ -153,9 +184,16 @@ function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
   // a schema, and resolution is not the place to demand an ordering.
   if (!schema) return true;
 
-  const [head] = path.split(".");
-  const shape = (schema as { shape?: Record<string, unknown> }).shape;
-  return shape === undefined || Object.hasOwn(shape, head);
+  let current: unknown = schema;
+  for (const segment of path.split(".")) {
+    if (segment === "*") return true;
+    const shape = objectShape(current);
+    // Not enumerable from here down, so nothing below can be judged.
+    if (shape === null) return true;
+    if (!Object.hasOwn(shape, segment)) return false;
+    current = shape[segment];
+  }
+  return true;
 }
 
 /** Which plugin provides each capability name, and at what version. */

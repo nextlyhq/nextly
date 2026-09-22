@@ -135,6 +135,66 @@ describe.each(getConfiguredTestDialects())(
       expect(roles).toEqual([editor]);
     });
 
+    it("records user.created, like the local path does", async () => {
+      // The public facade delegates straight here, so an account provisioned
+      // by a login provider was invisible to every webhook and plugin
+      // subscriber that sees an ordinary creation. Asserted against the outbox
+      // rather than a spy: the row is what a subscriber actually reads, and it
+      // must be written inside the account's own transaction.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      const created = await services(t).users.createExternalUser(
+        {
+          email: "evented@example.com",
+          name: "Evented Person",
+          roleIds: [editor],
+          emailVerifiedAt: new Date("2026-05-01T10:00:00Z"),
+        },
+        SYSTEM_CONTEXT
+      );
+
+      const db = t.adapter.getDrizzle() as unknown as TestDb;
+      const { nextlyEvents } = getDialectTables();
+      const rows = (await db.select().from(nextlyEvents)) as {
+        type?: string;
+        resourceId?: string;
+      }[];
+      const mine = rows.filter(
+        row =>
+          row.type === "user.created" && row.resourceId === String(created.id)
+      );
+      expect(mine).toHaveLength(1);
+    });
+
+    it("writes no creation event when the account is refused", async () => {
+      // The control. An event recorded outside the account's transaction, or
+      // before the policy checks, would still satisfy the assertion above
+      // while announcing a user that does not exist.
+      const t = await boot(dialect);
+      const db = t.adapter.getDrizzle() as unknown as TestDb;
+      const { nextlyEvents } = getDialectTables();
+      const before = ((await db.select().from(nextlyEvents)) as unknown[])
+        .length;
+
+      await expect(
+        services(t).users.createExternalUser(
+          {
+            email: "refused@example.com",
+            name: "Refused",
+            roleIds: [],
+            emailVerifiedAt: new Date("2026-05-01T10:00:00Z"),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toThrow(NextlyError);
+
+      const after = ((await db.select().from(nextlyEvents)) as unknown[])
+        .length;
+      expect(after).toBe(before);
+    });
+
     it("refuses on an empty install, writing nothing", async () => {
       // The first account decides who administers the site. A login provider
       // must never be the thing that creates it.

@@ -692,6 +692,63 @@ export class UserMutationService extends BaseService {
    * that would leave an active account with fewer privileges than it was
    * created with, and nothing to say so.
    */
+  /**
+   * Record `user.created` in the SAME transaction that inserts the account.
+   *
+   * One implementation for both creation paths. They had diverged: the local
+   * path recorded and emitted, the external path did nothing, so an account
+   * provisioned by a login provider was invisible to every subscriber that
+   * observes the ordinary one — and a plugin initialising per-user state saw
+   * no such user exist.
+   *
+   * The payload is identity only, never a password or token hash. Roles are
+   * omitted deliberately: the local path assigns them after this transaction
+   * commits, so no committed role state exists to report without a false
+   * claim. Returns whether a row was written, so the caller offers the drain
+   * only for a real event.
+   */
+  private async recordUserCreatedInTx(
+    txDb: DrizzleTransactionLike,
+    created: {
+      userId: string;
+      email: string;
+      name: string | null;
+      actor: RequestActor | null;
+    }
+  ): Promise<boolean> {
+    return recordMutationEventInTx(txDb, this.dialect, {
+      type: "user.created",
+      resource: { kind: "user", id: created.userId },
+      data: {
+        id: created.userId,
+        email: created.email,
+        name: created.name,
+      },
+      fields: [],
+      actor: created.actor,
+    });
+  }
+
+  /**
+   * The post-commit half, once the account and its outbox row are durable.
+   *
+   * Retention runs whether or not an event was recorded — a
+   * user-management-only install relies on write-triggered maintenance — while
+   * the drain and the in-process emit happen only when a row was actually
+   * written.
+   */
+  private async afterUserCreated(
+    recorded: boolean,
+    userId: string
+  ): Promise<void> {
+    await this.retentionRunner?.maybeRun(
+      UserMutationService.WRITE_PATH_PRUNE_BATCHES
+    );
+    if (!recorded) return;
+    this.fastDrainScheduler?.offer();
+    safeEmit("user.created", { userId });
+  }
+
   async createExternalUser(
     input: CreateExternalUserData,
     _context?: RequestActor
@@ -784,6 +841,7 @@ export class UserMutationService extends BaseService {
     const now = new Date();
     const newUserId = randomUUID();
 
+    let userCreatedRecorded = false;
     await this.withTransaction(async tx => {
       const txDb = tx as DrizzleTransactionLike;
       await txDb.insert(users).values({
@@ -811,7 +869,18 @@ export class UserMutationService extends BaseService {
           createdAt: now,
         });
       }
+
+      // Inside the transaction, like the local path: a subscriber observes the
+      // account exactly when it becomes real, and never for a rolled-back one.
+      userCreatedRecorded = await this.recordUserCreatedInTx(txDb, {
+        userId: newUserId,
+        email,
+        name: input.name,
+        actor: _context ?? null,
+      });
     });
+
+    await this.afterUserCreated(userCreatedRecorded, newUserId);
 
     return {
       id: newUserId,
@@ -1034,33 +1103,17 @@ export class UserMutationService extends BaseService {
         });
       };
 
-      // Record a `user.created` webhook event inside the same transaction that
-      // inserts the account, so a subscriber observes the account exactly when
-      // it becomes real (and never for a rolled-back create). The payload is
-      // deliberately PII-safe: identity only, never the password hash or the
-      // invite-token hash. Roles are omitted on purpose: they are assigned after
-      // this transaction commits (and the first user's super-admin role is too),
-      // so no committed role state exists to report here without a false claim —
-      // a creation event asserts identity, and role changes are their own
-      // concern. `userCreatedRecorded` captures whether a row was written so the
-      // fast drain is offered only for a real event, and only after commit.
+      // Recorded through the shared helper, which the external creation path
+      // also uses — the two had drifted, and only one of them told anybody a
+      // user existed.
       let userCreatedRecorded = false;
       const recordCreatedEvent = async (txDb: DrizzleTransactionLike) => {
-        userCreatedRecorded = await recordMutationEventInTx(
-          txDb,
-          this.dialect,
-          {
-            type: "user.created",
-            resource: { kind: "user", id: newUserId },
-            data: {
-              id: newUserId,
-              email,
-              name: userData.name ?? null,
-            },
-            fields: [],
-            actor: actor ?? null,
-          }
-        );
+        userCreatedRecorded = await this.recordUserCreatedInTx(txDb, {
+          userId: newUserId,
+          email,
+          name: userData.name ?? null,
+          actor: actor ?? null,
+        });
       };
 
       // Wrap user + user_ext + invite inserts in a transaction for atomicity.
@@ -1133,15 +1186,7 @@ export class UserMutationService extends BaseService {
       // of at the next scheduled trigger. Both are no-ops when unconfigured;
       // retention runs regardless of a recording, the drain only when one
       // happened.
-      await this.retentionRunner?.maybeRun(
-        UserMutationService.WRITE_PATH_PRUNE_BATCHES
-      );
-      if (userCreatedRecorded) {
-        this.fastDrainScheduler?.offer();
-        // The in-process counterpart of the outbox row above, for the same
-        // reason as `user.deleted`.
-        safeEmit("user.created", { userId: newUserId });
-      }
+      await this.afterUserCreated(userCreatedRecorded, newUserId);
 
       // Fetch created user
       const user = await this.db.query.users.findFirst({
