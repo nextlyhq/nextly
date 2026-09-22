@@ -23,6 +23,7 @@
 import { NextlyError } from "../../errors/nextly-error";
 
 import { hostAllowed, judgeAddress } from "./address-rules";
+import type { SendArgs } from "./transport";
 
 /** How many redirects a request may follow before it is treated as a loop. */
 const MAX_REDIRECTS = 3;
@@ -42,14 +43,15 @@ export interface PluginFetchDeps {
   allowlist: readonly string[];
   /** Every A/AAAA answer for a name. Injected so the rules are testable. */
   resolve: (hostname: string) => Promise<ResolvedAddress[]>;
-  /** Sends one request to a VETTED address. */
-  send: (request: {
-    url: URL;
-    address: ResolvedAddress;
-    init: RequestInit;
-    timeoutMs: number;
-    maxBodyBytes: number;
-  }) => Promise<Response>;
+  /**
+   * Sends one request to a VETTED address.
+   *
+   * Typed as the transport's own argument object rather than restating its
+   * fields: the two had already drifted once, and a second spelling of the
+   * same shape is how a caller keeps passing an option the transport stopped
+   * reading.
+   */
+  send: (request: SendArgs) => Promise<Response>;
   /** Development installs may reach localhost, for a fake provider in tests. */
   allowLoopback: boolean;
 }
@@ -155,6 +157,10 @@ export function createPluginFetch(
     }
 
     let remaining = MAX_REDIRECTS;
+    // Fixed BEFORE the loop, so every hop spends the same budget. Set inside,
+    // each redirect would start a fresh thirty seconds and a chain of them
+    // could hold a worker far past the bound this constant states.
+    const deadlineAt = Date.now() + TIMEOUT_MS;
     for (;;) {
       const address = await vetUrl(url, deps);
       const response = await deps.send({
@@ -163,7 +169,7 @@ export function createPluginFetch(
         // `manual`, so a redirect comes back here to be checked rather than
         // being followed by the transport without one.
         init: { ...init, redirect: "manual" },
-        timeoutMs: TIMEOUT_MS,
+        deadlineAt,
         maxBodyBytes: MAX_BODY_BYTES,
       });
 
