@@ -10,7 +10,7 @@
  * will own them — asserting them here against a fake would be a test of the
  * fake. Rows checkable from the compiled model are asserted now.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
@@ -39,6 +39,13 @@ import {
   viewForStream,
 } from "../../ownership/element-ownership";
 import { runEntityTransforms } from "../../../../plugins/entity-transforms";
+import { uuidV7Timestamp } from "../../../../utils/uuid-v7";
+import {
+  assertUsableClientId,
+  fieldProducesColumn,
+  generateId,
+  resolvePostgresSchema,
+} from "../collection-db-options";
 
 const notes = defineTable(
   "notes",
@@ -474,7 +481,15 @@ describe("row 19 — custom table name", () => {
 });
 
 describe("row 20 — virtual fields", () => {
-  it.todo("C9: `virtual` extended from group/repeater to every field type");
+  it("produce no column, on any field type", () => {
+    // Reuses the "descriptor returns null" path every consumer already
+    // honours for component fields. A second mechanism would need each of
+    // them taught again, and the one that was missed would emit a column for
+    // a field that has no value.
+    expect(fieldProducesColumn({ type: "text", virtual: true })).toBe(false);
+    expect(fieldProducesColumn({ type: "number", virtual: true })).toBe(false);
+    expect(fieldProducesColumn({ type: "text" })).toBe(true);
+  });
 });
 
 describe("row 21 — server-only custom config", () => {
@@ -484,15 +499,48 @@ describe("row 21 — server-only custom config", () => {
 });
 
 describe("row 22 — collection id type", () => {
-  it.todo("C9: db.idType uuid | uuidv7; serial stays extension-tables-only");
+  it("chooses the generator without changing the storage", () => {
+    // Which is what keeps relations, the REST API and the admin unaffected:
+    // both are 36 characters in the same column, and only the bytes differ.
+    expect(uuidV7Timestamp(generateId("uuidv7"))).not.toBeNull();
+    expect(uuidV7Timestamp(generateId("uuid"))).toBeNull();
+    expect(generateId("uuid")).toHaveLength(36);
+  });
 });
 
 describe("row 23 — client-supplied id on create", () => {
-  it.todo("C9: db.allowIdOnCreate");
+  it("is off by default and validated by shape when on", () => {
+    expect(() => assertUsableClientId("x", false, "posts")).toThrow(
+      NextlyError
+    );
+    expect(
+      assertUsableClientId(
+        "018f2c2e-0000-7000-8000-000000000000",
+        true,
+        "posts"
+      )
+    ).toBeTruthy();
+    // An arbitrary string would let a caller pick a key that collides with a
+    // future generated one.
+    expect(() => assertUsableClientId("hello", true, "posts")).toThrow(
+      NextlyError
+    );
+  });
 });
 
 describe("row 24 — a Postgres schema other than public", () => {
-  it.todo("C10: db.postgres.schema for managed and extension tables");
+  it("resolves on PostgreSQL and is ignored with a warning elsewhere", () => {
+    expect(resolvePostgresSchema("cms", "postgresql", () => undefined)).toBe(
+      "cms"
+    );
+    // Refusing would make one config unusable across dialects; ignoring it
+    // silently would leave an operator believing their tables were namespaced.
+    const warn = vi.fn();
+    expect(resolvePostgresSchema("cms", "sqlite", warn)).toBeNull();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it.todo("C10: a fresh PG install creates everything in that schema");
 });
 
 describe("row 25 — plugin-registrable schema changes", () => {

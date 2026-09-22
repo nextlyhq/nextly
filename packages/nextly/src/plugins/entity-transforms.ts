@@ -82,6 +82,45 @@ export function runEntityTransforms(
   return [...bySlug.values()];
 }
 
+/**
+ * Fields a transform may not change, because they are the entity's IDENTITY.
+ *
+ * `slug` is how every reference to the entity resolves — a relation, a route,
+ * a permission. `dbName` is the table its data is in. Changing either makes
+ * the transformed entity a DIFFERENT entity wearing the old one's data, and
+ * the pipeline would read that as a drop and a create.
+ */
+const IDENTITY_FIELDS = ["slug", "dbName"] as const;
+
+/**
+ * Refuse a transform that changed what the entity IS.
+ *
+ * Also refuses returning nothing at all: a transform may not delete another
+ * plugin's entity, because that orphans its data and the code that reads it.
+ * `admin.hidden` hides one; disabling the owning plugin removes it.
+ */
+function assertIdentityPreserved(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  source: string,
+  position: number
+): void {
+  for (const field of IDENTITY_FIELDS) {
+    if (before[field] === undefined && after[field] === undefined) continue;
+    if (before[field] === after[field]) continue;
+
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `${source}.transform[${String(position)}]`,
+          code: "INVALID",
+          message: `A transform may not change "${field}". It is how every reference to this entity resolves, so changing it makes the result a different entity wearing the old one's data.`,
+        },
+      ],
+    });
+  }
+}
+
 /** The entities one transform targets, or a refusal naming the missing slug. */
 function matchesFor(
   bySlug: ReadonlyMap<string, TransformableEntity>,
@@ -167,9 +206,29 @@ function applyOne(
     slug,
     position
   )) {
+    const definition = transformOne(
+      entity,
+      contribution,
+      transform,
+      slug,
+      position
+    );
+    assertIdentityPreserved(
+      entity.definition,
+      definition,
+      contribution.source,
+      position
+    );
+    // Provenance, surfaced in the admin's collection info and `nextly
+    // plugins`. Without it an entity's shape has no explanation: an operator
+    // sees a field the config does not declare and nothing says who added it.
+    const modifiedBy = [
+      ...((entity.definition.modifiedBy as string[] | undefined) ?? []),
+      contribution.source,
+    ];
     bySlug.set(key, {
       ...entity,
-      definition: transformOne(entity, contribution, transform, slug, position),
+      definition: { ...definition, modifiedBy },
     });
   }
 }

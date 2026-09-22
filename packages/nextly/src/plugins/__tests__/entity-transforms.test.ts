@@ -222,6 +222,61 @@ describe("refusals", () => {
     }
   });
 
+  it("refuses a transform that changes the slug", () => {
+    // `slug` is how every reference resolves — a relation, a route, a
+    // permission. Changing it makes the result a different entity wearing the
+    // old one's data, which the pipeline reads as a drop and a create.
+    expect(
+      refusal(() =>
+        runEntityTransforms(entities, [
+          {
+            source: "plugin:seo",
+            transforms: [
+              {
+                target: "posts",
+                transform: e => ({ ...e, slug: "articles" }),
+              },
+            ],
+          },
+        ])
+      )
+    ).toMatch(/may not change "slug"/);
+  });
+
+  it("refuses a transform that moves the table", () => {
+    expect(
+      refusal(() =>
+        runEntityTransforms(entities, [
+          {
+            source: "plugin:seo",
+            transforms: [
+              { target: "posts", transform: e => ({ ...e, dbName: "other" }) },
+            ],
+          },
+        ])
+      )
+    ).toMatch(/may not change "dbName"/);
+  });
+
+  it("records who modified the entity", () => {
+    // Without provenance an operator sees a field the config does not declare
+    // and nothing says who added it.
+    const out = runEntityTransforms(entities, [
+      {
+        source: "plugin:a",
+        transforms: [{ target: "posts", transform: e => e }],
+      },
+      {
+        source: "plugin:b",
+        transforms: [{ target: "posts", transform: e => e }],
+      },
+    ]);
+    expect(out.find(e => e.slug === "posts")?.definition.modifiedBy).toEqual([
+      "plugin:a",
+      "plugin:b",
+    ]);
+  });
+
   it("gives each transform a FROZEN copy, so mutation fails loudly", () => {
     // Mutation would make the result depend on whether a later transform read
     // a field before or after an earlier one wrote it — an ordering invisible
