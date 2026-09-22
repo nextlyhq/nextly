@@ -67,6 +67,7 @@ import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
+import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -770,6 +771,38 @@ export async function registerServices(
 
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
 
+  // Layer 1.5: Compile the extension schema and publish it
+  // ----------------------------------------
+  // BEFORE `initializeSchemaRegistry`, which runs first-run setup on a fresh
+  // database — and first-run pushes a table list, not a diff. An active schema
+  // published after it would be too late: the tables would be compiled, owned,
+  // and absent from the only push that database ever gets.
+  //
+  // It is also before every later consumer, all of which read
+  // `getActiveExtensionSchema`: the push pipeline's merge, the runtime
+  // registry, the migrate refusal and drop protection. None of them can
+  // populate it, and until something did, the whole extension surface
+  // validated correctly and created nothing.
+  // The dialect is read defensively because an adapter that cannot report one
+  // is a boot that is going to fail regardless, and it must fail at the step
+  // that actually needs a database rather than here. Only the CAPABILITY read
+  // is guarded: a genuine compile error still throws, because a plugin whose
+  // tables silently did not compile is the failure this whole layer exists to
+  // prevent.
+  const bootDialect = (
+    adapter as {
+      getCapabilities?: () => { dialect?: "postgresql" | "mysql" | "sqlite" };
+    }
+  ).getCapabilities?.()?.dialect;
+  if (bootDialect !== undefined) {
+    await compileAndPublishExtensionSchema({
+      dialect: bootDialect,
+      plugins: resolvedPlugins,
+      config: transformedConfig,
+      logger: resolvedLogger,
+    });
+  }
+
   const schemaRegistry = await initializeSchemaRegistry(adapter);
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
@@ -1199,6 +1232,7 @@ export async function registerServices(
 
   registerDomainServices(ctx);
 
+  // ----------------------------------------
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------

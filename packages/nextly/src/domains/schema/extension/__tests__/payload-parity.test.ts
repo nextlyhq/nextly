@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   buildExtensionSchema,
+  type ExtensionSchemaInput,
   isRegisteredExtensionTable,
   setActiveExtensionSchema,
   clearActiveExtensionSchema,
@@ -53,7 +54,9 @@ const notes = defineTable(
   { indexes: [{ columns: ["title"], unique: true }] }
 );
 
-function input(extra: Record<string, unknown> = {}) {
+function input(
+  extra: Partial<ExtensionSchemaInput> = {}
+): ExtensionSchemaInput {
   return {
     dialect: "postgresql" as const,
     coreTableNames: ["users", "media"],

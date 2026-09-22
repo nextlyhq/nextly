@@ -19,6 +19,9 @@
 // first query will surface real DB errors loudly, and `nextly db:sync`
 // remains the canonical recovery path.
 
+import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import { emitDdl } from "../domains/schema/pipeline/ddl-emitter";
+
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
 
 interface AdapterLike {
@@ -107,6 +110,43 @@ export async function warnIfCoreSchemaIsBehind(
       "[nextly] Core schema check timed out; continuing startup.",
     failedMessagePrefix: "[nextly] Could not check core schema state: ",
   });
+}
+
+/**
+ * Create the indexes an extension table declared.
+ *
+ * Separate from the table push for the reason above, and failure-safe for the
+ * same reason first-run as a whole is: an index that could not be created is
+ * worth reporting, and is not worth refusing to start over.
+ */
+async function createExtensionIndexes(
+  adapter: AdapterLike,
+  dialect: "postgresql" | "mysql" | "sqlite",
+  logger: LoggerLike
+): Promise<void> {
+  const schema = getActiveExtensionSchema(dialect);
+  if (!schema) return;
+
+  const ops = schema.specs.flatMap(spec =>
+    (spec.indexes ?? []).map(index => ({
+      type: "add_index" as const,
+      tableName: spec.name,
+      index,
+    }))
+  );
+  if (ops.length === 0) return;
+
+  for (const statement of emitDdl(ops, dialect)) {
+    try {
+      await adapter.executeQuery(statement);
+    } catch (error) {
+      logger.warn(
+        `[nextly] could not create an extension index: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
 }
 
 /** The check itself; bounded by its caller. */
@@ -232,12 +272,41 @@ export async function ensureFirstRunSetup(
 
   try {
     const dialect = adapter.dialect;
-    const staticTables = deps.getDialectTables(dialect);
+    // Extension tables join the FIRST-RUN push as well as the incremental one.
+    //
+    // This path does not go through `PushSchemaPipeline.apply`, which is where
+    // the extension merge otherwise happens — so on a fresh database a
+    // plugin's tables were compiled, validated, owned, and never created. The
+    // failure was `no such table` on the first query, with nothing between
+    // boot and that query reporting a problem.
+    //
+    // Merged here rather than taught to `getDialectTables`: that function
+    // answers "what are Nextly's own tables", which is a different question
+    // with a stable answer, and widening it would make every caller of it
+    // depend on plugin config.
+    const staticTables = {
+      ...deps.getDialectTables(dialect),
+      ...(getActiveExtensionSchema(dialect)?.drizzle ?? {}),
+    };
     const result = await deps.freshPushSchema(
       dialect,
       adapter.getDrizzle(),
       staticTables
     );
+
+    // Extension INDEXES, replayed from the spec.
+    //
+    // They cannot ride the push above: A3 keeps indexes off the Drizzle tables
+    // deliberately, because drizzle-kit would otherwise emit its own CREATE
+    // INDEX beside the replayed one and MySQL has no IF NOT EXISTS. That is
+    // right for the incremental path, where `add_index` is replayed
+    // separately — and it means a FRESH database got the tables and none of
+    // their indexes, so a declared unique index enforced nothing.
+    //
+    // Emitted through the pipeline's own emitter rather than by composing SQL
+    // here: the two would then disagree about quoting and about which indexes
+    // a dialect can build at all.
+    await createExtensionIndexes(adapter, dialect, logger);
 
     // `freshPushSchema` above already creates the ledger (it is in
     // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
