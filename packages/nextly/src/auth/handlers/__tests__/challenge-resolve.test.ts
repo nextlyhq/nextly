@@ -114,6 +114,69 @@ describe("handleChallengeResolve (D71)", () => {
     expect(res.status).toBe(401);
   });
 
+  it("caps guesses even when the SAME token is replayed every time", async () => {
+    // The cap lived entirely in the submitted token, and minting a
+    // replacement did not invalidate the one presented — so resubmitting the
+    // original `attempts: 0` token after each wrong answer bought unlimited
+    // guesses until its TTL. Counting per CHALLENGE is what makes the cap
+    // enforceable; the old test only proved a new token comes back.
+    const counted = new Map<string, number>();
+    const deps = makeDeps();
+    deps.countChallengeAttempt = (challengeId, limit) => {
+      const next = (counted.get(challengeId) ?? 0) + 1;
+      counted.set(challengeId, next);
+      return Promise.resolve({ allowed: next < limit });
+    };
+
+    const replayed = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0 },
+      SECRET,
+      300
+    );
+
+    // "Stopped" is either a refusal response or a thrown refusal, depending
+    // on which guard trips first; both end the challenge, and the property
+    // under test is that SOMETHING does.
+    let stoppedAfter: number | undefined;
+    for (
+      let attempt = 1;
+      attempt <= 8 && stoppedAfter === undefined;
+      attempt += 1
+    ) {
+      try {
+        const res = await handleChallengeResolve(
+          makeRequest({ pendingToken: replayed, response: { code: "000000" } }),
+          deps
+        );
+        const body = (await res.json()) as Record<string, unknown>;
+        if (body.status !== "challenge") stoppedAfter = attempt;
+      } catch {
+        stoppedAfter = attempt;
+      }
+    }
+
+    expect(stoppedAfter).toBeDefined();
+    expect(stoppedAfter).toBeLessThanOrEqual(deps.maxChallengeAttempts);
+  });
+
+  it("still lets a caller inside the cap try again", async () => {
+    // The control. A counter that refused everything would satisfy the test
+    // above while breaking the second factor for everyone.
+    const deps = makeDeps();
+    deps.countChallengeAttempt = () => Promise.resolve({ allowed: true });
+    const pendingToken = await mintPendingToken(
+      { userId: "u1", challengeId: "totp", attempts: 0 },
+      SECRET,
+      300
+    );
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      deps
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("challenge");
+  });
+
   it("fails for good once attempts are exhausted", async () => {
     const deps = makeDeps();
     const pendingToken = await mintPendingToken(

@@ -31,6 +31,24 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
   challengeTokenTTL: number;
   /** Max attempts before a challenge fails for good. */
   maxChallengeAttempts: number;
+  /**
+   * Counts one attempt against a challenge, server-side.
+   *
+   * The cap cannot be carried in the pending token: minting a replacement does
+   * not invalidate the one that was presented, so a caller could resubmit the
+   * original `attempts: 0` token after every wrong answer and guess until the
+   * TTL expired. Counting against the CHALLENGE makes the cap hold whichever
+   * token arrives.
+   *
+   * Injected so the rule is testable without a store, and defaulted to the
+   * shared limiter's counter — a fixed window over a key is exactly what this
+   * needs, and a second implementation of one is a second thing to get right.
+   */
+  countChallengeAttempt?: (
+    challengeId: string,
+    limit: number,
+    windowMs: number
+  ) => Promise<{ allowed: boolean }>;
   allowedOrigins: string[];
   loginStallTimeMs: number;
   auditLog: AuditLogWriter;
@@ -120,7 +138,11 @@ async function passwordChangeRequired(
 async function wrongAnswer(
   deps: Pick<
     ChallengeResolveDeps,
-    "secret" | "challengeTokenTTL" | "maxChallengeAttempts" | "isProduction"
+    | "secret"
+    | "challengeTokenTTL"
+    | "maxChallengeAttempts"
+    | "isProduction"
+    | "countChallengeAttempt"
   >,
   args: {
     pending: {
@@ -133,8 +155,27 @@ async function wrongAnswer(
     requestId: string;
   }
 ): Promise<Response> {
+  // Counted against the challenge, not against the token that was presented.
+  // The token's own number is still carried forward so a client can show
+  // progress, but it is not what enforces the cap.
+  const count =
+    deps.countChallengeAttempt ??
+    (async (challengeId: string, limit: number, windowMs: number) => {
+      const { authRateLimiter } = await import("../middleware/rate-limiter");
+      return authRateLimiter().check(
+        `challenge-attempts:${challengeId}`,
+        limit,
+        windowMs
+      );
+    });
+
+  const verdict = await count(
+    args.pending.challengeId,
+    deps.maxChallengeAttempts,
+    deps.challengeTokenTTL * 1000
+  );
   const nextAttempts = args.pending.attempts + 1;
-  if (nextAttempts >= deps.maxChallengeAttempts) {
+  if (!verdict.allowed || nextAttempts >= deps.maxChallengeAttempts) {
     throw NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-failed-final") },
     });
