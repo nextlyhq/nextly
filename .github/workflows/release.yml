@@ -44,28 +44,23 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # .nvmrc is pinned at 22.14.0 (provides Node 22.14, the version
-          # whose bundled npm we then upgrade in the next step).
+          # .nvmrc pins 24.21.0, whose bundled npm is 11.19.0. Nothing in this
+          # job upgrades npm any more, and re-adding such a step would be cargo
+          # cult: `pnpm publish` has been implemented natively since pnpm 11 and
+          # no longer delegates to the npm CLI, so the npm on PATH is not what
+          # writes to the registry. `changeset publish` detects the pnpm lockfile
+          # and spawns `pnpm publish`, which performs the OIDC token exchange
+          # itself. The version that has to satisfy trusted publishing is
+          # therefore the pnpm in `packageManager`, not npm.
+          #
+          # The predecessor of this comment pinned `npm install -g npm@11.18.0`
+          # because pnpm 9 DID shell out to npm, and Node 22.14's bundled npm
+          # 10.9 could not exchange an OIDC token (the registry answered 404).
+          # Both halves of that reasoning are now obsolete.
           node-version-file: .nvmrc
           cache: pnpm
           # Writes ~/.npmrc with the registry URL for publishing
           registry-url: https://registry.npmjs.org
-
-      # Node 22.14.0 ships bundled npm 10.9.x, which supports provenance but
-      # NOT trusted publishing (separate OIDC audiences). Trusted publishing
-      # requires npm >=11.5.1 to exchange the OIDC token at the registry for
-      # publish auth. Without this upgrade the PUT request goes out without
-      # a valid trusted-publisher token and the registry returns 404.
-      #
-      # Pin an exact, tested version rather than @latest: npm 12.x raised its
-      # engine floor to Node ^22.22 || ^24.15 || >=26, which the .nvmrc pin
-      # (22.14) does not satisfy, so `npm@latest` fails with EBADENGINE and
-      # aborts the whole release. 11.18.0 meets the >=11.5.1 trusted-publishing
-      # requirement and runs on Node 22.14. Keep this exact so a future npm
-      # release can never silently re-break publishing; bump it deliberately
-      # alongside a Node bump in .nvmrc.
-      - name: Upgrade npm to >=11.5.1 for trusted publishing
-        run: npm install -g npm@11.18.0
 
       # Scoped to the JOB, which is the part that matters. Six jobs across four
       # workflows cache `.turbo`, they run concurrently on the same commit, and

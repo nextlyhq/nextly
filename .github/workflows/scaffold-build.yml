@@ -89,15 +89,27 @@ jobs:
           # invoking the CLI through pnpm, whose layout does not expose subdependencies at the
           # root. The asymmetry is between the two RESOLVERS, so one template covers it.
           #
-          # This leg runs the pnpm the repo pins (9.0.0), which is also the one STRICTEST about
-          # the generated `pnpm-workspace.yaml`: through 9.3, the presence of that file
-          # declared a workspace and a missing `packages` key failed the install outright.
-          # pnpm relaxed it in 9.4 when the file became the general settings home, so a leg on
-          # any current pnpm would not see it.
+          # pnpm 9 is the one STRICTEST about the generated `pnpm-workspace.yaml`: through 9.3,
+          # the presence of that file declared a workspace and a missing `packages` key failed
+          # the install outright. pnpm relaxed it in 9.4 when the file became the general
+          # settings home, so a leg on any current pnpm would not see it.
+          #
+          # The version is PINNED here rather than inherited. This leg used to get pnpm 9 for
+          # free, because the repo's own `packageManager` was `pnpm@9.0.0` — so when that pin
+          # moved to 12.5.1 the leg silently started testing 12 while still named for 9, and
+          # the pre-9.4 behaviour it exists to cover stopped being covered by anything. An
+          # inherited version is not a version this leg chose.
+          #
+          # `9.0` and not `9`: `npm install -g pnpm@9` resolves to the newest 9.x, which is
+          # past the 9.4 relaxation and therefore has nothing to say here. `9.0` pins the 9.0.x
+          # line, which is both what the repo used to run and inside the strict window. The
+          # check step below matches on the `<version>.` prefix, which `9.0` satisfies and a
+          # three-part `9.0.0` would not.
           - name: blank-pnpm9
             template: blank
             pm: pnpm
             source: local
+            pnpmVersion: "9.0"
 
           # The same resolver on a modern pnpm, because the two read the generated workspace
           # file DIFFERENTLY and each ignores what the other enforces. pnpm 9 runs dependency
@@ -196,9 +208,11 @@ jobs:
       #
       # Asked from the SCAFFOLD directory rather than the checkout, and the difference is not a
       # detail: pnpm 10+ reads `packageManager` and re-executes itself as that version, so a
-      # freshly installed pnpm 11 answers `9.0.0` anywhere inside this repository — measured —
-      # while the scaffold, which runs outside it, is genuinely on 11. The version that governs
-      # an install is the one resolved where that install happens.
+      # freshly installed pnpm answers `12.5.1` — the repo's pin — anywhere inside this
+      # repository, while the scaffold, which runs outside it, is genuinely on the matrix
+      # version. The version that governs an install is the one resolved where that install
+      # happens. (pnpm 9 does not re-execute at all, so the 9.0 leg is on it either way; the
+      # check below is what proves that rather than assuming it.)
       #
       # Without this the leg is unfalsifiable: an install that failed, or landed off PATH,
       # leaves the pinned pnpm in place and the leg reports a green for a version it never ran.
