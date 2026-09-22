@@ -23,6 +23,7 @@ import {
   claimsRepoRoot,
   codeSpans,
   missingAnchors,
+  namesAWorkspace,
   pathsIn,
   gitIgnored,
   pnpmScriptsIn,
@@ -60,22 +61,22 @@ describe("naming the script a pnpm invocation runs", () => {
    */
   it("steps over a filter, reports the workspace, and records the subcommand", () => {
     expect(pnpmScriptsIn("`pnpm --filter playground nextly generate:types`")).toEqual([
-      { filter: "playground", name: "nextly", subcommand: "generate:types" },
+      { filter: "playground", name: "nextly", subcommands: ["generate:types"] },
     ]);
   });
 
   it("records no subcommand when the invocation is just a script", () => {
-    expect(pnpmScriptsIn("`pnpm check-types`")[0].subcommand).toBeNull();
+    expect(pnpmScriptsIn("`pnpm check-types`")[0].subcommands).toEqual([]);
   });
 
   it("does not read a shell comment as a subcommand", () => {
     // `pnpm --filter <pkg>... build  # trailing ... includes <pkg> itself`
-    expect(pnpmScriptsIn("`pnpm build # trailing words explain the flag`")[0].subcommand).toBeNull();
+    expect(pnpmScriptsIn("`pnpm build # trailing words explain the flag`")[0].subcommands).toEqual([]);
   });
 
   it("strips the dependents selector from a filter", () => {
     expect(pnpmScriptsIn("`pnpm --filter nextly... build`")).toEqual([
-      { filter: "nextly", name: "build", subcommand: null },
+      { filter: "nextly", name: "build", subcommands: [] },
     ]);
   });
 
@@ -402,5 +403,76 @@ describe("finding citations of agent guidance anywhere in the repository", () =>
 
   it("drops trailing punctuation that belongs to the sentence", () => {
     expect([...guidanceReferences("see `.claude/rules/a.md`.")]).toEqual([".claude/rules/a.md"]);
+  });
+});
+
+describe("keeping every subcommand of one launcher", () => {
+  /*
+   * 🔴 The entry was keyed on filter and script alone, so the last invocation
+   * won and the rest vanished. AGENTS.md names six `pnpm worktree`
+   * subcommands and the checker reported ONE of them — deleting five changed
+   * nothing it said. The script stays one entry, so a missing script is still
+   * one finding rather than six; the subcommands accumulate.
+   */
+  it("accumulates the subcommands of a repeated launcher", () => {
+    const entries = pnpmScriptsIn(
+      "`pnpm worktree new` then `pnpm worktree list` then `pnpm worktree remove`"
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].subcommands).toEqual(["new", "list", "remove"]);
+  });
+
+  it("does not repeat a subcommand named twice", () => {
+    expect(pnpmScriptsIn("`pnpm worktree list` and again `pnpm worktree list`")[0].subcommands)
+      .toEqual(["list"]);
+  });
+});
+
+describe("telling a workspace filter from a placeholder", () => {
+  /*
+   * 🔴 An unknown filter was skipped as a placeholder, which is right for
+   * `<pkg>` and wrong for `playground`: renaming a real workspace left every
+   * command filtered to it green.
+   */
+  it.each(["playground", "nextly", "@nextlyhq/ui", "plugin-form-builder"])(
+    "treats %s as a concrete workspace",
+    filter => {
+      expect(namesAWorkspace(filter)).toBe(true);
+    }
+  );
+
+  it.each(["<pkg>", "<workspace>", "*", "{a,b}"])("treats %s as a placeholder", filter => {
+    expect(namesAWorkspace(filter)).toBe(false);
+  });
+});
+
+describe("reading a file named as a command operand", () => {
+  /*
+   * 🔴 A span holding whitespace was discarded whole, so a file named as an
+   * operand was never looked at. Measured against the repository: deleting
+   * `scripts/measure-facts.mjs` left the check reporting OK, because AGENTS.md
+   * names it only inside `node scripts/measure-facts.mjs`.
+   */
+  it("reads the operand of a command span", () => {
+    expect([...pathsIn("run `node scripts/measure-facts.mjs` first")]).toEqual([
+      "scripts/measure-facts.mjs",
+    ]);
+  });
+
+  it("reads a flag's argument", () => {
+    expect([...pathsIn("`docker compose -f docker-compose.test.yml up -d`")]).toEqual([
+      "docker-compose.test.yml",
+    ]);
+  });
+
+  it("still drops the words of a command that name no file", () => {
+    // Only the operand survives; `node`, `-f`, `up` and `-d` are not paths.
+    expect([...pathsIn("`node --experimental-vm-modules scripts/x.mjs --out dir`")]).toEqual([
+      "scripts/x.mjs",
+    ]);
+  });
+
+  it("still ignores a glob operand", () => {
+    expect([...pathsIn("`eslint src/**/*.ts --fix`")]).toEqual([]);
   });
 });

@@ -217,7 +217,17 @@ export function pnpmScriptsIn(text) {
     // REPORTED as unverified rather than silently passing, because silence
     // from a checker reads as coverage.
     const subcommand = words.slice(i + 1).find(word => /^[a-z][a-z0-9:-]*$/.test(word)) ?? null;
-    found.set(`${filter ?? ""}\u0000${cleaned}`, { filter, name: cleaned, subcommand });
+    // 🔴 Keyed on filter and script alone, the last invocation won and the
+    // rest vanished. AGENTS.md names six `pnpm worktree` subcommands and the
+    // checker reported ONE, so deleting five of them changed nothing it said.
+    // The script stays one entry — a missing script is one finding, not six —
+    // while the subcommands accumulate.
+    const key = `${filter ?? ""}\u0000${cleaned}`;
+    const entry = found.get(key) ?? { filter, name: cleaned, subcommands: [] };
+    if (subcommand !== null && !entry.subcommands.includes(subcommand)) {
+      entry.subcommands.push(subcommand);
+    }
+    found.set(key, entry);
   }
   return [...found.values()];
 }
@@ -229,6 +239,17 @@ export function pnpmScriptsIn(text) {
  * skips rather than reporting — the advisory polarity again. A placeholder like
  * `<pkg>` is exactly that case.
  */
+/**
+ * Whether a `--filter` argument is a concrete workspace name or a placeholder.
+ *
+ * Instruction files write `pnpm --filter <pkg> build` to mean "any package",
+ * and that names nothing to check. `playground` names something exactly, and
+ * its disappearance is the drift worth reporting.
+ */
+export function namesAWorkspace(filter) {
+  return /^@?[a-z0-9][a-z0-9@/._-]*$/.test(filter);
+}
+
 export function workspaceScripts(base = root) {
   const byName = new Map();
   for (const dir of ["packages", "apps"]) {
@@ -256,14 +277,24 @@ export function workspaceScripts(base = root) {
  */
 export function pathsIn(text) {
   const found = new Set();
-  for (const token of codeSpans(text).map(span => span.trim())) {
-    if (/[*?[\]{}<>()\s|$]/.test(token)) continue;
-    if (token.startsWith("/") || token.startsWith("~") || token.startsWith("@")) continue;
-    if (/^[a-z]+:\/\//.test(token)) continue;
-    // A path with a line or symbol suffix (`file.ts:42`) still names a file.
-    const path = token.split(":")[0];
-    if (!PATH_EXTENSIONS.some(ext => path.endsWith(ext)) && !EXTENSIONLESS_FILES.has(path)) continue;
-    found.add(path);
+  // 🔴 A span holding whitespace was discarded WHOLE, so a file named as an
+  // OPERAND was never looked at. `node scripts/measure-facts.mjs` and
+  // `docker compose -f docker-compose.test.yml ...` are concrete commands this
+  // module claims to protect, and deleting the first left the check green. The
+  // span is split and each word judged alone; the rules below already drop
+  // every word that is not a path.
+  for (const span of codeSpans(text)) {
+    for (const token of span.trim().split(/\s+/)) {
+      if (/[*?[\]{}<>()|$]/.test(token)) continue;
+      if (token.startsWith("/") || token.startsWith("~") || token.startsWith("@")) continue;
+      if (/^[a-z]+:\/\//.test(token)) continue;
+      // A path with a line or symbol suffix (`file.ts:42`) still names a file.
+      const path = token.split(":")[0];
+      if (!PATH_EXTENSIONS.some(ext => path.endsWith(ext)) && !EXTENSIONLESS_FILES.has(path)) {
+        continue;
+      }
+      found.add(path);
+    }
   }
   return found;
 }
@@ -527,8 +558,8 @@ function main() {
 
   for (const file of files) {
     const text = readFileSync(join(root, file), "utf8");
-    for (const { filter, name, subcommand } of pnpmScriptsIn(text)) {
-      if (subcommand !== null) {
+    for (const { filter, name, subcommands } of pnpmScriptsIn(text)) {
+      for (const subcommand of subcommands) {
         unverified.push({ file, claim: `pnpm ${filter ? `--filter ${filter} ` : ""}${name} ${subcommand}` });
       }
       if (filter === null) {
@@ -538,8 +569,17 @@ function main() {
         continue;
       }
       const declared = byWorkspace.get(filter);
-      // An unknown filter is a placeholder, not a claim about a script.
-      if (declared && !declared.has(name)) {
+      if (!declared) {
+        // 🔴 An unknown filter was skipped as a placeholder, which is right for
+        // `<pkg>` and wrong for `playground`: renaming a real workspace left
+        // every command filtered to it green. A placeholder cannot be a
+        // package name, so only those shapes are skipped.
+        if (namesAWorkspace(filter)) {
+          findings.push({ file, kind: "script", claim: `pnpm --filter ${filter} — no such workspace` });
+        }
+        continue;
+      }
+      if (!declared.has(name)) {
         findings.push({ file, kind: "script", claim: `pnpm --filter ${filter} ${name}` });
       }
     }
