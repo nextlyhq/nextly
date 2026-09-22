@@ -20,6 +20,38 @@ export interface DeclaredHookPoint {
   kind: "filter" | "action" | "decision";
   owner: string;
   description?: string;
+  /**
+   * The declared payload shape, kept with the point that declared it.
+   *
+   * One map rather than a second keyed the same way: the checker used to take
+   * points and schemas separately, which is two things to keep in step for no
+   * gain — a schema can only ever belong to the point it was declared on.
+   */
+  payload?: { safeParse: (value: unknown) => { success: boolean } };
+}
+
+/**
+ * The points this process has resolved, and the checker built from them.
+ *
+ * Module-level because `collectHookPoints` runs once at resolve and every
+ * seam in the process asks the same question afterwards. Its result was
+ * previously discarded, so a declared payload schema checked nothing and the
+ * declared `kind` constrained nothing — the contribution contract promised a
+ * development-time warning that could not arrive.
+ */
+let declaredPoints: Map<string, DeclaredHookPoint> = new Map();
+
+export function publishHookPoints(
+  points: Map<string, DeclaredHookPoint>
+): void {
+  declaredPoints = points;
+}
+
+export function getDeclaredHookPoints(): ReadonlyMap<
+  string,
+  DeclaredHookPoint
+> {
+  return declaredPoints;
 }
 
 /**
@@ -66,6 +98,7 @@ export function collectHookPoints(
         kind: point.kind,
         owner: plugin.name,
         ...(point.description ? { description: point.description } : {}),
+        ...(point.payload ? { payload: point.payload } : {}),
       });
     }
   }
@@ -82,15 +115,14 @@ export function collectHookPoints(
  * invocation and the author is not there to read it.
  */
 export function createPayloadChecker(
-  points: Map<string, DeclaredHookPoint>,
-  schemas: Map<string, { safeParse: (v: unknown) => { success: boolean } }>,
+  points: ReadonlyMap<string, DeclaredHookPoint>,
   warn: (message: string) => void
 ): (name: string, payload: unknown) => void {
   const warned = new Set<string>();
 
   return function check(name, payload) {
     if (warned.has(name)) return;
-    const schema = schemas.get(name);
+    const schema = points.get(name)?.payload;
     if (!schema) return;
     if (schema.safeParse(payload).success) return;
 

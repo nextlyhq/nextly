@@ -38,6 +38,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
@@ -733,7 +734,18 @@ export interface PluginDefinition {
    */
   requires?: Record<string, string>;
 
-  /** @experimental Integer schema version, checked against applied migrations. */
+  /**
+   * @experimental The version of this plugin's own schema, as a positive
+   * integer.
+   *
+   * Validated as a positive integer at resolve time, and recorded — it is NOT
+   * yet compared against what a database has applied, because no plugin
+   * migration state exists to compare it with. A plugin can therefore boot at
+   * a newer code version than its tables, which is exactly the case this field
+   * will stop once that state does exist. Described here as what it does
+   * rather than what it is for, because a contract nothing enforces reads to a
+   * plugin author as a guarantee.
+   */
   schemaVersion?: number;
 
   /**
@@ -948,6 +960,28 @@ export const PLUGIN_SERVICE_NAMES = [
 /** One of the names a plugin-context resolver must answer. */
 export type PluginServiceName = (typeof PLUGIN_SERVICE_NAMES)[number];
 
+/**
+ * The database surface a plugin actually receives.
+ *
+ * A NEW object exposing exactly the four fluent methods, rather than the live
+ * instance with its extras hidden by a type. The difference is the whole
+ * point: a boundary the code cannot cross, not a description of one it is
+ * asked not to. `rawSql` hands back the instance itself, which is what
+ * declaring the capability buys.
+ */
+function restrictDatabase(
+  raw: DatabaseInstance,
+  rawSqlAllowed: boolean
+): DatabaseInstance {
+  if (rawSqlAllowed) return raw;
+  return {
+    update: table => raw.update(table),
+    delete: table => raw.delete(table),
+    insert: table => raw.insert(table),
+    select: columns => raw.select(columns),
+  };
+}
+
 export function createPluginContext(
   getServiceFn: <T extends PluginServiceName>(
     name: T
@@ -1059,7 +1093,16 @@ export function createPluginContext(
   const userService = getServiceFn("userService");
   const mediaService = getServiceFn("mediaService");
   const emailService = getServiceFn("emailService");
-  const db = getServiceFn("db");
+  // Restricted unless the plugin DECLARED raw SQL. `DatabaseInstance` already
+  // describes only the fluent surface, but the object handed over was the live
+  // Drizzle instance, which carries `execute`, `run` and its own client — so a
+  // JavaScript plugin, or TypeScript reaching past the type, had raw access
+  // whatever its manifest said, and the installation checklist could not
+  // describe the plugin's real reach.
+  const db = restrictDatabase(
+    getServiceFn("db"),
+    plugin?.capabilities?.db?.rawSql === true
+  );
   const logger = getServiceFn("logger");
   const config = getServiceFn("config");
 
@@ -1092,19 +1135,32 @@ export function createPluginContext(
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
+  // Consults what the plugins DECLARED, which was collected and thrown away —
+  // so a declared payload schema checked nothing. Development only, and once
+  // per point; see the checker.
+  const checkPayload = createPayloadChecker(getDeclaredHookPoints(), message =>
+    logger.warn(message)
+  );
   const pluginFilters: PluginFilterRegistry = {
     add: (name, fn) => filterRegistry.addFilter(name, fn),
     remove: (name, fn) => filterRegistry.removeFilter(name, fn),
-    apply: (name, value, context) =>
-      filterRegistry.applyFilters(name, value, context),
-    decide: (name, initial, context) =>
-      filterRegistry.applyDecision(name, initial, context),
+    apply: (name, value, context) => {
+      // The value handed to a filter IS the payload at this seam.
+      checkPayload(name, value);
+      return filterRegistry.applyFilters(name, value, context);
+    },
+    decide: (name, initial, context) => {
+      checkPayload(name, initial);
+      return filterRegistry.applyDecision(name, initial, context);
+    },
   };
   const pluginActions: PluginActionRegistry = {
     add: (name, fn) => filterRegistry.addAction(name, fn),
     remove: (name, fn) => filterRegistry.removeAction(name, fn),
-    run: (name, payload, context) =>
-      filterRegistry.runActions(name, payload, context),
+    run: (name, payload, context) => {
+      checkPayload(name, payload);
+      return filterRegistry.runActions(name, payload, context);
+    },
   };
 
   return {

@@ -89,13 +89,18 @@ describe("payload checking in development", () => {
     // A mismatched payload is usually every call at that seam; a warning per
     // call would bury everything else in the log.
     const warn = vi.fn();
+    // The schema travels WITH the point that declared it; a second map keyed
+    // the same way was one more thing to keep in step for no gain.
     const points = collectHookPoints([
-      plugin("@acme/auth", [{ name: "acme-auth.profile", kind: "filter" }]),
+      plugin("@acme/auth", [
+        {
+          name: "acme-auth.profile",
+          kind: "filter",
+          payload: { safeParse: () => ({ success: false }) },
+        },
+      ]),
     ]);
-    const schemas = new Map([
-      ["acme-auth.profile", { safeParse: () => ({ success: false }) }],
-    ]);
-    const check = createPayloadChecker(points, schemas, warn);
+    const check = createPayloadChecker(points, warn);
 
     check("acme-auth.profile", { bad: true });
     check("acme-auth.profile", { bad: true });

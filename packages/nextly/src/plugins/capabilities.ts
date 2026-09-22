@@ -112,7 +112,13 @@ function assertSecretPaths(plugin: PluginDefinition): void {
   }
 }
 
-/** Refuse a schema version that is not a positive integer. */
+/**
+ * Refuse a schema version that is not a positive integer.
+ *
+ * The whole of the check. Comparing it against what a database has applied
+ * needs plugin migration state, which does not exist yet, so nothing here
+ * stops a plugin booting ahead of its tables.
+ */
 function assertSchemaVersion(plugin: PluginDefinition): void {
   const version = plugin.schemaVersion;
   if (version === undefined) return;

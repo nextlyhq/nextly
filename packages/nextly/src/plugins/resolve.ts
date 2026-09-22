@@ -1,5 +1,5 @@
 import { validateCapabilities, validateRequires } from "./capabilities";
-import { collectHookPoints } from "./hook-points";
+import { collectHookPoints, publishHookPoints } from "./hook-points";
 import type { PluginDefinition } from "./plugin-context";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
@@ -35,8 +35,10 @@ export function resolvePlugins(
   validateCapabilities(plugins);
   validateRequires(plugins);
   // Names and collisions, before anything can register a handler at a seam
-  // that two plugins both believe they own.
-  collectHookPoints(plugins);
+  // that two plugins both believe they own — and PUBLISHED, so the seams can
+  // consult what was declared. Discarding it left every declared payload
+  // schema checking nothing.
+  publishHookPoints(collectHookPoints(plugins));
   // Before anything reads it. A `clientConfig` that cannot be delivered is a
   // configuration error like an incompatible version, so it belongs with the
   // other fail-fast checks rather than surfacing when the admin first asks for
