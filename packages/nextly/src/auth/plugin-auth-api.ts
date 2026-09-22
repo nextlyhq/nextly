@@ -193,6 +193,24 @@ async function loadUsableUser(
   return user;
 }
 
+/**
+ * The refusals a login may legitimately end in, as opposed to failures.
+ *
+ * Every one of these is a decision ABOUT the caller, so each is answered the
+ * same audited way. Anything outside this set means the attempt could not be
+ * judged at all.
+ */
+const EXPECTED_LOGIN_REFUSALS = [
+  "AUTH_INVALID_CREDENTIALS",
+  "FORBIDDEN",
+  "RATE_LIMITED",
+  "AUTH_REQUIRED",
+] as const;
+
+function isExpectedLoginRefusal(err: unknown): boolean {
+  return EXPECTED_LOGIN_REFUSALS.some(code => NextlyError.isCode(err, code));
+}
+
 export function createPluginAuthApi(
   getDeps: () => CompleteLoginDeps
 ): PluginAuthApi {
@@ -274,7 +292,19 @@ export function createPluginAuthApi(
         });
         return redirectWithCookies(next, [...minted.cookies, ...extra]);
       } catch (err) {
-        if (!NextlyError.isCode(err, "AUTH_INVALID_CREDENTIALS")) throw err;
+        // An EXPECTED refusal is answered; anything else is a failure of the
+        // system rather than a verdict about the caller, and must keep
+        // travelling. `beforeLogin` hooks may abort with any typed policy
+        // error, and only invalid-credentials was handled — so a hook denying
+        // by policy or rate limit broke the documented always-return-a-redirect
+        // contract, skipped the `login-failed` row, and surfaced the exception
+        // in whichever plugin route had called in.
+        //
+        // A NAMED set rather than "any NextlyError": an INTERNAL_ERROR or a
+        // DATABASE_ERROR reaching here means the login could not be decided,
+        // and answering "sign-in failed" would present an outage as a verdict
+        // about the person's credentials.
+        if (!isExpectedLoginRefusal(err)) throw err;
         // Actor-less, like the login handler: naming the account on a failure
         // is the enumeration leak the generic response exists to avoid.
         await deps.auditLog.write({
