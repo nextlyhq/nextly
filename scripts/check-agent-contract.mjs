@@ -27,6 +27,7 @@
  *   node scripts/check-agent-contract.mjs --json
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -264,6 +265,35 @@ export function routedSkills(agentsMd) {
   return names;
 }
 
+/**
+ * Paths git is told to ignore, out of a candidate list.
+ *
+ * A gitignored path is not a claim that a file exists — `.claude/settings.
+ * local.json` is written per worktree and is absent from a fresh clone by
+ * design, so reporting it is a finding against correct prose. `check-ignore`
+ * is asked rather than `.gitignore` re-parsed, because the rules compose
+ * across files, negations and precedence, and a second reader of them would be
+ * the recomputation this repository has a rule about.
+ */
+export function gitIgnored(paths, cwd = root) {
+  if (paths.length === 0) return new Set();
+  try {
+    const out = execFileSync("git", ["check-ignore", "--stdin"], {
+      cwd,
+      input: paths.join("\n"),
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    return new Set(out.split("\n").filter(Boolean));
+  } catch (error) {
+    // `check-ignore` exits 1 when NOTHING matched, which is an answer rather
+    // than a failure; anything else means git could not be asked, and an
+    // unavailable answer must not read as "nothing is ignored".
+    if (error.status === 1) return new Set(String(error.stdout ?? "").split("\n").filter(Boolean));
+    throw new Error(`agent-contract: could not ask git which paths are ignored: ${error.message}`);
+  }
+}
+
 function main() {
   const asJson = process.argv.includes("--json");
   const files = instructionFiles();
@@ -321,9 +351,15 @@ function main() {
     // A nested AGENTS.md cites its own package's files relatively, so both
     // bases are tried before anything is reported.
     const near = dirname(join(root, file));
-    for (const path of pathsIn(text)) {
-      if (existsSync(join(root, path)) || existsSync(join(near, path))) continue;
-      if (!claimsRepoRoot(path, topLevel)) continue;
+    const unresolved = [...pathsIn(text)].filter(
+      path =>
+        !existsSync(join(root, path)) &&
+        !existsSync(join(near, path)) &&
+        claimsRepoRoot(path, topLevel)
+    );
+    const ignored = gitIgnored(unresolved);
+    for (const path of unresolved) {
+      if (ignored.has(path)) continue;
       findings.push({ file, kind: "path", claim: path });
     }
   }

@@ -54,9 +54,9 @@
     "test:unit": "turbo run test",
     "test:scripts": "vitest run --dir scripts",
     "test:integration": "turbo run test:integration",
-    "test:integration:postgres15": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5434/nextly_test turbo run test:integration",
-    "test:integration:postgres17": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5435/nextly_test turbo run test:integration",
-    "test:integration:mysql": "TEST_MYSQL_URL=mysql://root:root@localhost:3307/nextly_test turbo run test:integration",
+    "test:integration:postgres15": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5434/${NEXTLY_TEST_DB:-nextly_test} turbo run test:integration",
+    "test:integration:postgres17": "TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5435/${NEXTLY_TEST_DB:-nextly_test} turbo run test:integration",
+    "test:integration:mysql": "TEST_MYSQL_URL=mysql://root:root@localhost:3307/${NEXTLY_TEST_DB:-nextly_test} turbo run test:integration",
     "test:integration:sqlite": "turbo run test:integration",
     "_comment_ci_lanes": "=== CI lanes: what CI runs, and the only place it is written ===",
     "lane:test": "turbo run test --concurrency=50% --filter='./packages/*' --filter='!nextly' --filter='!@nextlyhq/admin'",
@@ -98,6 +98,7 @@
     "release:status": "changeset status",
     "release:dry-run": "changeset publish --dry-run",
     "measure-facts": "node scripts/measure-facts.mjs",
+    "worktree": "node scripts/worktree.mjs",
     "check:gate-scope": "node scripts/gate-scope.mjs"
   },
   "devDependencies": {

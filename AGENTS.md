@@ -103,6 +103,48 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - There is no `nextly dev` CLI command by design: user apps run plain
   `next dev`, and schema changes apply in-process via the HMR listener.
 
+## Working in several checkouts at once
+
+Never work a PR branch in the shared checkout: another session switching
+branches underneath you removes files mid-command. Use a worktree, and give it
+a SLOT, because three things in this repository are per-machine rather than
+per-checkout.
+
+```
+pnpm worktree new <branch> [--from <ref>]   # create, allocate a slot, report it
+pnpm worktree list                          # who holds which slot
+pnpm worktree env --slot <n>                # the exports, for a plain shell
+```
+
+A slot decides the playground port (`PORT`, 3000 + 10n), the Playwright port
+(`E2E_PORT`, 3100 + 10n) and the integration database (`NEXTLY_TEST_DB`,
+`nextly_test` then `nextly_test_w<n>`). It writes them into that worktree's
+`.claude/settings.local.json`, which is gitignored and per-checkout, so a
+Claude Code session started there picks them up with no further setup. **Slot 0
+is the documented defaults**, so a checkout that never runs this is unchanged.
+
+The two port collisions are obvious. The third is not, and it fails as a flaky
+test rather than as a collision: test-owned tables get a random per-file prefix,
+but Nextly's SYSTEM tables have fixed names (`nextly_schema_events` and its
+neighbours) and cannot be prefixed. Within one run `fileParallelism: false`
+handles that. Across two worktrees pointed at the same `nextly_test` it is not
+handled at all — the second run drops and recreates a system table the first is
+still using. Hence a separate DATABASE per slot rather than a prefix.
+
+The CONTAINERS stay shared. They set a fixed `container_name`, so exactly one
+compose project can own them and a second worktree bringing up its own fails on
+the taken names. `pnpm worktree new` creates its database inside whichever test
+containers are running, and says which ones it skipped.
+
+`NEXTLY_TEST_DB` carries a database NAME, never a URL: Postgres 15 is on 5434
+and Postgres 17 on 5435, so a single `TEST_POSTGRES_URL` in the environment
+would point the `:postgres15` lane at the 17 container and report a pass for a
+version it never ran against.
+
+One more shared thing the slot does NOT cover: `git stash` is per-clone, not
+per-worktree, so a stash pushed in one checkout is visible — and poppable — in
+every other. Prefer a branch commit to a stash when several sessions are live.
+
 ## Build and test (read this before running anything)
 
 - `pnpm build` builds all packages (turbo, dependency order).

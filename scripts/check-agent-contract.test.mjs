@@ -17,6 +17,7 @@ import {
   codeSpans,
   missingAnchors,
   pathsIn,
+  gitIgnored,
   pnpmScriptsIn,
   routedSkills,
   routerDisagreements,
@@ -175,5 +176,25 @@ describe("holding the skill router and the skills directory to one set", () => {
     expect(routerDisagreements(new Set(), new Set(["orphan"]))).toEqual([
       { name: "orphan", side: "present in .claude/skills but not routed by AGENTS.md" },
     ]);
+  });
+});
+
+describe("not reporting a path git is told to ignore", () => {
+  /*
+   * `.claude/settings.local.json` is written per worktree and is absent from a
+   * fresh clone by design, so AGENTS.md naming it is correct prose rather than
+   * a stale reference. The exemption has to stay narrow, though: a tracked
+   * path that does not exist is still a finding.
+   */
+  it("names an ignored path as ignored", () => {
+    expect(gitIgnored(["node_modules/anything.ts"])).toContain("node_modules/anything.ts");
+  });
+
+  it("does not exempt a path git would track", () => {
+    expect(gitIgnored(["packages/nextly/src/ghost.ts"]).size).toBe(0);
+  });
+
+  it("asks nothing when there is nothing to ask about", () => {
+    expect(gitIgnored([])).toEqual(new Set());
   });
 });
