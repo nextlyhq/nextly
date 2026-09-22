@@ -113,8 +113,15 @@ per-checkout.
 ```
 pnpm worktree new <branch> [--from <ref>]   # create, allocate a slot, report it
 pnpm worktree list                          # who holds which slot
+pnpm worktree remove <branch>               # give the slot, ports and databases back
 pnpm worktree env --slot <n>                # the exports, for a plain shell
 ```
+
+**Remove it when you are finished.** Slots are small integers and an abandoned
+checkout holds its ports and its databases indefinitely. `remove` drops the
+slot's databases before it removes the checkout, so a later `new` cannot take
+the slot while the old databases still hold another run's tables. It never
+touches slot 0, which is the shared default.
 
 A slot decides the playground port (`PORT`, 3000 + 10n), the Playwright port
 (`E2E_PORT`, 3100 + 10n) and the integration database (`NEXTLY_TEST_DB`,
@@ -360,6 +367,26 @@ every other. Prefer a branch commit to a stash when several sessions are live.
   placeholder and is missing from that list, because a publish without a trusted
   publisher answers 404 and would strand it after the rest of the train is
   already live. Details: the `release-and-changesets` skill.
+
+## Clean up what you started
+
+Anything a task brings up, that task takes down. Containers started to verify
+something, worktrees created for a branch, throwaway branches, scratch files
+and test databases all get removed when the work is done — not left for the
+next person to find and wonder about.
+
+The same applies to anything you WRITE here. Tooling that allocates a resource
+ships its teardown in the same change, not as a follow-up: a `create` with no
+matching `remove` leaks whatever is scarce, and what is scarce is rarely disk.
+
+```sh
+docker stop nextly-postgres17-test nextly-postgres15-test nextly-mysql-test
+pnpm worktree remove <branch>
+```
+
+Stopping the test containers is safe and cheap — `docker start` by name brings
+them back with their data, which is why the start commands above are `start`
+rather than `compose up`.
 
 ## Git and PR rules
 

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   BASE,
   databaseFor,
+  databaseToDrop,
   lowestFreeSlot,
   settingsWithEnv,
   slotEnv,
@@ -122,5 +123,28 @@ describe("writing the slot into a checkout's local settings", () => {
 
   it("creates the env block when the file had none", () => {
     expect(settingsWithEnv(null, { PORT: "3010" })).toEqual({ env: { PORT: "3010" } });
+  });
+});
+
+describe("giving a slot's resources back", () => {
+  /*
+   * The blast radius that makes this worth a test of its own. Slot 0's
+   * database is the one the main checkout and every unallocated checkout use,
+   * so a removal that dropped it would take out everyone else's test run, and
+   * it would do so from a command whose whole purpose is tidying up.
+   */
+  it("never drops the shared default", () => {
+    expect(databaseToDrop(0)).toBeNull();
+  });
+
+  it("drops exactly the slot's own database", () => {
+    expect(databaseToDrop(1)).toBe("nextly_test_w1");
+    expect(databaseToDrop(7)).toBe("nextly_test_w7");
+  });
+
+  it("drops a database no other slot would claim", () => {
+    const dropped = [1, 2, 3].map(databaseToDrop);
+    expect(new Set(dropped).size).toBe(3);
+    expect(dropped).not.toContain(databaseFor(0));
   });
 });

@@ -29,7 +29,13 @@
  * Usage:
  *   node scripts/worktree.mjs new <branch> [--from <ref>] [--root <dir>]
  *   node scripts/worktree.mjs list
+ *   node scripts/worktree.mjs remove <branch|path> [--keep-branch]
  *   node scripts/worktree.mjs env [--slot <n>]
+ *
+ * Anything that ALLOCATES has a teardown path in the same file. `new` takes a
+ * checkout, two ports and a database on each running container; `remove` gives
+ * all of them back. A create without a matching remove leaks the scarce thing
+ * — slots are small integers, and an abandoned one holds its ports forever.
  */
 
 import { execFileSync } from "node:child_process";
@@ -228,6 +234,83 @@ function commandNew(branch, from, worktreeRoot) {
   for (const [key, value] of Object.entries(env)) console.log(`    export ${key}=${value}`);
 }
 
+/**
+ * Drop the slot's databases from whichever test containers are running.
+ *
+ * Slot 0 is never dropped. It is the shared default database that the main
+ * checkout and every unallocated one use, so removing a worktree must not take
+ * it: the blast radius of that mistake is everyone else's test run.
+ */
+export function databaseToDrop(slot) {
+  // Slot 0's database is shared by the main checkout and every unallocated
+  // one, so it is never a removal's to drop. Returning null rather than
+  // guarding at the call site keeps the decision in one place and testable.
+  return slot === 0 ? null : databaseFor(slot);
+}
+
+function dropDatabases(slot) {
+  const name = databaseToDrop(slot);
+  if (name === null) {
+    return [{ container: "(all)", state: "kept — slot 0 is the shared default" }];
+  }
+  const results = [];
+  for (const { container, engine } of TEST_DATABASES) {
+    try {
+      const argv =
+        engine === "postgres"
+          ? ["exec", container, "psql", "-U", "postgres", "-c", `DROP DATABASE IF EXISTS ${name}`]
+          : ["exec", container, "mysql", "-uroot", "-proot", "-e",
+             `DROP DATABASE IF EXISTS \`${name}\``];
+      execFileSync("docker", argv, { stdio: ["ignore", "ignore", "pipe"] });
+      results.push({ container, state: `dropped ${name}` });
+    } catch {
+      results.push({ container, state: "SKIPPED — container not running" });
+    }
+  }
+  return results;
+}
+
+function commandRemove(target, keepBranch) {
+  const paths = worktreePaths(git(["worktree", "list", "--porcelain"]));
+  // Accept either the branch name or the path, because a caller who just ran
+  // `new` has the path and a caller reading `list` has the branch.
+  const match =
+    paths.find(path => resolve(path) === resolve(target)) ??
+    paths.find(path => path.endsWith(`-${target.replace(/\//g, "-")}`));
+
+  if (!match) {
+    console.error(`worktree: no checkout matches '${target}'. \`worktree list\` shows them.`);
+    process.exit(2);
+  }
+  if (resolve(match) === root) {
+    console.error("worktree: refusing to remove the checkout this command is running in");
+    process.exit(2);
+  }
+
+  const slot = slotOf(match);
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], match);
+
+  // The databases go FIRST. Once the checkout is gone its slot is free, and a
+  // later `new` could take the slot while these databases still hold another
+  // run's tables.
+  const dropped = dropDatabases(slot);
+  git(["worktree", "remove", "--force", match]);
+  if (!keepBranch) {
+    try {
+      git(["branch", "-D", branch]);
+    } catch {
+      // An unmerged branch is worth keeping by accident rather than losing on
+      // purpose, so a refusal here is reported and not fatal.
+      console.log(`  branch ${branch} kept (git declined to delete it)`);
+    }
+  }
+
+  console.log(`worktree: removed ${match}`);
+  console.log(`  slot ${slot} returned to the pool`);
+  for (const { container, state } of dropped) console.log(`    ${container}: ${state}`);
+  if (!keepBranch) console.log(`  branch ${branch} deleted`);
+}
+
 function commandList() {
   const paths = worktreePaths(git(["worktree", "list", "--porcelain"]));
   for (const path of paths) {
@@ -254,12 +337,20 @@ function main() {
     return;
   }
   if (command === "list") return commandList();
+  if (command === "remove") {
+    const target = rest[0];
+    if (!target || target.startsWith("--")) {
+      console.error("worktree: remove <branch|path> [--keep-branch]");
+      process.exit(2);
+    }
+    return commandRemove(target, rest.includes("--keep-branch"));
+  }
   if (command === "env") {
     const env = slotEnv(Number(flag("slot") ?? 0));
     for (const [key, value] of Object.entries(env)) console.log(`export ${key}=${value}`);
     return;
   }
-  console.error("worktree: new | list | env");
+  console.error("worktree: new | list | remove | env");
   process.exit(2);
 }
 
