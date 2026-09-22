@@ -301,7 +301,13 @@ function addIndexes(
       unique: index.unique === true,
       ...(index.name !== undefined ? { name: index.name } : {}),
     };
-    assertIndexBuildable(resolved, table.columns, table.name);
+    // A table this layer SEEDS rather than declares carries no authoritative
+    // column set: `publish.ts` seeds an entity with none at all, because the
+    // field pipeline is what knows them. Saying so here keeps the full check
+    // for tables that do declare their columns.
+    const columnsAreKnown =
+      table.owner.kind !== "entity" && table.owner.kind !== "core";
+    assertIndexBuildable(resolved, table.columns, table.name, columnsAreKnown);
     table.indexes.push(resolved);
   }
 }

@@ -291,7 +291,8 @@ function judgeIndexColumn(
 export function judgeIndex(
   index: ExtensionIndex,
   columns: readonly ExtensionColumn[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  columnsAreKnown = true
 ): IndexVerdict | null {
   const byName = new Map(columns.map(column => [column.name, column]));
   let keyBytes = 0;
@@ -299,6 +300,11 @@ export function judgeIndex(
   for (const columnName of index.columns) {
     const column = byName.get(columnName);
     if (!column) {
+      // An entity or core table is SEEDED here, not declared: its real
+      // columns come from the field pipeline, which owns them. Refusing what
+      // this layer cannot see would reject every legitimate index on one —
+      // and the seed carries no columns at all, so that is all of them.
+      if (!columnsAreKnown) continue;
       return {
         dialect,
         reason: "unknown-column",
@@ -312,7 +318,14 @@ export function judgeIndex(
     if (dialect === "mysql") keyBytes += mysqlKeyBytes(column) ?? 0;
   }
 
-  if (dialect === "mysql" && keyBytes > MYSQL_MAX_KEY_BYTES) {
+  // Only meaningful when every column was weighed. A width summed over the
+  // subset this layer happens to know would be too small, and a bound checked
+  // against too small a number passes for the wrong reason.
+  if (
+    columnsAreKnown &&
+    dialect === "mysql" &&
+    keyBytes > MYSQL_MAX_KEY_BYTES
+  ) {
     return {
       dialect,
       reason: "key-too-wide",
@@ -332,10 +345,19 @@ export function judgeIndex(
 export function assertIndexBuildable(
   index: ExtensionIndex,
   columns: readonly ExtensionColumn[],
-  tableName: string
+  tableName: string,
+  /**
+   * Whether `columns` is the table's WHOLE column set.
+   *
+   * False for a table this layer only seeds — an entity or core table — where
+   * the field pipeline holds the real columns and validates an index against
+   * them. Defaulted to true so a caller that declares its own columns, which
+   * is every plugin and app table, keeps the full check without saying so.
+   */
+  columnsAreKnown = true
 ): void {
   for (const dialect of ALL_DIALECTS) {
-    const verdict = judgeIndex(index, columns, dialect);
+    const verdict = judgeIndex(index, columns, dialect, columnsAreKnown);
     if (verdict) {
       refuse(
         `${tableName}.indexes[${index.columns.join(",")}]`,

@@ -19,7 +19,10 @@
 // first query will surface real DB errors loudly, and `nextly db:sync`
 // remains the canonical recovery path.
 
-import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import {
+  type ExtensionSchema,
+  getActiveExtensionSchema,
+} from "../domains/schema/extension/build-extension-schema";
 import { emitDdl } from "../domains/schema/pipeline/ddl-emitter";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
@@ -59,6 +62,21 @@ export interface EnsureFirstRunSetupArgs {
   adapter: AdapterLike;
   logger: LoggerLike;
   deps?: Partial<EnsureFirstRunSetupDeps>;
+  /**
+   * The extension schema the caller just published, passed rather than read.
+   *
+   * This module is loaded through a dynamic import while `publish` is imported
+   * statically, and a bundler may resolve the two to different instances of
+   * the module holding the active-schema map — so reading it here returned
+   * nothing while the publisher had just written two tables into it. Threading
+   * the value removes the shared-state assumption instead of relying on the
+   * bundler to collapse the copies.
+   *
+   * Optional: the CLI reaches first-run without a container, and falls back to
+   * the module-level value, which is correct there because one process loads
+   * this module once.
+   */
+  extensionSchema?: ExtensionSchema | undefined;
 }
 
 export type EnsureFirstRunSetupResult =
@@ -122,9 +140,10 @@ export async function warnIfCoreSchemaIsBehind(
 async function createExtensionIndexes(
   adapter: AdapterLike,
   dialect: "postgresql" | "mysql" | "sqlite",
-  logger: LoggerLike
+  logger: LoggerLike,
+  passed: ExtensionSchema | null | undefined
 ): Promise<void> {
-  const schema = getActiveExtensionSchema(dialect);
+  const schema = passed ?? getActiveExtensionSchema(dialect);
   if (!schema) return;
 
   const ops = schema.specs.flatMap(spec =>
@@ -284,9 +303,11 @@ export async function ensureFirstRunSetup(
     // answers "what are Nextly's own tables", which is a different question
     // with a stable answer, and widening it would make every caller of it
     // depend on plugin config.
+    const extensionSchema =
+      args.extensionSchema ?? getActiveExtensionSchema(dialect);
     const staticTables = {
       ...deps.getDialectTables(dialect),
-      ...(getActiveExtensionSchema(dialect)?.drizzle ?? {}),
+      ...(extensionSchema?.drizzle ?? {}),
     };
     const result = await deps.freshPushSchema(
       dialect,
@@ -306,7 +327,7 @@ export async function ensureFirstRunSetup(
     // Emitted through the pipeline's own emitter rather than by composing SQL
     // here: the two would then disagree about quoting and about which indexes
     // a dialect can build at all.
-    await createExtensionIndexes(adapter, dialect, logger);
+    await createExtensionIndexes(adapter, dialect, logger, extensionSchema);
 
     // `freshPushSchema` above already creates the ledger (it is in
     // getDialectTables). Only bootstrap it out-of-band as a fallback if it is

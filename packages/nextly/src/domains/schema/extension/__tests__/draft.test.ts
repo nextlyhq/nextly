@@ -190,6 +190,53 @@ describe("extendTable ownership", () => {
     ]);
   });
 
+  it("allows an index on an entity table whose columns are only seeded", () => {
+    // The real boot seeds an entity with NO columns — `publish.ts` says so in
+    // terms, because the field pipeline is what knows them. The store above
+    // seeds `dc_posts` WITH columns, so every other test here reaches a case
+    // production never has, and the refusal this guards against fired on the
+    // first plugin that indexed an entity table.
+    const seeded = new SchemaDraftStore({
+      dialect: "postgresql",
+      coreTableNames: ["users", "media"],
+      entities: [
+        {
+          name: "dc_posts",
+          slug: "posts",
+          entityKind: "collection",
+          columns: [],
+        },
+      ],
+      pluginPrefixes: new Map([["auth-plugin", "auth"]]),
+    });
+    const draft = createOwnerDraft(seeded, {
+      kind: "plugin",
+      id: "auth-plugin",
+    });
+    expect(() =>
+      draft.extendTable("dc_posts", { indexes: [{ columns: ["created_at"] }] })
+    ).not.toThrow();
+    expect(seeded.get("dc_posts")?.indexes).toEqual([
+      { columns: ["created_at"], unique: false },
+    ]);
+  });
+
+  it("still refuses an unknown column on a table that DOES declare its own", () => {
+    // The control for the rule above: relaxing the check for seeded tables
+    // must not relax it for a table whose column set is authoritative, or the
+    // rule would be satisfied by never checking anything.
+    const s2 = store();
+    const draft = createOwnerDraft(s2, { kind: "plugin", id: "auth-plugin" });
+    draft.addTable(identities);
+    expect(
+      refusal(() =>
+        draft.extendTable("auth__identities", {
+          indexes: [{ columns: ["nope"] }],
+        })
+      )
+    ).toMatch(/does not declare/);
+  });
+
   it("refuses an index on another plugin's table", () => {
     const s = store();
     createOwnerDraft(s, { kind: "plugin", id: "auth-plugin" }).addTable(

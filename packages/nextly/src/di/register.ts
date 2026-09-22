@@ -67,6 +67,7 @@ import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
+import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import {
   clearFieldTypes,
@@ -794,8 +795,14 @@ export async function registerServices(
       getCapabilities?: () => { dialect?: "postgresql" | "mysql" | "sqlite" };
     }
   ).getCapabilities?.()?.dialect;
+  // Held rather than only published: first-run is reached through a dynamic
+  // import, which a bundler may resolve to a second instance of the module
+  // holding the active-schema map — so it read an empty map while this call
+  // had just filled one. Passing the value makes the boot path independent of
+  // how the two modules happen to be resolved.
+  let bootExtensionSchema: ExtensionSchema | undefined;
   if (bootDialect !== undefined) {
-    await compileAndPublishExtensionSchema({
+    bootExtensionSchema = await compileAndPublishExtensionSchema({
       dialect: bootDialect,
       plugins: resolvedPlugins,
       config: transformedConfig,
@@ -803,7 +810,10 @@ export async function registerServices(
     });
   }
 
-  const schemaRegistry = await initializeSchemaRegistry(adapter);
+  const schemaRegistry = await initializeSchemaRegistry(
+    adapter,
+    bootExtensionSchema
+  );
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
   // schema registry. `registerConfigTablesInResolver` (below) only runs when the
@@ -1512,7 +1522,8 @@ async function resolveAdapter(
  * and `dynamic_components` DB tables and are generated at runtime.
  */
 async function initializeSchemaRegistry(
-  adapter: DrizzleAdapter
+  adapter: DrizzleAdapter,
+  extensionSchema?: ExtensionSchema
 ): Promise<SchemaRegistry | undefined> {
   try {
     const { SchemaRegistry } = await import("../database/schema-registry");
@@ -1549,6 +1560,7 @@ async function initializeSchemaRegistry(
       // user-visible event and the boot logger wiring isn't done yet.
       await ensureFirstRunSetup({
         adapter,
+        extensionSchema,
         logger: {
           debug: msg => console.debug(msg),
           info: msg => console.log(msg),

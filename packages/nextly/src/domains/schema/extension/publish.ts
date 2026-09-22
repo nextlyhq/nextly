@@ -25,6 +25,7 @@ import type { DrizzleSchemaHook } from "./after-drizzle";
 import {
   buildExtensionSchema,
   clearActiveExtensionSchema,
+  type ExtensionSchema,
   setActiveExtensionSchema,
 } from "./build-extension-schema";
 import type { SeedEntityTable } from "./draft";
@@ -119,7 +120,7 @@ function contributionsOf(
  */
 export async function compileAndPublishExtensionSchema(
   input: PublishInput
-): Promise<void> {
+): Promise<ExtensionSchema | undefined> {
   const plugins = contributionsOf(input.plugins);
   const schemaConfig = (
     input.config.db as
@@ -141,7 +142,7 @@ export async function compileAndPublishExtensionSchema(
     // that REMOVES the last plugin does not leave its tables in the desired
     // set — which would keep re-creating them.
     clearActiveExtensionSchema();
-    return;
+    return undefined;
   }
 
   const collections = (input.config.collections ?? []) as {
@@ -179,4 +180,10 @@ export async function compileAndPublishExtensionSchema(
   input.logger.debug?.(
     `[nextly] extension schema: ${String(schema.tables.length)} table(s) from ${String(plugins.length)} plugin(s).`
   );
+  // RETURNED as well as published, so a caller in the same boot can hand it
+  // to first-run directly. The module-level map is reached through a dynamic
+  // import there, and a bundler may resolve that to a second instance of this
+  // module — whose map is empty. Measured: publish logged two tables and
+  // first-run read none, in one process, microseconds apart.
+  return schema;
 }
