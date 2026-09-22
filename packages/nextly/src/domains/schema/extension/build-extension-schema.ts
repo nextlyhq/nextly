@@ -22,7 +22,12 @@ import type { TableSpec } from "../pipeline/diff/types";
 import { toDrizzleTable, toTableSpec } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
 import { runExtensionHooks, type SchemaContribution } from "./run-hooks";
-import type { ExtensionIndex, ExtensionTable, SchemaOwner } from "./types";
+import type {
+  ExtensionColumn,
+  ExtensionIndex,
+  ExtensionTable,
+  SchemaOwner,
+} from "./types";
 
 export interface ExtensionSchemaInput {
   dialect: SupportedDialect;
@@ -40,6 +45,14 @@ export interface ExtensionSchema {
   tables: ExtensionTable[];
   /** Entity table name → indexes added to it. */
   entityIndexes: Map<string, ExtensionIndex[]>;
+  /**
+   * Entity or core table name → HIDDEN columns added to it.
+   *
+   * Carried separately from `tables` because these belong to a table this
+   * module does not own: they must reach the entity's desired spec and its
+   * runtime Drizzle table, and must NOT be emitted as a table of their own.
+   */
+  entityColumns: Map<string, ExtensionColumn[]>;
   /** Compiled, for the diff engine. */
   specs: TableSpec[];
   /** Compiled, sqlName → Drizzle table. */
@@ -105,9 +118,21 @@ export async function buildExtensionSchema(
   // Indexes contributed to entity tables are carried separately: they belong
   // to a table this module does not own and must not be emitted as one.
   const entityIndexes = new Map<string, ExtensionIndex[]>();
+  const entityColumns = new Map<string, ExtensionColumn[]>();
   for (const table of store.all()) {
-    if (table.owner.kind === "entity" && table.indexes.length > 0) {
+    const isForeign =
+      table.owner.kind === "entity" || table.owner.kind === "core";
+    if (!isForeign) continue;
+
+    if (table.indexes.length > 0) {
       entityIndexes.set(table.name, table.indexes);
+    }
+    // Only the columns somebody ADDED. A seeded entity table already carries
+    // its own, and emitting those would make the pipeline propose creating
+    // columns that exist.
+    const added = table.columns.filter(column => column.hidden === true);
+    if (added.length > 0) {
+      entityColumns.set(table.name, added);
     }
   }
 
@@ -122,6 +147,7 @@ export async function buildExtensionSchema(
   return {
     tables,
     entityIndexes,
+    entityColumns,
     specs,
     drizzle,
     owners,

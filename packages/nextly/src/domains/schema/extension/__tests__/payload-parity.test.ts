@@ -26,6 +26,12 @@ import {
   resolveCheck,
   resolveForeignKey,
 } from "../constraints";
+import {
+  assertAddableToExistingRows,
+  assertMayAddColumns,
+  assertMayOverride,
+  assertOverrideCompatible,
+} from "../extension-columns";
 
 const notes = defineTable(
   "notes",
@@ -87,13 +93,61 @@ describe("row 2 — hooks see every generated table", () => {
 });
 
 describe("row 3 — columns on a generated table", () => {
-  it.todo(
-    "C3: schema.extendTable(entityTable, { columns }) adds hidden columns"
-  );
+  it("adds a HIDDEN column, which is the difference from extendTable", async () => {
+    const schema = await buildExtensionSchema(
+      input({
+        plugins: [
+          {
+            owner: { kind: "plugin", id: "fx" },
+            extend: [
+              ({ schema: draft }) => {
+                draft.extendTable("dc_posts", {
+                  columns: { searchVector: col.text({ nullable: true }) },
+                });
+              },
+            ],
+          },
+        ],
+      })
+    );
+    // Payload's `extendTable` reaches Drizzle's internals and the column
+    // becomes part of the table for every reader. Here it reaches the schema
+    // machinery — so push and SQLite rebuilds keep it — and no entry API
+    // returns it.
+    expect(schema.entityColumns.get("dc_posts")?.[0]).toMatchObject({
+      name: "search_vector",
+      hidden: true,
+    });
+    // And it is NOT emitted as a table of its own.
+    expect(schema.tables).toHaveLength(0);
+  });
+
+  it("refuses NOT NULL with no default on a populated table", () => {
+    expect(() =>
+      assertAddableToExistingRows(
+        { key: "x", name: "x", kind: "text", nullable: false },
+        "dc_posts"
+      )
+    ).toThrow(NextlyError);
+  });
 });
 
 describe("row 4 — override a generated column", () => {
-  it.todo("C3: schema.overrideColumn, app only, type-compatibility checked");
+  it("narrows storage within a value family, app only", () => {
+    // Payload's tested case is `varchar('city', { length: 10 })`.
+    expect(() =>
+      assertOverrideCompatible("text", "varchar", "dc_posts", "city")
+    ).not.toThrow();
+    // Crossing families leaves the field's validation describing a column
+    // that cannot hold what it accepts.
+    expect(() =>
+      assertOverrideCompatible("text", "integer", "dc_posts", "city")
+    ).toThrow(NextlyError);
+    // A plugin doing this would change what every reader of that field gets.
+    expect(() =>
+      assertMayOverride({ kind: "plugin", id: "fx" }, "dc_posts", "city")
+    ).toThrow(NextlyError);
+  });
 });
 
 describe("row 5 — compound and unique indexes", () => {
@@ -196,7 +250,25 @@ describe("row 9 — check constraints", () => {
 });
 
 describe("row 10 — enums", () => {
-  it.todo("C2: col.enum(values) — native on PG, CHECK on MySQL and SQLite");
+  it("declares a value set and narrows the inferred type to it", () => {
+    const orders = defineTable("orders", {
+      id: col.id(),
+      state: col.enum(["open", "paid"] as const, { name: "order_status" }),
+    });
+    expect(orders.columns.find(c => c.key === "state")).toMatchObject({
+      kind: "enum",
+      enumValues: ["open", "paid"],
+      enumName: "order_status",
+    });
+    // Payload reaches `pgEnum` through a hook and loses the type. Here the
+    // literal union comes from the declaration, so a bad value is a compile
+    // error rather than a write the database refuses.
+    type Row = InferRow<typeof orders>;
+    const row: Row = { id: "x", state: "open" };
+    expect(row.state).toBe("open");
+  });
+
+  it.todo("C8: the enum lifecycle — create, add value, refused removal");
 });
 
 describe("row 11 — any Drizzle column type", () => {
@@ -206,7 +278,31 @@ describe("row 11 — any Drizzle column type", () => {
     expect(true).toBe(true);
   });
 
-  it.todo("C2: bigint, smallint, char(n), uuid, real, bytes, serial");
+  it("renders each new kind on each dialect", () => {
+    const table = {
+      name: "fx__widgets",
+      authored: "widgets",
+      owner: { kind: "plugin" as const, id: "fx" },
+      columns: defineTable("widgets", {
+        id: col.id(),
+        big: col.bigint(),
+        small: col.smallint(),
+        code: col.char(3),
+        ref: col.uuid(),
+        ratio: col.real(),
+      }).columns.map(c => ({ ...c })),
+      indexes: [],
+    };
+    for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+      const spec = toTableSpec(table, dialect);
+      // Every column renders SOMETHING on every dialect. The builders return
+      // `unknown` with no default arm, so a kind nobody handled compiles
+      // cleanly and yields undefined — which is how `bigint` first shipped.
+      expect(spec.columns.map(c => c.type).every(Boolean)).toBe(true);
+    }
+  });
+
+  it.todo("C2: serial, for extension tables only");
 });
 
 describe("row 12 — relations for typed relational queries", () => {
@@ -235,7 +331,24 @@ describe("row 14 — adopt an existing table without dropping it", () => {
 });
 
 describe("row 15 — extend core system tables", () => {
-  it.todo("C4: extendTable on an allowlisted set of core tables");
+  it("allows the five carrying application data, and refuses the rest", () => {
+    // Payload reaches core tables through `jobsCollectionOverrides` and its
+    // hooks. The allowlist is the difference: a column on RBAC or the ledger
+    // sits inside the machinery that decides access or applies migrations, so
+    // a broken extension there fails OPEN or strands the database.
+    for (const table of ["users", "media", "nextly_jobs"]) {
+      expect(() =>
+        assertMayAddColumns({ kind: "core", table }, table, { kind: "app" })
+      ).not.toThrow();
+    }
+    expect(() =>
+      assertMayAddColumns(
+        { kind: "core", table: "refresh_tokens" },
+        "refresh_tokens",
+        { kind: "app" }
+      )
+    ).toThrow(NextlyError);
+  });
 });
 
 describe("row 16 — the app extending a plugin's tables", () => {

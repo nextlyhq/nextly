@@ -21,6 +21,11 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { ColumnBuilder, TableDefinition } from "./dsl";
 import { defineTable } from "./dsl";
 import {
+  assertAddableToExistingRows,
+  assertMayAddColumns,
+  type ExtensionTarget,
+} from "./extension-columns";
+import {
   assertIndexBuildable,
   assertUsableAppTableName,
   pluginTableName,
@@ -208,6 +213,22 @@ function toView(table: DraftTable): DraftTableView {
   });
 }
 
+/**
+ * Which rule set applies to this table, for this caller.
+ *
+ * Derived from the table's recorded owner rather than from its name: a prefix
+ * test answers "does this look like a core table", which is a different
+ * question and one that a renamed table answers wrongly.
+ */
+function targetOf(table: DraftTable, scope: ExtendScope): ExtensionTarget {
+  if (scope.isOwn) return { kind: "own" };
+  if (table.owner.kind === "entity") {
+    return { kind: "entity", slug: table.owner.slug };
+  }
+  if (table.owner.kind === "core") return { kind: "core", table: table.name };
+  return { kind: "foreign", owner: table.owner };
+}
+
 /** What the ownership rules need to know about one `extendTable` call. */
 interface ExtendScope {
   owner: SchemaOwner;
@@ -231,17 +252,14 @@ function addColumns(
 ): void {
   if (!columns || Object.keys(columns).length === 0) return;
 
-  if (!scope.isOwn) {
-    refuse(
-      `${scope.ownerPath}.extendTable.${table.name}`,
-      `${describeOwner(scope.owner)} may not add columns to "${table.name}", which belongs to ${describeOwner(table.owner)}. Columns may only be added to your own tables.`
-    );
-  }
+  assertMayAddColumns(targetOf(table, scope), table.name, scope.owner);
 
   // Reuse the DSL so an extension column is validated exactly as a declared
   // one: the snake-casing and the per-column rules are the same question, and
   // asking it twice is how the two answers drift.
   const resolved = defineTable(table.name, columns);
+  const onSomeoneElsesTable = !scope.isOwn;
+
   for (const column of resolved.columns) {
     if (table.columns.some(existing => existing.name === column.name)) {
       refuse(
@@ -249,7 +267,13 @@ function addColumns(
         `Column "${column.name}" is already declared on "${table.name}".`
       );
     }
-    table.columns.push({ ...column });
+    // Only on a table that already exists with rows in it. A table this
+    // caller is declaring right now is empty by construction, so requiring a
+    // default there would be a rule with no failure to prevent.
+    if (onSomeoneElsesTable) {
+      assertAddableToExistingRows(column, table.name);
+    }
+    table.columns.push({ ...column, hidden: onSomeoneElsesTable });
   }
 }
 

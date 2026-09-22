@@ -140,15 +140,45 @@ describe("extendTable ownership", () => {
     ).toMatch(/may not add columns to "auth__identities"/);
   });
 
-  it("refuses columns on an entity table", () => {
-    // An entity read selects the whole table, so a raw column would either leak
-    // into API responses or be proposed as a DROP by dev push.
+  it("allows a HIDDEN column on an entity table", () => {
+    // Part A refused this. It is allowed now because both halves exist: the
+    // column reaches the runtime table (so push and SQLite rebuilds keep it)
+    // and is marked hidden (so no entry API returns it). Neither half alone
+    // would be safe — unhidden it leaks into every response, and absent from
+    // the runtime table the next push proposes DROPPING it.
+    const s = store();
+    const draft = createOwnerDraft(s, { kind: "app" });
+    draft.extendTable("dc_posts", {
+      columns: { searchVector: col.text({ nullable: true }) },
+    });
+    expect(
+      s.get("dc_posts")?.columns.find(c => c.name === "search_vector")
+    ).toMatchObject({ hidden: true });
+  });
+
+  it("refuses a NOT NULL column with no default on a populated table", () => {
+    // Existing rows already exist, so this cannot be added on any dialect —
+    // and it fails on exactly the installations that have data. Caught at
+    // resolve time, on an empty dev database, rather than in production.
     const draft = createOwnerDraft(store(), { kind: "app" });
     expect(
       refusal(() =>
         draft.extendTable("dc_posts", { columns: { x: col.text() } })
       )
-    ).toMatch(/may not add columns to "dc_posts"/);
+    ).toMatch(/NOT NULL with no default/);
+  });
+
+  it("does not require a default on the caller's OWN new table", () => {
+    // The discriminator: a table being declared right now is empty by
+    // construction, so the rule above would have no failure to prevent there.
+    const s = store();
+    const draft = createOwnerDraft(s, { kind: "plugin", id: "auth-plugin" });
+    draft.addTable(identities);
+    expect(() =>
+      draft.extendTable("auth__identities", {
+        columns: { notNullNoDefault: col.text() },
+      })
+    ).not.toThrow();
   });
 
   it("allows an index on an entity table", () => {

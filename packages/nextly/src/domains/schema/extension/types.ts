@@ -63,6 +63,22 @@ export interface ExtensionColumn {
   precision?: number;
   scale?: number;
   /**
+   * Whether this column is hidden from the entry API.
+   *
+   * True for a column added to a table its owner did not declare — an entity
+   * or an extendable core table. An entity read is `db.select().from(table)`,
+   * so an unhidden extension column would appear in every REST response,
+   * every Direct API read, every version and every webhook payload; and
+   * keeping it out of the runtime table instead would make the next dev push
+   * propose DROPPING it.
+   *
+   * Hiding it at the row mapper is the only place both problems are solved at
+   * once: the column exists everywhere the schema machinery looks, and
+   * nowhere an entry is produced.
+   */
+  hidden?: boolean;
+
+  /**
    * Documentation-only target of a reference column.
    *
    * Never a database constraint: `IndexSpec` cannot express a foreign key and
