@@ -108,6 +108,47 @@ describe("PluginSettingsService", () => {
     expect(store.rows).toHaveLength(0);
   });
 
+  it("refuses an unknown key instead of writing undefined into the row", async () => {
+    // A plain zod object STRIPS what it does not know, so this parsed happily
+    // and `parsed.data.typo` was undefined; `JSON.stringify(undefined)` is the
+    // value undefined, not a string, and the column is NOT NULL. A misspelled
+    // or stale field therefore surfaced as a database error rather than as an
+    // answer naming the field.
+    const store = memoryStore();
+    await expect(service(store).set({ typo: 1 } as never)).rejects.toSatisfy(
+      (e: unknown) => NextlyError.is(e) && e.code === "VALIDATION_ERROR"
+    );
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it("names the unknown key in the refusal", async () => {
+    // Which key is the only useful part of the answer: the caller sent an
+    // object, and "something in it is wrong" does not locate the typo.
+    const store = memoryStore();
+    const error = await service(store)
+      .set({ prot: 443 } as never)
+      .catch((e: unknown) => e);
+    const data = NextlyError.is(error)
+      ? (error.publicData as { errors?: { path?: string }[] } | undefined)
+      : undefined;
+    expect(data?.errors?.[0]?.path).toBe("prot");
+  });
+
+  it("still writes every key the schema does declare", async () => {
+    // The control. Refusing any patch that mentions an unfamiliar key would
+    // satisfy both tests above while making ordinary writes fail.
+    const store = memoryStore();
+    await service(store).set({ port: 8443 });
+    expect(store.rows.map(r => r.key)).toEqual(["port"]);
+  });
+
+  it("records the acting user on the row it writes", async () => {
+    // `updated_by` exists to retain who changed a plugin's configuration.
+    const store = memoryStore();
+    await service(store).set({ port: 8443 }, { actorUserId: "user-7" });
+    expect(store.rows[0]?.updatedBy).toBe("user-7");
+  });
+
   it("reads a value written under a retired secret, after rotation", async () => {
     // Without this a secret rotation silently breaks every stored credential,
     // and the failure surfaces as the provider rejecting a login.

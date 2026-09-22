@@ -113,8 +113,33 @@ export class PluginSettingsService {
       });
     }
 
+    // A plain zod object STRIPS what it does not know, so `{ typo: 1 }` parses
+    // happily and `parsed.data.typo` is then undefined. Iterating the original
+    // patch wrote `JSON.stringify(undefined)` — the value `undefined`, not a
+    // string — into a NOT NULL text column, turning a misspelled or stale
+    // field into a database error instead of an answer naming the problem.
+    const unknown = Object.keys(patch).filter(
+      key => !Object.hasOwn(parsed.data, key)
+    );
+    if (unknown.length > 0) {
+      throw NextlyError.validation({
+        errors: unknown.map(key => ({
+          path: key,
+          code: "UNKNOWN_KEY",
+          message: `"${key}" is not declared by this plugin's settings schema.`,
+        })),
+        logContext: { plugin: this.deps.owner },
+      });
+    }
+
     const secretKeys = secretTopLevelKeys(this.deps.secretPaths);
     const now = new Date();
+    // The PATCH's keys, not the parsed result's. Parsing fills in every
+    // schema default, so writing those would turn a change of one field into
+    // a reset of the others — a `port` update silently overwriting a stored
+    // `clientSecret` with the empty default. The refusal above is what makes
+    // this safe: every remaining key is known to be present in `parsed.data`,
+    // so no `undefined` can reach the column.
     const rows: PluginSettingRow[] = Object.keys(patch).map(key => {
       const value = parsed.data[key];
       const holdsSecret = secretKeys.has(key);

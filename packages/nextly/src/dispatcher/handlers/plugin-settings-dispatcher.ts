@@ -21,6 +21,7 @@ import { createPluginSettingsStore } from "../../domains/plugins/settings-store"
 import { NextlyError } from "../../errors/nextly-error";
 import { env } from "../../lib/env";
 import type { ServiceContainer } from "../../services";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { requireParam } from "../helpers/validation";
 import type { Params } from "../types";
 
@@ -87,9 +88,12 @@ export async function dispatchPluginSettings(
     // A secret arrives here only as a WRITE. The read never handed one out, so
     // a client echoing back what it was given sends `{ set: true }`, which the
     // schema refuses rather than storing over the real value.
+    // The CALLER, read the way every other dispatched write reads it. This
+    // took `params.userId`, which names the TARGET of a user route and is
+    // never populated here — so `updated_by` was null on every settings
+    // update, losing the actor the column was added to keep.
     await service.set(body as Record<string, unknown>, {
-      actorUserId:
-        typeof params.userId === "string" ? params.userId : undefined,
+      actorUserId: readAuthenticatedUser(params)?.id,
     });
     return respondAction("Settings updated.");
   }

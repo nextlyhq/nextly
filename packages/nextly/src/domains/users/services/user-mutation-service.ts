@@ -1688,7 +1688,7 @@ export class UserMutationService extends BaseService {
     userId: number | string,
     actor?: RequestActor
   ): Promise<void> {
-    const { users, userRoles, media } = this.tables;
+    const { users, userRoles, media, nextlyPluginSettings } = this.tables;
 
     // Asked once, before the transaction opens, because a failed statement
     // aborts an open Postgres transaction and there would be no way back.
@@ -1940,6 +1940,26 @@ export class UserMutationService extends BaseService {
           const detaching = (this.dialect === "sqlite"
             ? await detachQuery
             : await detachQuery.for("update")) as unknown[] as MediaRow[];
+
+          // Plugin settings keep the editing user's id in `updated_by`, and
+          // nothing else erases it: the rows are core-owned and survive the
+          // account, so without this they go on identifying that person
+          // indefinitely. Scrubbed inside the deletion transaction, like every
+          // other retained attribution, so the erasure cannot half-apply.
+          //
+          // The row itself stays: it is the plugin's configuration, not the
+          // user's data, and deleting it would reconfigure the install.
+          if (nextlyPluginSettings) {
+            await txDb
+              .update(nextlyPluginSettings)
+              .set({ updatedBy: null })
+              .where(
+                eq(
+                  (nextlyPluginSettings as { updatedBy: Column }).updatedBy,
+                  userId
+                )
+              );
+          }
 
           if (detaching.length > 0) {
             const detachedAt = new Date();
