@@ -32,6 +32,7 @@ import {
   assertMayOverride,
   assertOverrideCompatible,
 } from "../extension-columns";
+import { assertAdoptable, impliedEdges, toEdges } from "../relations";
 
 const notes = defineTable(
   "notes",
@@ -306,9 +307,38 @@ describe("row 11 — any Drizzle column type", () => {
 });
 
 describe("row 12 — relations for typed relational queries", () => {
-  it.todo(
-    "C5: defineTable(..., { relations }) and db.query.<t>.findMany({ with })"
-  );
+  it("derives a `one` edge from a ref rather than asking for it twice", () => {
+    // Payload has the author return `relations` from the hook. Here a `ref`
+    // already states where the column points, so the edge comes from it —
+    // two statements of one fact come to disagree, and a relational query
+    // following the wrong one returns rows that look plausible.
+    expect(
+      impliedEdges({
+        name: "fx__orders",
+        authored: "orders",
+        owner: { kind: "plugin", id: "fx" },
+        columns: [
+          {
+            key: "userId",
+            name: "user_id",
+            kind: "shortText",
+            nullable: false,
+            references: "users",
+          },
+        ],
+        indexes: [],
+      })
+    ).toEqual([{ key: "user", fromColumn: "user_id", targetTable: "users" }]);
+  });
+
+  it("puts a `many` edge on the target, pointing back", () => {
+    const { reverse } = toEdges("fx__orders", [
+      { kind: "many", key: "orders", targetTable: "users", column: "user_id" },
+    ]);
+    expect(reverse.get("users")?.[0]?.targetTable).toBe("fx__orders");
+  });
+
+  it.todo("C5: db.query.<t>.findMany({ with }) on three dialects");
 });
 
 describe("row 13 — typed access to added tables", () => {
@@ -327,7 +357,17 @@ describe("row 13 — typed access to added tables", () => {
 });
 
 describe("row 14 — adopt an existing table without dropping it", () => {
-  it.todo("C6: schema.adoptTable(def, { managed: false })");
+  it("adopts an unmanaged table and refuses a managed one", () => {
+    const managed = new Set(["dc_posts", "users"]);
+    expect(() => assertAdoptable("legacy_orders", managed)).not.toThrow();
+    // Payload's `beforeSchemaInit` takes introspected tables so it stops
+    // dropping them. The refusal is the addition: adopting a table Nextly
+    // MAINTAINS would make schema changes to it silently stop being applied,
+    // because "not managed" is exactly the state that produces no operations.
+    expect(() => assertAdoptable("dc_posts", managed)).toThrow(NextlyError);
+  });
+
+  it.todo("C6: push and migrate:create never touch it, on three dialects");
 });
 
 describe("row 15 — extend core system tables", () => {
