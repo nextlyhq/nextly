@@ -109,7 +109,18 @@ export type ColumnKind =
   | "timestamp" // PG/MySQL: timestamp, SQLite: integer(timestamp mode)
   | "json" // PG: jsonb, MySQL: json, SQLite: text
   | "fkSingle" // single-target foreign key — text/varchar(36)
-  | "skip"; // the field keeps its values in another table — no column emitted
+  | "skip" // the field keeps its values in another table — no column emitted
+  // Kinds below are reachable only from an extension table's DSL. No
+  // collection field produces one, so every existing entity's columns are
+  // unchanged — which is the point: a new kind must not alter a table that
+  // already exists.
+  | "bigint" // PG/MySQL: bigint; SQLite: integer
+  | "smallint" // PG/MySQL: smallint; SQLite: integer
+  | "char" // fixed width (uses `length`); SQLite: text
+  | "uuid" // PG: uuid; MySQL: char(36); SQLite: text
+  | "real" // PG/SQLite: real; MySQL: float
+  | "bytes" // PG: bytea; MySQL: longblob; SQLite: blob
+  | "enum"; // PG: a native type; MySQL: ENUM(...); SQLite: text + CHECK
 
 /**
  * The columns a row of this table could plausibly have left empty.
@@ -618,6 +629,49 @@ export function renderDialectType(
     if (dialect === "postgresql") return "text";
     if (dialect === "mysql") return "varchar(36)";
     return "text"; // sqlite
+  }
+  // Extension-only kinds. Rendered HERE rather than in the extension module
+  // so the desired spec and the collection pipeline keep asking one function
+  // what a kind looks like — a second renderer is how the two sides of a diff
+  // come to disagree about a column that never changed.
+  if (kind === "bigint") {
+    if (dialect === "postgresql") return "int8";
+    if (dialect === "mysql") return "bigint";
+    return "integer"; // sqlite
+  }
+  if (kind === "smallint") {
+    if (dialect === "postgresql") return "int2";
+    if (dialect === "mysql") return "smallint";
+    return "integer"; // sqlite
+  }
+  if (kind === "char") {
+    // PostgreSQL introspects `char(n)` as `bpchar`, so that is what the
+    // desired side must say or every diff reports a type change.
+    if (dialect === "postgresql") return "bpchar";
+    if (dialect === "mysql") return `char(${length ?? 1})`;
+    return "text"; // sqlite
+  }
+  if (kind === "uuid") {
+    if (dialect === "postgresql") return "uuid";
+    if (dialect === "mysql") return "char(36)";
+    return "text"; // sqlite
+  }
+  if (kind === "real") {
+    if (dialect === "postgresql") return "float4";
+    if (dialect === "mysql") return "float";
+    return "real"; // sqlite
+  }
+  if (kind === "bytes") {
+    if (dialect === "postgresql") return "bytea";
+    if (dialect === "mysql") return "longblob";
+    return "blob"; // sqlite
+  }
+  if (kind === "enum") {
+    // Text on every dialect here. A PostgreSQL native enum introspects as its
+    // own TYPE NAME, which this function cannot know — the name lives on the
+    // column — so rendering it would produce a token that matches nothing.
+    if (dialect === "mysql") return "text";
+    return "text";
   }
   // Unreachable: skip is filtered out before this is called.
   return "text";

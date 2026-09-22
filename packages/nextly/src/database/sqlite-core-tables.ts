@@ -1,4 +1,5 @@
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
+import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 // Raw CREATE TABLE IF NOT EXISTS DDL for all Nextly core SQLite tables.
@@ -229,6 +230,22 @@ export function generateSqliteCoreTableStatements(): string[] {
       "id" TEXT PRIMARY KEY,
       "revision" INTEGER NOT NULL,
       "generation" TEXT NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    // Bootstrapped rather than exempted. A database built from this fallback
+    // without it has no ownership record at all, and the rule that keeps
+    // data — "a table with no owner row is never dropped" — would then be
+    // true of EVERY table, which quietly disables the protection rather than
+    // failing.
+    `CREATE TABLE IF NOT EXISTS "${SCHEMA_OWNERS_TABLE}" (
+      "table_name" TEXT PRIMARY KEY,
+      "owner_kind" TEXT NOT NULL,
+      "owner_id" TEXT NOT NULL,
+      "migrated_by" TEXT NOT NULL,
+      "owner_version" TEXT,
+      "schema_version" INTEGER,
+      "state" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS "content_schema_events" (

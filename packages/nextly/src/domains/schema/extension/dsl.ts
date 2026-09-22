@@ -51,6 +51,10 @@ export interface ColumnBuilder<
   readonly default?: string | number | boolean | DefaultToken;
   readonly generated?: "uuidv7";
   readonly onUpdate?: "now";
+  /** The permitted values, for the `enum` kind. */
+  readonly enumValues?: readonly string[];
+  /** An explicit type name for a native PostgreSQL enum. */
+  readonly enumName?: string;
   readonly length?: number;
   readonly precision?: number;
   readonly scale?: number;
@@ -250,6 +254,112 @@ export const col = {
       nullable: opts?.nullable === true,
     })) as JsonColumnBuilder,
 
+  /** 64-bit integer. Reads as a number, so values beyond 2^53 lose precision. */
+  bigint<const O extends ColOpts<number>>(
+    opts?: O
+  ): ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>> {
+    return build<number>("bigint", opts) as ColumnBuilder<
+      number,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /** 16-bit integer. */
+  smallint<const O extends ColOpts<number>>(
+    opts?: O
+  ): ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>> {
+    return build<number>("smallint", opts) as ColumnBuilder<
+      number,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /**
+   * Fixed-width text.
+   *
+   * Worth knowing before choosing it: PostgreSQL PADS a `char(n)` value with
+   * spaces to the full width, and returns it padded. A country code is the
+   * case it suits; anything variable belongs in `varchar`.
+   */
+  char<const O extends ColOpts<string>>(
+    length: number,
+    opts?: O
+  ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
+    if (!Number.isInteger(length) || length < 1 || length > 255) {
+      invalid(
+        "char.length",
+        `A char length must be an integer between 1 and 255; received ${String(length)}.`
+      );
+    }
+    return build<string>("char", opts, { length }) as ColumnBuilder<
+      string,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /** A UUID. Native on PostgreSQL; `char(36)` on MySQL; text on SQLite. */
+  uuid<const O extends ColOpts<string>>(
+    opts?: O
+  ): ColumnBuilder<string, NullableOf<O>, HasDefaultOf<O>> {
+    return build<string>("uuid", opts) as ColumnBuilder<
+      string,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /** 32-bit float. Prefer `decimal` for money. */
+  real<const O extends ColOpts<number>>(
+    opts?: O
+  ): ColumnBuilder<number, NullableOf<O>, HasDefaultOf<O>> {
+    return build<number>("real", opts) as ColumnBuilder<
+      number,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /** Raw bytes. */
+  bytes<const O extends ColOpts<never>>(
+    opts?: O
+  ): ColumnBuilder<Uint8Array, NullableOf<O>, HasDefaultOf<O>> {
+    return build<Uint8Array>("bytes", opts) as ColumnBuilder<
+      Uint8Array,
+      NullableOf<O>,
+      HasDefaultOf<O>
+    >;
+  },
+
+  /**
+   * One of a fixed set of strings.
+   *
+   * `InferRow` gives the literal union, so a value outside the set is a
+   * compile error rather than a row the database refuses. The storage differs
+   * by dialect — a native type on PostgreSQL, `ENUM(...)` on MySQL, text with
+   * a CHECK on SQLite — and the declaration is the same everywhere.
+   */
+  enum<const TValues extends readonly string[]>(
+    values: TValues,
+    opts?: { nullable?: boolean; name?: string }
+  ): ColumnBuilder<TValues[number], boolean, false> {
+    if (values.length === 0) {
+      invalid("enum.values", "An enum must list at least one value.");
+    }
+    if (new Set(values).size !== values.length) {
+      invalid("enum.values", "An enum may not list a value twice.");
+    }
+    return {
+      kind: "enum",
+      nullable: opts?.nullable === true,
+      hasDefault: false,
+      enumValues: [...values],
+      ...(opts?.name !== undefined ? { enumName: opts.name } : {}),
+    };
+  },
+
   /**
    * The conventional primary key: a `varchar(36)` filled with a UUIDv7.
    *
@@ -344,6 +454,8 @@ export interface ResolvedColumn {
   default?: string | number | boolean | DefaultToken;
   generated?: "uuidv7";
   onUpdate?: "now";
+  enumValues?: readonly string[];
+  enumName?: string;
   length?: number;
   precision?: number;
   scale?: number;
@@ -351,37 +463,51 @@ export interface ResolvedColumn {
 }
 
 /**
+ * The optional fields a resolved column copies when the builder set them.
+ *
+ * A list rather than a conditional spread per field: each was its own branch,
+ * and the count grew with every kind that needed one more. Copying by key also
+ * means a field added to `ColumnBuilder` reaches `ResolvedColumn` by being
+ * named here once.
+ */
+const OPTIONAL_COLUMN_FIELDS = [
+  "primaryKey",
+  "default",
+  "generated",
+  "onUpdate",
+  "enumValues",
+  "enumName",
+  "length",
+  "precision",
+  "scale",
+  "references",
+] as const satisfies readonly (keyof ColumnBuilder)[];
+
+/**
  * One column, once its SQL name is known.
  *
- * Every optional field is spread conditionally rather than written as
- * `undefined`, because the definition is compared by value downstream and an
- * explicit `undefined` is not the same shape as an absent key.
+ * Optional fields are omitted rather than set to `undefined`, because the
+ * definition is compared by value downstream and an explicit `undefined` is
+ * not the same shape as an absent key.
  */
 function toResolvedColumn(
   key: string,
   sqlName: string,
   builder: ColumnBuilder
 ): ResolvedColumn {
-  return {
+  const resolved: ResolvedColumn = {
     key,
     name: sqlName,
     kind: builder.kind,
     nullable: builder.nullable,
-    ...(builder.primaryKey === true ? { primaryKey: true } : {}),
-    ...(builder.default !== undefined ? { default: builder.default } : {}),
-    ...(builder.generated !== undefined
-      ? { generated: builder.generated }
-      : {}),
-    ...(builder.onUpdate !== undefined ? { onUpdate: builder.onUpdate } : {}),
-    ...(builder.length !== undefined ? { length: builder.length } : {}),
-    ...(builder.precision !== undefined
-      ? { precision: builder.precision }
-      : {}),
-    ...(builder.scale !== undefined ? { scale: builder.scale } : {}),
-    ...(builder.references !== undefined
-      ? { references: builder.references }
-      : {}),
   };
+  for (const field of OPTIONAL_COLUMN_FIELDS) {
+    const value = builder[field];
+    if (value !== undefined) {
+      (resolved as unknown as Record<string, unknown>)[field] = value;
+    }
+  }
+  return resolved;
 }
 
 /** The resolved columns, and the key each SQL name came from. */

@@ -24,6 +24,11 @@ import {
   double as mysqlDouble,
   decimal as mysqlDecimal,
   int as mysqlInt,
+  bigint as mysqlBigint,
+  smallint as mysqlSmallint,
+  char as mysqlChar,
+  float as mysqlFloat,
+  binary as mysqlBinary,
 } from "drizzle-orm/mysql-core";
 import {
   pgTable,
@@ -35,6 +40,11 @@ import {
   numeric as pgNumeric,
   varchar as pgVarchar,
   integer as pgInteger,
+  bigint as pgBigint,
+  smallint as pgSmallint,
+  char as pgChar,
+  uuid as pgUuid,
+  real as pgReal,
 } from "drizzle-orm/pg-core";
 import {
   sqliteTable,
@@ -42,6 +52,7 @@ import {
   integer as sqliteInteger,
   real as sqliteReal,
   numeric as sqliteNumeric,
+  blob as sqliteBlob,
 } from "drizzle-orm/sqlite-core";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -434,6 +445,19 @@ function buildSystemDrizzleColumn(
 }
 
 /**
+ * Apply nullability once, rather than in every arm.
+ *
+ * Each builder below had `nullable ? col : col.notNull()` repeated per kind,
+ * which doubled the branch count of a function that is otherwise a lookup.
+ * The arms now return the column and this decides.
+ */
+function withNullability(column: unknown, nullable: boolean): unknown {
+  if (nullable) return column;
+  const chainable = column as { notNull?: () => unknown };
+  return typeof chainable.notNull === "function" ? chainable.notNull() : column;
+}
+
+/**
  * Translates a user-field descriptor into the appropriate Drizzle
  * column builder. The descriptor's `kind` is the dispatch key —
  * the per-dialect Drizzle imports stay isolated to this function.
@@ -483,31 +507,56 @@ export function buildPgColumnFromKind(
     case "text":
     case "longText":
     case "varchar":
-      return nullable ? pgText(name) : pgText(name).notNull();
+      return withNullability(pgText(name), nullable);
     case "shortText": {
       // The one string kind PostgreSQL bounds. The others render `text` there, so binding this as
       // text too would leave the ORM describing a column the DDL declared with a width.
       const col = pgVarchar(name, { length: desc.length ?? 255 });
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "boolean":
-      return nullable ? pgBoolean(name) : pgBoolean(name).notNull();
+      return withNullability(pgBoolean(name), nullable);
     case "integer":
-      return nullable ? pgInteger(name) : pgInteger(name).notNull();
+      return withNullability(pgInteger(name), nullable);
     case "double":
-      return nullable
-        ? pgDoublePrecision(name)
-        : pgDoublePrecision(name).notNull();
+      return withNullability(pgDoublePrecision(name), nullable);
     case "decimal": {
       const col = pgNumeric(name, decimalConfig(desc));
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "timestamp":
-      return nullable ? pgTimestamp(name) : pgTimestamp(name).notNull();
+      return withNullability(pgTimestamp(name), nullable);
     case "json":
-      return nullable ? pgJsonb(name) : pgJsonb(name).notNull();
+      return withNullability(pgJsonb(name), nullable);
     case "fkSingle":
       return pgText(name);
+    // Extension-only kinds. Omitting them does NOT fail to compile — this
+    // function returns `unknown`, so a missing case falls through to
+    // `undefined` and the table receives a non-column. Every kind is listed
+    // for that reason.
+    case "bigint": {
+      const col = pgBigint(name, { mode: "number" });
+      return withNullability(col, nullable);
+    }
+    case "smallint":
+      return withNullability(pgSmallint(name), nullable);
+    case "char": {
+      const col = pgChar(name, { length: desc.length ?? 1 });
+      return withNullability(col, nullable);
+    }
+    case "uuid":
+      return withNullability(pgUuid(name), nullable);
+    case "real":
+      return withNullability(pgReal(name), nullable);
+    case "bytes":
+      // No first-class `bytea` builder; `text` keeps the ORM readable while
+      // the DDL declares the real type.
+      return withNullability(pgText(name), nullable);
+    case "enum":
+      // A native PostgreSQL enum needs its TYPE, which this builder has no
+      // handle on. Text keeps reads and writes working; the constraint is
+      // carried by the migration.
+      return withNullability(pgText(name), nullable);
     case "skip":
       return null;
   }
@@ -525,26 +574,52 @@ export function buildMysqlColumnFromKind(
     case "shortText":
     case "varchar": {
       const col = mysqlVarchar(name, { length: length ?? 255 });
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "longText":
-      return nullable ? mysqlText(name) : mysqlText(name).notNull();
+      return withNullability(mysqlText(name), nullable);
     case "boolean":
-      return nullable ? mysqlBoolean(name) : mysqlBoolean(name).notNull();
+      return withNullability(mysqlBoolean(name), nullable);
     case "integer":
-      return nullable ? mysqlInt(name) : mysqlInt(name).notNull();
+      return withNullability(mysqlInt(name), nullable);
     case "double":
-      return nullable ? mysqlDouble(name) : mysqlDouble(name).notNull();
+      return withNullability(mysqlDouble(name), nullable);
     case "decimal": {
       const col = mysqlDecimal(name, decimalConfig(desc));
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "timestamp":
-      return nullable ? mysqlTimestamp(name) : mysqlTimestamp(name).notNull();
+      return withNullability(mysqlTimestamp(name), nullable);
     case "json":
-      return nullable ? mysqlJson(name) : mysqlJson(name).notNull();
+      return withNullability(mysqlJson(name), nullable);
     case "fkSingle":
       return mysqlVarchar(name, { length: length ?? 36 });
+    // See the PostgreSQL builder: a missing case falls through to `undefined`
+    // rather than failing to compile, so every kind is listed.
+    case "bigint": {
+      const col = mysqlBigint(name, { mode: "number" });
+      return withNullability(col, nullable);
+    }
+    case "smallint":
+      return withNullability(mysqlSmallint(name), nullable);
+    case "char": {
+      const col = mysqlChar(name, { length: length ?? 1 });
+      return withNullability(col, nullable);
+    }
+    case "uuid": {
+      const col = mysqlChar(name, { length: 36 });
+      return withNullability(col, nullable);
+    }
+    case "real":
+      return withNullability(mysqlFloat(name), nullable);
+    case "bytes": {
+      const col = mysqlBinary(name, { length: length ?? 255 });
+      return withNullability(col, nullable);
+    }
+    case "enum": {
+      const col = mysqlVarchar(name, { length: 255 });
+      return withNullability(col, nullable);
+    }
     case "skip":
       return null;
   }
@@ -560,30 +635,46 @@ export function buildSqliteColumnFromKind(
     case "longText":
     case "shortText":
     case "varchar":
-      return nullable ? sqliteText(name) : sqliteText(name).notNull();
+      return withNullability(sqliteText(name), nullable);
     case "boolean":
-      return nullable
-        ? sqliteInteger(name, { mode: "boolean" })
-        : sqliteInteger(name, { mode: "boolean" }).notNull();
+      return withNullability(
+        sqliteInteger(name, { mode: "boolean" }),
+        nullable
+      );
     case "integer":
-      return nullable ? sqliteInteger(name) : sqliteInteger(name).notNull();
+      return withNullability(sqliteInteger(name), nullable);
     case "double":
-      return nullable ? sqliteReal(name) : sqliteReal(name).notNull();
+      return withNullability(sqliteReal(name), nullable);
     case "decimal": {
       // SQLite has no fixed-precision decimal; NUMERIC affinity is the closest,
       // read back as a JS number to match the field's value contract.
       const col = sqliteNumeric(name, { mode: "number" });
-      return nullable ? col : col.notNull();
+      return withNullability(col, nullable);
     }
     case "timestamp":
-      return nullable
-        ? sqliteInteger(name, { mode: "timestamp" })
-        : sqliteInteger(name, { mode: "timestamp" }).notNull();
+      return withNullability(
+        sqliteInteger(name, { mode: "timestamp" }),
+        nullable
+      );
     case "json":
       // SQLite stores JSON as text.
-      return nullable ? sqliteText(name) : sqliteText(name).notNull();
+      return withNullability(sqliteText(name), nullable);
     case "fkSingle":
       return sqliteText(name);
+    // SQLite has one integer type and one text type, so most of these
+    // collapse — the declaration stays portable because what it promises is
+    // the value's shape, not the storage word.
+    case "bigint":
+    case "smallint":
+      return withNullability(sqliteInteger(name), nullable);
+    case "char":
+    case "uuid":
+    case "enum":
+      return withNullability(sqliteText(name), nullable);
+    case "real":
+      return withNullability(sqliteReal(name), nullable);
+    case "bytes":
+      return withNullability(sqliteBlob(name), nullable);
     case "skip":
       return null;
   }

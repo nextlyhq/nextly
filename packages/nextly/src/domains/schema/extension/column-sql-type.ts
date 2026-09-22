@@ -34,6 +34,9 @@ const exactOf =
 
 const BOUNDED_TEXT = `varchar(${String(SHORT_TEXT_LENGTH)})`;
 
+const charOf = (column: Pick<ExtensionColumn, "length">): string =>
+  `char(${String(column.length ?? 1)})`;
+
 /**
  * The SQL type each kind takes, per dialect.
  *
@@ -75,6 +78,23 @@ const SQL_TYPES: Record<
     sqlite: "integer",
   },
   json: { postgresql: "jsonb", mysql: "json", sqlite: "text" },
+  // Extension-only kinds. SQLite collapses most of these because it has one
+  // integer type and one text type; the declaration stays portable because
+  // what it PROMISES is the value's shape, not the storage word.
+  bigint: { postgresql: "bigint", mysql: "bigint", sqlite: "integer" },
+  smallint: { postgresql: "smallint", mysql: "smallint", sqlite: "integer" },
+  char: {
+    postgresql: charOf,
+    mysql: charOf,
+    sqlite: "text",
+  },
+  uuid: { postgresql: "uuid", mysql: "char(36)", sqlite: "text" },
+  real: { postgresql: "real", mysql: "float", sqlite: "real" },
+  bytes: { postgresql: "bytea", mysql: "longblob", sqlite: "blob" },
+  // PostgreSQL gets a NATIVE type, whose introspected name is the type's own
+  // name rather than a keyword — which is why an enum needs its name carried
+  // on the column rather than being rendered from the values.
+  enum: { postgresql: "text", mysql: "text", sqlite: "text" },
 };
 
 /**
@@ -125,6 +145,23 @@ export function mysqlKeyBytes(
       return 8;
     case "timestamp":
       return 8;
+    case "bigint":
+      return 8;
+    case "smallint":
+      return 2;
+    case "char":
+      return (column.length ?? 1) * 4;
+    case "uuid":
+      // char(36) under utf8mb4.
+      return 36 * 4;
+    case "real":
+      return 4;
+    case "enum":
+      // Stored as text on two dialects, and MySQL keys its native ENUM by an
+      // internal index — but the neutral model cannot know the width, so the
+      // conservative answer is the bounded-text one.
+      return SHORT_TEXT_LENGTH * 4;
+    case "bytes":
     case "longText":
     case "json":
       // Neither can be keyed on MySQL without a prefix length, which the
