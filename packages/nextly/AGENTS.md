@@ -81,3 +81,33 @@ inside `packages/nextly`.
 - Integration tests self-skip when `TEST_POSTGRES_URL` / `TEST_MYSQL_URL` is
   unset; SQLite falls back to in-memory. Run from the repo root so turbo
   builds first.
+
+## Code Review Rules
+
+Adds to the root `Code Review Rules` for changes under `packages/nextly`.
+
+### Response shapes are canonical
+
+Lists return `{ items, meta }`; mutations return `{ message, item }`. Flag any
+hand-rolled response shape, and in particular a `docs`/`totalDocs` shape, which
+belongs to a different product and has never existed here.
+
+### Error codes carry their status
+
+Flag an inlined HTTP status number. Codes live in `src/errors/error-codes.ts`
+with a canonical status and are thrown through a `NextlyError` factory; a
+status chosen at the call site is a second mapping of the same question.
+
+### Surface-only field types stay out of the schema pipeline
+
+The canonical `FieldType` union excludes `url`, `phone`, `file`, `time` and
+`hidden` deliberately, so they can never reach a column mapper. Flag a change
+that adds one to the union, and flag new code using the `array()` alias where
+`repeater()` is the current factory.
+
+### Deleted CLI commands stay deleted
+
+`migrate:reset`, `migrate:rollback` and `migrate:refresh` were removed on
+purpose and there is no `dev` command by design — user apps run `next dev` and
+schema applies through the HMR listener. Flag a pull request resurrecting any
+of them without stating why the original decision no longer holds.

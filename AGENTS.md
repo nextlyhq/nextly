@@ -330,6 +330,81 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Pre-existing lint or type failures may be left alone (mention them in the
   PR); introducing new ones is not acceptable.
 
+## Code Review Rules
+
+For the automatic reviewer. CI already decides formatting, types, lint, the
+comment convention, changeset presence, design tokens and bare `Error` in
+product code, so none of those belong here — a reviewer relitigating a
+mechanical check costs a round and settles nothing. What follows is the
+consequential behaviour no check in this repository can judge.
+
+### Published surface is a compatibility contract
+
+`packages/nextly` publishes many export subpaths and every package versions in
+lockstep. Flag a removed, renamed or retyped export, a narrowed parameter, a
+widened return, or a changed default, unless the pull request states the
+compatibility decision and what consumers should do instead. Adding an export
+is safe; changing what an existing one means is not.
+
+### Behaviour must match across database dialects
+
+Postgres, MySQL and SQLite are all supported through `adapter-drizzle`. Flag a
+change to query building, DDL, migrations or type mapping that alters
+observable behaviour on one dialect without either covering the others or
+documenting the limitation as deliberate. Field-to-column mapping has one home
+(`packages/nextly/src/domains/schema/services/field-column-descriptor.ts`); an
+adapter that starts mapping field types is the defect, not a local fix.
+
+### `plugin-sdk` is the only stable plugin surface
+
+Flag a plugin or builder reaching into `nextly` or `@nextlyhq/admin` internals
+rather than through `@nextlyhq/plugin-sdk`, and flag a new export added to the
+SDK without a statement that it is intended to be stable. The safe path is to
+widen the SDK deliberately, not to bypass it.
+
+### A precondition runs before the work it guards
+
+Authorization, ownership, validity and quota checks must execute before the
+mutation they protect. Flag any reordering that moves one behind the work for
+cost reasons: the request is then rejected after the state has already changed,
+which turns a saving into a security hole. Defensive assertions over values
+already in hand may move; preconditions may not.
+
+### Access decisions have one path
+
+`overrideAccess: false` is judged by a single gate. Flag a second place that
+decides whether a caller may read or write, a hand-assembled caller literal
+instead of `readAccessCaller`, or a rule handed the stored `action-resource`
+permission spelling rather than the rule-facing `resource:action` one. Two
+doors that answer one key differently is a defect this repository has already
+had.
+
+### One question has one implementation
+
+Flag a narrower view computed alongside the richer one rather than derived from
+it — a count kept beside a list, a summary recomputed from the same inputs, a
+test that reconstructs the call it is watching instead of observing it. Two
+implementations agree on the day they are written and drift silently after,
+because both look correct in isolation.
+
+### A test must separate correct from plausibly broken
+
+Flag a test whose assertion a plausible broken implementation would also
+satisfy: a length bound a plain truncation meets, an assertion satisfied by
+absence, a fixture that never reaches the mechanism, an `@ts-expect-error` that
+would suppress an unrelated error on the same line. Say which property is
+uncovered and what would distinguish the two implementations. Flag a suite that
+silently stopped being discovered; a deliberate removal is a different act and
+the pull request should say which test went and why.
+
+### Stored data and migrations are hard to reverse
+
+Flag a migration that drops or rewrites existing rows or columns, a change to
+an established storage spelling, or a schema change that an existing
+installation would silently fail to receive, unless the pull request names the
+compatibility decision. Reaching existing databases is the part that gets
+missed.
+
 ---
 
 <!-- fallow:setup-hooks:start -->

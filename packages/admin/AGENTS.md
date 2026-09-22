@@ -37,3 +37,43 @@ matters inside `packages/admin`.
 - Entry field rendering goes through
   `src/components/features/entries/fields/FieldRenderer.tsx`; list cells
   through the EntryList table components.
+
+## Code Review Rules
+
+Adds to the root `Code Review Rules` for changes under `packages/admin`. The
+design-token lint and the CSS scoper's own tests already run in CI; these are
+the behaviours neither can see.
+
+### Every visual change works in both colour schemes
+
+There are no single-mode changes. Flag a change that adjusts appearance without
+evidence it was checked in dark as well as light — a token chosen for its light
+value, a border that vanishes on a dark surface, a focus ring with no contrast
+in one mode. Naming the `--nx-*` token used is the safe path; the lint catches
+a hardcoded colour but not a token that reads wrong in one scheme.
+
+### Field pickers render from the catalog
+
+Flag a hand-written list of field types anywhere in the admin. The serializable
+catalog at `nextly/field-catalog` is the one source; surfaces narrow it with
+`narrowFieldTypeCatalog` rather than redeclaring it. A second list drifts the
+moment a type is added.
+
+### Table state has invariants a type cannot express
+
+Flag a table that does not reset pagination when the search term or page size
+changes, omits `getRowId`, or breaks selection across pages. Each reads as
+working until the second page.
+
+### The error envelope is parsed, not thrown
+
+`NextlyError` belongs to the core package. Flag admin code constructing or
+expecting it rather than parsing the `{ error: { code, message, requestId } }`
+envelope through `src/lib/api/parseApiError.ts`.
+
+### Externalized dependencies stay out of the bundle
+
+Flag a change that pulls `@tanstack/react-query`, or another dependency listed
+as external in `tsup.config.ts`, back into the bundle. The consumer resolves
+these from their own `node_modules`, and bundling one produces two copies with
+separate state.
