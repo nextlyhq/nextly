@@ -4,74 +4,112 @@
  * Give each worktree its own ports and its own test databases.
  *
  * Several agents working at once need several checkouts, and this repository
- * has three things that are shared rather than per-checkout. Two are obvious
- * once stated: the playground binds :3000 and the Playwright suite binds :3100,
- * so a second worktree running either collides on a port.
+ * has things that are shared per-machine rather than per-checkout. Two are
+ * obvious: the playground and the Playwright suites bind fixed ports.
  *
  * 🔴 The third is not obvious and fails silently. Integration suites give
  * TEST-OWNED tables a random per-file prefix, which makes files independent —
  * but Nextly's SYSTEM tables have fixed names (`nextly_schema_events` and its
  * neighbours) and cannot be prefixed. Inside one run that is handled by
  * `fileParallelism: false`. Across two worktrees it is not handled at all:
- * both point `TEST_POSTGRES_URL` at `nextly_test` on the same container, and
- * the second run drops and recreates a system table the first is still using.
- * The result reads as a flaky test rather than as a collision, which is the
- * expensive way to find it.
+ * both point at `nextly_test` on the same container, and the second run drops
+ * and recreates a system table the first is still using. The result reads as a
+ * flaky test rather than as a collision.
  *
- * So the isolation has to be a separate DATABASE per worktree rather than a
- * prefix. The containers stay shared — they are addressed by fixed
- * `container_name`, so exactly one compose project can own them and a second
- * worktree bringing up its own would fail on the taken names.
+ * So the isolation is a separate DATABASE per worktree rather than a prefix,
+ * and a slot is what names it.
  *
- * Slot 0 is the defaults, so an existing checkout that never runs this behaves
- * exactly as before.
+ * Anything that ALLOCATES has a teardown path in the same file: `new` takes a
+ * checkout, a block of ports and a database on each running container, and
+ * `remove` gives them back. A create with no matching remove leaks whatever is
+ * scarce, and slots are a small pool.
  *
  * Usage:
  *   node scripts/worktree.mjs new <branch> [--from <ref>] [--root <dir>]
  *   node scripts/worktree.mjs list
- *   node scripts/worktree.mjs remove <branch|path> [--keep-branch]
+ *   node scripts/worktree.mjs remove <branch|path> [--keep-branch] [--force]
+ *   node scripts/worktree.mjs provision
+ *   node scripts/worktree.mjs sweep
  *   node scripts/worktree.mjs env [--slot <n>]
- *
- * Anything that ALLOCATES has a teardown path in the same file. `new` takes a
- * checkout, two ports and a database on each running container; `remove` gives
- * all of them back. A create without a matching remove leaks the scarce thing
- * — slots are small integers, and an abandoned one holds its ports forever.
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Ports and databases are derived from one number, never picked twice. */
-export const BASE = {
-  playground: 3000,
-  e2e: 3100,
-  stride: 10,
-  database: "nextly_test",
-};
+/**
+ * The ports slot 0 uses, which are the repository's documented defaults.
+ *
+ * Slot 0 is the primary checkout, and it must keep these exactly: `AGENTS.md`,
+ * `e2e/playwright.config.ts` and `e2e/playwright.production.config.ts` all
+ * name them, so changing them here would invalidate every one of those.
+ */
+export const DEFAULT_PORTS = { PORT: 3000, E2E_PORT: 3100, E2E_PROD_PORT: 3101 };
+
+/**
+ * Every server port a checkout binds, in the order a slot's block assigns them.
+ *
+ * 🔴 `E2E_PROD_PORT` was missing from the first version, so two worktrees
+ * running the production Playwright suite collided on 3101 despite holding
+ * different slots. A port that is not in this list is not allocated, and
+ * nothing says so — the collision simply happens.
+ */
+export const PORT_NAMES = ["PORT", "E2E_PORT", "E2E_PROD_PORT"];
+
+/**
+ * Where allocated slots start, and how many ports each one owns.
+ *
+ * 🔴 The first version gave each port its own arithmetic series — playground
+ * at 3000 + 10n and e2e at 3100 + 10n — and the series INTERSECT: slot 10's
+ * playground port is 3100, which is slot 0's e2e port. Independent series look
+ * separated at the slots anyone tries by hand and collide further out.
+ *
+ * A contiguous block per slot cannot have that shape. The base sits above every
+ * default in `DEFAULT_PORTS`, so an allocated slot can never reach one either.
+ */
+export const SLOT_PORT_BASE = 3200;
+export const PORTS_PER_SLOT = 10;
+
+/** The database name a slot owns. */
+export const DATABASE_BASE = "nextly_test";
 
 /** The test containers a worktree needs a database inside. */
 export const TEST_DATABASES = [
-  { container: "nextly-postgres17-test", engine: "postgres", port: 5435 },
-  { container: "nextly-postgres15-test", engine: "postgres", port: 5434 },
-  { container: "nextly-mysql-test", engine: "mysql", port: 3307 },
+  { container: "nextly-postgres17-test", engine: "postgres" },
+  { container: "nextly-postgres15-test", engine: "postgres" },
+  { container: "nextly-mysql-test", engine: "mysql" },
 ];
 
-/** The database name a slot owns. */
+/** How many slots may be claimed at once. */
+export const MAX_SLOTS = 64;
+
 export function databaseFor(slot) {
-  return slot === 0 ? BASE.database : `${BASE.database}_w${slot}`;
+  return slot === 0 ? DATABASE_BASE : `${DATABASE_BASE}_w${slot}`;
 }
 
-/**
- * Everything a slot decides.
- *
- * Slot 0 returns the documented defaults verbatim, which is what makes this
- * safe to land: a checkout that never allocates a slot is unchanged.
- */
+/** The ports a slot owns. Slot 0 is the documented defaults, verbatim. */
+export function portsFor(slot) {
+  if (slot === 0) return { ...DEFAULT_PORTS };
+  const base = SLOT_PORT_BASE + (slot - 1) * PORTS_PER_SLOT;
+  return Object.fromEntries(PORT_NAMES.map((name, index) => [name, base + index]));
+}
+
+/** Everything a slot decides, as environment variables. */
 export function slotEnv(slot) {
+  const ports = portsFor(slot);
   return {
     NEXTLY_WORKTREE_SLOT: String(slot),
     // The DATABASE, not a URL. Each dialect leg keeps its own port — postgres15
@@ -79,68 +117,268 @@ export function slotEnv(slot) {
     // environment would silently point the `:postgres15` leg at the 17
     // container and report a pass for a version it never ran against.
     NEXTLY_TEST_DB: databaseFor(slot),
-    PORT: String(BASE.playground + slot * BASE.stride),
-    E2E_PORT: String(BASE.e2e + slot * BASE.stride),
+    ...Object.fromEntries(Object.entries(ports).map(([k, v]) => [k, String(v)])),
   };
 }
 
+/**
+ * Run git with the hook environment cleared.
+ *
+ * Git exports GIT_DIR into every hook, and in a linked worktree it names that
+ * worktree's admin directory rather than a plain `.git`. This script is run
+ * from a terminal today, but nothing stops a hook calling it, and this
+ * repository has already lost time to a turbo invocation that inherited that
+ * pointer and never returned. Clearing it costs nothing: with no GIT_DIR set,
+ * git discovers the repository from the working directory.
+ */
 function git(args, cwd = root) {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
-
-/** Every checkout of this clone, as absolute paths. */
-export function worktreePaths(porcelain) {
-  return porcelain
-    .split("\n")
-    .filter(line => line.startsWith("worktree "))
-    .map(line => line.slice("worktree ".length));
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  return execFileSync("git", args, { cwd, encoding: "utf8", env }).trim();
 }
 
 /**
- * The slot a checkout has already been given.
+ * Git's worktree listing, as records rather than a list of paths.
  *
- * 🔴 An unallocated checkout holds slot 0, and returning null for it is how the
- * first run of this command handed a new worktree slot 0 as well — the main
- * checkout's :3000 and its `nextly_test` database, which is the collision the
- * whole slot mechanism exists to stop. Absence of a claim is not absence of an
- * occupant: every checkout occupies something, and the default is what it
- * occupies.
+ * 🔴 Removal used to match a branch by testing whether a checkout's PATH ended
+ * with the branch name, and a path suffix is not a branch: asking to remove
+ * `feature` matched a checkout of `fix-feature` and force-deleted the wrong
+ * one. The porcelain output states the branch outright, so read it.
  */
-export function slotOf(path) {
-  const settings = join(path, ".claude", "settings.local.json");
-  if (!existsSync(settings)) return 0;
-  try {
-    const value = JSON.parse(readFileSync(settings, "utf8"))?.env?.NEXTLY_WORKTREE_SLOT;
-    return value === undefined ? 0 : Number(value);
-  } catch {
-    // A settings file this cannot parse still belongs to a checkout that is
-    // using the defaults, so it holds slot 0 like any other unallocated one.
-    // Refusing here would let an unrelated syntax error block the command.
-    return 0;
-  }
-}
-
-/**
- * The lowest slot nobody holds.
- *
- * Lowest-free rather than next-highest, so removing a worktree returns its
- * ports and its databases to the pool instead of leaking them upward.
- */
-export function lowestFreeSlot(taken) {
-  // REFUSES a non-integer rather than filtering it out. Filtering is what the
-  // first version did, and it is why a checkout reporting `null` was read as
-  // no occupant at all and slot 0 was handed out twice. Dropping an entry you
-  // cannot read turns "I do not know what this checkout holds" into "it holds
-  // nothing", which is the answer that causes the collision.
-  for (const value of taken) {
-    if (!Number.isInteger(value) || value < 0) {
-      throw new Error(`worktree: cannot read the slot of every checkout (got ${value})`);
+export function worktreeRecords(porcelain) {
+  const records = [];
+  let current = null;
+  for (const line of porcelain.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      current = { path: line.slice("worktree ".length), branch: null };
+      records.push(current);
+    } else if (line.startsWith("branch ") && current) {
+      current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
     }
   }
-  const held = new Set(taken);
-  let slot = 0;
-  while (held.has(slot)) slot += 1;
-  return slot;
+  return records;
+}
+
+/** Kept for callers that only need the paths. */
+export function worktreePaths(porcelain) {
+  return worktreeRecords(porcelain).map(record => record.path);
+}
+
+/**
+ * The checkout a removal target names — by exact branch, or by exact path.
+ *
+ * Returns null rather than a best guess. A removal that destroys a checkout is
+ * not a place for fuzzy matching.
+ */
+export function findWorktree(records, target, resolvePath = resolve) {
+  const byBranch = records.filter(record => record.branch === target);
+  if (byBranch.length === 1) return byBranch[0];
+  const wanted = resolvePath(target);
+  const byPath = records.filter(record => resolvePath(record.path) === wanted);
+  return byPath.length === 1 ? byPath[0] : null;
+}
+
+/** Where slot claims live: the shared admin directory, so every worktree agrees. */
+export function claimDir(commonDir) {
+  return join(commonDir, "nextly-worktree-slots");
+}
+
+/**
+ * Whether a claim no longer describes anything, and may be taken over.
+ *
+ * `pendingCleanup` is the important case. A removal whose databases could NOT
+ * be dropped leaves the claim behind deliberately, so the slot is not reissued
+ * while a populated `nextly_test_w<n>` still exists — reissuing it would hand
+ * the next checkout another run's system tables, which is the collision this
+ * whole mechanism exists to prevent.
+ */
+export function isReclaimable(claim, exists = existsSync) {
+  if (claim === null) return true;
+  if (claim.pendingCleanup) return false;
+  return !exists(claim.path);
+}
+
+function readClaim(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Take the lowest free slot, atomically.
+ *
+ * 🔴 The first version read the worktree list, picked the lowest free number,
+ * and then wrote the settings file — three steps with nothing holding between
+ * them. Two agents running `worktree new` at the same time both read the same
+ * list and both chose the same slot, so the two checkouts got identical ports
+ * and an identical database. That is exactly the collision the slot mechanism
+ * exists to prevent, arriving through the mechanism itself.
+ *
+ * The claim is now the CREATE. `openSync(file, "wx")` fails with EEXIST when
+ * the file already exists, and the filesystem decides that — so two processes
+ * racing for one slot cannot both succeed, without a lock to acquire, hold or
+ * leak. It is the same boundary-rather-than-a-look argument the repository's
+ * `whole-file-writes` rule makes about `set -o noclobber`.
+ */
+export function claimSlot(dir, record, { maxSlots = MAX_SLOTS } = {}) {
+  mkdirSync(dir, { recursive: true });
+  for (let slot = 0; slot < maxSlots; slot += 1) {
+    const file = join(dir, `${slot}.json`);
+    let fd;
+    try {
+      fd = openSync(file, "wx");
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (isReclaimable(readClaim(file))) {
+        unlinkSync(file);
+        slot -= 1; // retry this slot, now free
+      }
+      continue;
+    }
+    try {
+      writeSync(fd, `${JSON.stringify({ slot, ...record, claimedAt: new Date().toISOString() }, null, 2)}\n`);
+    } finally {
+      closeSync(fd);
+    }
+    return slot;
+  }
+  throw new Error(`worktree: every slot below ${maxSlots} is claimed`);
+}
+
+/** Every claim on disk, newest field shape tolerated. */
+export function readClaims(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter(name => name.endsWith(".json"))
+    .map(name => readClaim(join(dir, name)))
+    .filter(claim => claim !== null)
+    .sort((a, b) => a.slot - b.slot);
+}
+
+/** Whether a named container is up right now. */
+function containerRunning(container) {
+  try {
+    const state = execFileSync("docker", ["inspect", "-f", "{{.State.Running}}", container], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return state === "true";
+  } catch {
+    // No such container, or no docker at all. Either way it is not running,
+    // and that is a different fact from a command failing against one that is.
+    return false;
+  }
+}
+
+function sqlArgs(engine, container, statement) {
+  return engine === "postgres"
+    ? ["exec", container, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", statement]
+    : ["exec", container, "mysql", "-uroot", "-proot", "-e", statement];
+}
+
+/**
+ * Create the slot's database in each running container.
+ *
+ * 🔴 The first version wrapped the whole thing in one catch that reported
+ * every failure as "container not running", and `new` then succeeded anyway.
+ * A permission error, a bad password or a full disk therefore left a checkout
+ * whose `NEXTLY_TEST_DB` names a database that does not exist — and the
+ * integration suites SELF-SKIP when they cannot connect, so the next run went
+ * green having tested nothing. Two outcomes that need opposite responses were
+ * rendered identically.
+ *
+ * Now the container is probed separately, so "not running" is established
+ * rather than inferred from a failure, and a command that fails against a
+ * container that IS running is an error the caller must see.
+ */
+export function provisionDatabases(slot, { run = execFileSync } = {}) {
+  const name = databaseFor(slot);
+  const results = [];
+  for (const { container, engine } of TEST_DATABASES) {
+    if (!containerRunning(container)) {
+      results.push({ container, state: "skipped", detail: "container not running" });
+      continue;
+    }
+    try {
+      // IF NOT EXISTS is not portable to Postgres's CREATE DATABASE, so the
+      // existence check is separate and the create is guarded by it.
+      const exists = engine === "postgres"
+        ? run("docker", ["exec", container, "psql", "-U", "postgres", "-tAc",
+            `SELECT 1 FROM pg_database WHERE datname='${name}'`],
+            { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
+        : run("docker", ["exec", container, "mysql", "-uroot", "-proot", "-Nse",
+            `SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='${name}'`],
+            { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      if (exists) {
+        results.push({ container, state: "present", detail: name });
+        continue;
+      }
+      const create = engine === "postgres"
+        ? `CREATE DATABASE ${name}`
+        : `CREATE DATABASE \`${name}\``;
+      run("docker", sqlArgs(engine, container, create), { stdio: ["ignore", "ignore", "pipe"] });
+      results.push({ container, state: "created", detail: name });
+    } catch (error) {
+      // The container is up and the command still failed. That is a real
+      // error, and reporting it as a skip is how a broken setup reads as a
+      // working one.
+      results.push({ container, state: "failed", detail: String(error.message ?? error).split("\n")[0] });
+    }
+  }
+  return results;
+}
+
+/**
+ * Drop the slot's databases.
+ *
+ * Slot 0's database is shared by the primary checkout and every unallocated
+ * one, so it is never a removal's to drop. Returning null rather than guarding
+ * at the call site keeps the decision in one place and testable.
+ */
+export function databaseToDrop(slot) {
+  return slot === 0 ? null : databaseFor(slot);
+}
+
+export function dropDatabases(slot, { run = execFileSync } = {}) {
+  const name = databaseToDrop(slot);
+  if (name === null) {
+    return [{ container: "(all)", state: "kept", detail: "slot 0 is the shared default" }];
+  }
+  const results = [];
+  for (const { container, engine } of TEST_DATABASES) {
+    if (!containerRunning(container)) {
+      results.push({ container, state: "skipped", detail: "container not running" });
+      continue;
+    }
+    try {
+      const drop = engine === "postgres"
+        ? `DROP DATABASE IF EXISTS ${name}`
+        : `DROP DATABASE IF EXISTS \`${name}\``;
+      run("docker", sqlArgs(engine, container, drop), { stdio: ["ignore", "ignore", "pipe"] });
+      results.push({ container, state: "dropped", detail: name });
+    } catch (error) {
+      // Postgres refuses to drop a database with a live connection, which is
+      // the ordinary case when a test run is still finishing. Treating that as
+      // done is what let a later worktree inherit a populated database.
+      results.push({ container, state: "failed", detail: String(error.message ?? error).split("\n")[0] });
+    }
+  }
+  return results;
+}
+
+/**
+ * Whether a teardown left anything behind.
+ *
+ * Both a failure and a skip mean the database still exists: one because the
+ * drop was refused, the other because nothing was asked. The slot must stay
+ * reserved in either case, so they answer the same question here even though
+ * they print differently.
+ */
+export function teardownIncomplete(results) {
+  return results.some(result => result.state === "failed" || result.state === "skipped");
 }
 
 /** Merge the slot's env into a checkout's local settings, keeping the rest. */
@@ -158,165 +396,222 @@ function writeSettings(path, env) {
   return file;
 }
 
-/**
- * Create the slot's database inside each running test container.
- *
- * Advisory: a container that is not up is reported and skipped rather than
- * failing the command, because creating the worktree is still the right
- * outcome and the databases can be made later. What it must never do is report
- * success without having created anything, so each container says which it was.
- */
-function createDatabases(slot) {
-  const name = databaseFor(slot);
-  const results = [];
-  for (const { container, engine } of TEST_DATABASES) {
-    try {
-      execFileSync("docker", ["inspect", "-f", "{{.State.Running}}", container], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim() === "true" || (() => {
-        throw new Error("not running");
-      })();
+function commonDir() {
+  return resolve(root, git(["rev-parse", "--git-common-dir"]));
+}
 
-      const argv =
-        engine === "postgres"
-          ? ["exec", container, "psql", "-U", "postgres", "-tAc",
-             `SELECT 1 FROM pg_database WHERE datname='${name}'`]
-          : ["exec", container, "mysql", "-uroot", "-proot", "-Nse",
-             `SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='${name}'`];
-      const exists = execFileSync("docker", argv, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-
-      if (exists) {
-        results.push({ container, state: "already present" });
-        continue;
-      }
-      const create =
-        engine === "postgres"
-          ? ["exec", container, "psql", "-U", "postgres", "-c", `CREATE DATABASE ${name}`]
-          : ["exec", container, "mysql", "-uroot", "-proot", "-e",
-             `CREATE DATABASE \`${name}\``];
-      execFileSync("docker", create, { stdio: ["ignore", "ignore", "pipe"] });
-      results.push({ container, state: "created" });
-    } catch {
-      results.push({ container, state: "SKIPPED — container not running" });
-    }
+/** The primary checkout holds slot 0, whether or not anything recorded it. */
+function ensurePrimaryClaim(dir) {
+  const file = join(dir, "0.json");
+  if (existsSync(file)) return;
+  mkdirSync(dir, { recursive: true });
+  try {
+    const fd = openSync(file, "wx");
+    const primary = worktreeRecords(git(["worktree", "list", "--porcelain"]))[0];
+    writeSync(fd, `${JSON.stringify({ slot: 0, path: primary?.path ?? root, branch: primary?.branch ?? null, primary: true }, null, 2)}\n`);
+    closeSync(fd);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
   }
-  return results;
+}
+
+function report(results, indent = "    ") {
+  for (const { container, state, detail } of results) {
+    console.log(`${indent}${container}: ${state}${detail ? ` — ${detail}` : ""}`);
+  }
 }
 
 function commandNew(branch, from, worktreeRoot) {
-  const porcelain = git(["worktree", "list", "--porcelain"]);
-  const paths = worktreePaths(porcelain);
-  const slot = lowestFreeSlot(paths.map(slotOf));
-  const target = join(worktreeRoot, `${basename(root)}-${branch.replace(/\//g, "-")}`);
+  const dir = claimDir(commonDir());
+  ensurePrimaryClaim(dir);
 
+  const target = join(worktreeRoot, `${basename(root)}-${branch.split("/").join("-")}`);
   if (existsSync(target)) {
     console.error(`worktree: ${target} already exists — refusing to write into it`);
     process.exit(2);
   }
 
-  git(["worktree", "add", "-b", branch, target, from]);
+  // Claimed BEFORE the checkout is created, so a concurrent run cannot take
+  // the same number in the window between choosing and recording it.
+  const slot = claimSlot(dir, { path: target, branch });
+
+  try {
+    git(["worktree", "add", "-b", branch, target, from]);
+  } catch (error) {
+    // The claim describes a checkout that was never created, so release it
+    // rather than leaking the slot.
+    try {
+      unlinkSync(join(dir, `${slot}.json`));
+    } catch {
+      // Already gone is the outcome we wanted.
+    }
+    throw error;
+  }
+
   const env = slotEnv(slot);
   const settings = writeSettings(target, env);
+  const provisioned = provisionDatabases(slot);
+  const failed = provisioned.filter(result => result.state === "failed");
 
   console.log(`worktree: ${target}`);
   console.log(`  branch ${branch} from ${from}, slot ${slot}`);
-  console.log(`  playground :${env.PORT}   e2e :${env.E2E_PORT}`);
+  console.log(`  ports ${PORT_NAMES.map(name => `${name}=${env[name]}`).join(" ")}`);
   console.log(`  test database ${databaseFor(slot)}`);
-  for (const { container, state } of createDatabases(slot)) {
-    console.log(`    ${container}: ${state}`);
-  }
+  report(provisioned);
   console.log(`  ${settings} carries the env, so Claude Code sessions there pick it up`);
-  console.log(`\n  for a plain shell in that worktree:`);
-  for (const [key, value] of Object.entries(env)) console.log(`    export ${key}=${value}`);
-}
 
-/**
- * Drop the slot's databases from whichever test containers are running.
- *
- * Slot 0 is never dropped. It is the shared default database that the main
- * checkout and every unallocated one use, so removing a worktree must not take
- * it: the blast radius of that mistake is everyone else's test run.
- */
-export function databaseToDrop(slot) {
-  // Slot 0's database is shared by the main checkout and every unallocated
-  // one, so it is never a removal's to drop. Returning null rather than
-  // guarding at the call site keeps the decision in one place and testable.
-  return slot === 0 ? null : databaseFor(slot);
-}
-
-function dropDatabases(slot) {
-  const name = databaseToDrop(slot);
-  if (name === null) {
-    return [{ container: "(all)", state: "kept — slot 0 is the shared default" }];
+  if (failed.length > 0) {
+    console.error(
+      `\nworktree: ${failed.length} database(s) could not be created against a RUNNING container.`
+    );
+    console.error("  The checkout exists but its integration lanes would self-skip, which reads");
+    console.error("  as a pass. Fix the cause and run `pnpm worktree provision` in that checkout.");
+    process.exit(1);
   }
-  const results = [];
-  for (const { container, engine } of TEST_DATABASES) {
-    try {
-      const argv =
-        engine === "postgres"
-          ? ["exec", container, "psql", "-U", "postgres", "-c", `DROP DATABASE IF EXISTS ${name}`]
-          : ["exec", container, "mysql", "-uroot", "-proot", "-e",
-             `DROP DATABASE IF EXISTS \`${name}\``];
-      execFileSync("docker", argv, { stdio: ["ignore", "ignore", "pipe"] });
-      results.push({ container, state: `dropped ${name}` });
-    } catch {
-      results.push({ container, state: "SKIPPED — container not running" });
-    }
+  if (provisioned.some(result => result.state === "skipped")) {
+    console.log("\n  Some containers are down, so their databases do not exist yet.");
+    console.log("  After `docker start ...`, run `pnpm worktree provision` in that checkout.");
   }
-  return results;
 }
 
-function commandRemove(target, keepBranch) {
-  const paths = worktreePaths(git(["worktree", "list", "--porcelain"]));
-  // Accept either the branch name or the path, because a caller who just ran
-  // `new` has the path and a caller reading `list` has the branch.
-  const match =
-    paths.find(path => resolve(path) === resolve(target)) ??
-    paths.find(path => path.endsWith(`-${target.replace(/\//g, "-")}`));
+function commandRemove(target, { keepBranch, force }) {
+  const records = worktreeRecords(git(["worktree", "list", "--porcelain"]));
+  const match = findWorktree(records, target);
 
   if (!match) {
-    console.error(`worktree: no checkout matches '${target}'. \`worktree list\` shows them.`);
+    console.error(`worktree: no checkout matches '${target}' by branch or path.`);
+    console.error("  `pnpm worktree list` shows them. Removal matches exactly, never by prefix.");
     process.exit(2);
   }
-  if (resolve(match) === root) {
+  if (resolve(match.path) === root) {
     console.error("worktree: refusing to remove the checkout this command is running in");
     process.exit(2);
   }
 
-  const slot = slotOf(match);
-  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], match);
+  const dir = claimDir(commonDir());
+  const claims = readClaims(dir);
+  const claim = claims.find(entry => resolve(entry.path) === resolve(match.path));
+  const slot = claim?.slot ?? 0;
 
-  // The databases go FIRST. Once the checkout is gone its slot is free, and a
-  // later `new` could take the slot while these databases still hold another
-  // run's tables.
+  // Databases FIRST. Once the checkout is gone the slot looks free, and a
+  // later `new` could take it while the old databases still hold another run's
+  // system tables.
   const dropped = dropDatabases(slot);
-  git(["worktree", "remove", "--force", match]);
-  if (!keepBranch) {
+  const incomplete = teardownIncomplete(dropped) && slot !== 0;
+
+  const removeArgs = ["worktree", "remove", match.path];
+  if (force) removeArgs.splice(2, 0, "--force");
+  try {
+    git(removeArgs);
+  } catch (error) {
+    // 🔴 `--force` used to be unconditional, which discards uncommitted work
+    // from a routine cleanup command. Refusing is the safe default; the
+    // message says exactly how to proceed once the work is dealt with.
+    console.error(`worktree: refusing to remove ${match.path}`);
+    console.error(`  ${String(error.message ?? error).split("\n").filter(Boolean).slice(-1)[0]}`);
+    console.error("  Commit or stash the work, or pass --force to discard it.");
+    process.exit(1);
+  }
+
+  let branchState = "kept";
+  if (!keepBranch && match.branch) {
+    // `-d` refuses an unmerged branch; `-D` deletes it regardless. The first
+    // version used `-D` while its comment claimed git would decline, so a
+    // routine cleanup silently destroyed unpushed commits.
     try {
-      git(["branch", "-D", branch]);
+      git(["branch", force ? "-D" : "-d", match.branch]);
+      branchState = force ? "force-deleted" : "deleted";
     } catch {
-      // An unmerged branch is worth keeping by accident rather than losing on
-      // purpose, so a refusal here is reported and not fatal.
-      console.log(`  branch ${branch} kept (git declined to delete it)`);
+      branchState = "kept (unmerged — delete it yourself, or re-run with --force)";
     }
   }
 
-  console.log(`worktree: removed ${match}`);
-  console.log(`  slot ${slot} returned to the pool`);
-  for (const { container, state } of dropped) console.log(`    ${container}: ${state}`);
-  if (!keepBranch) console.log(`  branch ${branch} deleted`);
+  console.log(`worktree: removed ${match.path}`);
+  report(dropped);
+  console.log(`  branch ${match.branch ?? "(detached)"}: ${branchState}`);
+
+  if (!claim) {
+    console.log(`  no slot claim recorded for this checkout; nothing to release`);
+    return;
+  }
+  const file = join(dir, `${slot}.json`);
+  if (incomplete) {
+    // Retain the reservation. Releasing a slot whose database still exists is
+    // how the next checkout inherits another run's tables.
+    writeFileSync(file, `${JSON.stringify({ ...claim, pendingCleanup: true, path: match.path }, null, 2)}\n`);
+    console.log(`  slot ${slot} RESERVED, not released — its databases still exist`);
+    console.log("  start the test containers and run `pnpm worktree sweep` to release it");
+  } else {
+    try {
+      unlinkSync(file);
+    } catch {
+      // Already gone is the outcome we wanted.
+    }
+    console.log(`  slot ${slot} released`);
+  }
+}
+
+/** Retry database creation for the checkout this runs in. */
+function commandProvision() {
+  const env = existsSync(join(root, ".claude", "settings.local.json"))
+    ? JSON.parse(readFileSync(join(root, ".claude", "settings.local.json"), "utf8")).env ?? {}
+    : {};
+  const slot = Number(env.NEXTLY_WORKTREE_SLOT ?? 0);
+  const results = provisionDatabases(slot);
+  console.log(`worktree: provisioning slot ${slot} (${databaseFor(slot)})`);
+  report(results, "  ");
+  const failed = results.filter(result => result.state === "failed");
+  const skipped = results.filter(result => result.state === "skipped");
+  if (failed.length > 0) process.exit(1);
+  if (skipped.length > 0) {
+    console.log("\n  Start the containers first: docker start nextly-postgres17-test nextly-mysql-test");
+    process.exit(1);
+  }
+}
+
+/** Release slots whose databases could not be dropped at removal time. */
+function commandSweep() {
+  const dir = claimDir(commonDir());
+  const pending = readClaims(dir).filter(claim => claim.pendingCleanup);
+  if (pending.length === 0) {
+    console.log("worktree: no slot is waiting on database cleanup");
+    return;
+  }
+  let stuck = 0;
+  for (const claim of pending) {
+    const results = dropDatabases(claim.slot);
+    console.log(`slot ${claim.slot} (${databaseFor(claim.slot)}):`);
+    report(results, "  ");
+    if (teardownIncomplete(results)) {
+      stuck += 1;
+      console.log(`  still reserved`);
+      continue;
+    }
+    try {
+      unlinkSync(join(dir, `${claim.slot}.json`));
+    } catch {
+      // Already gone is the outcome we wanted.
+    }
+    console.log(`  released`);
+  }
+  if (stuck > 0) process.exit(1);
 }
 
 function commandList() {
-  const paths = worktreePaths(git(["worktree", "list", "--porcelain"]));
-  for (const path of paths) {
-    const slot = slotOf(path);
+  const records = worktreeRecords(git(["worktree", "list", "--porcelain"]));
+  const dir = claimDir(commonDir());
+  const claims = readClaims(dir);
+  for (const record of records) {
+    const claim = claims.find(entry => resolve(entry.path) === resolve(record.path));
+    const slot = claim?.slot ?? 0;
     const env = slotEnv(slot);
-    console.log(`slot ${String(slot).padEnd(4)} :${env.PORT}/:${env.E2E_PORT}  ${databaseFor(slot).padEnd(18)} ${path}`);
+    console.log(
+      `slot ${String(slot).padEnd(3)} ${PORT_NAMES.map(n => env[n]).join("/")}  ` +
+        `${databaseFor(slot).padEnd(18)} ${record.branch ?? "(detached)"}  ${record.path}`
+    );
+  }
+  for (const claim of claims.filter(c => c.pendingCleanup)) {
+    console.log(`slot ${String(claim.slot).padEnd(3)} RESERVED — databases from ${claim.path} were never dropped`);
   }
 }
 
@@ -333,24 +628,28 @@ function main() {
       console.error("worktree: new <branch> [--from <ref>] [--root <dir>]");
       process.exit(2);
     }
-    commandNew(branch, flag("from") ?? "origin/main", resolve(flag("root") ?? join(root, "..")));
-    return;
+    return commandNew(branch, flag("from") ?? "origin/main", resolve(flag("root") ?? join(root, "..")));
   }
-  if (command === "list") return commandList();
   if (command === "remove") {
     const target = rest[0];
     if (!target || target.startsWith("--")) {
-      console.error("worktree: remove <branch|path> [--keep-branch]");
+      console.error("worktree: remove <branch|path> [--keep-branch] [--force]");
       process.exit(2);
     }
-    return commandRemove(target, rest.includes("--keep-branch"));
+    return commandRemove(target, {
+      keepBranch: rest.includes("--keep-branch"),
+      force: rest.includes("--force"),
+    });
   }
+  if (command === "list") return commandList();
+  if (command === "provision") return commandProvision();
+  if (command === "sweep") return commandSweep();
   if (command === "env") {
     const env = slotEnv(Number(flag("slot") ?? 0));
     for (const [key, value] of Object.entries(env)) console.log(`export ${key}=${value}`);
     return;
   }
-  console.error("worktree: new | list | remove | env");
+  console.error("worktree: new | list | remove | provision | sweep | env");
   process.exit(2);
 }
 

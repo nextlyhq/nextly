@@ -13,6 +13,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANCHORS,
+  REQUIRED_RULES,
+  claimsBareFile,
+  guidanceReferences,
   claimsRepoRoot,
   codeSpans,
   missingAnchors,
@@ -44,15 +47,31 @@ describe("naming the script a pnpm invocation runs", () => {
     expect(names("`pnpm check-types`")).toEqual(["check-types"]);
   });
 
-  it("steps over a filter and reports the workspace it named", () => {
+  /*
+   * The subcommand is REPORTED rather than dropped. `generate:types` belongs to
+   * the nextly CLI, not to pnpm, so this module cannot decide whether it still
+   * exists — listing a tool's own commands here would be a second copy of them.
+   * Recording it is what stops the checker's silence reading as coverage of the
+   * exact reference it was written to protect.
+   */
+  it("steps over a filter, reports the workspace, and records the subcommand", () => {
     expect(pnpmScriptsIn("`pnpm --filter playground nextly generate:types`")).toEqual([
-      { filter: "playground", name: "nextly" },
+      { filter: "playground", name: "nextly", subcommand: "generate:types" },
     ]);
+  });
+
+  it("records no subcommand when the invocation is just a script", () => {
+    expect(pnpmScriptsIn("`pnpm check-types`")[0].subcommand).toBeNull();
+  });
+
+  it("does not read a shell comment as a subcommand", () => {
+    // `pnpm --filter <pkg>... build  # trailing ... includes <pkg> itself`
+    expect(pnpmScriptsIn("`pnpm build # trailing words explain the flag`")[0].subcommand).toBeNull();
   });
 
   it("strips the dependents selector from a filter", () => {
     expect(pnpmScriptsIn("`pnpm --filter nextly... build`")).toEqual([
-      { filter: "nextly", name: "build" },
+      { filter: "nextly", name: "build", subcommand: null },
     ]);
   });
 
@@ -126,18 +145,28 @@ describe("refusing a file set that cannot have found anything", () => {
    * them either — a collector that dropped AGENTS.md while picking up three
    * skills matches any total. Membership is what gets asserted.
    */
+  const COMPLETE = ["AGENTS.md", ...REQUIRED_RULES, ".claude/skills/y/SKILL.md"];
+
   it("names every anchor missing from an empty set", () => {
-    expect(missingAnchors([])).toEqual(ANCHORS);
+    expect(missingAnchors([])).toEqual([...ANCHORS, ...REQUIRED_RULES]);
   });
 
-  it("accepts a rule file as covering the rules anchor", () => {
-    expect(missingAnchors(["AGENTS.md", ".claude/rules/x.md", ".claude/skills/y/SKILL.md"]))
-      .toEqual([]);
+  it("is satisfied by a complete set", () => {
+    expect(missingAnchors(COMPLETE)).toEqual([]);
   });
 
   it("still refuses when only one anchor is missing", () => {
-    expect(missingAnchors([".claude/rules/x.md", ".claude/skills/y/SKILL.md"]))
-      .toEqual(["AGENTS.md"]);
+    expect(missingAnchors(COMPLETE.filter(f => f !== "AGENTS.md"))).toEqual(["AGENTS.md"]);
+  });
+
+  /*
+   * 🔴 The anchor for `.claude/rules` accepts ANY file under it, so deleting
+   * one of the two rules AGENTS.md promises are always loaded left the other
+   * keeping the directory non-empty and the check green. Their exact presence
+   * is the property, not membership of the directory.
+   */
+  it.each(REQUIRED_RULES)("refuses when %s is gone, even though other rules remain", rule => {
+    expect(missingAnchors(COMPLETE.filter(f => f !== rule))).toEqual([rule]);
   });
 });
 
@@ -196,5 +225,79 @@ describe("not reporting a path git is told to ignore", () => {
 
   it("asks nothing when there is nothing to ask about", () => {
     expect(gitIgnored([])).toEqual(new Set());
+  });
+});
+
+describe("reading a tilde-fenced block", () => {
+  /*
+   * 🔴 The reader tracked a boolean "are we inside a fence" and matched only
+   * backticks, so a `~~~` block was invisible: every command and path inside
+   * one went unchecked, and a stale reference hidden there passed CI.
+   */
+  it("reads a tilde-fenced block", () => {
+    expect(codeSpans("before\n~~~sh\npnpm lint\n~~~\nafter")).toEqual(["pnpm lint"]);
+  });
+
+  it("does not let one fence character close the other's block", () => {
+    // The backticks are CONTENT here, because a tilde block opened it.
+    expect(codeSpans("~~~\n```\npnpm lint\n~~~")).toEqual(["```", "pnpm lint"]);
+  });
+
+  it("requires a closing fence at least as long as the opening one", () => {
+    expect(codeSpans("~~~~\n~~~\npnpm lint\n~~~~")).toEqual(["~~~", "pnpm lint"]);
+  });
+});
+
+describe("deciding whether a bare filename is a claim", () => {
+  // Measured over the instruction files as they stand: accepting every bare
+  // name reported 20 valid references, and this rule reports none of them
+  // while still catching all three probe deletions.
+  const basenames = new Set(["ci.yml", "FieldRenderer.tsx", "context7.json", ".fallowrc.jsonc"]);
+  const rootFiles = new Set(["context7.json", ".fallowrc.jsonc"]);
+
+  it("stays silent on a name some file in the repository carries", () => {
+    expect(claimsBareFile("ci.yml", basenames, rootFiles)).toBe(false);
+    expect(claimsBareFile("FieldRenderer.tsx", basenames, rootFiles)).toBe(false);
+  });
+
+  it("reports a name no file carries", () => {
+    expect(claimsBareFile("context7-gone.json", basenames, rootFiles)).toBe(true);
+  });
+
+  it("ignores a bare suffix, which names no file at all", () => {
+    expect(claimsBareFile(".test.mjs", basenames, rootFiles)).toBe(false);
+    expect(claimsBareFile(".md", basenames, rootFiles)).toBe(false);
+  });
+
+  it("still checks a dot-led file that really is at the root", () => {
+    expect(claimsBareFile(".fallowrc.jsonc", basenames, rootFiles)).toBe(false);
+  });
+});
+
+describe("finding citations of agent guidance anywhere in the repository", () => {
+  /*
+   * 🔴 Moving a rule into a skill left four citations of the old path behind,
+   * all in .ts source comments. The cleanup searched only Markdown and .mjs and
+   * then reported none — a population that excluded every file carrying the
+   * problem.
+   */
+  it("finds a citation in ordinary source text", () => {
+    expect([...guidanceReferences("see `.claude/rules/gone.md` for the rule")]).toEqual([
+      ".claude/rules/gone.md",
+    ]);
+  });
+
+  it("finds a skill directory citation", () => {
+    expect([...guidanceReferences("the `.claude/skills/derived-checks/SKILL.md` skill")]).toEqual([
+      ".claude/skills/derived-checks/SKILL.md",
+    ]);
+  });
+
+  it("reads nothing out of prose that merely says claude", () => {
+    expect([...guidanceReferences("claude rules are loaded at launch")]).toEqual([]);
+  });
+
+  it("drops trailing punctuation that belongs to the sentence", () => {
+    expect([...guidanceReferences("see `.claude/rules/a.md`.")]).toEqual([".claude/rules/a.md"]);
   });
 });

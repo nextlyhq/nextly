@@ -46,6 +46,37 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const ANCHORS = ["AGENTS.md", ".claude/rules", ".claude/skills"];
 
 /**
+ * Rules AGENTS.md promises are loaded in EVERY session, named individually.
+ *
+ * 🔴 The anchor above accepts any file under `.claude/rules`, so either of
+ * these could be deleted while the other kept the directory non-empty and the
+ * check stayed green. AGENTS.md names them because their loading behaviour is
+ * the point — one prevents a failure that arrives before any file is read, the
+ * other is path-scoped — so membership of the directory is not what has to
+ * hold. Their exact presence is.
+ */
+/**
+ * The one file the guidance scan does not read: its own test.
+ *
+ * That test necessarily contains guidance paths that do NOT resolve — fixtures
+ * asserting the scanner reports a dead citation. Reading them makes the check
+ * fail on the evidence that it works, which is the instrument treating its own
+ * test data as its subject.
+ *
+ * The cost is stated rather than hidden: a genuinely stale citation written in
+ * this one file would be missed. It is the file whose maintainer is by
+ * definition looking at the scanner, and every other test file — including the
+ * `.test.ts` where one of the original four stale citations actually lived —
+ * is still read.
+ */
+export const GUIDANCE_SCAN_EXCLUDES = ["scripts/check-agent-contract.test.mjs"];
+
+export const REQUIRED_RULES = [
+  ".claude/rules/whole-file-writes.md",
+  ".claude/rules/integration-tests.md",
+];
+
+/**
  * `pnpm <word>` that is not a script: pnpm's own verbs, and the binaries the
  * workspace exposes through its dependencies. A name here is never reported.
  */
@@ -77,17 +108,32 @@ const PATH_EXTENSIONS = [
  */
 export function codeSpans(text) {
   const spans = [];
-  let fenced = false;
+  // The OPEN fence, or null. Markdown allows `~~~` as well as backticks, and a
+  // block opened with one is not closed by the other — so tracking a boolean
+  // "are we fenced" misreads both. A tilde-fenced block was invisible to this
+  // reader entirely, which meant a stale command inside one passed CI.
+  let fence = null;
   for (const line of text.split("\n")) {
-    if (/^\s*```/.test(line)) {
-      fenced = !fenced;
-      continue;
+    const match = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (match) {
+      const char = match[1][0];
+      const length = match[1].length;
+      if (fence === null) {
+        fence = { char, length };
+        continue;
+      }
+      // A closing fence uses the same character and is at least as long as the
+      // one that opened the block; anything else is content inside it.
+      if (char === fence.char && length >= fence.length) {
+        fence = null;
+        continue;
+      }
     }
-    if (fenced) {
+    if (fence !== null) {
       spans.push(line);
       continue;
     }
-    for (const match of line.matchAll(/`([^`]+)`/g)) spans.push(match[1]);
+    for (const span of line.matchAll(/`([^`]+)`/g)) spans.push(span[1]);
   }
   return spans;
 }
@@ -104,7 +150,9 @@ export function pnpmScriptsIn(text) {
   for (const span of codeSpans(text)) {
     const match = /^\s*pnpm\s+(.*)$/.exec(span);
     if (!match) continue;
-    const words = match[1].trim().split(/\s+/);
+    // A shell comment is not part of the command. `pnpm --filter <pkg>... build
+    // # trailing ... includes <pkg>` otherwise reads "trailing" as a subcommand.
+    const words = match[1].split("#")[0].trim().split(/\s+/).filter(Boolean);
     let i = 0;
     let filter = null;
     while (i < words.length) {
@@ -128,7 +176,15 @@ export function pnpmScriptsIn(text) {
     const cleaned = name.replace(/\.{3}$/, "").replace(/[.,;:)]+$/, "");
     if (!/^[a-z][a-z0-9:-]*$/.test(cleaned)) continue;
     if (PNPM_BUILTINS.has(cleaned)) continue;
-    found.set(`${filter ?? ""}\u0000${cleaned}`, { filter, name: cleaned });
+    // Words after the script name. `pnpm --filter playground nextly
+    // generate:types` runs the `nextly` launcher and then a CLI subcommand
+    // this module cannot check: subcommands belong to the tool, and listing
+    // them here would be a second copy of the tool's own command table — the
+    // recomputation `derived-checks` exists to prevent. So the subcommand is
+    // REPORTED as unverified rather than silently passing, because silence
+    // from a checker reads as coverage.
+    const subcommand = words.slice(i + 1).find(word => /^[a-z][a-z0-9:-]*$/.test(word)) ?? null;
+    found.set(`${filter ?? ""}\u0000${cleaned}`, { filter, name: cleaned, subcommand });
   }
   return [...found.values()];
 }
@@ -168,7 +224,6 @@ export function workspaceScripts(base = root) {
 export function pathsIn(text) {
   const found = new Set();
   for (const token of codeSpans(text).map(span => span.trim())) {
-    if (!token.includes("/")) continue;
     if (/[*?[\]{}<>()\s|$]/.test(token)) continue;
     if (token.startsWith("/") || token.startsWith("~") || token.startsWith("@")) continue;
     if (/^[a-z]+:\/\//.test(token)) continue;
@@ -192,6 +247,32 @@ export function pathsIn(text) {
  */
 export function claimsRepoRoot(path, topLevel) {
   return topLevel.has(path.split("/")[0]);
+}
+
+/**
+ * Whether an unresolved BARE filename is a claim about a file that should exist.
+ *
+ * Requiring a `/` was the first rule, and it discarded `context7.json`,
+ * `AGENTS.measured.md`, `docker-compose.test.yml` and `.nvmrc` — concrete
+ * repository files that could be renamed away while the check stayed green.
+ *
+ * Dropping the requirement outright is worse. Measured over the instruction
+ * files as they stand, it reports 20 references that are all perfectly valid:
+ * workflow names like `ci.yml` and `labeler.yml`, component basenames like
+ * `FieldRenderer.tsx`, and bare suffixes like `.md` and `.test.mjs` that name
+ * no file at all.
+ *
+ * What separates them is whether ANY file in the repository carries that
+ * basename. `ci.yml` does, at `.github/workflows/ci.yml`, so the reference is
+ * live. A deleted `context7.json` would carry none, which is exactly the
+ * staleness worth reporting. Measured against the same corpus: 0 false
+ * positives, and all three probe deletions reported.
+ */
+export function claimsBareFile(name, basenames, rootFiles) {
+  // A dot-led token is a suffix pattern (`.test.mjs`) unless it is a real root
+  // file (`.fallowrc.jsonc`), and a suffix names nothing to check.
+  if (name.startsWith(".") && !rootFiles.has(name)) return false;
+  return !basenames.has(name);
 }
 
 /** Every `.md` under a directory, recursively. */
@@ -235,9 +316,13 @@ export function instructionFiles(base = root) {
  * found anything rather than reporting its emptiness as a pass.
  */
 export function missingAnchors(files) {
-  return ANCHORS.filter(anchor =>
-    !files.some(file => file === anchor || file.startsWith(`${anchor}/`))
-  );
+  const present = new Set(files);
+  return [
+    ...ANCHORS.filter(
+      anchor => !files.some(file => file === anchor || file.startsWith(`${anchor}/`))
+    ),
+    ...REQUIRED_RULES.filter(rule => !present.has(rule)),
+  ];
 }
 
 /**
@@ -294,6 +379,32 @@ export function gitIgnored(paths, cwd = root) {
   }
 }
 
+/**
+ * References to agent-guidance files made ANYWHERE in the repository.
+ *
+ * 🔴 Moving a rule into a skill left four citations of the old rules path
+ * behind, all of them in .ts source comments. The cleanup that missed them
+ * searched only Markdown and .mjs files and then reported "none" — a
+ * population that excluded every file carrying the problem, answering
+ * confidently about a set it never read.
+ *
+ * Note that this comment names no path in backticks, deliberately: the scanner
+ * below reads code spans, so an example written as a citation becomes a
+ * finding about itself.
+ *
+ * So this scans EVERY tracked file rather than the instruction files, and
+ * looks only for `.claude/...` paths. Narrow subject, complete population:
+ * the opposite trade from the rest of this module, and the right one here
+ * because the citation is unambiguous wherever it appears.
+ */
+export function guidanceReferences(text) {
+  const found = new Set();
+  for (const match of text.matchAll(/`(\.claude\/[A-Za-z0-9._/-]+)`/g)) {
+    found.add(match[1].replace(/[.,;:)]+$/, ""));
+  }
+  return found;
+}
+
 function main() {
   const asJson = process.argv.includes("--json");
   const files = instructionFiles();
@@ -313,12 +424,24 @@ function main() {
     readdirSync(root).filter(entry => statSync(join(root, entry)).isDirectory())
   );
 
+  // Every basename in the repository, so a bare reference can be told from a
+  // stale one. Read once rather than per file.
+  const tracked = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" })
+    .split("\n")
+    .filter(Boolean);
+  const basenames = new Set(tracked.map(path => path.split("/").pop()));
+  const rootFiles = new Set(tracked.filter(path => !path.includes("/")));
+
   const scripts = new Set(
     Object.keys(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {})
   );
   const byWorkspace = workspaceScripts();
 
   const findings = [];
+  // Claims this module can see but cannot decide. Kept apart from findings:
+  // an advisory check must not report what it could not check as a failure,
+  // and must not let its silence imply it checked.
+  const unverified = [];
 
   const skillsDir = join(root, ".claude/skills");
   const present = new Set(
@@ -335,7 +458,10 @@ function main() {
 
   for (const file of files) {
     const text = readFileSync(join(root, file), "utf8");
-    for (const { filter, name } of pnpmScriptsIn(text)) {
+    for (const { filter, name, subcommand } of pnpmScriptsIn(text)) {
+      if (subcommand !== null) {
+        unverified.push({ file, claim: `pnpm ${filter ? `--filter ${filter} ` : ""}${name} ${subcommand}` });
+      }
       if (filter === null) {
         if (!scripts.has(name)) {
           findings.push({ file, kind: "script", claim: `pnpm ${name}` });
@@ -351,12 +477,12 @@ function main() {
     // A nested AGENTS.md cites its own package's files relatively, so both
     // bases are tried before anything is reported.
     const near = dirname(join(root, file));
-    const unresolved = [...pathsIn(text)].filter(
-      path =>
-        !existsSync(join(root, path)) &&
-        !existsSync(join(near, path)) &&
-        claimsRepoRoot(path, topLevel)
-    );
+    const unresolved = [...pathsIn(text)].filter(path => {
+      if (existsSync(join(root, path)) || existsSync(join(near, path))) return false;
+      return path.includes("/")
+        ? claimsRepoRoot(path, topLevel)
+        : claimsBareFile(path, basenames, rootFiles);
+    });
     const ignored = gitIgnored(unresolved);
     for (const path of unresolved) {
       if (ignored.has(path)) continue;
@@ -364,8 +490,32 @@ function main() {
     }
   }
 
+  // Every tracked file, for the narrow `.claude/...` scan above.
+  const guidanceMisses = new Map();
+  for (const file of tracked) {
+    if (GUIDANCE_SCAN_EXCLUDES.includes(file)) continue;
+    let text;
+    try {
+      text = readFileSync(join(root, file), "utf8");
+    } catch {
+      continue; // binary, or removed since `git ls-files` ran
+    }
+    for (const reference of guidanceReferences(text)) {
+      if (existsSync(join(root, reference))) continue;
+      if (!guidanceMisses.has(reference)) guidanceMisses.set(reference, []);
+      guidanceMisses.get(reference).push(file);
+    }
+  }
+  // Asked once for the whole set: a gitignored path is not a claim that a file
+  // exists, and `.claude/settings.local.json` is written per worktree.
+  const ignoredGuidance = gitIgnored([...guidanceMisses.keys()]);
+  for (const [reference, files] of guidanceMisses) {
+    if (ignoredGuidance.has(reference)) continue;
+    for (const file of files) findings.push({ file, kind: "guidance", claim: reference });
+  }
+
   if (asJson) {
-    console.log(JSON.stringify({ files: files.length, findings }, null, 2));
+    console.log(JSON.stringify({ files: files.length, findings, unverified }, null, 2));
   } else if (findings.length > 0) {
     // The verdict first, because a refusal printed below a reader's `head` is
     // a refusal nobody saw — `derived-checks.md` on a gate's output.
@@ -376,6 +526,12 @@ function main() {
     console.error(`\nread ${files.length} instruction file(s)`);
   } else {
     console.log(`agent-contract: OK — ${files.length} instruction file(s), every reference resolves`);
+  }
+
+  if (unverified.length > 0) {
+    console.log(`\n${unverified.length} reference(s) name a tool subcommand this does not check:`);
+    for (const { file, claim } of unverified) console.log(`  ${file}: ${claim}`);
+    console.log("  The launcher script is checked; the subcommand belongs to that tool.");
   }
 
   process.exit(findings.length > 0 ? 1 : 0);

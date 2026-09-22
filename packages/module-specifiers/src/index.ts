@@ -9,7 +9,7 @@
  * dynamic import it could not resolve as importing nothing. Three of those are
  * silent, and all three answer "clean".
  *
- * `.claude/rules/derived-checks.md` states the rule this file exists to satisfy:
+ * the `derived-checks` skill states the rule this file exists to satisfy:
  * a narrower view must be DERIVED from the richer one, never computed alongside
  * it.
  *
@@ -215,7 +215,7 @@ export interface ModuleSpecifierRef {
  *
  * 🔴 Both must come from one walk. Two visitors agree the day they are written, and the drift is
  * silent in the direction that answers "clean" -- which is the defect
- * `.claude/rules/derived-checks.md` exists to prevent, and which this file was already written to
+ * the `derived-checks` skill exists to prevent, and which this file was already written to
  * fix once.
  */
 export function moduleSpecifierRefs(
