@@ -54,11 +54,20 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## Setup and dev loop
 
-- Requirements: Node `^20.19.0 || ^22.12.0 || >=24.0.0`, pnpm 9.0.0
+- Requirements: Node `^20.19.0 || ^22.12.0 || >=24.0.0`, pnpm 12.5.1
   (`packageManager` is pinned in `package.json`; Corepack enforces the exact
   version). The ranges are disjoint deliberately, mirroring what the test
   environment supports: 20.6-20.18 and the whole 23.x line are excluded, not
   merely untested.
+- Two different facts, deliberately not one: `engines.node` above is the
+  CONTRACT the published packages make, and `.nvmrc` (24.21.0) is the version
+  contributors, CI and the release job actually run. Every workflow reads
+  `.nvmrc`, so the toolchain moves by editing that file; narrowing `engines`
+  would drop Node 20/22 for users and is a separate decision. `package-smoke`
+  derives its Node legs FROM `engines.node`, so the floors stay tested.
+- pnpm settings live in `pnpm-workspace.yaml`, not `.npmrc` and not a `pnpm`
+  block in `package.json` — pnpm reads only auth and registry settings from
+  `.npmrc`, and ignores anything else there in silence.
 - Install: `pnpm install`.
 - Dev harness: `pnpm dev:app` starts the playground on :3000 (SQLite by
   default; `pnpm dev:postgres` / `pnpm dev:mysql` for other dialects, with

@@ -125,4 +125,36 @@ describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
     );
     expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
   });
+
+  it("disables Localized on a component reference and says where to localize instead", () => {
+    // A component reference holds no value of its own, so the flag was a
+    // silent no-op that read as Apply being broken. The switch must not
+    // offer what storage cannot honour. Both stored spellings are fed —
+    // the guard recognizes "component" and the migrated "fieldGroup", so
+    // a naive `type === "component"` check cannot pass here.
+    for (const type of ["component", "fieldGroup"] as const) {
+      const { unmount } = render(<Controlled initial={{ ...f, type }} />);
+      expect(
+        screen.getByRole("switch", { name: /^localized$/i })
+      ).toBeDisabled();
+      expect(
+        screen.getByText(/localization is set by the fields inside it/i)
+      ).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("reads a legacy localized flag on a component reference as OFF", () => {
+    // A save from before the gate could carry `localized: true` on the
+    // reference. The switch is disabled, so displaying that stale flag would
+    // present dead metadata as an active setting.
+    render(
+      <Controlled
+        initial={{ ...f, type: "component", advanced: { localized: true } }}
+      />
+    );
+    expect(
+      screen.getByRole("switch", { name: /^localized$/i })
+    ).not.toBeChecked();
+  });
 });

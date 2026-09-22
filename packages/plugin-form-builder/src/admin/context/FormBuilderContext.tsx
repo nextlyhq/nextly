@@ -373,9 +373,13 @@ export function FormBuilderProvider({
       setFieldsState(prev =>
         prev.map(f => (f.name === fieldName ? { ...f, ...updates } : f))
       );
-      // If the field name is being changed, also update selectedFieldId
-      // This prevents the sidebar from disappearing when renaming a field
-      if (updates.name && updates.name !== fieldName) {
+      // If the field name is being changed, also update selectedFieldId.
+      // This prevents the sidebar from disappearing when renaming a field —
+      // including when the change is TO the empty string, which is where a
+      // rename that clears the input first passes through: skipping it there
+      // would stop the renamed field matching its own selection, collapsing
+      // the card (and unmounting the editor) mid-rename.
+      if (updates.name !== undefined && updates.name !== fieldName) {
         setSelectedFieldId(updates.name);
       }
       setIsDirty(true);

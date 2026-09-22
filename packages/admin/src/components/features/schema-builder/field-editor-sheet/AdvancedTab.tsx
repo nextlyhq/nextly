@@ -5,6 +5,7 @@
 // level via the helper in lib/builder/is-inside-repeating-ancestor.
 import { Label, Switch } from "@nextlyhq/ui";
 import { defaultLocalizedForType } from "nextly/config";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import type { BuilderField } from "../types";
 
@@ -26,6 +27,9 @@ type Props = {
 const NESTED_UNIQUE_TOOLTIP =
   "Unique can't be enforced inside a repeater or repeatable field group. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
 
+const FIELD_GROUP_LOCALIZED_TOOLTIP =
+  "A component's localization is set by the fields inside it, not by this switch — a component reference holds no value of its own to localize. Enable Internationalization on the component's own settings, then toggle Localized on the inner fields that need per-language values.";
+
 export function AdvancedTab({
   field,
   readOnly = false,
@@ -37,6 +41,12 @@ export function AdvancedTab({
     onChange({ ...field, advanced: { ...adv, ...next } });
 
   const uniqueDisabled = readOnly || isInsideRepeatingAncestor;
+  // A component/field-group REFERENCE field produces no column and stores no
+  // value, so localizing it is structurally unbacked: the flag would save and
+  // change nothing, which reads as the Apply button being broken. What the
+  // author wants is localized CONTENT, and that lives in the component's own
+  // fields — so the switch is disabled and says where to go instead.
+  const localizedDisabled = readOnly || isFieldGroupFieldType(field.type);
 
   return (
     <div className="space-y-4">
@@ -55,12 +65,23 @@ export function AdvancedTab({
       <SwitchRow
         ariaLabel="Localized"
         label="Localized"
-        help="Store a different value per language. Text fields localize by default; toggle to override. Requires the collection's Internationalization setting and a migration to create the translations table."
+        help={
+          isFieldGroupFieldType(field.type)
+            ? FIELD_GROUP_LOCALIZED_TOOLTIP
+            : "Store a different value per language. Text fields localize by default; toggle to override. Requires the collection's Internationalization setting and a migration to create the translations table."
+        }
         // when the author hasn't set this explicitly, reflect the backend
         // smart default (text-like fields localize by default) so the switch shows
-        // the effective state instead of always reading as off.
-        checked={adv.localized ?? defaultLocalizedForType(field.type)}
-        disabled={readOnly}
+        // the effective state instead of always reading as off. A field-group
+        // reference always reads OFF: the switch is disabled above, and a
+        // legacy save could still carry `localized: true` on the reference —
+        // displaying it would present dead metadata as an active setting.
+        checked={
+          isFieldGroupFieldType(field.type)
+            ? false
+            : (adv.localized ?? defaultLocalizedForType(field.type))
+        }
+        disabled={localizedDisabled}
         onChange={v => setAdv({ localized: v })}
       />
     </div>

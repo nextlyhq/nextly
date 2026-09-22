@@ -22,13 +22,33 @@ export function generateFieldId(): string {
 
 /**
  * Convert a string to snake_case.
+ *
+ * A run of anything that is not a letter or a digit — spaces, punctuation,
+ * symbols — collapses to ONE underscore, and nothing dangles at either end.
+ * The same rule the builder's other name/slug derivations already apply
+ * (`toKebabName` below, `startingFieldName`): translating the input
+ * character-by-character instead would turn "phone no." into "phone_no_" and
+ * let a punctuation-only label mint a name of pure underscores.
+ *
+ * The `"pre-collapse"` mode is that older character-by-character rule, kept
+ * inside this function and used ONLY to recognize names it minted before
+ * the rule changed (a stored "phone_no_" still follows its label) — never
+ * to derive new names. Recognition compares EXACT outputs of the two modes
+ * against a stored name; normalizing the stored name itself would also
+ * capture legal manual names like "line__item", whose runs the save path
+ * deliberately preserves as identity.
  */
-export function toSnakeName(s: string): string {
-  return String(s || "")
+export function toSnakeName(
+  s: string,
+  mode: "current" | "pre-collapse" = "current"
+): string {
+  const lowercased = String(s || "")
     .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_")
-    .replace(/[^a-z0-9_]/g, "_");
+    .toLowerCase();
+  if (mode === "pre-collapse") {
+    return lowercased.replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "_");
+  }
+  return lowercased.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 
 export function toKebabName(s: string): string {
@@ -202,12 +222,28 @@ export function reorderNestedFields(
 }
 
 /**
+ * A field name the server accepts, verbatim: the pattern every field
+ * identifier must match on the wire (`^[a-z][a-z0-9_]*$` — a leading letter,
+ * then letters, digits or underscores, runs and trailing underscores
+ * included). Mirrors the contract the server validates against rather than
+ * inventing a local rule for what "stored" means.
+ */
+const STORED_FIELD_NAME = /^[a-z][a-z0-9_]*$/;
+
+/**
  * Convert BuilderField (UI) to FieldDefinition (API payload).
  * Handles nested fields, blocks, and all field-type-specific properties.
  */
 export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   const definition: FieldDefinition = {
-    name: toSnakeName(field.name),
+    // A stored name is the field's identity, not a label: one already legal
+    // passes through untouched, because re-deriving it would collapse its
+    // legal `__` runs or trim a legal trailing `_` and silently rename the
+    // column and API key during an unrelated save. The derivation is only
+    // for a name the server would reject anyway.
+    name: STORED_FIELD_NAME.test(field.name)
+      ? field.name
+      : toSnakeName(field.name),
     label: field.label || field.name,
     type: field.type,
     required: Boolean(field.validation?.required),
@@ -220,7 +256,15 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   // an untouched switch to false would override the backend's per-type default
   // (text-like fields localize when the collection opts in), pinning fields to
   // shared. Omission means "use the default".
-  if (typeof field.advanced?.localized === "boolean") {
+  //
+  // A field-group REFERENCE never forwards it, even when set: the reference
+  // produces no column, so the flag is unbacked metadata — and a value saved
+  // by the pre-gate editor must not keep riding every save now that the
+  // switch no longer offers it.
+  if (
+    typeof field.advanced?.localized === "boolean" &&
+    !isFieldGroupFieldType(field.type)
+  ) {
     definition.localized = field.advanced.localized;
   }
 

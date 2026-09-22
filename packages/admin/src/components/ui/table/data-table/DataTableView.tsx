@@ -453,7 +453,10 @@ export function DataTableView<Row extends object>({
                   }
                 >
                   <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
-                    <CardTitle className="text-base">
+                    {/* min-w-0: without it the title refuses to shrink below
+                        its content and pushes the header row past the card,
+                        painting long primary/secondary text over the border. */}
+                    <CardTitle className="min-w-0 text-base">
                       {cardPrimary
                         ? renderCell(cardPrimary, row, nav.href)
                         : id}
@@ -488,7 +491,10 @@ export function DataTableView<Row extends object>({
                             )}
                             <dd
                               className={cn(
-                                "flex-1",
+                                // min-w-0 with flex-1: a long value (URLs,
+                                // version strings) must be allowed to shrink
+                                // so truncate/wrap inside the cell engages.
+                                "min-w-0 flex-1",
                                 col.hideLabelOnMobile
                                   ? "text-left"
                                   : "text-right"
