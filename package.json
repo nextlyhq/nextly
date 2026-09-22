@@ -112,6 +112,7 @@
     "@eslint/js": "^9.34.0",
     "@manypkg/get-packages": "^1.1.3",
     "@nextlyhq/eslint-plugin": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
