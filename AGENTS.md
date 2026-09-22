@@ -266,6 +266,50 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   Either way this is the deliberate removal the count rule exempts, so state the
   drop rather than letting it look like a suite that went missing.
 
+## How much of the machine a local gate may take
+
+`.husky/pre-push` and `pnpm verify:pr` are bounded, and the bound is checked
+(`pnpm check:local-gate-bounds`, run in CI).
+
+```
+NEXTLY_LOCAL_CONCURRENCY   turbo package tasks at once   default 2
+NEXTLY_LOCAL_MAX_WORKERS   Vitest workers per package    default 2
+```
+
+🔴 Unbounded, these gates exhaust a laptop, and the arithmetic is the finding
+rather than an estimate. `turbo --concurrency` defaults to 10. Vitest's
+`maxWorkers` defaults to `os.availableParallelism()` with watch off, and 23 of
+the 24 packages declaring a `test` script set no cap of their own. Ten packages
+times eight cores is up to 80 concurrent Node processes, each with a V8 heap;
+on a 9.7 GiB WSL2 VM the kernel OOM-killer took `systemd` and `dbus-daemon` and
+the session had to be restarted.
+
+The diff that triggers the worst of it is ordinary. `scripts/gate-scope.mjs`
+treats the root manifest, `pnpm-workspace.yaml` and `turbo.jsonc` as redefining
+the task graph, so a change to any of them takes the UNFILTERED branch and
+tests every package at once.
+
+CI was never affected: `lane:test` passes `--concurrency=50%` and splits
+`nextly` and `admin` into lanes of their own. Only the local path was
+unbounded, and that asymmetry is what this closes.
+
+**Concurrency is not correctness.** The cap changes how many tasks run at once,
+never which ones, so every gate still asks exactly what it asked before. On a
+machine with headroom, raise it for one command:
+
+```sh
+NEXTLY_LOCAL_CONCURRENCY=6 NEXTLY_LOCAL_MAX_WORKERS=4 git push
+```
+
+`TURBO_CONCURRENCY` is turbo's own variable, so exporting it once reaches
+`pnpm run build` and every nested invocation. Vitest reads no equivalent
+variable, so its cap is forwarded as `-- --maxWorkers=<n>` through turbo.
+
+Two entry points carry the same limits, for when you want the gate without a
+push: `pnpm verify:pr` (build, lint, types, unit tests) and `pnpm verify:full`
+(adds the repo-wide lints and the SQLite integration leg). Run one heavy phase
+at a time; never a unit suite while an integration leg is in flight.
+
 ## Conventions (enforced; violations will be rejected in review)
 
 - Conventional Commits: commitlint (husky) checks the FORMAT; the PR-title

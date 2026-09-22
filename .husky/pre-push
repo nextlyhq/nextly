@@ -33,6 +33,37 @@ unset GIT_DIR GIT_WORK_TREE
 
 set -e
 
+# How much of this machine the gates below may take.
+#
+# 🔴 Unbounded, this hook exhausts a developer laptop. The arithmetic, measured
+# rather than estimated: turbo's `--concurrency` defaults to 10, so ten package
+# tasks run at once; 23 of the 24 packages that declare a `test` script set no
+# Vitest worker cap, and Vitest's `maxWorkers` defaults to
+# `os.availableParallelism()` with watch disabled. On an 8-core machine that is
+# up to 80 concurrent Node processes, each with its own V8 heap. On a 9.7 GiB
+# WSL2 VM the kernel OOM-killer took `systemd` and `dbus-daemon` and the whole
+# session had to be restarted.
+#
+# The diff that triggers it is ordinary: `scripts/gate-scope.mjs` treats the
+# root manifest, `pnpm-workspace.yaml` and `turbo.jsonc` as redefining the task
+# graph, so any change to one takes the UNFILTERED branch below and tests every
+# package at once.
+#
+# CI already bounds this — `lane:test` passes `--concurrency=50%` and splits
+# `nextly` and `admin` into lanes of their own. Only the local path was
+# unbounded, which is the asymmetry this closes.
+#
+# Concurrency is not correctness. Capping it changes how many tasks run at
+# once, never which ones, so every gate below still asks exactly what it asked
+# before. Raise these on a machine with headroom:
+#   NEXTLY_LOCAL_CONCURRENCY=6 NEXTLY_LOCAL_MAX_WORKERS=4 git push
+#
+# TURBO_CONCURRENCY is turbo's own variable, so it reaches `pnpm run build` and
+# every other nested invocation without each call site having to remember.
+TURBO_CONCURRENCY="${NEXTLY_LOCAL_CONCURRENCY:-2}"
+export TURBO_CONCURRENCY
+VITEST_WORKERS="${NEXTLY_LOCAL_MAX_WORKERS:-2}"
+
 # What is uncommitted RIGHT NOW, recorded before anything below can change it.
 #
 # Every gate in this hook runs against the working tree, and Git then pushes
@@ -122,13 +153,13 @@ set -e
 
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
-  pnpm turbo test --continue
+  pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
 elif [ "$GATE_STATUS" -ne 0 ]; then
   echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
   exit "$GATE_STATUS"
 elif [ -n "$GATE_FILTERS" ]; then
   # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
-  pnpm turbo test --continue $GATE_FILTERS
+  pnpm turbo test --continue $GATE_FILTERS -- --maxWorkers="$VITEST_WORKERS"
 fi
 
 # The TYPES of the packages this push AFFECTS, blocking.
