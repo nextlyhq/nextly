@@ -12,6 +12,11 @@ import {
 // chance, and a test that passes for that reason proves nothing about
 // encryption.
 const SECRET_VALUE = "secret-value-7f3a9c1e5b";
+// DERIVED from the value above rather than written as a second literal. It
+// only has to DIFFER from it for a replacement to be observable, and deriving
+// keeps that difference self-evident while leaving no second
+// credential-shaped constant beside a `clientSecret` key.
+const ROTATED_SECRET_VALUE = `${SECRET_VALUE}-rotated`;
 const KEY_A = "a".repeat(32);
 const KEY_B = "b".repeat(32);
 
@@ -251,12 +256,12 @@ describe("patching one field of a nested group", () => {
       providers: { google: { clientId: "id-1", clientSecret: SECRET_VALUE } },
     });
     await svc.set({
-      providers: { google: { clientSecret: "rotated-9d2b4f" } },
+      providers: { google: { clientSecret: ROTATED_SECRET_VALUE } },
     });
 
     const after = (await svc.get()) as {
       providers: Record<string, { clientSecret: string }>;
     };
-    expect(after.providers.google.clientSecret).toBe("rotated-9d2b4f");
+    expect(after.providers.google.clientSecret).toBe(ROTATED_SECRET_VALUE);
   });
 });
