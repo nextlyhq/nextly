@@ -26,7 +26,7 @@
  *   node scripts/check-local-gate-bounds.mjs
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -47,6 +47,28 @@ export const BOUNDED_SCRIPTS = ["verify:pr", "verify:full"];
 
 /** The runner that derives the limits and applies them to every phase. */
 export const BOUNDED_RUNNER = "scripts/verify.mjs";
+
+/**
+ * Whether the delegated runner actually applies the bounds it is trusted for.
+ *
+ * 🔴 Accepting `node scripts/verify.mjs` on the strength of the filename means
+ * the runner could drop its concurrency environment or its worker flag and
+ * both entry points would still be certified clean — a control that cannot
+ * enforce the rule it names. The filename is a claim; these are the two
+ * properties that make it true.
+ */
+export function runnerProblems(source) {
+  const problems = [];
+  if (!/TURBO_CONCURRENCY:/.test(source)) {
+    problems.push(
+      `${BOUNDED_RUNNER}: does not set TURBO_CONCURRENCY on the commands it spawns`
+    );
+  }
+  if (!/--maxWorkers=/.test(source)) {
+    problems.push(`${BOUNDED_RUNNER}: does not pass --maxWorkers to the test phase`);
+  }
+  return problems;
+}
 
 /**
  * Lines that invoke turbo, with the line number, comments and strings removed.
@@ -72,10 +94,14 @@ export function concurrencyExportLine(script) {
   const lines = script.split("\n");
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i].replace(/#.*$/, "").trim();
-    if (/^export\s+TURBO_CONCURRENCY\b/.test(line)) return i + 1;
+    // `export VAR=value` in one statement. The `=` is required: a bare
+    // `export TURBO_CONCURRENCY` exports an unset variable, which turbo reads
+    // as absent and answers with its default of 10 — a hook that looks bounded
+    // and is not.
+    if (/^export\s+TURBO_CONCURRENCY=\S/.test(line)) return i + 1;
     // `VAR=value` on one line and `export VAR` on the next is the POSIX-portable
     // spelling, and the export is what makes it reach a child process.
-    if (/^TURBO_CONCURRENCY=/.test(line)) {
+    if (/^TURBO_CONCURRENCY=\S/.test(line)) {
       for (let j = i + 1; j < lines.length; j += 1) {
         const next = lines[j].replace(/#.*$/, "").trim();
         if (/^export\s+TURBO_CONCURRENCY\b/.test(next)) return j + 1;
@@ -124,7 +150,7 @@ export function boundsProblems(script) {
   }
 
   for (const { line, text } of invocations) {
-    if (!/\bturbo\s+test\b/.test(text)) continue;
+    if (!/\bturbo\s+(run\s+)?test\b/.test(text)) continue;
     if (!/--maxWorkers/.test(text)) {
       problems.push(
         `${HOOK}:${line}: runs tests without forwarding --maxWorkers, so each package spawns one Vitest worker per core — '${text}'`
@@ -173,7 +199,17 @@ export function scriptProblems(scripts) {
 function main() {
   const script = readFileSync(join(root, HOOK), "utf8");
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  const problems = [...boundsProblems(script), ...scriptProblems(manifest.scripts ?? {})];
+  const runner = existsSync(join(root, BOUNDED_RUNNER))
+    ? readFileSync(join(root, BOUNDED_RUNNER), "utf8")
+    : null;
+  const problems = [
+    ...boundsProblems(script),
+    ...scriptProblems(manifest.scripts ?? {}),
+    // A missing runner is not a pass: the scripts delegate to it.
+    ...(runner === null
+      ? [`${BOUNDED_RUNNER}: missing, but the root scripts delegate their bounds to it`]
+      : runnerProblems(runner)),
+  ];
 
   if (problems.length > 0) {
     // Verdict first: a refusal printed under a reader's `head` is a refusal

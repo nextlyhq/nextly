@@ -11,7 +11,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOUNDED_RUNNER,
   boundsProblems,
+  runnerProblems,
   concurrencyExportLine,
   scriptProblems,
   turboInvocations,
@@ -158,5 +160,85 @@ describe("holding the root scripts to the same bound as the hook", () => {
     expect(scriptProblems({ "verify:pr": bounded["verify:pr"] })).toEqual([
       expect.stringContaining("'verify:full' is missing"),
     ]);
+  });
+});
+
+describe("both spellings of a turbo test invocation", () => {
+  const bounded = 'TURBO_CONCURRENCY="2"\nexport TURBO_CONCURRENCY\n';
+
+  /*
+   * 🔴 `turbo run test` is the canonical spelling used throughout
+   * package.json, and the narrower pattern skipped it entirely — so removing
+   * --maxWorkers from that form left the check reporting clean while every
+   * package spawned one Vitest worker per core.
+   */
+  it.each(["pnpm turbo test --continue", "pnpm turbo run test --continue"])(
+    "reports '%s' when it forwards no worker cap",
+    invocation => {
+      expect(boundsProblems(bounded + invocation)).toEqual([
+        expect.stringContaining("--maxWorkers"),
+      ]);
+    }
+  );
+
+  it.each([
+    "pnpm turbo test --continue -- --maxWorkers=2",
+    "pnpm turbo run test --continue -- --maxWorkers=2",
+  ])("is silent on '%s'", invocation => {
+    expect(boundsProblems(bounded + invocation)).toEqual([]);
+  });
+});
+
+describe("an export that carries no value", () => {
+  /*
+   * 🔴 `export TURBO_CONCURRENCY` with no assignment anywhere satisfied the
+   * old pattern. It exports an UNSET variable, which turbo reads as absent and
+   * answers with its default of 10 — a hook that looks bounded and is not.
+   */
+  it("rejects a bare export with no assignment", () => {
+    expect(
+      boundsProblems("export TURBO_CONCURRENCY\npnpm turbo test -- --maxWorkers=2")
+    ).toEqual([expect.stringContaining("never exported")]);
+  });
+
+  it("accepts an export that assigns in one statement", () => {
+    expect(
+      boundsProblems("export TURBO_CONCURRENCY=2\npnpm turbo test -- --maxWorkers=2")
+    ).toEqual([]);
+  });
+
+  it("accepts an assignment followed by an export", () => {
+    expect(
+      boundsProblems('TURBO_CONCURRENCY="2"\nexport TURBO_CONCURRENCY\npnpm turbo test -- --maxWorkers=2')
+    ).toEqual([]);
+  });
+});
+
+describe("validating the runner the root scripts delegate to", () => {
+  const sound = 'const workers = `--maxWorkers=${limits.maxWorkers}`;\nenv: { TURBO_CONCURRENCY: String(limits.concurrency) }';
+
+  it("is silent when the runner applies both bounds", () => {
+    expect(runnerProblems(sound)).toEqual([]);
+  });
+
+  /*
+   * 🔴 The delegation was accepted on the strength of the filename, so the
+   * runner could drop either bound and both entry points would still be
+   * certified clean — a control unable to enforce the rule it names.
+   */
+  it("names a runner that sets no concurrency on what it spawns", () => {
+    expect(runnerProblems("const workers = `--maxWorkers=2`;")).toEqual([
+      expect.stringContaining("TURBO_CONCURRENCY"),
+    ]);
+  });
+
+  it("names a runner that caps no workers", () => {
+    expect(runnerProblems("env: { TURBO_CONCURRENCY: '2' }")).toEqual([
+      expect.stringContaining("--maxWorkers"),
+    ]);
+  });
+
+  it("names the runner by the path the scripts delegate to", () => {
+    expect(BOUNDED_RUNNER).toBe("scripts/verify.mjs");
   });
 });

@@ -43,6 +43,10 @@ export function phasesFor(scope, limits) {
     { name: "build", argv: ["turbo", "run", "build"] },
     { name: "lint + types", argv: ["turbo", "run", "lint", "check-types", "--continue"] },
     { name: "unit tests", argv: ["turbo", "run", "test", "--continue", "--", workers] },
+    // `turbo run test` does not reach `scripts/` — gate-scope.mjs records that
+    // explicitly — so without this a change confined to the repository's own
+    // tooling passes both documented entry points without running its tests.
+    { name: "script tests", argv: ["run", "test:scripts"] },
   ];
   if (scope === "pr") return pr;
   return [
