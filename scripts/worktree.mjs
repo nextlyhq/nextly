@@ -508,6 +508,22 @@ export function recordProvisioned(dir, slot, containers) {
   writeFileSync(file, `${JSON.stringify({ ...claim, provisioned: merged }, null, 2)}\n`);
 }
 
+/**
+ * Provision a slot's databases and record each container as it is reached.
+ *
+ * 🔴 The two callers used to wire this themselves, which meant a test could
+ * supply its own `willProvision` and pass whether the CLAIM FILE was written
+ * at all. Either caller could have stopped recording and every test stayed
+ * green. The wiring is the thing that has to hold, so it lives here and both
+ * commands call it.
+ */
+export function provisionAndRecord(dir, slot, options = {}) {
+  return provisionDatabases(slot, {
+    ...options,
+    willProvision: container => recordProvisioned(dir, slot, [container]),
+  });
+}
+
 function report(results, indent = "    ") {
   for (const { container, state, detail } of results) {
     console.log(`${indent}${container}: ${state}${detail ? ` — ${detail}` : ""}`);
@@ -545,9 +561,7 @@ function commandNew(branch, from, worktreeRoot) {
   const settings = writeSettings(target, env);
   // The record is written per container as provisioning reaches it, so an
   // interrupted run leaves a record that is never short of what exists.
-  const provisioned = provisionDatabases(slot, {
-    willProvision: container => recordProvisioned(dir, slot, [container]),
-  });
+  const provisioned = provisionAndRecord(dir, slot);
   const failed = provisioned.filter(result => result.state === "failed");
 
   console.log(`worktree: ${target}`);
@@ -682,9 +696,7 @@ function commandProvision() {
     process.exit(2);
   }
   const dir = claimDir(commonDir());
-  const results = provisionDatabases(slot, {
-    willProvision: container => recordProvisioned(dir, slot, [container]),
-  });
+  const results = provisionAndRecord(dir, slot);
   console.log(`worktree: provisioning slot ${slot} (${databaseFor(slot)})`);
   report(results, "  ");
   const failed = results.filter(result => result.state === "failed");

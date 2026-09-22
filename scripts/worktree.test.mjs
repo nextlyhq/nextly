@@ -24,6 +24,7 @@ import {
   isReclaimable,
   parseSlot,
   portsFor,
+  provisionAndRecord,
   provisionDatabases,
   readClaims,
   settingsWithEnv,
@@ -460,5 +461,59 @@ describe("recording what a slot was provisioned into", () => {
     // what completed, releases it.
     expect(teardownIncomplete(dropped, ["nextly-postgres17-test", "nextly-postgres15-test"]))
       .toBe(false);
+  });
+});
+
+describe("the provisioning wiring, through the function both commands call", () => {
+  /*
+   * 🔴 The tests above supply their own `willProvision` and then hand the
+   * array they built to `teardownIncomplete`, so the CLAIM FILE is never
+   * observed. Either command could stop recording and every one of them would
+   * still pass. This exercises the wiring itself and reads the file off disk.
+   */
+  it("persists a container to the claim BEFORE it runs a statement against it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextly-slots-"));
+    try {
+      writeFileSync(join(dir, "3.json"), JSON.stringify({ slot: 3, path: "/gone" }));
+      const onDiskAtStatement = [];
+
+      provisionAndRecord(dir, 3, {
+        isRunning: () => true,
+        run: (_cmd, args) => {
+          const claim = JSON.parse(readFileSync(join(dir, "3.json"), "utf8"));
+          onDiskAtStatement.push({ container: args[1], provisioned: claim.provisioned ?? [] });
+          return "";
+        },
+      });
+
+      expect(onDiskAtStatement.length).toBeGreaterThan(0);
+      for (const { container, provisioned } of onDiskAtStatement) {
+        expect(provisioned).toContain(container);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the claim naming every container it reached", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextly-slots-"));
+    try {
+      writeFileSync(join(dir, "5.json"), JSON.stringify({ slot: 5, path: "/gone" }));
+      provisionAndRecord(dir, 5, {
+        isRunning: container => container !== "nextly-mysql-test",
+        run: () => "",
+      });
+
+      const claim = JSON.parse(readFileSync(join(dir, "5.json"), "utf8"));
+      expect(claim.provisioned).toEqual([
+        "nextly-postgres17-test",
+        "nextly-postgres15-test",
+      ]);
+      // A stopped container holds no database, so recording it would reserve
+      // the slot for a drop that has nothing to do.
+      expect(claim.provisioned).not.toContain("nextly-mysql-test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

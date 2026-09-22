@@ -9,6 +9,10 @@
  * correct prose, which `derived-checks.md` calls the failure that gets an
  * advisory check deleted.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,6 +24,7 @@ import {
   claimsFilePath,
   guidanceReferences,
   instructionFiles,
+  unresolvedIn,
   claimsRepoRoot,
   codeSpans,
   missingAnchors,
@@ -362,8 +367,15 @@ describe("deciding whether a bare filename is a claim", () => {
     expect(claimsBareFile(".md", basenames)).toBe(false);
   });
 
-  it("stays silent on an extensionless dotfile that exists", () => {
-    expect(claimsBareFile(".nvmrc", basenames)).toBe(false);
+  /*
+   * This is only ever reached once the caller's existence checks have already
+   * failed, so for an allowlisted dotfile there is nothing left to ask: it
+   * names repository configuration at one place and it was not there. A
+   * same-named file elsewhere does not make the citation live — that fallback
+   * is what let a RELOCATED `.nvmrc` read as fine.
+   */
+  it("reports an allowlisted dotfile that did not resolve, wherever its name occurs", () => {
+    expect(claimsBareFile(".nvmrc", basenames)).toBe(true);
   });
 
   /*
@@ -474,5 +486,92 @@ describe("reading a file named as a command operand", () => {
 
   it("still ignores a glob operand", () => {
     expect([...pathsIn("`eslint src/**/*.ts --fix`")]).toEqual([]);
+  });
+});
+
+describe("analysing a real instruction file on disk", () => {
+  /*
+   * 🔴 The `claimsFilePath` tests above pass `nestedGuide: true` straight in,
+   * which reconstructs the classification the caller performs. Deleting the
+   * derivation at the call site would leave them green while a deleted
+   * package-relative target is silently ignored again. These give
+   * `unresolvedIn` a file PATH and let it decide, which is the production
+   * decision.
+   */
+  const withRepo = body => {
+    const base = mkdtempSync(join(tmpdir(), "nextly-contract-"));
+    try {
+      mkdirSync(join(base, "packages", "thing", "src"), { recursive: true });
+      mkdirSync(join(base, ".claude", "skills", "x"), { recursive: true });
+      writeFileSync(join(base, "package.json"), "{}");
+      return body(base);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  };
+
+  const facts = { topLevel: new Set(["packages", "scripts", ".claude"]), basenames: new Set() };
+
+  it("reports a nested guide's relative path once the target is gone", () => {
+    withRepo(base => {
+      // The file is NOT created, which is the deletion being modelled.
+      const found = unresolvedIn({
+        base,
+        file: "packages/thing/AGENTS.md",
+        text: "The entry point is `src/config.ts`.",
+        ...facts,
+      });
+      expect(found).toEqual(["src/config.ts"]);
+    });
+  });
+
+  it("stays silent while that target exists", () => {
+    withRepo(base => {
+      writeFileSync(join(base, "packages", "thing", "src", "config.ts"), "");
+      const found = unresolvedIn({
+        base,
+        file: "packages/thing/AGENTS.md",
+        text: "The entry point is `src/config.ts`.",
+        ...facts,
+      });
+      expect(found).toEqual([]);
+    });
+  });
+
+  it("treats the same citation in a skill as a fragment, not a claim", () => {
+    withRepo(base => {
+      const found = unresolvedIn({
+        base,
+        file: ".claude/skills/x/SKILL.md",
+        text: "The entry point is `src/config.ts`.",
+        ...facts,
+      });
+      expect(found).toEqual([]);
+    });
+  });
+});
+
+describe("dotfiles named with a directory in front of them", () => {
+  it("reads an allowlisted dotfile under a package", () => {
+    // 🔴 The allowlist was compared against the whole path, so a nested
+    // dotfile was discarded before any check ran.
+    expect([...pathsIn("see `packages/nextly/.gitignore`")]).toEqual([
+      "packages/nextly/.gitignore",
+    ]);
+  });
+
+  /*
+   * 🔴 A bare allowlisted dotfile used to fall through to the repository-wide
+   * basenames, so MOVING the root `.nvmrc` into a subdirectory left the
+   * citation reading as live — the moved file still carries the name.
+   * Deletion was reported and relocation was not, and relocation is the
+   * likelier accident.
+   */
+  it("reports a relocated dotfile, not just a deleted one", () => {
+    expect(claimsBareFile(".nvmrc", new Set([".nvmrc", "ci.yml"]))).toBe(true);
+  });
+
+  it("still treats a bare suffix as naming nothing", () => {
+    expect(claimsBareFile(".md", new Set(["ci.yml"]))).toBe(false);
   });
 });

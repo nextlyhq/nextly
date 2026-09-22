@@ -290,7 +290,11 @@ export function pathsIn(text) {
       if (/^[a-z]+:\/\//.test(token)) continue;
       // A path with a line or symbol suffix (`file.ts:42`) still names a file.
       const path = token.split(":")[0];
-      if (!PATH_EXTENSIONS.some(ext => path.endsWith(ext)) && !EXTENSIONLESS_FILES.has(path)) {
+      // The allowlist names a FILE, so it is matched against the basename.
+      // Comparing the whole path discarded `packages/nextly/.gitignore`, and
+      // this repository has nested `.gitignore` files that guidance cites.
+      const named = EXTENSIONLESS_FILES.has(path.split("/").pop());
+      if (!PATH_EXTENSIONS.some(ext => path.endsWith(ext)) && !named) {
         continue;
       }
       found.add(path);
@@ -354,6 +358,13 @@ export function claimsFilePath(path, { topLevel, basenames, nestedGuide = false 
  * positives, and all three probe deletions reported.
  */
 export function claimsBareFile(name, basenames) {
+  // 🔴 An allowlisted dotfile names repository configuration at ONE place, so
+  // the existence checks the caller already ran are the whole question. Going
+  // on to consult the repository-wide basenames meant MOVING the root `.nvmrc`
+  // into a subdirectory left the citation reading as live, because the moved
+  // file still carries the name. Deletion was reported and relocation was not,
+  // and relocation is the likelier accident.
+  if (EXTENSIONLESS_FILES.has(name)) return true;
   // 🔴 A dot-led token is a suffix pattern (`.md`, `.test.mjs`) when it ENDS in
   // a known extension, and a suffix names nothing to check.
   //
@@ -368,6 +379,27 @@ export function claimsBareFile(name, basenames) {
   // alternative reports every `.md` in the instruction files.
   if (name.startsWith(".") && PATH_EXTENSIONS.some(ext => name.endsWith(ext))) return false;
   return !basenames.has(name);
+}
+
+/**
+ * The unresolved references one instruction file claims.
+ *
+ * 🔴 The nested-guide classification used to live in `main`, so a test could
+ * pass `nestedGuide: true` straight to `claimsFilePath` and stay green while
+ * the caller stopped deriving it. Deriving it HERE, from the file path the
+ * analysis is given, means a test of this function exercises the real
+ * classification rather than reconstructing it.
+ *
+ * A nested AGENTS.md cites its own package's files relatively, so both bases
+ * are tried before anything is reported.
+ */
+export function unresolvedIn({ file, text, base = root, topLevel, basenames }) {
+  const near = dirname(join(base, file));
+  const nestedGuide = file.endsWith("/AGENTS.md");
+  return [...pathsIn(text)].filter(path => {
+    if (existsSync(join(base, path)) || existsSync(join(near, path))) return false;
+    return claimsFilePath(path, { topLevel, basenames, nestedGuide });
+  });
 }
 
 /** Every `.md` under a directory, recursively. */
@@ -583,14 +615,7 @@ function main() {
         findings.push({ file, kind: "script", claim: `pnpm --filter ${filter} ${name}` });
       }
     }
-    // A nested AGENTS.md cites its own package's files relatively, so both
-    // bases are tried before anything is reported.
-    const near = dirname(join(root, file));
-    const nestedGuide = file.endsWith("/AGENTS.md");
-    const unresolved = [...pathsIn(text)].filter(path => {
-      if (existsSync(join(root, path)) || existsSync(join(near, path))) return false;
-      return claimsFilePath(path, { topLevel, basenames, nestedGuide });
-    });
+    const unresolved = unresolvedIn({ file, text, topLevel, basenames });
     const ignored = gitIgnored(unresolved);
     for (const path of unresolved) {
       if (ignored.has(path)) continue;
