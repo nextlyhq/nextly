@@ -244,6 +244,39 @@ export function pluginRouteAuthRequired(
 }
 
 /**
+ * The ordinary-traffic allowance, taken from the app's own rate-limit config.
+ *
+ * Read from configuration rather than fixed here so a plugin route declaring
+ * `general` is held to the same budget the app chose for its REST surface,
+ * and so turning rate limiting off turns this off too.
+ */
+async function generalRouteBudget(): Promise<{
+  limit: number;
+  windowMs: number;
+}> {
+  const { getService } = await import("../../di/register");
+  const config = getService("config") as
+    | {
+        rateLimit?: {
+          enabled?: boolean;
+          readLimit?: number;
+          windowMs?: number;
+        };
+      }
+    | undefined;
+  const rateLimit = config?.rateLimit;
+  // Disabled app-wide means disabled here: an effectively infinite budget,
+  // rather than a second switch a reader would have to know about.
+  if (rateLimit?.enabled === false) {
+    return { limit: Number.MAX_SAFE_INTEGER, windowMs: 60_000 };
+  }
+  return {
+    limit: rateLimit?.readLimit ?? 100,
+    windowMs: rateLimit?.windowMs ?? 60_000,
+  };
+}
+
+/**
  * Apply the route's rate limit, returning the refusal when it trips.
  *
  * The bucket is the plugin's own: sharing core's `/auth/*` bucket would let a
@@ -254,7 +287,8 @@ async function applyRouteRateLimit(
   req: Request,
   matched: RouteMatch
 ): Promise<Response | null> {
-  if (matched.route.rateLimit !== "auth") return null;
+  const declared = matched.route.rateLimit;
+  if (declared === undefined) return null;
 
   const { authRateLimiter } = await import(
     "../../auth/middleware/rate-limiter"
@@ -272,13 +306,21 @@ async function applyRouteRateLimit(
 
   const { readAuthRateLimit } = await import("../../auth/handlers/deps-bridge");
   const configured = readAuthRateLimit(getService as (n: string) => unknown);
-  // Same limit and window as core's auth routes, in this plugin's own bucket.
+  // Which BUDGET, decided by what the route declared. `auth` takes core's
+  // auth allowance so guessing stays expensive; `general` takes the ordinary
+  // API read allowance, which is far larger and is the point of declaring it.
+  // Both spend from this plugin's own bucket, keyed above.
+  //
+  // The counter is shared with the auth limiter deliberately: it is a plain
+  // fixed-window counter over a key, and a second implementation of that is a
+  // second thing to keep correct.
+  const budget =
+    declared === "auth"
+      ? { limit: configured.requestsPerHour, windowMs: configured.windowMs }
+      : await generalRouteBudget();
+
   const limiter = authRateLimiter(configured.store);
-  const verdict = await limiter.check(
-    key,
-    configured.requestsPerHour,
-    configured.windowMs
-  );
+  const verdict = await limiter.check(key, budget.limit, budget.windowMs);
   if (verdict.allowed) return null;
 
   const retryAfter = Math.max(

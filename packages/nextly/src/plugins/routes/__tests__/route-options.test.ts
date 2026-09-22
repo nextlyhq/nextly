@@ -145,7 +145,31 @@ describe("rateLimitKey", () => {
     ).not.toBe("auth-ip:1.2.3.4");
   });
 
+  it("gives a general-limited route a bucket too", () => {
+    // `general` is a public option on `PluginRoute.rateLimit`, and this
+    // returned null for it — so a route declaring a valid documented value ran
+    // with no limit whatsoever, which is the opposite of what declaring one
+    // means.
+    expect(
+      rateLimitKey(route({ rateLimit: "general" }), "acme-auth", "1.2.3.4")
+    ).toBe("plugin-general-ip:acme-auth:1.2.3.4");
+  });
+
+  it("keeps the general and auth buckets apart", () => {
+    // Ordinary traffic must not be able to spend the allowance that exists to
+    // make password guessing expensive.
+    const auth = rateLimitKey(route({ rateLimit: "auth" }), "p", "1.2.3.4");
+    const general = rateLimitKey(
+      route({ rateLimit: "general" }),
+      "p",
+      "1.2.3.4"
+    );
+    expect(auth).not.toBe(general);
+  });
+
   it("is null for a route that asked for no limit", () => {
+    // The control: a key generated for every route would satisfy both tests
+    // above while limiting routes that never opted in.
     expect(rateLimitKey(route(), "acme-auth", "1.2.3.4")).toBeNull();
   });
 });

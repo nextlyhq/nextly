@@ -82,8 +82,15 @@ export function rateLimitKey(
   pluginSlug: string,
   ip: string
 ): string | null {
-  if (route.rateLimit !== "auth") return null;
-  return `plugin-auth-ip:${pluginSlug}:${ip}`;
+  // Both declared values get a bucket, and they are DIFFERENT buckets: an
+  // auth route's budget exists to make guessing expensive, and ordinary
+  // traffic must not be able to spend it. `general` returned null here, so a
+  // route declaring the public option ran with no limit at all.
+  if (route.rateLimit === "auth") return `plugin-auth-ip:${pluginSlug}:${ip}`;
+  if (route.rateLimit === "general") {
+    return `plugin-general-ip:${pluginSlug}:${ip}`;
+  }
+  return null;
 }
 
 /** Why a route's declared options are invalid, or null when they are fine. */

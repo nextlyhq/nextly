@@ -2689,7 +2689,12 @@ export function parseRestRoute(
   // Plugin settings. One plugin per request, named in the path, so a caller
   // cannot ask for every plugin's configuration in one go.
   if (resource === "plugins-settings" && id) {
-    routeParams.plugin = id;
+    // A SCOPED name occupies two segments. Taking only the first stored
+    // `@acme` as the plugin and left `auth` sitting in `subresource`, so
+    // `serviceFor` looked up a plugin by a name no plugin has and answered
+    // 404 — for the npm-scoped names this repository's own plugins use.
+    routeParams.plugin =
+      id.startsWith("@") && subresource ? `${id}/${subresource}` : id;
     if (httpMethod === "GET") {
       return {
         service: "pluginSettings",
