@@ -238,6 +238,31 @@ describe("validating the runner the root scripts delegate to", () => {
     ]);
   });
 
+  /*
+   * 🔴 Grepping the source for one `--maxWorkers=` was the first version, and
+   * one occurrence anywhere satisfied it — so a SECOND test phase could run
+   * uncapped while the runner reported the smaller derived number. Given the
+   * phases, each one that runs tests is judged on its own.
+   */
+  it("names the uncapped phase when another phase is capped", () => {
+    const phases = [
+      { name: "unit tests", argv: ["turbo", "run", "test", "--", "--maxWorkers=2"] },
+      { name: "script tests", argv: ["run", "test:scripts"] },
+    ];
+    expect(runnerProblems(sound, phases)).toEqual([
+      expect.stringContaining("'script tests'"),
+    ]);
+  });
+
+  it("is silent when every test phase carries a cap", () => {
+    const phases = [
+      { name: "unit tests", argv: ["turbo", "run", "test", "--", "--maxWorkers=2"] },
+      { name: "script tests", argv: ["exec", "vitest", "run", "--dir", "scripts", "--maxWorkers=2"] },
+      { name: "build", argv: ["turbo", "run", "build"] },
+    ];
+    expect(runnerProblems(sound, phases)).toEqual([]);
+  });
+
   it("names the runner by the path the scripts delegate to", () => {
     expect(BOUNDED_RUNNER).toBe("scripts/verify.mjs");
   });

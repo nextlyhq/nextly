@@ -57,15 +57,33 @@ export const BOUNDED_RUNNER = "scripts/verify.mjs";
  * enforce the rule it names. The filename is a claim; these are the two
  * properties that make it true.
  */
-export function runnerProblems(source) {
+export function runnerProblems(source, phases = null) {
   const problems = [];
   if (!/TURBO_CONCURRENCY:/.test(source)) {
     problems.push(
       `${BOUNDED_RUNNER}: does not set TURBO_CONCURRENCY on the commands it spawns`
     );
   }
-  if (!/--maxWorkers=/.test(source)) {
-    problems.push(`${BOUNDED_RUNNER}: does not pass --maxWorkers to the test phase`);
+
+  // 🔴 Grepping the source for one `--maxWorkers=` was the first version, and
+  // one occurrence anywhere satisfied it — so a SECOND phase could run vitest
+  // uncapped while the runner reported the smaller derived number. The phases
+  // are asked for instead, and every one that runs tests is held to the cap.
+  if (phases === null) {
+    if (!/--maxWorkers=/.test(source)) {
+      problems.push(`${BOUNDED_RUNNER}: does not pass --maxWorkers to any test phase`);
+    }
+    return problems;
+  }
+
+  for (const phase of phases) {
+    const argv = phase.argv.join(" ");
+    if (!/\btest\b/.test(argv)) continue;
+    if (!/--maxWorkers=/.test(argv)) {
+      problems.push(
+        `${BOUNDED_RUNNER}: phase '${phase.name}' runs tests without --maxWorkers — '${argv}'`
+      );
+    }
   }
   return problems;
 }
@@ -196,19 +214,29 @@ export function scriptProblems(scripts) {
   return problems;
 }
 
-function main() {
+async function main() {
   const script = readFileSync(join(root, HOOK), "utf8");
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const runner = existsSync(join(root, BOUNDED_RUNNER))
     ? readFileSync(join(root, BOUNDED_RUNNER), "utf8")
     : null;
+  // The phases as the runner actually builds them, rather than as its source
+  // text reads. A grep cannot tell which phase an occurrence belongs to.
+  let runnerPhases = null;
+  if (runner !== null) {
+    const { phasesFor } = await import("./verify.mjs");
+    runnerPhases = [
+      ...phasesFor("pr", { concurrency: 2, maxWorkers: 2 }),
+      ...phasesFor("full", { concurrency: 2, maxWorkers: 2 }),
+    ];
+  }
   const problems = [
     ...boundsProblems(script),
     ...scriptProblems(manifest.scripts ?? {}),
     // A missing runner is not a pass: the scripts delegate to it.
     ...(runner === null
       ? [`${BOUNDED_RUNNER}: missing, but the root scripts delegate their bounds to it`]
-      : runnerProblems(runner)),
+      : runnerProblems(runner, runnerPhases)),
   ];
 
   if (problems.length > 0) {
@@ -227,5 +255,5 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]).endsWith("check-local-gate-bounds.mjs")) {
-  main();
+  await main();
 }

@@ -25,9 +25,34 @@ describe("the phases a verification scope runs", () => {
     expect(phases.indexOf("build")).toBeLessThan(phases.indexOf("lint + types"));
   });
 
-  it("caps workers on the phase that spawns them", () => {
-    const tests = phasesFor("pr", limits).find(phase => phase.name === "unit tests");
-    expect(tests.argv).toContain("--maxWorkers=2");
+  /*
+   * Every phase that runs tests, not just the first one. A second uncapped
+   * phase is the shape that slipped through: the runner reported the derived
+   * number while one of its phases ran one worker per core.
+   */
+  it("caps workers on every phase that runs tests", () => {
+    for (const phase of phasesFor("full", limits)) {
+      if (!/\btest\b/.test(phase.argv.join(" "))) continue;
+      expect(phase.argv, `phase '${phase.name}' is uncapped`).toContain("--maxWorkers=2");
+    }
+  });
+
+  /*
+   * 🔴 `pnpm run <script> -- <args>` forwards the arguments but KEEPS the
+   * separator, so vitest reads everything after `--` as a test-name filter
+   * rather than as options: the cap is accepted, ignored, and the run reports
+   * success. Measured with a deliberately invalid flag — through
+   * `pnpm run ... --` it is ignored, passed directly it is rejected.
+   *
+   * turbo's `--` forwards options correctly, which is why only the `run` form
+   * is forbidden here.
+   */
+  it("does not rely on pnpm run's -- to carry a cap, because it does not", () => {
+    for (const phase of phasesFor("full", limits)) {
+      if (phase.argv[0] !== "run") continue;
+      expect(phase.argv, `phase '${phase.name}' passes options through 'pnpm run --'`)
+        .not.toContain("--maxWorkers=2");
+    }
   });
 
   /*

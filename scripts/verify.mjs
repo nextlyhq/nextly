@@ -46,7 +46,23 @@ export function phasesFor(scope, limits) {
     // `turbo run test` does not reach `scripts/` — gate-scope.mjs records that
     // explicitly — so without this a change confined to the repository's own
     // tooling passes both documented entry points without running its tests.
-    { name: "script tests", argv: ["run", "test:scripts"] },
+    //
+    // vitest is invoked DIRECTLY rather than through `pnpm run test:scripts`,
+    // and the reason is measurable rather than stylistic. `pnpm run <script> --
+    // <args>` forwards the arguments but KEEPS the separator, so the script
+    // runs as `vitest run --dir scripts -- --maxWorkers=2` and vitest reads
+    // everything after `--` as a test-name filter rather than as options. The
+    // cap is silently ignored and the run reports success, so the phase looks
+    // bounded and is not. Verified with a deliberately invalid flag: through
+    // `pnpm run ... --` it is accepted and ignored; passed directly it is
+    // rejected with `Unknown option`.
+    //
+    // turbo's `--` behaves the opposite way and does forward options, which is
+    // why the phases above can keep using it.
+    //
+    // `test:scripts` is exactly this command with no wrapper of its own, so
+    // nothing is bypassed by going direct.
+    { name: "script tests", argv: ["exec", "vitest", "run", "--dir", "scripts", workers] },
   ];
   if (scope === "pr") return pr;
   return [
@@ -54,7 +70,16 @@ export function phasesFor(scope, limits) {
     { name: "repo-wide lints", argv: ["run", "lint:design"] },
     { name: "workspace lint", argv: ["run", "lint:workspace"] },
     { name: "script lint", argv: ["run", "lint:scripts"] },
-    { name: "integration (sqlite)", argv: ["run", "test:integration:sqlite"] },
+    // Invoked as turbo directly rather than through `test:integration:sqlite`,
+    // which is exactly `turbo run test:integration` with no environment of its
+    // own — the sqlite leg needs no connection URL. Going direct is what lets
+    // the worker cap be forwarded; appending it to the script would hand
+    // `--maxWorkers` to turbo, which does not know the flag.
+    //
+    // The integration configs already pin `singleFork: true`, so this changes
+    // nothing at runtime. It makes the bound VERIFIABLE rather than resting on
+    // a config the checker does not read.
+    { name: "integration (sqlite)", argv: ["turbo", "run", "test:integration", "--", workers] },
   ];
 }
 
