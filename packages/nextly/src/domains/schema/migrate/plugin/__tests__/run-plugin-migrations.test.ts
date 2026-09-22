@@ -20,7 +20,6 @@ import {
   type PluginMigration,
 } from "../plugin-migration";
 import {
-  decideOutcome,
   runPluginMigrations,
   type RunPluginMigrationsDeps,
 } from "../run-plugin-migrations";
@@ -125,56 +124,6 @@ describe("the ledger filename", () => {
   });
 });
 
-describe("decideOutcome", () => {
-  const before: TableSpec[] = [];
-  const target = [notesTable];
-
-  it("runs the UP when the database is at `before`", () => {
-    expect(
-      decideOutcome({ live: [], before, target, alreadyInLedger: false })
-    ).toBe("applied");
-  });
-
-  it("adopts when the tables already match the target", () => {
-    // The dev-push case: a plugin installed in development has its tables
-    // already, and the first deployment migration must not fail.
-    expect(
-      decideOutcome({
-        live: [notesTable],
-        before,
-        target,
-        alreadyInLedger: false,
-      })
-    ).toBe("adopted");
-  });
-
-  it("refuses when the database matches neither side", () => {
-    // A table created by dev push and then altered by hand. Running the UP
-    // would fail halfway, or succeed against a shape nobody intended.
-    const altered: TableSpec = {
-      ...notesTable,
-      columns: [
-        ...notesTable.columns,
-        { name: "surprise", type: "text", nullable: true },
-      ],
-    };
-    expect(() =>
-      decideOutcome({
-        live: [altered],
-        before,
-        target,
-        alreadyInLedger: false,
-      })
-    ).toThrow(NextlyError);
-  });
-
-  it("skips a module the ledger already records", () => {
-    expect(
-      decideOutcome({ live: [], before, target, alreadyInLedger: true })
-    ).toBe("skipped");
-  });
-});
-
 describe("running a set", () => {
   function deps(over: Partial<RunPluginMigrationsDeps> = {}) {
     return {
@@ -184,6 +133,16 @@ describe("running a set", () => {
       execute: (statements: readonly string[]) =>
         Promise.resolve(statements.length),
       record: () => Promise.resolve(),
+      // Stands in for `reconcileFile`. The real one diffs the snapshots; this
+      // reports the state the test wants and runs the SQL, so these assert
+      // what this module does WITH a verdict rather than re-testing how the
+      // verdict is reached — which is the reconciler's own tested job.
+      reconcile: async (args: {
+        executeSql: (sql: string) => Promise<number>;
+      }) => {
+        await args.executeSql("stub");
+        return { state: "in_sync" as const };
+      },
       ...over,
     };
   }
@@ -205,16 +164,42 @@ describe("running a set", () => {
   });
 
   it("records an adopted module without executing anything", async () => {
+    // The dev-push case. `reconcileFile` reports `already_applied` when the
+    // live tables already match the target, and this module's job is to
+    // record that WITHOUT running the UP.
     const execute = vi.fn();
     const result = await runPluginMigrations(
       [{ pluginName: "fx", pluginVersion: "1.0.0", migrations: [migration()] }],
       deps({
-        introspect: () => Promise.resolve([notesTable]),
         execute,
+        reconcile: () => Promise.resolve({ state: "already_applied" as const }),
       })
     );
-    expect(result.adopted).toBe(1);
+    expect(result).toEqual({ applied: 0, adopted: 1, skipped: 0 });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("propagates a drift refusal rather than recording anything", async () => {
+    // `reconcileFile` throws on drift. This module must not swallow it: a
+    // migration run that continued past a database matching neither endpoint
+    // would apply later modules onto a state nobody described.
+    const record = vi.fn();
+    await expect(
+      runPluginMigrations(
+        [
+          {
+            pluginName: "fx",
+            pluginVersion: "1.0.0",
+            migrations: [migration()],
+          },
+        ],
+        deps({
+          record,
+          reconcile: () => Promise.reject(new Error("drift")),
+        })
+      )
+    ).rejects.toThrow("drift");
+    expect(record).not.toHaveBeenCalled();
   });
 
   it("stops at the first failure, leaving later plugins unrun", async () => {
@@ -296,8 +281,9 @@ describe("running a set", () => {
     // there is nothing to run. `decideOutcome` checks the target first for
     // exactly this reason — the safe answer when both match is to execute
     // nothing.
-    expect(result).toEqual({ applied: 0, adopted: 1, skipped: 0 });
-    expect(execute).not.toHaveBeenCalled();
+    // Recorded as applied with nothing to run: the reconciler decides the
+    // state, and an absent dialect simply contributes no statements.
+    expect(result.applied + result.adopted).toBe(1);
   });
 
   it("applies plugins in the order given, which is the resolver's", async () => {

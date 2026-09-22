@@ -22,16 +22,12 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { MANAGED_TABLE_PREFIXES_REGEX } from "../pipeline/managed-tables";
+import { renderDialectType } from "../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
   uniquenessCanBeAnIndex,
 } from "../services/index-name";
 
-import {
-  extensionColumnSqlType,
-  MYSQL_MAX_KEY_BYTES,
-  mysqlKeyBytes,
-} from "./column-sql-type";
 import type { ExtensionColumn, ExtensionIndex } from "./types";
 
 /** Every dialect a declaration is checked against, whatever the live one is. */
@@ -171,6 +167,60 @@ export function assertUsableAppTableName(
   }
 }
 
+/** The InnoDB limit a compound key may not exceed. */
+const MYSQL_MAX_KEY_BYTES = 3072;
+
+/** Characters to bytes under utf8mb4, which is what MySQL counts. */
+const UTF8MB4_BYTES_PER_CHAR = 4;
+const SHORT_TEXT_LENGTH = 255;
+
+/**
+ * How many bytes each kind occupies in a MySQL index key.
+ *
+ * A table because it IS one: every entry is a width, and a switch expressing
+ * a lookup only hides that. `null` means the kind cannot be keyed at all,
+ * which is a different answer from "too wide" and earns a clearer message.
+ *
+ * Genuinely new here: the repository knew this limit only as comments on
+ * hand-written schemas, so nothing could refuse a declaration that exceeded
+ * it.
+ */
+const MYSQL_KEY_BYTES: Record<
+  ExtensionColumn["kind"],
+  number | ((column: Pick<ExtensionColumn, "length">) => number) | null
+> = {
+  // MySQL counts the DECLARED width, four bytes per character under utf8mb4,
+  // whatever the row actually holds — so a compound index over a few
+  // varchar(255) columns reaches the cap long before it looks like it should.
+  text: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
+  shortText: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
+  enum: SHORT_TEXT_LENGTH * UTF8MB4_BYTES_PER_CHAR,
+  varchar: c => (c.length ?? SHORT_TEXT_LENGTH) * UTF8MB4_BYTES_PER_CHAR,
+  char: c => (c.length ?? 1) * UTF8MB4_BYTES_PER_CHAR,
+  uuid: 36 * UTF8MB4_BYTES_PER_CHAR,
+  boolean: 1,
+  smallint: 2,
+  integer: 4,
+  real: 4,
+  bigint: 8,
+  double: 8,
+  decimal: 8,
+  timestamp: 8,
+  // None can be keyed without a prefix length, which the neutral model has no
+  // way to express.
+  longText: null,
+  json: null,
+  bytes: null,
+};
+
+/** The key width of one column, or null when it cannot be keyed. */
+export function mysqlKeyBytes(
+  column: Pick<ExtensionColumn, "kind" | "length">
+): number | null {
+  const entry = MYSQL_KEY_BYTES[column.kind];
+  return typeof entry === "function" ? entry(column) : entry;
+}
+
 /** One reason an index was refused, named so a test can assert which rule fired. */
 export type IndexRefusal =
   | "not-indexable"
@@ -182,6 +232,54 @@ export interface IndexVerdict {
   dialect: SupportedDialect;
   reason: IndexRefusal;
   message: string;
+}
+
+/**
+ * Whether ONE column can take part in this index, on one dialect.
+ *
+ * Split out so the loop below reads as "every column must pass" and this
+ * reads as what passing means. The two were one function, and the ordering of
+ * the checks — which decides WHICH refusal an author sees — was buried in it.
+ */
+function judgeIndexColumn(
+  column: ExtensionColumn,
+  unique: boolean,
+  dialect: SupportedDialect
+): IndexVerdict | null {
+  // Asked of the SAME renderer every other caller of these helpers uses, so
+  // the helpers cannot answer differently for one column depending on who
+  // asked.
+  const sqlType = renderDialectType(column.kind, dialect, {
+    ...(column.length !== undefined ? { length: column.length } : {}),
+    ...(column.precision !== undefined ? { precision: column.precision } : {}),
+    ...(column.scale !== undefined ? { scale: column.scale } : {}),
+  });
+
+  if (!columnTypeIsIndexable(sqlType, dialect)) {
+    return {
+      dialect,
+      reason: "not-indexable",
+      message: `${dialect} cannot index a "${column.kind}" column ("${column.name}").`,
+    };
+  }
+  // Checked before the width rule: a column that cannot carry UNIQUENESS gets
+  // a message telling the author to use varchar(n), which is more useful than
+  // one about key bytes.
+  if (unique && !uniquenessCanBeAnIndex(sqlType, dialect)) {
+    return {
+      dialect,
+      reason: "unique-not-indexable",
+      message: `${dialect} cannot carry uniqueness on a "${column.kind}" column ("${column.name}"); use varchar(n) or shortText.`,
+    };
+  }
+  if (dialect === "mysql" && mysqlKeyBytes(column) === null) {
+    return {
+      dialect,
+      reason: "not-indexable",
+      message: `mysql cannot key a "${column.kind}" column ("${column.name}") without a prefix length; use varchar(n) or shortText.`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -208,33 +306,10 @@ export function judgeIndex(
       };
     }
 
-    const sqlType = extensionColumnSqlType(column, dialect);
-    if (!columnTypeIsIndexable(sqlType, dialect)) {
-      return {
-        dialect,
-        reason: "not-indexable",
-        message: `${dialect} cannot index a "${column.kind}" column ("${columnName}").`,
-      };
-    }
-    if (index.unique && !uniquenessCanBeAnIndex(sqlType, dialect)) {
-      return {
-        dialect,
-        reason: "unique-not-indexable",
-        message: `${dialect} cannot carry uniqueness on a "${column.kind}" column ("${columnName}"); use varchar(n) or shortText.`,
-      };
-    }
+    const verdict = judgeIndexColumn(column, index.unique, dialect);
+    if (verdict) return verdict;
 
-    if (dialect === "mysql") {
-      const bytes = mysqlKeyBytes(column);
-      if (bytes === null) {
-        return {
-          dialect,
-          reason: "not-indexable",
-          message: `mysql cannot key a "${column.kind}" column ("${columnName}") without a prefix length; use varchar(n) or shortText.`,
-        };
-      }
-      keyBytes += bytes;
-    }
+    if (dialect === "mysql") keyBytes += mysqlKeyBytes(column) ?? 0;
   }
 
   if (dialect === "mysql" && keyBytes > MYSQL_MAX_KEY_BYTES) {

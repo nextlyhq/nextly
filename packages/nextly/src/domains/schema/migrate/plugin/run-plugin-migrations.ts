@@ -64,6 +64,20 @@ export interface RunPluginMigrationsDeps {
   introspect: (tableNames: readonly string[]) => Promise<TableSpec[]>;
   /** Execute one module's UP in its own transaction. */
   execute: (statements: readonly string[]) => Promise<number>;
+  /**
+   * The EXISTING reconciler, injected rather than imported.
+   *
+   * Injected so this stays testable without a ledger, and `reconcileFile`
+   * rather than a local decision so there is one implementation of what
+   * "already applied" means.
+   */
+  reconcile: (args: {
+    file: { filename: string; sql: string; path: string; sha256?: string };
+    before: { tables: TableSpec[] };
+    target: { tables: TableSpec[] };
+    live: { tables: TableSpec[] };
+    executeSql: (sql: string) => Promise<number>;
+  }) => Promise<{ state: "in_sync" | "already_applied" | "drift" }>;
   /** Record the outcome against the ledger and the owner registry. */
   record: (row: {
     filename: string;
@@ -83,24 +97,21 @@ export interface PluginMigrationResult {
   skipped: number;
 }
 
-/** Compare two table sets by value, ignoring the order they were listed in. */
-function sameTables(a: readonly TableSpec[], b: readonly TableSpec[]): boolean {
-  const key = (tables: readonly TableSpec[]) =>
-    JSON.stringify(
-      [...tables]
-        .sort((x, y) => x.name.localeCompare(y.name))
-        .map(table => ({
-          name: table.name,
-          columns: [...table.columns].sort((x, y) =>
-            x.name.localeCompare(y.name)
-          ),
-          indexes: [...(table.indexes ?? [])].sort((x, y) =>
-            x.name.localeCompare(y.name)
-          ),
-        }))
-    );
-  return key(a) === key(b);
-}
+/**
+ * Why no adoption logic lives in this file.
+ *
+ * `reconcileFile` already decides the three outcomes — in_sync,
+ * already_applied, drift — by DIFFING the snapshots, and B5 said in terms
+ * that there is no second adoption implementation. There was one here, and it
+ * compared snapshots with JSON.stringify rather than a diff.
+ *
+ * That was not merely redundant, it was wrong. `drizzleTableToTableSpec`
+ * reports a PostgreSQL boolean as `boolean` and `renderDialectType` reports
+ * it as `bool`; `normalizeType` maps both to `bool`, so a real diff sees one
+ * type where a string comparison saw two. The duplicate would have reported
+ * DRIFT on a database that was entirely correct — precisely the failure
+ * adoption exists to prevent.
+ */
 
 /**
  * Everything one dialect needs from a module, with its absences resolved once.
@@ -130,34 +141,6 @@ function endpointsFor(
 }
 
 /**
- * Decide one module's outcome by comparing live against its own endpoints.
- *
- * Returns the outcome rather than acting, so the decision is testable without
- * a database and so there is exactly one place the three cases are named.
- */
-export function decideOutcome(args: {
-  live: readonly TableSpec[];
-  before: readonly TableSpec[];
-  target: readonly TableSpec[];
-  alreadyInLedger: boolean;
-}): ModuleOutcome {
-  if (args.alreadyInLedger) return "skipped";
-  if (sameTables(args.live, args.target)) return "adopted";
-  if (sameTables(args.live, args.before)) return "applied";
-
-  throw new NextlyError({
-    code: "NEXTLY_MIGRATION_DRIFT",
-    publicMessage:
-      "The database does not match either side of this migration. It was changed outside Nextly, or a migration was applied and then reverted by hand.",
-    logContext: {
-      liveTables: args.live.map(t => t.name),
-      beforeTables: args.before.map(t => t.name),
-      targetTables: args.target.map(t => t.name),
-    },
-  });
-}
-
-/**
  * Apply one module: decide, execute if needed, record.
  *
  * Split out so the loop below reads as the ORDER it enforces and this reads as
@@ -183,28 +166,43 @@ async function applyModule(
     );
   }
 
+  if (alreadyInLedger) return "skipped";
+
   const { before, target, up, names } = endpointsFor(migration, deps.dialect);
-  const outcome = decideOutcome({
-    live: alreadyInLedger ? [] : await deps.introspect(names),
-    before,
-    target,
-    alreadyInLedger,
+
+  // The decision is `reconcileFile`'s, not ours. It diffs the snapshots, which
+  // is what makes an adopted table that merely SPELLS a type differently — a
+  // PostgreSQL `boolean` against a rendered `bool` — compare equal.
+  let executed = 0;
+  const { state } = await deps.reconcile({
+    file: {
+      filename,
+      sql: up.join(";\n"),
+      path: filename,
+      sha256: migrationChecksum(migration.dialects),
+    },
+    before: { tables: before },
+    target: { tables: target },
+    live: { tables: await deps.introspect(names) },
+    executeSql: async (sql: string) => {
+      executed = await deps.execute(sql.split(";\n").filter(Boolean));
+      return executed;
+    },
   });
 
-  const executed = outcome === "applied" ? await deps.execute(up) : 0;
+  const outcome: ModuleOutcome =
+    state === "already_applied" ? "adopted" : "applied";
 
-  if (outcome !== "skipped") {
-    await deps.record({
-      filename,
-      pluginName: set.pluginName,
-      pluginVersion: set.pluginVersion,
-      schemaVersion: migration.schemaVersion,
-      sha256: migrationChecksum(migration.dialects),
-      outcome,
-      statementsExecuted: executed,
-      tables: names,
-    });
-  }
+  await deps.record({
+    filename,
+    pluginName: set.pluginName,
+    pluginVersion: set.pluginVersion,
+    schemaVersion: migration.schemaVersion,
+    sha256: migrationChecksum(migration.dialects),
+    outcome,
+    statementsExecuted: executed,
+    tables: names,
+  });
   return outcome;
 }
 

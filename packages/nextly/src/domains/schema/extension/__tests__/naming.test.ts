@@ -11,6 +11,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { pluginAdminSlug } from "../../../../plugins/plugin-slug";
 import {
   assertUsableAppTableName,
+  mysqlKeyBytes,
   judgeIndex,
   pluginTableName,
   pluginTablePrefix,
@@ -184,5 +185,64 @@ describe("judgeIndex", () => {
     expect(
       judgeIndex({ columns: ["ghost"], unique: false }, cols, "postgresql")
     ).toMatchObject({ reason: "unknown-column" });
+  });
+});
+
+describe("MySQL key widths", () => {
+  it("counts the DECLARED width, not the stored one", () => {
+    // Four bytes per character under utf8mb4, whatever the row holds — which
+    // is why a compound index over a few varchar(255) columns reaches the
+    // 3072-byte cap long before it looks like it should.
+    expect(mysqlKeyBytes({ kind: "varchar", length: 255 })).toBe(1020);
+    expect(mysqlKeyBytes({ kind: "shortText" })).toBe(1020);
+    expect(mysqlKeyBytes({ kind: "char", length: 3 })).toBe(12);
+    expect(mysqlKeyBytes({ kind: "uuid" })).toBe(144);
+  });
+
+  it("gives fixed-width kinds their real size", () => {
+    expect(mysqlKeyBytes({ kind: "boolean" })).toBe(1);
+    expect(mysqlKeyBytes({ kind: "smallint" })).toBe(2);
+    expect(mysqlKeyBytes({ kind: "integer" })).toBe(4);
+    expect(mysqlKeyBytes({ kind: "bigint" })).toBe(8);
+  });
+
+  it("returns null for kinds MySQL cannot key at all", () => {
+    // Distinct from "too wide": these need a prefix length the neutral model
+    // has no way to express, so the message has to differ.
+    expect(mysqlKeyBytes({ kind: "longText" })).toBeNull();
+    expect(mysqlKeyBytes({ kind: "json" })).toBeNull();
+    expect(mysqlKeyBytes({ kind: "bytes" })).toBeNull();
+  });
+
+  it("answers for EVERY kind, so a new one cannot fall through", () => {
+    // The table is a Record over the union, so a missing kind is a compile
+    // error — but a kind whose entry is `undefined` would slip past that and
+    // read as "cannot be keyed". This asserts the values are real.
+    const kinds = [
+      "text",
+      "longText",
+      "shortText",
+      "varchar",
+      "boolean",
+      "integer",
+      "double",
+      "decimal",
+      "timestamp",
+      "json",
+      "bigint",
+      "smallint",
+      "char",
+      "uuid",
+      "real",
+      "bytes",
+      "enum",
+    ] as const;
+    for (const kind of kinds) {
+      const bytes = mysqlKeyBytes({ kind, length: 4 });
+      expect({ kind, defined: bytes !== undefined }).toEqual({
+        kind,
+        defined: true,
+      });
+    }
   });
 });

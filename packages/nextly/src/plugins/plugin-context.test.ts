@@ -56,17 +56,16 @@ function makeCtx(plugin?: unknown) {
 
 describe("createPluginContext (P1 reshape)", () => {
   it("exposes db and logger at the top level", () => {
-    const { ctx, logger } = makeCtx();
-    // Not the live instance: a plugin that did not declare `db.rawSql` gets a
-    // surface carrying only the fluent methods, so `execute` and `run` are not
-    // reachable however the plugin is written.
-    expect(ctx.db).toBeDefined();
-    expect(Object.keys(ctx.db as object).sort()).toEqual([
-      "delete",
-      "insert",
-      "select",
-      "update",
-    ]);
+    const { ctx, db, logger } = makeCtx();
+    // `ctx.db` is the typed surface; the raw handle it used to BE is
+    // preserved at `.raw` so existing plugins keep working — and a plugin
+    // that did not declare `db.rawSql` gets only the fluent methods, so
+    // `execute` and `run` are not reachable however the plugin is written.
+    expect(ctx.db.raw).toBe(db);
+    expect(typeof ctx.db.table).toBe("function");
+    expect(
+      (Object.keys(ctx.db) as string[]).filter(k => k !== "raw").sort()
+    ).toEqual(["delete", "insert", "select", "table", "update"]);
     expect(ctx.logger).toBe(logger);
   });
 
