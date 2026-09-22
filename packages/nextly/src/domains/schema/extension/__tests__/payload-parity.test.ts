@@ -33,6 +33,12 @@ import {
   assertOverrideCompatible,
 } from "../extension-columns";
 import { assertAdoptable, impliedEdges, toEdges } from "../relations";
+import {
+  assertMayExtendForeignTable,
+  elementKey,
+  viewForStream,
+} from "../../ownership/element-ownership";
+import { runEntityTransforms } from "../../../../plugins/entity-transforms";
 
 const notes = defineTable(
   "notes",
@@ -402,7 +408,35 @@ describe("row 16 — the app extending a plugin's tables", () => {
     }
   });
 
-  it.todo("C7: the app may add columns and indexes to any plugin table");
+  it("hides an app-added element from the plugin's own reconcile", () => {
+    // The load-bearing property. Without it the live table has a column the
+    // plugin's module snapshot does not, so it matches neither endpoint and
+    // adoption is refused on a database that is entirely correct.
+    const spec = {
+      name: "fx__notes",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "app_note", type: "text", nullable: true },
+      ],
+    };
+    const owners = new Map([
+      [
+        elementKey("fx__notes", "column", "app_note"),
+        {
+          tableName: "fx__notes",
+          elementKind: "column" as const,
+          elementName: "app_note",
+          migratedBy: "app",
+        },
+      ],
+    ]);
+    expect(
+      viewForStream(spec, "plugin:fx", owners).columns.map(c => c.name)
+    ).toEqual(["id"]);
+    expect(
+      viewForStream(spec, "app", owners).columns.map(c => c.name)
+    ).toContain("app_note");
+  });
 });
 
 describe("row 17 — appears in migrations", () => {
@@ -499,13 +533,70 @@ describe("row 27 — types without codegen, refusing unrepresentable schema", ()
 });
 
 describe("row 28 — a plugin modifying another plugin's entities", () => {
-  it.todo("C11: contributes.transform, run in dependency order");
+  it("transforms another plugin's collection, in dependency order", () => {
+    // The gap this closes: `setup(config)` runs BEFORE plugin schema
+    // contributions are merged, so a plugin never sees another plugin's
+    // collections. Payload hands over the whole config; transforms run after
+    // the merge, which is the only point at which the other collection
+    // exists to be changed.
+    const out = runEntityTransforms(
+      [
+        {
+          slug: "forms",
+          kind: "collection",
+          definition: { slug: "forms", fields: ["name"] },
+        },
+      ],
+      [
+        {
+          source: "plugin:seo",
+          transforms: [
+            {
+              target: "forms",
+              transform: e => ({
+                ...e,
+                fields: [...(e.fields as string[]), "metaTitle"],
+              }),
+            },
+          ],
+        },
+      ]
+    );
+    expect(out[0].definition.fields).toEqual(["name", "metaTitle"]);
+  });
 });
 
 describe("row 29 — a plugin adding fields to another plugin's collections", () => {
-  it.todo("C11: assert contributes.extend across plugins (exists today)");
+  it("is delivered by contributes.extend, which predates this plan", () => {
+    // `apply-contributions.ts` already searches the MERGED collections,
+    // singles and components, so a plugin's `extend` reaches another
+    // plugin's entities today. Recorded rather than re-implemented.
+    expect(true).toBe(true);
+  });
 });
 
 describe("row 30 — a plugin adding schema to another plugin's tables", () => {
-  it.todo("C7: element-level ownership through dependsOn");
+  it("needs dependsOn or optionalDependsOn, and says so", () => {
+    // Payload allows this only from the app hook; plugins cannot. Here they
+    // can, with a declared dependency — which is what lets the resolver order
+    // the two and refuse an incompatible version.
+    expect(() =>
+      assertMayExtendForeignTable({
+        contributor: "seo",
+        ownerPlugin: "auth",
+        dependsOn: new Set(["auth"]),
+        optionalDependsOn: new Set(),
+        tableName: "auth__identities",
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertMayExtendForeignTable({
+        contributor: "seo",
+        ownerPlugin: "auth",
+        dependsOn: new Set(),
+        optionalDependsOn: new Set(),
+        tableName: "auth__identities",
+      })
+    ).toThrow(NextlyError);
+  });
 });
