@@ -268,47 +268,68 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## How much of the machine a local gate may take
 
-`.husky/pre-push` and `pnpm verify:pr` are bounded, and the bound is checked
-(`pnpm check:local-gate-bounds`, run in CI).
+`.husky/pre-push`, `pnpm verify:pr` and `pnpm verify:full` size themselves to
+the machine they run on. `pnpm local-limits` prints what this machine gets.
 
-```
-NEXTLY_LOCAL_CONCURRENCY   turbo package tasks at once   default 2
-NEXTLY_LOCAL_MAX_WORKERS   Vitest workers per package    default 2
-```
+The gates fan out two levels: turbo runs several package tasks at once, and
+each task running Vitest spawns several workers. **The product is what consumes
+the machine**, and both defaults are large — `turbo --concurrency` defaults to
+10, and Vitest's `maxWorkers` defaults to `os.availableParallelism()`. On an
+eight-core machine that reaches up to 80 Node processes, each with its own V8
+heap, which exhausts an ordinary development machine. The kernel's response to
+that is to kill processes, not to slow down.
 
-🔴 Unbounded, these gates exhaust a laptop, and the arithmetic is the finding
-rather than an estimate. `turbo --concurrency` defaults to 10. Vitest's
-`maxWorkers` defaults to `os.availableParallelism()` with watch off, and 23 of
-the 24 packages declaring a `test` script set no cap of their own. Ten packages
-times eight cores is up to 80 concurrent Node processes, each with a V8 heap;
-on a 9.7 GiB WSL2 VM the kernel OOM-killer took `systemd` and `dbus-daemon` and
-the session had to be restarted.
+`scripts/local-limits.mjs` budgets the total number of heavy processes from
+total memory and core count, then splits it into the two knobs. Roughly:
 
-The diff that triggers the worst of it is ordinary. `scripts/gate-scope.mjs`
-treats the root manifest, `pnpm-workspace.yaml` and `turbo.jsonc` as redefining
-the task graph, so a change to any of them takes the UNFILTERED branch and
-tests every package at once.
+| Machine         | package tasks | workers each | peak processes |
+| --------------- | ------------- | ------------ | -------------- |
+| 4 GiB / 4 cpu   | 1             | 1            | 1              |
+| 8 GiB / 4 cpu   | 1             | 3            | 3              |
+| 16 GiB / 8 cpu  | 2             | 3            | 6              |
+| 64 GiB / 32 cpu | 4             | 4            | 16             |
 
-CI was never affected: `lane:test` passes `--concurrency=50%` and splits
-`nextly` and `admin` into lanes of their own. Only the local path was
-unbounded, and that asymmetry is what this closes.
+A FIXED number would be wrong for everyone: one that protects a small laptop
+makes a workstation crawl, and either way the gate gets bypassed. Deriving it
+is what lets the same command be correct on both.
 
 **Concurrency is not correctness.** The cap changes how many tasks run at once,
-never which ones, so every gate still asks exactly what it asked before. On a
-machine with headroom, raise it for one command:
+never which ones, so a bounded gate asks exactly what an unbounded one asked.
+
+Override it for one command when you have headroom, or permanently in your
+shell profile when you do not:
 
 ```sh
 NEXTLY_LOCAL_CONCURRENCY=6 NEXTLY_LOCAL_MAX_WORKERS=4 git push
 ```
 
-`TURBO_CONCURRENCY` is turbo's own variable, so exporting it once reaches
-`pnpm run build` and every nested invocation. Vitest reads no equivalent
-variable, so its cap is forwarded as `-- --maxWorkers=<n>` through turbo.
+A malformed override is ignored rather than honoured, because an empty
+`NEXTLY_LOCAL_CONCURRENCY=` in a profile would otherwise restore turbo's
+default of 10 — the failure the bound exists to prevent, arriving silently.
 
-Two entry points carry the same limits, for when you want the gate without a
-push: `pnpm verify:pr` (build, lint, types, unit tests) and `pnpm verify:full`
-(adds the repo-wide lints and the SQLite integration leg). Run one heavy phase
-at a time; never a unit suite while an integration leg is in flight.
+### By operating system
+
+Everything above is platform-independent: `os.totalmem()` and
+`os.availableParallelism()` report correctly on all four. What differs is what
+else is competing for the machine.
+
+- **Linux** — nothing special. The budget reserves 30% for the OS and your
+  editor.
+- **macOS** — the same, though a machine with unified memory shares it with the
+  GPU; if you run a heavy simulator alongside, lower the override.
+- **Windows** — run hooks from Git Bash or another POSIX shell; husky hooks are
+  `sh` scripts. Defender's real-time scanning of `node_modules` costs more than
+  concurrency does, so exclude the repository directory from it before tuning
+  anything else.
+- **WSL2** — the VM's memory is what `os.totalmem()` reports, and it is set in
+  `.wslconfig` on the Windows side rather than by the distribution. That file is
+  per-machine and belongs on the machine, never in this repository. Keep the
+  repository on the Linux filesystem: a checkout under `/mnt/c` crosses the
+  9p filesystem boundary for every file operation and is far slower than any
+  concurrency setting can compensate for.
+
+Run one heavy phase at a time, and never a unit suite while an integration leg
+is in flight.
 
 ## Conventions (enforced; violations will be rejected in review)
 

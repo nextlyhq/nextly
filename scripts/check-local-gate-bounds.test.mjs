@@ -5,7 +5,8 @@
  * The measured event behind them: `.husky/pre-push` ran `pnpm turbo test`
  * unfiltered with no concurrency cap, turbo's default of 10 package tasks met
  * Vitest's default of one worker per core in 23 uncapped packages, and the
- * kernel OOM-killer took `systemd` and `dbus-daemon` on a 9.7 GiB WSL2 VM.
+ * machine ran out of memory. What the kernel killed was not the build: an init
+ * and a session daemon went first, taking the desktop with them.
  */
 import { describe, expect, it } from "vitest";
 

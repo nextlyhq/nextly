@@ -3,14 +3,15 @@
 /**
  * The local gates must declare how much of the machine they may take.
  *
- * 🔴 Unbounded, `.husky/pre-push` exhausts a developer laptop, and the
- * arithmetic is the finding rather than an estimate. Turbo's `--concurrency`
- * defaults to 10. Vitest's `maxWorkers` defaults to
+ * 🔴 Unbounded, `.husky/pre-push` exhausts an ordinary development machine, and
+ * the arithmetic is the finding rather than an estimate. Turbo's
+ * `--concurrency` defaults to 10. Vitest's `maxWorkers` defaults to
  * `os.availableParallelism()` when watch mode is off, and 23 of the 24 packages
  * declaring a `test` script set no cap of their own. Ten packages times eight
- * workers is up to 80 concurrent Node processes, each carrying a V8 heap; on a
- * 9.7 GiB WSL2 VM the kernel OOM-killer took `systemd` and `dbus-daemon` with
- * it and the session had to be restarted.
+ * cores is up to 80 concurrent Node processes, each carrying a V8 heap. Once
+ * memory runs out the kernel kills processes rather than slowing down, and what
+ * it picks is not necessarily the build — an init or session daemon going first
+ * takes the whole desktop with it.
  *
  * The comment explaining that lives in the hook, and a comment is not a
  * control: the next person to add a turbo invocation there will not read it.
@@ -43,6 +44,9 @@ export const HOOK = ".husky/pre-push";
  * `verify:pr` quietly becoming the unbounded path the hook stopped being.
  */
 export const BOUNDED_SCRIPTS = ["verify:pr", "verify:full"];
+
+/** The runner that derives the limits and applies them to every phase. */
+export const BOUNDED_RUNNER = "scripts/verify.mjs";
 
 /**
  * Lines that invoke turbo, with the line number, comments and strings removed.
@@ -146,12 +150,18 @@ export function scriptProblems(scripts) {
       problems.push(`package.json: '${name}' is missing, so there is no bounded local entry point`);
       continue;
     }
-    const delegates = BOUNDED_SCRIPTS.some(
-      other => other !== name && body.includes(`pnpm ${other}`)
-    );
-    if (delegates) continue;
+    // Delegating to the bounded runner IS the bound: it derives the limits
+    // from the machine and applies them to every phase it spawns. Requiring
+    // the variable inline as well would reward restating the limit in a second
+    // place, which is the drift this file exists to stop.
+    if (new RegExp(`node\\s+${BOUNDED_RUNNER}`).test(body)) continue;
+    // Composing another already-bounded script is equally fine.
+    if (BOUNDED_SCRIPTS.some(other => other !== name && body.includes(`pnpm ${other}`))) continue;
+
     if (!/TURBO_CONCURRENCY=/.test(body)) {
-      problems.push(`package.json: '${name}' runs turbo without setting TURBO_CONCURRENCY`);
+      problems.push(
+        `package.json: '${name}' runs turbo without setting TURBO_CONCURRENCY or delegating to ${BOUNDED_RUNNER}`
+      );
     }
     if (/turbo run test|turbo test/.test(body) && !/--maxWorkers/.test(body)) {
       problems.push(`package.json: '${name}' runs tests without capping --maxWorkers`);
