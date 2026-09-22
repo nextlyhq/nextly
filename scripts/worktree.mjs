@@ -98,6 +98,25 @@ export function databaseFor(slot) {
   return slot === 0 ? DATABASE_BASE : `${DATABASE_BASE}_w${slot}`;
 }
 
+/**
+ * The slot a `--slot` argument names, or null if it names no slot at all.
+ *
+ * `Number()` accepts far more than a slot can be. `--slot nope` and a bare
+ * `--slot` both became NaN, and `worktree env` then printed `PORT=NaN` and
+ * `NEXTLY_TEST_DB=nextly_test_wNaN` and exited 0. Sourcing that output leaves
+ * the servers on their slot-0 defaults while the integration lanes look for a
+ * database that cannot exist and self-skip — which reads as a pass. Both
+ * halves of the isolation are gone and nothing says so.
+ *
+ * Digits only, so `-1`, `1.5`, `1e3` and `0x2` are all refused rather than
+ * silently truncated into a slot that exists.
+ */
+export function parseSlot(value) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  const slot = Number(value);
+  return slot < MAX_SLOTS ? slot : null;
+}
+
 /** The ports a slot owns. Slot 0 is the documented defaults, verbatim. */
 export function portsFor(slot) {
   if (slot === 0) return { ...DEFAULT_PORTS };
@@ -313,14 +332,30 @@ function sqlArgs(engine, container, statement) {
  * rather than inferred from a failure, and a command that fails against a
  * container that IS running is an error the caller must see.
  */
-export function provisionDatabases(slot, { run = execFileSync } = {}) {
+export function provisionDatabases(
+  slot,
+  { run = execFileSync, willProvision = () => {}, isRunning = containerRunning } = {}
+) {
   const name = databaseFor(slot);
   const results = [];
   for (const { container, engine } of TEST_DATABASES) {
-    if (!containerRunning(container)) {
+    if (!isRunning(container)) {
       results.push({ container, state: "skipped", detail: "container not running" });
       continue;
     }
+    // 🔴 Recorded BEFORE the container is touched, never after.
+    //
+    // Recording the OUTCOME meant an interrupted run left a record that was
+    // short by whatever it had just done. A removal taken later, while that
+    // container happened to be stopped, read the skip as "nothing was ever
+    // created here", released the slot, and the next worktree inherited a
+    // populated database.
+    //
+    // The record only has to be a SUPERSET of the containers holding the
+    // database. Every drop is `IF EXISTS`, so naming one that never received
+    // it costs a single statement, while missing one costs the isolation this
+    // whole script exists for. Over-recording is the safe direction.
+    willProvision(container);
     try {
       // IF NOT EXISTS is not portable to Postgres's CREATE DATABASE, so the
       // existence check is separate and the create is guarded by it.
@@ -508,16 +543,12 @@ function commandNew(branch, from, worktreeRoot) {
 
   const env = slotEnv(slot);
   const settings = writeSettings(target, env);
-  const provisioned = provisionDatabases(slot);
+  // The record is written per container as provisioning reaches it, so an
+  // interrupted run leaves a record that is never short of what exists.
+  const provisioned = provisionDatabases(slot, {
+    willProvision: container => recordProvisioned(dir, slot, [container]),
+  });
   const failed = provisioned.filter(result => result.state === "failed");
-
-  // Which containers actually hold this slot's database, so a later teardown
-  // knows what it must drop and what was never there.
-  recordProvisioned(
-    dir,
-    slot,
-    provisioned.filter(r => r.state === "created" || r.state === "present").map(r => r.container)
-  );
 
   console.log(`worktree: ${target}`);
   console.log(`  branch ${branch} from ${from}, slot ${slot}`);
@@ -639,13 +670,21 @@ function commandProvision() {
   const env = existsSync(join(root, ".claude", "settings.local.json"))
     ? JSON.parse(readFileSync(join(root, ".claude", "settings.local.json"), "utf8")).env ?? {}
     : {};
-  const slot = Number(env.NEXTLY_WORKTREE_SLOT ?? 0);
-  const results = provisionDatabases(slot);
-  recordProvisioned(
-    claimDir(commonDir()),
-    slot,
-    results.filter(r => r.state === "created" || r.state === "present").map(r => r.container)
-  );
+  // The same unvalidated conversion `worktree env` carried: a hand-edited
+  // settings file with a nonsense slot provisioned `nextly_test_wNaN` and
+  // reported success.
+  const slot = parseSlot(String(env.NEXTLY_WORKTREE_SLOT ?? 0));
+  if (slot === null) {
+    console.error(
+      `worktree: .claude/settings.local.json sets NEXTLY_WORKTREE_SLOT=` +
+        `${env.NEXTLY_WORKTREE_SLOT}, which is not a slot from 0 to ${MAX_SLOTS - 1}`
+    );
+    process.exit(2);
+  }
+  const dir = claimDir(commonDir());
+  const results = provisionDatabases(slot, {
+    willProvision: container => recordProvisioned(dir, slot, [container]),
+  });
   console.log(`worktree: provisioning slot ${slot} (${databaseFor(slot)})`);
   report(results, "  ");
   const failed = results.filter(result => result.state === "failed");
@@ -738,7 +777,16 @@ function main() {
   if (command === "provision") return commandProvision();
   if (command === "sweep") return commandSweep();
   if (command === "env") {
-    const env = slotEnv(Number(flag("slot") ?? 0));
+    // `flag` returns null when the option is absent and undefined when it is
+    // present with nothing after it, and those mean different things here: no
+    // `--slot` is the primary checkout, a `--slot` with no value is a typo.
+    const raw = flag("slot");
+    const slot = raw === null ? 0 : parseSlot(raw);
+    if (slot === null) {
+      console.error(`worktree: --slot needs an integer from 0 to ${MAX_SLOTS - 1}`);
+      process.exit(2);
+    }
+    const env = slotEnv(slot);
     for (const [key, value] of Object.entries(env)) console.log(`export ${key}=${value}`);
     return;
   }

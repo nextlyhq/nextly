@@ -17,10 +17,14 @@ import {
   PORT_NAMES,
   claimSlot,
   databaseFor,
+  MAX_SLOTS,
+  TEST_DATABASES,
   databaseToDrop,
   findWorktree,
   isReclaimable,
+  parseSlot,
   portsFor,
+  provisionDatabases,
   readClaims,
   settingsWithEnv,
   slotEnv,
@@ -352,5 +356,109 @@ describe("writing the slot into a checkout's local settings", () => {
 
   it("creates the env block when the file had none", () => {
     expect(settingsWithEnv(null, { PORT: "3200" })).toEqual({ env: { PORT: "3200" } });
+  });
+});
+
+describe("reading the slot off a --slot argument", () => {
+  /*
+   * 🔴 `Number(flag("slot") ?? 0)` accepted anything. `worktree env --slot abc`
+   * printed `PORT=NaN` and `NEXTLY_TEST_DB=nextly_test_wNaN` and exited 0, and
+   * sourcing that leaves the servers on their slot-0 defaults while the
+   * integration lanes look for a database that cannot exist and self-skip —
+   * which reads as a pass. Both halves of the isolation gone, silently.
+   */
+  it("reads a slot in range", () => {
+    expect(parseSlot("0")).toBe(0);
+    expect(parseSlot("7")).toBe(7);
+    expect(parseSlot(String(MAX_SLOTS - 1))).toBe(MAX_SLOTS - 1);
+  });
+
+  it.each(["abc", "-1", "1.5", "1e3", "0x2", "", " 3", "+1"])(
+    "refuses what is not a slot: %j",
+    value => {
+      expect(parseSlot(value)).toBe(null);
+    }
+  );
+
+  it("refuses a slot past the last one that can be claimed", () => {
+    expect(parseSlot(String(MAX_SLOTS))).toBe(null);
+  });
+
+  it("refuses a --slot given no value at all", () => {
+    // `flag()` returns undefined for `worktree env --slot` with nothing after
+    // it, which the old `?? 0` quietly turned into the primary checkout.
+    expect(parseSlot(undefined)).toBe(null);
+  });
+});
+
+describe("recording what a slot was provisioned into", () => {
+  const containers = TEST_DATABASES.map(entry => entry.container);
+
+  /*
+   * 🔴 The record used to be written from the OUTCOME, after every container
+   * had been visited. An interrupted `provision` therefore left a record short
+   * by whatever it had just done, and a removal taken later while that
+   * container happened to be stopped read the skip as "nothing was ever
+   * created here", released the slot, and handed the next worktree a populated
+   * database.
+   *
+   * The invariant that makes an interruption safe is an ORDERING one: nothing
+   * is touched before it is recorded. Then a kill at any point leaves a record
+   * that is a superset of what exists, and every drop is `IF EXISTS`.
+   */
+  it("records a container before running anything against it", () => {
+    const recorded = [];
+    const atStatement = [];
+    provisionDatabases(3, {
+      isRunning: () => true,
+      willProvision: container => recorded.push(container),
+      run: (_cmd, args) => {
+        atStatement.push({ container: args[1], recorded: [...recorded] });
+        return "";
+      },
+    });
+
+    expect(atStatement.length).toBeGreaterThan(0);
+    for (const { container, recorded: soFar } of atStatement) {
+      expect(soFar).toContain(container);
+    }
+    expect(recorded).toEqual(containers);
+  });
+
+  it("leaves a stopped container out of the record", () => {
+    const recorded = [];
+    const results = provisionDatabases(3, {
+      isRunning: container => container !== "nextly-mysql-test",
+      willProvision: container => recorded.push(container),
+      run: () => "",
+    });
+
+    expect(recorded).not.toContain("nextly-mysql-test");
+    expect(results.find(r => r.container === "nextly-mysql-test").state).toBe("skipped");
+  });
+
+  it("holds the slot when a container it reached is stopped at removal", () => {
+    const recorded = [];
+    provisionDatabases(3, {
+      isRunning: () => true,
+      willProvision: container => recorded.push(container),
+      run: (_cmd, args) => {
+        if (args[1] === "nextly-mysql-test") throw new Error("interrupted");
+        return "";
+      },
+    });
+
+    // The removal that used to release the slot.
+    const dropped = [
+      { container: "nextly-postgres17-test", state: "dropped" },
+      { container: "nextly-postgres15-test", state: "dropped" },
+      { container: "nextly-mysql-test", state: "skipped", detail: "container not running" },
+    ];
+    expect(teardownIncomplete(dropped, recorded)).toBe(true);
+
+    // The control: the record the OLD code would have written, holding only
+    // what completed, releases it.
+    expect(teardownIncomplete(dropped, ["nextly-postgres17-test", "nextly-postgres15-test"]))
+      .toBe(false);
   });
 });
