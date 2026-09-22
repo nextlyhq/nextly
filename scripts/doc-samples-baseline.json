@@ -1,8 +1,8 @@
 {
   "coverage": {
-    "pages": 70,
-    "samples": 392,
-    "compiled": 247
+    "pages": 71,
+    "samples": 399,
+    "compiled": 248
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -142,7 +142,7 @@
       "compiled": 7
     },
     "docs/plugins/api-reference.mdx": {
-      "samples": 14,
+      "samples": 19,
       "compiled": 1
     },
     "docs/plugins/auth.mdx": {
@@ -179,6 +179,10 @@
     },
     "docs/plugins/schema.mdx": {
       "samples": 3,
+      "compiled": 1
+    },
+    "docs/plugins/security.mdx": {
+      "samples": 2,
       "compiled": 1
     },
     "docs/plugins/seo.mdx": {
@@ -291,7 +295,7 @@
     "docs/guides/media-storage.mdx": 1,
     "docs/guides/routing-and-seo.mdx": 3,
     "docs/plugins/admin-ui.mdx": 1,
-    "docs/plugins/auth.mdx": 3,
+    "docs/plugins/auth.mdx": 2,
     "docs/plugins/author-guide.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
     "docs/plugins/lifecycle.mdx": 2,
@@ -333,7 +337,6 @@
       "reader-name #9 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
-      "#1 error TS2304: Cannot find name 'verifyGoogleToken'.": 1,
       "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
       "#2 error TS2304: Cannot find name 'verifyTotp'.": 1,
       "uninstalled #0 error TS2307: Cannot find module '@acme/nextly-plugin-google' or its corresponding type declarations.": 1

@@ -142,6 +142,47 @@ describe("validateCapabilities", () => {
     ).not.toThrow();
   });
 
+  it("checks the segments after a wildcard over an OBJECT", () => {
+    // A `*` over an object matches whichever keys it HAS — but the suffix
+    // still has to exist under one of them. Accepting at the wildcard was the
+    // record case's defect wearing the other shape, and the consequence is the
+    // same: `mapSecrets` matches nothing, so the credential is stored in plain
+    // text and returned unredacted.
+    const settings = z.object({
+      providers: z.object({ google: z.object({ clientSecret: z.string() }) }),
+    });
+    expect(
+      reasonOf(() =>
+        validateCapabilities([
+          plugin({
+            contributes: { settings },
+            capabilities: { secrets: ["providers.*.clientSecrett"] },
+          } as never),
+        ])
+      )
+    ).toBe("unknown-secret-path");
+  });
+
+  it("accepts a wildcard suffix that exists under ONE of the keys", () => {
+    // The control, and the reason the rule is "some" rather than "every": a
+    // wildcard names any key, so a suffix present under one of them is a
+    // declaration that matches something real.
+    const settings = z.object({
+      providers: z.object({
+        google: z.object({ clientSecret: z.string() }),
+        anonymous: z.object({ enabled: z.boolean() }),
+      }),
+    });
+    expect(() =>
+      validateCapabilities([
+        plugin({
+          contributes: { settings },
+          capabilities: { secrets: ["providers.*.clientSecret"] },
+        } as never),
+      ])
+    ).not.toThrow();
+  });
+
   it("checks the segments AFTER a wildcard over a record", () => {
     // A record accepts any KEY, which says nothing about what is beneath it.
     // Stopping at the `*` accepted this typo exactly as stopping at the head

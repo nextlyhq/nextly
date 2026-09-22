@@ -30,7 +30,8 @@ import type { PluginDefinition, PluginSettingsApi } from "./plugin-context";
  */
 export function createPluginSettings(
   plugin: PluginDefinition,
-  db: unknown
+  db: unknown,
+  dialect: SupportedDialect
 ): PluginSettingsApi {
   const schema = plugin.contributes?.settings;
   if (!schema) {
@@ -42,10 +43,14 @@ export function createPluginSettings(
     });
   }
 
-  // Resolved lazily: the dialect is read from the live database handle, and a
-  // context can be built before one is connected.
+  // The dialect is PASSED, not read off the handle. What a plugin receives is
+  // a restricted wrapper exposing four query methods and nothing else, so
+  // `db.dialect` was always undefined and every install fell back to SQLite:
+  // MySQL has no `onConflictDoUpdate` and failed the write outright, and
+  // Postgres was handed SQLite's column encoders, which store a timestamp as
+  // an integer. The store itself stays lazy, because a context can be built
+  // before the database is connected.
   const service = () => {
-    const dialect = (db as { dialect?: SupportedDialect }).dialect ?? "sqlite";
     return new PluginSettingsService({
       owner: plugin.name,
       schema,

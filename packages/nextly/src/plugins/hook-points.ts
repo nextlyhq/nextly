@@ -129,11 +129,12 @@ export function collectHookPoints(
  * the ones the call gets. The kind is the whole reason a decision point is not
  * an ordinary filter.
  *
- * Warned once per POINT AND ASPECT rather than per call: a mismatch is usually
- * every call at that seam, and a warning per call would bury the rest of the
- * log. Keyed per aspect so a payload warning does not silence the kind one.
- * Skipped entirely in production, where the cost is paid on every invocation
- * and the author is not there to read it.
+ * The two halves are enforced DIFFERENTLY, by what a miss costs. A kind
+ * mismatch is refused on every call, because it turns a veto into a permit;
+ * it is a map lookup and a comparison, so running it always costs nothing. A
+ * payload mismatch is warned once per point, because a schema parse on every
+ * invocation is not free and a wrong payload does not, by itself, change who
+ * is allowed to do what.
  */
 export function createPayloadChecker(
   points: ReadonlyMap<string, DeclaredHookPoint>,
@@ -147,22 +148,30 @@ export function createPayloadChecker(
     // declared, and resolution is not the place to forbid that.
     if (!point) return;
 
-    const kindKey = `${name}:kind`;
-    if (via !== undefined && point.kind !== via && !warned.has(kindKey)) {
-      warned.add(kindKey);
-      warn(
-        `[nextly] Hook point "${name}" (declared by ${point.owner}) is a ` +
-          `${point.kind}, but it was called as a ${via}.`
+    // REFUSED rather than warned, and never skipped for cost. A point declared
+    // a `decision` and executed through `apply` runs on the ordinary filter
+    // executor, which error-isolates a throwing handler and keeps the previous
+    // value — so a veto becomes a permit and the call fails OPEN. A warning
+    // leaves that outcome exactly as it was, and in production nobody is there
+    // to read it. The check is a map lookup and a string compare, so it costs
+    // nothing to run on every call; the payload check below is a schema parse,
+    // which is why that one stays advisory.
+    if (via !== undefined && point.kind !== via) {
+      throw resolutionError(
+        "hook-point-kind-mismatch",
+        `Hook point "${name}" (declared by ${point.owner}) is a ${point.kind}, ` +
+          `but it was executed as a ${via}. A decision executed as a filter ` +
+          `cannot veto, so the call would fail open.`,
+        { point: name, declared: point.kind, executedAs: via }
       );
     }
 
-    const payloadKey = `${name}:payload`;
-    if (warned.has(payloadKey)) return;
+    if (warned.has(name)) return;
     const schema = point.payload;
     if (!schema) return;
     if (schema.safeParse(payload).success) return;
 
-    warned.add(payloadKey);
+    warned.add(name);
     warn(
       `[nextly] A payload at hook point "${name}" (declared by ${point.owner}) does not match its schema.`
     );

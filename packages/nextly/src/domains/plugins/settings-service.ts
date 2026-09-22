@@ -19,7 +19,11 @@ import { NextlyError } from "../../errors/nextly-error";
 import { secretGenerations } from "../../shared/lib/secret-generations";
 import { decrypt, encrypt } from "../../utils/encryption";
 
-import { mapSecrets, redactSecrets, secretTopLevelKeys } from "./secret-paths";
+import {
+  mapSecrets,
+  redactSecrets,
+  topLevelKeyHoldsSecret,
+} from "./secret-paths";
 
 /** One stored top-level key. */
 export interface PluginSettingRow {
@@ -184,7 +188,6 @@ export class PluginSettingsService {
       });
     }
 
-    const secretKeys = secretTopLevelKeys(this.deps.secretPaths);
     const now = new Date();
     // The PATCH's keys, not the parsed result's. Parsing fills in every
     // schema default, so writing those would turn a change of one field into
@@ -194,7 +197,7 @@ export class PluginSettingsService {
     // so no `undefined` can reach the column.
     const rows: PluginSettingRow[] = Object.keys(patch).map(key => {
       const value = parsed.data[key];
-      const holdsSecret = secretKeys.has(key);
+      const holdsSecret = topLevelKeyHoldsSecret(key, this.deps.secretPaths);
       return {
         owner: this.deps.owner,
         key,

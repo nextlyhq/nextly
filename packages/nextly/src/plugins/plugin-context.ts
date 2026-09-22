@@ -9,6 +9,8 @@
  * @since 1.0.0
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
@@ -953,6 +955,7 @@ export const PLUGIN_SERVICE_NAMES = [
   "versionsService",
   "singleRegistryService",
   "db",
+  "dialect",
   "logger",
   "config",
 ] as const;
@@ -999,11 +1002,13 @@ export function createPluginContext(
               ? SingleRegistryService
               : T extends "db"
                 ? DatabaseInstance
-                : T extends "logger"
-                  ? Logger
-                  : T extends "config"
-                    ? NextlyServiceConfig
-                    : never,
+                : T extends "dialect"
+                  ? SupportedDialect
+                  : T extends "logger"
+                    ? Logger
+                    : T extends "config"
+                      ? NextlyServiceConfig
+                      : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -1216,8 +1221,19 @@ export function createPluginContext(
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
     // exactly what this store exists to replace.
+    // The UNRESTRICTED handle, deliberately. `restrictDatabase` bounds what the
+    // PLUGIN may issue; this store is core code writing core-owned rows into a
+    // core-owned table, and it needs a transaction to apply a multi-key patch
+    // as one thing. The plugin never receives this handle — only `get` and
+    // `set`, which take a validated patch.
     ...(plugin?.contributes?.settings
-      ? { settings: createPluginSettings(plugin, db) }
+      ? {
+          settings: createPluginSettings(
+            plugin,
+            getServiceFn("db"),
+            getServiceFn("dialect")
+          ),
+        }
       : {}),
     ...(pluginFetch ? { fetch: pluginFetch } : {}),
     ...(plugin?.contributes?.audit ? { audit: createPluginAudit(plugin) } : {}),

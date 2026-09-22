@@ -27,6 +27,33 @@ afterEach(async () => {
 
 const SYSTEM_CONTEXT = { user: undefined } as never;
 
+/**
+ * The unique-violation each driver actually raises.
+ *
+ * Spelled per dialect because that is the input `toDbError` reads: a generic
+ * error carrying no recognised code or message classifies as internal, and a
+ * test built on one would fail whether or not the translation exists.
+ */
+function uniqueViolation(dialect: TestDialect): Error {
+  if (dialect === "postgresql") {
+    return Object.assign(
+      new Error(
+        'duplicate key value violates unique constraint "users_email_unique"'
+      ),
+      { code: "23505" }
+    );
+  }
+  if (dialect === "mysql") {
+    return Object.assign(
+      new Error("Duplicate entry 'raced@example.com' for key 'users.email'"),
+      { code: "ER_DUP_ENTRY", errno: 1062 }
+    );
+  }
+  return Object.assign(new Error("UNIQUE constraint failed: users.email"), {
+    code: "SQLITE_CONSTRAINT_UNIQUE",
+  });
+}
+
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
   if (dialect === "sqlite") {
@@ -313,6 +340,56 @@ describe.each(getConfiguredTestDialects())(
         String(created.id)
       );
       expect(names).not.toContain("super-admin");
+    });
+
+    it("reports a unique violation from the INSERT as a duplicate", async () => {
+      // The pre-flight lookup is a READ, so it cannot settle a race: two
+      // provider callbacks for the same new address both pass it and the
+      // loser's insert violates the unique index. Untranslated that surfaced
+      // as an untyped 500, and the provider could not tell "already exists" —
+      // the case it recovers from by loading the account — from a real failure.
+      //
+      // The violation is INDUCED rather than raced for, because a race is not
+      // reproducible: two calls that happen to serialize would be refused by
+      // the read instead, and the test would pass without ever reaching the
+      // classification it names. The transaction is made to fail exactly as
+      // the database fails it.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      // ONE instance, held, and the MUTATION service rather than the facade:
+      // `services()` builds a fresh container each call, and `users` delegates
+      // to `mutationService`, which is where the transaction runs. Patching
+      // anything else leaves the real transaction in place and the test passes
+      // without ever reaching the branch it names.
+      const users = services(t).users;
+      const mutation = (
+        users as unknown as {
+          mutationService: {
+            withTransaction: (...args: never[]) => unknown;
+          };
+        }
+      ).mutationService;
+      mutation.withTransaction = async () => {
+        // The shape THIS dialect's driver reports, not a NextlyError:
+        // translating a ready-made NextlyError would prove nothing about the
+        // classification, and a shape no driver produces would be classified
+        // as internal and fail the test for the wrong reason.
+        throw uniqueViolation(dialect);
+      };
+
+      await expect(
+        users.createExternalUser(
+          {
+            email: "raced@example.com",
+            name: "Raced",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
     });
   }
 );

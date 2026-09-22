@@ -10,6 +10,8 @@
  * we use the database adapter directly.
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import { getDialectTables } from "../../database/index";
 import type { NextlyServiceConfig } from "../../di/register";
 import { buildAuditLogWriter } from "../../domains/audit/audit-log-writer";
@@ -474,6 +476,17 @@ export function buildAuthRouterDeps(
     if (name === "db") {
       const adapter = getService("adapter") as { getDrizzle: () => unknown };
       return adapter.getDrizzle();
+    }
+    // Also not a DI service. The container registers the adapter, and the
+    // dialect is something it is asked for; a plugin's settings store picks
+    // its table metadata and its upsert spelling from this answer, and the
+    // restricted database handle it receives carries no dialect to infer one
+    // from.
+    if (name === "dialect") {
+      const adapter = getService("adapter") as {
+        getCapabilities: () => { dialect: SupportedDialect };
+      };
+      return adapter.getCapabilities().dialect;
     }
     return getService(name);
   }) as Parameters<typeof createPluginContext>[0];

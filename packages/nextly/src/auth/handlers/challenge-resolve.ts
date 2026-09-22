@@ -3,6 +3,7 @@ import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
+import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import {
@@ -49,6 +50,17 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
     limit: number,
     windowMs: number
   ) => Promise<{ allowed: boolean }>;
+  /**
+   * Where the attempt window lives, when one is configured.
+   *
+   * The same store the rest of auth rate-limits against, for the same reason:
+   * absent, the window is this process's memory, so every worker enforces its
+   * own copy of the budget and the real cap is `maxChallengeAttempts` times
+   * the instance count. That is the multi-worker and serverless case — exactly
+   * where an operator has configured a shared store and is entitled to think
+   * the MFA cap holds.
+   */
+  authRateLimit?: { store?: RateLimitStore };
   allowedOrigins: string[];
   loginStallTimeMs: number;
   auditLog: AuditLogWriter;
@@ -163,15 +175,24 @@ async function passwordChangeRequired(
 async function spendChallengeAttempt(
   deps: Pick<
     ChallengeResolveDeps,
-    "challengeTokenTTL" | "maxChallengeAttempts" | "countChallengeAttempt"
+    | "challengeTokenTTL"
+    | "maxChallengeAttempts"
+    | "countChallengeAttempt"
+    | "authRateLimit"
   >,
   pending: { userId: string; challengeId: string }
 ): Promise<void> {
+  // The CONFIGURED store, not the module-level default. `authRateLimiter()`
+  // with no argument returns the process-memory limiter whatever the install
+  // configured, so each worker counted its own five attempts and the cap was
+  // effectively multiplied by the instance count — in the deployments that
+  // have a shared store precisely because they run more than one process.
+  const store = deps.authRateLimit?.store;
   const count =
     deps.countChallengeAttempt ??
     (async (key: string, limit: number, windowMs: number) => {
       const { authRateLimiter } = await import("../middleware/rate-limiter");
-      return authRateLimiter().check(key, limit, windowMs);
+      return authRateLimiter(store).check(key, limit, windowMs);
     });
 
   // Keyed by USER and challenge. `challengeId` names the challenge DEFINITION

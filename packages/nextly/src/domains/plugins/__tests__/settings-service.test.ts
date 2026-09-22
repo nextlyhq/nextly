@@ -265,3 +265,68 @@ describe("patching one field of a nested group", () => {
     expect(after.providers.google.clientSecret).toBe(ROTATED_SECRET_VALUE);
   });
 });
+
+describe("a top-level wildcard in a secret declaration", () => {
+  /** A schema whose secrets are only ever reachable through a wildcard. */
+  const wildcardSchema = z.object({
+    google: z.object({ apiKey: z.string(), label: z.string() }).optional(),
+  });
+
+  function wildcardService(store: PluginSettingsStore) {
+    return new PluginSettingsService({
+      owner: "@test/p",
+      schema: wildcardSchema,
+      secretPaths: ["*.apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    });
+  }
+
+  it("ENCRYPTS the row a wildcard declaration covers", async () => {
+    // `*.apiKey` contributed the literal `"*"` to the set of secret-bearing
+    // top-level keys, which no concrete key equals — so the row was written as
+    // plain text and marked non-secret, while the traversal that decides what
+    // to encrypt honoured the same wildcard. Asserted on the STORED row, since
+    // `get()` returns the value either way and cannot tell the two apart.
+    const store = memoryStore();
+    await wildcardService(store).set({
+      google: { apiKey: SECRET_VALUE, label: "Google" },
+    });
+
+    const row = store.rows.find(r => r.key === "google");
+    expect(row?.isSecret).toBe(true);
+    expect(row?.value).not.toContain(SECRET_VALUE);
+  });
+
+  it("still reads the value back", async () => {
+    // The control: marking every row secret and never decrypting would satisfy
+    // the assertion above while making the setting unreadable.
+    const store = memoryStore();
+    const svc = wildcardService(store);
+    await svc.set({ google: { apiKey: SECRET_VALUE, label: "Google" } });
+
+    const after = (await svc.get()) as {
+      google: { apiKey: string; label: string };
+    };
+    expect(after.google.apiKey).toBe(SECRET_VALUE);
+    expect(after.google.label).toBe("Google");
+  });
+
+  it("leaves a row no declaration covers in plain text", async () => {
+    // The other control. A wildcard must not make EVERY row a secret: the
+    // encryption assertion above is satisfied by a store that encrypts
+    // unconditionally, and that would be a different defect with the same green.
+    const store = memoryStore();
+    await new PluginSettingsService({
+      owner: "@test/p",
+      schema: wildcardSchema,
+      secretPaths: ["*.apiKey"],
+      store,
+      secrets: () => [KEY_A],
+    }).set({ google: { apiKey: SECRET_VALUE, label: "Google" } });
+
+    const row = store.rows.find(r => r.key === "google");
+    // The non-secret sibling inside the same row stays readable.
+    expect(row?.value).toContain("Google");
+  });
+});

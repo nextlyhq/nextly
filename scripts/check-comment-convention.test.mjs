@@ -221,7 +221,10 @@ describe("the allowlist", () => {
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
   const EXPECTED_ENTRIES = 228;
-  const EXPECTED_TOTAL = 507;
+  // 507 -> 506: one recorded offence in `services/users.ts` no longer exists,
+  // so the list shrank by a digest. The entry itself remains, which is why the
+  // count above does not move.
+  const EXPECTED_TOTAL = 506;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

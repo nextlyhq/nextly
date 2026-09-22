@@ -39,13 +39,26 @@ export function isSecretPath(
 }
 
 /**
- * The top-level keys that can contain a secret.
+ * Whether a secret can live anywhere under this top-level key.
  *
- * Storage is one row per top-level key, so this decides which rows are marked
- * as holding a secret at all.
+ * Storage is one row per top-level key, so this decides which rows are
+ * encrypted and marked as holding a secret at all.
+ *
+ * Asked as a QUESTION about a key rather than answered as a set of names,
+ * because a wildcard has no name to put in one. `*.apiKey` contributed the
+ * literal `"*"`, which no concrete key ever equals, so every row it covers was
+ * written as plain text while `mapSecrets` — which honours the same wildcard —
+ * went on treating the value as a secret. The two disagreed about one
+ * declaration, and only the storage side was observable.
  */
-export function secretTopLevelKeys(patterns: readonly string[]): Set<string> {
-  return new Set(patterns.map(pattern => pattern.split(".")[0]));
+export function topLevelKeyHoldsSecret(
+  key: string,
+  patterns: readonly string[]
+): boolean {
+  return patterns.some(pattern => {
+    const first = pattern.split(".")[0];
+    return first === "*" || first === key;
+  });
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

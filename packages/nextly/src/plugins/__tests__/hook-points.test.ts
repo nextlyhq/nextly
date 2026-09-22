@@ -141,20 +141,23 @@ describe("payload checking in development", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("reports a point executed through the wrong registry API", () => {
-    // A decision's veto fails CLOSED; run through `apply` the same throw is
-    // error-isolated and skipped, so the declaration stops describing what the
-    // call actually does.
+  it("REFUSES a point executed through the wrong registry API", () => {
+    // A warning leaves the call running: the ordinary filter executor
+    // error-isolates a throwing veto and keeps the previous value, so the
+    // decision fails OPEN. Refusing is what makes the declaration binding,
+    // and it must not be skipped in production either.
     const warn = vi.fn();
     const points = collectHookPoints([
       plugin("@acme/auth", [{ name: "acme-auth.gate", kind: "decision" }]),
     ]);
+    const check = createPayloadChecker(points, warn);
 
-    createPayloadChecker(points, warn)("acme-auth.gate", {}, "filter");
-
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0][0]).toContain("acme-auth.gate");
-    expect(warn.mock.calls[0][0]).toContain("decision");
+    expect(reasonOf(() => check("acme-auth.gate", {}, "filter"))).toBe(
+      "hook-point-kind-mismatch"
+    );
+    // A warning instead of a refusal is precisely the defect, so the absence
+    // of one is part of the assertion rather than incidental.
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("says nothing when the kind matches", () => {

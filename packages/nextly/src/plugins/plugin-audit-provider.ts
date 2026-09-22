@@ -26,9 +26,13 @@ import { pluginAdminSlug } from "./plugin-slug";
  */
 export function createPluginAudit(plugin: PluginDefinition): PluginAuditApi {
   const slug = pluginAdminSlug(plugin.name);
+  // The same call resolution already made, so the two cannot disagree about
+  // which kinds are declared. By the time a context is built this cannot
+  // throw: `resolvePlugins` made it first and refused the boot.
   const kinds = collectPluginAuditKinds(
     slug,
-    plugin.contributes?.audit?.kinds ?? []
+    plugin.contributes?.audit?.kinds ?? [],
+    plugin.name
   );
 
   return {

@@ -25,6 +25,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
@@ -1219,6 +1220,7 @@ export async function registerServices(
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
     transformedConfig,
     adapterDrizzleDb,
+    adapter.getCapabilities().dialect,
     resolvedLogger,
     hookRegistry
   );
@@ -2849,6 +2851,7 @@ async function reconcileSingleTablesForBoot(
 async function initializePlugins(
   transformedConfig: NextlyServiceConfig,
   adapterDrizzleDb: DatabaseInstance,
+  dialect: SupportedDialect,
   logger: Logger,
   hookRegistry: HookRegistry | undefined
 ): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
@@ -2885,6 +2888,7 @@ async function initializePlugins(
       | VersionsService
       | SingleRegistryService
       | DatabaseInstance
+      | SupportedDialect
       | Logger
       | NextlyServiceConfig
   > = {
@@ -2897,6 +2901,11 @@ async function initializePlugins(
     singleRegistryService: () =>
       container.get<SingleRegistryService>("singleRegistryService"),
     db: () => adapterDrizzleDb,
+    // The adapter's own answer. Everything that turns a plugin's settings into
+    // SQL picks its table metadata and its upsert spelling from this, and the
+    // database handle a plugin receives is a restricted wrapper that carries
+    // no dialect of its own to infer one from.
+    dialect: () => dialect,
     logger: () => logger,
     config: () => transformedConfig,
   };

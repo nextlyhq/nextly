@@ -26,6 +26,8 @@ reading its source to find out whether it calls an external service, you read
 what it declared:
 
 ```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
 export default definePlugin({
   name: "@acme/auth",
   version: "1.0.0",

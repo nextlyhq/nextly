@@ -45,6 +45,7 @@ import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { safeEmit } from "../../../events/domain-events";
+import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
   layoutRowId,
   widgetLayoutTables,
@@ -846,43 +847,60 @@ export class UserMutationService extends BaseService {
     const newUserId = randomUUID();
 
     let userCreatedRecorded = false;
-    await this.withTransaction(async tx => {
-      const txDb = tx as DrizzleTransactionLike;
-      await txDb.insert(users).values({
-        id: newUserId,
-        email,
-        name: input.name,
-        passwordHash: null,
-        // The provider established the address, so it is verified at creation
-        // and the account is usable at once.
-        emailVerified: input.emailVerifiedAt,
-        image: input.image ?? null,
-        isActive: true,
-        mustChangePassword: false,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      // In the same transaction as the account: an active user missing the
-      // roles it was created with is a worse outcome than no user at all.
-      for (const role of namedRoles) {
-        await txDb.insert(userRoles).values({
-          id: randomUUID(),
-          userId: newUserId,
-          roleId: role.id,
+    // The duplicate lookup above is a READ, so it cannot settle a race: two
+    // provider callbacks for the same new address both pass it, and the loser's
+    // insert violates the unique index. Untranslated, that surfaced as an
+    // untyped 500, and the provider could not tell "already exists" — the case
+    // it recovers from by loading the account — from a real failure. Classified
+    // the same way `createLocalUser` and `updateUser` classify it, because it
+    // is the same outcome reached by a different route.
+    try {
+      await this.withTransaction(async tx => {
+        const txDb = tx as DrizzleTransactionLike;
+        await txDb.insert(users).values({
+          id: newUserId,
+          email,
+          name: input.name,
+          passwordHash: null,
+          // The provider established the address, so it is verified at
+          // creation and the account is usable at once.
+          emailVerified: input.emailVerifiedAt,
+          image: input.image ?? null,
+          isActive: true,
+          mustChangePassword: false,
           createdAt: now,
+          updatedAt: now,
         });
-      }
 
-      // Inside the transaction, like the local path: a subscriber observes the
-      // account exactly when it becomes real, and never for a rolled-back one.
-      userCreatedRecorded = await this.recordUserCreatedInTx(txDb, {
-        userId: newUserId,
-        email,
-        name: input.name,
-        actor: _context ?? null,
+        // In the same transaction as the account: an active user missing the
+        // roles it was created with is a worse outcome than no user at all.
+        for (const role of namedRoles) {
+          await txDb.insert(userRoles).values({
+            id: randomUUID(),
+            userId: newUserId,
+            roleId: role.id,
+            createdAt: now,
+          });
+        }
+
+        // Inside the transaction, like the local path: a subscriber observes
+        // the account exactly when it becomes real, and never for a
+        // rolled-back one.
+        userCreatedRecorded = await this.recordUserCreatedInTx(txDb, {
+          userId: newUserId,
+          email,
+          name: input.name,
+          actor: _context ?? null,
+        });
       });
-    });
+    } catch (err) {
+      if (NextlyError.is(err)) throw err;
+      // `fromDatabaseError` already maps a unique violation to DUPLICATE, so
+      // there is no second branch here spelling that out: the local path keeps
+      // one only because it attaches a different logContext, and restating the
+      // mapping is how two answers to one question start to drift.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
 
     await this.afterUserCreated(userCreatedRecorded, newUserId);
 
@@ -1698,13 +1716,21 @@ export class UserMutationService extends BaseService {
    *
    * Its own step so the deletion transaction reads as the sequence it
    * enforces rather than as the detail of each erasure.
+   *
+   * `tableExists` is asked by the caller, before the transaction opens, and
+   * passed in. The declaration being registered says only that this build
+   * knows the table; it says nothing about the database in front of it, and a
+   * statement against an absent table aborts the whole deletion — every
+   * account deletion, permanently, on any install whose database predates the
+   * table.
    */
   private async scrubPluginSettingsActor(
     txDb: DrizzleTransactionLike,
-    userId: string | number
+    userId: string | number,
+    settingsExist: boolean
   ): Promise<void> {
     const { nextlyPluginSettings } = this.tables;
-    if (!nextlyPluginSettings) return;
+    if (!nextlyPluginSettings || !settingsExist) return;
     await txDb
       .update(nextlyPluginSettings)
       .set({ updatedBy: null })
@@ -1818,6 +1844,27 @@ export class UserMutationService extends BaseService {
       widgetLayoutExists = await this.adapter.tableExists(WIDGET_LAYOUT_TABLE);
     } catch {
       widgetLayoutExists = true;
+    }
+
+    // Who last edited a plugin's settings, probed out here for the reason the
+    // three above are: a failed statement aborts an open Postgres transaction
+    // and there would be no way back.
+    //
+    // An unanswerable probe is treated as PRESENT, matching them: `updated_by`
+    // holds the editing account's id and nothing else erases it, so skipping
+    // the scrub on a transient metadata failure would delete the account and
+    // leave it identified by core-owned rows indefinitely. Attempting it
+    // against a genuinely absent table fails the UPDATE and takes the deletion
+    // with it, which is the invariant those three protect.
+    //
+    // Databases without the table exist, and not only historic ones: the table
+    // arrives with the plugin runtime, so any database reconciled before it
+    // lacks the table while this build's declaration is present either way.
+    let settingsExist: boolean;
+    try {
+      settingsExist = await this.adapter.tableExists(PLUGIN_SETTINGS_TABLE);
+    } catch {
+      settingsExist = true;
     }
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
@@ -1954,7 +2001,7 @@ export class UserMutationService extends BaseService {
         // the deleted user's id in `updated_by` on exactly the installs least
         // likely to notice. The helper already handles the settings table
         // being absent, so it needs no guard of its own.
-        await this.scrubPluginSettingsActor(txDb, userId);
+        await this.scrubPluginSettingsActor(txDb, userId, settingsExist);
 
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and

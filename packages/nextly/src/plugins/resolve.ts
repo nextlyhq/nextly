@@ -1,6 +1,9 @@
+import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
+
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import type { PluginDefinition } from "./plugin-context";
+import { pluginAdminSlug } from "./plugin-slug";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
@@ -39,6 +42,22 @@ export function resolvePlugins(
   // consult what was declared. Discarding it left every declared payload
   // schema checking nothing.
   publishHookPoints(collectHookPoints(plugins));
+  // Audit kinds, for the reason hook point names are checked above: a kind
+  // outside the plugin's prefix used to be dropped where it was collected, so
+  // the application booted with `ctx.audit` present and every write of that
+  // kind discarded at runtime. The operator is then missing the trail the
+  // manifest said it would keep, and nothing says so until it is needed.
+  // The SAME call the provider makes, so resolution cannot accept a
+  // declaration the provider would refuse.
+  for (const plugin of plugins) {
+    const declared = plugin.contributes?.audit?.kinds;
+    if (!declared) continue;
+    collectPluginAuditKinds(
+      pluginAdminSlug(plugin.name),
+      declared,
+      plugin.name
+    );
+  }
   // Before anything reads it. A `clientConfig` that cannot be delivered is a
   // configuration error like an incompatible version, so it belongs with the
   // other fail-fast checks rather than surfacing when the admin first asks for

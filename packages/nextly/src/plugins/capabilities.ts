@@ -215,21 +215,35 @@ function schemaHasPath(plugin: PluginDefinition, path: string): boolean {
   // Nothing to check against: a plugin may declare secrets before it declares
   // a schema, and resolution is not the place to demand an ordering.
   if (!schema) return true;
+  return schemaHasPathFrom(schema, path);
+}
 
-  let current: unknown = schema;
-  for (const segment of path.split(".")) {
+/**
+ * The same walk, entered partway down rather than at a plugin's root.
+ *
+ * Split out so the wildcard branch above can ask the question of each value
+ * in turn; `schemaHasPath` takes a plugin because that is what its callers
+ * hold, and re-deriving the traversal here would be a second implementation
+ * of it.
+ */
+function schemaHasPathFrom(node: unknown, path: string): boolean {
+  let current: unknown = node;
+  const segments = path.split(".");
+  for (let at = 0; at < segments.length; at += 1) {
+    const segment = segments[at];
     const shape = objectShape(current);
     if (shape !== null) {
-      // A `*` against an OBJECT matches whichever keys it has, so nothing
-      // below can be pinned to one of them.
-      if (segment === "*") return true;
+      if (segment === "*") {
+        const rest = segments.slice(at + 1).join(".");
+        if (rest === "") return true;
+        return Object.values(shape).some(value =>
+          schemaHasPathFrom(value, rest)
+        );
+      }
       if (!Object.hasOwn(shape, segment)) return false;
       current = shape[segment];
       continue;
     }
-
-    // Any key is valid on a record — that is what a record means — so the
-    // segment itself is accepted and the suffix is judged against the values.
     const valueSchema = recordValueSchema(current);
     if (valueSchema === null) return true;
     current = valueSchema;

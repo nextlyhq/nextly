@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   collectPluginAuditKinds,
   looksLikeSecret,
@@ -24,12 +25,40 @@ describe("collectPluginAuditKinds", () => {
     expect(kinds().has(`${SLUG}.identity-linked`)).toBe(true);
   });
 
-  it("drops a kind outside the prefix, so one plugin cannot impersonate another", () => {
-    const collected = collectPluginAuditKinds(SLUG, [
-      { kind: "login-succeeded" },
-      { kind: "other-plugin.thing" },
-    ]);
-    expect(collected.size).toBe(0);
+  it("REFUSES a kind outside the prefix, naming the plugin and the kind", () => {
+    // Dropping it booted the application with `ctx.audit` present and every
+    // write of that kind discarded at runtime, so the operator was missing the
+    // trail the manifest said would be kept and nothing said so until it was
+    // needed. Refusing is what makes the declaration binding.
+    let caught: unknown;
+    try {
+      collectPluginAuditKinds(
+        SLUG,
+        [{ kind: "other-plugin.thing" }],
+        "@acme/auth"
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(NextlyError.is(caught)).toBe(true);
+    const context = (caught as NextlyError).logContext as {
+      reason?: string;
+      plugin?: string;
+      auditKind?: string;
+    };
+    expect(context.reason).toBe("plugin-audit-kind-outside-prefix");
+    // Both, because a refusal naming neither leaves whoever reads it looking
+    // through every manifest for the declaration that caused it.
+    expect(context.plugin).toBe("@acme/auth");
+    expect(context.auditKind).toBe("other-plugin.thing");
+  });
+
+  it("accepts a correctly prefixed kind", () => {
+    // The control: a collector that threw on every declaration would satisfy
+    // the refusal above while making any audit contribution unbootable.
+    expect(() =>
+      collectPluginAuditKinds(SLUG, [{ kind: `${SLUG}.thing` }])
+    ).not.toThrow();
   });
 
   it("gives a kind with no declared keys an empty allowlist rather than an open one", () => {

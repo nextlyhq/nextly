@@ -98,6 +98,16 @@ export const googleAuth = definePlugin({
     },
   },
 });
+
+declare function redirectToGoogle(ctx: unknown): Response;
+declare function exchangeCodeForProfile(
+  request: Request,
+  ctx: unknown
+): Promise<{ email: string }>;
+declare function findLocalUserFor(
+  profile: { email: string },
+  ctx: unknown
+): Promise<{ id: string } | null>;
 ```
 
 **What `completeLogin` does for you**, in this order: loads the user by id, so a

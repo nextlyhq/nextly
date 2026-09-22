@@ -44,6 +44,20 @@ const CREDENTIAL_HEADERS = new Set([
   "cookie",
   "cookie2",
 ]);
+/**
+ * Headers that describe the body rather than the request.
+ *
+ * Lower-case for the same reason as the set above: `Headers` reports names
+ * that way, and matching a spelling the caller happened to choose is the miss
+ * that would leave a stale `Content-Length` on a request carrying no body.
+ */
+const ENTITY_HEADERS = new Set([
+  "content-encoding",
+  "content-language",
+  "content-length",
+  "content-location",
+  "content-type",
+]);
 
 /** One resolved address, as a DNS answer gives it. */
 export interface ResolvedAddress {
@@ -93,10 +107,25 @@ function nextHop(
       ? current.headers
       : stripCredentialHeaders(current.headers);
 
-  if (status === 307 || status === 308) {
-    // The body must be sent again, so it has to be replayable. A stream is
-    // consumed by the first hop and would arrive empty at the second —
-    // refused rather than silently truncated to nothing.
+  const method = (current.method ?? "GET").toUpperCase();
+
+  // Which methods a redirect rewrites is per STATUS, and there are three
+  // cases rather than two. 307 and 308 exist precisely to preserve the
+  // request, so they rewrite nothing. 303 means "fetch the result by GET", so
+  // it rewrites whatever the request was. 301 and 302 rewrite only POST, for
+  // historical compatibility — rewriting PUT, PATCH or DELETE as well turned
+  // the caller's operation into a different one and dropped its body.
+  const rewritesToGet =
+    status === 307 || status === 308
+      ? false
+      : status === 303
+        ? method !== "HEAD"
+        : method === "POST";
+
+  if (!rewritesToGet) {
+    // The body is sent again, so it has to be replayable. A stream is consumed
+    // by the first hop and would arrive empty at the second — refused rather
+    // than silently truncated to nothing.
     if (current.body instanceof ReadableStream) {
       refuse("unreplayable-redirect-body", {
         host: to.hostname,
@@ -107,7 +136,23 @@ function nextHop(
   }
 
   const { body: _dropped, ...rest } = current;
-  return { ...rest, headers, method: "GET" };
+  // Entity headers describe a body that is no longer being sent. Carrying a
+  // `Content-Length` or `Content-Type` onto a bodyless GET leaves the framing
+  // disagreeing with the request.
+  return { ...rest, headers: stripEntityHeaders(headers), method: "GET" };
+}
+
+/** The headers that describe a body, dropped when the body is. */
+function stripEntityHeaders(
+  headers: RequestInit["headers"]
+): Record<string, string> {
+  const kept: Record<string, string> = {};
+  const source = new Headers(headers ?? {});
+  source.forEach((value, name) => {
+    if (ENTITY_HEADERS.has(name.toLowerCase())) return;
+    kept[name] = value;
+  });
+  return kept;
 }
 
 /** The request headers a cross-origin hop may keep. */

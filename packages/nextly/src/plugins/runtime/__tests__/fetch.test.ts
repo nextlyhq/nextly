@@ -391,3 +391,86 @@ describe("credentials across a redirect", () => {
     expect(headerOf(seen[1], "authorization")).toBe("Bearer secret-token");
   });
 });
+
+/**
+ * Which methods a redirect rewrites, and which it leaves alone.
+ *
+ * Rewriting everything below 307 into a GET turned a caller's PUT, PATCH or
+ * DELETE into a different operation and dropped its body — a provider that
+ * redirects an update then received a read. The status decides: 303 means
+ * "fetch the result by GET", 301 and 302 rewrite only POST.
+ */
+describe("redirect method rules", () => {
+  function hopping(status: number) {
+    const seen: RequestInit[] = [];
+    const send = async (request: SendArgs): Promise<Response> => {
+      seen.push(request.init);
+      if (seen.length === 1) {
+        return new Response(null, {
+          status,
+          headers: { location: "https://api.example.com/next" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    };
+    return { seen, d: deps({ send }) };
+  }
+
+  it.each([301, 302])("preserves a PUT across %i", async status => {
+    const body = new URLSearchParams({ a: "1" });
+    const { seen, d } = hopping(status);
+    await createPluginFetch(d)("https://api.example.com/x", {
+      method: "PUT",
+      body,
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1].method).toBe("PUT");
+    expect(seen[1].body).toBe(body);
+  });
+
+  it.each([301, 302])("still rewrites a POST on %i", async status => {
+    // The control. Preserving every method would satisfy the test above while
+    // reinstating the replay this rule exists to stop.
+    const { seen, d } = hopping(status);
+    await createPluginFetch(d)("https://api.example.com/x", {
+      method: "POST",
+      body: new URLSearchParams({ a: "1" }),
+    });
+
+    expect(seen[1].method).toBe("GET");
+    expect(seen[1].body).toBeUndefined();
+  });
+
+  it("rewrites even a PUT on 303, which means fetch by GET", async () => {
+    const { seen, d } = hopping(303);
+    await createPluginFetch(d)("https://api.example.com/x", {
+      method: "PUT",
+      body: new URLSearchParams({ a: "1" }),
+    });
+
+    expect(seen[1].method).toBe("GET");
+    expect(seen[1].body).toBeUndefined();
+  });
+
+  it("drops the headers that describe a body it no longer sends", async () => {
+    // A `Content-Length` left on a bodyless GET disagrees with the request it
+    // is attached to, which a strict intermediary may reject.
+    const { seen, d } = hopping(303);
+    await createPluginFetch(d)("https://api.example.com/x", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": "17",
+        accept: "application/json",
+      },
+      body: JSON.stringify({ a: 1 }),
+    });
+
+    const sent = new Headers(seen[1].headers ?? {});
+    expect(sent.get("content-length")).toBeNull();
+    expect(sent.get("content-type")).toBeNull();
+    // A header that is not about the body still travels.
+    expect(sent.get("accept")).toBe("application/json");
+  });
+});

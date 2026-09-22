@@ -17,6 +17,7 @@
  * @since 1.0.0
  */
 import { getNextlyLogger } from "../../observability/logger";
+import { resolutionError } from "../../plugins/resolution-error";
 
 /** What a plugin says it will write. */
 export interface PluginAuditKind {
@@ -56,14 +57,34 @@ export function looksLikeSecret(value: string): boolean {
  *
  * A kind must start with the plugin's own prefix, so one plugin cannot write
  * rows that read as another's — or as core's.
+ *
+ * A mis-prefixed kind is REFUSED, not dropped. Dropping it let the application
+ * boot with `ctx.audit` present and the declaration apparently accepted, while
+ * every write of that kind was discarded at runtime behind a warning nobody
+ * reads — so the operator has no trail for exactly the security event the
+ * manifest said would be recorded, and nothing before the incident says so. A
+ * misspelled prefix is a configuration error like an incompatible version, and
+ * it is only observable here. Same treatment, and the same reason, as a hook
+ * point declared outside its plugin's prefix.
  */
 export function collectPluginAuditKinds(
   pluginSlug: string,
-  declared: readonly PluginAuditKind[]
+  declared: readonly PluginAuditKind[],
+  pluginName: string = pluginSlug
 ): Map<string, Set<string>> {
   const kinds = new Map<string, Set<string>>();
   for (const entry of declared) {
-    if (!entry.kind.startsWith(`${pluginSlug}.`)) continue;
+    if (!entry.kind.startsWith(`${pluginSlug}.`)) {
+      throw resolutionError(
+        "plugin-audit-kind-outside-prefix",
+        `Plugin "${pluginName}" declares the audit kind "${entry.kind}", which must start with "${pluginSlug}.".`,
+        {
+          plugin: pluginName,
+          auditKind: entry.kind,
+          expectedPrefix: pluginSlug,
+        }
+      );
+    }
     kinds.set(entry.kind, new Set(entry.metadataKeys ?? []));
   }
   return kinds;
