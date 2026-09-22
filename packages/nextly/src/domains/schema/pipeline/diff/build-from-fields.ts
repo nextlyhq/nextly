@@ -80,6 +80,18 @@ interface MinimalFieldDef {
 
 /** Optional toggles that affect which system columns are injected. */
 export interface BuildDesiredTableOptions {
+  /**
+   * Indexes a schema hook contributed to this entity, naming SQL COLUMNS.
+   *
+   * Kept apart from `indexes`, which names FIELDS. The two were merged once,
+   * and every contributed index on a system column was refused as a field the
+   * entity does not declare.
+   */
+  columnIndexes?: readonly {
+    columns: readonly string[];
+    unique: boolean;
+    name?: string;
+  }[];
   /** When true, a `status` system column is injected (varchar/text NOT NULL DEFAULT 'draft'). */
   hasStatus?: boolean;
   /**
@@ -149,6 +161,31 @@ interface CollectionIndexContext<F> {
    * was added, so an app that declared one has been running without it.
    */
   declaredIndexes?: readonly DeclaredIndex[];
+  /**
+   * Indexes whose COLUMNS are already resolved, contributed by a schema hook.
+   *
+   * Separate from `declaredIndexes` because the two speak different
+   * languages. A declared index names FIELDS, which are resolved to columns
+   * through the descriptor; an extension index names SQL COLUMNS, because the
+   * hook that added it was handed a table rather than a field list.
+   *
+   * Passing the second through the first refuses every system column: there is
+   * no field called `created_at`, so a hook indexing it was told the entity
+   * does not declare it — which it does not, as a FIELD.
+   */
+  columnIndexes?: readonly {
+    columns: readonly string[];
+    unique: boolean;
+    name?: string;
+  }[];
+  /**
+   * Every column this table will have, when the caller already knows.
+   *
+   * Supplied rather than inferred so a contributed index is checked against
+   * the real set — a system column that happens to carry no index of its own
+   * is invisible to anything derived from the indexes built above.
+   */
+  tableColumnNames?: ReadonlySet<string>;
   /**
    * The logical kind of the column a field materialises.
    *
@@ -267,6 +304,20 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     }
   }
   indexes.push(...declaredIndexSpecs(tableName, fields, context));
+  // The columns this table is known to have: everything the indexes above
+  // already name, plus every field that materialises one. A contributed index
+  // is kept only if its columns are among them.
+  const knownColumns =
+    context.tableColumnNames ??
+    new Set<string>([
+      ...indexes.flatMap(index => index.columns),
+      ...fields
+        .map(field => columnNameFor(field))
+        .filter((c): c is string => c !== null),
+    ]);
+  indexes.push(
+    ...contributedIndexSpecs(tableName, knownColumns, context.columnIndexes)
+  );
   return dedupeIndexes(indexes);
 }
 
@@ -281,6 +332,34 @@ const UNKEYABLE_KINDS = new Set(["json", "longText"]);
  * mean an author writes a unique compound index, sees no error, and discovers
  * on the first duplicate row that it was never created.
  */
+/**
+ * Specs for indexes a hook contributed, whose columns need no resolution.
+ *
+ * Only the columns the table actually has: a hook may index a column another
+ * contribution adds, and an index naming a column that is not there is invalid
+ * DDL. Skipped rather than refused, because the hook is not wrong to have
+ * asked — the column simply is not part of THIS table's desired state.
+ */
+function contributedIndexSpecs(
+  tableName: string,
+  knownColumns: ReadonlySet<string>,
+  entries: CollectionIndexContext<MinimalFieldDef>["columnIndexes"]
+): IndexSpec[] {
+  const out: IndexSpec[] = [];
+  for (const entry of entries ?? []) {
+    if (entry.columns.length === 0) continue;
+    if (!entry.columns.every(column => knownColumns.has(column))) continue;
+    out.push({
+      name:
+        entry.name ??
+        indexNameForColumns(tableName, entry.columns, entry.unique),
+      columns: [...entry.columns],
+      unique: entry.unique,
+    });
+  }
+  return out;
+}
+
 function declaredIndexSpecs<F extends MinimalFieldDef>(
   tableName: string,
   fields: readonly F[],
@@ -450,6 +529,10 @@ export function buildDesiredTableFromFields(
   }
 
   const indexes = collectionIndexSpecs(tableName, fields, {
+    tableColumnNames: new Set(columns.map(c => c.name)),
+    ...(options.columnIndexes !== undefined
+      ? { columnIndexes: options.columnIndexes }
+      : {}),
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
     hasCreatedByColumn: columns.some(c => c.name === "created_by"),

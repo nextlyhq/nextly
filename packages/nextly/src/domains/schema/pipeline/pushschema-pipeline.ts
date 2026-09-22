@@ -708,18 +708,20 @@ export class PushSchemaPipeline {
                 builtBy: builtByFor("collection", c.builderOwned),
                 hasStatus: c.status === true,
                 localized: c.localized === true,
-                // Config-declared compound indexes, and any a schema hook
-                // contributed to this entity's table.
-                indexes: [
-                  ...(c.indexes ?? []),
-                  ...(extensions?.entityIndexes.get(c.tableName) ?? []).map(
-                    index => ({
-                      fields: index.columns,
-                      unique: index.unique,
-                      ...(index.name !== undefined ? { name: index.name } : {}),
-                    })
-                  ),
-                ],
+                // Config-declared compound indexes name FIELDS.
+                indexes: [...(c.indexes ?? [])],
+                // A hook was handed a TABLE, so what it contributed names SQL
+                // COLUMNS. Sent down its own channel: passing these as fields
+                // asked the descriptor to resolve `created_at`, which is a
+                // system column and no field, so every contributed index on
+                // one was refused as undeclared.
+                columnIndexes: (
+                  extensions?.entityIndexes.get(c.tableName) ?? []
+                ).map(index => ({
+                  columns: index.columns,
+                  unique: index.unique,
+                  ...(index.name !== undefined ? { name: index.name } : {}),
+                })),
               }
             )
           ),
