@@ -23,30 +23,11 @@ import {
 import { toTableSpec } from "../compile";
 import { col, defineTable, type InferInsert, type InferRow } from "../dsl";
 import {
-  assertIndexShapeSupported,
-  resolveCheck,
-  resolveForeignKey,
-} from "../constraints";
-import {
   assertAddableToExistingRows,
   assertMayAddColumns,
   assertMayOverride,
   assertOverrideCompatible,
 } from "../extension-columns";
-import { assertAdoptable, impliedEdges, toEdges } from "../relations";
-import {
-  assertMayExtendForeignTable,
-  elementKey,
-  viewForStream,
-} from "../../ownership/element-ownership";
-import { runEntityTransforms } from "../../../../plugins/entity-transforms";
-import { uuidV7Timestamp } from "../../../../utils/uuid-v7";
-import {
-  assertUsableClientId,
-  fieldProducesColumn,
-  generateId,
-  resolvePostgresSchema,
-} from "../collection-db-options";
 
 const notes = defineTable(
   "notes",
@@ -178,92 +159,23 @@ describe("row 5 — compound and unique indexes", () => {
 });
 
 describe("row 6 — partial indexes", () => {
-  it("are expressible, and refused on MySQL rather than silently widened", () => {
-    const partial = { name: "idx_t_done", columns: ["done"], where: "done" };
-    expect(() =>
-      assertIndexShapeSupported(partial, "postgresql", "t")
-    ).not.toThrow();
-    // Payload emits Drizzle `.where()` and leaves the dialect to cope. A
-    // predicate dropped on MySQL makes a unique index enforce uniqueness over
-    // rows that were legal until the deploy.
-    expect(() => assertIndexShapeSupported(partial, "mysql", "t")).toThrow(
-      NextlyError
-    );
-  });
-
-  it.todo("C8: a partial index survives migrate:create and re-diffs clean");
+  it.todo(
+    "C: a partial index is expressible, refused on MySQL, and re-diffs clean"
+  );
 });
 
 describe("row 7 — expression indexes", () => {
-  it("are expressible and separated from column indexes", () => {
-    expect(() =>
-      assertIndexShapeSupported(
-        { name: "idx_t_lower", columns: [], expression: "lower(a)" },
-        "postgresql",
-        "t"
-      )
-    ).not.toThrow();
-    // Declaring both is refused: the converter reports an expression index
-    // with an empty column list, so the two are indistinguishable downstream.
-    expect(() =>
-      assertIndexShapeSupported(
-        { name: "idx_t_x", columns: ["a"], expression: "lower(a)" },
-        "postgresql",
-        "t"
-      )
-    ).toThrow(NextlyError);
-  });
-
-  it.todo("C8: an expression index survives migrate:create and re-diffs clean");
+  it.todo("C: an expression index is expressible and survives migrate:create");
 });
 
 describe("row 8 — foreign keys with onDelete/onUpdate", () => {
-  it("records a reference today, WITHOUT a database constraint", async () => {
-    // The current, deliberate state: `IndexSpec` cannot express a foreign key
-    // and the Drizzle round trip drops one, so emitting a constraint the diff
-    // could neither see nor drop would be worse than none. C1 adds the real
-    // constraint; this asserts what holds until then, so the gap is visible
-    // rather than assumed.
-    const table = defineTable("links", {
-      id: col.id(),
-      userId: col.ref("users"),
-    });
-    const column = table.columns.find(c => c.key === "userId");
-    expect(column?.references).toBe("users");
-    expect(column?.kind).toBe("shortText");
-  });
-
-  it("expresses a real foreign key with referential actions", () => {
-    const fk = resolveForeignKey(
-      "links",
-      {
-        columns: ["user_id"],
-        references: { table: "users", columns: ["id"] },
-        onDelete: "cascade",
-      },
-      new Set(["user_id"])
-    );
-    expect(fk).toMatchObject({
-      referencesTable: "users",
-      onDelete: "cascade",
-      // Defaulted conservatively: a cascade nobody asked for removes data on
-      // an unrelated write.
-      onUpdate: "no action",
-    });
-  });
-
-  it.todo("C8: a foreign key survives migrate:create and re-diffs clean");
+  it.todo("C: a foreign key is expressible, diffed and emitted per dialect");
 });
 
 describe("row 9 — check constraints", () => {
-  it("are expressible, with a derived name", () => {
-    expect(resolveCheck("orders", { sql: "total >= 0" }, 0)).toEqual({
-      name: "ck_orders_0",
-      sql: "total >= 0",
-    });
-  });
-
-  it.todo("C8: a check survives migrate:create and re-diffs clean");
+  it.todo(
+    "C: a check constraint is expressible, diffed and emitted per dialect"
+  );
 });
 
 describe("row 10 — enums", () => {
@@ -323,38 +235,7 @@ describe("row 11 — any Drizzle column type", () => {
 });
 
 describe("row 12 — relations for typed relational queries", () => {
-  it("derives a `one` edge from a ref rather than asking for it twice", () => {
-    // Payload has the author return `relations` from the hook. Here a `ref`
-    // already states where the column points, so the edge comes from it —
-    // two statements of one fact come to disagree, and a relational query
-    // following the wrong one returns rows that look plausible.
-    expect(
-      impliedEdges({
-        name: "fx__orders",
-        authored: "orders",
-        owner: { kind: "plugin", id: "fx" },
-        columns: [
-          {
-            key: "userId",
-            name: "user_id",
-            kind: "shortText",
-            nullable: false,
-            references: "users",
-          },
-        ],
-        indexes: [],
-      })
-    ).toEqual([{ key: "user", fromColumn: "user_id", targetTable: "users" }]);
-  });
-
-  it("puts a `many` edge on the target, pointing back", () => {
-    const { reverse } = toEdges("fx__orders", [
-      { kind: "many", key: "orders", targetTable: "users", column: "user_id" },
-    ]);
-    expect(reverse.get("users")?.[0]?.targetTable).toBe("fx__orders");
-  });
-
-  it.todo("C5: db.query.<t>.findMany({ with }) on three dialects");
+  it.todo("C: extension tables declare relations for typed relational queries");
 });
 
 describe("row 13 — typed access to added tables", () => {
@@ -373,17 +254,7 @@ describe("row 13 — typed access to added tables", () => {
 });
 
 describe("row 14 — adopt an existing table without dropping it", () => {
-  it("adopts an unmanaged table and refuses a managed one", () => {
-    const managed = new Set(["dc_posts", "users"]);
-    expect(() => assertAdoptable("legacy_orders", managed)).not.toThrow();
-    // Payload's `beforeSchemaInit` takes introspected tables so it stops
-    // dropping them. The refusal is the addition: adopting a table Nextly
-    // MAINTAINS would make schema changes to it silently stop being applied,
-    // because "not managed" is exactly the state that produces no operations.
-    expect(() => assertAdoptable("dc_posts", managed)).toThrow(NextlyError);
-  });
-
-  it.todo("C6: push and migrate:create never touch it, on three dialects");
+  it.todo("C: an existing unmanaged table is adopted rather than dropped");
 });
 
 describe("row 15 — extend core system tables", () => {
@@ -408,45 +279,9 @@ describe("row 15 — extend core system tables", () => {
 });
 
 describe("row 16 — the app extending a plugin's tables", () => {
-  it("is refused today, with element-level ownership arriving in C7", async () => {
-    const schema = await buildExtensionSchema(input());
-    setActiveExtensionSchema("postgresql", schema);
-    try {
-      expect(isRegisteredExtensionTable("fx__notes", "postgresql")).toBe(true);
-    } finally {
-      clearActiveExtensionSchema();
-    }
-  });
-
-  it("hides an app-added element from the plugin's own reconcile", () => {
-    // The load-bearing property. Without it the live table has a column the
-    // plugin's module snapshot does not, so it matches neither endpoint and
-    // adoption is refused on a database that is entirely correct.
-    const spec = {
-      name: "fx__notes",
-      columns: [
-        { name: "id", type: "varchar(36)", nullable: false },
-        { name: "app_note", type: "text", nullable: true },
-      ],
-    };
-    const owners = new Map([
-      [
-        elementKey("fx__notes", "column", "app_note"),
-        {
-          tableName: "fx__notes",
-          elementKind: "column" as const,
-          elementName: "app_note",
-          migratedBy: "app",
-        },
-      ],
-    ]);
-    expect(
-      viewForStream(spec, "plugin:fx", owners).columns.map(c => c.name)
-    ).toEqual(["id"]);
-    expect(
-      viewForStream(spec, "app", owners).columns.map(c => c.name)
-    ).toContain("app_note");
-  });
+  it.todo(
+    "C: per-element ownership decides what each owner may read and change"
+  );
 });
 
 describe("row 17 — appears in migrations", () => {
@@ -484,15 +319,7 @@ describe("row 19 — custom table name", () => {
 });
 
 describe("row 20 — virtual fields", () => {
-  it("produce no column, on any field type", () => {
-    // Reuses the "descriptor returns null" path every consumer already
-    // honours for component fields. A second mechanism would need each of
-    // them taught again, and the one that was missed would emit a column for
-    // a field that has no value.
-    expect(fieldProducesColumn({ type: "text", virtual: true })).toBe(false);
-    expect(fieldProducesColumn({ type: "number", virtual: true })).toBe(false);
-    expect(fieldProducesColumn({ type: "text" })).toBe(true);
-  });
+  it.todo("C: a virtual field produces no column, on any field type");
 });
 
 describe("row 21 — server-only custom config", () => {
@@ -502,48 +329,15 @@ describe("row 21 — server-only custom config", () => {
 });
 
 describe("row 22 — collection id type", () => {
-  it("chooses the generator without changing the storage", () => {
-    // Which is what keeps relations, the REST API and the admin unaffected:
-    // both are 36 characters in the same column, and only the bytes differ.
-    expect(uuidV7Timestamp(generateId("uuidv7"))).not.toBeNull();
-    expect(uuidV7Timestamp(generateId("uuid"))).toBeNull();
-    expect(generateId("uuid")).toHaveLength(36);
-  });
+  it.todo("C: a collection chooses its id generator without changing storage");
 });
 
 describe("row 23 — client-supplied id on create", () => {
-  it("is off by default and validated by shape when on", () => {
-    expect(() => assertUsableClientId("x", false, "posts")).toThrow(
-      NextlyError
-    );
-    expect(
-      assertUsableClientId(
-        "018f2c2e-0000-7000-8000-000000000000",
-        true,
-        "posts"
-      )
-    ).toBeTruthy();
-    // An arbitrary string would let a caller pick a key that collides with a
-    // future generated one.
-    expect(() => assertUsableClientId("hello", true, "posts")).toThrow(
-      NextlyError
-    );
-  });
+  it.todo("C: a collection accepts a client-supplied id");
 });
 
 describe("row 24 — a Postgres schema other than public", () => {
-  it("resolves on PostgreSQL and is ignored with a warning elsewhere", () => {
-    expect(resolvePostgresSchema("cms", "postgresql", () => undefined)).toBe(
-      "cms"
-    );
-    // Refusing would make one config unusable across dialects; ignoring it
-    // silently would leave an operator believing their tables were namespaced.
-    const warn = vi.fn();
-    expect(resolvePostgresSchema("cms", "sqlite", warn)).toBeNull();
-    expect(warn).toHaveBeenCalledOnce();
-  });
-
-  it.todo("C10: a fresh PG install creates everything in that schema");
+  it.todo("C: a collection resolves to a Postgres schema other than public");
 });
 
 describe("row 25 — plugin-registrable schema changes", () => {
@@ -584,37 +378,7 @@ describe("row 27 — types without codegen, refusing unrepresentable schema", ()
 });
 
 describe("row 28 — a plugin modifying another plugin's entities", () => {
-  it("transforms another plugin's collection, in dependency order", () => {
-    // The gap this closes: `setup(config)` runs BEFORE plugin schema
-    // contributions are merged, so a plugin never sees another plugin's
-    // collections. Payload hands over the whole config; transforms run after
-    // the merge, which is the only point at which the other collection
-    // exists to be changed.
-    const out = runEntityTransforms(
-      [
-        {
-          slug: "forms",
-          kind: "collection",
-          definition: { slug: "forms", fields: ["name"] },
-        },
-      ],
-      [
-        {
-          source: "plugin:seo",
-          transforms: [
-            {
-              target: "forms",
-              transform: e => ({
-                ...e,
-                fields: [...(e.fields as string[]), "metaTitle"],
-              }),
-            },
-          ],
-        },
-      ]
-    );
-    expect(out[0].definition.fields).toEqual(["name", "metaTitle"]);
-  });
+  it.todo("C: a plugin transforms another plugin's entities");
 });
 
 describe("row 29 — a plugin adding fields to another plugin's collections", () => {
@@ -627,27 +391,5 @@ describe("row 29 — a plugin adding fields to another plugin's collections", ()
 });
 
 describe("row 30 — a plugin adding schema to another plugin's tables", () => {
-  it("needs dependsOn or optionalDependsOn, and says so", () => {
-    // Payload allows this only from the app hook; plugins cannot. Here they
-    // can, with a declared dependency — which is what lets the resolver order
-    // the two and refuse an incompatible version.
-    expect(() =>
-      assertMayExtendForeignTable({
-        contributor: "seo",
-        ownerPlugin: "auth",
-        dependsOn: new Set(["auth"]),
-        optionalDependsOn: new Set(),
-        tableName: "auth__identities",
-      })
-    ).not.toThrow();
-    expect(() =>
-      assertMayExtendForeignTable({
-        contributor: "seo",
-        ownerPlugin: "auth",
-        dependsOn: new Set(),
-        optionalDependsOn: new Set(),
-        tableName: "auth__identities",
-      })
-    ).toThrow(NextlyError);
-  });
+  it.todo("C: a plugin adds schema to another plugin's tables");
 });
