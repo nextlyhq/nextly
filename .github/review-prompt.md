@@ -34,7 +34,7 @@ Read before forming any opinion (PR-side versions if the PR touches them):
 
 - `AGENTS.md` (root): the primary contract. Cite it with line-anchored permalinks in findings.
 - `ARCHITECTURE.md`: layering rules and the "Key invariants (do not break these)" section.
-- `.claude/rules/derived-checks.md` and `.claude/rules/verifying-merged-work.md`: the
+- the `derived-checks` skill and the `verifying-merged-work` skill: the
   detailed guidance behind several AGENTS.md rules, with worked examples. These load
   automatically only in Claude clients, which is why they are enumerated here — a reviewer
   running anywhere else would otherwise never see them.

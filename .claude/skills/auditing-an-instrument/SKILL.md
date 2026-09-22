@@ -1,3 +1,11 @@
+---
+name: auditing-an-instrument
+description: >-
+  Use when a check, test, probe, search or verification returned a clean,
+  empty or surprising result and you need to know whether it examined its
+  subject at all, and when designing the control for a break-verification.
+---
+
 ## An instrument that never examined its subject answers cleanly
 
 The other rules here are about reading an answer wrongly. This one is about an
@@ -202,7 +210,7 @@ git log --format='%H %P' -1 <mergeCommit>               # two parents = a merge
 it answers a DIFFERENT question — whether one commit is reachable from another,
 which says nothing about strategy on its own. It also depends on a ref that
 moves: unfetched, a genuine merge reports non-ancestor; later, unrelated
-commits can make ancestry true. `verifying-merged-work.md` already requires
+commits can make ancestry true. the `verifying-merged-work` skill already requires
 fetching both objects and probing the merge commit rather than `origin/main`,
 and that requirement is exactly this failure seen from the other side.
 
@@ -242,7 +250,7 @@ substitutions made, the files read, the rows fetched.
 and the two answers are opposite. Where members are distinguishable — rows,
 files, findings — assert MEMBERSHIP: a count is the same substitution one level
 up, since a selector that drops an expected row while adding an unrelated one
-matches any total you compare against. `derived-checks.md` makes that case at
+matches any total you compare against. the `derived-checks` skill makes that case at
 length.
 
 Where they are NOT — the occurrences of a string in a file are identical to each
@@ -253,7 +261,7 @@ above must not be read as a reason to drop an exact-count guard; membership and
 cardinality answer for different kinds of population, and reaching for the wrong
 one discards the check that would have fired. A verdict cannot tell you
 whether it had anything to judge. This is the population rule from
-`derived-checks.md`, and the instances above are what it looks like when the
+the `derived-checks` skill, and the instances above are what it looks like when the
 population is not merely small but absent.
 
 **Prefer an instrument that cannot have the failure to one that detects it.**
@@ -287,8 +295,8 @@ first.
 ### Where this sits
 
 **Most of what is here is already covered somewhere, and this file does not
-replace any of it.** `reading-a-ci-verdict.md` gives the shell redirect with an
-unread status its own table. `derived-checks.md` gives fixtures that never reach
+replace any of it.** the `reading-a-ci-verdict` skill gives the shell redirect with an
+unread status its own table. the `derived-checks` skill gives fixtures that never reach
 the mechanism, the positive controls that expose them, and the population rule
 in full. Where those two are the authority, defer to them: the guidance above
 restates only enough to make the shape visible, and where it is thinner than

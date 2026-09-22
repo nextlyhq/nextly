@@ -1,15 +1,16 @@
-<!--
-No `paths` frontmatter, for the reason `verifying-merged-work.md` gives: a rule
-without the field loads at launch, a rule with one — `paths: ["**/*"]`
-included — triggers only once a matching file is read. Reading a CI verdict is
-an act rather than a file type, and every check below is needed before any file
-of the work has been opened.
--->
+---
+name: reading-a-ci-verdict
+description: >-
+  Use when reading CI results, check runs or reviewer verdicts on a pull
+  request: deciding whether the required jobs actually ran, why a job is
+  skipped or missing, whether a workflow was triggered at all, whether a
+  review bot really reviewed, or before merging anything on green.
+---
 
 ## Green means nothing reported a failure
 
 That is a weaker statement than "the checks passed", and the gap between them is
-where this file lives. `verifying-merged-work.md` answers **did my code land**;
+where this file lives. the `verifying-merged-work` skill answers **did my code land**;
 this one answers **was anything actually run**. Both have been verified
 correctly on the same PR while it was broken, because they are different
 questions and each reads complete on its own.
@@ -73,12 +74,12 @@ it is worth stating as the property rather than as a note about one command:
   pull request inherited the failure and reported it.
 - **OUTPUT lost to the pipe.** A refusal printed below the twelfth line was cut
   off by `head -12` and the run read as clean. That one is in
-  `derived-checks.md`, from the output side rather than the status side.
+  the `derived-checks` skill, from the output side rather than the status side.
 
 Both halves have to reach the reader, and a pipe can lose either.
 
 **`set -o pipefail` is the obvious remedy and it has a scoping trap**, identical
-to the one `whole-file-writes.md` documents for `set -o noclobber`. The option
+to the one the `whole-file-writes` rule documents for `set -o noclobber`. The option
 applies to the shell that executes it. Where each command runs in a FRESH shell —
 which is every tool invocation for an agent — setting it in one call and running
 the pipeline in the next protects nothing, because the option is back at its
@@ -105,7 +106,7 @@ answer whose status you did not look at.
 Both of those are the same shape one level up — an instrument reporting on
 something it never examined — and it reaches well past CI: a test fixture that
 never reaches the mechanism, a search over the wrong set, a printed label that
-means something adjacent to what you asked. `instruments-that-never-looked.md`
+means something adjacent to what you asked. the `auditing-an-instrument` skill
 carries the measured instances and the controls that catch them.
 
 **A redirect is not safe BECAUSE it is a redirect — it is safe because the
@@ -338,7 +339,7 @@ run in. An empty commit is preferred because it pushes fast-forward.
 
 `git rebase --force-rebase` also replays, and it is the worse choice HERE
 despite doing the job: the rewritten commits need a non-fast-forward push, so
-GitHub records `head_ref_force_pushed`, and `verifying-merged-work.md` treats
+GitHub records `head_ref_force_pushed`, and the `verifying-merged-work` skill treats
 any such event as disqualifying — its tail check reports NOT CHECKABLE from
 then on, permanently, because a force-push can erase a tail and the surviving
 ref cannot prove otherwise. Taking a remedy from this file that disables the
@@ -475,7 +476,7 @@ gh run view "$RUN_ID" --json jobs \
 
 This cuts the other way too, and that is the more common error: a red inherited
 from `main` is not evidence about the branch. Before working a failure, confirm
-it reproduces from the branch's own diff — see `verifying-merged-work.md` on
+it reproduces from the branch's own diff — see the `verifying-merged-work` skill on
 naming the mechanism before calling something flake.
 
 ## A reviewer that never reviewed reads as a reviewer with no findings
@@ -594,7 +595,7 @@ The properties, each earned by a version that got it wrong:
   contributor's head ref, so `ls-remote origin` there returns nothing, or worse
   returns an unrelated branch of the same name and the gate inspects a revision
   belonging to somebody else. Resolve `headRepositoryOwner` and
-  `headRepository`, as `verifying-merged-work.md` already does for its tail
+  `headRepository`, as the `verifying-merged-work` skill already does for its tail
   check.
 - **Fail closed, and REFUSE rather than report.** Every query failing means the
   answer is unavailable, which is not a clean one; and a verdict that is printed
@@ -603,7 +604,7 @@ The properties, each earned by a version that got it wrong:
 ## Where this stops and the other file starts
 
 The last action before merging is re-reading the head's check conclusions, not
-the first. `verifying-merged-work.md` carries the merge gate itself —
+the first. the `verifying-merged-work` skill carries the merge gate itself —
 `gh pr merge --match-head-commit "$VERIFIED"`, which makes the check and the
 merge one atomic operation — along with the stranded-tail screen and everything
 about verifying by content.

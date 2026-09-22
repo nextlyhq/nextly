@@ -239,6 +239,31 @@ export function missingAnchors(files) {
   );
 }
 
+/**
+ * The skills AGENTS.md routes to, and the skills that exist, must be one set.
+ *
+ * The router table is a derived view of `.claude/skills/`, and a derived view
+ * drifts — which this repository has a rule about. Both directions matter and
+ * they fail differently: a routed skill that does not exist sends a reader to
+ * nothing, and a skill absent from the router is knowledge that loads only if
+ * its description happens to win, with no fallback.
+ */
+export function routerDisagreements(routed, present) {
+  return [
+    ...[...routed].filter(name => !present.has(name)).map(name => ({ name, side: "routed but absent from .claude/skills" })),
+    ...[...present].filter(name => !routed.has(name)).map(name => ({ name, side: "present in .claude/skills but not routed by AGENTS.md" })),
+  ];
+}
+
+/** Skill names the AGENTS.md router table names, read from its rows. */
+export function routedSkills(agentsMd) {
+  const names = new Set();
+  for (const row of agentsMd.matchAll(/^\|\s*`([a-z][a-z0-9-]*)`\s*\|/gm)) {
+    names.add(row[1]);
+  }
+  return names;
+}
+
 function main() {
   const asJson = process.argv.includes("--json");
   const files = instructionFiles();
@@ -264,6 +289,20 @@ function main() {
   const byWorkspace = workspaceScripts();
 
   const findings = [];
+
+  const skillsDir = join(root, ".claude/skills");
+  const present = new Set(
+    existsSync(skillsDir)
+      ? readdirSync(skillsDir).filter(name =>
+          existsSync(join(skillsDir, name, "SKILL.md"))
+        )
+      : []
+  );
+  const routed = routedSkills(readFileSync(join(root, "AGENTS.md"), "utf8"));
+  for (const { name, side } of routerDisagreements(routed, present)) {
+    findings.push({ file: "AGENTS.md", kind: "router", claim: `${name} — ${side}` });
+  }
+
   for (const file of files) {
     const text = readFileSync(join(root, file), "utf8");
     for (const { filter, name } of pnpmScriptsIn(text)) {

@@ -2,7 +2,7 @@
  * Decides whether a pull request may merge, and whether a merged one landed
  * whole.
  *
- * `.claude/rules/verifying-merged-work.md` describes the same procedure in
+ * the `verifying-merged-work` skill describes the same procedure in
  * prose with runnable shell in it. Shell embedded in a document has nothing
  * executing it, and every way it can be wrong here looks like a pass: a count
  * computed and never read, an exit status swallowed by a pipeline, a comparison

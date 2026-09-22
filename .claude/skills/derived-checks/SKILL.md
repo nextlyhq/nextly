@@ -1,44 +1,11 @@
 ---
-# Derived checks are not a packages/ phenomenon. Enumerating directories is how
-# this rule kept missing the code it is about — admin-css ships product code and
-# tests as .mjs, playground scripts assert agreement between a declaration and an
-# import, e2e specs recompute coordinates the app already derives, and the prose
-# section below applies squarely to docs and READMEs. Match by extension across
-# the repo rather than by location.
-paths:
-  - "**/*.ts"
-  - "**/*.tsx"
-  - "**/*.mjs"
-  - "**/*.js"
-  - "**/*.cjs"
-  - "**/*.md"
-  - "**/*.mdx"
-  # Configuration is where several of this rule's own examples live: the
-  # changeset package list versus the release group, and `pnpm-workspace.yaml`
-  # against the hand-maintained ALL_PACKAGES list that `scripts/lint-report.mjs`
-  # says must mirror it. Editing only the config is exactly the recomputation
-  # drift this rule is about.
-  - "**/*.json"
-  - "**/*.jsonc"
-  - "**/*.yaml"
-  - "**/*.yml"
-  # Shell verifiers count too: `packages/nextly/scripts/phase-gate.sh` parses
-  # test, lint and type-check counts and compares them against stored baselines,
-  # which is a derived check in every sense except the language it is written in.
-  - "**/*.sh"
-  # Tracked derived artefacts with no source extension of their own: committed
-  # `*.snap` files ARE the derived view, and `apps/playground/.env.example:17`
-  # names `packages/nextly/src/shared/lib/env.ts` as its source of truth.
-  - "**/*.snap"
-  - "**/.env.example"
-  - "**/*.env.example"
-  # And the derived ARTEFACTS, not only the code that derives them:
-  # `apps/playground/src/plugins/style-fixture/admin.source.css` compiles into a
-  # derived `admin.css`, and `templates/blog/migrations/*.sql` say outright that
-  # their structure mirrors `UserExtSchemaService.generateMigrationSQL()`.
-  - "**/*.css"
-  - "**/*.sql"
-  - ".changeset/**"
+name: derived-checks
+description: >-
+  Use when writing or reviewing code that checks, mirrors, summarises or
+  validates what other code produces: a gate, probe, test, lint rule or
+  derived view. Covers choosing controls, what a measurement proves,
+  identifying by structure rather than by name, and whether a guard should
+  fail open or closed.
 ---
 
 When one piece of code checks, mirrors or summarises what another produces:
@@ -440,7 +407,7 @@ Three from this repository, arriving from unrelated directions:
   matching text exists in the scope searched, and nothing more. Unless the
   marker is UNIQUE to that commit and the search is scoped to the path it
   changed, text that was already in the base — or arrived independently —
-  satisfies it while the commit is missing. `verifying-merged-work.md` says the
+  satisfies it while the commit is missing. the `verifying-merged-work` skill says the
   same from the other side; the presence is evidence about the text, and the
   claim is about a change.
 - **"The controls pass" used as "the findings are real."** It rules out the
@@ -541,7 +508,7 @@ replacement that hit the first of two occurrences — changing the file, but not
 the site under test — a probe whose worktree was unbuilt so a setup guard threw
 before any test ran, and a build whose failure went to a log nobody read all
 produce a result that reads as a verdict about the change.
-`instruments-that-never-looked.md` collects those, with the controls that
+the `auditing-an-instrument` skill collects those, with the controls that
 separate them.
 
 The tell is a sentence where the evidence names one thing and the conclusion

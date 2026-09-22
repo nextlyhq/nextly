@@ -18,6 +18,8 @@ import {
   missingAnchors,
   pathsIn,
   pnpmScriptsIn,
+  routedSkills,
+  routerDisagreements,
 } from "./check-agent-contract.mjs";
 
 const names = text => pnpmScriptsIn(text).map(entry => entry.name);
@@ -135,5 +137,43 @@ describe("refusing a file set that cannot have found anything", () => {
   it("still refuses when only one anchor is missing", () => {
     expect(missingAnchors([".claude/rules/x.md", ".claude/skills/y/SKILL.md"]))
       .toEqual(["AGENTS.md"]);
+  });
+});
+
+describe("holding the skill router and the skills directory to one set", () => {
+  const table = [
+    "| Load this | When you are about to |",
+    "|---|---|",
+    "| `testing-evidence` | add or judge a test |",
+    "| `derived-checks` | write a gate |",
+  ].join("\n");
+
+  it("reads the names out of the router rows", () => {
+    expect([...routedSkills(table)]).toEqual(["testing-evidence", "derived-checks"]);
+  });
+
+  it("does not mistake other inline code for a row", () => {
+    expect([...routedSkills("run `pnpm build` and see `AGENTS.md`")]).toEqual([]);
+  });
+
+  it("is silent when the two sides agree", () => {
+    expect(routerDisagreements(new Set(["a"]), new Set(["a"]))).toEqual([]);
+  });
+
+  /*
+   * Both directions, because they fail differently: a routed skill that does
+   * not exist sends a reader to nothing, while a skill nobody routes to loads
+   * only if its description wins, with no fallback behind it.
+   */
+  it("names a skill the router invented", () => {
+    expect(routerDisagreements(new Set(["ghost"]), new Set())).toEqual([
+      { name: "ghost", side: "routed but absent from .claude/skills" },
+    ]);
+  });
+
+  it("names a skill the router forgot", () => {
+    expect(routerDisagreements(new Set(), new Set(["orphan"]))).toEqual([
+      { name: "orphan", side: "present in .claude/skills but not routed by AGENTS.md" },
+    ]);
   });
 });

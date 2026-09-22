@@ -7,6 +7,32 @@ it runs inside their own Next.js app with their own database (Postgres, MySQL,
 or SQLite via Drizzle ORM). This repository is the pnpm + Turborepo monorepo
 for all published packages. Status: alpha, all packages version in lockstep.
 
+## Skills, and when to load one
+
+Procedures live in `.claude/skills/` rather than here, because a procedure
+needed once per task should not occupy context in every session. This table is
+the router: Claude selects a skill from its description, and the table is what
+survives a description that underperforms. Load the skill BEFORE the act, not
+after it goes wrong.
+
+| Load this                     | When you are about to                                   |
+| ----------------------------- | ------------------------------------------------------- |
+| `testing-evidence`            | add, change, delete or judge a test                     |
+| `writing-integration-tests`   | write or debug a `*.integration.test.ts`                |
+| `adding-a-field-type`         | add a field type to the catalog                         |
+| `derived-checks`              | write or review a check, gate, probe or derived view    |
+| `auditing-an-instrument`      | act on a clean, empty or surprising result from a check |
+| `reading-a-ci-verdict`        | read CI, check runs or a reviewer verdict               |
+| `reviewing-a-pr`              | review a PR or answer review-bot findings               |
+| `verifying-merged-work`       | confirm a change landed, or judge a red after a rebase  |
+| `recovering-a-clobbered-file` | recover a file a whole-file write may have replaced     |
+| `release-and-changesets`      | touch a changeset, a release or a new package name      |
+
+Two rules stay loaded in every session (`.claude/rules/`) because the failures
+they prevent arrive before any file has been read: `whole-file-writes` (a shell
+redirect reads nothing, so there is no read for a path-scoped rule to trigger
+on) and the path-scoped `integration-tests`.
+
 ## Repository map
 
 - `packages/nextly` - core: config surface, Direct API, REST dispatcher, CLI,
@@ -135,7 +161,7 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   rebuilding fixes those. If the error survives a successful build of that
   package AND its dependencies — the `<pkg>...` form above, not `^...` — it is a
   real resolution defect — see
-  `.claude/rules/verifying-merged-work.md`, which says to check what `main`
+  the `verifying-merged-work` skill, which says to check what `main`
   changed before calling any of this environmental.
 
   **A stale or missing sibling `dist` does not only produce `no-unresolved`.**
@@ -195,76 +221,13 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
   it: run the tests for the area you touch before and after your change, and
   fix any new failure you introduce.
-- A test is only evidence once you have seen it FAIL for the intended reason.
-  Break the code, confirm the intended test fails, restore. After changing a
-  test, re-run its break: a fix to the test is a change to the experiment.
-  What counts as the intended failure depends on when the test runs:
-  - A RUNTIME test that stops COMPILING proves nothing — the assertion never
-    executed, so the red says only that the break was malformed.
-  - A COMPILE-TIME contract test is the opposite case: compilation IS the
-    mechanism. In `*.test-d.ts`, widening a type makes its `@ts-expect-error`
-    unused and `check-types` fails for exactly the intended reason. Red is not
-    the evidence though — the EXPECTED DIAGNOSTIC is. A typo, a bad import or
-    an unrelated type error in the same file all stop compilation too, and
-    prove nothing about the property.
-  - `@ts-expect-error` is the sharp edge here, because it suppresses ANY error
-    on the line that follows. A test asserting "this call is rejected" stays
-    green once the code starts erroring for a different reason, and stays green
-    after the original rejection stops happening. Two things that look like
-    mitigations and are not: a comment naming the expected code, which `tsc`
-    never reads; and a positive control asserting the ACCEPTED form still
-    compiles, which an unrelated error confined to the rejected line leaves
-    untouched. Only an assertion the checker EVALUATES distinguishes the cases —
-    `expectTypeOf(...)`, or a diagnostic-aware type test that names the error it
-    expects. If the property cannot be asserted that way, say in the file that
-    the directive is unverified rather than letting it read as coverage.
-  - The count must not drop by ACCIDENT: a suite that silently stopped being
-    discovered reads as a pass, which is what that guards. Removing a test on
-    purpose is a different act, sometimes correct (below), and the PR says
-    which test went and why.
-- Before you assert or measure, name the property that SEPARATES a correct
-  implementation from the plausible broken one you are worried about, and check
-  that it is the property you are about to test. A necessary-but-insufficient
-  property returns green from both, and it does so carrying the authority of
-  having been checked, which closes the question. Two worked examples, both real:
-  - measuring whether an old database constraint could be DROPPED, when what
-    decides the repair is whether the code can FIND it. Dropping succeeded, and
-    the repair would still have skipped every database silently.
-  - asserting a generated identifier is `length <= 63`, when a plain truncation
-    is also 63 characters. The one test guarding the naming passed on the broken
-    implementation; distinctness was the separating property.
-
-  The operational form is to ask what ELSE would produce the same green. If
-  anything other than the property under test does — a fixture that never
-  reaches the mechanism, an unregistered type falling through to a default, an
-  assertion satisfied by absence, a search whose glob missed the directory —
-  the property is not covered yet. Add the positive control that makes the
-  mechanism's presence observable, and run it.
-
-- Whatever you are currently judging WITH is not being judged. A probe, a
-  derived check, a test, a post-apply verifier and the baseline diff that reads
-  the suite all had the same defect in one week here, and every one of them
-  existed to catch the layer above it. They were hard to see not because the
-  defect was subtle but because each occupied the position auditing is done
-  from, so nothing stood further out to look at it. Periodically step out one
-  level and give the instrument the same treatment as its subject: a positive
-  control on an input where you know the answer, and where the answer is not
-  "nothing". Confirming an instrument against a case that did not move cannot
-  distinguish it from one that reports nothing under any circumstances.
-- A test that passes both with and without the fix is worse than no test: the
-  next reader takes the green as coverage. **Repair it first.** Usually the
-  fixture never reaches the mechanism or the assertion is satisfied by absence,
-  and both are fixable. Deleting the ONLY attempted coverage for a behaviour
-  trades a misleading green for no signal at all, which is not an improvement.
-  Deletion is right in two cases, and they need different notes:
-  - **redundant** — the behaviour is genuinely covered elsewhere. Say in the
-    file that remains WHERE, so the next reader can follow it.
-  - **obsolete** — the code no longer does the thing. There is no remaining
-    file, and demanding one would force a false coverage comment. Say what
-    behaviour was removed and in which change instead.
-
-  Either way this is the deliberate removal the count rule exempts, so state the
-  drop rather than letting it look like a suite that went missing.
+- A test is only evidence once you have watched it FAIL for the intended
+  reason, and a green that both the fixed and the broken implementation
+  produce is worse than no test. How to establish that — break-verification,
+  the property that SEPARATES a correct implementation from the plausible
+  broken one, auditing the instrument you are judging with, and when deleting
+  a test is the right call — is the `testing-evidence` skill. Load it before
+  adding, changing or judging a test.
 
 ## Conventions (enforced; violations will be rejected in review)
 

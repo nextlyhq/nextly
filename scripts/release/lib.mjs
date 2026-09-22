@@ -46,7 +46,7 @@ const REQUIRED_FIELDS = [
  * advertises more says it supports versions nothing in CI ever runs — `package-smoke.yml` derives
  * its Node legs from this same field, so the range and the tested versions are one question — and
  * the user finds out at runtime instead of at install time. Read rather than restated for the
- * reason `.claude/rules/derived-checks.md` gives: a second copy agrees on the day it is written.
+ * reason the `derived-checks` skill gives: a second copy agrees on the day it is written.
  */
 export function rootEnginesRange() {
   return readJson(join(REPO_ROOT, "package.json")).engines.node;
