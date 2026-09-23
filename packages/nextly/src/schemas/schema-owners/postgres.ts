@@ -21,25 +21,37 @@
  * @module schemas/schema-owners/postgres
  */
 
-import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 
 import { SCHEMA_OWNERS_TABLE } from "./table-name";
 
-export const nextlySchemaOwners = pgTable(SCHEMA_OWNERS_TABLE, {
-  tableName: text("table_name").primaryKey(),
-  /** `core` | `collection` | `single` | `component` | `plugin` | `app`. */
-  ownerKind: text("owner_kind").notNull(),
-  /** `nextly` | entity slug | plugin name | `app`. */
-  ownerId: text("owner_id").notNull(),
-  /**
-   * Which migration stream carries this table: `core`, `app`, or
-   * `plugin:<name>`. Distinct from who declared it.
-   */
-  migratedBy: text("migrated_by").notNull(),
-  ownerVersion: text("owner_version"),
-  schemaVersion: integer("schema_version"),
-  /** `active` | `orphaned` | `uninstalled`. */
-  state: text("state").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
-});
+export const nextlySchemaOwners = pgTable(
+  SCHEMA_OWNERS_TABLE,
+  {
+    tableName: text("table_name"),
+    /**
+     * Which KIND of thing this row claims: `table` (the default, and what
+     * every pre-element row was) or `column` | `index` | `fk` | `check` —
+     * an ELEMENT somebody added to a table another owner declared.
+     */
+    elementKind: text("element_kind").notNull().default("table"),
+    /** The element's name; `''` for a table-level row. */
+    elementName: text("element_name").notNull().default(""),
+    /** `core` | `collection` | `single` | `component` | `plugin` | `app`. */
+    ownerKind: text("owner_kind").notNull(),
+    /** `nextly` | entity slug | plugin name | `app`. */
+    ownerId: text("owner_id").notNull(),
+    /**
+     * Which migration stream carries this table: `core`, `app`, or
+     * `plugin:<name>`. Distinct from who declared it.
+     */
+    migratedBy: text("migrated_by").notNull(),
+    ownerVersion: text("owner_version"),
+    schemaVersion: integer("schema_version"),
+    /** `active` | `orphaned` | `uninstalled`. */
+    state: text("state").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  t => [primaryKey({ columns: [t.tableName, t.elementKind, t.elementName] })]
+);

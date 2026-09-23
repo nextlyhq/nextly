@@ -37,6 +37,14 @@ export type OwnerState = "active" | "orphaned" | "uninstalled";
 
 export interface OwnerRecord {
   tableName: string;
+  /**
+   * `table` (the default and the pre-element meaning) or the kind of an
+   * ELEMENT somebody added to a table another owner declared: `column`,
+   * `index`, `fk`, `check`.
+   */
+  elementKind?: "table" | "column" | "index" | "fk" | "check";
+  /** The element's name; `''` for a table-level row. */
+  elementName?: string;
   ownerKind: OwnerKind;
   /** `nextly` | entity slug | plugin name | `app`. */
   ownerId: string;

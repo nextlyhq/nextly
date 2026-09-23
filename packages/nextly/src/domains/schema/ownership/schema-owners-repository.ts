@@ -10,7 +10,7 @@
  * @module domains/schema/ownership/schema-owners-repository
  * @since 1.0.0
  */
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { schemaOwnersTables } from "../../../schemas/schema-owners";
@@ -42,6 +42,12 @@ interface AnyDb {
 function toRecord(row: Record<string, unknown>): OwnerRecord {
   return {
     tableName: String(row.tableName),
+    elementKind:
+      typeof row.elementKind === "string"
+        ? (row.elementKind as OwnerRecord["elementKind"])
+        : undefined,
+    elementName:
+      typeof row.elementName === "string" ? row.elementName : undefined,
     ownerKind: String(row.ownerKind) as OwnerKind,
     ownerId: String(row.ownerId),
     migratedBy: String(row.migratedBy),
@@ -54,6 +60,11 @@ function toRecord(row: Record<string, unknown>): OwnerRecord {
       typeof row.schemaVersion === "number" ? row.schemaVersion : null,
     state: String(row.state) as OwnerState,
   };
+}
+
+/** The composite identity a row is keyed by. */
+function elementKeyOf(row: OwnerRecord): string {
+  return `${row.tableName}\u0000${row.elementKind ?? "table"}\u0000${row.elementName ?? ""}`;
 }
 
 export class SchemaOwnersRepository {
@@ -90,13 +101,15 @@ export class SchemaOwnersRepository {
    *
    * Done as a read-then-write per row rather than a dialect-specific upsert:
    * the three disagree about `ON CONFLICT` / `ON DUPLICATE KEY`, and this runs
-   * inside the caller's transaction where a race cannot interleave.
+   * inside the caller's transaction where a race cannot interleave. Keyed by
+   * (table, element kind, element name) — a table-level row and an element
+   * row on the same table are different claims.
    */
   async upsert(rows: readonly OwnerRecord[]): Promise<void> {
     if (rows.length === 0) return;
     const existing = new Set(
-      (await this.read(rows.map(row => row.tableName))).map(
-        row => row.tableName
+      (await this.read([...new Set(rows.map(row => row.tableName))])).map(
+        row => elementKeyOf(row)
       )
     );
     const now = new Date();
@@ -111,15 +124,26 @@ export class SchemaOwnersRepository {
         state: row.state,
         updatedAt: now,
       };
-      if (existing.has(row.tableName)) {
+      if (existing.has(elementKeyOf(row))) {
         await this.db
           .update(this.table)
           .set(values)
-          .where(eq(this.table.tableName, row.tableName));
+          .where(
+            and(
+              eq(this.table.tableName, row.tableName),
+              eq(
+                this.table.elementKind,
+                row.elementKind ?? "table"
+              ),
+              eq(this.table.elementName, row.elementName ?? "")
+            )
+          );
         continue;
       }
       await this.db.insert(this.table).values({
         tableName: row.tableName,
+        elementKind: row.elementKind ?? "table",
+        elementName: row.elementName ?? "",
         ...values,
         createdAt: now,
       });
