@@ -454,7 +454,7 @@ export class PluginSettingsService {
       return value.slice(ESCAPE_PREFIX.length);
     }
     if (typeof value === "string" && value.startsWith(SECRET_ENVELOPE)) {
-      return this.decryptEnvelope(value, []);
+      return unescapeClaim(this.decryptEnvelope(value, []));
     }
     return value;
   }
@@ -493,10 +493,6 @@ export class PluginSettingsService {
       },
       path
     );
-  }
-
-  private decryptSecrets(value: unknown, path: string[]): unknown {
-    return mapSecrets(value, this.deps.secretPaths, this.decryptEnvelope, path);
   }
 
   /**
@@ -540,6 +536,22 @@ export function pluginSettingsSecrets(env: {
   ).filter(
     (generation): generation is string => typeof generation === "string"
   );
+}
+
+/**
+ * Strip the escape marker a claim gained on its way into an envelope.
+ *
+ * The escape walk runs over the WHOLE row value before encryption, so a
+ * declared secret whose own text begins with a marker is escaped and then
+ * encrypted — the marker would otherwise come back out with the decrypted
+ * credential, changing it. Stripping here is the symmetric half of the
+ * round trip: escape before encrypt, unescape after decrypt, and a value
+ * beginning with the marker keeps exactly one (the doubling preserves it).
+ */
+function unescapeClaim(opened: unknown): unknown {
+  return typeof opened === "string" && opened.startsWith(ESCAPE_PREFIX)
+    ? opened.slice(ESCAPE_PREFIX.length)
+    : opened;
 }
 
 /**

@@ -680,3 +680,34 @@ describe("a plaintext value that claims the envelope prefix", () => {
     });
   });
 });
+
+describe("a declared SECRET whose own text claims a marker", () => {
+  it("round-trips an enc:-prefixed credential exactly", async () => {
+    // The escape walk covers the whole row value, secret leaves included —
+    // the marker is inside the encrypted plaintext, and the decrypt output
+    // must strip it again or the plugin receives a changed credential.
+    const store = memoryStore();
+    await service(store).set({ clientSecret: "enc:realkey" });
+
+    const settings = await service(store).get<{ clientSecret: string }>();
+    expect(settings.clientSecret).toBe("enc:realkey");
+  });
+
+  it("round-trips an escape-marker-prefixed credential exactly", async () => {
+    // Doubling survives the envelope too: one marker stripped, one kept.
+    const store = memoryStore();
+    await service(store).set({ clientSecret: "enc!realkey" });
+
+    const settings = await service(store).get<{ clientSecret: string }>();
+    expect(settings.clientSecret).toBe("enc!realkey");
+  });
+
+  it("round-trips an ordinary credential without touching it", async () => {
+    // The control: the symmetric strip changes nothing that never claimed.
+    const store = memoryStore();
+    await service(store).set({ clientSecret: SECRET_VALUE });
+
+    const settings = await service(store).get<{ clientSecret: string }>();
+    expect(settings.clientSecret).toBe(SECRET_VALUE);
+  });
+});
