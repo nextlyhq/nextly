@@ -193,3 +193,51 @@ describe("diffForeignKeys", () => {
     ]);
   });
 });
+
+describe("partial and expression indexes", () => {
+  const base = { name: "idx_fx__orders_open", columns: ["status"], unique: false };
+
+  it("renders the WHERE predicate on postgres and sqlite", () => {
+    const op = {
+      type: "add_index",
+      tableName: "fx__orders",
+      index: { ...base, where: "status = 'open'" },
+    } as never;
+    expect(generateSQL(op, "postgresql")).toBe(
+      `CREATE INDEX IF NOT EXISTS "idx_fx__orders_open" ON "fx__orders" ("status") WHERE status = 'open'`
+    );
+    expect(generateSQL(op, "sqlite")).toBe(
+      `CREATE INDEX IF NOT EXISTS "idx_fx__orders_open" ON "fx__orders" ("status") WHERE status = 'open'`
+    );
+  });
+
+  it("refuses a partial index on mysql, which has none", () => {
+    const op = {
+      type: "add_index",
+      tableName: "fx__orders",
+      index: { ...base, where: "status = 'open'" },
+    } as never;
+    expect(() => generateSQL(op, "mysql")).toThrow();
+  });
+
+  it("renders an expression index per dialect", () => {
+    const op = {
+      type: "add_index",
+      tableName: "fx__orders",
+      index: { ...base, columns: [], expression: "lower(email)" },
+    } as never;
+    expect(generateSQL(op, "postgresql")).toBe(
+      `CREATE INDEX IF NOT EXISTS "idx_fx__orders_open" ON "fx__orders" ((lower(email)))`
+    );
+    expect(generateSQL(op, "mysql")).toBe(
+      "CREATE INDEX `idx_fx__orders_open` ON `fx__orders` (lower(email))"
+    );
+  });
+
+  it("a changed predicate re-keys the index, arriving as drop-plus-add", () => {
+    const prev = { ...tableWith([]), indexes: [{ ...base, where: "status = 'open'" }] };
+    const cur = { ...tableWith([]), indexes: [{ ...base, where: "status <> 'done'" }] };
+    const ops = diffSnapshots({ tables: [prev] }, { tables: [cur] });
+    expect(ops.map(op => op.type)).toEqual(["drop_index", "add_index"]);
+  });
+});

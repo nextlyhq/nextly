@@ -15,7 +15,11 @@ import type { IndexSpec } from "./types";
  * index.
  */
 export function indexKey(idx: IndexSpec): string {
-  return `${idx.columns.join(",")}|${idx.unique ? "u" : "n"}`;
+  // The predicate and expression are part of the identity: a changed
+  // WHERE re-keys the index, which the diff reads as drop-plus-add rather
+  // than leaving two indexes that differ only in what they filter. Plain
+  // indexes append two empty strings, so every existing key is unchanged.
+  return `${idx.columns.join(",")}|${idx.unique ? "u" : "n"}|${idx.where ?? ""}|${idx.expression ?? ""}`;
 }
 
 /**

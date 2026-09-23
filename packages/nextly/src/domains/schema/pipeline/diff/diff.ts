@@ -98,10 +98,34 @@ export function diffSnapshots(
       // Pass 2: column-level ops for tables present in both snapshots.
       columnOps.push(...diffColumns(name, prevT.columns, curT.columns));
       // Pass 3: index-level ops (sentinel: skip when either side untracked).
-      for (const op of diffIndexes(name, prevT.indexes, curT.indexes)) {
-        if (op.type === "drop_index") dropIndexOps.push(op);
-        else addIndexOps.push(op);
+      // A RE-KEYED index (same name, changed predicate/expression) is the one
+      // case where the usual add-first ordering is wrong: the add renders
+      // with IF NOT EXISTS, so it no-ops against the old index still carrying
+      // the name, and the drop after it then removes the index outright. The
+      // pair routes through one bucket with the drop ahead of its add.
+      const indexOps = diffIndexes(name, prevT.indexes, curT.indexes);
+      const rekeyedNames = new Set(
+        indexOps
+          .filter(
+            (op): op is Extract<Operation, { type: "drop_index" }> =>
+              op.type === "drop_index"
+          )
+          .map(op => op.index.name)
+      );
+      const rekeyAdds: Operation[] = [];
+      for (const op of indexOps) {
+        if (op.type === "drop_index") {
+          dropIndexOps.push(op);
+        } else if (
+          op.type === "add_index" &&
+          rekeyedNames.has(op.index.name)
+        ) {
+          rekeyAdds.push(op);
+        } else {
+          addIndexOps.push(op);
+        }
       }
+      dropIndexOps.push(...rekeyAdds);
       // Pass 3b: check constraints, with the same untracked sentinel — a
       // snapshot written before checks were tracked reads as "don't know",
       // never as "this table has none". All of them route through ONE

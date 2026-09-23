@@ -98,8 +98,20 @@ export function generateMysqlSQL(op: Operation): string {
 }
 
 function createIndexStatement(tableName: string, index: IndexSpec): string {
-  const cols = index.columns.map(q).join(", ");
-  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ${q(index.name)} ON ${q(tableName)} (${cols})`;
+  // MySQL has no partial index. The resolve step refuses a declaration with a
+  // WHERE on this dialect; throwing here is the render-layer backstop, so a
+  // spec that reaches this point fails loudly instead of silently losing the
+  // predicate.
+  if (index.where) {
+    throw unsupportedOperation("generateMysqlSQL", {
+      type: `add_index (partial, ${index.name})`,
+    });
+  }
+  // A functional key part (8.0.13+): the expression is the key, unquoted.
+  const cols = index.expression ? index.expression : index.columns
+    .map(c => `\`${c}\``)
+    .join(", ");
+  return `CREATE ${index.unique ? "UNIQUE " : ""}INDEX ${q(index.name)} ON \`${tableName}\` (${cols})`;
 }
 
 function generateAddCheck(op: AddCheckOp): string {
