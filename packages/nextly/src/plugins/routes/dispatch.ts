@@ -15,7 +15,10 @@ import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
-import { isReadOperation } from "../../middleware/rate-limit";
+import {
+  isReadOperation,
+  RATE_LIMIT_DEFAULTS,
+} from "../../middleware/rate-limit";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 import type { PluginSelf } from "../self";
@@ -251,15 +254,18 @@ export function pluginRouteAuthRequired(
  * configured for a hundred reads but ten writes per window meant the ten for
  * its mutations, not a hundred of them through each plugin's bucket.
  * `isReadOperation` is imported from the limiter so the split has one list,
- * not two that drift.
+ * not two that drift — and the FALLBACKS come from the limiter's own exported
+ * defaults for the same reason: an install that configured no limits runs
+ * core's REST surface on those defaults, and a plugin route beside it must
+ * answer to the same numbers, not to a second set kept here.
  */
 function generalAllowance(
   rateLimit: { readLimit?: number; writeLimit?: number } | undefined,
   method: string
 ): number {
   return isReadOperation(method)
-    ? (rateLimit?.readLimit ?? 100)
-    : (rateLimit?.writeLimit ?? 30);
+    ? (rateLimit?.readLimit ?? RATE_LIMIT_DEFAULTS.readLimit)
+    : (rateLimit?.writeLimit ?? RATE_LIMIT_DEFAULTS.writeLimit);
 }
 
 /**
@@ -267,7 +273,10 @@ function generalAllowance(
  *
  * Read from configuration rather than fixed here so a plugin route declaring
  * `general` is held to the same budget the app chose for its REST surface,
- * and so turning rate limiting off turns this off too.
+ * and so turning rate limiting off turns this off too. A config with no
+ * limits at all is NOT an off switch on the sanitized path — `enabled`
+ * defaults to true there and the core limiter runs on its defaults, so this
+ * answers with those same defaults rather than enabling or inventing policy.
  */
 async function generalRouteBudget(method: string): Promise<{
   limit: number;
@@ -293,7 +302,7 @@ async function generalRouteBudget(method: string): Promise<{
   if (rateLimit?.enabled === false) return null;
   return {
     limit: generalAllowance(rateLimit, method),
-    windowMs: rateLimit?.windowMs ?? 60_000,
+    windowMs: rateLimit?.windowMs ?? RATE_LIMIT_DEFAULTS.windowMs,
   };
 }
 
@@ -479,9 +488,19 @@ export async function runPluginRoute(
   }
 
   // Before the handler: a rate limit that runs after the work it is limiting
-  // has already paid for the request it meant to refuse.
+  // has already paid for the request it meant to refuse. Through
+  // `withNoStore` for the same reason handler responses go through it: an
+  // auth route's refusal is as much a statement about an authentication
+  // attempt as its successes, and this early return is the one path the
+  // wrapper below never sees — without it a shared proxy could cache the 429
+  // and replay it to later callers.
   const limited = await applyRouteRateLimit(req, matched);
-  if (limited) return markPluginResponse(limited, matched.route);
+  if (limited) {
+    return markPluginResponse(
+      withNoStore(limited, matched.route),
+      matched.route
+    );
+  }
 
   const csrf = await applyRouteCsrf(req, matched);
   if (csrf) return markPluginResponse(csrf, matched.route);

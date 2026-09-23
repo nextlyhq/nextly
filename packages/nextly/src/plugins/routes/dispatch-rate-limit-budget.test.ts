@@ -43,6 +43,8 @@ vi.mock("../../utils/get-trusted-client-ip", () => ({
 
 import type { PluginContext } from "../plugin-context";
 
+import { RATE_LIMIT_DEFAULTS } from "../../middleware/rate-limit";
+
 import { runPluginRoute } from "./dispatch";
 import type { RouteMatch } from "./route-registry";
 import type { PluginRoute } from "./route-types";
@@ -176,6 +178,66 @@ function matchWithCsrf(): RouteMatch {
       path: "/r",
       public: true,
       csrf: true,
+      handler: () => Response.json({ ok: true }),
+    } as PluginRoute,
+    baseCtx,
+    params: {},
+  };
+}
+
+describe("a rate-limit refusal on an auth route", () => {
+  it("carries no-store, like the route's other responses", async () => {
+    // The refusal returns BEFORE the wrapper that stamps no-store on handler
+    // responses, and a public route gets no session-cache headers either — so
+    // without this, a shared proxy could cache the 429 and replay it to
+    // later callers the limiter had not refused.
+    check.mockResolvedValue({
+      allowed: false,
+      resetAt: new Date(Date.now() + 60_000),
+    });
+    config.value = {};
+
+    const res = await runPluginRoute(
+      new Request("http://localhost/admin/api/plugins/@a/x/r"),
+      matchAuth()
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("uses the limiter's own defaults when no limits are configured", async () => {
+    // A config with no limits runs core's REST surface on the limiter's
+    // defaults; a plugin route beside it must answer to the same numbers,
+    // not to a second set spelled here.
+    config.value = { rateLimit: { enabled: true } };
+
+    await runPluginRoute(
+      new Request("http://localhost/admin/api/plugins/@a/x/r"),
+      match("GET")
+    );
+    await runPluginRoute(
+      new Request("http://localhost/admin/api/plugins/@a/x/r", {
+        method: "POST",
+      }),
+      match("POST")
+    );
+
+    const limits = check.mock.calls.map(call => call[1]);
+    expect(limits).toContain(RATE_LIMIT_DEFAULTS.readLimit);
+    expect(limits).toContain(RATE_LIMIT_DEFAULTS.writeLimit);
+  });
+});
+
+/** An auth-limited route, whose refusals and responses are never cacheable. */
+function matchAuth(): RouteMatch {
+  return {
+    pluginName: "@a/x",
+    route: {
+      method: "GET",
+      path: "/r",
+      public: true,
+      rateLimit: "auth",
       handler: () => Response.json({ ok: true }),
     } as PluginRoute,
     baseCtx,

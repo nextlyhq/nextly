@@ -18,6 +18,7 @@ import {
   readCsrfFromRequest,
 } from "../../auth/csrf/csrf-cookie";
 import { validateCsrf } from "../../auth/csrf/validate";
+import { isReadOperation } from "../../middleware/rate-limit";
 
 import type { PluginRoute } from "./route-types";
 
@@ -88,7 +89,13 @@ export function rateLimitKey(
   // route declaring the public option ran with no limit at all.
   if (route.rateLimit === "auth") return `plugin-auth-ip:${pluginSlug}:${ip}`;
   if (route.rateLimit === "general") {
-    return `plugin-general-ip:${pluginSlug}:${ip}`;
+    // SUFFIXED by the read/write class, exactly as the core limiter keys its
+    // own buckets: reads and writes have separate configured limits, so a
+    // shared counter let enough GETs raise the count past `writeLimit` and
+    // refuse the next POST without a single write having been spent — read
+    // traffic denying mutations.
+    const operation = isReadOperation(route.method) ? "read" : "write";
+    return `plugin-general-ip:${pluginSlug}:${ip}:${operation}`;
   }
   return null;
 }

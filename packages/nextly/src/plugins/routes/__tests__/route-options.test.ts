@@ -149,10 +149,11 @@ describe("rateLimitKey", () => {
     // `general` is a public option on `PluginRoute.rateLimit`, and this
     // returned null for it — so a route declaring a valid documented value ran
     // with no limit whatsoever, which is the opposite of what declaring one
-    // means.
+    // means. The fixture's default method is POST, so the bucket is the write
+    // half of the read/write pair.
     expect(
       rateLimitKey(route({ rateLimit: "general" }), "acme-auth", "1.2.3.4")
-    ).toBe("plugin-general-ip:acme-auth:1.2.3.4");
+    ).toBe("plugin-general-ip:acme-auth:1.2.3.4:write");
   });
 
   it("keeps the general and auth buckets apart", () => {
@@ -193,5 +194,42 @@ describe("validateRouteOptions: the rate-limit mode", () => {
 
   it("accepts a route that declares no mode", () => {
     expect(validateRouteOptions(route())).toBeNull();
+  });
+});
+
+describe("rateLimitKey: reads and writes spend separate counters", () => {
+  it("suffixes a general bucket by the read/write class", () => {
+    // Reads and writes have separate configured limits, so one shared
+    // counter let enough GETs raise the count past `writeLimit` and refuse
+    // the next POST without a single write having been spent.
+    const read = rateLimitKey(
+      route({ method: "GET", rateLimit: "general" }),
+      "a",
+      "1.2.3.4"
+    );
+    const write = rateLimitKey(
+      route({ method: "POST", rateLimit: "general" }),
+      "a",
+      "1.2.3.4"
+    );
+    expect(read).not.toBe(write);
+    expect(read).toContain(":read");
+    expect(write).toContain(":write");
+  });
+
+  it("keeps ONE auth bucket regardless of method", () => {
+    // The auth allowance is a single guess-per-IP budget; splitting it by
+    // method would multiply the attempts an attacker gets.
+    const get = rateLimitKey(
+      route({ method: "GET", rateLimit: "auth" }),
+      "a",
+      "1.2.3.4"
+    );
+    const post = rateLimitKey(
+      route({ method: "POST", rateLimit: "auth" }),
+      "a",
+      "1.2.3.4"
+    );
+    expect(get).toBe(post);
   });
 });
