@@ -10,8 +10,13 @@
 import { resolve } from "node:path";
 
 import { shutdownServices } from "../di";
+import {
+  pluginMigrationSetsFrom,
+  type PluginMigrationSet,
+} from "../domains/schema/migrate/plugin/run-plugin-migrations";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
 import { NextlyError } from "../errors";
+import type { PluginDefinition } from "../plugins/plugin-context";
 
 import {
   allowBootMigrations,
@@ -45,6 +50,7 @@ interface MigrateCoreLike {
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
+    pluginMigrationSets?: readonly PluginMigrationSet[];
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -70,6 +76,11 @@ export interface RunProdMigrationsArgs {
     collections: readonly unknown[];
     singles?: readonly unknown[];
     fieldGroups?: readonly unknown[];
+    /**
+     * Plugin definitions from the same config the CLI reads: boot applies the
+     * same plugin migration modules the CLI would, from the same source.
+     */
+    plugins?: readonly PluginDefinition[];
   };
   /** Plugin additions to Builder entities, when the caller has them. */
   deferredExtends?: readonly unknown[];
@@ -193,6 +204,12 @@ export async function runProdMigrationsIfEnabled(
       lockMode: "wait",
       ttlSeconds: args.config.db.migrateLockTtlSeconds,
       knownJunctions: resolvedSchema.knownJunctions,
+      // The same sets the CLI applies, from the same config: a boot that
+      // skipped them would serve against a schema missing every plugin
+      // table while reporting a clean migrate.
+      pluginMigrationSets: await pluginMigrationSetsFrom(
+        args.config.plugins ?? []
+      ),
       ensureLedger,
     });
     // REFUSES rather than serving. `ran: false` means the migrate lock stayed

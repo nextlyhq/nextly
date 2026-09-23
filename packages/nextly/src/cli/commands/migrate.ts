@@ -56,6 +56,7 @@ import { getActiveExtensionSchema } from "../../domains/schema/extension/build-e
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { reconcileFile } from "../../domains/schema/migrate/drift-reconcile";
 import {
+  pluginMigrationSetsFrom,
   runPluginMigrations,
   type PluginMigrationSet,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
@@ -316,25 +317,9 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
-      // Resolver order, because a plugin's migration may reference a table a
-      // dependency created. `topoSortPlugins` is the same ordering boot uses;
-      // the full `resolvePlugins` battery belongs to boot, where a failure
-      // can name the surface that needed it.
-      // Dynamic for the same cycle reason as the owners repository above.
-      const { topoSortPlugins } = await import("../../plugins/topo-sort");
-      const pluginMigrationSets = topoSortPlugins(
+      const pluginMigrationSets = await pluginMigrationSetsFrom(
         configResult.config.plugins ?? []
-      )
-        .filter(
-          plugin =>
-            plugin.enabled !== false &&
-            (plugin.contributes?.schema?.migrations?.length ?? 0) > 0
-        )
-        .map(plugin => ({
-          pluginName: plugin.name,
-          pluginVersion: plugin.version,
-          migrations: plugin.contributes!.schema!.migrations!,
-        }));
+      );
       const { applied, metadata } = await migrateCore({
         dialect,
         db,

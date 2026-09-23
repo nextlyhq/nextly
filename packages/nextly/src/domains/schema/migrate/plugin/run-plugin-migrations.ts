@@ -35,6 +35,7 @@ import {
   qualifiedFilename,
   type PluginMigration,
 } from "./plugin-migration";
+import type { PluginDefinition } from "../../../../plugins/plugin-context";
 
 /** One plugin's migrations, in the order the resolver placed the plugin. */
 export interface PluginMigrationSet {
@@ -67,6 +68,33 @@ export interface PluginMigrationRunResult {
   applied: number;
   adopted: number;
   skipped: number;
+}
+
+/**
+ * The sets one run should apply, from the config's plugin list, in the order
+ * the resolver produces.
+ *
+ * Both callers — the CLI command and production boot — build nothing of their
+ * own, so the two cannot disagree about which plugins ship migrations or the
+ * order they run in.
+ */
+export async function pluginMigrationSetsFrom(
+  plugins: readonly PluginDefinition[]
+): Promise<PluginMigrationSet[]> {
+  // Dynamic for the same cycle reason the CLI command loads it: the module
+  // sits on a cycle that closes through the commands.
+  const { topoSortPlugins } = await import("../../../../plugins/topo-sort");
+  return topoSortPlugins([...plugins])
+    .filter(
+      plugin =>
+        plugin.enabled !== false &&
+        (plugin.contributes?.schema?.migrations?.length ?? 0) > 0
+    )
+    .map(plugin => ({
+      pluginName: plugin.name,
+      pluginVersion: plugin.version,
+      migrations: plugin.contributes!.schema!.migrations!,
+    }));
 }
 
 /**

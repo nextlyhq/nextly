@@ -149,7 +149,7 @@ describe("runPluginMigrations", () => {
       name: "001",
       schemaVersion: 1,
       before: [],
-      target: [created],
+      target: [tableSpec("fx__a", true)],
     });
     const h = deps({
       appliedShas: new Map([["plugin:a/001", m.checksum]]),
@@ -168,7 +168,7 @@ describe("runPluginMigrations", () => {
       name: "001",
       schemaVersion: 1,
       before: [],
-      target: [created],
+      target: [tableSpec("fx__a", true)],
     });
     const h = deps();
     h.live.set("fx__a", [created]);
@@ -187,7 +187,7 @@ describe("runPluginMigrations", () => {
       name: "001",
       schemaVersion: 1,
       before: [empty],
-      target: [created],
+      target: [tableSpec("fx__a", true)],
     });
     const h = deps();
     h.live.set("fx__a", [tableSpec("fx__a", false)]);
@@ -215,7 +215,7 @@ describe("runPluginMigrations", () => {
       name: "001",
       schemaVersion: 1,
       before: [],
-      target: [created],
+      target: [tableSpec("fx__a", true)],
     });
     m.dialects.postgresql.up = ["-- tampered"];
     const h = deps();
@@ -232,7 +232,7 @@ describe("runPluginMigrations", () => {
       name: "001",
       schemaVersion: 1,
       before: [],
-      target: [created],
+      target: [tableSpec("fx__a", true)],
     });
     const h = deps({
       appliedShas: new Map([["plugin:a/001", "0".repeat(64)]]),
@@ -250,13 +250,13 @@ describe("runPluginMigrations", () => {
       name: "001",
       schemaVersion: 1,
       before: [],
-      target: [created],
+      target: [tableSpec("fx__a", true)],
     });
     const second = module({
       name: "002",
       schemaVersion: 2,
       before: [created],
-      target: [created],
+      target: [tableSpec("fx__a", true)],
     });
     const h = deps({
       executeSql: async () => {
@@ -279,5 +279,42 @@ describe("runPluginMigrations", () => {
     // The failed module is recorded as failed; nothing after it starts.
     expect(h.failed.length).toBe(1);
     expect(h.started).toEqual(["plugin:a/001"]);
+  });
+});
+
+describe("pluginMigrationSetsFrom", () => {
+  const m = (): PluginMigration =>
+    module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", true)],
+    });
+
+  function def(name: string, extra: Record<string, unknown> = {}) {
+    return {
+      name,
+      version: "1.0.0",
+      nextly: "^0.0.2",
+      contributes: { schema: { migrations: [m()] } },
+      ...extra,
+    };
+  }
+
+  it("keeps only enabled plugins that ship migrations, in resolver order", async () => {
+    const { pluginMigrationSetsFrom } = await import(
+      "../run-plugin-migrations"
+    );
+    const b = { ...def("b"), dependsOn: { a: "*" } };
+    const sets = await pluginMigrationSetsFrom([
+      def("none-shipped", { contributes: {} }),
+      { ...def("disabled"), enabled: false },
+      b,
+      def("a"),
+    ]);
+    // b depends on a, so resolver order puts a first even though b was listed first.
+    expect(sets.map(s => s.pluginName)).toEqual(["a", "b"]);
+    expect(sets[0].migrations).toHaveLength(1);
+    expect(sets[0].pluginVersion).toBe("1.0.0");
   });
 });
