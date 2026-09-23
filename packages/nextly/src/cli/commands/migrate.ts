@@ -70,6 +70,7 @@ import {
   EMPTY_SNAPSHOT,
   parseSnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import {
@@ -609,9 +610,13 @@ export async function runPluginPhase(deps: MigrateCoreDeps): Promise<void> {
     "../../domains/schema/ownership/schema-owners-repository"
   );
   const owners = new OwnersRepo(deps.db, deps.dialect);
+  const ownerRows = new Map(
+    (await owners.read()).map(record => [record.tableName, record])
+  );
   const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
     dialect: deps.dialect,
     appliedShas,
+    owners: ownerRows,
     introspect: async names => {
       const liveTables = await safeListTables(deps.adapter);
       const managed = snapshotComparableTables(
@@ -1043,6 +1048,20 @@ export async function runFileMigrations(args: {
   const dz = adapter as unknown as DrizzleAdapter;
   const executeSql = buildSqlExecutor(dz, dialect);
 
+  // Owner rows for the drop guard: an app file dropping a plugin-migrated
+  // table is refused whole, before its first statement. Read once; absent
+  // registry reads as "nothing is claimed" and refuses nothing, which is a
+  // database predating the registry.
+  const { SchemaOwnersRepository: OwnersRepoForFiles } = await import(
+    "../../domains/schema/ownership/schema-owners-repository"
+  );
+  const fileOwners = new Map(
+    (await new OwnersRepoForFiles(db, dialect).read()).map(record => [
+      record.tableName,
+      record,
+    ])
+  );
+
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let applied = 0;
   let remaining =
@@ -1057,6 +1076,15 @@ export async function runFileMigrations(args: {
       continue;
     }
     if (remaining <= 0) break;
+
+    // Both apply routes run the same whole-file judgement, so a foreign drop
+    // is refused identically with or without a paired snapshot.
+    assertNoForeignDrops({
+      statements: splitSqlStatements(m.upSql, dialect),
+      stream: "app",
+      owners: fileOwners,
+      source: filename,
+    });
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.

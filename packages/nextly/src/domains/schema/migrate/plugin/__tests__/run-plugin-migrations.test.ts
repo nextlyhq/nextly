@@ -318,3 +318,39 @@ describe("pluginMigrationSetsFrom", () => {
     expect(sets[0].pluginVersion).toBe("1.0.0");
   });
 });
+
+describe("drop guard in the runner", () => {
+  it("refuses a module whose UP drops another stream's table, before executing", async () => {
+    const m = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [tableSpec("fx__a", false)],
+      up: ["DROP TABLE auth__identities"],
+    });
+    const h = deps({
+      owners: new Map([
+        [
+          "auth__identities",
+          {
+            tableName: "auth__identities",
+            ownerKind: "plugin" as const,
+            ownerId: "auth",
+            migratedBy: "plugin:auth",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active" as const,
+          },
+        ],
+      ]) as never,
+    });
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toThrow(/different owner/i);
+    expect(h.executed).toEqual([]);
+    expect(h.started).toEqual([]);
+  });
+});

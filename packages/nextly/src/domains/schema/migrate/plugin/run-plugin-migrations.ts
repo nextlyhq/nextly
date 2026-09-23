@@ -36,6 +36,8 @@ import {
   type PluginMigration,
 } from "./plugin-migration";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
+import { assertNoForeignDrops } from "../../ownership/drop-guard";
+import type { OwnerRecord } from "../../ownership/owner-registry";
 
 /** One plugin's migrations, in the order the resolver placed the plugin. */
 export interface PluginMigrationSet {
@@ -54,6 +56,12 @@ export interface RunPluginMigrationsDeps {
   executeSql: (sql: string) => Promise<number>;
   /** Ledger rows are recorded through this — `reconcileFile`'s own repo. */
   repo: ReconcileRepo;
+  /**
+   * Owner records for the drop guard. Absent (or empty) when no registry is
+   * available, which reads as "no table is claimed" and refuses nothing —
+   * exactly the behaviour of a database predating the registry.
+   */
+  owners?: ReadonlyMap<string, OwnerRecord>;
   /** Owner-registry upsert after a module lands or is adopted. */
   recordOwner: (args: {
     pluginName: string;
@@ -133,6 +141,15 @@ async function applyModule(
   assertModuleIntact(set.pluginName, migration);
 
   const filename = qualifiedFilename(set.pluginName, migration.name);
+  // Judged for the module as a whole, before anything executes: a module
+  // dropping another stream's table is refused with the ledger untouched,
+  // never partly applied.
+  assertNoForeignDrops({
+    statements: migration.dialects[deps.dialect]?.up ?? [],
+    stream: `plugin:${set.pluginName}`,
+    owners: deps.owners ?? new Map(),
+    source: filename,
+  });
   const recorded = deps.appliedShas.get(filename);
   if (recorded !== undefined) {
     assertAppliedUnchanged(set.pluginName, migration, recorded);

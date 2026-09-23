@@ -24,6 +24,8 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { truncateErrorMessage } from "../../domains/schema/events/schema-events-repository";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
+import { assertNoForeignDrops } from "../../domains/schema/ownership/drop-guard";
+import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
@@ -99,6 +101,11 @@ export interface MigrateDownCoreDeps {
   recordRolledBack: (filename: string) => Promise<void>;
   /** Records a `failed` event for an errored DOWN. */
   recordFailed: (filename: string, message: string) => Promise<void>;
+  /**
+   * Owner rows for the drop guard; absent when no registry is reachable,
+   * which refuses nothing (the pre-registry behaviour).
+   */
+  owners?: ReadonlyMap<string, OwnerRecord>;
   withLock: typeof withMigrateLock;
 }
 
@@ -180,6 +187,15 @@ export async function migrateDownCore(
         `Rolling back ${p.filename} drops a table or column (data loss). Re-run with --allow-data-loss to proceed.`
       );
     }
+    // A rollback drops only what its own stream owns: an app file's DOWN
+    // dropping a plugin-migrated table is refused whole, before any
+    // statement runs, so the ledger records nothing.
+    assertNoForeignDrops({
+      statements: splitSqlStatements(p.downSql, deps.dialect),
+      stream: deps.options.plugin ? `plugin:${deps.options.plugin}` : "app",
+      owners: deps.owners ?? new Map(),
+      source: p.filename,
+    });
   }
 
   if (deps.nodeEnv === "production" && !deps.options.yes) {
@@ -323,9 +339,22 @@ export async function runMigrateDown(
       });
     };
 
+    // Owner rows for the drop guard, read before the run so a foreign drop
+    // is refused before any statement executes.
+    const { SchemaOwnersRepository: OwnersRepo } = await import(
+      "../../domains/schema/ownership/schema-owners-repository"
+    );
+    const owners = new Map(
+      (await new OwnersRepo(db, dialect).read()).map(record => [
+        record.tableName,
+        record,
+      ])
+    );
+
     const result = await migrateDownCore({
       dialect,
       db,
+      owners,
 
       nodeEnv: process.env.NODE_ENV,
       logger,
