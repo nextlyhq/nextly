@@ -721,7 +721,29 @@ export function defineTable<
     opts?.foreignKeys ?? []
   );
   const checks = resolveChecks(name, opts?.checks ?? []);
-  const relations = resolveRelations(name, byName, opts?.relations ?? []);
+  const declaredRelations = resolveRelations(
+    name,
+    byName,
+    opts?.relations ?? []
+  );
+  // A ref() column carries its one-edge implicitly: the target is already
+  // declared beside the column, and asking the author to repeat it as a
+  // relation would be a second place to say the same thing. An explicit
+  // relation with the same name wins, so an author can rename or retarget
+  // the edge without the column fighting them.
+  const declaredNames = new Set(declaredRelations.map(rel => rel.name));
+  const autoRelations: TableRelationInput[] = resolved
+    .filter(column => column.references !== undefined)
+    .filter(column => !declaredNames.has(column.key))
+    .map(column => ({
+      name: column.key,
+      kind: "one" as const,
+      targetTable: column.references as string,
+      // The SQL name: the registry resolves edges against the table's
+      // column properties, which are keyed by SQL name.
+      fromColumn: column.name,
+    }));
+  const relations = [...declaredRelations, ...autoRelations];
 
   return Object.freeze({
     name,

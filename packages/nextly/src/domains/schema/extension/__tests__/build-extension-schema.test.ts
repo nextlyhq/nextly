@@ -307,3 +307,55 @@ describe("relation edges", () => {
     ).toThrow(NextlyError);
   });
 });
+
+describe("ref columns auto-produce one edges", () => {
+  it("a ref() column carries its one-edge without an explicit relation", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const linked = defineTable("linked", {
+      id: col.id(),
+      userId: col.ref("users"),
+    });
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: ["users"],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [linked] },
+      ],
+    });
+    expect(built.relations.get("fx__linked")).toEqual([
+      { key: "userId", fromColumn: "user_id", targetTable: "users" },
+    ]);
+  });
+
+  it("an explicit relation with the same name wins over the auto edge", async () => {
+    const { col, defineTable } = await import("../dsl");
+    const linked = defineTable(
+      "linked",
+      { id: col.id(), userId: col.ref("users") },
+      {
+        relations: [
+          {
+            name: "userId",
+            kind: "one",
+            targetTable: "admins",
+            fromColumn: "userId",
+          },
+        ],
+      }
+    );
+    const built = await buildExtensionSchema({
+      dialect: "postgresql" as const,
+      coreTableNames: ["users", "admins"],
+      entities: [],
+      pluginPrefixes: new Map([["fx", "fx"]]),
+      plugins: [
+        { owner: { kind: "plugin" as const, id: "fx" }, tables: [linked] },
+      ],
+    });
+    expect(built.relations.get("fx__linked")).toEqual([
+      { key: "userId", fromColumn: "user_id", targetTable: "admins" },
+    ]);
+  });
+});
