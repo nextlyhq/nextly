@@ -52,7 +52,11 @@ import type {
 import { consoleLogger } from "../../../services/shared";
 
 import type { UserAccountService } from "./user-account-service";
-import type { UserMutationService } from "./user-mutation-service";
+import type {
+  CreateExternalUserData,
+  UserMutationResponse,
+  UserMutationService,
+} from "./user-mutation-service";
 import type { UserQueryService, ListUsersOptions } from "./user-query-service";
 
 // ============================================================
@@ -234,6 +238,41 @@ export class UserService {
       });
       throw err;
     }
+  }
+
+  /**
+   * Create a user for an identity a trusted provider has already verified.
+   *
+   * On THIS service because this is the one `ctx.services.users` resolves to.
+   * The method existed only on the legacy `UsersService`, so a plugin reaching
+   * the supported SDK surface could not call it at all — and the nearest thing
+   * it could call, `create`, makes the local invite shape: inactive, with a
+   * set-password link, and unverified. Which is the opposite of what an
+   * external login needs, and silently so.
+   *
+   * A thin delegation on purpose. Every rule this path enforces — the empty
+   * install, the super-admin prohibition, the roles assigned inside the insert
+   * — belongs to the mutation service, and a second copy of any of them here
+   * would be a second thing to keep right.
+   *
+   * @param input - The verified identity and the roles to grant it.
+   * @param context - Who initiated it, recorded for event attribution.
+   * @throws NextlyError(FORBIDDEN) on an empty install, or a role that reaches
+   *   `super-admin` directly or by inheritance.
+   * @throws NextlyError(VALIDATION_ERROR) on an unknown or empty role list.
+   * @throws NextlyError(DUPLICATE) when the address already has an account.
+   */
+  async createExternalUser(
+    input: CreateExternalUserData,
+    context: RequestContext
+  ): Promise<UserMutationResponse> {
+    this.logger.debug("Creating external user", { email: input.email });
+    return this.mutationService.createExternalUser(
+      input,
+      // Same shape as the other writes on this service: the ACTOR is the
+      // signed-in user the request carries, not the request itself.
+      actorForWrite(undefined, context.user)
+    );
   }
 
   /**

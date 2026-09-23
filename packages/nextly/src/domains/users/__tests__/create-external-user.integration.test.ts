@@ -399,6 +399,80 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toSatisfy(NextlyError.is);
     });
 
+    it("refuses an edge added AFTER the pre-flight check", async () => {
+      // The refusal before the transaction reads a graph an administrator can
+      // change. An inheritance edge added between that read and the role
+      // insert used to commit an account reaching `super-admin` with the
+      // check already passed. The in-transaction `isSuperAdmin` asks about
+      // the rows this transaction wrote, so it sees the newer graph.
+      //
+      // The edge is added from INSIDE the pre-flight walk, which is the only
+      // place the two reads can be separated deterministically — racing two
+      // connections would be a test that usually passes.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const editor = await makeRole(t, "editor");
+
+      const db = t.adapter.getDrizzle() as unknown as {
+        select: (f: unknown) => {
+          from: (table: unknown) => {
+            where: (c: unknown) => Promise<Array<{ id: string }>>;
+          };
+        };
+        insert: (table: unknown) => {
+          values: (v: unknown) => Promise<unknown>;
+        };
+      };
+      const { roles, roleInherits } = getDialectTables();
+      const superAdmin = (
+        await db
+          .select({ id: roles.id })
+          .from(roles)
+          .where(eq(roles.slug, "super-admin"))
+      )[0].id;
+
+      const users = services(t).users;
+      const mutation = (
+        users as unknown as {
+          mutationService: {
+            refuseSuperAdminRoles: (
+              ids: string[],
+              email: string
+            ) => Promise<void>;
+          };
+        }
+      ).mutationService;
+      const realRefusal = mutation.refuseSuperAdminRoles.bind(mutation);
+      let addedEdge = false;
+      mutation.refuseSuperAdminRoles = async (ids, email) => {
+        await realRefusal(ids, email);
+        // Passed. NOW the graph changes, exactly as a concurrent
+        // administrator would change it.
+        if (!addedEdge) {
+          addedEdge = true;
+          await db.insert(roleInherits).values({
+            id: "ri-late-edge",
+            parentRoleId: editor,
+            childRoleId: superAdmin,
+            createdAt: new Date(),
+          });
+        }
+      };
+
+      await expect(
+        users.createExternalUser(
+          {
+            email: "late-edge@example.com",
+            name: "Late",
+            roleIds: [editor],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toSatisfy(NextlyError.is);
+      expect(addedEdge).toBe(true);
+    });
+
     it("still allows a role that inherits nothing dangerous", async () => {
       // The control: refusing every role with any inheritance edge would
       // satisfy the test above while making ordinary role composition

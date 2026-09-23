@@ -45,6 +45,10 @@ import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { safeEmit } from "../../../events/domain-events";
+import {
+  RETIRED_ACCOUNTS_TABLE,
+  retiredAccountsTable,
+} from "../../../init/retired-accounts-erasure";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
   layoutRowId,
@@ -856,6 +860,9 @@ export class UserMutationService extends BaseService {
     // let a provider mint a full super-admin through one indirection. The
     // descendant walk is the same one `getAllRoleIdsForUser` and the RBAC
     // services resolve through, rather than a second reading of the graph.
+    // A cheap refusal before any further work. It is NOT the one that decides:
+    // the binding check runs inside the transaction, immediately before the
+    // roles are assigned.
     await this.refuseSuperAdminRoles(
       namedRoles.map(r => r.id),
       email
@@ -928,6 +935,33 @@ export class UserMutationService extends BaseService {
             userId: newUserId,
             roleId: role.id,
             createdAt: now,
+          });
+        }
+
+        // The CANONICAL decision, asked about the account that now exists,
+        // on this transaction, after its roles are assigned.
+        //
+        // The refusal before the transaction reads a graph an administrator
+        // can change: an inheritance edge added between that read and these
+        // inserts would have committed an account reaching `super-admin`
+        // after the check had already passed. Asking `isSuperAdmin` here
+        // answers about the rows this transaction actually wrote, using the
+        // same resolution the request-time gate uses — so a graph that
+        // changed underneath it is seen, and the insert rolls back.
+        //
+        // The executor matters twice: it reads through this transaction's
+        // uncommitted rows, which is the only way to see roles not yet
+        // committed, and it bypasses the super-admin cache in both
+        // directions, so nothing here can poison a later request's answer.
+        const { isSuperAdmin } = await import(
+          "../../../services/lib/permissions"
+        );
+        if (await isSuperAdmin(newUserId, txDb)) {
+          throw NextlyError.forbidden({
+            logContext: {
+              reason: "external-user-super-admin-refused",
+              email,
+            },
           });
         }
 
@@ -1854,6 +1888,30 @@ export class UserMutationService extends BaseService {
     }
   }
 
+  /**
+   * Remove the deleted account's rows from the RETIRED `accounts` table.
+   *
+   * It is no longer created and nothing reads it, but an upgraded database
+   * keeps it until the operator drops it — and on Postgres and MySQL its
+   * `user_id` carried no cascade, so its provider identifiers and stored
+   * access, refresh and ID tokens outlive the account unless they are removed
+   * here. No later run revisits a deletion that has already happened.
+   *
+   * Runs in the deletion transaction, so the credentials go with the account
+   * rather than in a step a failure could skip. Its own method for the reason
+   * the other erasures have one: the transaction reads as the sequence it
+   * enforces rather than as the detail of each step.
+   */
+  private async eraseRetiredAccountRows(
+    txDb: DrizzleTransactionLike,
+    userId: string | number,
+    present: boolean
+  ): Promise<void> {
+    if (!present) return;
+    const retired = retiredAccountsTable(this.dialect);
+    await txDb.delete(retired).where(eq(retired.userId, String(userId)));
+  }
+
   private async scrubPluginSettingsActor(
     txDb: DrizzleTransactionLike,
     userId: string | number,
@@ -1976,6 +2034,14 @@ export class UserMutationService extends BaseService {
     // arrives with the plugin runtime, so any database reconciled before it
     // lacks the table while this build's declaration is present either way.
     const settingsExist = await this.tablePresent(PLUGIN_SETTINGS_TABLE);
+    // The RETIRED `accounts` table, probed for the same reason. It is no
+    // longer created and nothing reads it, but an upgraded database keeps it
+    // until the operator drops it — and on Postgres and MySQL its `user_id`
+    // carried no cascade, so its provider identifiers and stored access,
+    // refresh and ID tokens outlive the account unless they are erased here.
+    const retiredAccountsExist = await this.tablePresent(
+      RETIRED_ACCOUNTS_TABLE
+    );
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to
@@ -2112,6 +2178,8 @@ export class UserMutationService extends BaseService {
         // likely to notice. The helper already handles the settings table
         // being absent, so it needs no guard of its own.
         await this.scrubPluginSettingsActor(txDb, userId, settingsExist);
+
+        await this.eraseRetiredAccountRows(txDb, userId, retiredAccountsExist);
 
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and
