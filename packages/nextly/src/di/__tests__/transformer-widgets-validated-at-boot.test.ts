@@ -160,3 +160,60 @@ describe("capabilities a setup transformer introduces", () => {
     ).not.toBe("PLUGIN_RESOLUTION_ERROR");
   });
 });
+
+describe("a plugin a setup transformer ADDS", () => {
+  /** The boot failure's resolution reason, when it is one. */
+  function reasonOf(error: unknown): string | undefined {
+    return NextlyError.is(error)
+      ? (error.logContext as { reason?: string } | undefined)?.reason
+      : undefined;
+  }
+
+  it("is version-checked like a declared plugin", async () => {
+    // Re-running only the manifest checks let a transformer-introduced plugin
+    // declare any core range it liked — the whole resolver is what carries
+    // the version gate, and the list that initializes is the transformed one.
+    const incompatible = {
+      name: "@acme/added",
+      version: "1.0.0",
+      nextly: "^99.0.0",
+    };
+    const plugins = [
+      {
+        name: "@acme/transformer",
+        version: "1.0.0",
+        nextly: "*",
+        setup: (config: Record<string, unknown>) => ({
+          ...config,
+          plugins: [...(config.plugins as unknown[]), incompatible],
+        }),
+      },
+    ] as unknown as PluginDefinition[];
+
+    expect(reasonOf(await bootError(plugins))).toBe("core-incompatible");
+  });
+
+  it("is dependency-checked like a declared plugin", async () => {
+    // The same hole on the dependency side: an addition naming a capability
+    // nothing provides would have initialized unresolved.
+    const needsGhost = {
+      name: "@acme/added",
+      version: "1.0.0",
+      nextly: "*",
+      requires: { "ghost-capability": ">=1.0.0" },
+    };
+    const plugins = [
+      {
+        name: "@acme/transformer",
+        version: "1.0.0",
+        nextly: "*",
+        setup: (config: Record<string, unknown>) => ({
+          ...config,
+          plugins: [...(config.plugins as unknown[]), needsGhost],
+        }),
+      },
+    ] as unknown as PluginDefinition[];
+
+    expect(reasonOf(await bootError(plugins))).toBe("missing-capability");
+  });
+});

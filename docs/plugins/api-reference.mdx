@@ -433,5 +433,7 @@ verdict — so the order plugins load in cannot decide access.
 ### Lifecycle
 
 `onReady` runs after every plugin has initialised and routes are registered.
-`onInstall` and `onUninstall` are invoked by the install commands, never by a
-boot.
+`onInstall` and `onUninstall` are declared for the install and uninstall
+commands — a boot never calls them. The commands that invoke them arrive with
+the plugin migration work, so today nothing calls them: treat them as the
+contract for that flow, not as a running lifecycle.

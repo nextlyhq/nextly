@@ -128,7 +128,7 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { assertPluginManifests, resolvePlugins } from "../plugins/resolve";
+import { resolvePlugins } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { collectPluginRoutes } from "../plugins/routes/collect-routes";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
@@ -556,21 +556,27 @@ export async function registerServices(
   // ----------------------------------------
   const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
 
-  // EVERY manifest check, again, on the transformed list — not just the three
-  // that used to be repeated here.
-  //
-  // A `setup` transformer may add, rename or replace entries in `plugins`, and
-  // everything from here down consumes the transformed config rather than the
-  // list `resolvePlugins` checked. The capability rules are the ones that make
-  // this urgent: a secret path introduced by a transformer and never validated
-  // is a path that matches nothing, so `ctx.settings` stores the credential it
-  // names as ordinary text and returns it verbatim, with nothing at runtime
-  // saying so. Hook points are republished for the same reason — the published
-  // map is what every seam consults, and it described the pre-transform list.
-  //
-  // Slug, menu and widget checks are inside this call now, so the three that
-  // were spelled out here individually are covered by it.
-  assertPluginManifests(setupConfig.plugins ?? []);
+  // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
+  // add, rename or replace entries in `plugins`, and everything from here
+  // down consumes the transformed config rather than the list
+  // `resolvePlugins` first checked. Running the WHOLE resolver again —
+  // versions, dependencies, cycles, every manifest assertion and the
+  // topological sort — makes the transformed list as checked as the declared
+  // one was: a transformer-added plugin with an incompatible core version or
+  // a missing dependency fails the boot here, a transformer-introduced
+  // secret-path typo is refused before anything stores the credential it
+  // names, and the order the rest of registration initializes in is the
+  // sorted one rather than whatever order the transformer left the array in.
+  // The published hook-point map is rewritten by the same call, and the
+  // schema folding below receives this list, so a transformer-added plugin's
+  // collections and singles fold exactly like a declared plugin's.
+  const transformedPlugins = resolvePlugins(setupConfig.plugins ?? [], {
+    coreVersion: getCoreVersion(),
+  });
+  const transformedSetupConfig: NextlyServiceConfig = {
+    ...setupConfig,
+    plugins: transformedPlugins,
+  };
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
@@ -584,7 +590,10 @@ export async function registerServices(
   // Builder-made collections) and finalized after the DB is reachable below —
   // this is how extending/relating to a Builder collection works (P8/D3/R2).
   const { config: contributedConfig, deferredExtends } =
-    applyPluginSchemaContributionsDeferred(setupConfig, resolvedPlugins);
+    applyPluginSchemaContributionsDeferred(
+      transformedSetupConfig,
+      transformedPlugins
+    );
 
   // Re-resolved from the TRANSFORMED nested block, because a `setup`
   // transformer may have replaced it. The flattened `emailRetention` was
@@ -644,11 +653,11 @@ export async function registerServices(
   // finalized once Builder slugs are loaded from the DB (below).
   const unresolvedRelations =
     collectUnresolvedRelationTargets(transformedConfig);
-  validateCrossPluginRelations(resolvedPlugins);
+  validateCrossPluginRelations(transformedPlugins);
 
   // Fail fast on invalid plugin-declared custom permissions (D36). Validation
   // only here; the list is re-derived + seeded in runPostInitTasks.
-  collectCustomPermissions(transformedConfig, resolvedPlugins);
+  collectCustomPermissions(transformedConfig, transformedPlugins);
 
   // The half of that check the config cannot answer. A CRUD action on a
   // resource the config does not define may name a Schema Builder collection,
@@ -657,19 +666,19 @@ export async function registerServices(
   // so the verdict waits for Builder slugs, the same way relation targets do.
   const unresolvedPermissions = collectUnresolvedPermissionTargets(
     transformedConfig,
-    resolvedPlugins
+    transformedPlugins
   );
 
   // Fail fast on role-bundle collisions (D67). Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
-  collectRoles(transformedConfig, resolvedPlugins);
+  collectRoles(transformedConfig, transformedPlugins);
 
   // Register plugin custom field types (C7/D16) BEFORE schema sync, so the DDL
   // classifier (classifyFieldKind) maps each custom type to its storage
   // primitive. Declarative + schema-affecting, so registered for ALL plugins
   // (incl. disabled, per D49). Clear-and-rebuild per boot; fail-fast on collision.
   clearFieldTypes();
-  for (const fieldTypePlugin of resolvedPlugins) {
+  for (const fieldTypePlugin of transformedPlugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
       registerFieldType(withoutDisabledBehavior(fieldType, fieldTypePlugin));
     }
@@ -1242,7 +1251,7 @@ export async function registerServices(
       transformedConfig.collections.length > 0
     ) {
       const disabledCollectionSlugs = collectPluginContributedSlugs(
-        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        transformedPlugins.filter(plugin => plugin.enabled === false),
         "collections"
       );
       const hookedCollections = transformedConfig.collections.filter(
@@ -1269,7 +1278,7 @@ export async function registerServices(
       // contract means its runtime hooks must NOT run. Skip singles a disabled
       // plugin contributed; app and enabled-plugin singles register normally.
       const disabledSingleSlugs = collectPluginContributedSlugs(
-        resolvedPlugins.filter(plugin => plugin.enabled === false),
+        transformedPlugins.filter(plugin => plugin.enabled === false),
         "singles"
       );
       const hookedSingles = transformedConfig.singles.filter(
@@ -2928,9 +2937,11 @@ async function initializePlugins(
   const teardown: Array<{ plugin: PluginDefinition; context: PluginContext }> =
     [];
   const contexts = new Map<string, PluginContext>();
-  // Only the plugins whose `init` RAN — a strict prefix of `teardown`, which
-  // holds every enabled plugin from the moment its context is built. A failed
-  // boot rolls back exactly these, never one whose init was never reached.
+  // Only the plugins whose lifecycle RAN — `init` or `onReady` (init is
+  // optional, and a plugin may start all of its work in onReady). A subset
+  // of `teardown`, which holds every enabled plugin from the moment its
+  // context is built. A failed boot rolls back exactly these, never one
+  // whose lifecycle was never reached.
   const initialized: Array<{
     plugin: PluginDefinition;
     context: PluginContext;
@@ -3117,6 +3128,15 @@ async function initializePlugins(
           message,
         },
       });
+    }
+    // Recorded as started HERE as well, because `init` is optional: a plugin
+    // whose only lifecycle is `onReady` opens its timers and connections
+    // there, and a later plugin's onReady failing would otherwise leave them
+    // out of the rollback — running beside the retry's copies. A plugin whose
+    // onReady THREW is not recorded, mirroring the init decision: it has not
+    // finished starting, and its destroy expects a state that never existed.
+    if (!initialized.some(entry => entry.plugin === plugin)) {
+      initialized.push({ plugin, context });
     }
   }
 

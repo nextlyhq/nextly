@@ -38,9 +38,11 @@ export interface ResolvePluginsOptions {
  * runtime to say so.
  *
  * Idempotent, so calling it twice costs a second pass and changes nothing.
- * Version compatibility and the topological sort are NOT here: both are
- * properties of the declared dependency graph, which a transformer that
- * replaces a plugin cannot make compatible by rewriting.
+ * Version compatibility and the topological sort are NOT here because they
+ * live in `resolvePlugins`, which is what a caller holding a TRANSFORMED
+ * list should re-run: a replacement or addition can change its declared
+ * version and dependencies, so those checks travel with the list that will
+ * actually initialize.
  */
 export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // Before any surface reads the manifest. A capability that is misspelled or

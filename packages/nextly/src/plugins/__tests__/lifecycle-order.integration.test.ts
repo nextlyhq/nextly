@@ -245,3 +245,42 @@ describe("a failed boot destroys what it started", () => {
     ]);
   });
 });
+
+describe("a failed boot destroys what it started", () => {
+  it("destroys a plugin whose only lifecycle is onReady", async () => {
+    // `init` is optional, and a plugin may open every timer and connection it
+    // owns inside `onReady`. Recording only init-ran plugins left such a
+    // plugin out of the rollback, so a later plugin's onReady failure let
+    // its resources survive the failed boot and duplicate on the retry.
+    const destroyed: string[] = [];
+    const onReadyOnly = definePlugin({
+      name: "@test/onready-only",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      onReady() {},
+      destroy() {
+        destroyed.push("@test/onready-only");
+      },
+    });
+    const boom = definePlugin({
+      name: "@test/onready-boom",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      onReady() {
+        throw new Error("cannot finish starting");
+      },
+    });
+
+    await expect(
+      createTestNextly({ plugins: [onReadyOnly, boom] })
+    ).rejects.toSatisfy((err: unknown) => {
+      if (!NextlyError.is(err)) return false;
+      return (
+        (err.logContext as { reason?: string }).reason ===
+        "plugin-onready-failed"
+      );
+    });
+
+    expect(destroyed).toEqual(["@test/onready-only"]);
+  });
+});
